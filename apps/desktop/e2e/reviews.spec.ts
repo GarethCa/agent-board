@@ -84,7 +84,8 @@ test("a reviewer spawned from an implementer's tile leaves its doc and ends; the
     // Dismissed, the latest round's tab closes and its reviewer goes; its doc stays.
     await viewer.getByTestId('review-round').last().click();
     await viewer.getByRole('button', { name: 'Dismiss' }).click();
-    await expect(win.getByRole('tab')).toHaveCount(0);
+    // The window's tabs go; the terminal's own tabs are another strip.
+    await expect(win.getByRole('tablist', { name: 'Window tabs' })).toHaveCount(0);
     await expect(reviewer).toHaveCount(0);
     expect((await rounds(window)).map((round) => [round.round, round.status, round.dismissedAt !== null])).toEqual([
       [1, 'ready', true],

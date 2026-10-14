@@ -5,11 +5,14 @@ import {
   SHAPE_TYPES,
   TEXT_ALIGNS,
   TEXT_COLORS,
+  TEXT_FONT_SIZES,
   TEXT_SIZES,
+  LEGACY_TEXT_FONT_SIZES,
+  MAX_TEXT_FONT_SIZE,
+  MIN_TEXT_FONT_SIZE,
   type ShapeData,
   type ShapeType,
   type TextData,
-  type TextSize,
 } from '@agent-board/daemon/protocol';
 import { token, tokenNumber } from '../../theme';
 import type { MeasureLine, TextBox } from './text-layout';
@@ -20,11 +23,30 @@ const text = (value: unknown) => (typeof value === 'string' ? value : '');
 const flag = (value: unknown, fallback = false) => (typeof value === 'boolean' ? value : fallback);
 const color = (value: unknown, fallback: string) => (typeof value === 'string' ? value : fallback);
 
+/** A font size kept within what a text item may have. */
+export const clampFontSize = (px: number): number =>
+  Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(px)));
+
+/** The font size a step up (`1`) or down (`-1`) from `px` lands on: the next preset that way, else the limit. */
+export function stepFontSize(px: number, direction: 1 | -1): number {
+  const next =
+    direction === 1
+      ? TEXT_FONT_SIZES.find((preset) => preset > px)
+      : [...TEXT_FONT_SIZES].reverse().find((preset) => preset < px);
+  return clampFontSize(next ?? (direction === 1 ? MAX_TEXT_FONT_SIZE : MIN_TEXT_FONT_SIZE));
+}
+
 /** A text item's data, with defaults for anything missing or of the wrong type. */
 export function textData(data: Record<string, unknown>): TextData {
+  const size = pick(TEXT_SIZES, data.size, 'body');
   return {
     text: text(data.text),
-    size: pick(TEXT_SIZES, data.size, 'body'),
+    size,
+    fontSize:
+      typeof data.fontSize === 'number' && Number.isFinite(data.fontSize)
+        ? clampFontSize(data.fontSize)
+        : LEGACY_TEXT_FONT_SIZES[size],
+    minHeight: typeof data.minHeight === 'number' && data.minHeight > 0 ? data.minHeight : 0,
     bold: flag(data.bold),
     italic: flag(data.italic),
     align: pick(TEXT_ALIGNS, data.align, 'left'),
@@ -54,23 +76,14 @@ export function shapeData(data: Record<string, unknown>): ShapeData {
 /** A new shape's data. */
 export const newShapeData = (shape: ShapeType = 'rectangle'): ShapeData => shapeData({ shape });
 
-const SIZE_TOKENS = {
-  h1: '--text-item-h1-size',
-  h2: '--text-item-h2-size',
-  body: '--text-item-body-size',
-} as const satisfies Record<TextSize, `--${string}`>;
-
 let canvas: CanvasRenderingContext2D | null | undefined;
-
-/** The size a text item's `size` is set in, px. */
-const textSizePx = (size: TextSize): number => tokenNumber(SIZE_TOKENS[size]);
 
 /** How a text item is laid out and measured: its box, and a measure of one line in its font. */
 export function textMetrics(data: TextData): {
   box: TextBox;
   measure: MeasureLine;
 } {
-  const fontSize = textSizePx(data.size);
+  const fontSize = data.fontSize;
   const family = token('--font-sans');
   const weight = data.bold ? tokenNumber('--weight-bold') : tokenNumber('--weight-regular');
   const font = `${data.italic ? 'italic ' : ''}${weight} ${fontSize}px ${family}`;

@@ -11,6 +11,7 @@ const item = (id: string, x: number, y: number, data: Record<string, unknown> = 
   width: 100,
   height: 100,
   z: 1,
+  rotation: 0,
   data,
   createdAt: '',
   updatedAt: '',
@@ -44,6 +45,17 @@ describe('copied', () => {
       { id: 'b', x: 200, y: 0 },
     ]);
     expect(copy.connectors.map((known) => known.label)).toEqual(['next']);
+  });
+});
+
+describe('copied', () => {
+  it("keeps each item's angle, and a copy from before angles reads as straight", () => {
+    const copy = copied([{ item: { ...item('a', 0, 0), rotation: 30 }, at: { x: 0, y: 0 } }], []);
+    expect(copy.items[0]!.rotation).toBe(30);
+    expect(placed(copy, { dx: 5, dy: 5 }, () => 'new').items[0]!.rotation).toBe(30);
+    const older = JSON.stringify({ items: [{ ...copy.items[0]!, rotation: undefined }], connectors: [] });
+    expect(parseCopied(older)?.items[0]!.rotation).toBe(0);
+    expect(parseCopied(serialiseCopied({ items: [{ ...copy.items[0]!, rotation: 'x' as never }], connectors: [] }))).toBeUndefined();
   });
 });
 

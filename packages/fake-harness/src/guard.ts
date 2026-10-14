@@ -3,6 +3,7 @@ import { accessSync, chmodSync, constants, existsSync, mkdtempSync, readFileSync
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { leakedGitVars, scrubGitEnv } from './git-guard.ts';
 import { fakeBinDir, HARNESS_NAMES } from './paths.ts';
 
 const fakeBinReal = realpathSync(fakeBinDir);
@@ -221,6 +222,12 @@ function check(launch: Launch): void {
   for (const words of commands) {
     const launched = launchedBy(words, env.PATH);
     if (!launched) continue;
+    const leaked = basename(launched.command) === 'git' ? leakedGitVars(env) : [];
+    if (leaked.length > 0) {
+      throw new Error(
+        `agent-board git guard: refused to run git with ${leaked.join(', ')} in its environment (${words.join(' ')}); a leaked GIT_DIR makes git write to the dev repo. Scrub it with scrubGitEnv().`,
+      );
+    }
     const real = realHarnessFor(launched.command, { ...env, PATH: launched.path }, cwd);
     if (real) refuse(real, words.join(' '));
   }
@@ -261,12 +268,14 @@ let patched = false;
  * Layer 2, per test worker (Vitest setupFiles). Every `node:child_process` launcher:
  * - throws if it would start a real `claude`/`codex`: by name on PATH, by absolute path, through a PATH given in the
  *   spawn's own `env`, or named in a `sh -c` script, `shell: true` command or exec string;
+ * - throws if it would start `git` with GIT_DIR, GIT_WORK_TREE or the like in its environment (and strips them from this worker's);
  * - re-inserts the tripwire into a caller-built `env.PATH`, so whatever that child runs later still hits it.
  * Covers both `import { spawn }` and `childProcess.spawn` call styles.
  */
 export function guardChildProcess(): void {
   if (patched) return;
   patched = true;
+  scrubGitEnv();
   const cp = childProcess as unknown as Record<string, (...args: unknown[]) => unknown>;
   const wrap = (name: string, split: typeof spawnStyle) => {
     const original = cp[name]!;

@@ -296,3 +296,34 @@ test('the Shell tool puts a shell at home on the board; its folder chip follows 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const appearance of ['light', 'dark'] as const) {
+  test(`the repo picker's footer keeps Start inside the card, however long the branch and model, ${appearance}`, async () => {
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_APPEARANCE: appearance });
+    try {
+      await placeWithTool(window, 'New agent');
+      await pickFolderNext(app, repo);
+      await picker(window).getByRole('button', { name: 'Browse…' }).click();
+      await picker(window).getByRole('textbox', { name: 'Base branch' }).fill('origin/release/2026-10-a-very-long-base-branch-name-indeed');
+      await picker(window).getByRole('button', { name: 'Model and role' }).click();
+      await picker(window).getByRole('combobox', { name: 'Model' }).fill('claude-opus-5-5-with-a-very-long-model-name');
+      await picker(window).getByRole('combobox', { name: 'Role' }).selectOption('Reviewer');
+
+      const card = (await picker(window).boundingBox())!;
+      for (const control of [picker(window).getByRole('button', { name: /^Start/ }), picker(window).getByRole('button', { name: 'Model and role' })]) {
+        const box = (await control.boundingBox())!;
+        expect(box.x, 'inside the card on the left').toBeGreaterThanOrEqual(card.x);
+        expect(box.x + box.width, 'inside the card on the right').toBeLessThanOrEqual(card.x + card.width);
+      }
+      // Nothing in the footer runs past it, nor makes it scroll sideways.
+      const overflow = await window.locator('.repo-picker-foot').evaluate((foot) => foot.scrollWidth - foot.clientWidth);
+      expect(overflow).toBe(0);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

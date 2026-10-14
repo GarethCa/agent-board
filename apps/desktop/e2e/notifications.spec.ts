@@ -14,6 +14,12 @@ const notifications = (app: ElectronApplication): Promise<AppNotification[]> =>
 const clickNotification = (app: ElectronApplication, index: number) =>
   app.evaluate((_electron, i) => globalThis.agentBoardNotifications![i]!.click(), index);
 
+/** The popped-out session window, as a handle in the app's main process (undefined while there is none). */
+const poppedOut = (app: ElectronApplication) =>
+  app.evaluateHandle(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().includes('popOut=')),
+  );
+
 const badge = (app: ElectronApplication) => app.evaluate(({ app: electronApp }) => electronApp.getBadgeCount());
 
 const agentTile = (page: Page, agent: Agent) => tile(page).and(page.locator(`[data-session-id="${agent.sessionId}"]`));
@@ -139,29 +145,17 @@ test("clicking the notification of an agent whose session window is popped out b
     await expect.poll(async () => (await notifications(app)).length).toBe(1);
     await clickNotification(app, 0);
     await Promise.all([app.waitForEvent('window'), page.getByRole('button', { name: 'Pop out session window' }).click()]);
-    const poppedOutMinimised = () =>
-      app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().includes('popOut='))?.isMinimized(),
-      );
+    const poppedOutMinimised = async () => (await poppedOut(app)).evaluate((window) => window?.isMinimized());
     if (process.env.AGENT_BOARD_HEADED === '1') {
       // Shown once it has loaded; a hidden window can't be minimised.
-      await expect
-        .poll(() =>
-          app.evaluate(({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().includes('popOut='))?.isVisible(),
-          ),
-        )
-        .toBe(true);
-      await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().includes('popOut='))!.minimize(),
-      );
+      await expect.poll(async () => (await poppedOut(app)).evaluate((window) => window?.isVisible())).toBe(true);
+      await (await poppedOut(app)).evaluate((window) => window!.minimize());
     } else {
       // Headless, as e2e runs, the window is never shown, so it can't be minimised for real: it says it is until restored.
-      await app.evaluate(({ BrowserWindow }) => {
-        const window = BrowserWindow.getAllWindows().find((each) => each.webContents.getURL().includes('popOut='))!;
+      await (await poppedOut(app)).evaluate((window) => {
         let minimised = true;
-        window.isMinimized = () => minimised;
-        window.restore = () => void (minimised = false);
+        window!.isMinimized = () => minimised;
+        window!.restore = () => void (minimised = false);
       });
     }
     await expect.poll(poppedOutMinimised).toBe(true);

@@ -9,7 +9,10 @@ export interface Frame {
   height: number;
 }
 
-/** The frame as kept: the one to restore to, and whether the window fills the board now. */
+/**
+ * The frame as kept: the one to restore to, and whether the window fills the board now. The frame is in fractions of
+ * the board area (0 to 1), so it scales when the screen or the app window changes size.
+ */
 export interface SavedFrame {
   frame: Frame;
   maximised: boolean;
@@ -30,6 +33,9 @@ export interface Bounds {
   height: number;
 }
 
+/** The default restored size as fractions of the board: most of it, centred. */
+const DEFAULT_FRACTIONS: Frame = { x: 0.15, y: 0.125, width: 0.7, height: 0.75 };
+
 /** What it opens as when restored with no frame kept: most of the board, centred. */
 export function defaultFrame(bounds: Bounds): Frame {
   const width = Math.round(bounds.width * 0.7);
@@ -37,13 +43,29 @@ export function defaultFrame(bounds: Bounds): Frame {
   return { x: Math.round((bounds.width - width) / 2), y: Math.round((bounds.height - height) / 2), width, height };
 }
 
-/** The frame as saved (read back untyped), or undefined if it can't be read. */
+/** A frame in pixels as fractions of the board area. */
+export function toFractions(frame: Frame, bounds: Bounds): Frame {
+  return { x: frame.x / bounds.width, y: frame.y / bounds.height, width: frame.width / bounds.width, height: frame.height / bounds.height };
+}
+
+/** A frame kept as fractions of the board area, in pixels of this board. */
+export function fromFractions(frame: Frame, bounds: Bounds): Frame {
+  return { x: frame.x * bounds.width, y: frame.y * bounds.height, width: frame.width * bounds.width, height: frame.height * bounds.height };
+}
+
+/**
+ * The frame as saved (read back untyped), or undefined if it can't be read. A frame saved in pixels by an earlier build (any
+ * value over 1) is dropped, falling back to the default size; a saved "maximised" survives it.
+ */
 export function frameFrom(saved: unknown): SavedFrame | undefined {
   if (typeof saved !== 'object' || saved === null) return undefined;
   const { x, y, width, height, maximised } = saved as Record<string, unknown>;
   const numbers = [x, y, width, height];
   if (!numbers.every((value) => typeof value === 'number' && Number.isFinite(value)) || typeof maximised !== 'boolean') return undefined;
-  return { frame: { x, y, width, height } as Frame, maximised };
+  const [fx, fy, fw, fh] = numbers as number[];
+  const fractions = [fx, fy, fw, fh].every((value) => value! >= 0 && value! <= 1) && fw! > 0 && fh! > 0;
+  if (fractions) return { frame: { x: fx, y: fy, width: fw, height: fh } as Frame, maximised };
+  return maximised ? { frame: DEFAULT_FRACTIONS, maximised } : undefined;
 }
 
 /** The frame kept inside the board and at least the least size (or the board's, if that is smaller). */

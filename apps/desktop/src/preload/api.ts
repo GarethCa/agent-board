@@ -14,13 +14,13 @@ import type {
   FlowEdge,
   FlowEdgeRemovedEvent,
   FlowEdgeUpdatedEvent,
+  FlowDeliveredPayload,
   FlowPayloadPreview,
   UpdateFlowEdgeParams,
   ReviewRound,
   ReviewUpdatedEvent,
   CreateItemParams,
   ImageRef,
-  CreateShellParams,
   CreateShellTileParams,
   DaemonHealth,
   ExternalHooksStatus,
@@ -38,6 +38,10 @@ import type {
   SessionInfo,
   SessionOutputEvent,
   SessionSnapshotEvent,
+  PackageScripts,
+  ShellOwner,
+  ShellPlace,
+  PaneLayout,
   Shell,
   TileMove,
   TranscriptChunk,
@@ -63,8 +67,12 @@ import type {
   ZoneRemovedEvent,
   ZoneUpdatedEvent,
   ZoneSettings,
+  ZoneSnapshot,
   ZoneTracker,
+  OrchestratorActivity,
+  OrchestratorActivityEvent,
 } from '@agent-board/daemon/protocol';
+import type { WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
 
 /** The app lost its connection to the daemon for this attachment; the session itself may still be running. */
@@ -100,7 +108,6 @@ export type RestartDaemonResult = { status: 'restarted' } | { status: 'sessions-
 
 /** The IPC channels between the preload and main. */
 export const SESSION_IPC = {
-  createShell: 'session:createShell',
   list: 'session:list',
   attach: 'session:attach',
   detach: 'session:detach',
@@ -116,7 +123,6 @@ export const SESSION_IPC = {
 } as const;
 
 export interface SessionsApi {
-  createShell(params: CreateShellParams): Promise<SessionInfo>;
   /** Live sessions. */
   list(): Promise<SessionInfo[]>;
   /**
@@ -180,6 +186,7 @@ export const ZONE_IPC = {
   setDefaultRepo: 'zone:setDefaultRepo',
   setLook: 'zone:setLook',
   dissolve: 'zone:dissolve',
+  restore: 'zone:restore',
   browseFolder: 'zone:browseFolder',
   /** main → renderer: `(ZoneChange)` for every zone change. */
   changed: 'zone:changed',
@@ -219,10 +226,12 @@ export interface ZonesApi {
   unbind(id: string): Promise<Zone>;
   /** Sets a group's default repo (a repo, or a folder in one), or clears it with null. */
   setDefaultRepo(id: string, path: string | null): Promise<Zone>;
-  /** Renames the zone and/or recolours it (`#rrggbb`). */
-  setLook(id: string, look: { name?: string; color?: string }): Promise<Zone>;
+  /** Renames the zone, recolours it (`#rrggbb`) and/or sets its fill opacity (a percent, or null for the theme's own). */
+  setLook(id: string, look: { name?: string; color?: string; fillOpacity?: number | null }): Promise<Zone>;
   /** Dissolves a group in one step: its tiles go loose where they are drawn, then it goes; its items stay. */
   dissolve(id: string): Promise<void>;
+  /** Makes a dissolved group again, under its own id and with what it had; undoing a dissolve does. */
+  restore(zone: ZoneSnapshot): Promise<Zone>;
   /** Shows a folder picker ("Browse…") titled `title`, and resolves with the picked folder, or undefined if cancelled. */
   browseFolder(title: string): Promise<string | undefined>;
   /** Calls `listener` whenever a zone is added, changed or removed, by any window or by a clone. Returns the unsubscribe function. */
@@ -267,6 +276,7 @@ export const FLOW_EDGE_IPC = {
   create: 'flow-edge:create',
   update: 'flow-edge:update',
   preview: 'flow-edge:preview',
+  lastPayload: 'flow-edge:lastPayload',
   commands: 'flow-edge:commands',
   approve: 'flow-edge:approve',
   drop: 'flow-edge:drop',
@@ -285,6 +295,8 @@ export interface FlowEdgesApi {
   update(params: UpdateFlowEdgeParams): Promise<FlowEdge>;
   /** What the edge would carry if its agent handed off now. */
   preview(id: string): Promise<FlowPayloadPreview>;
+  /** What the edge last delivered, while the daemon remembers it (not across its restart); null before then. */
+  lastPayload(id: string): Promise<FlowDeliveredPayload | null>;
   /** What each of the edge's gates and scripts runs now, and whether you approved it. */
   commands(id: string): Promise<FlowCommandApproval[]>;
   /** Approves what `command` runs, as `commands` showed it (its `fingerprint`); refused if it has changed since. */
@@ -333,6 +345,21 @@ export interface ReviewsApi {
    * announced: drop them when it goes. Returns the unsubscribe function.
    */
   onChanged(listener: (change: ReviewUpdatedEvent) => void): () => void;
+}
+
+/** The orchestrator IPC channels between the preload and main. */
+export const ORCHESTRATOR_IPC = {
+  activity: 'orchestrator:activity',
+  /** main → renderer: `(OrchestratorActivityEvent)` for every line added to the activity log. */
+  logged: 'orchestrator:logged',
+} as const;
+
+/** What orchestrators did and tried (BB1): the activity log the daemon keeps. */
+export interface OrchestratorsApi {
+  /** The orchestrator's lines of the activity log, newest first: a page of them, older than the line `before` if given. */
+  activity(orchestratorId: string, before?: number): Promise<OrchestratorActivity[]>;
+  /** Calls `listener` with each line added to the log. Returns the unsubscribe function. */
+  onLogged(listener: (event: OrchestratorActivityEvent) => void): () => void;
 }
 
 /** The board item IPC channels between the preload and main. */
@@ -401,6 +428,7 @@ export const AGENT_IPC = {
   decidePermission: 'agent:decidePermission',
   link: 'agent:link',
   setSchedule: 'agent:setSchedule',
+  markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
   setName: 'agent:setName',
   move: 'agent:move',
@@ -419,8 +447,8 @@ export interface AgentsApi {
   spawn(params: SpawnAgentParams): Promise<SpawnAgentResult>;
   /** The name an agent started now with no task would get (`new-agent-N`), as the daemon picks it. */
   nextName(): Promise<string>;
-  /** Ends the agent and removes its worktree and branch; without `force`, stops short of losing work. */
-  delete(sessionId: string, force?: boolean): Promise<DeleteAgentResult>;
+  /** Ends the agent and removes its worktree and branch (or keeps them); without `force`, stops short of losing work. */
+  delete(sessionId: string, force?: boolean, keepWorktree?: boolean): Promise<DeleteAgentResult>;
   /**
    * Sends `text` to the agent as the user's next message, its line breaks kept; `paste` pastes it even as one line, as
    * a terminal pastes a dropped file's path.
@@ -452,6 +480,8 @@ export interface AgentsApi {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
   setSchedule(sessionId: string, schedule: ScheduleSpec | null): Promise<Agent>;
+  /** Marks the agent's current ask seen, because its session was opened: it stops needing the user until it asks again. */
+  markSeen(sessionId: string): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
   /** Renames the agent's tile. */
@@ -478,28 +508,68 @@ export const SHELL_IPC = {
   split: 'shell:split',
   resizeSplit: 'shell:resizeSplit',
   closePane: 'shell:closePane',
+  closeOwnPanes: 'shell:closeOwnPanes',
   resumePane: 'shell:resumePane',
   delete: 'shell:delete',
   setName: 'shell:setName',
   setPaneName: 'shell:setPaneName',
   move: 'shell:move',
+  createTab: 'shell:createTab',
+  ownTab: 'shell:ownTab',
+  scripts: 'shell:scripts',
+  moveTab: 'shell:moveTab',
+  movePane: 'shell:movePane',
+  returnPane: 'shell:returnPane',
+  windowLayout: 'shell:windowLayout',
+  setWindowLayout: 'shell:setWindowLayout',
+  unsplitTabs: 'shell:unsplitTabs',
   /** main → renderer: `(ShellChange)` for every shell tile change. */
   changed: 'shell:changed',
 } as const;
 
 export interface ShellsApi {
-  /** Every shell tile. */
+  /** Every shell tile, and every agent's or shell tile's tab (`owner` set). */
   list(): Promise<Shell[]>;
+  /**
+   * Opens a shell tab in the owner's session window: in the folder the agent started in or the shell tile's, or `cwd`;
+   * or, given `script`, one running that package script there.
+   */
+  createTab(owner: ShellOwner, options?: { cwd?: string; script?: string }): Promise<Shell>;
+  /** The agent's own tab, made the first time it is asked for, so it can be split. */
+  ownTab(agentId: string): Promise<Shell>;
+  /** The package scripts of the folder the agent started in, or the shell tile's. */
+  scripts(owner: ShellOwner): Promise<PackageScripts>;
   /** Starts a shell tile: in a zone, in its folder; or loose on the board at `position`, at home. */
   create(params: CreateShellTileParams): Promise<Shell>;
   /** Moves the shell's tile within its zone, into another, or out onto the board. */
   move(shellId: string, move: TileMove): Promise<Shell>;
+  /**
+   * Moves a whole shell into an agent's or shell tile's tabs (at `order`, an undo's, if given), or onto the board as a
+   * shell tile, its processes untouched; a shell tile takes its tabs with it. Resolves with each shell moved, itself first.
+   */
+  moveTab(shellId: string, to: ShellPlace, order?: number | null): Promise<Shell[]>;
+  /** Moves one pane of a split out into a shell of its own at `to` (with the id `id`, a redo's, if given). */
+  movePane(shellId: string, sessionId: string, to: ShellPlace, id?: string): Promise<{ moved: Shell; source: Shell; layoutBefore: PaneLayout }>;
+  /** Puts a pane moved out by `movePane` back into the shell, as `layout`, its own shell going. */
+  returnPane(shellId: string, sessionId: string, layout: PaneLayout): Promise<Shell>;
+  /** How the owner's session window lays out its tabs in panes; null until it first keeps one. */
+  windowLayout(owner: ShellOwner): Promise<WindowLayout | null>;
+  /** Keeps how the owner's session window lays out its tabs in panes. */
+  setWindowLayout(owner: ShellOwner, layout: WindowLayout): Promise<WindowLayout>;
+  /**
+   * Reads how the owner's session window lays out its tabs, as it opens: tabs split inside themselves before windows
+   * had panes are laid out as its panes first, no shell restarting. The layout is null until it first keeps one; the
+   * tabs are the owner's as they are now.
+   */
+  unsplitTabs(owner: ShellOwner): Promise<{ layout: WindowLayout | null; tabs: Shell[] }>;
   /** Splits the pane in two, the new pane after it. `horizontal` puts them side by side. */
   split(shellId: string, sessionId: string, direction: SplitDirection, cwd?: string): Promise<Shell>;
   /** Moves a split's divider. */
   resizeSplit(shellId: string, splitId: string, ratio: number): Promise<Shell>;
   /** Closes the pane and ends its session; resolves with null when it was the last one and the tile went too. */
   closePane(shellId: string, sessionId: string): Promise<Shell | null>;
+  /** Closes a shell tile's own panes, its next tab becoming its own; resolves with the tile and that tab's id. */
+  closeOwnPanes(shellId: string): Promise<{ tile: Shell; promoted: string }>;
   /** Starts a pane stopped by restart again: a new shell in its last folder, under its old output. */
   resumePane(shellId: string, sessionId: string): Promise<Shell>;
   /** Renames the shell's tile. */
@@ -745,6 +815,7 @@ export interface AgentBoardApi {
   connectors: ConnectorsApi;
   flowEdges: FlowEdgesApi;
   reviews: ReviewsApi;
+  orchestrators: OrchestratorsApi;
   agents: AgentsApi;
   shells: ShellsApi;
   external: ExternalApi;

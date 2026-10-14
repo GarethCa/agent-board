@@ -7,18 +7,17 @@ import { ITEM_IPC } from '../preload/api';
 import { IMAGE_SCHEME } from '../shared/image-url';
 import { forwardEvents } from './broadcast';
 import { handImage } from './image-staging';
+import { passthrough, passthroughVoid } from './passthrough';
 
 /** The board item IPC the preload's `items` API calls. Every window hears every change, so boards stay in step. */
 export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['item.updated', 'item.removed'], ITEM_IPC.changed);
 
-  ipcMain.handle(ITEM_IPC.list, () => daemon.call('item.list'));
-  ipcMain.handle(ITEM_IPC.create, (_event, params: CreateItemParams) => daemon.call('item.create', params));
-  ipcMain.handle(ITEM_IPC.update, (_event, params: UpdateItemParams) => daemon.call('item.update', params));
+  passthrough(daemon, ITEM_IPC.list, 'item.list');
+  passthrough(daemon, ITEM_IPC.create, 'item.create', (params: CreateItemParams) => params);
+  passthrough(daemon, ITEM_IPC.update, 'item.update', (params: UpdateItemParams) => params);
   ipcMain.handle(ITEM_IPC.importImage, (_event, bytes: unknown) => handImage(dataDir, bytes, (path) => daemon.call('image.import', { path })));
-  ipcMain.handle(ITEM_IPC.delete, async (_event, id: string) => {
-    await daemon.call('item.delete', { id });
-  });
+  passthroughVoid(daemon, ITEM_IPC.delete, 'item.delete', (id: string) => ({ id }));
 }
 
 const IMAGE_FILE = new RegExp(`^[0-9a-f]{64}\\.(${IMAGE_EXTENSIONS.join('|')})$`);

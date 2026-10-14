@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { clickClosing } from './windows.ts';
 import { scratch } from './scratch.ts';
@@ -131,10 +131,12 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await spawnAgent(window, 'monorepo', 'Run the tests', { harness });
       await expect(tile(window)).toHaveCount(1);
       await tile(window).dblclick();
+      await showDetails(sessionWindow(window));
       const controls = sessionWindow(window).getByRole('navigation', { name: 'Session controls' });
-      for (const later of ['Pause', 'Hand off', 'Fork']) {
-        await expect(controls.getByRole('button', { name: later })).toBeDisabled();
-      }
+      // Only controls that work: nothing says "Not built yet", and no Connections placeholder.
+      for (const later of ['Pause', 'Hand off', 'Fork']) await expect(controls.getByRole('button', { name: later })).toHaveCount(0);
+      await expect(sessionWindow(window)).not.toContainText('Not built yet');
+      await expect(sessionWindow(window)).not.toContainText('Flows between agents come with M2');
 
       // Interrupt mid-turn: the turn stops short and the agent is idle at its prompt. The fake echoes the prompt once
       // its turn is under way; a Ctrl-C before that reaches it at its prompt and is lost, however enabled Interrupt looks.
@@ -183,7 +185,8 @@ for (const harness of ['Claude', 'Codex'] as const) {
         window.getByRole('button', { name: 'Pop out session window' }).click(),
       ]);
       await expect(sessionWindow(popped)).toBeVisible();
-      await Promise.all([popped.waitForEvent('close'), tileAction(tile(window), 'Delete agent')]);
+      await tileAction(tile(window), 'Delete agent');
+      await Promise.all([popped.waitForEvent('close'), window.getByRole('alertdialog').getByRole('button', { name: 'Delete agent' }).click()]);
       await expect(tile(window)).toHaveCount(0);
       await expect(dockItem(window)).toHaveCount(0);
     } finally {

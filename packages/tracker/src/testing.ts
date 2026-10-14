@@ -1,7 +1,6 @@
 // Test doubles: never import these from production code.
 export {
   createFakeTracker,
-  FAKE_ISSUE_PROJECTS,
   FAKE_ISSUES,
   FAKE_PROJECTS,
   FAKE_SCOPES,

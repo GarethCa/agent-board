@@ -43,6 +43,24 @@ describe('board items over the socket', () => {
     expect(await client.call('item.list')).toEqual([recoloured]);
   });
 
+  it('keeps an angle on an item, straight by default, normalised to a half-turn either way', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const straight = await client.call('item.create', sticky());
+    const tilted = await client.call('item.create', sticky({ rotation: 30 }));
+
+    const turned = await client.call('item.update', { id: straight.id, rotation: 370 });
+    const back = await client.call('item.update', { id: tilted.id, rotation: -200 });
+    const moved = await client.call('item.update', { id: tilted.id, x: 5 });
+
+    expect(straight.rotation).toBe(0);
+    expect(tilted.rotation).toBe(30);
+    expect(turned.rotation).toBe(10);
+    expect(back.rotation).toBe(160);
+    expect(moved.rotation).toBe(160);
+    await expect(client.call('item.update', { id: tilted.id, rotation: Number.NaN })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('item.create', sticky({ rotation: 'x' as never }))).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+  });
+
   it('deletes an item', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const item = await client.call('item.create', sticky());

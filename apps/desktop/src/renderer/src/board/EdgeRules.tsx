@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import {
   ArrowRight,
+  Bot,
   ChevronDown,
   CircleCheck,
   FileJson,
@@ -21,6 +22,7 @@ import type {
   FlowCommandApproval,
   FlowCondition,
   FlowConditionCheck,
+  FlowDeliveredPayload,
   FlowEdge,
   FlowEdgePayload,
   FlowPayloadPreview,
@@ -28,7 +30,7 @@ import type {
 import { errorMessage } from '../../../shared/errors';
 import { Button, Dialog, FlowPill, IconButton, Input, Menu, Radio, SectionLabel, Segmented } from '../ui';
 import type { FlowEdgeActions } from './FlowEdge';
-import { conditionName, heldLabel, historyLine } from './flow-edges';
+import { conditionName, edgeLabel, heldLabel, historyLine } from './flow-edges';
 import { whenLabel } from './schedule';
 
 interface EdgeRulesProps {
@@ -36,6 +38,8 @@ interface EdgeRulesProps {
   /** The names of the agents at its ends. */
   fromName: string;
   toName: string;
+  /** The orchestrator that made it, if an agent did and is still on the board. */
+  madeByName?: string;
   /** Changes whenever its `from` agent finishes a turn, so the preview of its final message is read again. */
   fromRevision: string | null;
   /** Just drawn: the panel says it's new. */
@@ -113,6 +117,27 @@ function usePreview(edge: FlowEdge, fromRevision: string | null): FlowPayloadPre
 }
 
 /**
+ * What the edge last delivered, as the daemon remembers it (null when it doesn't: none yet, or since it restarted);
+ * undefined until it has said. Read again with each delivery.
+ */
+function useLastPayload(edge: FlowEdge): FlowDeliveredPayload | null | undefined {
+  const [payload, setPayload] = useState<FlowDeliveredPayload | null>();
+  const at = edge.lastDelivery?.delivered === true ? edge.lastDelivery.at : undefined;
+  useEffect(() => {
+    if (at === undefined) return setPayload(null);
+    let cancelled = false;
+    window.agentBoard.flowEdges.lastPayload(edge.id).then(
+      (next) => !cancelled && setPayload(next),
+      () => !cancelled && setPayload(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [edge.id, at]);
+  return payload;
+}
+
+/**
  * What each of the edge's gates and scripts runs now, and whether it is approved, by command: read again whenever the
  * edge changes, as a check may have found it changed.
  */
@@ -167,10 +192,11 @@ function ApproveCommand({ plan, fromName, onApprove, onClose }: { plan: FlowComm
  * agent's worktree), its trigger, how it delivers to a busy agent and its conditions, previews the payload, lists the
  * edge's history, and pauses, sends or deletes it.
  */
-export function EdgeRules({ edge, fromName, toName, fromRevision, drawn, live, actions, onDelete, onClose }: EdgeRulesProps) {
+export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, drawn, live, actions, onDelete, onClose }: EdgeRulesProps) {
   const id = useId();
   const now = new Date();
   const preview = usePreview(edge, fromRevision);
+  const delivered = useLastPayload(edge);
   const [path, setPath] = useState(edge.path ?? '');
   const [adding, setAdding] = useState<{ kind: FlowCondition['kind']; text: string }>();
   const commands = useCommands(edge);
@@ -233,6 +259,12 @@ export function EdgeRules({ edge, fromName, toName, fromRevision, drawn, live, a
           <ArrowRight aria-label="to" />
           <span>{toName}</span>
         </p>
+        {edge.madeBy !== null && (
+          <p className="edge-rules-made-by" data-testid="edge-rules-made-by">
+            <Bot aria-hidden />
+            Made by {madeByName ?? 'an orchestrator since deleted'}. You can change or delete it like any other.
+          </p>
+        )}
       </header>
       <div className="edge-rules-body">
         <section className="edge-rules-section" aria-labelledby={`${id}-payload`}>
@@ -379,6 +411,26 @@ export function EdgeRules({ edge, fromName, toName, fromRevision, drawn, live, a
           </Menu>
           <p className="edge-rules-hint">Held until they pass, then sent. Send now sends anyway.</p>
         </section>
+
+        {edge.lastDelivery?.delivered === true && (
+          <section className="edge-rules-section" aria-labelledby={`${id}-delivered`}>
+            <SectionLabel>
+              <span id={`${id}-delivered`}>Last hand-off</span>
+              <span className="edge-rules-aside edge-rules-mono">
+                {delivered?.name ?? edgeLabel(edge)} · {whenLabel(new Date(edge.lastDelivery.at), now)}
+              </span>
+            </SectionLabel>
+            {delivered === undefined ? null : delivered === null ? (
+              <p className="edge-rules-hint" data-testid="edge-rules-delivered">
+                What it carried isn't kept once agent-board restarts.
+              </p>
+            ) : (
+              <pre className="edge-rules-preview" data-testid="edge-rules-delivered">
+                {delivered.text}
+              </pre>
+            )}
+          </section>
+        )}
 
         <section className="edge-rules-section" aria-labelledby={`${id}-preview`}>
           <SectionLabel>

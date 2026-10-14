@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react';
 import type { Zone } from '@agent-board/daemon/protocol';
 import { CircleHelp } from 'lucide-react';
+import { RESET_ROTATION_KEY } from '../board/editing/context-menu';
+import { ROTATION_SNAP } from '../board/items/rotation';
 import { withCommand } from '../keys';
 import { Button, Island, IslandSeparator, Popover, Shortcut, ToolButton } from '../ui';
 
@@ -11,6 +13,8 @@ const SHORTCUTS: { keys: string[]; does: string }[] = [
   { keys: ['N'], does: 'Sticky note at the pointer' },
   { keys: ['T'], does: 'Text: then click' },
   { keys: ['S'], does: 'Shape: then drag' },
+  { keys: ['⇧'], does: `Turning with the rotate handle: ${ROTATION_SNAP}° steps` },
+  { keys: [RESET_ROTATION_KEY], does: 'Reset the rotation of what is selected' },
   { keys: [withCommand('K')], does: 'Find a zone or session' },
   { keys: [withCommand('\\')], does: 'Open or close the board menu' },
   { keys: [withCommand('I')], does: "A session window's details" },

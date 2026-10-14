@@ -21,6 +21,12 @@ export type TileData = {
   shell?: Shell;
   /** Expanded in place: drawn by `ExpandedTile` rather than the representation. */
   expanded?: true;
+  /** The orchestrator that started the agent, while it is on the board. */
+  from?: { sessionId: string; name: string };
+  /** How many agents on the board the agent started, as an orchestrator. */
+  crew?: number;
+  /** The tabs of the agent's session window, when it has any: its shells chip lists their shells. */
+  tabs?: Shell[];
 };
 
 export type TileNodeType = Node<TileData, 'tile'>;
@@ -40,6 +46,11 @@ export interface TileActions {
   expand(nodeId: string): void;
   /** Returns the expanded tile to compact; its session keeps running. */
   collapse(nodeId: string): void;
+  /**
+   * Saves the size the user let a compact tile go at, and its `place` if resizing from the left or top moved
+   * it; both are one undo step. No size puts it back to the default.
+   */
+  resizeTile(nodeId: string, size: { width: number; height: number } | undefined, place?: { x: number; y: number }): void;
   /**
    * Keeps the size an expanded tile was let go at, for it to open at again, and saves its `place` as let go (its
    * top-left, relative to its parent) if that isn't where its place is saved.
@@ -86,6 +97,11 @@ export interface TileActions {
   startReview(agent: Agent): void;
   /** Opens the implementer's session window on its Review tab. */
   openReview(implementer: string): void;
+  /**
+   * Opens the agent's session window on one of its terminal tabs, by id, or on a new shell tab where it
+   * started when `tab` is undefined.
+   */
+  openTab(agent: Agent, tab: string | undefined): void;
 }
 
 /** What a double-click on an agent's or shell tile opens: its tiles' tooltips and ⋯ menus say so. */
@@ -94,6 +110,7 @@ export const ClickOpensContext = createContext<ClickOpens>('window');
 export const TileActionsContext = createContext<TileActions>({
   expand: () => {},
   collapse: () => {},
+  resizeTile: () => {},
   resizeExpanded: () => {},
   maximise: () => {},
   openAgent: () => {},
@@ -115,6 +132,7 @@ export const TileActionsContext = createContext<TileActions>({
   resumeShell: async () => {},
   startReview: () => {},
   openReview: () => {},
+  openTab: () => {},
 });
 
 /** What a shell tile's folder chip needs (AK1): home, to show it as `~`, and where to open a new pane. */

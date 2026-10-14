@@ -4,6 +4,7 @@ import { SquareArrowOutUpRight } from 'lucide-react';
 import { Button, EmptyState, ErrorText, Input, StatusPill } from '../ui';
 import { useAction } from '../use-action';
 import { heldPrompts, needsYou, secondsLeft, toolSummary } from '../../../shared/needs-you';
+import { STATE_LABELS } from '../states';
 import { useNow } from './use-now';
 
 interface InboxProps {
@@ -15,7 +16,8 @@ interface InboxProps {
 /**
  * The needs-you inbox: every agent waiting for input or needing permission, with what it last said or each tool call
  * it wants to make, answerable without opening its shell. It follows the agents live, so an item goes as soon as the
- * agent moves on, however it was answered.
+ * agent moves on, however it was answered. An item whose session was opened since it began asking is read: it stays
+ * while the agent waits, but no longer counts.
  */
 export function Inbox({ agents, onOpen }: InboxProps) {
   const items = needsYou(agents);
@@ -44,10 +46,10 @@ export function Inbox({ agents, onOpen }: InboxProps) {
 function InboxItem({ agent, now, onOpen }: { agent: Agent; now: number; onOpen(agent: Agent): void }) {
   const asking = agent.permissions.length > 0;
   return (
-    <li className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state}>
+    <li className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state} data-read={agent.seen}>
       <div className="inbox-item-head">
         <span className="inbox-item-name">{agent.name}</span>
-        <StatusPill state={asking ? 'needs-permission' : agent.state} />
+        <StatusPill state={agent.seen ? 'idle' : asking ? 'needs-permission' : agent.state} label={agent.seen ? STATE_LABELS[asking ? 'needs-permission' : agent.state] : undefined} />
         <Button size="sm" variant="ghost" className="inbox-item-open" icon={<SquareArrowOutUpRight />} onClick={() => onOpen(agent)}>
           Open
         </Button>

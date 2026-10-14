@@ -47,6 +47,7 @@ export class McpClient {
   private readonly pending = new Map<number, (message: { result?: unknown; error?: { message: string } }) => void>();
   private nextId = 1;
   private ready: Promise<{ instructions?: string }> | undefined;
+  private tools: Promise<string[]> | undefined;
 
   constructor(server: McpServerConfig, cwd: string) {
     this.child = spawn(server.command, server.args, { cwd, env: server.env, stdio: 'pipe' });
@@ -82,8 +83,17 @@ export class McpClient {
     return this.ready;
   }
 
+  /** The names of the tools the server lists, asked once, as a harness asks as it starts. */
+  listTools(): Promise<string[]> {
+    this.tools ??= this.initialize()
+      .then(() => this.request('tools/list', {}))
+      .then((result) => ((result as { tools?: { name: string }[] }).tools ?? []).map((tool) => tool.name));
+    return this.tools;
+  }
+
+  /** Calls a tool the server listed; one it didn't list is an error, as in a harness, which offers the model no such tool. */
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    await this.initialize();
+    if (!(await this.listTools()).includes(name)) return { text: `No such tool available: ${name}`, isError: true };
     const result = (await this.request('tools/call', { name, arguments: args })) as {
       content?: { type: string; text?: string }[];
       isError?: boolean;

@@ -10,6 +10,8 @@ export const VIEW_KEYS = {
   expanded: 'expandedTiles',
   /** The size each tile was last let go at once resized while expanded, by node id: it opens at that size again. */
   expandedSizes: 'expandedTiles.sizes',
+  /** The size each compact tile was resized to, by node id; a tile not in it is the default size. */
+  tileSizes: 'tileSizes',
   /** The tiles dragged onto another, one of them expanded, by node id: left there, over it, not moved clear. */
   expandedOverlaps: 'expandedTiles.overlaps',
   /** Whether onboarding was finished or skipped, and whether the board menu offers it again. */
@@ -22,6 +24,8 @@ export const VIEW_KEYS = {
   windowFrame: 'windowFrame',
   /** What a double-click on an agent's or shell tile opens: its session window or the tile expanded in place. */
   clickOpens: 'clickOpens',
+  /** How the board shows the agents an orchestrator started: in a crew frame beside it, or with a "from" chip. */
+  crewLook: 'crewLook',
 } as const;
 
 /**

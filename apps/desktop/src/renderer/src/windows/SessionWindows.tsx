@@ -1,11 +1,12 @@
-import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
+import { createContext, use, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { needsYouNow, type Agent, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { WINDOW_QUERY, windowTargetFrom, type WindowTarget } from '../../../preload/api';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
+import { markSeen } from '../session/mark-seen';
 import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SquareArrowOutUpRight, X } from 'lucide-react';
-import { needsYou } from '../../../shared/needs-you';
 import { HarnessMark } from '../board/HarnessMark';
+import { TileActionsContext } from '../board/tile';
 import { Button, IconButton, Island, StatusPill, useToast } from '../ui';
 import { SessionWindow, type WindowNav } from '../session/SessionWindow';
 import type { WindowContent } from '../session/SessionBody';
@@ -51,6 +52,11 @@ export function useSessionWindows(): SessionWindowsValue {
 function initialWindows(): Windows {
   const target = windowTargetFrom(new URLSearchParams(location.search), WINDOW_QUERY.show);
   return target === undefined ? [] : showWindow([], target);
+}
+
+/** Opening or focusing an agent's session counts as seeing what it asks. */
+function markTargetSeen(target: WindowTarget) {
+  if (target.kind === 'session') markSeen(target.id);
 }
 
 /** How long the windows must stay put before where they are gets saved. */
@@ -105,6 +111,7 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
   const actions = useMemo<Omit<SessionWindowsValue, 'windows' | 'restored'>>(
     () => ({
       show(target) {
+        markTargetSeen(target);
         // Already out: bring its OS window forward.
         const popped = windowsRef.current.some((entry) => entry.id === target.id && entry.placement === 'popped');
         if (popped) void window.agentBoard.windows.popOut(target);
@@ -118,10 +125,12 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
         setWindows((current) => closeWindow(current, id));
       },
       popOut(target) {
+        markTargetSeen(target);
         setWindows((current) => popOutWindow(current, target));
         void window.agentBoard.windows.popOut(target);
       },
       switchTo(fromId, target) {
+        markTargetSeen(target);
         setWindows((current) => switchWindow(current, fromId, target));
       },
     }),
@@ -138,7 +147,7 @@ const idAttributes = ({ kind, id }: WindowTarget) => (kind === 'shell' ? { 'data
  * The session window shown on the board, and the dock along the board's bottom edge with every other one: minimised
  * windows to restore, and popped-out ones to bring forward. `agents` gives an agent's window its live controls, and
  * `shells` (undefined until listed) a shell tile's window its panes. Once the board has `loaded` them, a window whose
- * agent or shell is gone (deleted while the board was closed) is closed. `sessions`, where every agent's and shell's
+ * agent or shell is gone (deleted while the board was closed, or since) is closed. `sessions`, where every agent's and shell's
  * tile sits, and `zones` let the shown window step through the other sessions of its tile's zone (AL1).
  */
 export function SessionWindowsLayer({
@@ -159,6 +168,7 @@ export function SessionWindowsLayer({
 }) {
   const { windows, restored, show, minimise, close, popOut, switchTo } = useSessionWindows();
   const toasts = useToast();
+  const { deleteAgent, deleteShell } = useContext(TileActionsContext);
   // undefined until the saved frame has been read, so the window never draws maximised and then jumps to its size.
   const [frame, setFrame] = useState<SavedFrame | null | undefined>(undefined);
   const saveFrame = useMemo(() => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.windowFrame, value), SAVE_WINDOWS_DELAY_MS), []);
@@ -200,19 +210,17 @@ export function SessionWindowsLayer({
       },
     };
   }
-  // A shell tile deleted while the board was away (e.g. reopened for a pop-in) has nothing left to show.
-  const gone = content?.kind === 'shell' && shells !== undefined && content.shell === undefined ? content.shellId : undefined;
+  // A window whose agent or shell has gone has nothing left to show: shown, docked or popped out. Once the board has
+  // its agents and shells, windows taken back from the last run whose tile was deleted meanwhile go. After that, a
+  // window goes when its tile does, but only one that was listed first: a session window may open a moment before
+  // its tile is.
+  const listed = useRef<Set<string> | undefined>(undefined);
   useEffect(() => {
-    if (gone !== undefined) close(gone);
-  }, [gone, close]);
-  // Once, when the board has its agents and shells: windows taken back from the last run whose agent or shell was
-  // deleted meanwhile go. Only then, as a session window may open a moment before its tile is listed.
-  const pruned = useRef(false);
-  useEffect(() => {
-    if (!loaded || !restored || shells === undefined || pruned.current) return;
-    pruned.current = true;
+    if (!loaded || !restored || shells === undefined) return;
     const known = new Set([...agents.map((agent) => agent.sessionId), ...shells.map((shell) => shell.id)]);
-    for (const entry of windows) if (!known.has(entry.id)) close(entry.id);
+    const before = listed.current;
+    listed.current = known;
+    for (const entry of windows) if (!known.has(entry.id) && (before === undefined || before.has(entry.id))) close(entry.id);
   }, [loaded, restored, agents, shells, windows, close]);
   return (
     <>
@@ -225,6 +233,7 @@ export function SessionWindowsLayer({
             title={shown.title}
             placement="board"
             onClose={() => close(shown.id)}
+            onDelete={() => (content.kind === 'session' ? deleteAgent(content.sessionId) : deleteShell(content.shellId))}
             onMinimise={() => minimise(shown.id)}
             onPopOut={() => popOut(shown)}
             nav={nav}
@@ -255,7 +264,7 @@ export function SessionWindowsLayer({
             // The live name, so a rename shows in the dock.
             const name = agent?.name ?? (subject.kind === 'shell' ? subject.shell?.name : undefined) ?? entry.title;
             return (
-              <span key={entry.id} className="session-dock-item" data-testid="dock-item" {...idAttributes(entry)} data-placement={entry.placement} data-attention={agent !== undefined && needsYou([agent]).length > 0}>
+              <span key={entry.id} className="session-dock-item" data-testid="dock-item" {...idAttributes(entry)} data-placement={entry.placement} data-attention={agent !== undefined && needsYouNow(agent)}>
                 <Button
                   size="sm"
                   variant="ghost"

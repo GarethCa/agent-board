@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test';
-import { launch, screen, SHELL_ENV, sessionWindow } from './agent-helpers.ts';
+import { launch, screen, SHELL_ENV, sessionWindow, showDetails } from './agent-helpers.ts';
 import { test, newShell, removeDataDir, tempDataDir } from './launch.ts';
 
 const strip = (page: Page) => sessionWindow(page).locator('.session-details');
@@ -25,6 +25,9 @@ test('the details strip resizes on its handle: terminal columns follow, below th
     let { window } = current;
     await newShell(window);
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    // The strip opens collapsed to its icon rail; the rail's Show details opens it at the default width.
+    await expect(strip(window)).toHaveClass(/session-details-rail/);
+    await showDetails(sessionWindow(window));
     await expect(handle(window)).toHaveAttribute('role', 'separator');
     // Settled: the window eases in as it opens.
     await expect.poll(() => stripWidth(window)).toBe(316);
@@ -69,6 +72,10 @@ test('the details strip resizes on its handle: terminal columns follow, below th
     current = await launch(dataDir, SHELL_ENV);
     window = current.window;
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    // Each window opens collapsed; ⌘I opens it at the remembered width.
+    await expect(strip(window)).toHaveClass(/session-details-rail/);
+    await window.keyboard.press('ControlOrMeta+i');
+    await expect(strip(window)).not.toHaveClass(/session-details-rail/);
     await expect.poll(() => stripWidth(window)).toBe(initial - 50);
     await expect(screen(window)).toBeVisible();
   } finally {

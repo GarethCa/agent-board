@@ -3,18 +3,13 @@ import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
 import { TRACKER_ERROR, type TrackerProvider } from '@agent-board/daemon/protocol';
 import { TRACKER_IPC, type ScopesResult } from '../preload/api';
 import { openWebLink } from './links';
+import { passthrough, passthroughVoid } from './passthrough';
 
 /** The tracker IPC the preload's `trackers` API calls. Credentials pass through to the daemon and are never kept here. */
 export function registerTrackerIpc(daemon: DaemonLink): void {
-  ipcMain.handle(TRACKER_IPC.status, (_event, provider: TrackerProvider) =>
-    daemon.call('tracker.status', { provider }),
-  );
-  ipcMain.handle(TRACKER_IPC.connect, (_event, provider: TrackerProvider, credential: string) =>
-    daemon.call('tracker.connect', { provider, credential }),
-  );
-  ipcMain.handle(TRACKER_IPC.disconnect, async (_event, provider: TrackerProvider) => {
-    await daemon.call('tracker.disconnect', { provider });
-  });
+  passthrough(daemon, TRACKER_IPC.status, 'tracker.status', (provider: TrackerProvider) => ({ provider }));
+  passthrough(daemon, TRACKER_IPC.connect, 'tracker.connect', (provider: TrackerProvider, credential: string) => ({ provider, credential }));
+  passthroughVoid(daemon, TRACKER_IPC.disconnect, 'tracker.disconnect', (provider: TrackerProvider) => ({ provider }));
   ipcMain.handle(TRACKER_IPC.scopes, async (_event, provider: TrackerProvider): Promise<ScopesResult> => {
     try {
       return { status: 'ok', scopes: await daemon.call('tracker.scopes', { provider }) };
@@ -27,12 +22,8 @@ export function registerTrackerIpc(daemon: DaemonLink): void {
       throw error;
     }
   });
-  ipcMain.handle(TRACKER_IPC.projects, (_event, provider: TrackerProvider, scope: string) =>
-    daemon.call('tracker.projects', { provider, scope }),
-  );
-  ipcMain.handle(TRACKER_IPC.issues, (_event, zoneId: string, query?: string) =>
-    daemon.call('tracker.issues', { zoneId, query }),
-  );
+  passthrough(daemon, TRACKER_IPC.projects, 'tracker.projects', (provider: TrackerProvider, scope: string) => ({ provider, scope }));
+  passthrough(daemon, TRACKER_IPC.issues, 'tracker.issues', (zoneId: string, query?: string) => ({ zoneId, query }));
   // Tracker issues' and notes' links. Only https: the URL comes from outside the app.
   ipcMain.handle(TRACKER_IPC.openLink, (_event, url: string) => openWebLink(url));
 }

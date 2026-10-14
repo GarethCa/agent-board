@@ -158,6 +158,21 @@ describe('the Linear tracker', () => {
     expect(await answering({ data: { issue } }).getIssue('ACME-8')).toMatchObject({ description: '', scope: 'ACME' });
   });
 
+  it("reads the project an issue is in, and none for an issue that is in no project", async () => {
+    const issue = {
+      identifier: 'ACME-8',
+      title: 'Spawn a Codex agent',
+      description: '',
+      url: 'https://linear.app/acme/issue/ACME-8',
+      state: { name: 'Todo' },
+      team: { key: 'ACME' },
+    };
+    const inProject = await answering({ data: { issue: { ...issue, project: { id: 'p-1' } } } }).getIssue('ACME-8');
+    expect(inProject?.project).toBe('p-1');
+    const alone = await answering({ data: { issue: { ...issue, project: null } } }).getIssue('ACME-8');
+    expect(alone).not.toHaveProperty('project');
+  });
+
   it("reads an issue's labels, and has none for an issue it can't find", async () => {
     const labels = { nodes: [{ name: 'ready-for-agent' }, { name: 'Bug' }] };
     expect(await answering({ data: { issue: { labels } } }).issueLabels!('ACME-8')).toEqual(['ready-for-agent', 'Bug']);

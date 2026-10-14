@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  applyNodeChanges as applyFlowNodeChanges,
   Background,
   BackgroundVariant,
   ConnectionMode,
@@ -17,6 +18,7 @@ import {
   type EdgeTypes,
   type FinalConnectionState,
   type Node,
+  type NodeChange,
   type NodeTypes,
   type Rect,
   type Viewport,
@@ -39,7 +41,9 @@ import {
   type UpdateItemParams,
   type ExternalSession,
   type Shell,
+  type ShellPlace,
   type Zone,
+  type ZoneSnapshot,
   type ZoneBinding,
   type TileMove,
   type ZoneLayout,
@@ -53,9 +57,30 @@ import { errorMessage } from '../../../shared/errors';
 import { ZOOM_KEY } from '../keys';
 import { tokenNumber } from '../theme';
 import { Button, ContextMenu, Dialog, MENU_FOCUS_RETURN_MS, useToast } from '../ui';
+import { markSeen } from '../session/mark-seen';
 import { SessionWindowsLayer, useSessionWindows } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
 import { requestReviewTab } from '../review/review-tab';
+import { requestTab } from '../session/tab-request';
+import {
+  agentWorktrees,
+  dropKey,
+  dropMove,
+  dropOver,
+  ownerAtPoint,
+  paneAtPoint,
+  placeOf,
+  setShellDrag,
+  SHELL_DRAG_TYPE,
+  shellDrag,
+  shellMover,
+  tabMoveChanges,
+  tilesFirst,
+  useShellDrag,
+  type ShellDrag,
+  type ShellMove,
+} from '../session/shell-moves';
+import { liveShellCount } from '../session/tabs';
 import { shownWindow } from '../windows/session-windows';
 import { ConnectorActionsContext, type ConnectorActions } from './connectors/actions';
 import { ConnectorEdge, ConnectorMarkers } from './connectors/ConnectorEdge';
@@ -90,9 +115,11 @@ import { BOARD_CLIPBOARD_TYPE } from './editing/clipboard';
 import { boardEntries, selectionEntries, type ContextActions } from './editing/context-menu';
 import type { States } from './editing/history';
 import { SelectionBox, SnapGuides } from './editing/SelectionOverlays';
+import { selectedNodes } from './editing/selection';
+import { agentLine, deleteLines, externalEnded, externalLine, needsConfirmation, type DeleteTargets } from './editing/delete-plan';
 import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
-import { historyKey, useHistory, type BoardState, type Change } from './editing/use-history';
+import { historyKey, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
 import { useSnapping } from './editing/use-snapping';
 import {
   bringToFront,
@@ -116,6 +143,8 @@ import {
   type ExpandedTiles,
 } from './expanded';
 import { clickOpensFrom, tileOpenAction, type ClickOpens } from './click-opens';
+import { crewFrames, crewMoves, landingRects, withCrewFollowing } from './crews';
+import { CrewFramesContext, crewLookFrom, CrewViewContext, type CrewLook, type CrewView } from './crew-view';
 import {
   isItemNode,
   ITEM_NODE_PREFIX,
@@ -126,15 +155,16 @@ import {
   withItemChange,
   withoutItem,
   type ItemActions,
-  type ItemChange,
   type ItemNodeType,
 } from './items/items';
 import { MIN_SHAPE_SIZE } from './items/ShapeNode';
 import { ITEM_KINDS, ITEM_NODE_TYPES, type ItemKind } from './items/kinds';
+import { liveRotations, LiveRotationsContext, withRotation } from './items/Rotatable';
 import { classifyDrop, classifyPaste, imageBoardSize, imageProblem, type Incoming } from './items/paste';
-import type { ConnectorChange, ShellChange, WindowTarget, ZoneChange } from '../../../preload/api';
+import type { ConnectorChange, ItemChange, ShellChange, WindowTarget, ZoneChange } from '../../../preload/api';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { useProvideBoardCommands, type BoardCommands } from './commands';
+import { keepTileSizes, tileSizeOf, tileSizesFrom, withTileSize, type TileSizes } from './tile-size';
 import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, ZONE_PADDING } from './layout';
 import { tidyLoose as tidyLooseLayout, tidyZone as tidyZoneLayout } from './tidy';
 import { LinkIssueDialog } from './LinkIssueDialog';
@@ -154,6 +184,8 @@ import {
   isZone,
   layoutOf,
   shellWithPane,
+  compactSizeOf,
+  sizeOfNode,
   subjectOf,
   tileNodeId,
   tileSubject,
@@ -189,7 +221,8 @@ import { useZoneResize } from './use-zone-resize';
 const nodeTypes: NodeTypes = {
   zone: withConnectorHandles(ZoneNode),
   tile: withConnectorHandles(TileNode),
-  ...Object.fromEntries(Object.entries(ITEM_NODE_TYPES).map(([type, node]) => [type, withConnectorHandles(node)])),
+  // An item's connector handles turn with it.
+  ...Object.fromEntries(Object.entries(ITEM_NODE_TYPES).map(([type, node]) => [type, withRotation(withConnectorHandles(node))])),
 };
 const edgeTypes: EdgeTypes = { connector: ConnectorEdge, [BRIEF_EDGE_TYPE]: BriefEdge, [FLOW_EDGE_TYPE]: AgentFlowEdge };
 
@@ -221,6 +254,25 @@ const FIT_MARGIN = 0.15;
 
 /** The keys that arm a tool (T, S, Z, A and `). */
 const TOOL_KEYS: Record<string, ArmedTool> = { t: 'text', s: 'shape', z: 'zone', a: 'agent', '`': 'shell' };
+
+/** Where a mouse event is on the screen; undefined for a touch. */
+function pointOf(event: unknown): { x: number; y: number } | undefined {
+  const { clientX, clientY } = event as { clientX?: unknown; clientY?: unknown };
+  return typeof clientX === 'number' && typeof clientY === 'number' ? { x: clientX, y: clientY } : undefined;
+}
+
+/**
+ * Gives the keyboard to the board once the windows a move changed have settled (a window whose tab went shows another,
+ * whose terminal would take it), so ⌘Z takes the move back, as it does any board edit.
+ */
+function keyboardToBoard(): void {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest(SESSION_SURFACES) !== null) active.blur();
+    }),
+  );
+}
 
 /** `items` with `item` added, or replacing the one with the same key. */
 function upsertBy<T>(items: T[], item: T, key: (item: T) => string): T[] {
@@ -274,11 +326,27 @@ export function Board() {
 /** The toast id of the board's one notice: a newer failure replaces it, so they don't pile up. */
 const NOTICE = 'board-notice';
 
+/** Where ⌫ belongs to what is shown, not to the selected tile: an expanded tile or a session window. */
+const SESSION_SURFACES = '.expanded-tile, [data-testid="session-window"]';
+/** Open over the board, these take ⌫ for themselves: a dialog, or a session window. */
+const KEY_BLOCKERS = '[role="dialog"], [role="alertdialog"], [data-testid="session-window"]';
+
+/** Closes every confirmation of deleting a session. */
+const DELETE_FINAL = "Deleting a session can't be undone.";
+
 /**
- * A delete waiting for the user to confirm it: of a live agent, or one that would lose work (`force`); or of a shell
- * tile with live panes.
+ * A delete waiting for the user to confirm it: of a live agent, or one that would lose work; of a shell tile with live
+ * panes; of an external session still running; or of a selection of several things at once. Asked one at a time, in
+ * order: an agent that turns out to hold unsaved work while a selection is deleted asks again after the rest.
  */
-type PendingDelete = { message: string } & ({ kind: 'agent'; sessionId: string; force: boolean } | { kind: 'shell'; shellId: string });
+interface PendingDelete {
+  title: string;
+  lines: string[];
+  confirm: string;
+  /** Offered beside `confirm` where an agent's worktree and branch could be kept: runs with `keep`. */
+  keepLabel?: string;
+  run(keep: boolean): void;
+}
 
 /** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */
 /** How long a rename request waits for its tile to open its field before it lapses, ms. */
@@ -290,7 +358,7 @@ const CONTROLS = 'button, a, input, textarea, select, [role="menuitem"], .nodrag
 const MAX_AGENT_LIST_ATTEMPTS = 5;
 
 function BoardView() {
-  const [nodes, setNodes, applyNodeChanges] = useNodesState<BoardNode>([]);
+  const [nodes, setNodes] = useNodesState<BoardNode>([]);
   const [loaded, setLoaded] = useState(false);
   /**
    * Whether the board had anything on it when it loaded, so the view fits it. Fixed at load: React Flow holds a
@@ -376,12 +444,35 @@ function BoardView() {
   const [expandedSizes, setExpandedSizes] = useState<ExpandedSizes>({});
   const expandedSizesRef = useRef(expandedSizes);
   expandedSizesRef.current = expandedSizes;
+  /** The size each compact tile was resized to, by node id: saved with the view, so it is the same after a restart. */
+  const [tileSizes, setTileSizes] = useState<TileSizes>({});
+  const tileSizesRef = useRef(tileSizes);
+  tileSizesRef.current = tileSizes;
   /** What a double-click on an agent's or shell tile opens: read with the board, so the first one already obeys it. */
   const [clickOpens, setClickOpens] = useState<ClickOpens>('window');
   const pickClickOpens = useCallback((value: ClickOpens) => {
     setClickOpens(value);
     void window.agentBoard.view.set(VIEW_KEYS.clickOpens, value).catch(() => {});
   }, []);
+  /** How the board shows who started whom: crew frames, or chips. */
+  const [crewLook, setCrewLook] = useState<CrewLook>('frames');
+  const crewLookRef = useRef(crewLook);
+  crewLookRef.current = crewLook;
+  const pickCrewLook = useCallback((value: CrewLook) => {
+    setCrewLook(value);
+    void window.agentBoard.view.set(VIEW_KEYS.crewLook, value).catch(() => {});
+  }, []);
+  // The crew frames as drawn, for the zones; and who is in one, for the tiles, kept while the same so a frame moving
+  // with its crew redraws only the zones.
+  const shownFrames = useMemo(() => (crewLook === 'frames' ? crewFrames(nodes.filter(isSessionTile)) : []), [crewLook, nodes]);
+  const framedKey = shownFrames.flatMap((frame) => frame.members).join(' ');
+  const crewView = useMemo<CrewView>(() => ({ look: crewLook, framed: new Set(framedKey.split(' ').filter(Boolean)) }), [crewLook, framedKey]);
+  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames (BA2). */
+  const applyNodeChanges = useCallback(
+    (changes: NodeChange<BoardNode>[]) =>
+      setNodes((current) => applyFlowNodeChanges(crewLookRef.current === 'frames' ? withCrewFollowing(changes, current) : changes, current)),
+    [setNodes],
+  );
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   /** Which tile the user dragged onto which, one of the two expanded: the two may overlap. */
@@ -400,7 +491,15 @@ function BoardView() {
   );
   /** The agent the user asked to open from its notification, until the board has its agents to open it. */
   const [openRequest, setOpenRequest] = useState<string>();
-  const [pendingDelete, setPendingDelete] = useState<PendingDelete>();
+  const [pendingDeletes, setPendingDeletes] = useState<PendingDelete[]>([]);
+  const pendingDelete = pendingDeletes[0];
+  /** Asks the user to confirm a delete, after any already waiting. */
+  const askDelete = useCallback(
+    (ask: PendingDelete) => setPendingDeletes((current) => (current.some((known) => known.title === ask.title && known.lines.join() === ask.lines.join()) ? current : [...current, ask])),
+    [],
+  );
+  /** Drops the delete being asked about: it was confirmed or cancelled. */
+  const settleDelete = useCallback(() => setPendingDeletes((current) => current.slice(1)), []);
   /** An ended agent to restart once the user says so, as the shell its pane dropped into is running something. */
   const [pendingRestart, setPendingRestart] = useState<{ sessionId: string; message: string }>();
   /** The external session being resumed in agent-board, and where the board draws a tile it slotted into its zone. */
@@ -472,6 +571,8 @@ function BoardView() {
   const looseSpots = useRef(new Set<{ rect: ZoneLayout; shellId?: string }>());
   /** Each zone's layout as this window last saved it, for undoing its next move or resize. */
   const savedZoneLayouts = useRef(new Map<string, ZoneLayout>());
+  /** The fill opacity each zone had before the slider drag under way on it (null: the theme's own), until it is saved. */
+  const fillBeforeDrag = useRef(new Map<string, number | null>());
   /** Puts board objects back as an undo or redo has them; set once the board's actions are. */
   const applyStates = useRef<(states: States<BoardState>) => void>(() => {});
   const history = useHistory((states) => applyStates.current(states));
@@ -479,7 +580,7 @@ function BoardView() {
   /** `nodes` with the session tiles laid out from the agents, shells and external sessions, moves in flight applied. */
   const laidOut = useCallback(
     (nodes: BoardNode[]) =>
-      withTiles(nodes, agentsRef.current, shellsRef.current ?? [], externalsRef.current, pendingPlaces.current, expandedRef.current),
+      withTiles(nodes, agentsRef.current, shellsRef.current ?? [], externalsRef.current, pendingPlaces.current, expandedRef.current, tileSizesRef.current),
     [],
   );
   const relayout = useCallback(() => setNodes(laidOut), [setNodes, laidOut]);
@@ -487,7 +588,7 @@ function BoardView() {
   // A tile expanded, collapsed, brought to the front or resized is laid out again.
   useEffect(() => {
     if (loaded) relayout();
-  }, [loaded, expanded, relayout]);
+  }, [loaded, expanded, tileSizes, relayout]);
   // An expanded tile collapses when it goes: its agent or shell deleted, its external session dismissed.
   useEffect(() => {
     if (!loaded || shells === undefined) return;
@@ -498,6 +599,7 @@ function BoardView() {
     ]);
     setExpanded((current) => keepExpanded(current, present));
     setExpandedSizes((current) => keepSizes(current, present));
+    setTileSizes((current) => keepTileSizes(current, present));
     setOverlapsAllowed((current) => keepOverlaps(current, present));
   }, [loaded, agents, shells, externals]);
   // Saved as they change, to open again after a restart.
@@ -512,6 +614,10 @@ function BoardView() {
   useEffect(() => {
     if (loaded) saveExpandedSizes(expandedSizes);
   }, [loaded, expandedSizes, saveExpandedSizes]);
+  const saveTileSizes = useMemo(() => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.tileSizes, value), SAVE_EXPANDED_DELAY_MS), []);
+  useEffect(() => {
+    if (loaded) saveTileSizes(tileSizes);
+  }, [loaded, tileSizes, saveTileSizes]);
   const saveOverlaps = useMemo(
     () => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.expandedOverlaps, value), SAVE_EXPANDED_DELAY_MS),
     [],
@@ -567,6 +673,8 @@ function BoardView() {
         // Before the list arrives there is nothing to change: the change is applied over the list once it does.
         setShells((current) => current && applyShellChange(current, change));
         if (change.type === 'shell.removed') closeWindow(change.shellId);
+        // A shell tile moved into another's tabs has no window of its own: it shows in its owner's.
+        else if (change.shell.owner !== null && windowsRef.current.some((entry) => entry.id === change.shell.id)) closeWindow(change.shell.id);
       }),
     [closeWindow],
   );
@@ -646,14 +754,18 @@ function BoardView() {
       window.agentBoard.items.list(),
       window.agentBoard.shells.list(),
       window.agentBoard.connectors.list(),
-      // A daemon that can't say (an older build) opens the board fitted, as before.
-      window.agentBoard.view.get(VIEW_KEYS.viewport).catch(() => null),
-      window.agentBoard.view.get(VIEW_KEYS.expanded).catch(() => null),
-      window.agentBoard.view.get(VIEW_KEYS.clickOpens).catch(() => null),
-      window.agentBoard.view.get(VIEW_KEYS.expandedSizes).catch(() => null),
-      window.agentBoard.view.get(VIEW_KEYS.expandedOverlaps).catch(() => null),
+      // A view that can't be read opens the board fitted.
+      Promise.all([
+        window.agentBoard.view.get(VIEW_KEYS.viewport),
+        window.agentBoard.view.get(VIEW_KEYS.expanded),
+        window.agentBoard.view.get(VIEW_KEYS.clickOpens),
+        window.agentBoard.view.get(VIEW_KEYS.crewLook),
+        window.agentBoard.view.get(VIEW_KEYS.expandedSizes),
+        window.agentBoard.view.get(VIEW_KEYS.expandedOverlaps),
+        window.agentBoard.view.get(VIEW_KEYS.tileSizes),
+      ]).catch(() => [null, null, null, null, null, null, null] as const),
     ]).then(
-      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, viewport, savedExpanded, savedClickOpens, savedSizes, savedOverlaps]) => {
+      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedCrewLook, savedSizes, savedOverlaps, savedTileSizes]]) => {
         if (cancelled) return;
         const search = window.location.search;
         // Items after zones: a child node needs its parent first.
@@ -671,8 +783,10 @@ function BoardView() {
         setSavedViewport(saved);
         setExpanded(expandedFrom(savedExpanded));
         setExpandedSizes(sizesFrom(savedSizes));
+        setTileSizes(tileSizesFrom(savedTileSizes));
         setOverlapsAllowed(overlapsFrom(savedOverlaps));
         setClickOpens(clickOpensFrom(savedClickOpens));
+        setCrewLook(crewLookFrom(savedCrewLook));
         const held = loadedNodes.length + loadedAgents.length + loadedExternals.length + listedShells.length;
         setFitOnLoad(saved === undefined && held > 0);
         setLoadedEmpty(held === 0);
@@ -723,20 +837,28 @@ function BoardView() {
     if (tooSmall) relayout();
   }, [loaded, nodes, relayout]);
 
-  /** Deletes the agent; without `force`, the daemon refuses if that would lose work, and the user is asked. */
+  /**
+   * Deletes the agent, keeping its worktree and branch if `keep`; without `force`, the daemon refuses if that would lose
+   * work, and the user is asked.
+   */
   const deleteAgent = useCallback(
-    (sessionId: string, force: boolean) => {
-      setPendingDelete(undefined);
-      window.agentBoard.agents.delete(sessionId, force).then((result) => {
+    (sessionId: string, force: boolean, keep = false) => {
+      window.agentBoard.agents.delete(sessionId, force, keep).then((result) => {
         if (result.status === 'unsaved') {
           const message = `${result.message}. Deleting the agent removes its worktree and branch, and that work with them.`;
-          return setPendingDelete({ kind: 'agent', sessionId, message, force: true });
+          return askDelete({
+            title: 'Delete agent?',
+            lines: [message, DELETE_FINAL],
+            confirm: 'Delete anyway',
+            keepLabel: 'Keep worktree and branch',
+            run: (keepIt) => deleteAgent(sessionId, true, keepIt),
+          });
         }
         setAgents((current) => current.filter((agent) => agent.sessionId !== sessionId));
         closeWindow(sessionId);
       }, report('delete the agent'));
     },
-    [report, closeWindow],
+    [report, closeWindow, askDelete],
   );
   /** Restarts the ended agent; without `force`, the daemon refuses if its shell is running something, and the user is asked. */
   const restartAgent = useCallback(
@@ -752,13 +874,21 @@ function BoardView() {
   /** Deletes the shell tile and ends its panes. */
   const deleteShell = useCallback(
     (shellId: string) => {
-      setPendingDelete(undefined);
       window.agentBoard.shells.delete(shellId).then(() => closeWindow(shellId), report('delete the shell'));
     },
     [report, closeWindow],
   );
+  /** Takes the external session's tile off the board, without touching the session. */
+  const dismissExternal = useCallback(
+    (id: string) =>
+      void window.agentBoard.external.dismiss(id).then(
+        () => setExternals((current) => current.filter((session) => session.id !== id)),
+        report('remove the session from the board'),
+      ),
+    [report],
+  );
   /** `moveTile`, for the tile actions made before it. */
-  const moveTileRef = useRef<(nodeId: string, tile: TileData, move: TileMove) => void>(() => {});
+  const moveTileRef = useRef<(nodeId: string, tile: TileData, move: TileMove, coalesce?: string) => void>(() => {});
   /** Where the view will move to show a tile just expanded, once it is laid out. */
   const viewFollow = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(viewFollow.current), []);
@@ -772,9 +902,11 @@ function BoardView() {
   const tileActions = useMemo<TileActions>(
     () => ({
       expand(nodeId) {
+        const subject = tileSubject(nodeId);
+        // Expanding it, or bringing it forward, is looking at the session.
+        if (subject?.kind === 'agent') markSeen(subject.id);
         if (expandedRef.current.some((entry) => entry.id === nodeId)) return setExpanded((current) => bringToFront(current, nodeId));
         // Already in its own OS window: that comes forward instead.
-        const subject = tileSubject(nodeId);
         const popped = windowsRef.current.find(
           (entry) => subject !== undefined && subject.kind !== 'external' && entry.id === subject.id && entry.placement === 'popped',
         );
@@ -799,6 +931,21 @@ function BoardView() {
         else if (tile.shell !== undefined) openShell(tile.shell);
       },
       collapse: (nodeId) => setExpanded((current) => collapseTile(current, nodeId)),
+      resizeTile(nodeId, size, place) {
+        const node = nodesRef.current.find((known) => known.id === nodeId);
+        if (node === undefined || !isSessionTile(node)) return;
+        const before = tileSizeOf(tileSizesRef.current, nodeId);
+        const next = withTileSize(tileSizesRef.current, nodeId, size);
+        const after = tileSizeOf(next, nodeId);
+        const saved = pendingPlaces.current.get(nodeId) ?? subjectOf(node.data).position;
+        const moved = place !== undefined && (saved === null || saved.x !== place.x || saved.y !== place.y);
+        // One drag, one step: the size, and the place when resizing from the left or top moved it.
+        if (before.width !== after.width || before.height !== after.height) {
+          history.record([[historyKey.tileSize(nodeId), { type: 'tileSize', size: before }, { type: 'tileSize', size: after }]]);
+        }
+        setTileSizes(next);
+        if (moved) moveTileRef.current(nodeId, node.data, { zoneId: node.parentId ?? null, ...place });
+      },
       resizeExpanded(nodeId, size, place) {
         setExpanded((current) => resizeExpanded(current, nodeId, size));
         setExpandedSizes((current) => rememberSize(current, nodeId, size));
@@ -819,18 +966,23 @@ function BoardView() {
       // Live panes are processes that may be mid-command: ask first.
       deleteShell(shellId) {
         const shell = shellsRef.current?.find((known) => known.id === shellId);
-        if (shell === undefined || shell.endedPanes.length === paneIds(shell.layout).length) return deleteShell(shellId);
-        const message = `${shell.name} still has running shells. Deleting it ends them.`;
-        setPendingDelete({ kind: 'shell', shellId, message });
+        // Its tabs' shells end with it too.
+        if (shell === undefined || liveShellCount({ kind: 'shell', shell }, shellsRef.current ?? []) === 0) return deleteShell(shellId);
+        askDelete({ title: 'Delete shell?', lines: [`${shell.name} still has running shells. Deleting it ends them.`, DELETE_FINAL], confirm: 'Delete anyway', run: () => deleteShell(shellId) });
       },
-      // A live agent is never deleted on one click: it may be mid-task even with nothing to lose yet.
+      // A live agent is never deleted on one click: it may be mid-task even with nothing to lose yet. One with a worktree
+      // of its own, live or ended, asks whether to remove it with its branch or keep them.
       deleteAgent(sessionId) {
         const agent = agentsRef.current.find((known) => known.sessionId === sessionId);
-        if (agent === undefined || agent.endedAt !== null) return deleteAgent(sessionId, false);
-        const message = agent.ownsWorktree
-          ? `${agent.name} is still running. Deleting it ends its session and removes its worktree and branch.`
-          : `${agent.name} is still running. Deleting it ends its session and takes it off the board; ${agent.cwd} is left as it is.`;
-        setPendingDelete({ kind: 'agent', sessionId, message, force: false });
+        const liveShells = agent === undefined ? 0 : liveShellCount({ kind: 'agent', agent }, shellsRef.current ?? []);
+        if (agent === undefined || (agent.endedAt !== null && !agent.ownsWorktree && liveShells === 0)) return deleteAgent(sessionId, false);
+        askDelete({
+          title: 'Delete agent?',
+          lines: [agentLine(agent, liveShells), DELETE_FINAL],
+          confirm: agent.endedAt === null ? 'Delete anyway' : 'Delete agent',
+          keepLabel: agent.ownsWorktree ? 'Keep worktree and branch' : undefined,
+          run: (keep) => deleteAgent(sessionId, false, keep),
+        });
       },
       // From its own repo's zone, wherever its tile sits, picked as the daemon picks it.
       linkIssue(agent) {
@@ -850,11 +1002,12 @@ function BoardView() {
           report(muted ? "mute the agent's notifications" : "unmute the agent's notifications"),
         ),
       openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')),
-      dismissExternal: (id) =>
-        void window.agentBoard.external.dismiss(id).then(
-          () => setExternals((current) => current.filter((session) => session.id !== id)),
-          report('dismiss the session'),
-        ),
+      // An ended one is forgotten at once; one still running is only taken off the board, which it is told first.
+      dismissExternal(id) {
+        const session = externalsRef.current.find((known) => known.id === id);
+        if (session === undefined || externalEnded(session)) return dismissExternal(id);
+        askDelete({ title: 'Remove from board?', lines: [externalLine(session)], confirm: 'Remove from board', run: () => dismissExternal(id) });
+      },
       // Recorded for undo once it is saved, as the name the daemon kept. The tile follows the daemon's change event.
       rename: async (target, name) => {
         const before = nameOf(target);
@@ -891,8 +1044,19 @@ function BoardView() {
         requestReviewTab(implementer);
         openAgent(agent);
       },
+      openTab(agent, tab) {
+        const show = (tabId: string) => {
+          // A window popped out into an OS window of its own runs in another renderer, which can't hear the request:
+          // it is brought forward as it is, and nothing is left waiting for the next window on the board.
+          const popped = windowsRef.current.some((entry) => entry.id === agent.sessionId && entry.placement === 'popped');
+          if (!popped) requestTab(agent.sessionId, tabId);
+          openAgent(agent);
+        };
+        if (tab !== undefined) return show(tab);
+        window.agentBoard.shells.createTab({ kind: 'agent', id: agent.sessionId }).then((shell) => show(shell.id), report('open a shell'));
+      },
     }),
-    [openAgent, openShell, showWindow, popOut, deleteAgent, deleteShell, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, history, nameOf],
+    [openAgent, openShell, showWindow, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, history, nameOf],
   );
 
   const restartBanner = useRestartBanner(agents, shells, tileActions);
@@ -977,8 +1141,8 @@ function BoardView() {
   );
   /** Moves a tile as the user asked, which can be undone. */
   const moveTile = useCallback(
-    (nodeId: string, tile: TileData, move: TileMove) => {
-      recordTileMove(nodeId, tile, move);
+    (nodeId: string, tile: TileData, move: TileMove, coalesce?: string) => {
+      recordTileMove(nodeId, tile, move, coalesce);
       tileMoves.moveTile(nodeId, tile, move);
     },
     [recordTileMove, tileMoves.moveTile],
@@ -994,7 +1158,18 @@ function BoardView() {
     // Dropped onto another tile, one of the two expanded, the two may overlap: after the move, which ends any pair before.
     const shown = getNodes();
     const onto = droppedOnto(shown, node.id, expandedRef.current);
-    moveTile(node.id, node.data, { ...placeOnBoard(at, AGENT_TILE_SIZE, zoneLayouts()), toFront: true });
+    const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true };
+    // Its crew comes along under crew frames (BA2), each where it was beside it, undone with it as one step.
+    // Measured from where it is drawn, as its crew is.
+    const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
+    const crew = crewLookRef.current === 'frames' ? crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn)) : [];
+    const step = crew.length === 0 ? undefined : `crew:${node.id}:${Date.now()}`;
+    moveTile(node.id, node.data, move, step);
+    if (crew.length > 0) {
+      const following = new Set(crew.map((member) => member.node.id));
+      setNodes((current) => current.map((known) => (following.has(known.id) ? { ...known, dragging: false } : known)));
+      for (const member of crew) moveTile(member.node.id, member.node.data, member.move, step);
+    }
     // The one it was dropped onto stays where it was seen, even if only drawn there, moved clear of something.
     const target = shown.find((known): known is TileNodeType => known.id === onto && isSessionTile(known));
     const stored = nodesRef.current.find((known) => known.id === onto);
@@ -1005,6 +1180,78 @@ function BoardView() {
     setOverlapsAllowed((current) => allowingOverlap(current, node.id, onto));
   };
 
+  /** Takes in shells as a call returned them, before their events arrive. */
+  const tookShells = useCallback(
+    (taken: readonly Shell[]) => setShells((current) => taken.reduce((all, shell) => applyShellChange(all, { type: 'shell.updated', shell }), current ?? [])),
+    [],
+  );
+
+  /**
+   * Makes a move of a whole shell, or of a pane out of its split, that the user dropped (AT2), and records it
+   * for undo. Nothing restarts: only the shell's owner, or its place, changes. The window it lands in keeps the tab it
+   * shows, so the keyboard stays where it was and ⌘Z can take the move back.
+   */
+  const moveShell = useCallback(
+    (move: ShellMove) => {
+      const before = shellsRef.current ?? [];
+      if (move.kind === 'tab') {
+        window.agentBoard.shells.moveTab(move.shellId, move.to).then((moved) => {
+          tookShells(moved);
+          history.record(tabMoveChanges(before, moved));
+          keyboardToBoard();
+        }, report('move the shell'));
+        return;
+      }
+      window.agentBoard.shells.movePane(move.shellId, move.sessionId, move.to).then(({ moved, source, layoutBefore }) => {
+        tookShells([source, moved]);
+        const to = placeOf(moved);
+        if (to !== undefined) {
+          history.record([
+            [historyKey.pane(move.sessionId), { type: 'panePlace', in: { shellId: source.id, layout: layoutBefore } }, { type: 'panePlace', alone: { shellId: moved.id, to } }],
+          ]);
+        }
+        keyboardToBoard();
+      }, report('move the pane'));
+    },
+    [history, report, tookShells],
+  );
+
+  // The windows and tiles make the moves dropped on them through the board, while it is there.
+  useEffect(() => {
+    shellMover.set(moveShell);
+    return () => shellMover.set(undefined);
+  }, [moveShell]);
+  // What a dragged tab, pane or shell tile is over is shown only while one is dragged.
+  const draggingShell = useShellDrag();
+  useEffect(() => {
+    if (draggingShell === undefined) dropOver.set(undefined);
+  }, [draggingShell]);
+
+  /**
+   * Where a tab or pane dropped at `point` (on the screen) goes: into the tabs of the window or tile under it, or onto
+   * the board as a shell tile centred there. Dropped on a window that won't take it (its own), it stays.
+   */
+  const shellDropped = (drag: ShellDrag, point: { x: number; y: number }) => {
+    const owner = ownerAtPoint(point.x, point.y);
+    const onWindow = document.elementFromPoint(point.x, point.y)?.closest(SESSION_SURFACES) != null;
+    if (owner !== undefined || onWindow) {
+      const move = owner === undefined ? undefined : dropMove(drag, { owner }, paneAtPoint(point.x, point.y));
+      if (move !== undefined) moveShell(move);
+      return;
+    }
+    const at = screenToFlowPosition(point);
+    const corner = { x: at.x - AGENT_TILE_SIZE.width / 2, y: at.y - AGENT_TILE_SIZE.height / 2 };
+    const move = dropMove(drag, { tile: { ...placeOnBoard(corner, AGENT_TILE_SIZE, zoneLayouts()), toFront: true } });
+    if (move !== undefined) moveShell(move);
+  };
+
+  /** The agent a lone shell tile dragged to `point` would become a tab of, dropped now: its tile's or window's under it. */
+  const adopterOf = (dragged: BoardNode[], point: { x: number; y: number } | undefined) => {
+    const [node] = dragged;
+    if (dragged.length !== 1 || node === undefined || point === undefined || !isSessionTile(node) || node.data.shell === undefined) return undefined;
+    return ownerAtPoint(point.x, point.y, { skip: node.id, agentsOnly: true });
+  };
+
   /** The zone the dragged node would move into if dropped now, if it would change zone. */
   const dropTargetOf = (node: BoardNode): string | undefined => {
     const absolute = absoluteOf(node);
@@ -1012,7 +1259,7 @@ function BoardView() {
     if (isItemNode(node)) {
       const size = { width: node.width ?? node.data.item.width, height: node.height ?? node.data.item.height };
       zoneId = placeOnBoard(absolute, size, zoneLayouts()).zoneId;
-    } else if (isSessionTile(node)) zoneId = placeOnBoard(absolute, AGENT_TILE_SIZE, zoneLayouts()).zoneId;
+    } else if (isSessionTile(node)) zoneId = placeOnBoard(absolute, compactSizeOf(node), zoneLayouts()).zoneId;
     return zoneId != null && zoneId !== node.parentId ? zoneId : undefined;
   };
 
@@ -1086,9 +1333,9 @@ function BoardView() {
       setNodes((current) =>
         withItem(current, item).map((node) => (node.id === nodeId && editing ? { ...(node as ItemNodeType), data: { ...(node as ItemNodeType).data, editing } } : node)),
       );
-      const { id, kind, zoneId, x, y, width, height, data, z } = item;
+      const { id, kind, zoneId, x, y, width, height, rotation, data, z } = item;
       const created = window.agentBoard.items
-        .create({ id, kind, zoneId, x, y, width, height, data })
+        .create({ id, kind, zoneId, x, y, width, height, rotation, data })
         .then((made) => (made.z === z ? made : window.agentBoard.items.update({ id, z })))
         .then(
           (made) => setNodes((current) => withItem(current, made)),
@@ -1131,7 +1378,7 @@ function BoardView() {
       const place = placeOnBoard(at, size, zoneLayouts());
       const id = crypto.randomUUID();
       putItem(
-        { id, kind, ...place, ...size, z: topZ() + 1, data: made.data ?? newData?.() ?? {}, createdAt: '', updatedAt: '' },
+        { id, kind, ...place, ...size, z: topZ() + 1, rotation: 0, data: made.data ?? newData?.() ?? {}, createdAt: '', updatedAt: '' },
         { editing: editOnCreate },
       );
       selectOnly(new Set([`${ITEM_NODE_PREFIX}${id}`]));
@@ -1520,7 +1767,7 @@ function BoardView() {
       const tiles = children.filter(isSessionTile);
       const items = children.filter(isItemNode).map((node) => node.data.item);
       const layout = layoutOf(zone);
-      const { positions, size } = tidyZoneLayout(layout, tiles.map((node) => ({ id: node.id, ...node.position })), items);
+      const { positions, size } = tidyZoneLayout(layout, tiles.map((node) => ({ id: node.id, ...node.position, ...compactSizeOf(node) })), items);
       moveTilesTo(tiles, positions, zoneId);
       setOverlapsAllowed((current) => withoutOverlaps(current, positions.keys()));
       if (size.width !== layout.width || size.height !== layout.height) saveZoneLayout(zoneId, { ...layout, ...size });
@@ -1530,19 +1777,45 @@ function BoardView() {
 
   /**
    * Dissolves a group: the daemon puts its tiles loose where they are drawn and removes it, as one step; its
-   * notes, cards and connectors stay where they are, as when a zone goes.
+   * notes, cards and connectors stay where they are, as when a zone goes. One step to undo, which makes the
+   * group again and puts back what was in it; and a group holding tiles asks first.
    */
   const dissolveZone = useCallback(
-    async (zone: Zone) => {
-      setNotice(undefined);
-      try {
-        await window.agentBoard.zones.dissolve(zone.id);
-        toasts.show({ tone: 'success', message: `${zone.name} is dissolved: its tiles stay where they are` });
-      } catch (error) {
-        report('dissolve the zone')(error);
-      }
+    (zone: Zone) => {
+      const held = nodesRef.current.filter((node) => node.parentId === zone.id);
+      const tiles = held.filter(isSessionTile);
+      const group: DissolvedGroup = {
+        zone: snapshotOfZone(zone),
+        tiles: tiles.map((node) => ({ nodeId: node.id, at: node.position })),
+        items: held.filter(isItemNode).map(({ data: { item } }) => ({ id: item.id, x: item.x, y: item.y })),
+        connectors: connectorsRef.current.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'zone' && end.id === zone.id)),
+      };
+      const run = async () => {
+        setNotice(undefined);
+        try {
+          await window.agentBoard.zones.dissolve(zone.id);
+          // The daemon deleted the connectors on the group with it, and doesn't announce that.
+          const gone = new Set(group.connectors.map((connector) => connector.id));
+          if (gone.size > 0) setConnectors((current) => current.filter((connector) => !gone.has(connector.id)));
+          history.record([[historyKey.zoneGroup(zone.id), { type: 'zoneGroup', group }, null]]);
+          toasts.show({ tone: 'success', message: `${zone.name} is dissolved: its tiles stay where they are` });
+        } catch (error) {
+          report('dissolve the zone')(error);
+        }
+      };
+      if (tiles.length === 0 && group.connectors.length === 0) return void run();
+      askDelete({
+        title: `Dissolve ${zone.name}?`,
+        lines: [
+          tiles.length === 0
+            ? 'The group goes, with the connectors on it; ⌘Z brings it back.'
+            : `Its ${tiles.length === 1 ? 'tile stays' : `${tiles.length} tiles stay`} on the board where ${tiles.length === 1 ? 'it is' : 'they are'}. The group goes, with any connectors on it; ⌘Z brings it back.`,
+        ],
+        confirm: 'Dissolve',
+        run: () => void run(),
+      });
     },
-    [report, toasts],
+    [report, toasts, history, askDelete],
   );
 
   /** Tidies the tiles loose on the board: in a grid where they are, clear of zones and items. Saved, as one step to undo. */
@@ -1553,7 +1826,7 @@ function BoardView() {
       if (isItemNode(node) && node.parentId === undefined) return [node.data.item];
       return [];
     });
-    const positions = tidyLooseLayout(loose.map((node) => ({ id: node.id, ...node.position })), obstacles);
+    const positions = tidyLooseLayout(loose.map((node) => ({ id: node.id, ...node.position, ...compactSizeOf(node) })), obstacles);
     moveTilesTo(loose, positions, null);
     setOverlapsAllowed((current) => withoutOverlaps(current, positions.keys()));
   }, [moveTilesTo]);
@@ -1581,8 +1854,8 @@ function BoardView() {
     for (const state of entries) {
       if (state?.type === 'item') {
         const { item } = state;
-        const { id, zoneId, x, y, width, height, z, data } = item;
-        if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, data });
+        const { id, zoneId, x, y, width, height, z, rotation, data } = item;
+        if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, rotation, data });
         else putItem(item);
       }
     }
@@ -1596,10 +1869,48 @@ function BoardView() {
         setNodes((current) =>
           laidOut(current.map((node) => (isZone(node) && node.id === id ? { ...node, position: { x: layout.x, y: layout.y }, width: layout.width, height: layout.height } : node))),
         );
+      } else if (state?.type === 'zoneGroup') {
+        // Undoing a dissolve: the group again under its own id, then its tiles and items back in it. This runs after the
+        // undo has returned, so it must not record: the tile move is the unrecorded one, and the items go to the daemon,
+        // whose word of them updates the board.
+        const { zone, tiles, items, connectors } = state.group;
+        if (nodeIds.has(zone.id)) continue;
+        window.agentBoard.zones.restore(zone).then((restored) => {
+          setNodes((current) => withZone(current, restored));
+          for (const { nodeId, at } of tiles) {
+            const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
+            if (node !== undefined) tileMoves.moveTile(nodeId, node.data, { zoneId: zone.id, ...at });
+          }
+          for (const { id, x, y } of items) {
+            if (nodesRef.current.some((known) => known.id === `${ITEM_NODE_PREFIX}${id}`)) window.agentBoard.items.update({ id, zoneId: zone.id, x, y }).catch(report('put a note back in its group'));
+          }
+          // The daemon deleted these with the group. Made straight away, not through putConnector, which would record.
+          for (const connector of connectors) {
+            const { id, from, to, style, startEnd, endEnd, color, label } = connector;
+            const present = (end: ConnectorEnd) => end.type === 'zone' || nodesRef.current.some((known) => known.id === nodeIdOf(end));
+            if (!present(from) || !present(to)) continue;
+            setConnectors((current) => withConnector(current, connector));
+            window.agentBoard.connectors.create({ id, from, to, style, startEnd, endEnd, color, label }).catch((error: unknown) => {
+              setConnectors((current) => current.filter((known) => known.id !== id));
+              report('put a connector back')(error);
+            });
+          }
+        }, report('bring the group back'));
+      } else if (state === null && key.startsWith(historyKey.zoneGroup(''))) {
+        // Redoing a dissolve.
+        const id = key.slice(historyKey.zoneGroup('').length);
+        if (nodeIds.has(id)) window.agentBoard.zones.dissolve(id).catch(report('dissolve the zone'));
+      } else if (state?.type === 'zoneLook') {
+        const id = key.slice(historyKey.zoneLook('').length);
+        if (!nodeIds.has(id)) continue;
+        window.agentBoard.zones.setLook(id, state.look).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s look'));
       } else if (state?.type === 'tile') {
         const nodeId = key.slice(historyKey.tile('').length);
         const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
         if (node !== undefined) tileMoves.moveTile(nodeId, node.data, state.move);
+      } else if (state?.type === 'tileSize') {
+        const nodeId = key.slice(historyKey.tileSize('').length);
+        if (nodeIds.has(nodeId)) setTileSizes((current) => withTileSize(current, nodeId, state.size));
       } else if (state?.type === 'name') {
         // Not through the tile action, which would record it; and left be if the session or shell has gone.
         if (nameOf(state.target) !== undefined) renameDirect(state.target, state.name).catch(report('undo the rename'));
@@ -1620,6 +1931,46 @@ function BoardView() {
       if (state?.type !== 'flowEdge' || flowEdgesRef.current.some((known) => known.id === state.edge.id)) continue;
       if (nodeIds.has(tileNodeId('agent', state.edge.from)) && nodeIds.has(tileNodeId('agent', state.edge.to))) flow.actions.restore(state.edge);
     }
+    // Shells and panes moved between windows and the board, one call after another: a shell tile is back on
+    // the board before its tabs go back to it. One gone meanwhile is left be.
+    const shellPlaces = tilesFirst(
+      [...states].flatMap(([key, state]) => (state?.type === 'shellPlace' ? [{ id: key.slice(historyKey.shell('').length), to: state.to, order: state.order }] : [])),
+    );
+    const panePlaces = [...states].flatMap(([key, state]) => (state?.type === 'panePlace' ? [{ sessionId: key.slice(historyKey.pane('').length), state }] : []));
+    if (shellPlaces.length === 0 && panePlaces.length === 0) return;
+    /** Whether the owner or zone a shell would go back to has gone meanwhile (deleted, say): it stays where it is. */
+    const placeGone = (to: ShellPlace) =>
+      'owner' in to
+        ? to.owner.kind === 'agent'
+          ? !agentsRef.current.some((agent) => agent.sessionId === to.owner.id)
+          : !shellsRef.current?.some((shell) => shell.id === to.owner.id && shell.owner === null)
+        : to.tile.zoneId !== null && !nodeIds.has(to.tile.zoneId);
+    // One after another, each on its own: one that fails is said, and the rest still go back.
+    let moving = Promise.resolve();
+    const then = (step: () => Promise<void>) => {
+      moving = moving.then(() => step().catch(report('move the shell back')));
+    };
+    for (const place of shellPlaces) {
+      then(async () => {
+        if (!shellsRef.current?.some((shell) => shell.id === place.id) || placeGone(place.to)) return;
+        tookShells(await window.agentBoard.shells.moveTab(place.id, place.to, place.order));
+      });
+    }
+    for (const { sessionId, state } of panePlaces) {
+      then(async () => {
+        if ('in' in state) {
+          if (!shellsRef.current?.some((shell) => shell.id === state.in.shellId)) return;
+          tookShells([await window.agentBoard.shells.returnPane(state.in.shellId, sessionId, state.in.layout)]);
+          return;
+        }
+        const holder = shellsRef.current?.find((shell) => paneIds(shell.layout).includes(sessionId));
+        if (holder === undefined || placeGone(state.alone.to)) return;
+        const { moved, source } = await window.agentBoard.shells.movePane(holder.id, sessionId, state.alone.to, state.alone.shellId);
+        tookShells([source, moved]);
+      });
+    }
+    // The keyboard stays the board's, so ⌘Z and ⇧⌘Z go on stepping through moves.
+    void moving.then(keyboardToBoard);
   };
 
   /** Moves the zone's top-left corner to `at` on the board, what is in it with it, and saves it. */
@@ -1700,8 +2051,57 @@ function BoardView() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [loaded, editing.selection, clickOpens, tileActions]);
 
+  /**
+   * Deletes what is selected, as ⌫ and the context menu do: items and connectors at once, undoably; a lone session as its
+   * tile's own delete does, asking if it needs to; anything more with a session in it behind one combined question.
+   */
+  const deleteSelected = useCallback(() => {
+    const sessions = selectedNodes(nodesRef.current).all.filter(isSessionTile);
+    if (sessions.length === 0) return editing.deleteSelection();
+    const targets: DeleteTargets = {
+      agents: sessions.flatMap((node) => node.data.agent ?? []),
+      shells: sessions.flatMap((node) =>
+        node.data.shell === undefined ? [] : [{ name: node.data.shell.name, live: liveShellCount({ kind: 'shell', shell: node.data.shell }, shellsRef.current ?? []) > 0 }],
+      ),
+      externals: sessions.flatMap((node) => node.data.external ?? []),
+      items: editing.selection().items.length,
+      connectors: selectedConnectorsRef.current.size,
+      agentShells: new Map(sessions.flatMap((node) => (node.data.agent === undefined ? [] : [[node.data.agent.sessionId, liveShellCount({ kind: 'agent', agent: node.data.agent }, shellsRef.current ?? [])]]))),
+    };
+    if (!needsConfirmation(targets)) {
+      const { agent, shell, external } = sessions[0]!.data;
+      if (agent !== undefined) return tileActions.deleteAgent(agent.sessionId);
+      if (shell !== undefined) return tileActions.deleteShell(shell.id);
+      if (external !== undefined) return tileActions.dismissExternal(external.id);
+      return;
+    }
+    askDelete({
+      title: 'Delete selection?',
+      lines: deleteLines(targets),
+      confirm: 'Delete',
+      keepLabel: targets.agents.some((agent) => agent.ownsWorktree) ? 'Delete, keeping worktrees' : undefined,
+      run(keep) {
+        editing.deleteSelection();
+        for (const agent of targets.agents) deleteAgent(agent.sessionId, false, keep);
+        for (const node of sessions) if (node.data.shell !== undefined) deleteShell(node.data.shell.id);
+        for (const external of targets.externals) dismissExternal(external.id);
+      },
+    });
+  }, [editing, tileActions, askDelete, deleteAgent, deleteShell, dismissExternal]);
+
+  // Whether the pointer last went down inside an expanded tile or a session window: then a ⌫ is for what is shown there.
+  const pointerInSession = useRef(false);
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      pointerInSession.current = (event.target as Element | null)?.closest?.(SESSION_SURFACES) != null;
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, []);
+
   const contextActions: ContextActions = {
     ...editing,
+    deleteSelection: deleteSelected,
     // After the menu has handed the focus back to where it was opened, or the field would lose it at once.
     rename: () => {
       const [node] = editing.selection().nodes;
@@ -1746,7 +2146,7 @@ function BoardView() {
   const looseTiles = () => [
     ...getNodes()
       .filter((node) => isSessionTile(node) && node.parentId === undefined)
-      .map((node) => ({ ...node.position, ...AGENT_TILE_SIZE })),
+      .map((node) => ({ ...node.position, ...sizeOfNode(node) })),
     ...[...looseSpots.current].map((spot) => spot.rect),
   ];
 
@@ -1843,9 +2243,34 @@ function BoardView() {
         setNodes((current) => withZone(current, saved));
       },
       recolor(zone, color) {
+        const { fillOpacity } = zone;
+        history.record([[historyKey.zoneLook(zone.id), { type: 'zoneLook', look: { color: zone.color, fillOpacity } }, { type: 'zoneLook', look: { color, fillOpacity } }]]);
         window.agentBoard.zones.setLook(zone.id, { color }).then((saved) => setNodes((current) => withZone(current, saved)), report('recolour the zone'));
       },
-      dissolve: (zone) => void dissolveZone(zone),
+      previewFill(zone, fillOpacity) {
+        // What the zone had before the drag, for the one step it is undone by.
+        if (!fillBeforeDrag.current.has(zone.id)) fillBeforeDrag.current.set(zone.id, zone.fillOpacity);
+        setNodes((current) => {
+          const known = current.filter(isZone).find((node) => node.id === zone.id);
+          return known === undefined ? current : withZone(current, { ...known.data.zone, fillOpacity });
+        });
+      },
+      cancelFill(zone) {
+        if (!fillBeforeDrag.current.has(zone.id)) return;
+        const before = fillBeforeDrag.current.get(zone.id)!;
+        fillBeforeDrag.current.delete(zone.id);
+        setNodes((current) => {
+          const known = current.filter(isZone).find((node) => node.id === zone.id);
+          return known === undefined ? current : withZone(current, { ...known.data.zone, fillOpacity: before });
+        });
+      },
+      setFill(zone, fillOpacity) {
+        const before = fillBeforeDrag.current.has(zone.id) ? fillBeforeDrag.current.get(zone.id)! : zone.fillOpacity;
+        fillBeforeDrag.current.delete(zone.id);
+        history.record([[historyKey.zoneLook(zone.id), { type: 'zoneLook', look: { color: zone.color, fillOpacity: before } }, { type: 'zoneLook', look: { color: zone.color, fillOpacity } }]]);
+        window.agentBoard.zones.setLook(zone.id, { fillOpacity }).then((saved) => setNodes((current) => withZone(current, saved)), report("set the zone's fill opacity"));
+      },
+      dissolve: dissolveZone,
       setBoardMcp(zone, boardMcp) {
         window.agentBoard.zones.configure(zone.id, { boardMcp }).then(
           (saved) => {
@@ -1855,8 +2280,22 @@ function BoardView() {
           report('change the zone’s board MCP setting'),
         );
       },
+      setAgentsOrchestrate(zone, agentsOrchestrate) {
+        window.agentBoard.zones.configure(zone.id, { agentsOrchestrate }).then(
+          (saved) => {
+            setNodes((current) => withZone(current, saved));
+            toasts.show({
+              tone: 'success',
+              message: agentsOrchestrate
+                ? `Agents you start in ${saved.name} may orchestrate there`
+                : `No agent in ${saved.name} orchestrates any more`,
+            });
+          },
+          report('change whether the zone’s agents may orchestrate'),
+        );
+      },
     }),
-    [setNodes, reloadExternals, toasts, report, tidyZone, dissolveZone],
+    [setNodes, reloadExternals, toasts, report, tidyZone, dissolveZone, history],
   );
   /**
    * Starts a shell tile loose on the board and opens its window, typing `command` into it if given (the PTY holds it
@@ -1906,7 +2345,7 @@ function BoardView() {
         setNodes((current) =>
           current.map((node) => ((node.selected === true) === (node.id === nodeId) ? node : { ...node, selected: node.id === nodeId })),
         );
-        bringIntoView({ ...node.internals.positionAbsolute, ...AGENT_TILE_SIZE });
+        bringIntoView({ ...node.internals.positionAbsolute, ...sizeOfNode(node) });
       },
     }),
     [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, setNodes, bringIntoView],
@@ -1929,7 +2368,7 @@ function BoardView() {
       const size = ITEM_KINDS.issue.size;
       const taken = getNodes()
         .filter((node) => node.parentId === zone.id && (isSessionTile(node) || isItemNode(node)))
-        .map((node) => (isItemNode(node) ? node.data.item : { ...node.position, ...AGENT_TILE_SIZE }));
+        .map((node) => (isItemNode(node) ? node.data.item : { ...node.position, ...sizeOfNode(node) }));
       const at = freeItemSpot(zone.width, size, taken);
       const { provider, id, title, url, state } = issue;
       createItem('issue', { x: zone.x + at.x + size.width / 2, y: zone.y + at.y + size.height / 2 }, { data: { provider, id, title, url, state } });
@@ -1983,7 +2422,12 @@ function BoardView() {
 
   const edges = useMemo(() => {
     const nodeIds = new Set(nodes.map((node) => node.id));
-    return [...connectorEdges(connectors, nodeIds, selectedConnectors), ...briefEdges(nodes, agents), ...flowEdges(flow.edges, nodeIds, flow.selected, flow.live)];
+    const agentNames = new Map(agents.map((agent) => [agent.sessionId, agent.name]));
+    return [
+      ...connectorEdges(connectors, nodeIds, selectedConnectors),
+      ...briefEdges(nodes, agents),
+      ...flowEdges(flow.edges, nodeIds, flow.selected, flow.live, agentNames),
+    ];
   }, [connectors, nodes, selectedConnectors, agents, flow.edges, flow.selected, flow.live]);
   // A node that has lost its handles is measured again, or no edge would ever be drawn to it (see handle-bounds.ts).
   // After React Flow's own effects, which take `nodes` and so may have lost them.
@@ -2026,6 +2470,7 @@ function BoardView() {
       return next.size === current.size && [...next].every((id) => current.has(id)) ? current : next;
     });
   }, [setSelectedFlowEdges]);
+  const rotations = useMemo(liveRotations, []);
   const severalSelected = useMemo(() => nodes.filter((node) => node.selected === true).length > 1, [nodes]);
   /** The flow edge whose Edge rules are open: the one selected, alone. */
   const shownFlowEdge = flow.selected.size === 1 ? flow.edges.find((edge) => flow.selected.has(edge.id)) : undefined;
@@ -2056,6 +2501,8 @@ function BoardView() {
   const handoffs = useMemo(() => handoffEnds(flow.edges, flow.live), [flow.edges, flow.live]);
   /** The zones on the board, for the board menu and the zone island. */
   const zones = useMemo(() => nodes.filter(isZone).map((node) => node.data.zone), [nodes]);
+  // Each agent's name and worktree: a shell moved into another agent's window says whose worktree it runs in.
+  useEffect(() => agentWorktrees.set(agents.map((agent) => ({ name: agent.name, worktree: agent.worktree }))), [agents]);
   /** Where every agent's and shell's tile sits, for the session window's steps through its zone (AL1). */
   const navSessions = useMemo(() => nodes.filter(isSessionTile).flatMap(navSessionOf), [nodes]);
 
@@ -2072,8 +2519,21 @@ function BoardView() {
       }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+        const drag = event.dataTransfer.types.includes(SHELL_DRAG_TYPE) ? shellDrag() : undefined;
+        if (drag === undefined) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        const owner = ownerAtPoint(event.clientX, event.clientY);
+        dropOver.set(owner !== undefined && dropMove(drag, { owner }) !== undefined ? dropKey(owner) : undefined);
       }}
       onDrop={(event) => {
+        const drag = event.dataTransfer.types.includes(SHELL_DRAG_TYPE) ? shellDrag() : undefined;
+        if (drag !== undefined) {
+          event.preventDefault();
+          setShellDrag(undefined);
+          shellDropped(drag, { x: event.clientX, y: event.clientY });
+          return;
+        }
         if (event.dataTransfer.files.length === 0) return;
         // Not for the window to open the file.
         event.preventDefault();
@@ -2108,9 +2568,12 @@ function BoardView() {
                       <IssueCardContext value={issueCards}>
                       <TileActionsContext value={tileActions}>
                       <ClickOpensContext value={clickOpens}>
+                      <CrewViewContext value={crewView}>
+                      <CrewFramesContext value={shownFrames}>
                       <ShellFoldersContext value={shellFolders}>
                       <RenameRequestContext value={renameRequests}>
                         <ItemActionsContext value={itemActions}>
+                          <LiveRotationsContext value={rotations}>
                           <SeveralSelectedContext value={severalSelected}>
                           <ConnectorActionsContext value={connectorActions}>
                           <FlowEdgeActionsContext value={flow.actions}>
@@ -2170,11 +2633,23 @@ function BoardView() {
                                   if (node.data.expanded === true) tileActions.expand(node.id);
                                 }
                               }}
-                              onNodeDrag={(_event, _node, dragged) => setDropTarget(dragged.length === 1 ? dropTargetOf(dragged[0]!) : undefined)}
-                              onNodeDragStop={(_event, _node, dragged) => {
+                              onNodeDrag={(event, _node, dragged) => {
+                                setDropTarget(dragged.length === 1 ? dropTargetOf(dragged[0]!) : undefined);
+                                const adopter = adopterOf(dragged, pointOf(event));
+                                dropOver.set(adopter === undefined ? undefined : dropKey(adopter));
+                              }}
+                              onNodeDragStop={(event, _node, dragged) => {
                                 tileMoves.onDragStop();
                                 snapping.onDragStop();
                                 setDropTarget(undefined);
+                                dropOver.set(undefined);
+                                // A shell tile dropped on an agent's tile or window becomes one of its tabs (AT2),
+                                // rather than overlapping it.
+                                const adopter = adopterOf(dragged, pointOf(event));
+                                if (adopter !== undefined) {
+                                  moveShell({ kind: 'tab', shellId: (dragged[0] as TileNodeType).data.shell!.id, to: { owner: adopter } });
+                                  return;
+                                }
                                 // Where it was last drawn: snapped, and under the pointer, which React Flow's own reckoning isn't.
                                 for (const node of dragged.filter(isZone)) {
                                   saveLayout(node.id, layoutOf(nodesRef.current.filter(isZone).find((known) => known.id === node.id) ?? node));
@@ -2182,12 +2657,19 @@ function BoardView() {
                                 for (const node of dragged.filter(isItemNode)) itemDropped(node);
                                 for (const node of dragged.filter(isSessionTile)) tileDropped(node);
                               }}
-                              // Only items are deleted from the keyboard: removing a zone needs a designed, confirmed flow
-                              // first, and an agent a confirmation.
+                              // Items, connectors and sessions are deleted from the keyboard, sessions behind a confirmation:
+                              // removing a zone needs a designed, confirmed flow first.
                               deleteKeyCode={['Backspace', 'Delete']}
                               // React Flow adds a deleted node's children (a zone's notes) to the list: only items selected
                               // themselves go, and a connector selected itself: one on a deleted item goes with it, in the daemon.
                               onBeforeDelete={async ({ nodes: doomed, edges: doomedEdges }) => {
+                                // With a session selected the board deletes it all itself, after asking (see deleteSelected).
+                                if (doomed.some((node) => isSessionTile(node) && node.selected === true)) {
+                                  // Never from inside a session's window, its expanded tile or a dialog: the key is theirs.
+                                  const inSession = pointerInSession.current || document.activeElement?.closest(SESSION_SURFACES) != null;
+                                  if (!inSession && document.querySelector(KEY_BLOCKERS) === null) deleteSelected();
+                                  return { nodes: [], edges: [] };
+                                }
                                 const nodes = doomed.filter((node) => isItemNode(node) && node.selected === true);
                                 const going = new Set(nodes.map((node) => node.id));
                                 const edges = doomedEdges.filter((edge) => edge.selected === true && !going.has(edge.source) && !going.has(edge.target));
@@ -2289,9 +2771,12 @@ function BoardView() {
                           </FlowEdgeActionsContext>
                           </ConnectorActionsContext>
                           </SeveralSelectedContext>
+                          </LiveRotationsContext>
                         </ItemActionsContext>
                       </RenameRequestContext>
                       </ShellFoldersContext>
+                      </CrewFramesContext>
+                      </CrewViewContext>
                       </ClickOpensContext>
                       </TileActionsContext>
                       </IssueCardContext>
@@ -2327,6 +2812,8 @@ function BoardView() {
         onGrid={toggleGrid}
         clickOpens={clickOpens}
         onClickOpens={pickClickOpens}
+        crewLook={crewLook}
+        onCrewLook={pickCrewLook}
         mode={mode}
         onMode={pickMode}
         tool={tool}
@@ -2344,6 +2831,7 @@ function BoardView() {
           edge={shownFlowEdge}
           fromName={shownEnds.from.name}
           toName={shownEnds.to.name}
+          madeByName={agents.find((agent) => agent.sessionId === shownFlowEdge.madeBy)?.name}
           fromRevision={shownEnds.from.lastMessage}
           drawn={flow.drawn === shownFlowEdge.id}
           live={flow.live.has(shownFlowEdge.id)}
@@ -2456,23 +2944,40 @@ function BoardView() {
       {pendingDelete !== undefined && (
         <Dialog
           role="alertdialog"
-          title={pendingDelete.kind === 'shell' ? 'Delete shell?' : 'Delete agent?'}
-          onClose={() => setPendingDelete(undefined)}
+          title={pendingDelete.title}
+          onClose={settleDelete}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setPendingDelete(undefined)}>
+              <Button variant="ghost" onClick={settleDelete}>
                 Cancel
               </Button>
+              {pendingDelete.keepLabel !== undefined && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    settleDelete();
+                    pendingDelete.run(true);
+                  }}
+                >
+                  {pendingDelete.keepLabel}
+                </Button>
+              )}
               <Button
                 variant="danger"
-                onClick={() => (pendingDelete.kind === 'shell' ? deleteShell(pendingDelete.shellId) : deleteAgent(pendingDelete.sessionId, pendingDelete.force))}
+                onClick={() => {
+                  settleDelete();
+                  pendingDelete.run(false);
+                }}
               >
-                Delete anyway
+                {pendingDelete.confirm}
               </Button>
             </>
           }
         >
-          <p>{pendingDelete.message}</p>
+          {pendingDelete.lines.map((line, index) => (
+            // Lines may repeat (two shells of one name), and the list is fixed for the dialog.
+            <p key={index}>{line}</p>
+          ))}
         </Dialog>
       )}
       {resumingExternal !== undefined && (
@@ -2535,6 +3040,12 @@ function minimapColor(node: Node): string {
 function leastUsedColor(used: string[]): string {
   const uses = (color: string) => used.filter((each) => each === color).length;
   return ZONE_COLORS.reduce((best, color) => (uses(color) < uses(best) ? color : best));
+}
+
+/** What `zone.restore` needs to make `zone` again. */
+function snapshotOfZone(zone: Zone): ZoneSnapshot {
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo };
 }
 
 /** `nodes` with a zone change from the daemon applied. */

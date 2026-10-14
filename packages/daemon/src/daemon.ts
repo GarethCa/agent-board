@@ -19,6 +19,7 @@ import { createExternalSessionHost, externalHandlers, type ExternalSessionHost }
 import { externalResumeHandlers } from './resume-external.ts';
 import { removeExternalHookFile, writeCliShim, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
 import { boardHandlers, guardBoardCallers, type BoardConnection } from './board.ts';
+import { createOrchestratorHost } from './orchestrators.ts';
 import { connectorHandlers } from './connectors.ts';
 import { commandPlan } from './flow-approvals.ts';
 import { createConditionChecker, createShellRunner } from './flow-conditions.ts';
@@ -62,12 +63,11 @@ import { createSettings } from './settings.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
 import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
-import type { TerminalBackend } from './terminal-backend.ts';
 import { watchPullRequests } from './pull-requests.ts';
 import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
 import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
-import { createZoneSources, type RepoCloner, type ZoneSources } from './zone-sources.ts';
+import { createZoneSources, type ZoneSources } from './zone-sources.ts';
 import { zoneDissolveHandlers } from './zone-dissolve.ts';
 import { createZoneTable, zoneHandlers } from './zones.ts';
 
@@ -98,8 +98,6 @@ export interface DaemonOptions {
   saveQuietMs?: number;
   /** The longest piece of a terminal snapshot sent in one event (tests shorten it). */
   snapshotChunkLength?: number;
-  /** Where sessions' terminals live: the built-in node-pty backend by default (ADR-0006). */
-  terminalBackend?: TerminalBackend;
   /**
    * Where agent worktrees go (ADR-0007): `$AGENT_BOARD_WORKTREES_DIR`, else `~/.agent-board/worktrees`.
    */
@@ -158,8 +156,6 @@ export interface DaemonOptions {
    * `~/.agent-board/repos`.
    */
   reposDir?: string;
-  /** How those repos are cloned: with gh (`cloneRepo`) by default. */
-  cloneRepo?: RepoCloner;
   /**
    * How often it asks gh for agents' pull requests: `$AGENT_BOARD_PULL_REQUEST_POLL_MS` (for tests), else every
    * `DEFAULT_PULL_REQUEST_POLL_MS`; 0 never asks gh for them at all.
@@ -249,9 +245,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const countLiveSessions = () => (liveSessions.get() as { n: number }).n - agents.fallbackShellCount();
 
     const clients = new Set<Socket>();
+    /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
+    const listeners: ((event: DaemonEvent) => void)[] = [];
+    /** Each client's connection, as the board methods see it. */
+    const connections = new WeakMap<Socket, BoardConnection>();
+    /** Whether `client` may hear `event`: a session's connection hears only its own tile's activity lines. */
+    const hears = (client: Socket, event: DaemonEvent): boolean => {
+      if (event.type !== 'orchestrator.activity') return true;
+      const session = connections.get(client)?.boardSession;
+      return session === undefined || orchestrators.seesActivity(session, event.entry);
+    };
     const broadcast = (event: DaemonEvent) => {
       const line = eventLine(event);
-      for (const client of clients) if (!client.destroyed) client.write(line);
+      for (const client of clients) if (!client.destroyed && hears(client, event)) client.write(line);
+      for (const listener of listeners) listener(event);
     };
 
     // Sessions a crashed daemon left live would otherwise keep this one up for good.
@@ -283,7 +290,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       scrollbackDir: join(paths.dataDir, 'scrollback'),
       saveQuietMs: options.saveQuietMs,
       snapshotChunkLength: options.snapshotChunkLength,
-      backend: options.terminalBackend ?? createNodePtyBackend({ log }),
+      backend: createNodePtyBackend({ log }),
       shell,
       shellArgs,
       homeDir,
@@ -291,7 +298,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       board: { socketPath: paths.socket, cliDir: dirname(cliPath) },
       broadcast,
       log,
-      onCwd: (sessionId) => shells.onPaneFolder(sessionId),
+      onCwd: (sessionId) => shells.onPaneChanged(sessionId),
+      onShellState: (sessionId) => shells.onPaneChanged(sessionId),
+      shellIntegrationDir: join(paths.dataDir, 'shell-integration'),
       onExit: (session) => {
         agents.onExit(session);
         reviews.onExit(session.id, session.stoppedByRestart);
@@ -299,7 +308,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
     });
 
-    const shells = createShellHost({ db, sessions, homeDir, broadcast, log });
+    // Late-bound: the agent host is made after, with the shells' `deleteOwned`.
+    const shells = createShellHost({ db, sessions, homeDir, shell, agentDeleting: (agentId) => agents.isDeleting(agentId), broadcast, log });
     const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1');
     const externalSessions = createExternalSessionHost({
       db,
@@ -441,6 +451,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges.handOff(sessionId);
         reviews.onHandoff(sessionId);
       },
+      endTabs: (sessionId) => shells.deleteOwned(sessionId),
+      onTurnBoundary: (sessionId) => flowEdges.turnBoundary(sessionId),
       onRemoving: (sessionId) => flowEdges.dropAgent(sessionId),
       broadcast,
       log,
@@ -476,7 +488,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       zones: zoneTable,
       trackers,
       reposDir: options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos')),
-      clone: options.cloneRepo ?? ((repo, dir, clone) => cloneRepo(repo, dir, { ...clone, gh })),
+      clone: (repo, dir, clone) => cloneRepo(repo, dir, { ...clone, gh }),
       removeZone: async (id, cloneFailed) => {
         await leavingZone(id, () => zoneTable.remove(id, cloneFailed === undefined ? {} : { cloneFailed }));
         // Sessions that were in it by their folder may be in no zone now.
@@ -485,7 +497,22 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     await sources.reconcile();
-    const zones = zoneHandlers<unknown>(db, zoneTable, trackers);
+    const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId, on) => agents.zoneOrchestrateChanged(zoneId, on));
+    const orchestrators = createOrchestratorHost({
+      db,
+      sessions,
+      agents,
+      shells,
+      zones: () => zoneTable.list(),
+      flowEdges,
+      // As `agent.delete` without force: its reviewers go first.
+      deleteAgent: async (sessionId) => {
+        await reviews.deleteAgent(sessionId, () => agents.delete(sessionId, false).then(() => null));
+      },
+      broadcast,
+      log,
+    });
+    listeners.push((event) => orchestrators.onEvent(event));
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
@@ -541,7 +568,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...viewStateHandlers<SessionSubscriber>(db),
       ...settings.handlers<SessionSubscriber>(),
       ...agentHandlers(agents),
-      ...boardHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
+      ...boardHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells, flowEdges, logActivity: orchestrators.logActivity }),
+      ...orchestrators.handlers<SessionSubscriber & BoardConnection>(),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
@@ -559,10 +587,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }),
     };
 
-    const guardedHandlers = guardBoardCallers(handlers);
+    const guardedHandlers = guardBoardCallers(handlers, orchestrators);
     const server = createServer((socket) => {
       clients.add(socket);
+      const closed = new AbortController();
       const subscriber: SessionSubscriber & BoardConnection = {
+        closed: closed.signal,
         send: (event) => {
           if (!socket.destroyed) socket.write(eventLine(event));
         },
@@ -572,9 +602,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           else socket.once('drain', callback);
         },
       };
+      connections.set(socket, subscriber);
       socket.on('close', () => {
         clients.delete(socket);
         sessions.detachAll(subscriber);
+        closed.abort();
       });
       socket.on('error', () => socket.destroy());
       const feed = lineSplitter((line) => {
@@ -598,6 +630,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // External hooks go back to doing nothing, without even starting the app.
         removeExternalHookFile(externalHookFile, externalToken);
         externalSessions.stop();
+        orchestrators.close();
         pullRequests.stop();
         flowEdges.stop();
         conditionShell.stop();

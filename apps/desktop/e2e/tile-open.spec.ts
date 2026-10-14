@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -55,6 +55,7 @@ test('a click selects a tile and a double-click opens it, as the setting says; t
     await expect(sessionWindow(window)).toBeHidden();
     await expandedTile(window).getByRole('button', { name: 'Maximise' }).click();
     await expect(sessionWindow(window)).toBeVisible();
+    await showDetails(sessionWindow(window));
     await sessionWindow(window).getByText('Details').first().click();
     await window.keyboard.press('Enter');
     await expect(sessionWindow(window)).toHaveCount(1);

@@ -147,6 +147,57 @@ describe('zones over the socket', () => {
     await expect(client.call('zone.setLook', { id: 'missing', name: 'x' })).rejects.toThrow(/no zone missing/);
   });
 
+  it('restores a dissolved group under its own id with everything it had', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    await client.call('zone.setLook', { id: zone.id, color: '#12b886', fillOpacity: 12 });
+    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false });
+    const full = await client.call('zone.setDefaultRepo', { id: zone.id, path: tempRepo() });
+    await client.call('zone.dissolve', { id: zone.id });
+    expect(await client.call('zone.list')).toEqual([]);
+
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = full;
+    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo });
+
+    expect(restored).toEqual({ ...full, createdAt: restored.createdAt });
+    expect(await client.call('zone.list')).toEqual([restored]);
+    await expect(client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+  });
+
+  it('restores a group without a default repo whose folder has gone, rather than failing', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker } = zone;
+    await client.call('zone.dissolve', { id });
+
+    const restored = await client.call('zone.restore', {
+      id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker,
+      defaultRepo: join(tempPlainFolder(), 'gone'),
+    });
+
+    expect(restored.defaultRepo).toBeNull();
+  });
+
+  it("sets a zone's fill opacity, which starts at the theme's own and can be put back", async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    expect(zone.fillOpacity).toBeNull();
+
+    const faint = await client.call('zone.setLook', { id: zone.id, fillOpacity: 0 });
+    expect(faint).toEqual({ ...zone, fillOpacity: 0 });
+    const strong = await client.call('zone.setLook', { id: zone.id, fillOpacity: 40, color: '#fd7e14' });
+    expect(strong).toMatchObject({ fillOpacity: 40, color: '#fd7e14', name: 'Ideas' });
+    expect(await client.call('zone.setLook', { id: zone.id, name: 'Strays' })).toMatchObject({ fillOpacity: 40 });
+    expect(await client.call('zone.setLook', { id: zone.id, fillOpacity: null })).toMatchObject({ fillOpacity: null });
+
+    for (const bad of [-2, 1, 42, 8.5, '8']) {
+      await expect(client.call('zone.setLook', { id: zone.id, fillOpacity: bad as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    }
+    await expect(client.call('zone.setLook', { id: 'missing', fillOpacity: 8 })).rejects.toThrow(/no zone missing/);
+  });
+
   it('refuses to shrink a zone below the minimum size, or to update a zone that does not exist', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.add', { path: tempRepo(), ...at });

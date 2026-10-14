@@ -6,15 +6,9 @@ import { MAX_REVIEW_CAP } from '@agent-board/daemon/protocol';
 import { renderMarkdown } from '../board/items/StickyNode';
 import { Button, ErrorText, Menu } from '../ui';
 import { useAction } from '../use-action';
+import { shortWhen } from '../when';
 
 const SEVERITY_LABELS: Record<Severity, string> = { blocker: 'Blocker', major: 'Major', minor: 'Minor' };
-
-/** "Fri 17:52", or just "17:52" today. */
-function when(iso: string): string {
-  const date = new Date(iso);
-  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return date.toDateString() === new Date().toDateString() ? time : `${date.toLocaleDateString([], { weekday: 'short' })} ${time}`;
-}
 
 /** What a round's rail entry says it came to. */
 function outcome(round: ReviewRound): { label: string; tone: 'approve' | 'changes' | 'pending' | 'failed' } {
@@ -81,7 +75,7 @@ export function ReviewViewer({ implementer, rounds, onDismissed }: ReviewViewerP
                 {label}
               </span>
               <span className="review-round-when">
-                {when(known.finishedAt ?? known.createdAt)}
+                {shortWhen(known.finishedAt ?? known.createdAt)}
                 {known.sentAt !== null && ' · sent'}
               </span>
             </button>

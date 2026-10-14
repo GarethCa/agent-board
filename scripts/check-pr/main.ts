@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync, createWriteStream } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { selectChecks, type Plan } from './select.ts';
+import { filesNamingTickets } from './ticket-ids.ts';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -45,6 +46,9 @@ interface Step {
   needsBuild?: boolean;
 }
 
+/** The release's leak check on this branch (no pnpm install, no gate): a bare ticket ID in a changed file would stop the next release. */
+const leakCheckStep: Step = { name: 'release-leaks', argv: ['pnpm', 'release:public', '0.0.0', '--dry-run', '--skip-verify', '--ref', 'HEAD'] };
+
 function stepsFor(plan: Plan): Step[] {
   const linux = process.platform === 'linux' && !process.env.DISPLAY;
   const headless = linux ? ['sh', 'scripts/e2e-headless.sh'] : [];
@@ -53,6 +57,7 @@ function stepsFor(plan: Plan): Step[] {
     { name: 'typecheck', argv: ['pnpm', 'typecheck'] },
     { name: 'markdownlint', argv: ['pnpm', 'dlx', 'markdownlint-cli2@0.23.2'] },
   ];
+  if (leakCheck) steps.push(leakCheckStep);
   const related = plan.unit.filter((file) => existsSync(join(root, file)));
   if (related.length > 0) {
     steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...related] });
@@ -96,14 +101,20 @@ function run(step: Step, logDir: string): Promise<{ name: string; outcome: strin
 
 const { files, base } = changedFiles();
 const plan = selectChecks(files, (file) => existsSync(join(root, file)));
+const naming = filesNamingTickets(files, root);
+const leakCheck = naming.length > 0;
+plan.reasons.push(leakCheck ? `release-leaks: ${naming.length} changed file(s) name a ticket ID, so the release leak check runs` : 'release-leaks: skipped, no changed file names a ticket ID');
 console.log(`check:pr: ${files.length} file(s) changed against ${base}`);
 for (const reason of plan.reasons) console.log(`  ${reason}`);
 
 if (plan.full) {
   console.log('check:pr: running the full gate, pnpm check:local');
   if (dryRun) process.exit(0);
+  const logDir = process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.'));
+  mkdirSync(logDir, { recursive: true });
+  const leaks = leakCheck ? (await run(leakCheckStep, logDir)).outcome : 'pass';
   const full = spawn('sh', ['scripts/check-local.sh'], { cwd: root, stdio: 'inherit' });
-  full.on('close', (code) => process.exit(code ?? 1));
+  full.on('close', (code) => process.exit(code || leaks !== 'pass' ? 1 : 0));
 } else {
   const steps = stepsFor(plan);
   console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
@@ -119,7 +130,7 @@ if (plan.full) {
   // Stages, as in check-local.sh; the heavy runs never overlap, because the unit tests (5-second timeouts) and the e2e fail
   // when starved. 1: lint, typecheck, markdownlint and the build. 2: unit. 3: the native visual run, then the e2e.
   const named = (...names: string[]): Step[] => steps.filter((s) => names.includes(s.name));
-  await Promise.all(named('build', 'lint', 'typecheck', 'markdownlint').map(settle));
+  await Promise.all(named('build', 'lint', 'typecheck', 'markdownlint', 'release-leaks').map(settle));
   await Promise.all(named('unit').map(settle));
   if (results.get('build')?.outcome !== 'FAIL') {
     for (const stage of [['visual'], ['e2e']]) await Promise.all(named(...stage).map(settle));

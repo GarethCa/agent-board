@@ -4,23 +4,32 @@
 /** `horizontal` puts the panes side by side (tmux's `split-window -h`), `vertical` one above the other. */
 export type SplitDirection = 'horizontal' | 'vertical';
 
-export type PaneLayout =
-  | {
-      type: 'pane';
-      sessionId: string;
-      /** The user's label for the pane, shown in its header; the shell's name stands in without. */
-      name?: string;
-    }
-  | {
-      type: 'split';
-      /** Names the split, so a resize can say which one. */
-      id: string;
-      direction: SplitDirection;
-      /** The share of the split's length the first pane gets. */
-      ratio: number;
-      first: PaneLayout;
-      second: PaneLayout;
-    };
+/**
+ * A binary tree of splits, tmux-style, whose leaves are `Leaf`s: a shell's panes (`PaneLayout`), or a session window's
+ * panes (`WindowLayout`, window-layout.ts). One shape, so resizing, reading back and laying out are written once.
+ */
+export type SplitTree<Leaf> = Leaf | Split<Leaf>;
+
+export interface Split<Leaf> {
+  type: 'split';
+  /** Names the split, so a resize can say which one. */
+  id: string;
+  direction: SplitDirection;
+  /** The share of the split's length the first side gets. */
+  ratio: number;
+  first: SplitTree<Leaf>;
+  second: SplitTree<Leaf>;
+}
+
+/** A leaf of a split tree: anything but a split. */
+type Leaf = { type: 'pane' };
+
+export type PaneLayout = SplitTree<{
+  type: 'pane';
+  sessionId: string;
+  /** The user's label for the pane, shown in its header; the shell's name stands in without. */
+  name?: string;
+}>;
 
 /** How far a divider can be pushed: both panes stay big enough to use. */
 export const MIN_SPLIT_RATIO = 0.1;
@@ -72,6 +81,12 @@ export function neighbourOf(layout: PaneLayout, sessionId: string): string | und
   return neighbourOf(first, sessionId) ?? neighbourOf(second, sessionId);
 }
 
+/** The label the user gave the pane, if any. */
+export function paneName(layout: PaneLayout, sessionId: string): string | undefined {
+  if (layout.type === 'pane') return layout.sessionId === sessionId ? layout.name : undefined;
+  return paneName(layout.first, sessionId) ?? paneName(layout.second, sessionId);
+}
+
 /** Labels the pane, or takes its label off with an empty `name`. */
 export function setPaneName(layout: PaneLayout, sessionId: string, name: string): PaneLayout {
   if (!paneIds(layout).includes(sessionId)) throw new Error(`no pane ${sessionId}`);
@@ -83,12 +98,12 @@ export function setPaneName(layout: PaneLayout, sessionId: string, name: string)
   return walk(layout);
 }
 
-/** Moves a split's divider, to somewhere both panes stay usable. */
-export function setSplitRatio(layout: PaneLayout, splitId: string, ratio: number): PaneLayout {
+/** Moves a split's divider, to somewhere both sides stay usable. */
+export function setSplitRatio<L extends Leaf>(layout: SplitTree<L>, splitId: string, ratio: number): SplitTree<L> {
   const clamped = Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
   let found = false;
-  const walk = (node: PaneLayout): PaneLayout => {
-    if (node.type === 'pane') return node;
+  const walk = (node: SplitTree<L>): SplitTree<L> => {
+    if (node.type !== 'split') return node;
     if (node.id === splitId) {
       found = true;
       return { ...node, ratio: clamped };
@@ -100,16 +115,13 @@ export function setSplitRatio(layout: PaneLayout, splitId: string, ratio: number
   return result;
 }
 
-/** A layout read back from storage or the wire; throws if it isn't one. */
-export function parsePaneLayout(value: unknown): PaneLayout {
-  const bad = () => new Error(`not a pane layout: ${JSON.stringify(value)?.slice(0, 200)}`);
+/**
+ * A split tree read back from storage or the wire, each leaf by `leaf` (undefined for one that isn't); throws `bad()`
+ * for anything that isn't one.
+ */
+export function parseSplitTree<L>(value: unknown, leaf: (node: Record<string, unknown>) => L | undefined, bad: () => Error): SplitTree<L> {
   if (typeof value !== 'object' || value === null) throw bad();
   const node = value as Record<string, unknown>;
-  if (node.type === 'pane' && typeof node.sessionId === 'string') {
-    return typeof node.name === 'string' && node.name !== ''
-      ? { type: 'pane', sessionId: node.sessionId, name: node.name }
-      : { type: 'pane', sessionId: node.sessionId };
-  }
   if (
     node.type === 'split' &&
     typeof node.id === 'string' &&
@@ -118,7 +130,22 @@ export function parsePaneLayout(value: unknown): PaneLayout {
     node.ratio >= MIN_SPLIT_RATIO &&
     node.ratio <= MAX_SPLIT_RATIO
   ) {
-    return { type: 'split', id: node.id, direction: node.direction, ratio: node.ratio, first: parsePaneLayout(node.first), second: parsePaneLayout(node.second) };
+    return { type: 'split', id: node.id, direction: node.direction, ratio: node.ratio, first: parseSplitTree(node.first, leaf, bad), second: parseSplitTree(node.second, leaf, bad) };
   }
-  throw bad();
+  const parsed = leaf(node);
+  if (parsed === undefined) throw bad();
+  return parsed;
+}
+
+/** A layout read back from storage or the wire; throws if it isn't one. */
+export function parsePaneLayout(value: unknown): PaneLayout {
+  const bad = () => new Error(`not a pane layout: ${JSON.stringify(value)?.slice(0, 200)}`);
+  return parseSplitTree(
+    value,
+    (node) => {
+      if (node.type !== 'pane' || typeof node.sessionId !== 'string') return undefined;
+      return typeof node.name === 'string' && node.name !== '' ? { type: 'pane', sessionId: node.sessionId, name: node.name } : { type: 'pane', sessionId: node.sessionId };
+    },
+    bad,
+  );
 }

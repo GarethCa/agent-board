@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { ChevronDown, ChevronUp, Settings as SettingsIcon } from 'lucide-react';
 import { Inbox } from '../inbox/Inbox';
-import { needsYou } from '../../../shared/needs-you';
+import { unseenCount } from '../../../shared/needs-you';
 import { Button, Island, Popover, ToolButton } from '../ui';
 
 export interface NeedsYouProps {
@@ -19,7 +19,7 @@ export interface NeedsYouProps {
  */
 export function NeedsYou({ agents, onOpen, onSettings }: NeedsYouProps) {
   const [open, setOpen] = useState(false);
-  const count = needsYou(agents).length;
+  const count = unseenCount(agents);
   return (
     <Island className="needs-you island-top-right" data-tour="needs-you">
       <Popover

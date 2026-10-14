@@ -8,7 +8,8 @@ import type {
 } from '@agent-board/tracker';
 import type { TrackerProvider } from '@agent-board/tracker/providers';
 import pkg from '../package.json' with { type: 'json' };
-import type { PaneLayout, SplitDirection } from './pane-layout.ts';
+import { paneIds, type PaneLayout, type SplitDirection } from './pane-layout.ts';
+import type { WindowLayout } from './window-layout.ts';
 
 export type { PaneLayout, SplitDirection };
 export type {
@@ -95,6 +96,8 @@ export interface Zone {
   name: string;
   /** `#rrggbb`. */
   color: string;
+  /** How much of its colour fills it, in percent (see `ZONE_FILL_OPACITY`); null for the theme's own. */
+  fillOpacity: number | null;
   x: number;
   y: number;
   width: number;
@@ -109,6 +112,12 @@ export interface Zone {
    * agent-board. On by default. Every session gets the `agent-board` CLI and its env either way.
    */
   boardMcp: boolean;
+  /**
+   * Whether the agents the user starts in it may orchestrate in it (AZ3): each starts with `orchestrate` `zone`,
+   * which holds while its tile is in this zone and this stays on. On by default. Turned off, no agent in it orchestrates
+   * any more, whoever let it. An agent an orchestrator starts never orchestrates.
+   */
+  agentsOrchestrate: boolean;
   /** Where the zone's issues come from, or null if it has no tracker. */
   tracker: ZoneTracker | null;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
@@ -120,6 +129,12 @@ export interface Zone {
   defaultRepo: string | null;
   createdAt: string;
 }
+
+/** A group as it can be made again (`zone.restore`): what a user set on it, not what is derived or in flight. */
+export type ZoneSnapshot = Pick<
+  Zone,
+  'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'tracker' | 'defaultRepo'
+>;
 
 /**
  * A GitHub repo the daemon is cloning for a zone (`zone.clone`). The zone stays unbound, and starts no agent, until the
@@ -187,8 +202,25 @@ export type ZoneKind = 'repo' | 'folder' | 'unbound';
  */
 export type ZoneBinding = 'repo' | 'project';
 
-/** Zone tints, handed out least-used first so neighbouring zones differ. */
-export const ZONE_COLORS = ['#4c6ef5', '#12b886', '#f59f00', '#e64980', '#7950f2', '#15aabf', '#fa5252', '#82c91e'];
+/** Zone tints, handed out least-used first so neighbouring zones differ. The first eight are the original palette. */
+export const ZONE_COLORS = [
+  '#4c6ef5',
+  '#12b886',
+  '#f59f00',
+  '#e64980',
+  '#7950f2',
+  '#15aabf',
+  '#fa5252',
+  '#82c91e',
+  '#fd7e14',
+  '#40c057',
+  '#be4bdb',
+  '#fcc419',
+  '#339af0',
+  '#a0785a',
+  '#748ffc',
+  '#495057',
+];
 
 /** What each of `ZONE_COLORS` is called, for people who pick one by name, such as with a screen reader. */
 export const ZONE_COLOR_NAMES: Readonly<Record<string, string>> = {
@@ -200,12 +232,30 @@ export const ZONE_COLOR_NAMES: Readonly<Record<string, string>> = {
   '#15aabf': 'Cyan',
   '#fa5252': 'Red',
   '#82c91e': 'Lime',
+  '#fd7e14': 'Orange',
+  '#40c057': 'Green',
+  '#be4bdb': 'Grape',
+  '#fcc419': 'Yellow',
+  '#339af0': 'Sky',
+  '#a0785a': 'Brown',
+  '#748ffc': 'Periwinkle',
+  '#495057': 'Graphite',
 };
+
+/** The fill opacity a zone's slider offers, in percent: 0 is outline only. */
+export const ZONE_FILL_OPACITY = { min: 0, max: 40, step: 2 } as const;
+
+/** Whether `value` is a fill opacity a zone can have: a whole step of `ZONE_FILL_OPACITY`. */
+export function validZoneFillOpacity(value: unknown): value is number {
+  const { min, max, step } = ZONE_FILL_OPACITY;
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max && value % step === 0;
+}
 
 /** A zone's settings. */
 export interface ZoneSettings {
   codexBypassHookTrust: boolean;
   boardMcp: boolean;
+  agentsOrchestrate: boolean;
 }
 
 /** A zone's issue tracker: a provider and a scope in it, such as Linear team `ACME`. */
@@ -294,10 +344,21 @@ export interface BoardItem {
   height: number;
   /** Stacking order among items: higher draws on top. */
   z: number;
+  /**
+   * Its angle in degrees, clockwise about its own centre, in [-180, 180): 0, straight, until the user rotates it. `x`,
+   * `y`, `width` and `height` are its unrotated box.
+   */
+  rotation: number;
   /** What the kind needs, e.g. a sticky note's `StickyData`. */
   data: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+/** `degrees` as an item's `rotation` keeps it: in [-180, 180), and a straight item at 0, never -0. */
+export function normalisedAngle(degrees: number): number {
+  const angle = (((degrees % 360) + 540) % 360) - 180;
+  return angle === 0 ? 0 : angle;
 }
 
 /**
@@ -385,6 +446,15 @@ export const MAX_LINK_URL = 2048;
 /** The text sizes of a text item, and the text inside a shape: a heading 1, a heading 2 and body text. */
 export const TEXT_SIZES = ['h1', 'h2', 'body'] as const;
 export type TextSize = (typeof TEXT_SIZES)[number];
+/** The font sizes the text style bar offers, px. */
+export const TEXT_FONT_SIZES = [12, 14, 16, 20, 24, 32, 48, 64, 96] as const;
+/** The smallest and largest font size a text item may have, px. */
+export const MIN_TEXT_FONT_SIZE = 8;
+export const MAX_TEXT_FONT_SIZE = 200;
+/** The font size each `size` was drawn at before text items had a `fontSize`, px. */
+export const LEGACY_TEXT_FONT_SIZES: Record<TextSize, number> = { h1: 44, h2: 28, body: 16 };
+/** The font size the heading 1, heading 2 and body presets set, px. */
+export const TEXT_PRESET_FONT_SIZES: Record<TextSize, number> = { h1: 32, h2: 24, body: 16 };
 export const TEXT_ALIGNS = ['left', 'center', 'right'] as const;
 export type TextAlign = (typeof TEXT_ALIGNS)[number];
 
@@ -408,7 +478,15 @@ export const TEXT_COLORS = [
 /** A text item's `data`: free text with no background. */
 export interface TextData {
   text: string;
+  /** The size before `fontSize`; an item without a `fontSize` takes the one its `size` was drawn at. */
   size: TextSize;
+  /**
+   * px, from `MIN_TEXT_FONT_SIZE` to `MAX_TEXT_FONT_SIZE`. It wins over `size`, which is left as it was when a font
+   * size is picked: read `fontSize`, and `size` only for an item that has none.
+   */
+  fontSize: number;
+  /** The height the user dragged the box to, px, which it is never shorter than; 0 when it is as tall as its text. */
+  minHeight: number;
   bold: boolean;
   italic: boolean;
   align: TextAlign;
@@ -474,6 +552,8 @@ export interface CreateItemParams {
   y: number;
   width: number;
   height: number;
+  /** Its angle, straight (0) if not given. */
+  rotation?: number;
   data: Record<string, unknown>;
 }
 
@@ -678,6 +758,8 @@ export interface FlowEdge {
   deliveries: number;
   /** Whether it is delivering now: its payload is on its way to `to`. Not kept across a daemon restart. */
   delivering: boolean;
+  /** The agent that made it, an orchestrator (`orchestrator.addEdge`); null for one the user drew. */
+  madeBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -771,6 +853,44 @@ export interface DaemonSettings {
 export type FlowPayloadPreview = { name: string; text: string; bytes: number } | { name: string; problem: string };
 
 /**
+ * What an edge last delivered (`flowEdge.lastPayload`): its name, its text as it was delivered (JSON on one line), and
+ * when. Only the daemon's memory keeps it, so a restart forgets it.
+ */
+export interface FlowDeliveredPayload {
+  name: string;
+  text: string;
+  at: string;
+}
+
+/**
+ * What an agent hands over its outgoing edges (`board.handoff`). Each edge takes the part that matches what it
+ * carries: a final-message edge `message`, a handover edge the file `handoverPath` (relative to the agent's worktree;
+ * the edge's own file without), a JSON edge the value `json` (the edge's own file without).
+ */
+export interface HandoffPayload {
+  message?: string;
+  handoverPath?: string;
+  json?: unknown;
+}
+
+/**
+ * How a hand-off went along one edge: `delivered` to its `to` agent; `held` until its conditions pass (why); `queued`
+ * until that agent's turn ends; `checking`, its conditions still being checked as the call returned (a gate takes
+ * minutes); or `skipped` (why), as for a manual or paused edge.
+ */
+export interface HandoffOutcome {
+  edgeId: string;
+  to: string;
+  outcome: 'delivered' | 'held' | 'queued' | 'checking' | 'skipped';
+  /** What it carried: its file's name, or `message`. */
+  name: string;
+  reason: string | null;
+}
+
+/** A new edge an orchestrator makes (`orchestrator.addEdge`): as `CreateFlowEdgeParams`, without an id. */
+export type OrchestratorEdgeParams = Omit<CreateFlowEdgeParams, 'id' | 'paused'>;
+
+/**
  * Where the user put a session's tile: relative to its zone, so it moves with the zone, or a board position for a
  * tile loose on the board. `z` is its stacking order among tiles, higher on top; null for one never brought to
  * the front, which draws under those that were.
@@ -793,7 +913,8 @@ export interface TileMove {
 }
 
 /** The agent CLI a session runs. */
-export type Harness = 'claude' | 'codex';
+export const HARNESSES = ['claude', 'codex'] as const;
+export type Harness = (typeof HARNESSES)[number];
 
 /** A session as clients see it. Shell sessions have no harness. */
 export interface SessionInfo {
@@ -855,6 +976,11 @@ export function waitsForYou(agent: Pick<Agent, 'endedAt' | 'state' | 'permission
   return agent.endedAt === null && (agent.state === 'waiting' || agent.state === 'needs-permission' || agent.permissions.length > 0);
 }
 
+/** Whether an agent that waits for the user has not been seen since it began asking: it still counts, and shows needs-you. */
+export function needsYouNow(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'seen'>): boolean {
+  return !agent.seen && waitsForYou(agent);
+}
+
 /**
  * What interrupting a turn types: Ctrl-C, which both TUIs take as "interrupt the turn" (as they do Esc). At their
  * prompt, a second one soon after quits, so agents are only sent it mid-turn.
@@ -910,6 +1036,12 @@ export interface Agent {
   /** Whether the user muted its OS notifications. It still counts in the needs-you inbox. */
   muted: boolean;
   /**
+   * Whether the user has opened its session since it last began asking (`agent.markSeen`): its current ask is read, so it
+   * stops counting towards the badge, the dock and the menu bar, and its tile drops the needs-you look. The next time it
+   * works, or a new permission prompt comes, it is cleared and the agent needs the user again.
+   */
+  seen: boolean;
+  /**
    * The GitHub pull requests made from its branch, newest first, with their state and checks: as last seen by the
    * daemon, which asks gh every minute or so. Empty when the repo is not on GitHub.
    */
@@ -947,6 +1079,13 @@ export interface Agent {
    * in its own folder (`external.resume`): deleting it only takes it off the board.
    */
   ownsWorktree: boolean;
+  /**
+   * Whether it may start, message and watch other agents through the board CLI and MCP, and where: its scope,
+   * or null while it may not. Only the user sets it (`agent.setOrchestrate`); an agent an orchestrator starts never has it.
+   */
+  orchestrate: OrchestrateScope | null;
+  /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is deleted). */
+  spawnedBy: string | null;
 }
 
 /**
@@ -1157,6 +1296,148 @@ export interface BoardCaller {
   tileId: string;
   name: string;
   zoneId: string | null;
+  /**
+   * The scope it may orchestrate in: its agent's, when the session is that agent's own; null for a shell tile,
+   * an ended agent's shell, and an agent the user hasn't let orchestrate.
+   */
+  orchestrate: OrchestrateScope | null;
+}
+
+/**
+ * Where an orchestrator may act (ADR-0011): on the agents in the zone its tile is in now (`zone`), on those of
+ * its own repo wherever they sit (`repo`), or on any (`board`); and on the agents it started itself, wherever they are.
+ * It starts agents in its zone, or in a zone of its repo, or in any zone, the same way.
+ */
+export const ORCHESTRATE_SCOPES = ['zone', 'repo', 'board'] as const;
+export type OrchestrateScope = (typeof ORCHESTRATE_SCOPES)[number];
+
+/** Where `scope` reaches, in words, as `its` agent's (or `your`): `its zone`, `your repo`, `the whole board`. */
+export function orchestrateScopeWords(scope: OrchestrateScope, whose: 'its' | 'your' = 'its'): string {
+  return scope === 'board' ? 'the whole board' : `${whose} ${scope}`;
+}
+
+/** Whether `value` names an agent state. */
+export function isAgentState(value: unknown): value is AgentState {
+  return AGENT_STATES.includes(value as AgentState);
+}
+
+/**
+ * Why an orchestrator may not type `text`, as a first prompt or a message, or undefined when it may (ADR-0011). An
+ * allowlist: printable characters, spaces, tabs and line breaks (\n) only, so no control or format character (an
+ * escape, a carriage return, a zero-width or bidi mark) can press a key, hide what comes after it, or be dropped on
+ * the way to the prompt and leave a command in front. And it may not start, once leading whitespace is gone, as a
+ * harness command: `!` (a shell command) or a `/command` (a built-in, which may change a permission mode, a model or a
+ * setting), but for a namespaced `/plugin:command`, a plugin's command or skill or a Codex `/prompts:name`.
+ */
+export function orchestratorTextRefusal(text: string): string | undefined {
+  const hidden = /[^\P{C}\t\n]|[\u2028\u2029]/u.exec(text);
+  if (hidden !== null) {
+    const code = hidden[0].codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0');
+    return `it holds a control or format character (U+${code}); only printable text, tabs and line breaks may be sent`;
+  }
+  const start = text.trimStart();
+  if (start.startsWith('!')) return 'it starts with !, which runs a shell command';
+  if (start.startsWith('/') && !/^\/[\w.-]+:[\w.:-]+(\s|$)/.test(start)) {
+    return "it starts with a /command; only a plugin's namespaced /plugin:command may start one";
+  }
+  return undefined;
+}
+
+/** Where the zone setting that lets agents orchestrate is, for messages. */
+export const ORCHESTRATE_SETTING = "Let agents orchestrate, in the zone's ⋯ menu";
+
+/**
+ * Why the session `caller` may not orchestrate, for it to be told so, and what would change that. `agent` is its tile's
+ * agent, if it is one's, and `zones` the board's. It may not when an orchestrator started it (never), its session has
+ * ended, it is in no zone, its zone doesn't let agents orchestrate, or the user didn't start it there while it did.
+ */
+export function notOrchestratingReason(
+  caller: Pick<BoardCaller, 'sessionId' | 'name'>,
+  agent: Pick<Agent, 'sessionId' | 'spawnedBy' | 'endedAt' | 'zoneId'> | undefined,
+  zones: readonly Pick<Zone, 'id' | 'name' | 'agentsOrchestrate'>[],
+): string {
+  const { name } = caller;
+  if (agent === undefined) return `${name} may not orchestrate: only an agent can, not a shell`;
+  // An ended agent's pane drops into a shell holding its tile: that shell never orchestrates for it.
+  if (agent.sessionId !== caller.sessionId || agent.endedAt !== null) return `${name} may not orchestrate: it has ended, and its shell never orchestrates for it`;
+  const zone = zones.find((each) => each.id === agent.zoneId);
+  if (agent.spawnedBy !== null) return `${name} may not orchestrate: an agent an orchestrator started never does`;
+  if (zone === undefined) return `${name} may not orchestrate: it is in no zone, and agents orchestrate in a zone that lets them (${ORCHESTRATE_SETTING})`;
+  if (!zone.agentsOrchestrate) {
+    return `${name} may not orchestrate: orchestrating is off in ${zone.name}. The user can turn it on (${ORCHESTRATE_SETTING}) for the agents started there after`;
+  }
+  return `${name} may not orchestrate: the user didn't start it in ${zone.name} while orchestrating was on there. The agents the user starts there now may`;
+}
+
+/**
+ * What an orchestrator did, or tried: the control verbs, each logged (`OrchestratorActivity`). An edge it made or
+ * removed is `add-edge` or `remove-edge`, its target the edge's `to` agent. A `handoff` is any agent's, an orchestrator's
+ * or not: one line per edge it handed off along, its target that edge's `to` agent.
+ */
+export const ORCHESTRATOR_ACTIONS = ['spawn', 'send', 'interrupt', 'close', 'remove', 'add-edge', 'remove-edge', 'handoff'] as const;
+export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
+
+/** One line of the orchestrators' activity log: who did, or tried, what to whom, and when. Append-only. */
+export interface OrchestratorActivity {
+  id: number;
+  at: string;
+  orchestratorId: string;
+  /** Its name then. */
+  orchestratorName: string;
+  action: OrchestratorAction;
+  /** The agent it acted on (for `spawn`, the one it started), or null when a spawn was refused before there was one. */
+  targetId: string | null;
+  targetName: string | null;
+  /** What it asked: the message or prompt it sent, cut short, or the zone and harness of a spawn. */
+  detail: string;
+  outcome: 'done' | 'refused';
+  /** Why it was refused; null when done. */
+  reason: string | null;
+}
+
+/**
+ * The agent an orchestrator starts (`orchestrator.spawn`): as `agent.spawn`, in a zone in its scope (its own by
+ * default), without the user's own choices (another repo, a place on the board, Codex project config, orchestrating).
+ */
+export interface OrchestratorSpawnParams {
+  zoneId?: string;
+  harness?: Harness;
+  model?: string;
+  role?: AgentRole;
+  name?: string;
+  branch?: string;
+  baseBranch?: string;
+  issueId?: string;
+  prompt?: string;
+}
+
+/**
+ * How long `orchestrator.wait` waits at most, and by default: under the 60 s Codex gives an MCP tool call
+ * (`tool_timeout_sec`) and the 2 minutes Claude's Bash tool gives a command, so a wait answers, timed out if need be,
+ * before the harness gives up on it.
+ */
+export const MAX_ORCHESTRATOR_WAIT_MS = 30 * 60_000;
+export const DEFAULT_ORCHESTRATOR_WAIT_MS = 50_000;
+
+/**
+ * The states `orchestrator.wait` waits for by default: any but working. A turn has ended (at its prompt, asking, or
+ * failed), it needs the user, or it has ended.
+ */
+export const SETTLED_STATES: readonly AgentState[] = AGENT_STATES.filter(
+  (state) => state !== 'running' && state !== 'thinking' && state !== 'handing-off',
+);
+
+/** What `orchestrator.wait` saw: the agents as they are, and whether it gave up before they were all (or any) there. */
+export interface OrchestratorWaitResult {
+  agents: Agent[];
+  timedOut: boolean;
+}
+
+/** What `orchestrator.read` read: the agent's final message, or a file of its worktree. */
+export interface OrchestratorReadResult {
+  text: string;
+  /** The file, relative to its worktree; null for its final message. */
+  path: string | null;
 }
 
 /** Longest name a user can give an agent tile, a shell tile or a shell pane. */
@@ -1226,7 +1507,59 @@ export interface Shell {
   endedPanes: string[];
   /** The ended panes whose shell ended because the daemon went away (see `SessionInfo.stoppedByRestart`): resumable. */
   stoppedPanes: string[];
+  /** How each ended pane's shell exited, by session id: its exit code, or null for one ended by a signal. */
+  exitCodes: Record<string, number | null>;
+  /** The live panes whose shell is running a command, not sitting at its prompt, as last seen when its output went quiet. */
+  busyPanes: string[];
+  /** The TCP ports each busy pane's command listens on (a dev server's), by session id: only panes with some. */
+  panePorts: Record<string, number[]>;
+  /**
+   * The live panes whose last command failed, with its exit status, by session id: as the shell's integration reports
+   * at its prompt (bash and zsh). Cleared by the next command that succeeds.
+   */
+  failedCommands: Record<string, number>;
+  /**
+   * The session window it is a tab of: an agent's, by its session id, or a shell tile's, by its id; null for a
+   * shell tile on the board, whose own layout is its window's first tab. An owned shell has no zone or place of its own.
+   * The agent's own tab is one too, its first pane the agent's own session, which no shell call ends.
+   */
+  owner: ShellOwner | null;
+  /**
+   * Where a tab sits among its owner's tabs, after those with a lower one: null for one made before tabs could
+   * move, which sorts first, in the order it was made. A shell tile on the board keeps whatever it had as a tab.
+   */
+  tabOrder: number | null;
   createdAt: string;
+}
+
+/**
+ * Where a shell moves to (AT2): one of an agent's or a shell tile's tabs, or a shell tile on the board, at
+ * `tile` (relative to its zone, as `shell.move` takes it).
+ */
+export type ShellPlace = { owner: ShellOwner } | { tile: TileMove };
+
+/** Whose session window a shell that is a tab belongs to: an agent's or a shell tile's. */
+export interface ShellOwner {
+  kind: 'agent' | 'shell';
+  /** The agent's session id, or the shell tile's id. */
+  id: string;
+}
+
+/** Whether the shell is one of the owner's tabs (for an agent, its own tab or a shell tab; for a shell tile, a tab after its first). */
+export const isOwnedBy = (shell: Pick<Shell, 'owner'>, owner: ShellOwner): boolean => shell.owner?.kind === owner.kind && shell.owner.id === owner.id;
+
+/** Whether the shell is its agent's own tab: the one of its tabs whose panes hold the agent's own session. */
+export const isOwnTab = (shell: Pick<Shell, 'owner' | 'layout'>): boolean => shell.owner != null && paneIds(shell.layout).includes(shell.owner.id);
+
+/** The tabs in the order their owner's window shows them: by `tabOrder`, those with none first, as listed. */
+export const inTabOrder = <T extends Pick<Shell, 'tabOrder'>>(tabs: readonly T[]): T[] =>
+  [...tabs].sort((a, b) => (a.tabOrder ?? -Infinity) - (b.tabOrder ?? -Infinity) || 0);
+
+/** A worktree's package scripts, and the package manager that runs them. */
+export interface PackageScripts {
+  runner: 'npm' | 'pnpm' | 'yarn' | 'bun';
+  /** The scripts' names, as `package.json` lists them. */
+  scripts: string[];
 }
 
 /**
@@ -1278,6 +1611,8 @@ export type SpawnAgentParams = TerminalSize & {
   issueZoneId?: string;
   /** Where its tile goes: in the zone (the board slots it in without), or on the board for a loose one. */
   position?: { x: number; y: number };
+  /** Lets it orchestrate in this scope from the start (`agent.setOrchestrate`). Only the user's own spawn takes it. */
+  orchestrate?: OrchestrateScope;
 };
 
 /**
@@ -1339,8 +1674,22 @@ export interface DaemonMethods {
    * (lookups shared and briefly cached, so many windows cost one), else where it was last seen.
    */
   'session.cwd': { params: SessionRef; result: { cwd: string } };
-  /** Every shell tile, oldest first. */
+  /** Every shell tile, and every agent's tab (`owner` set), oldest first. */
   'shell.list': { params: undefined; result: Shell[] };
+  /**
+   * Opens a shell tab in the owner's session window: a shell where the agent started (its worktree, or its
+   * folder there) or in the shell tile's folder, or in `cwd` (absolute); or, given `script`, one running that package
+   * script of the owner's folder, named after it. Fails with `invalidParams` for an unknown agent or shell tile, one
+   * being deleted, a shell that is itself a tab, a `cwd` that is no folder or an unknown script.
+   */
+  'shell.createTab': { params: { owner: ShellOwner; cwd?: string; script?: string }; result: Shell };
+  /**
+   * The agent's own tab, made the first time it is asked for: its one pane the agent's own session, until it is split.
+   * Fails with `invalidParams` for an unknown agent.
+   */
+  'shell.ownTab': { params: { agentId: string }; result: Shell };
+  /** The package scripts of the folder the agent started in, or the shell tile's folder, for a tab to run one. */
+  'shell.scripts': { params: { owner: ShellOwner }; result: PackageScripts };
   /**
    * Starts a shell tile with one pane: in the zone, a shell in its folder, or loose on the board (`zoneId` null), a
    * shell in the home directory. `position` places its tile (relative to the zone), and is needed for a loose one.
@@ -1349,7 +1698,7 @@ export interface DaemonMethods {
   'shell.create': { params: CreateShellTileParams; result: Shell };
   /**
    * Moves the shell's tile: within its zone, into another, or out onto the board (`zoneId` null). Its panes stay
-   * where they are running. Fails with `invalidParams` for an unknown shell or zone.
+   * where they are running. Fails with `invalidParams` for an unknown shell or zone, or an agent's tab.
    */
   'shell.move': { params: { shellId: string } & TileMove; result: Shell };
   /**
@@ -1361,9 +1710,17 @@ export interface DaemonMethods {
   'shell.resizeSplit': { params: { shellId: string; splitId: string; ratio: number }; result: Shell };
   /**
    * Closes the pane, ending its session if it is live. Resolves with the shell, or null when that was its last pane
-   * and the tile went with it.
+   * and the tile (or tab) went with it. A shell tile whose first tab loses its last pane while it has more tabs keeps
+   * its tile, and its folder: its next tab's panes become its first tab, that tab's row going. Fails with `invalidParams` for an agent's own pane
+   * in its tab.
    */
   'shell.closePane': { params: { shellId: string; sessionId: string }; result: Shell | null };
+  /**
+   * Closes a shell tile's own panes, ending their sessions, its next tab's panes taking their place as its own: what its
+   * own tab's × does. Resolves with the tile and the id of the tab that became its own. Fails with `invalidParams` for a
+   * tile with no other tab (delete it instead), a tab, or one being deleted.
+   */
+  'shell.closeOwnPanes': { params: { shellId: string }; result: { tile: Shell; promoted: string } };
   /**
    * Starts an ended pane again: a new shell under the pane's session id, in the folder its shell was last in (else the
    * tile's), showing its old output, above a "restored" line for a pane stopped by restart. Fails with `invalidParams`
@@ -1377,8 +1734,55 @@ export interface DaemonMethods {
    * off. Fails with `invalidParams` for an unknown shell or pane, or a name over `MAX_NAME_LENGTH`.
    */
   'shell.setPaneName': { params: { shellId: string; sessionId: string; name: string | null }; result: Shell };
-  /** Ends every pane's session and removes the tile. */
+  /**
+   * Ends every pane's session and removes the tile, with its tabs, or the tab. Fails with `invalidParams` for the agent's
+   * own tab.
+   */
   'shell.delete': { params: { shellId: string }; result: null };
+  /**
+   * Moves the shell, all its panes, to `to` (AT2): into the owner's tabs, after its others (at `order`, as an
+   * undo puts one back, if given), or onto the board as a shell tile. Its processes, their output and folders are
+   * untouched: only its owner, or its place, changes, and its panes speak for the new one from then on. A shell tile
+   * moving into tabs takes its own tabs with it, after it. Resolves with each shell it moved, itself first. Fails with
+   * `invalidParams` for the agent's own tab, an owner that is unknown, a tab, the shell itself or being deleted, a
+   * shell being deleted, or an unknown zone.
+   */
+  'shell.moveTab': { params: { shellId: string; to: ShellPlace; order?: number | null }; result: Shell[] };
+  /**
+   * Moves the pane `sessionId` out of the shell's split into a shell of its own at `to` (AT2), named after the
+   * pane's label, else the shell's, with the id `id` if given (a redo's). Its process is untouched. Resolves with the new
+   * shell, the shell it left and that shell's layout before. Fails with `invalidParams` for a pane alone in its shell
+   * (move the shell), the agent's own pane, a taken `id`, or as `shell.moveTab` does for `to`.
+   */
+  'shell.movePane': {
+    params: { shellId: string; sessionId: string; to: ShellPlace; id?: string };
+    result: { moved: Shell; source: Shell; layoutBefore: PaneLayout };
+  };
+  /**
+   * Puts the pane `sessionId`, alone in a shell of its own, back into the shell `shellId`, whose layout becomes `layout`:
+   * its panes now and that pane. The pane's own shell goes; its process is untouched. Undoes `shell.movePane`. Fails
+   * with `invalidParams` for a pane not alone in a shell, one whose shell has tabs, or a layout of other panes.
+   */
+  'shell.returnPane': { params: { shellId: string; sessionId: string; layout: PaneLayout }; result: Shell };
+  /**
+   * How the owner's session window lays out its tabs (BH1): its panes, each with a strip. Null until its
+   * window first saves one, when the window shows one pane holding its tabs in their order.
+   */
+  'shell.windowLayout': { params: { owner: ShellOwner }; result: WindowLayout | null };
+  /**
+   * Keeps how the owner's session window lays out its tabs, until the owner goes. Which surfaces it holds is the
+   * window's to settle: a tab gone meanwhile is dropped as the window reads it back. Fails with `invalidParams` for a
+   * layout that isn't one, or an owner `shell.createTab` would refuse.
+   */
+  'shell.setWindowLayout': { params: { owner: ShellOwner; layout: WindowLayout }; result: WindowLayout };
+  /**
+   * Lays the owner's tabs that were split inside themselves before windows had panes out as its window's panes
+   *: each pane of such a tab but its first (an agent's own tab keeps the agent) moves out into a tab of its
+   * own, its process untouched, and the window splits where the tab was as the tab was split. A shell tile's own panes
+   * stay. Resolves with the window's layout as kept (null for none) and the owner's tabs as they are now, so a window
+   * lays the layout out against tabs it may not have heard of yet. Fails as `shell.setWindowLayout` does for the owner.
+   */
+  'shell.unsplitTabs': { params: { owner: ShellOwner }; result: { layout: WindowLayout | null; tabs: Shell[] } };
   /** Every zone, oldest first. */
   'zone.list': { params: undefined; result: Zone[] };
   /**
@@ -1438,8 +1842,15 @@ export interface DaemonMethods {
    * with `invalidParams` for an unknown id, a zone bound to a repo, or one still cloning.
    */
   'zone.dissolve': { params: { id: string }; result: null };
+  /**
+   * Makes a dissolved group again, under its own id and with everything it had (so undoing a dissolve restores it, not
+   * a look-alike). Its tiles are moved back in by the caller. Always an unbound group. Fails with `invalidParams`
+   * for an id in use, a blank name, a bad colour, fill opacity or layout, or a default repo that is not absolute. A
+   * default repo that no longer resolves to a git folder is left out. The tracker is trusted as `zone.list` gave it.
+   */
+  'zone.restore': { params: ZoneSnapshot; result: Zone };
   /** Renames a zone and/or recolours it (`#rrggbb`). Fails with `invalidParams` for an unknown id, a blank name or a bad colour. */
-  'zone.setLook': { params: { id: string; name?: string; color?: string }; result: Zone };
+  'zone.setLook': { params: { id: string; name?: string; color?: string; fillOpacity?: number | null }; result: Zone };
   /** Changes the zone's settings given. Fails with `invalidParams` for an unknown id, or none given. */
   'zone.configure': { params: { id: string } & Partial<ZoneSettings>; result: Zone };
   /**
@@ -1462,9 +1873,10 @@ export interface DaemonMethods {
   'agent.list': { params: undefined; result: Agent[] };
   /**
    * Ends the agent's session and removes its worktree and branch. Fails with `AGENT_ERROR.unsavedWork` when the
-   * worktree has uncommitted changes or the branch has commits no other branch has, unless `force`.
+   * worktree has uncommitted changes or the branch has commits no other branch has, unless `force`. With
+   * `keepWorktree` it leaves the worktree and branch as they are (and so never stops short for unsaved work).
    */
-  'agent.delete': { params: SessionRef & { force?: boolean }; result: null };
+  'agent.delete': { params: SessionRef & { force?: boolean; keepWorktree?: boolean }; result: null };
   /**
    * Sends `text` to the agent as the user's next message and submits it. One line is typed at its prompt; text of
    * several lines, or one line with `paste` (the composer sets it for a pasted image's path, as a dropped file is
@@ -1527,6 +1939,73 @@ export interface DaemonMethods {
   /** Mutes the agent's OS notifications, or unmutes them. Fails with `invalidParams` for an unknown agent. */
   'agent.setMuted': { params: SessionRef & { muted: boolean }; result: Agent };
   /**
+   * Marks the agent's current ask seen, because its session was opened or focused: it stops needing the user until it
+   * asks again. Does nothing unless the agent waits for the user. Fails with `invalidParams` for an unknown agent.
+   */
+  'agent.markSeen': { params: SessionRef; result: Agent };
+  /**
+   * Lets the agent orchestrate in `scope` (ADR-0011), or stops it with null. Takes effect on its next call. The
+   * user's alone: a board token is refused it, an orchestrator's too. Fails with `invalidParams` for an unknown agent
+   * or scope.
+   */
+  'agent.setOrchestrate': { params: SessionRef & { scope: OrchestrateScope | null }; result: Agent };
+  /**
+   * The orchestrator methods (ADR-0011). Each acts as the agent holding `token`, which must be an agent's own
+   * session's, with `orchestrate` on: else `BOARD_ERROR.notAllowed`. A target outside its scope (`OrchestrateScope`),
+   * or itself, is `BOARD_ERROR.outOfScope`. Each spawn, send, interrupt and close is logged, done or refused
+   * (`orchestrator.activity`).
+   *
+   * `spawn` starts an agent as `agent.spawn` does, in a zone of its scope (its own zone by default), with
+   * `spawnedBy` the orchestrator. A prompt (and a `send`'s text) is refused with `invalidParams` when
+   * `orchestratorTextRefusal` says why. With `baseBranch`, also when the base's project config (`.claude`, `.mcp.json`,
+   * `.codex`) differs from the repo's HEAD: the agent would start under settings the orchestrator chose.
+   */
+  'orchestrator.spawn': { params: { token: string } & OrchestratorSpawnParams; result: Agent };
+  /**
+   * Sends `text` as the agent's next message (`agent.answer`). Only to a live agent at its prompt, between turns: one
+   * that is working, needs permission or has ended is refused with `invalidParams`.
+   */
+  'orchestrator.send': { params: { token: string; sessionId: string; text: string }; result: Agent };
+  /**
+   * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
+   * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
+   * with a prompt by an orchestrator counts only once that turn has begun, so a wait straight after a send isn't
+   * answered by the idle before it. An agent deleted meanwhile fails it with `invalidParams`.
+   */
+  'orchestrator.wait': {
+    params: { token: string; sessionIds: string[]; states?: AgentState[]; any?: boolean; timeoutMs?: number };
+    result: OrchestratorWaitResult;
+  };
+  /**
+   * The agent's final message from its last finished turn, or with `path` a text file in its worktree (relative to it,
+   * and inside it once links are followed; at most `MAX_ORCHESTRATOR_READ_BYTES`). Fails with `invalidParams` when there
+   * is none.
+   */
+  'orchestrator.read': { params: { token: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
+  /** Interrupts the agent's turn (`agent.interrupt`). */
+  'orchestrator.interrupt': { params: { token: string; sessionId: string }; result: Agent };
+  /**
+   * Ends the agent's session, keeping its tile, worktree and branch (`agent.stop`); with `remove`, deletes it with its
+   * worktree and branch (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an agent the
+   * orchestrator started may be. Resolves with the agent, or null once removed.
+   */
+  'orchestrator.close': { params: { token: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  /**
+   * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
+   * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
+   * edge into another orchestrator would steer it). A gate or script condition runs nothing until the user approves it
+   * (ADR-0009): an orchestrator can't.
+   */
+  'orchestrator.addEdge': { params: { token: string } & OrchestratorEdgeParams; result: FlowEdge };
+  /** Deletes a flow edge it made, and only one it made: the user's edges, and other agents', are the user's. */
+  'orchestrator.removeEdge': { params: { token: string; id: string }; result: null };
+  /**
+   * The orchestrators' activity log, newest first: `orchestratorId`'s alone if given, at most `limit`
+   * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. A
+   * board token's connection reads only the lines its own tile wrote.
+   */
+  'orchestrator.activity': { params: { orchestratorId?: string; limit?: number; before?: number }; result: OrchestratorActivity[] };
+  /**
    * Who holds `token`, a session's board token (`AGENT_BOARD_IDENTITY`, ADR-0010). Fails with `BOARD_ERROR.unknownToken`
    * for a token no live session holds. Once it answers, the connection is that session's: it may call only
    * `BOARD_CALLER_METHODS` from then on.
@@ -1539,6 +2018,15 @@ export interface DaemonMethods {
    * `board.identify` does.
    */
   'board.setStatus': { params: { token: string; summary: string; progress?: number }; result: Agent };
+  /**
+   * The agent holding `token` hands `payload` over its own outgoing edges, or with `to` over its edge to that
+   * agent alone, each as its auto hand-off would go: its conditions checked first, held while any fails, skipped while
+   * paused. A manual edge is left for the user to send. Resolves with how it went along each edge, once each is
+   * delivered, held, queued or skipped, or after a few seconds of checking. Fails with `invalidParams` for a caller that
+   * isn't a live agent's own session, no edge out of it (to `to`), or a bad payload. Each edge handed off along is
+   * logged (`orchestrator.activity`). Its turn's end then hands off along the others alone.
+   */
+  'board.handoff': { params: { token: string; to?: string } & HandoffPayload; result: HandoffOutcome[] };
   /**
    * Moves the agent's tile within its zone, into any other (another repo's, or an unbound one) or out onto the board
    * (`zoneId` null). Only its tile moves. Fails with `invalidParams` for an unknown zone or agent.
@@ -1637,6 +2125,8 @@ export interface DaemonMethods {
   'flowEdge.approve': { params: { id: string; command: string; fingerprint: string }; result: FlowEdge };
   /** Drops the hand-off the edge holds and the delivery it queued, and any copy of them. */
   'flowEdge.drop': { params: { id: string }; result: FlowEdge };
+  /** What the edge last delivered, while the daemon remembers it; null before its first delivery, or since a restart. */
+  'flowEdge.lastPayload': { params: { id: string }; result: FlowDeliveredPayload | null };
   'settings.get': { params: undefined; result: DaemonSettings };
   /** Changes the settings given. Keeping only paths drops the copies held now. */
   'settings.set': { params: Partial<DaemonSettings>; result: DaemonSettings };
@@ -1721,8 +2211,13 @@ export const AGENT_ERROR = {
 export const BOARD_ERROR = {
   /** No live session holds the board token: it is wrong, or its session has ended. */
   unknownToken: -32020,
-  /** The connection presented a board token, and the method isn't one of `BOARD_CALLER_METHODS`. */
+  /**
+   * The connection presented a board token, and the method isn't one of `BOARD_CALLER_METHODS`; or it is an
+   * orchestrator method, and the token's agent may not orchestrate.
+   */
   notAllowed: -32021,
+  /** An orchestrator acted on an agent or zone outside its scope, or on itself. */
+  outOfScope: -32022,
 } as const;
 
 /**
@@ -1740,7 +2235,31 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'connector.list',
   'board.identify',
   'board.setStatus',
+  'board.handoff',
+  'orchestrator.activity',
 ]);
+
+/**
+ * The orchestrator methods (ADR-0011): a board token's connection reaches them too, and each refuses unless the
+ * token's agent may orchestrate, checked at every call.
+ */
+export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
+  'orchestrator.spawn',
+  'orchestrator.send',
+  'orchestrator.wait',
+  'orchestrator.read',
+  'orchestrator.interrupt',
+  'orchestrator.close',
+  'orchestrator.addEdge',
+  'orchestrator.removeEdge',
+]);
+
+/** Most of a file `orchestrator.read` returns. */
+export const MAX_ORCHESTRATOR_READ_BYTES = 256 * 1024;
+
+/** Lines `orchestrator.activity` returns without a limit, and at most. */
+export const DEFAULT_ACTIVITY_LIMIT = 100;
+export const MAX_ACTIVITY_LIMIT = 1_000;
 
 /** Whether `value` is a status's progress: a whole percentage, 0 to 100. */
 export function isStatusProgress(value: unknown): value is number {
@@ -1813,6 +2332,12 @@ export interface AgentUpdatedEvent {
 export interface AgentRemovedEvent {
   type: 'agent.removed';
   sessionId: string;
+}
+
+/** Sent to every client as each line is added to the orchestrators' activity log. */
+export interface OrchestratorActivityEvent {
+  type: 'orchestrator.activity';
+  entry: OrchestratorActivity;
 }
 
 /** Sent to every client when an external session first reports, or changes: its state, status file or end. */
@@ -1927,7 +2452,8 @@ export type DaemonEvent =
   | SessionOutputEvent
   | SessionExitedEvent
   | AgentUpdatedEvent
-  | AgentRemovedEvent;
+  | AgentRemovedEvent
+  | OrchestratorActivityEvent;
 
 export const EVENT_METHOD = 'event';
 

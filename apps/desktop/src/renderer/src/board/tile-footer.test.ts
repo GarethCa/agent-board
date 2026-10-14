@@ -7,7 +7,7 @@ const pr = (number: number, state: PullRequest['state'] = 'open', checks: PullRe
   ({ number, title: `PR ${number}`, url: `https://github.com/o/r/pull/${number}`, state, checks }) as PullRequest;
 const schedule = { cron: '0 9 * * 2', prompt: 'Go', enabled: true, nextRunAt: null, lastRun: null } as AgentSchedule;
 const agent = (fields: Partial<Agent> = {}) =>
-  ({ issue: null, pullRequests: [], schedule: null, muted: false, notice: null, ...fields }) as Agent;
+  ({ issue: null, pullRequests: [], schedule: null, muted: false, seen: false, notice: null, ...fields }) as Agent;
 
 describe('a tile’s footer', () => {
   it('is empty for an agent with nothing to show', () => {
@@ -24,6 +24,11 @@ describe('a tile’s footer', () => {
       { kind: 'schedule', schedule },
     ]);
     expect(footer.folded).toEqual([]);
+  });
+
+  it('shows one shells chip after the rest when the agent has shells, however many, and none without', () => {
+    expect(tileFooter(agent({ issue, muted: true }), 3).shown).toEqual([{ kind: 'issue', issue }, { kind: 'muted' }, { kind: 'shells' }]);
+    expect(tileFooter(agent(), 0).shown).toEqual([]);
   });
 
   it('shows a mute as a bell, never folded on its own into a cryptic +1', () => {

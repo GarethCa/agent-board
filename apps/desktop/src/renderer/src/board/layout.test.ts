@@ -149,6 +149,14 @@ const ROW = H + TILE_GAP + PERCH_ROOM;
 const TWO_WIDE = 2 * ZONE_PADDING + 2 * W + TILE_GAP;
 
 describe('packTiles', () => {
+  it('never moves a resized tile: the zone stops at its edge, and the default-size tiles pack round it', () => {
+    const big = { id: 'big', x: 20, y: 44, width: 400, height: 300 };
+    // Its far edge needs 20 + 400 + padding; narrower than that, the zone can't shrink.
+    expect(packTiles({ width: 440, height: 400 }, [big])?.get('big')).toEqual({ x: 20, y: 44 });
+    expect(packTiles({ width: 430, height: 400 }, [big])).toBeUndefined();
+    expect(packTiles({ width: 440, height: 300 }, [big])).toBeUndefined();
+  });
+
   const tiles = (places: Record<string, [number, number]>) => Object.entries(places).map(([id, [x, y]]) => ({ id, x, y }));
   const placed = (packed: ReadonlyMap<string, { x: number; y: number }> | undefined) =>
     packed && Object.fromEntries([...packed].map(([id, { x, y }]) => [id, [x, y]]));

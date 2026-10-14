@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { centreOf, clamp, contains, overlaps } from './geometry';
+import { centreOf, clamp, contains, overlaps, rotatedBounds } from './geometry';
 
 describe('overlaps', () => {
   const a = { x: 0, y: 0, width: 10, height: 10 };
@@ -47,5 +47,31 @@ describe('clamp', () => {
     expect(clamp(5, 0, 10)).toBe(5);
     expect(clamp(-1, 0, 10)).toBe(0);
     expect(clamp(11, 0, 10)).toBe(10);
+  });
+});
+
+describe('rotatedBounds', () => {
+  const rect = { x: 0, y: 0, width: 200, height: 100 };
+
+  it('is the rect itself when straight, or turned a half-turn', () => {
+    expect(rotatedBounds(rect, 0)).toEqual(rect);
+    const flipped = rotatedBounds(rect, 180);
+    expect(flipped.x).toBeCloseTo(0);
+    expect(flipped.width).toBeCloseTo(200);
+    expect(flipped.height).toBeCloseTo(100);
+  });
+
+  it('swaps width and height at a quarter-turn, about the same centre', () => {
+    const turned = rotatedBounds(rect, 90);
+    expect(turned.width).toBeCloseTo(100);
+    expect(turned.height).toBeCloseTo(200);
+    expect(centreOf(turned).x).toBeCloseTo(100);
+    expect(centreOf(turned).y).toBeCloseTo(50);
+  });
+
+  it('holds every corner at any other angle', () => {
+    const square = rotatedBounds({ x: 0, y: 0, width: 100, height: 100 }, -45);
+    expect(square.width).toBeCloseTo(100 * Math.SQRT2);
+    expect(square.x).toBeCloseTo(50 - 50 * Math.SQRT2);
   });
 });

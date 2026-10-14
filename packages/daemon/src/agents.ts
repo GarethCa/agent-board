@@ -41,6 +41,8 @@ import {
   type Harness,
   type TileMove,
   type DaemonMethods,
+  ORCHESTRATE_SCOPES,
+  type OrchestrateScope,
   type PermissionDecision,
   type LinkedIssue,
   type ScheduleSpec,
@@ -51,6 +53,7 @@ import {
   type TerminalSize,
   type TilePosition,
   type TranscriptChunk,
+  waitsForYou,
 } from './protocol.ts';
 import { folderPath, repoZoneOf } from './repo-zone.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
@@ -100,6 +103,9 @@ const MAX_DEFAULT_NAME_LENGTH = 40;
 
 /** How long an answer's text gets to land at the prompt before it is submitted, so it isn't taken as a pasted line. */
 const ANSWER_SUBMIT_DELAY_MS = 50;
+
+/** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
+const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
 
 /**
  * Hooks of a turn's work, which a turn interrupted mid-hook can still deliver after the interrupt. Until the next
@@ -161,8 +167,15 @@ export interface AgentHostOptions {
   schedules: Pick<ScheduleHost, 'get' | 'set' | 'remove'>;
   /** Hears an agent hand off: today, its own turn ending with a final message (its Stop hook). */
   onHandoff(sessionId: string): void;
+  /**
+   * Hears an agent's own turn begin (`UserPromptSubmit`) or end without a `Stop` (`StopFailure`, Codex's `Interrupt`,
+   * `SessionEnd`): what it handed off explicitly belongs to the turn it did it in.
+   */
+  onTurnBoundary?(sessionId: string): void;
   /** Hears an agent about to be deleted, so what goes with it can say so first: its flow edges. */
   onRemoving(sessionId: string): void;
+  /** Ends the shells in the agent's session window's tabs, and removes the tabs: it is being deleted. */
+  endTabs?(sessionId: string): Promise<void>;
   /** Whether the shell `pid` is running something: `isRunningSomething` by default. */
   isRunningSomething?(pid: number): Promise<boolean>;
   broadcast(event: DaemonEvent): void;
@@ -198,7 +211,10 @@ export interface AdoptSpec {
 const REVIEWER_OFFSET = 48;
 
 export interface AgentHost {
-  spawn(params: SpawnAgentParams): Promise<Agent>;
+  /** Whether the agent is being deleted: from the start of `delete` until its row is gone, its worktree too. */
+  isDeleting(sessionId: string): boolean;
+  /** Starts an agent; `spawnedBy` is the orchestrator starting it, if one is. */
+  spawn(params: SpawnAgentParams, spawnedBy?: string): Promise<Agent>;
   /**
    * Spawns a reviewer of agent `of`: in its harness, repo and zone, on a new branch `branch` (or the first free
    * one after it) from the tip of its branch, in the same folder of its worktree, with `prompt` as its task.
@@ -214,7 +230,8 @@ export interface AgentHost {
   list(): Agent[];
   /** The agent, if there is one. */
   get(sessionId: string): Agent | undefined;
-  delete(sessionId: string, force: boolean): Promise<void>;
+  /** Ends the agent and removes its worktree and branch, or with `keepWorktree` leaves them, and the work in them, alone. */
+  delete(sessionId: string, force: boolean, keepWorktree?: boolean): Promise<void>;
   /** Its conversation from its transcript (`TranscriptReader.read`), for the chat view. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;
   /** A Claude subagent's conversation (`TranscriptReader.readSubagent`), started by its call `toolUseId`. */
@@ -223,6 +240,8 @@ export interface AgentHost {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Agent;
+  /** Marks the agent's current ask seen, if it has one: it stops needing the user until it works and asks again. */
+  markSeen(sessionId: string): Agent;
   /** Renames the agent's tile. */
   setName(sessionId: string, name: string): Agent;
   /**
@@ -230,6 +249,13 @@ export interface AgentHost {
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
    */
   setStatus(sessionId: string, summary: string, progress: number | null): Agent;
+  /** Lets the agent orchestrate in `scope`, or stops it with null. */
+  setOrchestrate(sessionId: string, scope: OrchestrateScope | null): Agent;
+  /**
+   * Hears a zone's `agentsOrchestrate` change. Off, it stops every agent in it orchestrating (the zone's grants are
+   * held back while it is off, and come back with it; a grant by hand goes), and tells the clients of each it reaches.
+   */
+  zoneOrchestrateChanged(zoneId: string, on: boolean): void;
   /** Moves the agent's tile within its zone, into any other, or out onto the board. Only its tile moves. */
   move(sessionId: string, move: TileMove): Agent;
   /** The zone of the agent's own repo that speaks for it (`repoZoneOf`), if any. */
@@ -312,6 +338,7 @@ interface AgentRow extends PositionColumns {
   state: SessionState;
   notice: string | null;
   muted: number;
+  seen: number;
   issue_provider: LinkedIssue['provider'] | null;
   issue_id: string | null;
   issue_title: string | null;
@@ -332,6 +359,10 @@ interface AgentRow extends PositionColumns {
   status_summary: string | null;
   status_progress: number | null;
   status_updated_at: string | null;
+  orchestrate: OrchestrateScope | null;
+  /** The zone that let it orchestrate (`Zone.agentsOrchestrate`), null when the user did by hand. */
+  orchestrate_zone: string | null;
+  spawned_by: string | null;
 }
 
 interface ZoneRow {
@@ -346,6 +377,7 @@ interface ZoneRow {
   folder: string;
   codex_bypass_hook_trust: number;
   board_mcp: number;
+  agents_orchestrate: number;
   tracker_provider: string | null;
   created_at: string;
 }
@@ -365,24 +397,34 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
   const zoneColumns =
-    'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, board_mcp, tracker_provider, clone_repo, created_at';
+    'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const insert = db.prepare(
     `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, role, name, description, branch,
        worktree, state, issue_provider, issue_id, issue_title, issue_url, x, y, z, review_of, base_commit, owns_worktree,
-       harness_session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       harness_session_id, orchestrate, spawned_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const selectNames = db.prepare('SELECT name FROM agents');
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
+  const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
   const updateStatus = db.prepare(
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ? WHERE session_id = ?',
   );
+  const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_zone = ? WHERE session_id = ?');
+  /** The agents a zone's setting reaches: those in it, and those it let orchestrate, wherever they are. */
+  const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ? OR orchestrate_zone = ?');
+  /** The agents in a zone the user let orchestrate by hand. */
+  const clearHandGrantsIn = db.prepare(
+    'UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL AND orchestrate_zone IS NULL',
+  );
+  const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
+  const forgetParent = db.prepare('UPDATE agents SET spawned_by = NULL WHERE spawned_by = ?');
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
   const updateTranscript = db.prepare('UPDATE agents SET transcript_path = ? WHERE session_id = ?');
   const transcripts = createTranscriptReader();
@@ -527,6 +569,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           ? null
           : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at },
       muted: row.muted === 1,
+      // An ended agent asks nothing: what it was last seen at doesn't carry over.
+      seen: row.seen === 1 && row.ended_at === null,
       issue:
         row.issue_provider === null || row.issue_id === null
           ? null
@@ -543,10 +587,22 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       reviewOf: row.review_of,
       reviewCap: row.review_cap ?? DEFAULT_REVIEW_CAP,
       ownsWorktree: row.owns_worktree === 1,
+      orchestrate: orchestrateNow(row),
+      spawnedBy: row.spawned_by,
     };
   };
 
   const getRow = (sessionId: string) => selectOne.get(sessionId) as AgentRow | undefined;
+
+  /**
+   * The scope the agent may orchestrate in now. A zone's grant holds only while its tile is in that zone and the zone
+   * still lets its agents orchestrate: moved in, an agent gets nothing from the zone; moved out, it keeps nothing.
+   */
+  const orchestrateNow = (row: AgentRow): OrchestrateScope | null => {
+    if (row.orchestrate_zone === null) return row.orchestrate;
+    const granting = row.zone_id === row.orchestrate_zone ? (selectZone.get(row.zone_id) as ZoneRow | undefined) : undefined;
+    return granting?.agents_orchestrate === 1 ? row.orchestrate : null;
+  };
 
   /** The zone of the agent's own repo that speaks for it, wherever its tile sits (`repoZoneOf`). */
   const repoZone = (row: AgentRow): ZoneRow | undefined => repoZoneFor(row.zone_id, row.repo_root);
@@ -608,6 +664,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const save = (row: AgentRow, state: SessionState, next: readonly Subagent[], always = false) => {
     if (!always && state === row.state && next === subagents.of(row.session_id)) return;
     subagents.set(row.session_id, next);
+    // A new state is a new ask, or work: either way what was seen is over.
+    if (state !== row.state) updateSeen.run(0, row.session_id);
     update.run(state, row.session_id);
     options.broadcast({ type: 'agent.updated', agent: get(row.session_id)! });
   };
@@ -755,6 +813,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     drafting.delete(sessionId);
     updateNotice.run(null, sessionId);
     update.run('idle', sessionId);
+    updateSeen.run(0, sessionId);
     watchResumed(sessionId, row.harness, row.cwd, row.worktree, bypassed, codexSessionId);
     options.log(`relaunched ${row.harness} agent ${sessionId} ${why}`);
     announce(sessionId);
@@ -884,7 +943,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   return {
     nextName: freeAgentName,
 
-    async spawn(params) {
+    async spawn(params, spawnedBy) {
       const { zoneId, harness = 'claude', prompt = '', name, issueId, allowProjectCodexConfig = false, position, cols, rows } = params;
       const zone = zoneId === null ? undefined : (selectZone.get(zoneId) as ZoneRow | undefined);
       if (zoneId !== null && zone === undefined) throw invalidParams(`no zone ${zoneId}`);
@@ -894,8 +953,16 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // Passed to the harness as an argument: never an option of its own.
       if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
       if (params.role !== undefined && !AGENT_ROLES.includes(params.role)) throw invalidParams(`unknown role ${String(params.role)}`);
+      if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
+        throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
+      }
+      // An orchestrator's agents never orchestrate (ADR-0011). The user's may, as asked or as their zone lets them.
+      const zoneGrants = spawnedBy === undefined && params.orchestrate === undefined && zone?.agents_orchestrate === 1;
+      const orchestrate = spawnedBy === undefined ? (params.orchestrate ?? (zoneGrants ? 'zone' : null)) : null;
       // A typed branch is checked before anything is made for the agent, a scratch repo included.
       const typedBranch = params.branch === undefined ? undefined : await checkedBranchName(params.branch).catch(wrapInvalid);
+      // Its base reaches git only as `refs/heads/<base>`; checked all the same, so no name is ever read as an option.
+      if (params.baseBranch !== undefined) await checkedBranchName(params.baseBranch).catch(wrapInvalid);
       const fromZone = issueId === undefined ? undefined : issueZone(params, zone);
       if (harness === 'codex') {
         try {
@@ -976,7 +1043,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           baseCommit,
           1,
           null,
+          orchestrate,
+          spawnedBy ?? null,
         );
+        if (zoneGrants) updateOrchestrate.run(orchestrate, zoneId, id);
         // A repo it was given is offered again, once it has an agent in it.
         if (params.repo !== undefined && 'path' in params.repo) options.rememberFolder(folderPath(repoRoot, folder));
         const agent = get(id)!;
@@ -1046,6 +1116,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         of,
         null,
         1,
+        null,
+        null,
         null,
       );
       options.log(`spawned ${implementer.harness} reviewer ${id} of ${of} on ${branch} in ${worktree}`);
@@ -1124,6 +1196,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         baseCommit,
         at.ownsWorktree ? 1 : 0,
         codexSessionId,
+        null,
+        null,
       );
       watchResumed(sessionId, harness, at.cwd, at.worktree, bypassed, codexSessionId);
       options.log(`adopted ${harness} session ${sessionId} as an agent in ${at.cwd}`);
@@ -1145,11 +1219,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return transcripts.readSubagent(row.harness, row.transcript_path, toolUseId, agentId);
     },
 
-    async delete(sessionId, force) {
+    isDeleting: (sessionId) => deleting.has(sessionId),
+
+    async delete(sessionId, force, keepWorktree = false) {
       const agent = requireAgent(sessionId);
       // Its own repo, wherever its tile sits.
       const { repoRoot } = agent;
-      if (!force && agent.ownsWorktree) {
+      if (!force && !keepWorktree && agent.ownsWorktree) {
         const reason = await unsavedWork(repoRoot, agent.worktree, agent.branch);
         if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, `${agent.name}: ${reason}`);
       }
@@ -1159,14 +1235,19 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       try {
         if (agent.endedAt === null) await sessions.kill(sessionId);
         await endFallbackShell(sessionId);
+        await options.endTabs?.(sessionId);
         // An agent adopted in the user's own folder takes nothing of theirs with it.
-        if (agent.ownsWorktree) await removeWorktree(repoRoot, agent.worktree, agent.branch);
+        if (agent.ownsWorktree && !keepWorktree) await removeWorktree(repoRoot, agent.worktree, agent.branch);
       } finally {
         deleting.delete(sessionId);
       }
       options.schedules.remove(sessionId);
       options.onRemoving(sessionId);
       remove.run(sessionId);
+      // The agents it started stay, started by no one now; the activity log keeps who did.
+      const children = (selectChildren.all(sessionId) as { session_id: string }[]).map((child) => child.session_id);
+      forgetParent.run(sessionId);
+      for (const child of children) announce(child);
       sessions.forget(sessionId);
       subagents.delete(sessionId);
       idlePrompted.delete(sessionId);
@@ -1314,6 +1395,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return moved;
     },
 
+    markSeen(sessionId) {
+      const row = requireRow(sessionId);
+      if (row.seen === 0 && waitsForYou(toAgent(row))) {
+        updateSeen.run(1, sessionId);
+        options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+      }
+      return get(sessionId)!;
+    },
+
     setMuted(sessionId, muted) {
       requireAgent(sessionId);
       updateMuted.run(muted ? 1 : 0, sessionId);
@@ -1346,6 +1436,23 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
+    setOrchestrate(sessionId, scope) {
+      requireAgent(sessionId);
+      if (scope !== null && !ORCHESTRATE_SCOPES.includes(scope)) throw invalidParams(`unknown orchestrate scope ${String(scope)}`);
+      updateOrchestrate.run(scope, null, sessionId);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
+    zoneOrchestrateChanged(zoneId, on) {
+      // The zone's own grants stay, held while it is on (`orchestrateNow`); a grant by hand in it goes for good.
+      if (!on) clearHandGrantsIn.run(zoneId);
+      for (const { session_id: sessionId } of selectReachedBy.all(zoneId, zoneId) as { session_id: string }[]) {
+        options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
+      }
+    },
+
     onHook(sessionId, payload, signal) {
       const row = getRow(sessionId);
       // A hook still in flight when the process exited must not revive the ended agent's state.
@@ -1363,14 +1470,18 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (payload.agent_id === undefined && typeof transcript === 'string' && transcript !== row.transcript_path) {
         updateTranscript.run(transcript, sessionId);
       }
+      if (payload.agent_id === undefined && TURN_BOUNDARIES.has(payload.hook_event_name)) options.onTurnBoundary?.(sessionId);
       if (payload.hook_event_name === 'UserPromptSubmit') {
         interrupted.delete(sessionId);
         drafting.delete(sessionId);
       } else if (interrupted.has(sessionId) && isStaleAfterInterrupt(payload)) return undefined;
       const settled = permissions.afterHook(sessionId, payload);
       const reply = payload.hook_event_name === 'PermissionRequest' ? permissions.hold(sessionId, payload, signal) : undefined;
-      if (payload.hook_event_name === 'PermissionRequest') permissionSettled.delete(sessionId);
-      else if (settled) permissionSettled.add(sessionId);
+      if (payload.hook_event_name === 'PermissionRequest') {
+        permissionSettled.delete(sessionId);
+        // Another prompt is a new ask, even when the state was already needs-permission.
+        updateSeen.run(0, sessionId);
+      } else if (settled) permissionSettled.add(sessionId);
       // A permission notification landing after its prompt was settled would put the agent back to needs-permission with
       // nothing to answer, until some later hook.
       // The cost: if a later prompt's PermissionRequest never reaches the daemon (a failed hook), its notification is
@@ -1471,6 +1582,7 @@ export function agentHandlers<Context>(
         name: optionalStringParam(p, 'name'),
         issueId: optionalStringParam(p, 'issueId'),
         position: optionalPlaceParam(p),
+        orchestrate: optionalStringParam(p, 'orchestrate') as OrchestrateScope | undefined,
         cols: dimensionParam(p, 'cols'),
         rows: dimensionParam(p, 'rows'),
       });
@@ -1488,7 +1600,8 @@ export function agentHandlers<Context>(
     'agent.delete': async (params) => {
       const p = paramsObject(params);
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
-      await agents.delete(stringParam(p, 'sessionId'), p.force === true);
+      if (p.keepWorktree !== undefined && typeof p.keepWorktree !== 'boolean') throw invalidParams('keepWorktree must be a boolean');
+      await agents.delete(stringParam(p, 'sessionId'), p.force === true, p.keepWorktree === true);
       return null;
     },
     'agent.answer': async (params) => {
@@ -1533,6 +1646,11 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       return agents.setName(stringParam(p, 'sessionId'), requiredNameParam(p, 'name'));
     },
+    'agent.setOrchestrate': (params) => {
+      const p = paramsObject(params);
+      return agents.setOrchestrate(stringParam(p, 'sessionId'), p.scope === null ? null : (stringParam(p, 'scope') as OrchestrateScope));
+    },
+    'agent.markSeen': (params) => agents.markSeen(stringParam(paramsObject(params), 'sessionId')),
     'agent.setMuted': (params) => {
       const p = paramsObject(params);
       if (typeof p.muted !== 'boolean') throw invalidParams('muted must be a boolean');

@@ -87,7 +87,7 @@ test('marquee-selects three stickies, duplicates and moves them, undoes twice an
   }
 });
 
-test('select all leaves the shell when deleting, undo brings notes back with their connector; copy pastes at the pointer; the context menu aligns and colours; ] and [ restack', async () => {
+test('select all asks before deleting a shell, notes alone are deleted at once, undo brings notes back with their connector; copy pastes at the pointer; the context menu aligns and colours; ] and [ restack', async () => {
   const dataDir = tempDataDir();
   const app = await launchApp(dataDir);
   let client: DaemonClient | undefined;
@@ -112,9 +112,19 @@ test('select all leaves the shell when deleting, undo brings notes back with the
       shells: (await daemon.call('shell.list')).length,
     });
 
-    // Everything selected; deleting takes the notes and their connector, never the shell.
+    // Everything selected; deleting asks first, as the shell is a session, and Cancel leaves it all.
     await window.keyboard.press('ControlOrMeta+a');
     await expect(window.getByTestId('selection-box')).toHaveText('3 selected · 2 notes, 1 shell');
+    await window.keyboard.press('Backspace');
+    const confirm = window.getByRole('alertdialog', { name: 'Delete selection?' });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(notes).toHaveCount(2);
+    await expect(shellTile).toBeVisible();
+
+    // Only the notes selected; deleting takes them and their connector, with no question, and the shell stays.
+    await window.locator(`.react-flow__node[data-id="item:${a.id}"]`).click({ position: { x: 12, y: 12 } });
+    await window.locator(`.react-flow__node[data-id="item:${b.id}"]`).click({ position: { x: 12, y: 12 }, modifiers: ['Shift'] });
     await window.keyboard.press('Backspace');
     await expect(notes).toHaveCount(0);
     await expect.poll(async () => ({ ...(await stored()), items: (await stored()).items.length })).toEqual({ items: 0, connectors: 0, shells: 1 });

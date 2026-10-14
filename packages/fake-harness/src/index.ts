@@ -5,6 +5,7 @@ import type { FakeScenario } from './scenarios.ts';
 export { fakeBinDir } from './paths.ts';
 export { SCENARIOS, type FakeScenario } from './scenarios.ts';
 export { installHarnessGuard, harnessGuardGlobalSetup, guardChildProcess, realHarnessFor, type HarnessGuard } from './guard.ts';
+export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
 
 export interface FakeHarnessEnvOptions {

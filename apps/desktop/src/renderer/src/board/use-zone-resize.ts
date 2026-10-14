@@ -4,7 +4,8 @@ import type { ZoneLayout } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 import { isItemNode } from './items/items';
 import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
-import { holdsTiles, isSessionTile, isZone, layoutOf, type BoardNode } from './tiles';
+import { holdsTiles, isSessionTile, isZone, layoutOf, sizeOfNode, type BoardNode } from './tiles';
+import { isDefaultSize } from './tile-size';
 import type { ZoneResize } from './ZoneNode';
 
 /** How many halvings find how far a refused resize could have gone. */
@@ -19,6 +20,8 @@ interface Resizing {
   last: ZoneLayout;
   /** Where its tiles are now, by node id. */
   tiles: Places;
+  /** The sizes of its tiles that were resized, by node id. */
+  sizes: Map<string, { width: number; height: number }>;
   /** Its notes, text and shapes, which tiles are packed round. */
   obstacles: Rect[];
 }
@@ -51,6 +54,7 @@ export function useZoneResize({ nodesRef, setNodes, onNodesChange }: ZoneResizeO
           id,
           last,
           tiles: new Map(children.filter(isSessionTile).map((node) => [node.id, { x: last.x + node.position.x, y: last.y + node.position.y }])),
+          sizes: new Map(children.filter(isSessionTile).flatMap((node) => (node.data.expanded === true || isDefaultSize(sizeOfNode(node)) ? [] : [[node.id, sizeOfNode(node)] as const]))),
           obstacles: children.filter(isItemNode).map((node) => ({
             x: last.x + node.position.x,
             y: last.y + node.position.y,
@@ -117,14 +121,14 @@ export function useZoneResize({ nodesRef, setNodes, onNodesChange }: ZoneResizeO
 }
 
 /** What a zone must cover to hold tiles at `places` (board coordinates) with its padding round them. */
-function coversOf(places: readonly { x: number; y: number }[]) {
+function coversOf(places: readonly { x: number; y: number; width: number; height: number }[]) {
   return places.length === 0
     ? undefined
     : {
         left: Math.min(...places.map((place) => place.x)) - ZONE_PADDING,
         top: Math.min(...places.map((place) => place.y)) - ZONE_PADDING - PERCH_ROOM,
-        right: Math.max(...places.map((place) => place.x)) + AGENT_TILE_SIZE.width + ZONE_PADDING,
-        bottom: Math.max(...places.map((place) => place.y)) + AGENT_TILE_SIZE.height + TILE_GAP + ZONE_PADDING,
+        right: Math.max(...places.map((place) => place.x + place.width)) + ZONE_PADDING,
+        bottom: Math.max(...places.map((place) => place.y + place.height)) + TILE_GAP + ZONE_PADDING,
       };
 }
 
@@ -132,10 +136,11 @@ function coversOf(places: readonly { x: number; y: number }[]) {
 function packAt(state: Resizing, next: ZoneLayout): Places | undefined {
   const tiles = [...state.tiles];
   // Still holding them where they are (one hanging over an edge stays put unless that edge comes in): nothing moves.
-  if (holdsTiles(coversOf(tiles.map(([, place]) => place)), state.last, next)) return state.tiles;
+  const sizeOf = (id: string) => state.sizes.get(id) ?? AGENT_TILE_SIZE;
+  if (holdsTiles(coversOf(tiles.map(([id, place]) => ({ ...place, ...sizeOf(id) }))), state.last, next)) return state.tiles;
   const packed = packTiles(
     next,
-    tiles.map(([id, place]) => ({ id, x: place.x - next.x, y: place.y - next.y })),
+    tiles.map(([id, place]) => ({ id, x: place.x - next.x, y: place.y - next.y, ...state.sizes.get(id) })),
     state.obstacles.map((rect) => ({ ...rect, x: rect.x - next.x, y: rect.y - next.y })),
   );
   return packed && new Map([...packed].map(([id, place]) => [id, { x: place.x + next.x, y: place.y + next.y }]));

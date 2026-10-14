@@ -43,15 +43,15 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
     await window.getByRole('button', { name: 'Italic' }).click();
     await window.getByRole('button', { name: 'Align center' }).click();
     await window.getByRole('button', { name: 'Text blue' }).click();
-    await expect(texts).toHaveAttribute('data-size', 'h1');
+    await expect(texts).toHaveAttribute('data-font-size', '32');
     await expect.poll(async () => (await settledBox(texts)).height).toBeGreaterThan(bodyHeight);
     await expect
       .poll(async () => (await stored(dataDir))[0]?.data)
-      .toMatchObject({ size: 'h1', bold: true, italic: true, align: 'center', color: '#3b5bdb' });
+      .toMatchObject({ size: 'h1', fontSize: 32, bold: true, italic: true, align: 'center', color: '#3b5bdb' });
 
     // Resized from a side (the left, which is on screen), it keeps that width and wraps.
     await texts.click();
-    const handle = await settledBox(window.locator('.react-flow__resize-control.left'));
+    const handle = await settledBox(window.locator('.react-flow__resize-control.line.left'));
     const grip = { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 };
     const widthBefore = (await settledBox(texts)).width;
     await drag(window, grip, { x: grip.x + 250, y: grip.y });
@@ -123,7 +123,7 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
 
     const restoredText = window.getByTestId('text-item');
     await expect(restoredText).toHaveCount(1);
-    await expect(restoredText).toHaveAttribute('data-size', 'h1');
+    await expect(restoredText).toHaveAttribute('data-font-size', '32');
     await expect(restoredText).toHaveAttribute('data-italic', 'true');
     await expect(restoredText).toContainText('Sprint 12 movable sessions');
     const restoredShape = window.getByTestId('shape');
@@ -162,6 +162,105 @@ test('a text left empty is not kept, and Escape puts down an armed tool', async 
     await window.keyboard.press('Escape');
     await expect(window.getByTestId('text-item')).toHaveCount(0);
     expect(await stored(dataDir)).toEqual([]);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('a text box resizes from a corner and takes a font size, each undoable and kept across a restart', async () => {
+  const dataDir = tempDataDir();
+  let app = await launchApp(dataDir);
+  try {
+    let window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+    const texts = window.getByTestId('text-item');
+
+    await window.mouse.move(pane.x + 300, pane.y + 200);
+    await window.keyboard.press('t');
+    await window.mouse.click(pane.x + 200, pane.y + 200);
+    await expect(texts.getByRole('textbox', { name: 'Text' })).toBeFocused();
+    await window.keyboard.type('Resize me');
+    await window.keyboard.press('Escape');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.text).toBe('Resize me');
+    await window.getByRole('button', { name: 'Fit View' }).click();
+    await texts.click();
+
+    // Dragged from the bottom-right corner: wider and taller than its text.
+    const before = (await stored(dataDir))[0]!;
+    const corner = await settledBox(window.locator('.react-flow__resize-control.handle.bottom.right'));
+    const grip = { x: corner.x + corner.width / 2, y: corner.y + corner.height / 2 };
+    await drag(window, grip, { x: grip.x + 120, y: grip.y + 80 });
+    await expect.poll(async () => (await stored(dataDir))[0]?.width).toBeGreaterThan(before.width + 20);
+    await expect.poll(async () => (await stored(dataDir))[0]?.height).toBeGreaterThan(before.height + 20);
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.wrap).toBe(true);
+    const resized = (await stored(dataDir))[0]!;
+
+    // 48px from the size control.
+    await window.getByLabel('Font size').selectOption('48');
+    await expect(texts).toHaveAttribute('data-font-size', '48');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.fontSize).toBe(48);
+
+    // Undo takes the size back, then the resize; redo puts both back. The size select still has focus, as a real pick leaves it.
+    await window.getByLabel('Font size').focus();
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.fontSize).toBe(16);
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await stored(dataDir))[0]?.width).toBe(before.width);
+    await window.keyboard.press('ControlOrMeta+Shift+z');
+    await window.keyboard.press('ControlOrMeta+Shift+z');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.fontSize).toBe(48);
+    await expect.poll(async () => (await stored(dataDir))[0]?.width).toBe(resized.width);
+
+    // A restart keeps both.
+    await app.close();
+    await stopDaemon(dataDir);
+    app = await launchApp(dataDir);
+    window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await expect(window.getByTestId('text-item')).toHaveAttribute('data-font-size', '48');
+    expect((await stored(dataDir))[0]).toMatchObject({ width: resized.width });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('Shift on a corner scales the font with the box, and a box with no dragged height fits its text again', async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+    const texts = window.getByTestId('text-item');
+    await window.mouse.move(pane.x + 300, pane.y + 200);
+    await window.keyboard.press('t');
+    await window.mouse.click(pane.x + 200, pane.y + 200);
+    await window.keyboard.type('Scale me');
+    await window.keyboard.press('Escape');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.text).toBe('Scale me');
+    await window.getByRole('button', { name: 'Fit View' }).click();
+    await texts.click();
+
+    // Shift held before the grab: the font grows with the width.
+    const before = (await stored(dataDir))[0]!;
+    const corner = await settledBox(window.locator('.react-flow__resize-control.handle.bottom.right'));
+    const grip = { x: corner.x + corner.width / 2, y: corner.y + corner.height / 2 };
+    await window.keyboard.down('Shift');
+    await drag(window, grip, { x: grip.x + 100, y: grip.y + 40 });
+    await window.keyboard.up('Shift');
+    await expect.poll(async () => (await stored(dataDir))[0]?.width).toBeGreaterThan(before.width + 20);
+    const scaled = (await stored(dataDir))[0]!;
+    expect(scaled.data.fontSize).toBeGreaterThan(before.data.fontSize as number);
+
+    // A taller box that was dragged so stays tall; one that was not shrinks back with its text.
+    await window.getByLabel('Font size').selectOption('96');
+    await expect.poll(async () => (await stored(dataDir))[0]?.data.fontSize).toBe(96);
+    const tall = (await stored(dataDir))[0]!.height;
+    await window.getByLabel('Font size').selectOption('12');
+    await expect.poll(async () => (await stored(dataDir))[0]?.height).toBeLessThan(tall / 2);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

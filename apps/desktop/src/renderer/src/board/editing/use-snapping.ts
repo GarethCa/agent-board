@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { InternalNode, NodeChange } from '@xyflow/react';
 import { commandKey } from '../../keys';
+import { boundsOnBoard } from '../items/items';
 import { isZone, type BoardNode } from '../tiles';
 import { overlaps, type Rect } from '../../geometry';
 import { boundsOf, snapToGrid, snapToGuides, type Guide } from './snap';
@@ -45,7 +46,10 @@ export function useSnapping({ applyNodeChanges, nodesRef, getInternalNode, getZo
     };
   }, []);
 
-  /** Where the node is on the board, at its measured size, were its own top-left at `position` in its parent. */
+  /**
+   * What the node takes up on the board, at its measured size (a rotated item, the box round it), were its own top-left
+   * at `position` in its parent.
+   */
   const rectAt = useCallback(
     (id: string, position?: { x: number; y: number }): Rect | undefined => {
       const node = getInternalNode(id);
@@ -53,7 +57,7 @@ export function useSnapping({ applyNodeChanges, nodesRef, getInternalNode, getZo
       const parent = node.parentId === undefined ? undefined : getInternalNode(node.parentId);
       const origin = parent?.internals.positionAbsolute ?? { x: 0, y: 0 };
       const at = position === undefined ? node.internals.positionAbsolute : { x: origin.x + position.x, y: origin.y + position.y };
-      return { ...at, width: node.measured.width ?? node.width ?? 0, height: node.measured.height ?? node.height ?? 0 };
+      return boundsOnBoard(node, { ...at, width: node.measured.width ?? node.width ?? 0, height: node.measured.height ?? node.height ?? 0 });
     },
     [getInternalNode],
   );

@@ -1,7 +1,7 @@
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'crash', 'rate-limit', 'markdown'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'orchestrate', 'crash', 'rate-limit', 'markdown'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -81,6 +81,14 @@ const scripts: Record<FakeScenario, Script> = {
       true,
     );
     await session.say(ran ? 'Removed dist.' : 'Okay, I left dist alone.');
+    await session.stop();
+  },
+
+  /** Needs permission for a shell command that is the whole prompt, however long: a tile's ask can be as long as that. */
+  async 'long-permission'(session, prompt) {
+    await session.submit(prompt);
+    await session.say('I need to run a long command.');
+    await session.runTool(session.shellTool, { command: prompt, description: 'Run it' }, { stdout: '', stderr: '', interrupted: false }, true);
     await session.stop();
   },
 
@@ -212,6 +220,80 @@ const scripts: Record<FakeScenario, Script> = {
     await session.runShell(`agent-board status set --progress 20 -- '${summary.replaceAll("'", `'\\''`)}'`);
     await session.runShell('echo "hook env: ${AGENT_BOARD_HOOK_TOKEN:-none} ${AGENT_BOARD_HOOK_URL:-none}"');
     await session.say('I know where I am.');
+    await session.stop();
+  },
+
+  /**
+   * Orchestrators and their workers, by prompt. `Orchestrate: <task>` runs one through the agent-board MCP
+   * tools and CLI: starts a worker with the task, waits for it, reads its handover, sends it a follow-up, waits again,
+   * reads its reply and closes it. `Lead two: <task>` starts two workers with the task, one through the MCP tool and one
+   * through the CLI, and leaves them running. `Hand off: <text>` writes `<text>` into `.agent-board/handover.md` and hands
+   * it over its edges with the MCP `handoff` tool, `Hand off to <name>: <text>` over its edge to that agent
+   * alone, and `Hand off by CLI: <text>` the same with `agent-board handoff`, each then ending its turn on `Handed off.`. `Wire a worker: <message>` starts a worker, waits for
+   * its first turn, joins itself to it with an edge carrying a message (`add_edge`) and hands it `<message>` along it,
+   * ending on `Wired.`.
+   * `Print your board identity` echoes the board token. `Work slowly` runs `sleep 5`;
+   * `Ask permission` plays `permission`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
+   */
+  async orchestrate(session, prompt) {
+    await session.submit(prompt);
+    const task = /^Orchestrate: (.*)/.exec(prompt)?.[1];
+    if (task !== undefined) {
+      const started = await session.callMcpTool('agent-board', 'new_agent', { prompt: task, name: 'worker' });
+      const ref = /agent:[0-9a-f]+/.exec(started?.text ?? '')?.[0];
+      if (ref === undefined) {
+        await session.say('I could not start a worker.');
+        return session.stop();
+      }
+      await session.callMcpTool('agent-board', 'wait', { agents: [ref] });
+      await session.runShell(`agent-board read ${ref} .agent-board/handover.md`);
+      await session.callMcpTool('agent-board', 'send', { agent: ref, text: 'Also add a test' });
+      await session.runShell(`agent-board wait ${ref}`);
+      await session.callMcpTool('agent-board', 'read', { agent: ref });
+      await session.runShell(`agent-board close ${ref}`);
+      await session.say('The worker is done and closed.');
+      return session.stop();
+    }
+    const lead = /^Lead two: (.*)/.exec(prompt)?.[1];
+    if (lead !== undefined) {
+      await session.callMcpTool('agent-board', 'new_agent', { prompt: lead, name: 'worker one' });
+      await session.runShell(`agent-board new --name 'worker two' -- '${lead.replaceAll("'", `'\\''`)}'`);
+      await session.say('Two workers started.');
+      return session.stop();
+    }
+    const handoff = /^Hand off(?: to (\S+))?( by CLI)?: (.*)/.exec(prompt);
+    if (handoff !== null) {
+      const [, to, cli, text] = handoff as unknown as [string, string | undefined, string | undefined, string];
+      const path = '.agent-board/handover.md';
+      await session.runShell(`mkdir -p .agent-board && printf '# Handover\\n\\n%s\\n' '${text.replaceAll("'", `'\\''`)}' > ${path}`);
+      if (cli === undefined) await session.callMcpTool('agent-board', 'handoff', { handover_path: path, ...(to === undefined ? {} : { to }) });
+      else await session.runShell(`agent-board handoff --handover ${path}${to === undefined ? '' : ` --to ${to}`}`);
+      await session.say('Handed off.');
+      return session.stop();
+    }
+    const wire = /^Wire a worker: (.*)/.exec(prompt)?.[1];
+    if (wire !== undefined) {
+      await session.callMcpTool('agent-board', 'new_agent', { prompt: 'Stand by', name: 'worker' });
+      await session.callMcpTool('agent-board', 'wait', { agents: ['worker'] });
+      await session.callMcpTool('agent-board', 'add_edge', { from: 'me', to: 'worker', carries: 'message' });
+      await session.callMcpTool('agent-board', 'handoff', { to: 'worker', message: wire });
+      await session.say('Wired.');
+      return session.stop();
+    }
+    if (prompt === 'Print your board identity') {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return session.stop();
+    }
+    if (prompt === 'Work slowly') {
+      await session.runShell('sleep 5');
+      await session.say('Slow work done.');
+      return session.stop();
+    }
+    if (prompt === 'Ask permission') return scripts.permission(session, prompt);
+    if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
+    await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
+    await session.say('Handover written.\nSTATUS: done');
     await session.stop();
   },
 

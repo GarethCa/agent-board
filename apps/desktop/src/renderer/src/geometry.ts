@@ -31,3 +31,17 @@ export function centreOf(rect: Rect): Point {
 export function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
 }
+
+/**
+ * The upright box round `rect` turned `degrees` clockwise about its centre: what a rotated item takes up, for laying
+ * things out round it.
+ */
+export function rotatedBounds(rect: Rect, degrees: number): Rect {
+  if (degrees % 360 === 0) return rect;
+  const radians = (degrees * Math.PI) / 180;
+  const [cos, sin] = [Math.abs(Math.cos(radians)), Math.abs(Math.sin(radians))];
+  const width = rect.width * cos + rect.height * sin;
+  const height = rect.width * sin + rect.height * cos;
+  const centre = centreOf(rect);
+  return { x: centre.x - width / 2, y: centre.y - height / 2, width, height };
+}

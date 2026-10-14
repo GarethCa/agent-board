@@ -10,6 +10,7 @@ import { STATE_LABELS, TILE_STATE_LABELS } from './states';
 import { Button, EmptyState, PanelRow, Section, StatusPill, Tag, Tooltip, useToast } from './ui';
 import { useSessionWindows } from './windows/SessionWindows';
 import { panesLabel } from './session/panes';
+import { liveShellCount } from './session/tabs';
 
 interface SessionsProps {
   agents: readonly Agent[];
@@ -31,8 +32,8 @@ export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAge
   const sessions = useLiveSessions();
   const windows = useSessionWindows();
   const board = useBoardCommands();
-  const live = new Set(sessions.map((session) => session.id));
-  const liveShells = shells.filter((shell) => paneIds(shell.layout).some((id) => live.has(id)));
+  // A tab is its owner's: an agent's window opens on it, or its shell tile's, listed while any of the tile's shells runs.
+  const liveShells = shells.filter((shell) => !shell.owner && liveShellCount({ kind: 'shell', shell }, shells) > 0);
   // Sessions the board has no tile for: say, an agent's session it hasn't listed yet.
   const known = new Set([...agents.map((agent) => agent.sessionId), ...shells.flatMap((shell) => paneIds(shell.layout))]);
   const others = sessions.filter((session) => !known.has(session.id));

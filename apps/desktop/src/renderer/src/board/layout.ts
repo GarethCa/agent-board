@@ -100,7 +100,13 @@ export interface ZoneTile {
   id: string;
   x: number;
   y: number;
+  /** Its size if it was resized; `AGENT_TILE_SIZE` when left out. */
+  width?: number;
+  height?: number;
 }
+
+/** The size of `tile`: what it was resized to, or the default. */
+export const sizeOfZoneTile = (tile: ZoneTile) => ({ width: tile.width ?? AGENT_TILE_SIZE.width, height: tile.height ?? AGENT_TILE_SIZE.height });
 
 /** Slack for positions worked out from fractional ones, px. */
 const EPSILON = 1e-6;
@@ -130,12 +136,24 @@ export function packTiles(
     spot.x <= region.right + EPSILON &&
     spot.y >= region.top - EPSILON &&
     spot.y <= region.bottom + EPSILON;
-  const kept = tiles.filter(inside);
-  const cut = tiles.filter((tile) => !inside(tile));
+  // A resized tile is never moved to make room: it stays where it is, and the zone can shrink no further than its edge.
+  const resized = (tile: ZoneTile) => tile.width !== undefined || tile.height !== undefined;
+  const holds = (tile: ZoneTile) => {
+    const own = sizeOfZoneTile(tile);
+    return (
+      tile.x >= region.left - EPSILON &&
+      tile.y >= region.top - EPSILON &&
+      tile.x + own.width <= size.width - ZONE_PADDING + EPSILON &&
+      tile.y + own.height <= size.height - TILE_GAP - ZONE_PADDING + EPSILON
+    );
+  };
+  if (tiles.some((tile) => resized(tile) && !holds(tile))) return undefined;
+  const kept = tiles.filter((tile) => (resized(tile) ? true : inside(tile)));
+  const cut = tiles.filter((tile) => !resized(tile) && !inside(tile));
   const packed = new Map(kept.map((tile) => [tile.id, { x: tile.x, y: tile.y }]));
   if (cut.length === 0) return packed;
   if (region.right < region.left || region.bottom < region.top) return undefined;
-  const taken = [...kept.map(footprint), ...obstacles];
+  const taken = [...kept.map((tile) => sizedFootprint(tile, sizeOfZoneTile(tile))), ...obstacles];
 
   // The nearest to fitting first, so a tile just over the edge gets the spot nearest it.
   const overhang = (tile: ZoneTile) =>
@@ -202,8 +220,11 @@ function nearestFreeSpot(
 }
 
 /** The part of a zone a tile at `spot` takes: itself and the room above it for its subagents. */
-export function footprint(spot: { x: number; y: number }): Rect {
-  return { x: spot.x, y: spot.y - PERCH_ROOM, width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height + PERCH_ROOM };
+export const footprint = (spot: { x: number; y: number }): Rect => sizedFootprint(spot, AGENT_TILE_SIZE);
+
+/** The part of a zone a tile of `size` at `spot` takes. */
+export function sizedFootprint(spot: { x: number; y: number }, size: { width: number; height: number }): Rect {
+  return { x: spot.x, y: spot.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
 }
 
 /** Whether `rect` keeps `TILE_GAP` from every one of `others`. */

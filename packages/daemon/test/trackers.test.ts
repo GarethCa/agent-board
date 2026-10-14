@@ -313,6 +313,28 @@ describe('agents and issues', () => {
     expect(linked.message).toBe('ACME has no issue OPS-3');
   });
 
+  it("refuses an issue from a project other than the project zone's, for starting and for linking", async () => {
+    const { client } = await trackerDaemon();
+    await client.call('tracker.connect', { provider: 'linear', credential: GOOD_KEY });
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+    const tracker = { provider: 'linear' as const, scope: 'ACME', project: 'fake-project-tracker' };
+    await client.call('zone.setTracker', { id: zone.id, tracker });
+
+    // The first is in no project, the second in another one; both are in team ACME.
+    for (const issueId of ['ACME-12', 'ACME-2']) {
+      const spawned = await rpcError(client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId, ...SIZE }));
+      expect(spawned.code).toBe(RPC_ERROR.invalidParams);
+      expect(spawned.message).toBe(`ACME's project fake-project-tracker has no issue ${issueId}`);
+    }
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Look around', ...SIZE });
+    const inOtherProject = 'ACME-2';
+    const linked = await rpcError(client.call('agent.link', { sessionId: agent.sessionId, issueId: inOtherProject }));
+    expect(linked.message).toBe(`ACME's project fake-project-tracker has no issue ${inOtherProject}`);
+
+    const started = await client.call('agent.spawn', { zoneId: zone.id, prompt: '', issueId: 'ACME-16', ...SIZE });
+    expect(started.sessionId).toBeDefined();
+  });
+
   it('refuses an issue the tracker does not have, and leaves no worktree behind', async () => {
     const { client } = await trackerDaemon();
     const zone = await linearZone(client);

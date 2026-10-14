@@ -13,6 +13,7 @@ const card = (id: string, data: Partial<BoardItem['data']> = {}): BoardItem => (
   width: 240,
   height: 110,
   z: 1,
+  rotation: 0,
   data: { provider: 'linear', id: 'ACME-58', title: 'Movable sessions', url: 'https://linear.app/x/ACME-58', state: 'Todo', ...data },
   createdAt: '',
   updatedAt: '',

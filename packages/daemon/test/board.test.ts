@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { paneIds } from '../src/pane-layout.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
+import type { DaemonClient } from '../src/client.ts';
 import { BOARD_ERROR, RPC_ERROR } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempRepo } from './helpers.ts';
 
@@ -14,6 +15,12 @@ async function shellInZone() {
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
   const shell = await client.call('shell.create', { zoneId: zone.id });
   const pane = paneIds(shell.layout)[0]!;
+  const env = await boardEnv(client, recorder, pane);
+  return { daemon, client, recorder, zone, shell, pane, ...env };
+}
+
+/** The board env the shell in `pane` was given, read from its terminal. */
+async function boardEnv(client: DaemonClient, recorder: ReturnType<typeof recordEvents>, pane: string) {
   await client.call('session.attach', { sessionId: pane });
   await client.call('session.write', {
     sessionId: pane,
@@ -21,7 +28,7 @@ async function shellInZone() {
   });
   await recorder.waitForText(pane, ':end\r\n');
   const [socket, zoneId, sessionId, firstOnPath, token] = /env:(.*):end\r\n/.exec(recorder.screenText(pane))![1]!.split('|');
-  return { daemon, client, zone, shell, pane, socket, zoneId, sessionId, firstOnPath, token: token! };
+  return { socket, zoneId, sessionId, firstOnPath, token: token! };
 }
 
 describe('the board env', () => {
@@ -48,10 +55,28 @@ describe('the board env', () => {
       tileId: shell.id,
       name: shell.name,
       zoneId: shell.zoneId,
+      orchestrate: null,
     });
 
     await client.call('shell.move', { shellId: shell.id, zoneId: null, x: 2000, y: 0 });
     expect((await shellSide.call('board.identify', { token })).zoneId).toBeNull();
+  });
+
+  it("identifies a shell in one of a shell tile's tabs as the tile, in the tile's zone", async () => {
+    const { client, recorder, zone, shell } = await shellInZone();
+    const tab = await client.call('shell.createTab', { owner: { kind: 'shell', id: shell.id } });
+    const pane = paneIds(tab.layout)[0]!;
+    const { zoneId, token } = await boardEnv(client, recorder, pane);
+
+    expect(zoneId).toBe(zone.id);
+    expect(await client.call('board.identify', { token })).toEqual({
+      sessionId: pane,
+      kind: 'shell',
+      tileId: shell.id,
+      name: shell.name,
+      zoneId: zone.id,
+      orchestrate: null,
+    });
   });
 
   it('refuses a token no live session holds, and one whose session has ended', async () => {
@@ -84,6 +109,7 @@ describe('what a board token may call', () => {
       agentSide.call('agent.decidePermission', { sessionId: pane, requestId: 'r1', behavior: 'allow' }),
       agentSide.call('agent.spawn', { zoneId: zone.id, cols: 80, rows: 24 }),
       agentSide.call('agent.stop', { sessionId: pane }),
+      agentSide.call('agent.markSeen', { sessionId: pane }),
       agentSide.call('zone.configure', { id: zone.id, boardMcp: false }),
       agentSide.call('settings.set', { heldPayloads: 'path' }),
       agentSide.call('daemon.stop', {}),

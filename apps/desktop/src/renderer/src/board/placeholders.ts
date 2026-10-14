@@ -34,6 +34,7 @@ export function placeholderStickies(count: number): ItemNodeType[] {
       y: 4 * (TILE.height + GAP) + Math.floor(index / COLUMNS) * (STICKY_SIZE.height + GAP),
       ...STICKY_SIZE,
       z: index,
+      rotation: 0,
       data: {
         text: index % 3 === 0 ? `**Note ${index + 1}**\n- one thing\n- _another_` : `Placeholder note ${index + 1}`,
         color: STICKY_COLORS[index % STICKY_COLORS.length]!.value,

@@ -30,8 +30,7 @@ describe('the details strip', () => {
   it('draws the rail’s section icons before its headings, aria-hidden', () => {
     const rail = iconsIn(render(true));
     const strip = iconsIn(render(false));
-    for (const icon of ['circle-dot', 'folder-git-2', 'git-pull-request', 'bot', 'cable', 'calendar-clock']) expect(rail).toContain(icon);
-    // The strip also lists the controls the rail hides while they can't act.
+    for (const icon of ['circle-dot', 'folder-git-2', 'git-pull-request', 'bot', 'calendar-clock']) expect(rail).toContain(icon);
     for (const icon of rail) expect(strip).toContain(icon);
     expect(render(false)).not.toMatch(/<svg(?![^>]*aria-hidden="true")/);
   });

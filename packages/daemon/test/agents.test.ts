@@ -276,6 +276,72 @@ describe('Claude agents', () => {
     expect((await second.client.call('agent.setMuted', { sessionId: agent.sessionId, muted: false })).muted).toBe(false);
   });
 
+  it('marks an ask seen when its session is opened, until the agent works and asks again', async () => {
+    const { client, recorder } = await agentDaemon('waiting', { repeat: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the app');
+    const waiting = await untilState(recorder, agent.sessionId, 'waiting');
+    expect(waiting.seen).toBe(false);
+
+    const seen = await client.call('agent.markSeen', { sessionId: agent.sessionId });
+
+    expect(seen).toMatchObject({ state: 'waiting', seen: true });
+    await untilAgent(recorder, agent.sessionId, (known) => known.seen);
+    expect((await client.call('agent.list'))[0]?.seen).toBe(true);
+  });
+
+  it('clears seen on the next working transition, so the agent needs you again when it waits', async () => {
+    const { client, recorder } = await agentDaemon('waiting', { repeat: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the app');
+    await untilState(recorder, agent.sessionId, 'waiting');
+    await client.call('agent.markSeen', { sessionId: agent.sessionId });
+
+    const answered = recorder.events.length;
+    await client.call('agent.answer', { sessionId: agent.sessionId, text: 'SQLite' });
+    const worked = await untilAgent(recorder, agent.sessionId, (known) => known.state !== 'waiting', answered);
+    expect(worked.seen).toBe(false);
+    const asking = await untilAgent(recorder, agent.sessionId, (known) => known.state === 'waiting', answered);
+    expect(asking.seen).toBe(false);
+  });
+
+  it('clears seen when another permission prompt arrives while it still needs permission', async () => {
+    const { client, recorder } = await agentDaemon('subagent-permission', { stepDelayMs: 1000 });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Clean up');
+    const first = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length >= 1);
+    // The second subagent has not asked yet: this is the first ask, and it is seen.
+    expect(first.permissions).toHaveLength(1);
+    expect((await client.call('agent.markSeen', { sessionId: agent.sessionId })).seen).toBe(true);
+
+    // Its sibling's prompt lands in the same needs-permission state: a new ask all the same.
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 2);
+    expect(asking).toMatchObject({ state: 'needs-permission', seen: false });
+  });
+
+  it('reports no seen on an agent that has ended', async () => {
+    const { client, recorder } = await agentDaemon('waiting', { repeat: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the app');
+    await untilState(recorder, agent.sessionId, 'waiting');
+    await client.call('agent.markSeen', { sessionId: agent.sessionId });
+
+    await client.call('session.kill', { sessionId: agent.sessionId });
+
+    const ended = await untilAgent(recorder, agent.sessionId, (a) => a.endedAt !== null);
+    expect(ended.seen).toBe(false);
+    expect((await client.call('agent.list'))[0]?.seen).toBe(false);
+  });
+
+  it('does not mark an agent that is not asking, and refuses an unknown agent', async () => {
+    const { client } = await agentDaemon('output');
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+
+    expect((await client.call('agent.markSeen', { sessionId: agent.sessionId })).seen).toBe(false);
+    await expect(client.call('agent.markSeen', { sessionId: 'nope' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+  });
+
   it('refuses to mute an unknown agent, or without a boolean', async () => {
     const { client } = await agentDaemon('output');
     const zone = await addZone(client, tempRepo());
@@ -417,6 +483,21 @@ describe('Claude agents', () => {
       await client.call('agent.delete', { sessionId: agent.sessionId });
 
       expect(await client.call('connector.list')).toEqual([]);
+    });
+
+    it('with keepWorktree ends the agent and leaves its worktree, branch and unsaved work', async () => {
+      const { client, recorder } = await agentDaemon('waiting');
+      const repo = tempRepo();
+      const zone = await addZone(client, repo);
+      const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+      await untilState(recorder, agent.sessionId, 'waiting');
+      writeFileSync(join(agent.worktree, 'notes.md'), 'work in progress\n');
+
+      await client.call('agent.delete', { sessionId: agent.sessionId, keepWorktree: true });
+
+      expect(await client.call('agent.list')).toEqual([]);
+      expect(existsSync(join(agent.worktree, 'notes.md'))).toBe(true);
+      expect(git(repo, 'branch', '--list', agent.branch)).toContain(agent.branch);
     });
 
     it('kills a clean agent and removes its worktree and branch', async () => {

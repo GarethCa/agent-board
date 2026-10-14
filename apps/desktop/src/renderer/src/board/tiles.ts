@@ -12,7 +12,9 @@ import {
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
+import { tileSizeOf, type TileSizes } from './tile-size';
 import { AGENT_TILE_SIZE, freeSpotFor, freeTileSlot, PERCH_ROOM, ZONE_PADDING, zoneMinSize } from './layout';
+import { crewSpot } from './crews';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
 
@@ -66,12 +68,28 @@ export function subjectOf(data: TileData): { zoneId: string | null; position: Ti
   return data.agent ?? data.shell ?? data.external ?? { zoneId: null, position: null };
 }
 
+/** A tile's size as the board has it: what it was resized to, or the default. */
+export const sizeOfNode = (node: Node): { width: number; height: number } => ({
+  width: node.width ?? AGENT_TILE_SIZE.width,
+  height: node.height ?? AGENT_TILE_SIZE.height,
+});
+
+/** A tile's compact size: what it was resized to; an expanded tile counts as the default, as its zone does. */
+export const compactSizeOf = (node: TileNodeType): { width: number; height: number } =>
+  node.data.expanded === true ? AGENT_TILE_SIZE : sizeOfNode(node);
+
 /** A tile's stacking order: never-raised tiles under the rest. */
 const zOf = (node: TileNodeType) => subjectOf(node.data).position?.z ?? -Infinity;
 
-/** The shell tile the session is a pane of, if any. */
-export const shellWithPane = (shells: readonly Shell[] | undefined, sessionId: string): Shell | undefined =>
-  shells?.find((shell) => paneIds(shell.layout).includes(sessionId));
+/**
+ * The shell tile the session is a pane of, if any, in its own panes or one of its tabs: not an agent's tab, whose own
+ * tab holds the agent's session too.
+ */
+export function shellWithPane(shells: readonly Shell[] | undefined, sessionId: string): Shell | undefined {
+  const holder = shells?.find((shell) => shell.owner?.kind !== 'agent' && paneIds(shell.layout).includes(sessionId));
+  const tileId = holder?.owner?.id;
+  return tileId === undefined ? holder : shells?.find((shell) => shell.id === tileId && !shell.owner);
+}
 
 /** `subject` (an agent, shell or external session) as it is while `move` is being saved. */
 function placedAt<T extends { zoneId: string | null; position: TilePosition | null }>(subject: T, move: TileMove | undefined): T {
@@ -108,6 +126,8 @@ export function withTiles(
   pending: ReadonlyMap<string, TileMove> = new Map(),
   /** The tiles expanded in place, drawn at their size over the rest. */
   expanded: ExpandedTiles = [],
+  /** The sizes tiles were resized to, by node id: a tile not here is `AGENT_TILE_SIZE`. */
+  sizes: TileSizes = {},
 ): BoardNode[] {
   const known = new Map(nodes.filter(isSessionTile).map((node) => [node.id, node]));
   const zones = new Map(nodes.filter(isZone).map((zone) => [zone.id, zone]));
@@ -116,14 +136,33 @@ export function withTiles(
     if (zoneId !== null && !zones.has(zoneId)) return;
     entries.push({ id, parentId: zoneId ?? undefined, position: undefined, data, draggable: true });
   };
+  const byId = new Map(agents.map((agent) => [agent.sessionId, agent]));
+  const crews = new Map<string, number>();
+  for (const agent of agents) {
+    if (agent.spawnedBy !== null && byId.has(agent.spawnedBy)) crews.set(agent.spawnedBy, (crews.get(agent.spawnedBy) ?? 0) + 1);
+  }
+  // An agent's or shell tile's tabs are shells of its session window, not tiles of their own; an agent's tile shows its.
+  const tabs = new Map<string, Shell[]>();
+  for (const shell of shells) if (shell.owner?.kind === 'agent') tabs.set(shell.owner.id, [...(tabs.get(shell.owner.id) ?? []), shell]);
   for (const listed of agents) {
     const id = tileNodeId('agent', listed.sessionId);
     const agent = placedAt(listed, pending.get(id));
     // Outside every zone of its repo, its tile says which repo it works in.
     const home = agent.zoneId !== null && zones.get(agent.zoneId)?.data.zone.repoRoot === agent.repoRoot;
-    add(id, agent.zoneId, { label: agent.name, harness: agent.harness, agent, ...(home ? {} : { repo: repoName(agent.repoRoot) }) });
+    const orchestrator = agent.spawnedBy === null ? undefined : byId.get(agent.spawnedBy);
+    const crew = crews.get(agent.sessionId);
+    add(id, agent.zoneId, {
+      label: agent.name,
+      harness: agent.harness,
+      agent,
+      ...(home ? {} : { repo: repoName(agent.repoRoot) }),
+      ...(orchestrator === undefined ? {} : { from: { sessionId: orchestrator.sessionId, name: orchestrator.name } }),
+      ...(crew === undefined ? {} : { crew }),
+      ...(tabs.has(agent.sessionId) ? { tabs: tabs.get(agent.sessionId) } : {}),
+    });
   }
   for (const listed of shells) {
+    if (listed.owner) continue;
     const id = tileNodeId('shell', listed.id);
     const shell = placedAt(listed, pending.get(id));
     add(id, shell.zoneId, { label: shell.name, harness: null, shell });
@@ -148,18 +187,39 @@ export function withTiles(
       if (position !== null) entry.position = { x: position.x, y: position.y };
     }
   }
-  const rect = (entry: Placed) => ({ ...entry.position!, ...AGENT_TILE_SIZE });
+  /**
+   * A compact tile's size as drawn: what it is being resized to until it is let go, else what it was last let go at.
+   * An expanded tile counts as its compact size here: its zone keeps to that, so it floats over it.
+   */
+  const sizeOf = (id: string) => {
+    const before = known.get(id);
+    const saved = tileSizeOf(sizes, id);
+    return before?.resizing === true && expandedRank(expanded, id) === undefined ? { width: before.width ?? saved.width, height: before.height ?? saved.height } : saved;
+  };
+  const rect = (entry: Placed) => ({ ...entry.position!, ...sizeOf(entry.id) });
+  /** What a placed tile takes for a new crew member: its size as drawn (expanded or not), and the room above it. */
+  const footprintOf = (entry: Placed) => {
+    const rank = expandedRank(expanded, entry.id);
+    const size = rank === undefined ? sizeOf(entry.id) : expanded[rank]!;
+    return { x: entry.position!.x, y: entry.position!.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
+  };
+  const zoneRects = [...zones.values()].map(layoutOf);
+  // Board items in each zone (an issue card, a sticky), and loose on the board, are in the way too.
+  const items = new Map<string | undefined, ZoneLayout[]>();
+  for (const node of nodes.filter(isItemNode)) items.set(node.parentId, [...(items.get(node.parentId) ?? []), node.data.item]);
   for (const entry of entries) {
     if (entry.position !== undefined) continue;
     const siblings = entries.filter((other) => other.parentId === entry.parentId && other.position !== undefined);
-    if (entry.parentId === undefined) {
-      const zoneRects = [...zones.values()].map(layoutOf);
+    const inTheWay = items.get(entry.parentId) ?? [];
+    // An orchestrator's new agent goes beside it, in its crew (BA2), when it starts where its orchestrator is.
+    const orchestrator = entry.data.from && siblings.find((other) => other.data.agent?.sessionId === entry.data.from!.sessionId);
+    const besideIt =
+      orchestrator && crewSpot(orchestrator.position!, [...siblings.map(footprintOf), ...inTheWay, ...(entry.parentId === undefined ? zoneRects : [])]);
+    if (besideIt !== undefined) entry.position = besideIt;
+    else if (entry.parentId === undefined) {
       entry.position = freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...zoneRects, ...siblings.map(rect)]);
     } else {
-      const parentId = entry.parentId;
-      // Board items in the zone (an issue card, a sticky) are in the way too.
-      const items = nodes.filter(isItemNode).filter((node) => node.parentId === parentId).map((node) => node.data.item);
-      entry.position = freeTileSlot(layoutOf(zones.get(parentId)!).width, [...siblings.map(rect), ...items]);
+      entry.position = freeTileSlot(layoutOf(zones.get(entry.parentId)!).width, [...siblings.map(rect), ...inTheWay]);
     }
   }
 
@@ -183,7 +243,7 @@ export function withTiles(
       position: entry.position!,
       // An expanded tile being resized has the size React Flow is giving it until it is let go.
       ...(open === undefined
-        ? AGENT_TILE_SIZE
+        ? sizeOf(entry.id)
         : before?.resizing === true
           ? { width: before.width ?? open.width, height: before.height ?? open.height }
           : { width: open.width, height: open.height }),

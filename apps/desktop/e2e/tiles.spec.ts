@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, setClickOpens, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -28,7 +28,7 @@ async function zoom(window: Page): Promise<number> {
 
 /**
  * The box of the React Flow node holding `tile`, once still. Not the tile's own: lifted while dragged, the tile is
- * scaled and tilted, but its node is where it is.
+ * scaled, but its node is where it is.
  */
 const nodeBox = (window: Page, tile: Locator) => settledBox(window.locator('.react-flow__node').filter({ has: tile }));
 
@@ -322,6 +322,9 @@ test('a tile for a session started in another terminal drags within its zone, ou
     await externalTile.dblclick();
     const expanded = window.getByTestId('expanded-tile');
     await expect(expanded).toHaveAttribute('data-external-id', /^claude:/);
+    // It opens collapsed to the icon rail, like every session window.
+    await expect(expanded.getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Show details' })).toBeVisible();
+    await showDetails(expanded);
     const details = expanded.getByRole('complementary', { name: 'Session details' });
     await expect(details).toContainText('First prompt');
     await expect(details).toContainText('Pick a database');
@@ -457,6 +460,8 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and onl
     const boxes = () => Promise.all(parts.map((part) => settledBox(part)));
 
     await window.mouse.move(0, 0);
+    // Its state settles first: the fake agent works, then waits, and the pill's label (so its width) follows.
+    await expect(card).toHaveAttribute('data-state', 'waiting');
     await expect(card.locator('.ui-pill')).toHaveCount(1);
     await expect(actions).toHaveCSS('opacity', '0');
     const before = await boxes();
@@ -465,7 +470,7 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and onl
     await expect(actions).toHaveCSS('opacity', '1');
     await expect(card.locator('.ui-pill')).toHaveCount(1);
     await expect(card.locator('.ui-pill')).toBeVisible();
-    // The tile is tilted a little, and the same either way: its parts are where they were.
+    // The same either way: its parts are where they were.
     expect(await boxes()).toEqual(before);
   } finally {
     await app.close();

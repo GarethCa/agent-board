@@ -160,11 +160,16 @@ const readsIn = (source: string) =>
  */
 const LOCAL = [
   '--radix-popover-content-available-height',
+  '--pane-top',
+  '--pane-height',
+  '--pane-strip',
   '--zone-color',
+  '--zone-fill-pct',
   '--rename-gap',
   '--sticky-color',
   '--sticky-ink',
   '--item-color',
+  '--text-font-size',
   '--shape-fill',
   '--shape-stroke',
   '--connector-color',

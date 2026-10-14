@@ -1,18 +1,20 @@
-import { memo, useContext, useEffect, type CSSProperties } from 'react';
-import { NodeResizeControl, useReactFlow, type NodeProps } from '@xyflow/react';
+import { memo, useContext, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react';
 import {
   MAX_TEXT_LENGTH,
   TEXT_ALIGNS,
   TEXT_COLORS,
+  TEXT_FONT_SIZES,
+  TEXT_PRESET_FONT_SIZES,
   TEXT_SIZES,
   type TextData,
   type TextSize,
 } from '@agent-board/daemon/protocol';
-import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Trash2 } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Minus, Plus, Trash2 } from 'lucide-react';
 import { BarButton, BarRow, BarSeparator, BarSwatch, ItemStyleBar } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
-import { textItemSize } from './text-layout';
-import { textData, textMetrics } from './text-style';
+import { clampTextHeight, resizedText, textItemSize } from './text-layout';
+import { clampFontSize, stepFontSize, textData, textMetrics } from './text-style';
 import { themedColor } from '../../board-colors';
 import { useDraftText } from './useDraftText';
 
@@ -31,10 +33,44 @@ const ALIGN_ICONS = { left: <AlignLeft />, center: <AlignCenter />, right: <Alig
 /** The least width a text item can be resized to, px. */
 const MIN_WRAPPED_WIDTH = 40;
 
-/** The size `data` takes: as wide as its text, or, once `wrap`ped, `width` wide and as tall as the text wraps to. */
+/**
+ * The size `data` takes: as wide as its text, or, once `wrap`ped, `width` wide; as tall as the text wraps to, or as the
+ * `minHeight` it was dragged to, if more.
+ */
 function sizeOf(data: TextData, text: string, width: number) {
   const { box, measure } = textMetrics(data);
-  return textItemSize(text, measure, box, data.wrap ? width : undefined);
+  const size = textItemSize(text, measure, box, data.wrap ? width : undefined);
+  return { ...size, height: clampTextHeight(data.minHeight, size.height) };
+}
+
+/**
+ * Whether Shift is held, which makes a corner drag scale the font with the box. Tracked from the keys and from each
+ * press, so Shift held before the grab counts, and one let go while the window was away doesn't stick. `ref` is the
+ * same, for a callback that must see it as it is now.
+ */
+function useShiftHeld(active: boolean) {
+  const [held, setHeld] = useState(false);
+  const ref = useRef(false);
+  useEffect(() => {
+    const set = (value: boolean) => {
+      ref.current = value;
+      setHeld(value);
+    };
+    if (!active) return set(false);
+    const track = (event: KeyboardEvent | PointerEvent) => set(event.shiftKey);
+    const release = () => set(false);
+    window.addEventListener('keydown', track);
+    window.addEventListener('keyup', track);
+    window.addEventListener('pointerdown', track, true);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('keydown', track);
+      window.removeEventListener('keyup', track);
+      window.removeEventListener('pointerdown', track, true);
+      window.removeEventListener('blur', release);
+    };
+  }, [active]);
+  return { held, ref };
 }
 
 /** The delete button every item's bar ends with. */
@@ -59,6 +95,9 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
   const style = textData(item.data);
   const editing = data.editing === true;
   const currentWidth = width ?? item.width;
+  const shift = useShiftHeld(selected === true);
+  // The box at the start of a resize, and which handle is dragged: a corner when it moves both ways.
+  const drag = useRef({ width: 0, height: 0, corner: false });
   const { shown, draft, startEditing, type, finishEditing } = useDraftText(id, editing, style.text, (typed) =>
     update({
       id: item.id,
@@ -68,6 +107,9 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
   );
 
   // Sized as it is typed in, before the typing is saved.
+  // One line of text, the least a drag can reach; a shorter box than its text is lifted to it when the drag ends.
+  const { box } = textMetrics(style);
+  const oneLine = Math.ceil(box.lineHeight + 2 * box.padding);
   const size = sizeOf(style, shown, currentWidth);
   useEffect(() => {
     if (editing) updateNode(id, size);
@@ -87,7 +129,7 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
     <div
       className="text-item"
       data-testid="text-item"
-      data-size={style.size}
+      data-font-size={style.fontSize}
       data-bold={style.bold}
       data-italic={style.italic}
       data-align={style.align}
@@ -95,46 +137,84 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
       data-editing={editing || undefined}
       data-selected={selected || undefined}
       data-zone={item.zoneId ?? ''}
-      style={{ '--item-color': themedColor(style.color) } as CSSProperties}
+      style={{ '--item-color': themedColor(style.color), '--text-font-size': `${style.fontSize}px` } as CSSProperties}
       onDoubleClick={(event) => {
         event.stopPropagation();
         if (!editing) startEditing();
       }}
     >
-      {alone &&
-        !editing &&
-        (['left', 'right'] as const).map((position) => (
-          <NodeResizeControl
-            key={position}
-            position={position}
-            resizeDirection="horizontal"
-            minWidth={MIN_WRAPPED_WIDTH}
-            className="item-resize-handle"
-            onResizeEnd={(_event, { x, y, width: resized }) =>
-              update({
-                id: item.id,
-                x,
-                y,
-                width: resized,
-                height: sizeOf({ ...style, wrap: true }, style.text, resized).height,
-                data: { wrap: true },
-              })
-            }
-          />
-        ))}
+      {alone && !editing && (
+        <NodeResizer
+          color="var(--item-handle)"
+          handleClassName="item-resize-handle nokey"
+          lineClassName="item-resize-line"
+          minWidth={MIN_WRAPPED_WIDTH}
+          minHeight={oneLine}
+          keepAspectRatio={shift.held}
+          onResizeStart={(_event, start) => {
+            drag.current = { width: start.width, height: start.height, corner: false };
+          }}
+          onResize={(_event, { direction }) => {
+            drag.current.corner = direction[0] !== 0 && direction[1] !== 0;
+          }}
+          onResizeEnd={(_event, { x, y, width: resized, height: dragged }) => {
+            const { width: wasWidth, height: wasHeight, corner } = drag.current;
+            // Shift on a corner scales the font with the box: by how much the width changed.
+            const fontSize = shift.ref.current && corner ? clampFontSize((style.fontSize * resized) / wasWidth) : style.fontSize;
+            const scaled = { ...style, fontSize };
+            const needs = sizeOf({ ...scaled, minHeight: 0, wrap: true }, style.text, resized).height;
+            const { widthChanged, minHeight } = resizedText({
+              from: { width: wasWidth, height: wasHeight },
+              to: { width: resized, height: dragged },
+              minHeight: style.minHeight,
+              needs,
+            });
+            const next = { ...scaled, wrap: style.wrap || widthChanged, minHeight };
+            update({
+              id: item.id,
+              x,
+              y,
+              width: next.wrap ? resized : sizeOf(next, style.text, resized).width,
+              height: sizeOf(next, style.text, resized).height,
+              data: { wrap: next.wrap, fontSize, minHeight },
+            });
+          }}
+        />
+      )}
       <ItemStyleBar label="Text style" visible={alone && !dragging}>
         <BarRow>
           {TEXT_SIZES.map((option) => (
             <BarButton
               key={option}
               name={SIZE_LABELS[option]}
-              pressed={style.size === option}
+              pressed={style.fontSize === TEXT_PRESET_FONT_SIZES[option]}
               // A heading comes bold and body text plain, as in a document; bold is then the user's to toggle.
-              onClick={() => restyle({ size: option, bold: option !== 'body' })}
+              onClick={() => restyle({ size: option, fontSize: TEXT_PRESET_FONT_SIZES[option], bold: option !== 'body' })}
             >
               {SIZE_SHORT[option]}
             </BarButton>
           ))}
+          <BarSeparator />
+          <BarButton name="Smaller text" onClick={() => restyle({ fontSize: stepFontSize(style.fontSize, -1) })}>
+            <Minus />
+          </BarButton>
+          <select
+            className="item-bar-select"
+            aria-label="Font size"
+            value={style.fontSize}
+            onChange={(event) => restyle({ fontSize: Number(event.target.value) })}
+          >
+            {[...new Set([...TEXT_FONT_SIZES, style.fontSize])]
+              .sort((a, b) => a - b)
+              .map((px) => (
+                <option key={px} value={px}>
+                  {px}
+                </option>
+              ))}
+          </select>
+          <BarButton name="Larger text" onClick={() => restyle({ fontSize: stepFontSize(style.fontSize, 1) })}>
+            <Plus />
+          </BarButton>
           <BarSeparator />
           <BarButton name="Bold" pressed={style.bold} onClick={() => restyle({ bold: !style.bold })}>
             <Bold />

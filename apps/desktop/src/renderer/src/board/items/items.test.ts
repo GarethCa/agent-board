@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BoardItem } from '@agent-board/daemon/protocol';
-import { itemNode, placeOnBoard, withItem, withoutItem } from './items';
+import { boundsOnBoard, itemNode, placeOnBoard, withItem, withoutItem } from './items';
 
 const zones = [
   { id: 'a', x: 0, y: 0, width: 500, height: 400 },
@@ -18,6 +18,7 @@ const item = (overrides: Partial<BoardItem> = {}): BoardItem => ({
   width: 100,
   height: 80,
   z: 1,
+  rotation: 0,
   data: { text: '', color: '#fff3a3' },
   createdAt: '',
   updatedAt: '',
@@ -107,5 +108,17 @@ describe('withItem', () => {
 
   it('removes an item', () => {
     expect(withoutItem(withItem([zone], item()), 'i1')).toEqual([zone]);
+  });
+});
+
+describe('boundsOnBoard', () => {
+  const rect = { x: 0, y: 0, width: 200, height: 100 };
+
+  it("is a rotated item's upright box round it, and anything else's own rect", () => {
+    const turned = boundsOnBoard(itemNode(item({ rotation: 90 })), rect);
+    expect(turned.width).toBeCloseTo(100);
+    expect(turned.height).toBeCloseTo(200);
+    expect(boundsOnBoard(itemNode(item()), rect)).toEqual(rect);
+    expect(boundsOnBoard({ id: 'a', position: { x: 0, y: 0 }, data: {} }, rect)).toEqual(rect);
   });
 });

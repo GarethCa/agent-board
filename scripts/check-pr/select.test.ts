@@ -130,6 +130,10 @@ describe('selectChecks', () => {
     expect(selectChecks(['packages/daemon/src/transcripts.ts']).e2e).toEqual(['chat-view.spec.ts']);
   });
 
+  it('maps the session body, which wires up the terminal keys, to the terminal newline spec', () => {
+    expect(selectChecks(['apps/desktop/src/renderer/src/session/SessionBody.tsx']).e2e).toContain('terminal-newline.spec.ts');
+  });
+
   it('runs visual for renderer code that moves things, not just styles', () => {
     expect(selectChecks(['apps/desktop/src/renderer/src/board/perch.ts']).visual).toBe(true);
   });

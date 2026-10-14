@@ -16,6 +16,7 @@ import { ZoneJump } from './ZoneJump';
 import { ZoomControls } from './ZoomControls';
 import type { ZoneSource } from './zones';
 import type { ClickOpens } from '../board/click-opens';
+import type { CrewLook } from '../board/crew-view';
 
 export interface BoardChromeProps extends CreateToolbarProps {
   /** Whether the board has loaded: until then only the board menu shows, with the daemon's status. */
@@ -51,6 +52,8 @@ export interface BoardChromeProps extends CreateToolbarProps {
   /** What a double-click on an agent's or shell tile opens, for Settings, and picks it. */
   clickOpens: ClickOpens;
   onClickOpens(value: ClickOpens): void;
+  crewLook: CrewLook;
+  onCrewLook(value: CrewLook): void;
 }
 
 /**
@@ -59,7 +62,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
@@ -100,6 +103,8 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells,
         onError={onError}
         clickOpens={clickOpens}
         onClickOpens={onClickOpens}
+        crewLook={crewLook}
+        onCrewLook={onCrewLook}
         onGettingStarted={onboarding.state?.showInMenu ? onboarding.reopen : undefined}
       />
       {buildMismatch(status) && <BuildMismatch app={status.build} health={status.health} />}

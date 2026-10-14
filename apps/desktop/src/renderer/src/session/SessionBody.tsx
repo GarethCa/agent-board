@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
-import { paneIds } from '@agent-board/daemon/pane-layout';
-import type { Agent, Shell } from '@agent-board/daemon/protocol';
+import type { PaneLayout } from '@agent-board/daemon/pane-layout';
+import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
+import type { Agent, Shell, ShellOwner } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
-import { Button, ErrorText, Kbd, Textarea } from '../ui';
+import { Button, Dialog, ErrorText, Kbd, Tag, Textarea } from '../ui';
 import { useAction } from '../use-action';
 import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
@@ -12,10 +13,15 @@ import { ChatView } from './ChatView';
 import type { RunsChoice, RunsMode } from './chat';
 import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
-import { panesLabel } from './panes';
 import { composerBlock } from './composer-block';
 import { composerKey, droppedPath, insertAt } from './composer-input';
 import { canRestart, ENDED_SHELL_LABEL, exitText, RestartAgent } from './RestartAgent';
+import { HARNESS_COMMANDS, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
+import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, shellMover } from './shell-moves';
+import type { StripTab } from './TabStrip';
+import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
+import { PaneStrip, WindowPanes } from './WindowPanes';
+import { useSeenWhileShown } from './mark-seen';
 
 /**
  * What a session window or an expanded tile shows: one session's terminal (with its agent, live, for an agent's
@@ -39,6 +45,8 @@ interface SessionBodyProps {
   view?: SessionView;
   /** Shows the terminal again, from a chat that can't read the agent's transcript. */
   onShowTerminal?(): void;
+  /** Whether the window shows this body at all: false while its Review or Activity tab covers it. True by default. */
+  shown?: boolean;
 }
 
 /** What an agent's session window shows of it: its terminal (the harness's own TUI) or its conversation as a chat. */
@@ -58,49 +66,145 @@ export function SessionBody({
   autoFocus = true,
   view = 'terminal',
   onShowTerminal,
+  shown = true,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [single, setSingle] = useState<PaneStatus>({ state: 'attaching' });
   const [problem, setProblem] = useState<string>();
-  const [focus, setFocus] = useState<string>();
   const [paneStatuses, setPaneStatuses] = useState<Record<string, PaneStatus>>({});
   const onPaneStatus = useCallback(
     (paneId: string, status: PaneStatus) => setPaneStatuses((current) => ({ ...current, [paneId]: status })),
     [],
   );
-  const panes = shell ? paneIds(shell.layout) : [];
-  // The focused pane, or the first when it was closed elsewhere (or none was clicked yet).
-  const focusedPane = shell && (focus !== undefined && panes.includes(focus) ? focus : panes[0]);
-  const pane = (focusedPane !== undefined && paneStatuses[focusedPane]) || single;
+  const owner: TabOwner | undefined = agent ? { kind: 'agent', agent } : shell ? { kind: 'shell', shell } : undefined;
+  // Tabs and panes drag between windows and onto the board (AT2), where the board can move them: not in a
+  // pop-out, where a tab still moves among its own window's panes.
+  const moves = shellMover.use();
+  const panes = useWindowPanes(owner, { onProblem: setProblem, moves });
+  const dropOver = dropOverValue.use();
+  const worktrees = agentWorktrees.use();
+  const from = owner === undefined ? undefined : shellOwner(owner);
+  const dragFrom = moves === undefined ? undefined : from;
+  // A shell moved in from another agent keeps its folder: say so when it is outside this agent's worktree.
+  const astray = agent && panes && foreignFolder(panes.surfaces.flatMap((surface) => (surface.kind === 'tab' && surface.tab.shell ? [surface.tab.shell] : [])), agent.sessionId, agent.worktree, worktrees);
+  const panelPrefix = useId();
+  const tabPanel = (key: string) => `${panelPrefix}-tab-${key}`;
+  // The window's own: its own surface and its shell tabs, not another session shown in it.
+  const ownFocused = panes === undefined || panes.focusedPane.active.kind === 'tab';
+  // The session with the keyboard, in any pane; and in the window's own surfaces, the one its controls act on: the
+  // focused one, else the own surface's.
+  const anyFocus = panes?.focusedSession;
+  const tabFocus = panes === undefined ? undefined : ownFocused ? anyFocus : panes.focusIn(panes.surfaces[0]!);
+  // Whatever way in this session was opened by (⌘K, the inbox, ‹ ›, a restored window...), showing the agent's own pane
+  // is seeing its ask: not while a shell tab of its pane, or its Review or Activity tab, covers it.
+  useSeenWhileShown(content.kind === 'session' ? content.sessionId : undefined, shown && (panes === undefined || panes.showing(OWN_SURFACE)));
+  // A shell pane of one of the window's tabs with the keyboard, not an agent's own.
+  const tabShellFocused = tabFocus !== undefined && tabFocus !== agent?.sessionId;
+  // The session's own pane: a shell tile's focused pane, or the agent's (whose window and controls it is, whichever
+  // pane has the keyboard).
+  const own = (shell && tabFocus !== undefined && paneStatuses[tabFocus]) || single;
+  // What the strip says: the focused pane, a shell pane in an agent's tab or another session shown here too.
+  const otherFocused = !ownFocused && anyFocus !== undefined;
+  const pane = (otherFocused && paneStatuses[anyFocus]) || (tabShellFocused && paneStatuses[tabFocus]) || own;
   // A shell tile not listed yet has no pane for its controls to act on.
-  const controlSession = content.kind === 'session' ? content.sessionId : focusedPane;
-  const live = controlSession !== undefined && pane.state !== 'exited' && pane.state !== 'unavailable';
+  const controlSession = content.kind === 'session' ? content.sessionId : tabFocus;
+  const live = controlSession !== undefined && own.state !== 'exited' && own.state !== 'unavailable';
   const openLink = useCallback(
     (url: string) => void window.agentBoard.trackers.openLink(url).catch((error: unknown) => setProblem(`could not open the link: ${errorMessage(error)}`)),
     [],
   );
-  useEffect(() => onAttachState?.(pane.state), [pane.state, onAttachState]);
-  const chat = view === 'chat' && agent !== undefined;
+  useEffect(() => onAttachState?.(own.state), [own.state, onAttachState]);
+  // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
+  const chatPicked = view === 'chat' && agent !== undefined;
+  const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
   // Expand all and Collapse all, kept while the window is open, through switches to the terminal and back.
   const [runs, setRuns] = useState<RunsChoice>({ mode: 'auto', at: 0 });
   const pressRuns = (mode: RunsMode) => setRuns((current) => ({ mode, at: current.at + 1 }));
-  // Back from the chat, the terminal takes the keyboard again: it lost it when it was hidden.
   const terminalView = useRef<HTMLDivElement>(null);
-  const wasChat = useRef(chat);
+  const wasChat = useRef(chatPicked);
+  const select = panes?.select;
   useEffect(() => {
-    if (wasChat.current && !chat) terminalView.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus();
-    wasChat.current = chat;
-  }, [chat]);
+    // Picked while a shell tab shows, the chat brings the agent's own tab forward. Only on a change: a tab asked for as
+    // the window opens (a row of the shells chip) still shows.
+    if (!wasChat.current && chatPicked) select?.(OWN_SURFACE);
+    // Back from the chat, the terminal takes the keyboard again: it lost it when it was hidden.
+    if (wasChat.current && !chatPicked) terminalView.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus();
+    wasChat.current = chatPicked;
+  }, [chatPicked, select]);
+
+  // An agent's terminal, with its chat view over it when that is picked: in its own tab, or the whole window.
+  const sessionView = content.kind === 'session' && (
+    <>
+      <div ref={terminalView} className="session-terminal-view" hidden={chatPicked}>
+        {/* Keyed by when its session started, so a relaunched agent's session is attached afresh; an ended
+            agent's pane shows the shell it dropped into, while that runs. */}
+        <TerminalPane
+          key={`${content.agent?.createdAt}/${content.agent?.shellSessionId}`}
+          sessionId={content.agent?.shellSessionId ?? content.sessionId}
+          onStatus={setSingle}
+          autoFocus={autoFocus}
+          // In its tab, it has the keyboard while that tab shows and it is the tab's focused pane.
+          focused={panes === undefined || (panes.focusedPane.active.key === OWN_SURFACE && anyFocus === agent?.sessionId)}
+          // The shell an ended agent dropped into is a plain shell.
+          harness={content.agent?.shellSessionId ? null : (content.agent?.harness ?? null)}
+        />
+      </div>
+      {agent && (
+        <div className="session-chat-view" hidden={!chatPicked}>
+          <ChatView
+            key={agent.sessionId}
+            agent={agent}
+            active={chatPicked}
+            onShowTerminal={() => onShowTerminal?.()}
+            runs={runs}
+            onOpenLink={openLink}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const here = agent ? 'in this worktree' : 'in this folder';
+  /** A surface's tab: an agent's own dot is its attachment unless a shell split beside it failed; a shell's, its shells'. */
+  const stripTabOf = (surface: WindowSurface): StripTab => {
+    const closable = panes?.closable(surface) ?? false;
+    const base = { id: surface.key, label: surface.label, closable };
+    if (surface.kind === 'agent') return { ...base, dot: paneStatuses[surface.agent.sessionId]?.state ?? 'attaching', closeHint: 'Close the tab; the session keeps running' };
+    if (surface.kind === 'tile') return { ...base, dot: worstState(windowShells({ kind: 'shell', shell: surface.shell }, [surface.shell]).map((each) => each.state)) ?? 'idle', closeHint: 'Close the tab; its shells keep running' };
+    const dots = panes?.dots.get(surface.key);
+    const dot = agent && surface.key === OWN_SURFACE ? (dots === 'failed' ? 'failed' : single.state) : (dots ?? 'idle');
+    return { ...base, dot, closeHint: 'Close the tab, ending its shells' };
+  };
+  const renderSurface = (surface: WindowSurface, visible: boolean) =>
+    panes === undefined ? null : (
+      <SurfaceView
+        surface={surface}
+        panes={panes}
+        visible={visible}
+        shown={shown}
+        autoFocus={autoFocus}
+        onPaneStatus={onPaneStatus}
+        onProblem={setProblem}
+        agentPane={surface.key === OWN_SURFACE && agent ? { sessionId: agent.sessionId, label: HARNESS_COMMANDS[agent.harness], content: sessionView } : undefined}
+        dragFrom={dragFrom}
+      />
+    );
 
   return (
-    <div className="session-window-body">
+    <div
+      className="session-window-body"
+      onKeyDownCapture={panes?.onKeyDown}
+      data-tab-drop={from === undefined ? undefined : dropKey(from)}
+      data-drop-over={(from !== undefined && dropOver === dropKey(from)) || undefined}
+    >
       <SessionDetails
         sessionId={controlSession}
         agent={agent}
-        shell={shell}
-        focusedPane={focusedPane}
-        onFocusPane={setFocus}
+        shell={panes?.focusedPane.active.kind === 'tab' ? panes.focusedPane.active.tab.shell : undefined}
+        focusedPane={tabFocus}
+        onFocusPane={panes?.focus}
+        onSplit={panes?.splitFromDetails}
         live={live}
         onProblem={setProblem}
         collapsed={detailsCollapsed}
@@ -110,10 +214,16 @@ export function SessionBody({
       <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
-          <span className="session-window-pane">
-            <span className="session-window-pane-dot" data-state={pane.state} aria-hidden />
-            {agent ? HARNESS_COMMANDS[agent.harness] : shell ? panesLabel(panes.length) : 'shell'}
-          </span>
+          {panes ? (
+            panes.panes.length === 1 && (
+              <PaneStrip panes={panes} pane={panes.panes[0]!} stripTab={stripTabOf} here={here} panelId={tabPanel} focused={false} />
+            )
+          ) : (
+            <span className="session-window-pane">
+              <span className="session-window-pane-dot" data-state={pane.state} aria-hidden />
+              shell
+            </span>
+          )}
           {chat && (
             <span className="chat-runs-actions">
               <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every run of tool calls">
@@ -124,8 +234,13 @@ export function SessionBody({
               </Button>
             </span>
           )}
+          {astray && (
+            <Tag tone="warning" className="session-window-astray" data-testid="session-window-astray">
+              {astray}
+            </Tag>
+          )}
           <span className="session-window-status" data-testid="session-window-status" data-error={pane.state === 'exited' || problem !== undefined}>
-            {statusText(pane, agent)}
+            {statusText(pane, tabShellFocused || otherFocused ? undefined : agent)}
             {problem && ` · ${problem}`}
           </span>
         </div>
@@ -138,54 +253,45 @@ export function SessionBody({
           </div>
         )}
         <div className="session-panes">
-          {content.kind === 'session' ? (
-            <>
-              <div ref={terminalView} className="session-terminal-view" hidden={chat}>
-                {/* Keyed by when its session started, so a relaunched agent's session is attached afresh; an ended
-                    agent's pane shows the shell it dropped into, while that runs. */}
-                <TerminalPane
-                  key={`${content.agent?.createdAt}/${content.agent?.shellSessionId}`}
-                  sessionId={content.agent?.shellSessionId ?? content.sessionId}
-                  onStatus={setSingle}
-                  autoFocus={autoFocus}
-                  // The shell an ended agent dropped into is a plain shell.
-                  harness={content.agent?.shellSessionId ? null : (content.agent?.harness ?? null)}
-                />
-              </div>
-              {agent && (
-                <div className="session-chat-view" hidden={!chat}>
-                  <ChatView
-                    key={agent.sessionId}
-                    agent={agent}
-                    active={chat}
-                    onShowTerminal={() => onShowTerminal?.()}
-                    runs={runs}
-                    onOpenLink={openLink}
-                  />
-                </div>
-              )}
-            </>
-          ) : shell && focusedPane !== undefined ? (
-            <ShellPanes
-              shell={shell}
-              focused={focusedPane}
-              onFocus={setFocus}
-              onStatus={onPaneStatus}
-              autoFocus={autoFocus}
-              onResize={(splitId, ratio) =>
-                window.agentBoard.shells.resizeSplit(shell.id, splitId, ratio).then(
-                  () => {},
-                  (error: unknown) => setProblem(`could not resize: ${errorMessage(error)}`),
-                )
-              }
-            />
+          {panes ? (
+            <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} />
+          ) : content.kind === 'session' ? (
+            sessionView
           ) : (
             <p className="session-window-pending">Loading panes…</p>
           )}
         </div>
         {agent && chat && <Composer agent={agent} />}
       </div>
+      {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
     </div>
+  );
+}
+
+/**
+ * Asks before closing a shell tab whose shells still run, as deleting a shell tile does: here, in the window, which a
+ * pop-out has no board to ask from.
+ */
+function CloseTabDialog({ surface, onAnswer }: { surface: WindowSurface; onAnswer(confirmed: boolean): void }) {
+  const live = surface.kind === 'tab' ? tabLiveShells(surface.tab) : 0;
+  return (
+    <Dialog
+      role="alertdialog"
+      title="Close tab?"
+      onClose={() => onAnswer(false)}
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => onAnswer(false)}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={() => onAnswer(true)}>
+            Close tab
+          </Button>
+        </>
+      }
+    >
+      {`${surface.label} ${live === 1 ? 'still has a running shell. Closing the tab ends it.' : `still has ${live} running shells. Closing the tab ends them.`}`}
+    </Dialog>
   );
 }
 
@@ -229,8 +335,95 @@ function BlockedBanner({ agent, chat, onShowTerminal }: { agent: Agent; chat: bo
   );
 }
 
-/** What the terminal strip calls an agent's pane: the command it runs. */
-const HARNESS_COMMANDS: Record<Agent['harness'], string> = { claude: 'claude', codex: 'codex' };
+/**
+ * What one tab of a window shows (BH1), by its kind: a shell tab's panes (the window's own, with the agent's
+ * pane in an agent's), another agent's terminal, or a shell tile's panes. The keyboard goes to it while its pane has it.
+ */
+function SurfaceView({
+  surface,
+  panes,
+  visible,
+  shown,
+  autoFocus,
+  onPaneStatus,
+  onProblem,
+  agentPane,
+  dragFrom,
+}: {
+  surface: WindowSurface;
+  panes: WindowPanesControl;
+  visible: boolean;
+  /** Whether the window shows its body at all. */
+  shown: boolean;
+  autoFocus: boolean;
+  onPaneStatus(sessionId: string, status: PaneStatus): void;
+  onProblem(problem: string): void;
+  agentPane?: { sessionId: string; label: string; content: ReactNode };
+  dragFrom: ShellOwner | undefined;
+}) {
+  const keyboard = visible && panes.focusedPane.active.key === surface.key;
+  const focused = panes.focusIn(surface) ?? '';
+  // Showing another agent's session is seeing its ask, as its own window would be.
+  useSeenWhileShown(surface.kind === 'agent' ? surface.agent.sessionId : undefined, shown && visible);
+  const resize = (shellId: string) => (splitId: string, ratio: number) =>
+    window.agentBoard.shells.resizeSplit(shellId, splitId, ratio).then(
+      (resized) => panes.apply(resized),
+      (error: unknown) => onProblem(`could not resize: ${errorMessage(error)}`),
+    );
+  if (surface.kind === 'agent') {
+    const { agent } = surface;
+    return (
+      <TerminalPane
+        key={`${agent.createdAt}/${agent.shellSessionId}`}
+        sessionId={agent.shellSessionId ?? agent.sessionId}
+        onStatus={(status) => onPaneStatus(agent.sessionId, status)}
+        focused={keyboard}
+        autoFocus={autoFocus}
+        harness={agent.shellSessionId ? null : agent.harness}
+      />
+    );
+  }
+  if (surface.kind === 'tile') {
+    return <ShellPanes shell={surface.shell} focused={focused} onFocus={panes.focus} onStatus={onPaneStatus} autoFocus={autoFocus} active={keyboard} onResize={resize(surface.shell.id)} />;
+  }
+  const { tab } = surface;
+  return (
+    <ShellPanes
+      shell={tab.shell ?? untabbedShell(tab.layout)}
+      focused={focused}
+      onFocus={panes.focus}
+      onStatus={onPaneStatus}
+      autoFocus={autoFocus}
+      active={keyboard}
+      onResize={tab.shell === undefined ? () => Promise.resolve() : resize(tab.shell.id)}
+      agentPane={agentPane}
+      dragFrom={dragFrom}
+    />
+  );
+}
+
+/**
+ * The agent's own tab before the daemon keeps it (it is first split): the agent's pane alone, which no shell call
+ * acts on.
+ */
+const untabbedShell = (layout: PaneLayout): Shell => ({
+  id: '',
+  zoneId: null,
+  position: null,
+  name: '',
+  cwd: '',
+  layout,
+  paneFolders: {},
+  endedPanes: [],
+  stoppedPanes: [],
+  exitCodes: {},
+  busyPanes: [],
+  panePorts: {},
+  failedCommands: {},
+  owner: null,
+  tabOrder: null,
+  createdAt: '',
+});
 
 function statusText({ state, ended, problem }: PaneStatus, agent: Agent | undefined): string {
   switch (state) {

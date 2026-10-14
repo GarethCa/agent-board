@@ -24,7 +24,7 @@ test('a shell tile runs agent-board identify and sees its own tile and zone', as
     await expect(screen(window)).toContainText(`zone:${zone!.id.slice(0, 4)}  monorepo`);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -44,7 +44,7 @@ test('an agent sets its status with agent-board status set (after the MCP set_st
     await expect(tile(window).getByTestId('tile-description')).toHaveAttribute('title', /Task: Moving session ids to the daemon$/);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

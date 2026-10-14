@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox } from './board-helpers.ts';
-import { launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -188,6 +188,9 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     const branch = await branchOf(window);
     await expect(expandedTile(window).getByRole('heading', { name: 'Pick a database' })).toBeVisible();
     await expect(expandedTile(window).locator('.session-window-head')).toContainText(branch);
+    // Opens collapsed to its icon rail; the rail's Show details opens it.
+    await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
+    await showDetails(expandedTile(window));
     const details = expandedTile(window).getByRole('complementary', { name: 'Session details' });
     await expect(details).toContainText('Worktree and branch');
     await expect(details).toContainText('PR and checks');
@@ -207,7 +210,7 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     // Its Delete asks as the tile's ⋯ menu does: a running agent's worktree and branch go with it. Cancelled here.
     await expandedTile(window).getByRole('button', { name: 'Delete agent' }).click();
     const deleting = window.getByRole('alertdialog', { name: 'Delete agent?' });
-    await expect(deleting).toContainText('removes its worktree and branch');
+    await expect(deleting).toContainText('worktree and branch are removed');
     await deleting.getByRole('button', { name: 'Cancel' }).click();
     await expect(deleting).toHaveCount(0);
     await expect(expandedTile(window)).toBeVisible();
@@ -445,7 +448,7 @@ test('dragging across a word in an expanded tile selects exactly that word, zoom
     expect(scales[2]).toBeGreaterThan(1.4);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

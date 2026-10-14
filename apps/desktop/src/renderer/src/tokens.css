@@ -75,6 +75,8 @@
   --picked-halo: color-mix(in srgb, var(--accent) 13%, transparent); /* round a picked choice card */
   --shadow-focus: 0 0 0 3px var(--focus-halo);
   --shadow-picked: 0 0 0 3px var(--picked-halo);
+  --crew-edge: color-mix(in srgb, var(--accent) 55%, transparent); /* an orchestrator's crew frame, dashed */
+  --crew-halo: color-mix(in srgb, var(--accent) 25%, transparent); /* round an orchestrator's tile, and a lit family's */
 
   /* Inverse: a dark chip on the light desk, for tooltips and toasts */
   --inverse: var(--text);
@@ -164,6 +166,13 @@
    */
   --zone-fill-mix: 8%;
   --zone-edge-mix: 45%;
+  /*
+   * A zone with a fill opacity of its own (--zone-fill-pct, a bare percent) derives both from it: the edge starts at
+   * --zone-edge-base with no fill and gains --zone-edge-slope per point of fill. At the default (8) this is 45%.
+   */
+  --zone-fill-default: 8;
+  --zone-edge-base: 30%;
+  --zone-edge-slope: 1.875;
   --zone-tab-mix: 50%; /* a zone's tab: its colour, half shaded */
   --zone-tab-shade: var(--text);
   --on-zone: #ffffff; /* text on a zone's tab */
@@ -213,7 +222,7 @@
 
   /*
    * Text items and shapes. An item's own colours are its data (TEXT_COLORS, SHAPE_FILLS, SHAPE_STROKES in the
-   * protocol), set as --item-color, --shape-fill, --shape-stroke and --swatch. TextNode reads the sizes, --text-item-
+   * protocol), set as --item-color, --shape-fill, --shape-stroke and --swatch. TextNode reads --text-item-
    * leading and --text-item-padding to size itself as it is typed in.
    */
   --paint-ink: #2b2a27; /* text, a connector or an outline in Ink, drawn on the desk */
@@ -234,8 +243,6 @@
   --shape-ink-green: #2f9e44;
   --shape-ink-blue: #3b5bdb;
   --shape-ink-violet: #6741d9;
-  --text-item-h1-size: 44px;
-  --text-item-h2-size: 28px;
   --text-item-body-size: 16px;
   --text-item-leading: 1.25;
   --text-item-padding: var(--space-2);
@@ -257,6 +264,10 @@
   --tool-armed-edge: var(
     --accent
   ); /* the outline drawn while dragging out a shape */
+  /* The Rotate tool's handle: round, under what it turns, clear of the connector handle on its bottom side. */
+  --rotate-handle-size: 22px;
+  --rotate-handle-icon: 12px;
+  --rotate-handle-reach: calc(var(--connector-handle-offset) + var(--connector-handle-size) + var(--space-2));
 
   /*
    * Connectors: thin neutral annotation lines, drawn from a round handle on the middle of an object's side.
@@ -277,6 +288,11 @@
   --connector-bar-gap: 10px; /* between the style bar and the line it is over */
   --connector-drop-edge: var(--accent); /* the outline of the object a connector would join, while one is dragged */
   --connector-drop-fill: color-mix(in srgb, var(--accent) 5%, transparent);
+  --shell-drop-edge: var(--accent); /* a tab strip's slot where a dragged tab or pane would land */
+  --shell-drop-halo: color-mix(in srgb, var(--accent) 35%, transparent); /* round a window or tile a dragged shell would join */
+  --shell-drop-fill: color-mix(in srgb, var(--accent) 14%, transparent); /* the half of a pane a dragged tab would split into */
+  --shell-ghost: var(--accent); /* a tab or pane as it is dragged */
+  --on-shell-ghost: var(--on-accent);
   --connector-drag-dash: 4 4;
 
   /*
@@ -305,6 +321,9 @@
   --flow-receiving-ring: color-mix(in srgb, var(--flow-edge) 14%, transparent); /* round a tile receiving a hand-off */
   --flow-held: var(--state-rate-limited-soft); /* a hand-off an edge holds until its conditions pass (FlowRules) */
   --flow-held-ink: var(--state-rate-limited-ink);
+  --flow-agent-made-dash: 8 5; /* an edge an orchestrator made, dashed beside the user's solid ones */
+  --flow-delivered: var(--flow-label); /* the chip under an edge's label saying when it last delivered */
+  --flow-delivered-ink: var(--flow-label-ink);
   --flow-condition-passed: var(--success-soft); /* an Edge rules condition that passed its last check */
   --flow-condition-passed-edge: color-mix(in srgb, var(--success) 22%, transparent);
   --flow-condition-passed-ink: var(--success);
@@ -392,7 +411,7 @@
 
   /*
    * Shadows. Crisp, unblurred layers only on the board: it repaints every tile on each pan frame, and a blurred shadow
-   * on a tilted tile made that cost ~40 ms a frame with 200 tiles (e2e/board-perf.spec.ts). Controls, cards and chips
+   * on a (then tilted) tile made that cost ~40 ms a frame with 200 tiles (e2e/board-perf.spec.ts). Controls, cards and chips
    * over the board are few, so they may blur.
    */
   --shadow-tile: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
@@ -406,6 +425,7 @@
   --shadow-tab-picked: 0 0 0 1px var(--border); /* the picked tab of a row of tabs */
   --shadow-row-picked: inset 0 0 0 1.5px var(--accent); /* the picked row of a list to pick from (Add zone) */
   --shadow-loose-dot: inset 0 0 0 1.5px var(--muted); /* the hollow dot for the board's loose sessions */
+  --shadow-pane-focused: inset 0 -2px 0 var(--window-focus); /* under the strip of a session window's focused pane, of several */
   --shadow-island: 0 1px 0 rgb(43 42 39 / 5%), 0 12px 32px -8px rgb(43 42 39 / 28%), 0 2px 6px rgb(43 42 39 / 8%);
   --shadow-tooltip: 0 6px 16px -6px rgb(0 0 0 / 40%);
   --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 45%);
@@ -414,9 +434,8 @@
   --shadow-expanded: 0 1px 0 rgb(40 32 16 / 12%), 0 4px 0 -1px rgb(40 32 16 / 8%), 0 10px 0 -4px rgb(40 32 16 / 5%); /* an expanded tile at rest: unblurred, as several may be open while the board pans */
   --shadow-window: 0 0 0 1px rgb(43 42 39 / 22%), 0 30px 60px -18px rgb(0 0 0 / 50%), 0 12px 24px -12px rgb(0 0 0 / 25%);
 
-  /* Drag lift: a tile being dragged draws a little bigger and tilts a little further (TileCompact mock). */
+  /* Drag lift: a tile being dragged draws a little bigger (TileCompact mock), but never tilts. */
   --lift-scale: 1.04;
-  --lift-tilt: 1.5deg;
 
   /* Layers: what stacks over what, lowest first. The board's own nodes and panels stack below all of these. */
   --layer-raised: 2; /* over a sibling: a split shell's divider */
@@ -553,6 +572,9 @@
   --size-tile-head: 22px; /* a tile's head row */
   --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */
   --size-tile-name: 96px; /* a tile's name, narrowest: it never gives way to badges */
+  --size-tab-label: 220px; /* a terminal tab's label, longest before it is cut short */
+  --size-tab-slot: 56px; /* the slot in a tab strip where a dragged tab would land */
+  --size-astray-hint: 320px; /* the hint that a shell runs in another agent's worktree, longest before it is cut short */
   --size-details: 316px; /* a session window's details strip */
   --size-details-min: 200px; /* the least it is dragged to, before it collapses to the rail */
   --size-chat-io: 240px; /* the most of a tool call's input or output the chat view shows before it scrolls */
@@ -561,6 +583,7 @@
   --size-composer-max: 200px; /* the most the composer's field grows to with the lines typed, before it scrolls */
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
   --size-dock-item: 260px; /* a window's chip in the dock, widest */
+  --window-gutter: var(--space-6); /* the margin the board's session window leaves round itself when it fills the board */
   --size-dock-clear: 200px; /* room the dock leaves each side for the zone and zoom islands */
   --control-xs: 18px; /* an icon button in a dense row: a tile's head */
   --control-sm: 26px; /* a small button or input's height */
@@ -583,6 +606,7 @@
   --size-switch-height: 18px;
   --size-knob: 14px; /* a switch's knob */
   --size-swatch: 18px; /* a colour swatch */
+  --size-slider-value: 36px; /* the room for a menu slider's value */
   --size-swatch-lg: 20px; /* a colour swatch on a text item's or shape's bar */
   --size-divider: 7px; /* the grab area between split panes */
   --size-divider-overhang: calc(var(--size-divider) / 2); /* how far a grab area reaches over each neighbour */
@@ -785,6 +809,9 @@
   /* Zones: a lighter tint on the dark desk, and the tab shaded towards the desk rather than the (light) text */
   --zone-fill-mix: 6%;
   --zone-edge-mix: 40%;
+  --zone-fill-default: 6;
+  --zone-edge-base: 28%;
+  --zone-edge-slope: 2;
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
 

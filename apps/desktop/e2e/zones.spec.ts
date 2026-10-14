@@ -465,3 +465,131 @@ test('the Zone tool (Z) drags out where a zone goes, a group by default, which c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('recolours a zone from 16 colours and sets its fill opacity, both saved and undone, the drag as one step', async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await addEmptyZone(window, 'Ideas', 'Teal');
+    const zone = zoneNamed(window, 'Ideas');
+    await expect(zone).toBeVisible();
+    const [stored] = await storedZones(dataDir);
+    expect(stored).toMatchObject({ color: '#12b886', fillOpacity: null });
+
+    // The zone menu offers all 16 colours by name, and the slider; a new colour is saved.
+    const options = zone.getByRole('button', { name: 'Zone options' });
+    await options.click();
+    const colours = window.getByRole('group', { name: 'Colour' }).getByRole('menuitem');
+    await expect(colours).toHaveCount(16);
+    await window.getByRole('group', { name: 'Colour' }).getByRole('menuitem', { name: 'Graphite' }).click();
+    await expect.poll(async () => (await storedZones(dataDir))[0]?.color).toBe('#495057');
+
+    // Dragging the slider to 30% saves once the drag ends; the zone's fill and edge follow it.
+    await options.click();
+    const slider = window.locator('.ui-menu-slider input[type=range]');
+    const track = (await slider.boundingBox())!;
+    const y = track.y + track.height / 2;
+    await window.mouse.move(track.x + track.width / 2, y);
+    await window.mouse.down();
+    for (const fraction of [0.6, 0.7, 0.75]) await window.mouse.move(track.x + track.width * fraction, y);
+    await window.mouse.up();
+    const percent = Number(await slider.inputValue());
+    expect(percent).toBeGreaterThan(8);
+    await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(percent);
+    await expect(zone).toHaveAttribute('data-fill', String(percent));
+    await window.keyboard.press('Escape');
+
+    // Outline only: 0% is a valid fill, and the zone keeps a visible edge.
+    await options.click();
+    await window.locator('.ui-menu-slider input[type=range]').fill('0');
+    await window.locator('.ui-menu-slider input[type=range]').dispatchEvent('pointerup');
+    await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(0);
+    await window.keyboard.press('Escape');
+
+    // One undo takes back the whole 0% change (not a tick of the drag), the next the 30% before it.
+    // Clicking empty zone floor gives the board the keyboard.
+    const box = (await zone.boundingBox())!;
+    await window.mouse.click(box.x + 12, box.y + box.height - 12);
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(percent);
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await storedZones(dataDir))[0]).toMatchObject({ fillOpacity: null, color: '#495057' });
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await storedZones(dataDir))[0]?.color).toBe('#12b886');
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});
+
+test('the fill opacity slider is reached and set with the keyboard alone, and a drag that is put back or abandoned leaves nothing behind', async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await addEmptyZone(window, 'Ideas');
+    const zone = zoneNamed(window, 'Ideas');
+    const options = zone.getByRole('button', { name: 'Zone options' });
+    const slider = window.getByRole('slider', { name: 'Fill opacity' });
+    const fill = async () => (await storedZones(dataDir))[0]?.fillOpacity;
+
+    // Arrowing down the menu from the last colour reaches the slider (not skipped, no focus trap): Right steps it, Down leaves it.
+    await options.focus();
+    await window.keyboard.press('Enter');
+    await window.getByRole('menuitem', { name: 'Graphite' }).focus();
+    await window.keyboard.press('ArrowDown');
+    await expect(slider).toBeFocused();
+    const start = Number(await slider.getAttribute('aria-valuenow'));
+    await window.keyboard.press('ArrowRight');
+    await window.keyboard.press('ArrowRight');
+    await expect(slider).toHaveAttribute('aria-valuenow', String(start + 4));
+    await expect.poll(fill).toBe(start + 4);
+    await window.keyboard.press('End');
+    await expect.poll(fill).toBe(40);
+    await window.keyboard.press('Home');
+    await expect.poll(fill).toBe(0);
+    await window.keyboard.press('ArrowDown');
+    await expect(slider).not.toBeFocused();
+    await expect(window.getByRole('menuitem').filter({ hasText: /default repo/ })).toBeFocused();
+    await window.keyboard.press('Escape');
+
+    // Dragged away and back to where it began: nothing is saved, and the zone is drawn as saved.
+    await options.click();
+    const input = window.locator('.ui-menu-slider input[type=range]');
+    const box = (await input.boundingBox())!;
+    const y = box.y + box.height / 2;
+    const begin = { x: box.x + 2, y };
+    await window.mouse.move(begin.x, y);
+    await window.mouse.down();
+    await window.mouse.move(box.x + box.width * 0.6, y);
+    await expect(zone).toHaveAttribute('data-fill', /^(?!0$)\d+$/);
+    await window.mouse.move(begin.x, y);
+    await window.mouse.up();
+    await expect(zone).toHaveAttribute('data-fill', '0');
+    expect(await fill()).toBe(0);
+    await window.keyboard.press('Escape');
+
+    // Closed mid-drag: the preview is taken back.
+    await options.click();
+    await window.mouse.move(box.x + 2, y);
+    await window.mouse.down();
+    await window.mouse.move(box.x + box.width * 0.8, y);
+    await expect(zone).not.toHaveAttribute('data-fill', '0');
+    await window.keyboard.press('Escape');
+    await window.mouse.up();
+    await expect(zone).toHaveAttribute('data-fill', '0');
+    expect(await fill()).toBe(0);
+
+    // Neither left an undo step: one undo takes back the keyboard's last change (End then Home: 40 to 0), not a drag.
+    const floor = (await zone.boundingBox())!;
+    await window.mouse.click(floor.x + 12, floor.y + floor.height - 12);
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(fill).toBe(40);
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});

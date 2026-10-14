@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
 import { commandKey } from '../../keys';
-import { isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
-import { AGENT_TILE_SIZE } from '../layout';
+import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
 import type { TileData, TileNodeType } from '../tile';
-import { isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
+import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
 import { isTyping } from '../use-tile-moves';
 import type { Rect } from '../../geometry';
 import { align, distribute, reorder, type Alignment, type Reorder } from './arrange';
@@ -50,7 +49,7 @@ export interface SelectionSummary {
   items: ItemNodeType[];
   /** Whether it is one agent or shell tile, which can be renamed. */
   renamable: boolean;
-  /** Whether a session tile is in it: never deleted, copied or duplicated from here. */
+  /** Whether a session tile is in it: deleted with a confirmation, but never copied or duplicated from here. */
   hasSessions: boolean;
   /** The item kinds in it. */
   kinds: Set<BoardItemKind>;
@@ -71,8 +70,8 @@ function summarise(nodes: readonly BoardNode[]): SelectionSummary {
 
 /**
  * Editing the selection: select all, duplicate, copy, cut and paste, undo and redo, z-order, align and
- * distribute, colour and delete, from the keyboard and the context menu. Sessions are moved, aligned and reordered with
- * the rest, but never deleted, copied or duplicated here.
+ * distribute, colour, resetting rotation and delete, from the keyboard and the context menu. Sessions are moved, aligned and
+ * reordered with the rest, but never copied or duplicated here; the board deletes them, after asking.
  */
 export function useEditing(options: EditingOptions) {
   const optionsRef = useRef(options);
@@ -107,8 +106,8 @@ export function useEditing(options: EditingOptions) {
       const made = placed(copy, shift, () => crypto.randomUUID());
       const zones = zoneLayouts();
       const top = topZ();
-      made.items.forEach(({ id, kind, x, y, width, height, data }, index) => {
-        putItem({ id, kind, ...placeOnBoard({ x, y }, { width, height }, zones), width, height, data, z: top + index + 1, createdAt: '', updatedAt: '' });
+      made.items.forEach(({ id, kind, x, y, width, height, rotation, data }, index) => {
+        putItem({ id, kind, ...placeOnBoard({ x, y }, { width, height }, zones), width, height, rotation, data, z: top + index + 1, createdAt: '', updatedAt: '' });
       });
       for (const connector of made.connectors) putConnector({ ...connector, createdAt: '', updatedAt: '' });
       select(new Set(made.items.map((item) => `${ITEM_NODE_PREFIX}${item.id}`)));
@@ -135,7 +134,7 @@ export function useEditing(options: EditingOptions) {
     [optionsRef, putCopies],
   );
 
-  /** Deletes the selected items and connectors; sessions and zones stay. */
+  /** Deletes the selected items and connectors; sessions (the board's to ask about) and zones stay. */
   const deleteSelection = useCallback(() => {
     const { removeItem, removeConnector, selectedConnectorsRef } = optionsRef.current;
     const items = selection().items;
@@ -183,24 +182,30 @@ export function useEditing(options: EditingOptions) {
       else if (isItemNode(node)) {
         const size = { width: node.width ?? node.data.item.width, height: node.height ?? node.data.item.height };
         updateItem({ id: node.data.item.id, ...placeOnBoard(at, size, zoneLayouts()) });
-      } else if (isSessionTile(node)) moveTile(node.id, node.data, placeOnBoard(at, AGENT_TILE_SIZE, zoneLayouts()));
+      } else if (isSessionTile(node)) moveTile(node.id, node.data, placeOnBoard(at, compactSizeOf(node), zoneLayouts()));
     },
     [optionsRef],
   );
 
-  /** Moves the selection as `arrange` places it, from where each node is on the board. */
+  /**
+   * Moves the selection as `arrange` places it, from what each node takes up on the board: a rotated item lines up by
+   * the box round it.
+   */
   const arrange = useCallback(
     (arrangement: (boxes: (Rect & { id: string })[]) => Map<string, { x: number; y: number }>) => {
       const { rectOf } = optionsRef.current;
       const movable = selection().nodes;
-      const boxes = movable.flatMap((node) => {
-        const rect = rectOf(node.id);
-        return rect === undefined ? [] : [{ id: node.id, ...rect }];
-      });
-      const moves = arrangement(boxes);
+      const rects = new Map(
+        movable.flatMap((node) => {
+          const rect = rectOf(node.id);
+          return rect === undefined ? [] : [[node.id, { rect, bounds: boundsOnBoard(node, rect) }] as const];
+        }),
+      );
+      const moves = arrangement([...rects].map(([id, { bounds }]) => ({ id, ...bounds })));
       for (const node of movable) {
         const at = moves.get(node.id);
-        if (at !== undefined) moveNodeTo(node, at);
+        const { rect, bounds } = rects.get(node.id) ?? {};
+        if (at !== undefined && rect !== undefined && bounds !== undefined) moveNodeTo(node, { x: at.x + rect.x - bounds.x, y: at.y + rect.y - bounds.y });
       }
     },
     [optionsRef, selection, moveNodeTo],
@@ -219,15 +224,24 @@ export function useEditing(options: EditingOptions) {
     [optionsRef, selection],
   );
 
-  // The keyboard: undo and redo, select all, duplicate, and z-order. Never while typing (in a note, a field or a
+  /** Turns the selected items back straight, as one undo step. */
+  const resetRotation = useCallback(() => {
+    for (const node of selection().items) {
+      if (node.data.item.rotation !== 0) optionsRef.current.updateItem({ id: node.data.item.id, rotation: 0 });
+    }
+  }, [optionsRef, selection]);
+
+  // The keyboard: undo and redo, select all, duplicate, z-order, and ⇧R to turn the selected items back straight. Never while typing (in a note, a field or a
   // terminal), nor in a dialog or menu, which have their own keys.
   useEffect(() => {
     if (!options.loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.altKey || isTyping(event) || inOverlay()) return;
-      const { history } = optionsRef.current;
       const command = commandKey(event);
       const key = event.key.toLowerCase();
+      // A select has no undo of its own, and keeps focus after a pick: ⌘Z still undoes the pick.
+      const undoingInSelect = (key === 'z' || key === 'y') && command && (event.target as HTMLElement | null)?.tagName === 'SELECT';
+      if (event.altKey || (isTyping(event) && !undoingInSelect) || inOverlay()) return;
+      const { history } = optionsRef.current;
       const run = (action: () => unknown) => {
         event.preventDefault();
         action();
@@ -238,10 +252,11 @@ export function useEditing(options: EditingOptions) {
       else if (command && key === 'd' && !event.shiftKey) run(duplicate);
       else if (event.key === ']' && !event.shiftKey) run(() => restack(command ? 'forward' : 'front'));
       else if (event.key === '[' && !event.shiftKey) run(() => restack(command ? 'backward' : 'back'));
+      else if (key === 'r' && event.shiftKey && !command && selection().items.some((node) => node.data.item.rotation !== 0)) run(resetRotation);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [options.loaded, optionsRef, selectAll, duplicate, restack]);
+  }, [options.loaded, optionsRef, selectAll, duplicate, restack, selection, resetRotation]);
 
   // Copy and cut put the selected items on the clipboard, for this board or another window's, and their text for
   // other apps; not while typing, or with text selected, which is copied as usual.
@@ -282,6 +297,7 @@ export function useEditing(options: EditingOptions) {
     align: alignSelection,
     distribute: distributeSelection,
     setColor,
+    resetRotation,
     /** Copies the selection as the keyboard does, for the context menu. */
     copy: () => {
       copyingFromMenu.current = true;

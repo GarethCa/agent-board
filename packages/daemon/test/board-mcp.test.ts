@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
-import { BOARD_MCP_INSTRUCTIONS } from '../src/board-mcp.ts';
+import { COMMAND_HELP, COMMAND_OPTIONS } from '../src/board-cli.ts';
+import { BOARD_MCP_INSTRUCTIONS, BOARD_MCP_TOOLS, ORCHESTRATOR_MCP_TOOLS } from '../src/board-mcp.ts';
 import type { Agent, AgentUpdatedEvent, DaemonEvent, Harness } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -99,5 +100,46 @@ describe('agent-board mcp over stdio', () => {
     for (const tool of ['whoami', 'board', 'connections']) {
       expect(await mcp.callTool(tool, {})).toMatchObject({ text: expect.stringContaining('not a live session'), isError: true });
     }
+  });
+});
+
+describe('the board MCP tools and the agent-board CLI', () => {
+  /**
+   * Each tool's CLI command, with the tool arguments that are positional there (no option) and the ones the CLI spells
+   * differently. `options` is the CLI options it takes when that isn't the command's own.
+   */
+  const PARITY: { tool: string; command: string; positional?: string[]; renamed?: Record<string, string>; options?: string[] }[] = [
+    { tool: 'whoami', command: 'identify' },
+    { tool: 'board', command: 'tree' },
+    { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
+    { tool: 'set_status', command: 'status', positional: ['summary'] },
+    { tool: 'new_agent', command: 'new', renamed: { prompt: 'file' } },
+    { tool: 'send', command: 'send', positional: ['agent'], renamed: { text: 'file' } },
+    { tool: 'wait', command: 'wait', positional: ['agents'], renamed: { timeout_seconds: 'timeout' } },
+    { tool: 'read', command: 'read', positional: ['agent', 'path'] },
+    { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
+    { tool: 'close', command: 'close', positional: ['agent'] },
+    { tool: 'add_edge', command: 'edge', positional: ['from', 'to'], renamed: { conditions: 'condition' } },
+    { tool: 'list_edges', command: 'edges' },
+    { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
+  ];
+  /** Tools with no command of their own, and commands with no tool, each for a reason. */
+  const MCP_ONLY = ['connections'];
+  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc'];
+
+  const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];
+  const toolProperties = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema.properties as object | undefined) ?? {});
+
+  it('pairs every tool with a command, and every command with a tool', () => {
+    expect(tools.map((t) => t.name).sort()).toEqual([...PARITY.map((p) => p.tool), ...MCP_ONLY].sort());
+    expect(Object.keys(COMMAND_HELP).sort()).toEqual([...new Set(PARITY.map((p) => p.command)), ...CLI_ONLY].sort());
+  });
+
+  it.each(PARITY)('gives $tool the options of `agent-board $command`', ({ tool, command, positional = [], renamed = {}, options }) => {
+    const fromTool = toolProperties(tool)
+      .filter((name) => !positional.includes(name))
+      .map((name) => renamed[name] ?? name)
+      .sort();
+    expect(fromTool).toEqual([...(options ?? COMMAND_OPTIONS[command] ?? [])].sort());
   });
 });

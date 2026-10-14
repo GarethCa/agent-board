@@ -8,6 +8,8 @@ import xtermSerialize from '@xterm/addon-serialize';
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
 import { hashToken, newToken } from './tokens.ts';
 import { createCwdLookup } from './cwd-lookup.ts';
+import { foregroundOf, type Foreground } from './foreground.ts';
+import { lastExitStatus, shellIntegrationEnv } from './shell-integration.ts';
 import { processCwd } from './process-cwd.ts';
 import {
   SCROLLBACK_LINES,
@@ -59,6 +61,13 @@ export interface SessionSubscriber {
   whenDrained(callback: () => void): void;
 }
 
+/** How a live shell session is doing: see `SessionHost.shellState`. */
+export interface ShellState {
+  busy: boolean;
+  ports: number[];
+  lastStatus: number | undefined;
+}
+
 export interface SessionHostOptions {
   db: DatabaseSync;
   backend: TerminalBackend;
@@ -88,6 +97,15 @@ export interface SessionHostOptions {
   processCwd?(pid: number): Promise<string | undefined>;
   /** Called when a shell session is found in another folder than it was last seen in. */
   onCwd?(sessionId: string): void;
+  /** What a shell's process is running, and the ports it listens on: `foregroundOf` by default. */
+  foreground?(pid: number): Promise<Foreground>;
+  /** Called when a shell session's `SessionHost.shellState` changes: a command started or ended, a port opened, a command failed. */
+  onShellState?(sessionId: string): void;
+  /**
+   * Where the shell integration's files go (`shell-integration.ts`), which has a shell say how each command went. No
+   * integration without it.
+   */
+  shellIntegrationDir?: string;
   /**
    * Hands every session the board env (ADR-0010): the daemon's socket, a board token of its own, its zone, and the
    * `agent-board` CLI's folder first on its PATH. None without it.
@@ -137,6 +155,10 @@ interface LiveSession {
   lastOutputAt?: number;
   /** A shell's folder, as last found. */
   lastCwd?: string;
+  /** What a shell was running when its output last went quiet. */
+  foreground?: Foreground;
+  /** The exit status of a shell's last command, as its integration reported at its prompt. */
+  lastStatus?: number;
 }
 
 export interface SessionHost {
@@ -173,6 +195,12 @@ export interface SessionHost {
   killAll(options: { stoppedByRestart: boolean }): Promise<void>;
   /** Deletes the session's saved screen, once nothing will show it again. */
   forget(sessionId: string): void;
+  /**
+   * How a live shell session is doing: whether it was running a command when its output last went quiet, the
+   * ports that command listens on, and the exit status of its last command if its shell reports it. Nothing for an
+   * agent's session or an ended one.
+   */
+  shellState(sessionId: string): ShellState;
   /**
    * The folder the session's process is in now: looked up, with lookups for one session shared, for a live
    * one; else where it was last seen, or started. Throws for a session it has no record of.
@@ -234,6 +262,7 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   const saveQuietMs = options.saveQuietMs ?? SAVE_QUIET_MS;
   const saveMaxWaitMs = options.saveMaxWaitMs ?? SAVE_MAX_WAIT_MS;
   const lookupCwd = createCwdLookup({ find: options.processCwd ?? processCwd });
+  const findForeground = options.foreground ?? foregroundOf;
   const { scrollbackDir } = options;
   if (scrollbackDir !== undefined) mkdirSync(scrollbackDir, { recursive: true, mode: 0o700 });
   const screenFile = (sessionId: string) => join(scrollbackDir!, `${sessionId}.json`);
@@ -281,6 +310,12 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         session.lastCwd = cwd;
         updateLastCwd.run(cwd, id);
         options.onCwd?.(id);
+      });
+      void findForeground(pid).then((foreground) => {
+        const known = session.foreground ?? { busy: false, ports: [] };
+        if (!sessions.has(id) || (foreground.busy === known.busy && foreground.ports.join() === known.ports.join())) return;
+        session.foreground = foreground;
+        options.onShellState?.(id);
       });
     }
   };
@@ -463,6 +498,13 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         }
         deliver(session, { type: 'session.output', sessionId: id, data });
         scheduleSave(session);
+        if (harness === null) {
+          const status = lastExitStatus(data);
+          if (status !== undefined && status !== session.lastStatus) {
+            session.lastStatus = status;
+            options.onShellState?.(id);
+          }
+        }
       },
       onExit(exit) {
         sessions.delete(id);
@@ -500,8 +542,10 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     createShell({ cols, rows, cwd = options.homeDir ?? homedir(), id = randomUUID(), restore, zoneId }) {
       // Shell sessions get no harness hooks, but every row carries a token; this one is never handed out.
       const hookTokenSha256 = hashToken(newToken());
-      const { shell: command, shellArgs: args } = options;
-      return start({ id, harness: null, command, args, cwd, env: sessionEnv(id), cols, rows, hookTokenSha256, restore, zoneId });
+      const { shell: command, shellArgs: args, shellIntegrationDir } = options;
+      const base = sessionEnv(id);
+      const env = shellIntegrationDir === undefined ? base : { ...base, ...shellIntegrationEnv(command, shellIntegrationDir, base) };
+      return start({ id, harness: null, command, args, cwd, env, cols, rows, hookTokenSha256, restore, zoneId });
     },
 
     sessionForBoardToken: (token) => boardTokens.get(hashToken(token)),
@@ -548,6 +592,11 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     },
 
     savedScreen: readScreen,
+
+    shellState(sessionId) {
+      const session = sessions.get(sessionId);
+      return { busy: session?.foreground?.busy ?? false, ports: session?.foreground?.ports ?? [], lastStatus: session?.lastStatus };
+    },
 
     forget(sessionId) {
       if (scrollbackDir !== undefined) rmSync(screenFile(sessionId), { force: true });
