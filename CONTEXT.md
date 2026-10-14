@@ -39,7 +39,7 @@ _Avoid_: import
 A GitHub repo the daemon clones for a zone, with gh, into `~/.agent-board/repos/<owner>/<repo>` (`$AGENT_BOARD_REPOS_DIR`). While it clones the zone shows its progress and a Cancel on its tab, and starts no agent. If the clone fails, is cancelled, or is cut short by the daemon going away, its folder goes, and so does its zone, unless sessions were moved into it meanwhile: then it stays, unbound.
 
 **Tile**:
-The board object for one session. Rendered by the active representation. Every tile can be dragged into any zone or loose onto the board, and keeps the place it is dropped (kept by the daemon, relative to its zone); a new one takes the first free spot. Where it sits changes nothing about its session. An agent's or shell's name is the user's to change, in place: a double-click on it, the pencil beside it, F2 with the tile selected or its context menu. A shell split into panes can also label each pane, with the shell's name standing in without. Agents don't rename themselves (they set their description); renaming never touches the worktree, branch or session.
+The board object for one session. Rendered by the active representation. Every tile can be dragged into any zone or loose onto the board, and keeps the place it is dropped (kept by the daemon, relative to its zone); a new one takes the first free spot. Where it sits changes nothing about its session. An agent's or shell's name is the user's to change, in place: a double-click on it, the pencil beside it, F2 with the tile selected or its context menu. A shell split into panes can also label each pane, with the shell's name standing in without. Agents don't rename themselves (they set their **status**); renaming never touches the worktree, branch or session.
 _Avoid_: card (cards are issue cards), node
 
 **Expanded tile**:
@@ -183,6 +183,20 @@ One of: `running`, `thinking`, `waiting` (for input), `needs-permission`, `idle`
 **Stopped by restart**:
 A session whose process ended because the daemon went away under it (a crash, a shutdown, the machine restarting), not because it exited or the user stopped it. Its tile shows its last output and a **Resume** button, and a banner counts them all, with **Resume all**: nothing starts again, and no tokens are spent, until the user picks. Resuming carries on an agent's conversation (`claude --resume`, `codex resume`), or starts a new shell in a pane's last folder under its old output, marked restored. An agent with a schedule is never stopped by restart: its schedule relaunches it.
 _Avoid_: crashed, failed (those are the session's own doing)
+
+**Status**:
+What an agent says it is doing now, set from its own session with `agent-board status set` or the board MCP's `set_status`: one line, at most 200 characters, and how far through it is (0-100) if it says. Its tile shows it in place of its task until it sets another; the last writer wins (ADR-0010).
+_Avoid_: description (that is the task it was given). Its line of text is its **summary**.
+
+**Board CLI** / **board MCP**:
+`agent-board`, the command line every session the app starts finds on its PATH, which reads the board (`identify`, `tree`, `show <ref>`…) and sets the caller's status; and `agent-board mcp`, the same as a few MCP tools agents get, whose instructions say only to read `agent-board --help` (ADR-0010).
+_Avoid_: API, control API
+
+**Ref**:
+How the board CLI names a thing: `<kind>:<start of its id>` (`zone:4f2a`, `agent:9c1e`), a unique name, or `me`.
+
+**Board token**:
+A session's own token, in its env as `AGENT_BOARD_IDENTITY`, which tells the daemon which session a CLI or MCP call comes from. Unlike the hook token it can't post hook events, so the model may see it.
 
 **Needs-you inbox**:
 The list of agents in `waiting` or `needs-permission`, or with any permission prompt pending, answerable without opening their shell.

@@ -71,8 +71,8 @@ describe('agent-board daemon', () => {
 
   it('exits 2 with usage on bad arguments', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(runAgentBoardCli([])).resolves.toBe(2);
     await expect(runAgentBoardCli(['serve'])).resolves.toBe(2);
+    expect(error).toHaveBeenCalledWith('agent-board: no command serve. `agent-board --help` lists them.');
     await expect(runAgentBoardCli(['hook', 'claude'])).resolves.toBe(2);
     await expect(runAgentBoardCli(['hook'])).resolves.toBe(2);
     await expect(runAgentBoardCli(['daemon'])).resolves.toBe(2);

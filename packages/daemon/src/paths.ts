@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export interface DaemonPaths {
@@ -30,6 +30,17 @@ export function daemonPaths(dataDir: string): DaemonPaths {
     lock: join(dataDir, 'daemon.lock'),
     log: join(dataDir, 'daemon.log'),
   };
+}
+
+/**
+ * The app's own data dir, as Electron names it (`app.getPath('userData')` for the app called `agent-board`), so a CLI
+ * run outside the app finds the daemon the app starts.
+ */
+export function defaultDataDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const home = env.HOME || homedir();
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'agent-board');
+  if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), 'agent-board');
+  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'agent-board');
 }
 
 function socketPath(dataDir: string, id: string): string {

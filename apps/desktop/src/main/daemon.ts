@@ -7,4 +7,8 @@ import { BUILD } from './build';
 const fakeBuild = process.env.AGENT_BOARD_FAKE_DAEMON_BUILD;
 const build: BuildInfo = fakeBuild ? JSON.parse(fakeBuild) : BUILD;
 
-process.exitCode = await runAgentBoardCli(process.argv.slice(2), { build });
+// Not awaited at the top level: the CLI loads chunks lazily (the daemon, the MCP server), and those import from this
+// entry, which would never finish evaluating while it awaited them.
+void runAgentBoardCli(process.argv.slice(2), { build }).then((code) => {
+  process.exitCode = code;
+});

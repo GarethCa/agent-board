@@ -17,14 +17,16 @@ import { systemClock, type Clock } from './clock.ts';
 import { externalHookFiles, externalHooksHandlers } from './external-hooks.ts';
 import { createExternalSessionHost, externalHandlers, type ExternalSessionHost } from './external-sessions.ts';
 import { externalResumeHandlers } from './resume-external.ts';
-import { removeExternalHookFile, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
+import { removeExternalHookFile, writeCliShim, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
+import { boardHandlers, guardBoardCallers, type BoardConnection } from './board.ts';
 import { connectorHandlers } from './connectors.ts';
 import { commandPlan } from './flow-approvals.ts';
 import { createConditionChecker, createShellRunner } from './flow-conditions.ts';
 import { createFlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
 import { itemHandlers, itemsLeavingZone } from './items.ts';
-import { hashHookToken, newHookToken, startHookIngress, type HookIngress } from './hook-ingress.ts';
+import { startHookIngress, type HookIngress } from './hook-ingress.ts';
+import { hashToken, newToken } from './tokens.ts';
 import { acquireDaemonLock } from './lock.ts';
 import { adoptLoginShellPath } from './login-path.ts';
 import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
@@ -120,6 +122,12 @@ export interface DaemonOptions {
    * left as it is.
    */
   hookForwarder?: CliLauncher;
+  /**
+   * How to run this app's whole `agent-board` CLI (ADR-0010), which the daemon (re)writes as `agent-board` beside the
+   * hook shim, puts first on every session's PATH and runs as agents' board MCP server: `hookForwarder` by default.
+   * Without either, sessions get the board env but no CLI.
+   */
+  cli?: CliLauncher;
   /**
    * The stable launcher Codex's hook command names (ADR-0004): `$AGENT_BOARD_HOOK_SHIM`, else
    * `~/.agent-board/bin/agent-board-hook`.
@@ -257,6 +265,17 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const loginPath = await adoptLoginShellPath(shell, shellArgs);
     if (loginPath !== undefined) log(`using the login shell's PATH: ${process.env.PATH}`);
     else if (shellArgs.includes('-l')) log(`could not read ${shell}'s login PATH; keeping the daemon's own`);
+    const hookShimPath = options.hookShimPath ?? defaultHookShimPath();
+    // The agent-board CLI sessions run (ADR-0010), beside the hook shim.
+    const cli = options.cli ?? options.hookForwarder;
+    const cliPath = join(dirname(hookShimPath), 'agent-board');
+    if (cli !== undefined) {
+      try {
+        writeCliShim(cliPath, cli);
+      } catch (error) {
+        log(`could not write the agent-board CLI ${cliPath}: ${(error as Error).message}`);
+      }
+    }
     // `agents` and `pullRequests` are created below, once the hook ingress has a port. No session can exit or post a
     // hook before then.
     const sessions = createSessionHost({
@@ -269,6 +288,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shellArgs,
       homeDir,
       killGraceMs: options.killGraceMs,
+      board: { socketPath: paths.socket, cliDir: dirname(cliPath) },
       broadcast,
       log,
       onCwd: (sessionId) => shells.onPaneFolder(sessionId),
@@ -288,7 +308,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     external = externalSessions;
-    const externalToken = newHookToken();
+    const externalToken = newToken();
     ingress = await startHookIngress({
       sessionForToken: (hash) => (sessionForToken.get(hash) as { id: string } | undefined)?.id,
       onHook: (sessionId, event, payload, signal) => {
@@ -297,14 +317,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         if (payload.hook_event_name === 'Stop') void pullRequests.refresh(sessionId);
         return agents.onHook(sessionId, payload, signal);
       },
-      externalTokenSha256: hashHookToken(externalToken),
+      externalTokenSha256: hashToken(externalToken),
       onExternalHook: (harness, payload) => {
         externalSessions.onHook(harness, payload).catch((error: Error) => log(`external hook failed: ${error.message}`));
       },
     });
     const hookPort = ingress.port;
     const gh = options.gh ?? (process.env.AGENT_BOARD_GH || 'gh');
-    const hookShimPath = options.hookShimPath ?? defaultHookShimPath();
     const externalHookFile = options.externalHookFile ?? defaultExternalHookFile(hookShimPath);
     // Checked again before each Codex spawn, which fails if it can't be written; other agents don't need it.
     const ensureHookShim = () => {
@@ -409,6 +428,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       codexCommand: 'codex',
       hookShimPath,
       ensureHookShim,
+      boardCliPath: cli === undefined ? undefined : cliPath,
       env: options.agentEnv ?? process.env,
       shell,
       shellArgs,
@@ -466,7 +486,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     await sources.reconcile();
     const zones = zoneHandlers<unknown>(db, zoneTable, trackers);
-    const handlers: RpcHandlers<DaemonMethods, SessionSubscriber> = {
+    const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
         build: options.build ?? null,
@@ -478,6 +498,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         clients: clients.size,
         liveSessions: countLiveSessions(),
         homeDir,
+        cliPath: cli === undefined ? null : cliPath,
       }),
       'daemon.stop': (params, subscriber) => {
         const liveSessions = countLiveSessions();
@@ -520,6 +541,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...viewStateHandlers<SessionSubscriber>(db),
       ...settings.handlers<SessionSubscriber>(),
       ...agentHandlers(agents),
+      ...boardHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
@@ -537,9 +559,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       }),
     };
 
+    const guardedHandlers = guardBoardCallers(handlers);
     const server = createServer((socket) => {
       clients.add(socket);
-      const subscriber: SessionSubscriber = {
+      const subscriber: SessionSubscriber & BoardConnection = {
         send: (event) => {
           if (!socket.destroyed) socket.write(eventLine(event));
         },
@@ -555,7 +578,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       });
       socket.on('error', () => socket.destroy());
       const feed = lineSplitter((line) => {
-        void handleRpcLine(line, handlers, subscriber).then((response) => {
+        void handleRpcLine(line, guardedHandlers, subscriber).then((response) => {
           if (response !== undefined && !socket.destroyed) socket.write(`${JSON.stringify(response)}\n`);
         });
       });

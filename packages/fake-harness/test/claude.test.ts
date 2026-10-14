@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilEvents, untilStdout } from './run-fake.ts';
 
@@ -520,5 +521,22 @@ describe('fake claude', () => {
     await done;
 
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['notified', 'end']);
+  });
+});
+
+describe('claude MCP servers', () => {
+  it('starts a --mcp-config server with its own env plus the server’s, and calls its tools', async () => {
+    const server = join(import.meta.dirname, 'fixtures', 'mcp', 'echo-server.mjs');
+    const config = { mcpServers: { 'agent-board': { type: 'stdio', command: process.execPath, args: [server], env: { SECRET: 'set-by-config' } } } };
+    const result = await runFake('claude', {
+      scenario: 'board',
+      args: ['--mcp-config', JSON.stringify(config), 'Map the board'],
+      env: { BOARD_VISIBLE: 'yes' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('The board says: You are on the echo board.');
+    expect(result.stdout).toContain('whoami {} env:yes|set-by-config');
+    expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} env:yes|set-by-config');
   });
 });

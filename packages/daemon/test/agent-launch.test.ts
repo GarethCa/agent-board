@@ -48,7 +48,7 @@ describe('default agent names', () => {
 describe('launching codex', () => {
   const base = { command: 'codex', hookShimPath: '/Users/me/.agent-board/bin/agent-board-hook', prompt: '-fix it', zoneBypassHookTrust: true };
 
-  it('passes every hook as a -c override running the shim, hides AGENT_BOARD_* from tool shells, and bypasses trust', () => {
+  it('passes every hook as a -c override running the shim, hides the hook env from tool shells, and bypasses trust', () => {
     const cwd = tempDataDir();
     const { command, args, projectConfig } = codexLaunch({ ...base, cwd, worktree: cwd });
 
@@ -60,9 +60,21 @@ describe('launching codex', () => {
     );
     expect(overrides.filter((o) => o.startsWith('hooks.')).map((o) => o.slice(6, o.indexOf('=')))).toEqual(Object.keys(CODEX_HOOK_TIMEOUTS));
     expect(overrides).toContain('hooks.SessionEnd=[{hooks=[{type="command",command="\\"/Users/me/.agent-board/bin/agent-board-hook\\" codex",timeout=3}]}]');
-    expect(overrides).toContain('shell_environment_policy.exclude=["AGENT_BOARD_*"]');
+    expect(overrides).toContain('shell_environment_policy.exclude=["AGENT_BOARD_HOOK_*"]');
+    expect(overrides.some((o) => o.startsWith('mcp_servers.'))).toBe(false);
     // The prompt comes last, after `--`, so one starting with a dash is not read as a flag.
     expect(args.slice(-3)).toEqual(['--dangerously-bypass-hook-trust', '--', '-fix it']);
+  });
+
+  it('runs the board MCP server from the CLI, passing it the board env, when given the CLI', () => {
+    const cwd = tempDataDir();
+    const { args } = codexLaunch({ ...base, cwd, worktree: cwd, boardCli: '/Users/me/.agent-board/bin/agent-board' });
+    const overrides = args.filter((_, i) => args[i - 1] === '-c');
+    expect(overrides.filter((o) => o.startsWith('mcp_servers.'))).toEqual([
+      'mcp_servers.agent-board.command="/Users/me/.agent-board/bin/agent-board"',
+      'mcp_servers.agent-board.args=["mcp"]',
+      'mcp_servers.agent-board.env_vars=["AGENT_BOARD_SOCKET","AGENT_BOARD_IDENTITY","AGENT_BOARD_SESSION_ID","AGENT_BOARD_ZONE_ID"]',
+    ]);
   });
 
   it('leaves out the bypass flag when the zone turns it off', () => {

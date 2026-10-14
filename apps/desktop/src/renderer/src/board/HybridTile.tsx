@@ -1,6 +1,7 @@
 import { memo, useContext, useState, type MouseEvent, type ReactNode } from 'react';
 import {
   shortIssueId,
+  statusLine,
   TRACKER_PROVIDERS,
   type Agent,
   type AgentSchedule,
@@ -165,8 +166,13 @@ function AgentTile({ id, agent, repo }: { id: string; agent: Agent; repo?: strin
           {agent.notice}
         </span>
       ) : (
-        <span className="hybrid-tile-body hybrid-tile-description" data-empty={agent.description === '' || undefined} title={agent.description}>
-          {agent.description || 'No task yet'}
+        <span
+          className="hybrid-tile-body hybrid-tile-description"
+          data-testid="tile-description"
+          data-empty={(agent.status === null && agent.description === '') || undefined}
+          title={agent.status === null ? agent.description : `${statusLine(agent.status)}\n\nTask: ${agent.description}`}
+        >
+          {agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}
         </span>
       )}
       {agent.state === 'stopped-by-restart' && <ResumeRow onResume={() => resumeAgent(agent.sessionId)} />}

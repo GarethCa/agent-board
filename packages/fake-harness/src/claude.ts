@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { hasFlag, parseArgs, stringFlag, type FlagSpec } from './args.ts';
+import { hasFlag, listFlag, parseArgs, stringFlag, type FlagSpec } from './args.ts';
 import { ConfigError, mergeHooks, parseHooksJson, readHooksFile, validateMatchers, type HooksConfig } from './hooks.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
+import { parseClaudeMcpConfig, type McpServerConfig } from './mcp.ts';
 import { toolOutput, type ConversationMessage, type Invocation, type Transcript } from './session.ts';
 
 const FLAGS: FlagSpec = {
@@ -65,6 +66,9 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
       permissionSuggestions: true,
       subagentToolName: 'Agent',
       shellToolName: 'Bash',
+      mcpServers: mcpConfigFlags(listFlag(args, '--mcp-config'), env),
+      // Claude's Bash tool runs with its own env.
+      shellEnv: env,
     },
   };
 }
@@ -77,6 +81,18 @@ function authStatus(env: NodeJS.ProcessEnv): Invocation {
   const loggedIn = env.FAKE_HARNESS_LOGGED_OUT !== '1';
   const status = loggedIn ? { loggedIn, authMethod: 'claude.ai', apiProvider: 'firstParty' } : { loggedIn, authMethod: 'none', apiProvider: 'firstParty' };
   return { reply: JSON.stringify(status, null, 2), exitCode: loggedIn ? 0 : 1 };
+}
+
+/** The servers of every `--mcp-config` (inline JSON or a file path), later ones over earlier. */
+function mcpConfigFlags(values: string[], env: NodeJS.ProcessEnv): Record<string, McpServerConfig> {
+  return Object.assign(
+    {},
+    ...values.map((value) => {
+      if (value.trim().startsWith('{')) return parseClaudeMcpConfig(value, '--mcp-config', env);
+      if (!existsSync(value)) throw new ConfigError(`--mcp-config file not found: ${value}`);
+      return parseClaudeMcpConfig(readFileSync(value, 'utf8'), value, env);
+    }),
+  );
 }
 
 /** `--settings` takes inline JSON or a file path. */

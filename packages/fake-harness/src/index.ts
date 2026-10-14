@@ -46,3 +46,5 @@ export {
   type HookResponder,
   type HookEvent,
 } from './recorder.ts';
+
+export { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';

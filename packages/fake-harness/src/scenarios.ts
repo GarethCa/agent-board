@@ -1,7 +1,7 @@
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'crash', 'rate-limit', 'markdown'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'crash', 'rate-limit', 'markdown'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -192,6 +192,26 @@ const scripts: Record<FakeScenario, Script> = {
     await session.submit(prompt);
     await session.runTool(session.shellTool, { command: 'git diff main...HEAD', description: 'Read the diff' }, { stdout: '', stderr: '', interrupted: false });
     await session.say(round[1] === '1' ? FIRST_REVIEW : LATER_REVIEW);
+    await session.stop();
+  },
+
+  /**
+   * Finds its way round agent-board as a model told once would (ADR-0010): reads the board MCP server's instructions,
+   * calls its `whoami` tool and sets its status to the prompt's first line at 10% with `set_status`. Then, for real in
+   * its shell, runs `agent-board identify`, sets the same status at 20% with `agent-board status set`, and looks for
+   * the hook env. Without the server it only runs the shell commands.
+   */
+  async board(session, prompt) {
+    await session.submit(prompt);
+    const summary = prompt.split('\n', 1)[0]!;
+    const instructions = await session.mcpInstructions('agent-board');
+    await session.say(instructions === undefined ? 'There is no agent-board MCP server here.' : `The board says: ${instructions}`);
+    await session.callMcpTool('agent-board', 'whoami', {});
+    await session.callMcpTool('agent-board', 'set_status', { summary, progress: 10 });
+    await session.runShell('agent-board identify');
+    await session.runShell(`agent-board status set --progress 20 -- '${summary.replaceAll("'", `'\\''`)}'`);
+    await session.runShell('echo "hook env: ${AGENT_BOARD_HOOK_TOKEN:-none} ${AGENT_BOARD_HOOK_URL:-none}"');
+    await session.say('I know where I am.');
     await session.stop();
   },
 

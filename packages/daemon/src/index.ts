@@ -14,7 +14,7 @@ export { runAgentBoardCli, EXIT_SESSIONS_LIVE, USAGE, type AgentBoardCliOptions 
 export { stopDaemon, type StopDaemonOptions, type StopDaemonResult } from './stop.ts';
 export { daemonPaths, type DaemonPaths } from './paths.ts';
 export { isProcessAlive } from './pid.ts';
-export { newHookToken, hashHookToken } from './hook-ingress.ts';
+export { newToken, hashToken } from './tokens.ts';
 export { MIGRATIONS, migrate, schemaVersion, type Migration } from './migrate.ts';
 export {
   AGENT_ERROR,

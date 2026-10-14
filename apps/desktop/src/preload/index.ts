@@ -190,6 +190,7 @@ const api: AgentBoardApi = {
   setup: {
     check: (tool) => invoke(SETUP_IPC.check, tool),
     testNotification: () => invoke(SETUP_IPC.testNotification),
+    installCli: () => invoke(SETUP_IPC.installCli),
     onGettingStarted(listener) {
       // Taken on every poke and once on subscribing, as opening an agent is, for a request made while the board loaded.
       const take = () =>

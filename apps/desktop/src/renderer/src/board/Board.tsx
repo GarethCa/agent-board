@@ -1846,6 +1846,15 @@ function BoardView() {
         window.agentBoard.zones.setLook(zone.id, { color }).then((saved) => setNodes((current) => withZone(current, saved)), report('recolour the zone'));
       },
       dissolve: (zone) => void dissolveZone(zone),
+      setBoardMcp(zone, boardMcp) {
+        window.agentBoard.zones.configure(zone.id, { boardMcp }).then(
+          (saved) => {
+            setNodes((current) => withZone(current, saved));
+            toasts.show({ tone: 'success', message: `Agents started in ${saved.name} ${boardMcp ? 'get' : "don't get"} the board MCP server` });
+          },
+          report('change the zone’s board MCP setting'),
+        );
+      },
     }),
     [setNodes, reloadExternals, toasts, report, tidyZone, dissolveZone],
   );

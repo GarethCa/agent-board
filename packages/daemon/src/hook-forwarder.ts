@@ -3,11 +3,14 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+/** What the hook env vars start with, which Codex keeps from the model's shell commands. */
+export const HOOK_ENV_PREFIX = 'AGENT_BOARD_HOOK_';
+
 /** The env var that carries an agent's hook token, so it never appears on its command line. */
-export const HOOK_TOKEN_ENV = 'AGENT_BOARD_HOOK_TOKEN';
+export const HOOK_TOKEN_ENV = `${HOOK_ENV_PREFIX}TOKEN`;
 
 /** The env var that tells the forwarder where the hook ingress listens. */
-export const HOOK_URL_ENV = 'AGENT_BOARD_HOOK_URL';
+export const HOOK_URL_ENV = `${HOOK_ENV_PREFIX}URL`;
 
 /** The env var the shim sets to tell the external forwarder where the running daemon left its address. */
 const EXTERNAL_HOOK_FILE_ENV = 'AGENT_BOARD_EXTERNAL_HOOK_FILE';
@@ -151,7 +154,20 @@ export function removeExternalHookFile(path: string, token: string): void {
  * meanwhile sees the old or the new shim, never half; the folder and the shim are the user's alone.
  */
 export function writeHookShim(path: string, launcher: CliLauncher, externalHookFile?: string): void {
-  const script = hookShimScript(launcher, externalHookFile);
+  writeShim(path, hookShimScript(launcher, externalHookFile));
+}
+
+/**
+ * Makes sure the `agent-board` CLI launcher at `path` (ADR-0010), which every session finds first on its PATH and
+ * agents run as their board MCP server, runs the CLI on the app `launcher` describes. Written as the hook shim is.
+ */
+export function writeCliShim(path: string, launcher: CliLauncher): void {
+  const exec = [launcher.command, ...launcher.args].map(shellQuote).join(' ');
+  writeShim(path, ['#!/bin/sh', '# Written by the agent-board daemon: the agent-board command line.', `ELECTRON_RUN_AS_NODE=1 exec ${exec} "$@"`, ''].join('\n'));
+}
+
+/** Writes `script` to `path` as an executable of the user's alone, atomically, unless it is there already. */
+function writeShim(path: string, script: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   chmodSync(dirname(path), 0o700);
   if (readOrUndefined(path) === script) {

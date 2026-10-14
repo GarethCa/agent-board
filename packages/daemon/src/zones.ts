@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { runGit } from './git.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { folderPath } from './repo-zone.ts';
-import { finiteNumberParam, invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
@@ -49,6 +49,7 @@ interface ZoneRow {
   width: number;
   height: number;
   codex_bypass_hook_trust: number;
+  board_mcp: number;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -152,6 +153,7 @@ export function createZoneTable(
     width: row.width,
     height: row.height,
     codexBypassHookTrust: row.codex_bypass_hook_trust === 1,
+    boardMcp: row.board_mcp === 1,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -245,7 +247,8 @@ export function zoneHandlers<Context>(
   const updateLayout = db.prepare('UPDATE zones SET x = ?, y = ?, width = ?, height = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE zones SET name = ? WHERE id = ?');
   const updateColor = db.prepare('UPDATE zones SET color = ? WHERE id = ?');
-  const updateSettings = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
+  const updateBypass = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
+  const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -345,9 +348,12 @@ export function zoneHandlers<Context>(
     'zone.configure': (params) => {
       const fields = paramsObject(params);
       const id = stringParam(fields, 'id');
-      const bypass = fields.codexBypassHookTrust;
-      if (typeof bypass !== 'boolean') throw invalidParams('codexBypassHookTrust must be a boolean');
-      if (updateSettings.run(bypass ? 1 : 0, id).changes === 0) throw noZone(id);
+      const bypass = optionalBooleanParam(fields, 'codexBypassHookTrust');
+      const boardMcp = optionalBooleanParam(fields, 'boardMcp');
+      if (bypass === undefined && boardMcp === undefined) throw invalidParams('give codexBypassHookTrust or boardMcp');
+      zones.get(id);
+      if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
+      if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
       return changed(id);
     },
     'zone.setLook': (params) => {

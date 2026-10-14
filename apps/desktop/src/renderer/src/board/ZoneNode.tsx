@@ -1,6 +1,6 @@
 import { createContext, memo, useContext, useId, type CSSProperties } from 'react';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
-import { CircleDot, Ellipsis, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Pencil, Plus, Unlink, X } from 'lucide-react';
+import { CircleDot, Ellipsis, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Pencil, Plug, Plus, Unlink, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming } from '../ui';
 import { folderLabel } from './folders';
 import { leastZoneSize } from './layout';
@@ -91,7 +91,8 @@ export const BindZoneContext = createContext<(zone: Zone, as: ZoneBinding) => vo
 
 /**
  * What a zone's tab can do to the zone: to its binding, unbind it back into a group or set a group's default
- * repo; Tidy it; rename or recolour it, and dissolve a group.
+ * repo; Tidy it; rename or recolour it, and dissolve a group; turn the board MCP server off or on
+ * for its agents.
  */
 export interface ZoneBindingActions {
   unbind(zone: Zone): void;
@@ -104,6 +105,8 @@ export interface ZoneBindingActions {
   recolor(zone: Zone, color: string): void;
   /** Removes a group, leaving its tiles loose on the board where they are, and its notes and cards. */
   dissolve(zone: Zone): void;
+  /** Whether agents started in it get the board MCP server (ADR-0010). */
+  setBoardMcp(zone: Zone, on: boolean): void;
 }
 export const ZoneBindingContext = createContext<ZoneBindingActions>({
   unbind: () => {},
@@ -112,6 +115,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   rename: () => Promise.resolve(),
   recolor: () => {},
   dissolve: () => {},
+  setBoardMcp: () => {},
 });
 
 export function zoneNode(zone: Zone): ZoneNodeType {
@@ -310,12 +314,20 @@ export const ZoneNode = memo(function ZoneNode({
                     onSelect: () => binding.pickDefaultRepo(zone),
                   }
                 : { label: 'Unbind', icon: <Unlink />, hint: 'Its agents keep their repos, and it keeps its issues', onSelect: () => binding.unbind(zone) },
+              {
+                label: zone.boardMcp ? 'Turn off board MCP' : 'Turn on board MCP',
+                icon: <Plug />,
+                hint: zone.boardMcp
+                  ? 'Agents started here stop getting the agent-board MCP server; the CLI stays'
+                  : 'Agents started here get the agent-board MCP server again',
+                onSelect: () => binding.setBoardMcp(zone, !zone.boardMcp),
+              },
               ...(unbound
                 ? ['separator' as const, { label: 'Dissolve', icon: <X />, danger: true, hint: 'Its tiles stay on the board where they are', onSelect: () => binding.dissolve(zone) }]
                 : []),
             ]}
           >
-            <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, rename, colour, default repo, unbind, dissolve" />
+            <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, rename, colour, default repo, unbind, board MCP, dissolve" />
           </Menu>
         )}
       </div>

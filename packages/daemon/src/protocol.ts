@@ -72,6 +72,8 @@ export interface DaemonHealth {
   liveSessions: number;
   /** The home directory loose shells start in, which a shell's folder chip shows as `~`. */
   homeDir: string;
+  /** The `agent-board` CLI launcher the daemon wrote (ADR-0010), which Settings links into `~/.local/bin`; null for none. */
+  cliPath: string | null;
 }
 
 /**
@@ -102,6 +104,11 @@ export interface Zone {
    * without review. On by default. Off, Codex asks the user to review them once, in the agent's terminal.
    */
   codexBypassHookTrust: boolean;
+  /**
+   * Whether agents started from it get the board MCP server (`agent-board mcp`, ADR-0010), which tells them they are on
+   * agent-board. On by default. Every session gets the `agent-board` CLI and its env either way.
+   */
+  boardMcp: boolean;
   /** Where the zone's issues come from, or null if it has no tracker. */
   tracker: ZoneTracker | null;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
@@ -198,6 +205,7 @@ export const ZONE_COLOR_NAMES: Readonly<Record<string, string>> = {
 /** A zone's settings. */
 export interface ZoneSettings {
   codexBypassHookTrust: boolean;
+  boardMcp: boolean;
 }
 
 /** A zone's issue tracker: a provider and a scope in it, such as Linear team `ACME`. */
@@ -894,6 +902,11 @@ export interface Agent {
   notice: string | null;
   /** The tracker issue it works on, or null. */
   issue: LinkedIssue | null;
+  /**
+   * What it says it is doing now, set from its own session (`agent-board status set`, ADR-0010); null until it sets
+   * one, when its tile shows its `description`.
+   */
+  status: AgentStatus | null;
   /** Whether the user muted its OS notifications. It still counts in the needs-you inbox. */
   muted: boolean;
   /**
@@ -1122,6 +1135,29 @@ export interface ExternalResumePlan {
 
 /** Longest description kept from a session's task or first prompt; tiles show only its start anyway. */
 export const MAX_DESCRIPTION_LENGTH = 500;
+
+/** Longest status summary an agent can set: a line or two on its tile. */
+export const MAX_STATUS_LENGTH = 200;
+
+/** What an agent says it is doing now: a short summary, and how far through it is (0-100) if it says. */
+export interface AgentStatus {
+  summary: string;
+  progress: number | null;
+  updatedAt: string;
+}
+
+/**
+ * Who a board token belongs to (`board.identify`): the live session it was handed to, and the tile that session is
+ * drawn on, an agent's or a shell's, with that tile's zone now (null for loose on the board).
+ */
+export interface BoardCaller {
+  sessionId: string;
+  kind: 'agent' | 'shell';
+  /** The agent's session, or the shell tile's id. */
+  tileId: string;
+  name: string;
+  zoneId: string | null;
+}
 
 /** Longest name a user can give an agent tile, a shell tile or a shell pane. */
 export const MAX_NAME_LENGTH = 60;
@@ -1404,8 +1440,8 @@ export interface DaemonMethods {
   'zone.dissolve': { params: { id: string }; result: null };
   /** Renames a zone and/or recolours it (`#rrggbb`). Fails with `invalidParams` for an unknown id, a blank name or a bad colour. */
   'zone.setLook': { params: { id: string; name?: string; color?: string }; result: Zone };
-  /** Changes a zone's settings. Fails with `invalidParams` for an unknown id. */
-  'zone.configure': { params: { id: string } & ZoneSettings; result: Zone };
+  /** Changes the zone's settings given. Fails with `invalidParams` for an unknown id, or none given. */
+  'zone.configure': { params: { id: string } & Partial<ZoneSettings>; result: Zone };
   /**
    * Binds the zone to a tracker scope the credential can see, and optionally to one of its projects, spelled as the
    * tracker spells them, or unbinds it with null. Fails with `TRACKER_ERROR.notConnected` before `tracker.connect`, and
@@ -1490,6 +1526,19 @@ export interface DaemonMethods {
   'agent.setName': { params: SessionRef & { name: string }; result: Agent };
   /** Mutes the agent's OS notifications, or unmutes them. Fails with `invalidParams` for an unknown agent. */
   'agent.setMuted': { params: SessionRef & { muted: boolean }; result: Agent };
+  /**
+   * Who holds `token`, a session's board token (`AGENT_BOARD_IDENTITY`, ADR-0010). Fails with `BOARD_ERROR.unknownToken`
+   * for a token no live session holds. Once it answers, the connection is that session's: it may call only
+   * `BOARD_CALLER_METHODS` from then on.
+   */
+  'board.identify': { params: { token: string }; result: BoardCaller };
+  /**
+   * Sets the status of the agent holding `token`: only its own. `summary` is trimmed and at most `MAX_STATUS_LENGTH`;
+   * `progress` a whole number 0-100, or absent. Fails with `BOARD_ERROR.unknownToken` for an unknown token, and
+   * `invalidParams` for a shell's, a blank summary or a bad progress. Makes the connection the session's, as
+   * `board.identify` does.
+   */
+  'board.setStatus': { params: { token: string; summary: string; progress?: number }; result: Agent };
   /**
    * Moves the agent's tile within its zone, into any other (another repo's, or an unbound one) or out onto the board
    * (`zoneId` null). Only its tile moves. Fails with `invalidParams` for an unknown zone or agent.
@@ -1667,6 +1716,41 @@ export const AGENT_ERROR = {
   /** The external session may still be running in another terminal; ask the user, then retry with `force`. */
   liveElsewhere: -32014,
 } as const;
+
+/** Errors of the `board.*` methods, which the agent-facing CLI and MCP call (ADR-0010). */
+export const BOARD_ERROR = {
+  /** No live session holds the board token: it is wrong, or its session has ended. */
+  unknownToken: -32020,
+  /** The connection presented a board token, and the method isn't one of `BOARD_CALLER_METHODS`. */
+  notAllowed: -32021,
+} as const;
+
+/**
+ * What a connection that has presented a session's board token (`board.identify`, `board.setStatus`) may call: the
+ * board's reads and its own status, nothing that starts, steers, answers for or stops a session, or changes a setting
+ * (ADR-0010). A connection that never presents one is the user's, with the whole API.
+ */
+export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
+  'daemon.health',
+  'zone.list',
+  'agent.list',
+  'shell.list',
+  'flowEdge.list',
+  'item.list',
+  'connector.list',
+  'board.identify',
+  'board.setStatus',
+]);
+
+/** Whether `value` is a status's progress: a whole percentage, 0 to 100. */
+export function isStatusProgress(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 100;
+}
+
+/** A status as one line: `Moving session ids to the daemon · 40%`. */
+export function statusLine(status: Pick<AgentStatus, 'summary' | 'progress'>): string {
+  return status.progress === null ? status.summary : `${status.summary} · ${status.progress}%`;
+}
 
 /**
  * Error codes for tracker calls. A tracker refusing a request for a reason of its own (an unknown issue or team) is

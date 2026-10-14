@@ -1,0 +1,178 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`agent-board --help > has help for agents 1`] = `
+"usage: agent-board agents [--json]   (or: agent-board ls)
+
+Every agent: its ref, name, [state], status (or task) and zone.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for edges 1`] = `
+"usage: agent-board edges [--json]
+
+Every edge: the agent it flows from and the one it flows to (with their states), what it carries
+(the first agent's final message, or a file from its worktree), when (as that agent's turn
+ends, or when the user presses Send), the conditions that must pass first, and how it stands
+(paused, holding a hand-off, last delivered or skipped).
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for identify 1`] = `
+"usage: agent-board identify [--json]
+
+Who and where you are: your tile's ref and name, whether it is an agent or a shell tile, the zone
+it is in now (or loose), and for an agent its state, status and branch.
+
+Outside an agent-board session it says so: you can read the board, but have no tile.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for mcp 1`] = `
+"usage: agent-board mcp
+
+Serves the board as MCP tools on stdio: whoami, board, connections and set_status. The app adds it
+to the agents it starts; add it to another Claude with:
+
+  claude mcp add agent-board -- agent-board mcp
+"
+`;
+
+exports[`agent-board --help > has help for rpc 1`] = `
+"usage: agent-board rpc <method> ['<json params>']
+
+Calls one of the daemon's JSON-RPC methods (as the app does) and prints its result as JSON, such as
+\`agent-board rpc agent.list\`.
+
+In an agent-board session, which has AGENT_BOARD_IDENTITY, it reaches only what the other
+commands do:
+
+  daemon.health
+  zone.list
+  agent.list
+  shell.list
+  flowEdge.list
+  item.list
+  connector.list
+  board.identify
+  board.setStatus
+
+Everything else (starting, typing to, answering for or stopping a session, changing a setting) is
+refused. Outside a session it reaches every method, as the app does.
+"
+`;
+
+exports[`agent-board --help > has help for shells 1`] = `
+"usage: agent-board shells [--json]
+
+Every shell tile: its ref, name, the folder its first pane is in, and its zone.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for show 1`] = `
+"usage: agent-board show <ref> [--json]
+
+Everything about one zone, agent, shell, edge or item. \`agent-board show me\` shows your own tile.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for status 1`] = `
+"usage: agent-board status set <summary> [--progress <0-100>]
+
+Sets your own tile's status: one line, at most 200 characters, saying what you are doing
+now, as the change you are making ("Moving session ids to the daemon"), not the task you were
+given. Your tile shows it in place of your task. Set it once you understand the work, and again
+when its direction changes. --progress is how far through you are, 0 to 100.
+
+Only an agent can, and only its own. Setting it again replaces it; a person editing it by hand
+is replaced the same way, whoever writes last. A summary that starts with a dash goes after --:
+\`agent-board status set --progress 50 -- -v now works\`.
+
+  --progress <n>   0 to 100.
+  --json           Print the agent as JSON.
+"
+`;
+
+exports[`agent-board --help > has help for tree 1`] = `
+"usage: agent-board tree [--json]
+
+Every zone, with the tiles and items in it, then the tiles and items loose on the board. A zone
+line says what it is bound to (repo, folder, or group); an agent line its state in [brackets]
+and its status, or its task until it sets one. ← marks you.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for zones 1`] = `
+"usage: agent-board zones [--json]
+
+Every zone: its ref, name, what it is bound to and how many tiles it holds.
+
+  --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > teaches the concepts, refs and commands 1`] = `
+"agent-board: the board you are on. agent-board is a desktop app that shows coding agents
+(Claude Code, Codex) and plain shells as tiles on one infinite board. This command reads that
+board, and lets an agent say what it is doing.
+
+CONCEPTS
+  zone    A coloured region of the board. A repo zone is bound to a git repo (or a folder in
+          one); a group is bound to none. Where a tile sits is only where it is drawn: moving
+          it changes nothing about its session.
+  tile    One session on the board, in a zone or loose: an agent or a shell.
+  agent   A session running claude or codex in its own git worktree and branch. It has a
+          state (running, thinking, waiting, needs-permission, idle, rate-limited, failed,
+          done, ...) and a status: one line it sets to say what it is doing now.
+  shell   A tile of plain shell panes.
+  edge    A flow from one agent to another. When the first hands off (its turn ends, or the
+          user presses Send), what the edge carries (that agent's final message, or a file
+          from its worktree) is sent to the second as its next message, once the edge's
+          conditions pass.
+  item    A sticky note, text, shape, image, link card or issue card on the board.
+
+REFS
+  Commands name things by ref: <kind>:<start of its id>, as the board lists them
+  (zone:4f2a, agent:9c1e, shell:07bd, edge:e5aa, item:31f0). A whole id works, and so does a
+  unique name, alone or after its kind (fix-tests, zone:web). \`me\` is your own tile. A name
+  that more than one thing has is an error listing them.
+
+COMMANDS
+  identify              Who and where you are: your tile, its zone, your state and status.
+  tree                  Every zone with its tiles and items, then what is loose on the board.
+  zones                 Every zone.
+  agents (or ls)        Every agent: state, status (or task) and zone.
+  shells                Every shell tile.
+  edges                 Every edge: its two agents, what it carries, when, and how it stands.
+  show <ref>            Everything about one zone, agent, shell, edge or item.
+  status set <summary> [--progress <0-100>]
+                        Set your own tile's status (agents only). See \`status --help\`.
+  mcp                   Serve these as MCP tools on stdio, for a harness.
+  rpc <method> [json]   Call a daemon method directly and print its JSON result. In a session,
+                        only the reads above and your own status.
+
+  Read commands take --json. \`agent-board <command> --help\` says more about one.
+  Starting, messaging and stopping other agents is not here yet.
+
+ENVIRONMENT
+  The app sets these in every session it starts:
+  AGENT_BOARD_SOCKET      The daemon's socket.
+  AGENT_BOARD_IDENTITY    Your session's board token: it says which tile you are.
+  AGENT_BOARD_SESSION_ID  Your session.
+  AGENT_BOARD_ZONE_ID     The zone your tile was in as it started. It may have moved since;
+                          \`identify\` says where it is now.
+  Outside a session the CLI finds the daemon of $AGENT_BOARD_DATA_DIR, else the app's own,
+  and reads the board as you, setting no status.
+"
+`;

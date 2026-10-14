@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { runHooks, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
+import { execFile } from 'node:child_process';
+import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
 
 /** One message of a conversation, as a resumed session shows it again. */
@@ -60,6 +62,10 @@ export interface Dialect {
   permissionModeEvents?: ReadonlySet<string>;
   subagentToolName: string;
   shellToolName: string;
+  /** The MCP servers its config names, by name, started on first use. */
+  mcpServers: Record<string, McpServerConfig>;
+  /** The env the model's shell commands run with: Codex leaves out what its `shell_environment_policy` excludes. */
+  shellEnv: NodeJS.ProcessEnv;
   /** Overrides the SessionEnd reason (Codex always reports `other`). */
   sessionEndReason?: string;
   /** Pause between streamed words and tool steps. */
@@ -125,6 +131,8 @@ export class FakeSession {
   /** Rejects whatever the turn is waiting on, once it is interrupted. */
   private wake: (() => void) | undefined;
   private lastExitPress = 0;
+  /** The MCP servers started so far. */
+  private readonly mcpClients: Record<string, McpClient> = {};
 
   constructor(dialect: Dialect) {
     this.dialect = dialect;
@@ -201,6 +209,45 @@ export class FakeSession {
     if (!inside) this.dialect.transcript.toolResult(id, response, false);
     await this.fire('PostToolUse', { ...inside, tool_name: name, tool_input: input, tool_response: response, tool_use_id: id });
     return true;
+  }
+
+  /**
+   * Runs `command` for real in the model's shell (`sh -c`, in its folder, with `shellEnv`) as a shell tool call, and
+   * returns its stdout. Scenarios use it to run the CLIs a session is given.
+   */
+  async runShell(command: string): Promise<string> {
+    const { stdout, stderr } = await this.untilInterrupted(
+      new Promise<{ stdout: string; stderr: string }>((resolve) => {
+        execFile('/bin/sh', ['-c', command], { cwd: this.dialect.cwd, env: this.dialect.shellEnv }, (_error, stdout, stderr) =>
+          resolve({ stdout, stderr }),
+        );
+      }),
+    );
+    await this.runTool(this.shellTool, { command, description: command }, { stdout, stderr, interrupted: false });
+    this.print(`${stdout}${stderr}`);
+    return stdout;
+  }
+
+  /**
+   * Calls an MCP server's tool as the model would, starting the server the first time: a tool call named
+   * `mcp__<server>__<tool>`, its result's text printed. Undefined when the config names no such server.
+   */
+  async callMcpTool(server: string, tool: string, args: Record<string, unknown>): Promise<McpToolResult | undefined> {
+    const config = this.dialect.mcpServers[server];
+    if (config === undefined) return undefined;
+    this.mcpClients[server] ??= new McpClient(config, this.dialect.cwd);
+    const result = await this.untilInterrupted(this.mcpClients[server].callTool(tool, args));
+    await this.runTool(`mcp__${server}__${tool}`, args, { content: [{ type: 'text', text: result.text }], isError: result.isError });
+    this.print(`${result.text}\n`);
+    return result;
+  }
+
+  /** The instructions `server` gives as it starts, or undefined for no such server. */
+  async mcpInstructions(server: string): Promise<string | undefined> {
+    const config = this.dialect.mcpServers[server];
+    if (config === undefined) return undefined;
+    this.mcpClients[server] ??= new McpClient(config, this.dialect.cwd);
+    return (await this.untilInterrupted(this.mcpClients[server].initialize())).instructions;
   }
 
   /**

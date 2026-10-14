@@ -9,7 +9,7 @@ import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { startDaemon, type Daemon, type DaemonOptions } from '../src/daemon.ts';
 import { connectDaemon, type DaemonClient } from '../src/client.ts';
 import type { CliLauncher } from '../src/hook-forwarder.ts';
-import { hashHookToken } from '../src/hook-ingress.ts';
+import { hashToken } from '../src/tokens.ts';
 import { migrate } from '../src/migrate.ts';
 import type { DaemonEvent } from '../src/protocol.ts';
 import { daemonPaths } from '../src/paths.ts';
@@ -28,6 +28,12 @@ export function tempDataDir(): string {
 export const TEST_HOOK_FORWARDER: CliLauncher = {
   command: process.execPath,
   args: ['--disable-warning=ExperimentalWarning', fileURLToPath(new URL('../src/hook-main.ts', import.meta.url))],
+};
+
+/** Runs the whole `agent-board` CLI from source, as the CLI launcher sessions find on their PATH does in tests. */
+export const TEST_CLI_LAUNCHER: CliLauncher = {
+  command: process.execPath,
+  args: ['--disable-warning=ExperimentalWarning', fileURLToPath(new URL('../src/cli-main.ts', import.meta.url))],
 };
 
 /** A fresh git repo with one commit and an `apps/web` folder, removed when the test ends. */
@@ -62,6 +68,7 @@ export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Pro
     externalHookFile: join(tempDataDir(), 'external-hook.json'),
     externalHookFiles: { claude: join(tempDataDir(), 'settings.json'), codex: join(tempDataDir(), 'hooks.json') },
     hookForwarder: TEST_HOOK_FORWARDER,
+    cli: TEST_CLI_LAUNCHER,
     credentials: createMemoryCredentialStore(),
     // Never asks gh for pull requests unless a test wants it to, with a fake gh.
     pullRequestPollMs: 0,
@@ -88,7 +95,7 @@ export function insertFakeSession(dataDir: string, session: { id: string; hookTo
     migrate(db);
     db.prepare("INSERT INTO sessions (id, harness, hook_token_sha256) VALUES (?, 'claude', ?)").run(
       session.id,
-      hashHookToken(session.hookToken),
+      hashToken(session.hookToken),
     );
   } finally {
     db.close();
