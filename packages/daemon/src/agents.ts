@@ -6,9 +6,10 @@ import { issuePrompt, shortIssueId, type PullRequest } from '@agent-board/tracke
 import { runGit } from './git.ts';
 import { CLAUDE_HOOK_EVENTS, lastMessageAfterHook, stateAfterExit } from './claude-state.ts';
 import { guardCodexConfig, projectCodexConfig, type CodexConfigGuard } from './codex-config-guard.ts';
-import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
+import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
+import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
 import { stateAfterHook } from './harness-state.ts';
-import { hashHookToken, newHookToken } from './hook-ingress.ts';
+import { hashToken, newToken } from './tokens.ts';
 import { isRunningSomething as defaultIsRunningSomething } from './foreground.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { loginShellKind } from './login-path.ts';
@@ -28,7 +29,9 @@ import {
   DEFAULT_REVIEW_CAP,
   INTERRUPT_KEY,
   INTERRUPTIBLE_STATES,
+  isStatusProgress,
   MAX_DESCRIPTION_LENGTH,
+  MAX_STATUS_LENGTH,
   type Agent,
   type AgentRepo,
   type AgentRole,
@@ -136,6 +139,11 @@ export interface AgentHostOptions {
   hookShimPath: string;
   /** Makes sure the launcher is there and runs this app; throws if it can't be written. */
   ensureHookShim(): void;
+  /**
+   * The `agent-board` CLI launcher (ADR-0010), which agents run as their board MCP server (`agent-board mcp`) unless
+   * their zone turns it off. No agent gets the server without it.
+   */
+  boardCliPath?: string;
   /** The environment harness sessions start from. */
   env: NodeJS.ProcessEnv;
   /** The user's shell and its arguments. A login shell (`-l`) also launches the harness, so it gets the profile's PATH. */
@@ -217,6 +225,11 @@ export interface AgentHost {
   setMuted(sessionId: string, muted: boolean): Agent;
   /** Renames the agent's tile. */
   setName(sessionId: string, name: string): Agent;
+  /**
+   * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
+   * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
+   */
+  setStatus(sessionId: string, summary: string, progress: number | null): Agent;
   /** Moves the agent's tile within its zone, into any other, or out onto the board. Only its tile moves. */
   move(sessionId: string, move: TileMove): Agent;
   /** The zone of the agent's own repo that speaks for it (`repoZoneOf`), if any. */
@@ -275,6 +288,8 @@ export interface AgentHost {
    * keep the daemon up or make `daemon.stop` ask (ADR-0002); shutting down ends them with the rest.
    */
   fallbackShellCount(): number;
+  /** The ended agent whose pane dropped into the shell session `sessionId`, if it is one. */
+  fallbackOwner(sessionId: string): string | undefined;
   /** Releases held hooks; call before the database closes. */
   close(): void;
 }
@@ -313,6 +328,10 @@ interface AgentRow extends PositionColumns {
   review_cap: number | null;
   /** 0 for an agent adopted in a folder of the user's, whose worktree and branch deleting it leaves alone. */
   owns_worktree: number;
+  /** Its status (`setStatus`): all null until it sets one. */
+  status_summary: string | null;
+  status_progress: number | null;
+  status_updated_at: string | null;
 }
 
 interface ZoneRow {
@@ -326,6 +345,7 @@ interface ZoneRow {
   clone_repo: string | null;
   folder: string;
   codex_bypass_hook_trust: number;
+  board_mcp: number;
   tracker_provider: string | null;
   created_at: string;
 }
@@ -344,7 +364,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   // In the order they were spawned: a relaunch restarts the session's `created_at`.
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
-  const zoneColumns = 'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, tracker_provider, clone_repo, created_at';
+  const zoneColumns =
+    'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, board_mcp, tracker_provider, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const insert = db.prepare(
@@ -359,6 +380,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
+  const updateStatus = db.prepare(
+    'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ? WHERE session_id = ?',
+  );
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
   const updateTranscript = db.prepare('UPDATE agents SET transcript_path = ? WHERE session_id = ?');
   const transcripts = createTranscriptReader();
@@ -498,6 +522,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           ? 'handing-off'
           : state,
       notice: row.notice,
+      status:
+        row.status_summary === null || row.status_updated_at === null
+          ? null
+          : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at },
       muted: row.muted === 1,
       issue:
         row.issue_provider === null || row.issue_id === null
@@ -534,6 +562,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         createdAt: zone.created_at,
       })),
     );
+
+  /** Whether an agent whose tile is in `zoneId` gets the board MCP server: on unless its zone turned it off. */
+  const boardMcpOn = (zoneId: string | null): boolean =>
+    zoneId === null || (selectZone.get(zoneId) as ZoneRow | undefined)?.board_mcp !== 0;
 
   const get = (sessionId: string): Agent | undefined => {
     const row = getRow(sessionId);
@@ -611,6 +643,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     model: string | null;
     /** The setting of the zone it starts from: Codex starts with `--dangerously-bypass-hook-trust`. */
     bypassHookTrust: boolean;
+    /** The zone its tile is in, whose setting says whether it gets the board MCP server; null for loose. */
+    zoneId: string | null;
     cwd: string;
     worktree: string;
     task?: string;
@@ -619,7 +653,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     size: TerminalSize;
   }): boolean => {
     const { id, harness, cwd, worktree, task } = spec;
-    const token = newHookToken();
+    const token = newToken();
+    const boardCli = options.boardCliPath !== undefined && boardMcpOn(spec.zoneId) ? options.boardCliPath : undefined;
     let harnessCommand: HarnessLaunch;
     if (harness === 'claude') {
       const settings = JSON.stringify(claudeSettings(options.hookUrl(), options.permissionHoldMs));
@@ -630,6 +665,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           id,
           '--settings',
           settings,
+          ...(boardCli === undefined ? [] : ['--mcp-config', JSON.stringify(claudeMcpConfig(boardCli))]),
           ...(spec.model === null ? [] : ['--model', spec.model]),
           ...(task === undefined ? [] : ['--', task]),
         ],
@@ -639,6 +675,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         command: options.codexCommand,
         hookShimPath: options.hookShimPath,
         zoneBypassHookTrust: spec.bypassHookTrust,
+        boardCli,
         model: spec.model ?? undefined,
         cwd,
         worktree,
@@ -661,8 +698,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       args,
       cwd,
       env: sessionEnv(id, env, { [HOOK_TOKEN_ENV]: token, [HOOK_URL_ENV]: options.hookUrl() }),
+      zoneId: spec.zoneId,
       ...spec.size,
-      hookTokenSha256: hashHookToken(token),
+      hookTokenSha256: hashToken(token),
     });
     return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
   };
@@ -698,6 +736,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         harness: row.harness,
         model: row.model,
         bypassHookTrust: bypassHookTrust === 1,
+        zoneId: row.zone_id,
         cwd: row.cwd,
         worktree: row.worktree,
         task: prompt,
@@ -765,7 +804,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (!existsSync(row.cwd)) return;
       const saved = sessions.savedScreen(sessionId);
       const size = saved === undefined ? RELAUNCH_SIZE : { cols: saved.cols, rows: saved.rows };
-      const shell = sessions.createShell({ ...size, cwd: row.cwd, restore: saved === undefined ? '' : `${saved.data}${RESET_MODES}\r\n` });
+      const restore = saved === undefined ? '' : `${saved.data}${RESET_MODES}\r\n`;
+      const shell = sessions.createShell({ ...size, cwd: row.cwd, restore, zoneId: row.zone_id });
       fallbackShells.set(sessionId, shell.id);
       fallbackOwners.set(shell.id, sessionId);
       announce(sessionId);
@@ -907,6 +947,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           harness,
           model,
           bypassHookTrust: bypassHookTrust === 1,
+          zoneId,
           cwd,
           worktree,
           task: task === '' ? undefined : task,
@@ -974,6 +1015,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           harness: implementer.harness,
           model: implementer.model,
           bypassHookTrust: implementer.codex_bypass_hook_trust === 1,
+          zoneId: implementer.zone_id,
           cwd,
           worktree,
           task: prompt,
@@ -1051,6 +1093,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           harness,
           model: null,
           bypassHookTrust: bypassHookTrust === 1,
+          zoneId,
           cwd: at.cwd,
           worktree: at.worktree,
           resume: { codexSessionId },
@@ -1287,6 +1330,22 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
+    setStatus(sessionId, summary, progress) {
+      requireAgent(sessionId);
+      const text = oneLine(summary);
+      if (text === '') throw invalidParams('the status summary must not be blank');
+      if (text.length > MAX_STATUS_LENGTH) {
+        throw invalidParams(`the status summary is ${text.length} characters; at most ${MAX_STATUS_LENGTH}`);
+      }
+      if (progress !== null && !isStatusProgress(progress)) {
+        throw invalidParams('progress must be a whole number from 0 to 100');
+      }
+      updateStatus.run(text, progress, new Date().toISOString(), sessionId);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
     onHook(sessionId, payload, signal) {
       const row = getRow(sessionId);
       // A hook still in flight when the process exited must not revive the ended agent's state.
@@ -1381,6 +1440,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     announce,
 
     fallbackShellCount: () => fallbackShells.size,
+
+    fallbackOwner: (sessionId) => fallbackOwners.get(sessionId),
 
     close: () => {
       closed = true;
@@ -1505,6 +1566,20 @@ export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
   };
 }
 
+/** What the board MCP server is called in a harness's MCP config. */
+const BOARD_MCP_SERVER = 'agent-board';
+
+/** The board env the MCP server needs (ADR-0010). */
+const BOARD_MCP_ENV = [BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_SESSION_ENV, BOARD_ZONE_ENV];
+
+/**
+ * The `claude --mcp-config` that runs the board MCP server, `agent-board mcp` (ADR-0010). Claude starts it with its own
+ * env, which has the board env.
+ */
+function claudeMcpConfig(boardCli: string) {
+  return { mcpServers: { [BOARD_MCP_SERVER]: { type: 'stdio', command: boardCli, args: ['mcp'] } } };
+}
+
 /** A harness executable and its arguments. */
 interface HarnessLaunch {
   command: string;
@@ -1516,6 +1591,8 @@ export interface CodexLaunchOptions {
   hookShimPath: string;
   /** The zone's setting: start with `--dangerously-bypass-hook-trust`. */
   zoneBypassHookTrust: boolean;
+  /** The `agent-board` CLI launcher, to run as the board MCP server (ADR-0010); none without. */
+  boardCli?: string;
   /** Where Codex starts, and the worktree it is in. */
   cwd: string;
   worktree: string;
@@ -1529,8 +1606,8 @@ export interface CodexLaunchOptions {
 
 /**
  * How to start `codex` for an agent (ADR-0004): every hook event as a `-c` override running the forwarder, the
- * `AGENT_BOARD_*` env (hook URL and token) hidden from the model's shell commands, and the hook-trust bypass flag when
- * the zone has it on. Use it for every launch of a Codex agent, a resume included.
+ * `AGENT_BOARD_HOOK_*` env (hook URL and token) hidden from the model's shell commands, the board MCP server
+ * (ADR-0010) when it has `boardCli`, and the hook-trust bypass flag when the zone has it on. Use it for every launch of a Codex agent, a resume included.
  *
  * The flag skips review for every hook in the session, not just ours, and hooks run outside Codex's sandbox. So when
  * the worktree has Codex config of its own where Codex loads it from (the start folder up to the worktree root),
@@ -1543,7 +1620,19 @@ export function codexLaunch(options: CodexLaunchOptions): HarnessLaunch & { proj
     '-c',
     `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=${timeout}}]}]`,
   ]));
-  args.push('-c', 'shell_environment_policy.exclude=["AGENT_BOARD_*"]');
+  // The hook URL and token stay out of the model's shell commands; the board env (ADR-0010) is for them.
+  args.push('-c', `shell_environment_policy.exclude=[${JSON.stringify(`${HOOK_ENV_PREFIX}*`)}]`);
+  if (options.boardCli !== undefined) {
+    // Codex gives an MCP server only a few env vars of its own unless told which others to pass.
+    args.push(
+      '-c',
+      `mcp_servers.${BOARD_MCP_SERVER}.command=${JSON.stringify(options.boardCli)}`,
+      '-c',
+      `mcp_servers.${BOARD_MCP_SERVER}.args=["mcp"]`,
+      '-c',
+      `mcp_servers.${BOARD_MCP_SERVER}.env_vars=${JSON.stringify(BOARD_MCP_ENV)}`,
+    );
+  }
   const projectConfig = projectCodexConfig(options.cwd, options.worktree);
   if (options.zoneBypassHookTrust && projectConfig === undefined) args.push(CODEX_BYPASS_FLAG);
   if (options.model !== undefined) args.push('-m', options.model);

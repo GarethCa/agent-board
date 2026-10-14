@@ -1,11 +1,17 @@
 import { ipcMain, Menu, Notification, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { DaemonLink } from '@agent-board/daemon/client';
+import { installCli } from '@agent-board/daemon/cli-install';
 import type { SetupTool } from '@agent-board/daemon/protocol';
 import { SETUP_IPC } from '../preload/api';
 import { revealWindow } from './background';
 import type { Notifier } from './notifications';
 
-/** Onboarding's IPC: the daemon's CLI checks, and the notification that asks the OS for permission. */
+/**
+ * Onboarding's and Settings' IPC: the daemon's CLI checks, the notification that asks the OS for permission, and
+ * installing the `agent-board` command line.
+ */
 export function registerSetupIpc(daemon: DaemonLink, notify: Notifier): void {
   ipcMain.handle(SETUP_IPC.check, (_event, tool: SetupTool) => daemon.call('setup.check', { tool }));
   ipcMain.handle(SETUP_IPC.testNotification, () => {
@@ -13,6 +19,11 @@ export function registerSetupIpc(daemon: DaemonLink, notify: Notifier): void {
     if (!process.env.AGENT_BOARD_FAKE_NOTIFICATIONS && !Notification.isSupported()) return { shown: false };
     notify({ title: 'Test notification', body: 'agent-board will tell you like this when an agent needs you.' }, () => {});
     return { shown: true };
+  });
+  ipcMain.handle(SETUP_IPC.installCli, async () => {
+    const { cliPath } = await daemon.call('daemon.health');
+    if (cliPath === null) throw new Error('the daemon has no agent-board command line to link');
+    return installCli(cliPath, join(homedir(), '.local', 'bin'));
   });
 }
 

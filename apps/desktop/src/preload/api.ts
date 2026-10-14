@@ -212,7 +212,7 @@ export interface ZonesApi {
   /** Moves and resizes a zone. */
   update(id: string, layout: ZoneLayout): Promise<Zone>;
   /** Changes a zone's settings. */
-  configure(id: string, settings: ZoneSettings): Promise<Zone>;
+  configure(id: string, settings: Partial<ZoneSettings>): Promise<Zone>;
   /** Binds the zone to a tracker team, or unbinds it with null. */
   setTracker(id: string, tracker: ZoneTracker | null): Promise<Zone>;
   /** Unbinds the zone back into a group: no repo, tracker or default repo. Its agents keep their own repos. */
@@ -708,6 +708,7 @@ export const SETUP_IPC = {
   /** Main to the board: the app menu's Help › Getting started was picked; take the request with `takeGettingStarted`. */
   gettingStarted: 'setup:gettingStarted',
   takeGettingStarted: 'setup:takeGettingStarted',
+  installCli: 'setup:installCli',
 } as const;
 
 /** What first-run onboarding checks and sets up. */
@@ -721,6 +722,11 @@ export interface SetupApi {
   testNotification(): Promise<{ shown: boolean }>;
   /** Calls `listener` when the app menu's Help › Getting started is picked. Returns the function that stops it. */
   onGettingStarted(listener: () => void): () => void;
+  /**
+   * Links the `agent-board` CLI into `~/.local/bin` (ADR-0010), for terminals outside the app, and resolves with the
+   * link's path. Fails when the daemon wrote no CLI, or a file of someone else's is in the way.
+   */
+  installCli(): Promise<string>;
 }
 
 /** What the preload exposes to the renderer as `window.agentBoard`. */

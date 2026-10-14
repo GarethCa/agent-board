@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { hashHookToken, startHookIngress } from '../src/hook-ingress.ts';
+import { startHookIngress } from '../src/hook-ingress.ts';
+import { hashToken } from '../src/tokens.ts';
 import type { DaemonEvent } from '../src/protocol.ts';
 import { connectTestClient, insertFakeSession, startTestDaemon, tempDataDir } from './helpers.ts';
 
@@ -92,7 +93,7 @@ describe('hook ingress', () => {
   describe('replies', () => {
     async function ingress(onHook: Parameters<typeof startHookIngress>[0]['onHook']) {
       const started = await startHookIngress({
-        sessionForToken: (hash) => (hash === hashHookToken('secret-token') ? 'session-1' : undefined),
+        sessionForToken: (hash) => (hash === hashToken('secret-token') ? 'session-1' : undefined),
         onHook,
       });
       onTestFinished(() => started.close());

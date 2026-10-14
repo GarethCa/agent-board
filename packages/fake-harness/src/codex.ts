@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { hasFlag, listFlag, parseArgs, stringFlag, type FlagSpec } from './args.ts';
 import { ConfigError, mergeHooks, readHooksFile, validateMatchers, type HooksConfig, type MatcherGroup } from './hooks.ts';
+import { codexMcpServers } from './mcp.ts';
 import { parseTomlValue } from './toml.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
 import { toolOutput, type ConversationMessage, type Invocation, type Transcript } from './session.ts';
@@ -51,10 +52,11 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
   const model = stringFlag(args, '-m', '--model') ?? 'gpt-5-codex';
   const warnings: string[] = [];
 
+  const overrides = configOverrides(listFlag(args, '-c', '--config'));
   let hooks = mergeHooks(
     readHooksFile(join(codexHome, 'hooks.json')),
     readHooksFile(join(gitRoot(cwd), '.codex', 'hooks.json')),
-    configOverrideHooks(listFlag(args, '-c', '--config')),
+    configOverrideHooks(overrides),
   );
   validateMatchers(hooks, 'regex');
   const hookCount = Object.values(hooks).flatMap((groups) => groups ?? []).length;
@@ -93,27 +95,53 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
       permissionModeEvents: PERMISSION_MODE_EVENTS,
       subagentToolName: 'spawn_agent',
       shellToolName: 'Bash',
+      mcpServers: codexMcpServers(overrides, env),
+      shellEnv: shellEnvironment(env, overrides),
       sessionEndReason: 'other',
     },
   };
 }
 
-/**
- * The hooks in `-c key=value` overrides. Like Codex, a value that isn't TOML is taken as a plain string; the fake only
- * uses `hooks.<Event>` keys and ignores the rest.
- */
-function configOverrideHooks(overrides: string[]): HooksConfig {
-  const hooks: HooksConfig = {};
-  for (const override of overrides) {
+/** `-c key=value` overrides as keys and values. Like Codex, a value that isn't TOML is taken as a plain string. */
+function configOverrides(overrides: string[]): [string, unknown][] {
+  return overrides.map((override) => {
     const eq = override.indexOf('=');
     if (eq <= 0) throw new ConfigError(`-c ${override}: expected key=value`);
-    const event = /^hooks\.(\w+)$/.exec(override.slice(0, eq).trim())?.[1];
+    const raw = override.slice(eq + 1);
+    let value: unknown;
+    try {
+      value = parseTomlValue(raw);
+    } catch {
+      value = raw;
+    }
+    return [override.slice(0, eq).trim(), value];
+  });
+}
+
+/** The hooks in the overrides' `hooks.<Event>` keys. */
+function configOverrideHooks(overrides: [string, unknown][]): HooksConfig {
+  const hooks: HooksConfig = {};
+  for (const [key, groups] of overrides) {
+    const event = /^hooks\.(\w+)$/.exec(key)?.[1];
     if (event === undefined) continue;
-    const groups = parseTomlValue(override.slice(eq + 1));
-    if (!isMatcherGroups(groups)) throw new ConfigError(`-c ${override}: expected an array of {hooks=[…]} groups`);
+    if (!isMatcherGroups(groups)) throw new ConfigError(`-c ${key}: expected an array of {hooks=[…]} groups`);
     hooks[event] = groups;
   }
   return hooks;
+}
+
+/**
+ * The env the model's shell commands get, as Codex's `shell_environment_policy` filters it: first its default excludes
+ * (any var whose name has KEY, SECRET or TOKEN in it) unless `ignore_default_excludes` is true, then the vars
+ * `exclude` matches (case-insensitive globs, `*` and `?`).
+ */
+function shellEnvironment(env: NodeJS.ProcessEnv, overrides: [string, unknown][]): NodeJS.ProcessEnv {
+  const setting = (name: string) => overrides.filter(([key]) => key === `shell_environment_policy.${name}`).at(-1)?.[1];
+  const exclude = setting('exclude') ?? [];
+  if (!Array.isArray(exclude)) throw new ConfigError('shell_environment_policy.exclude: expected an array of patterns');
+  const patterns = exclude.map((glob) => new RegExp(`^${String(glob).replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.')}$`, 'i'));
+  if (setting('ignore_default_excludes') !== true) patterns.push(/KEY|SECRET|TOKEN/i);
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !patterns.some((pattern) => pattern.test(name))));
 }
 
 function isMatcherGroups(value: unknown): value is MatcherGroup[] {

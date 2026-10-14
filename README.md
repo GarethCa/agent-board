@@ -87,6 +87,36 @@ An **edge** carries one agent's work to another when the first finishes. Hover a
 
 **Send to implementer** hands the doc back as the agent's next message; **Start round 2** reviews the fixes (up to 3 rounds unless you change the cap), with findings the new round sees fixed struck through; **Approve and merge** squash-merges the agent's pull request once the latest round approves with no open blocker and the checks pass. The loop is implementer, reviewer, implementer again, until the doc approves.
 
+### Agents that know the board
+
+Every agent agent-board starts is told one thing: it is on agent-board, and `agent-board --help` says the rest. That help is the whole manual (zones, tiles, edges, refs and commands), so nothing long is pasted into the agent's prompt and it costs no tokens until the agent asks. Two doors lead to the same place:
+
+- **The `agent-board` command line.** Inside a session it is already on the `PATH`. For your own terminals, **Settings › Command line › Install command-line tool** links it into `~/.local/bin`. It reads the board (`tree`, `zones`, `agents`, `shells`, `edges`, `show <ref>`), and an agent uses it to set its own one-line status, which its tile shows in place of the task. Read commands take `--json`.
+- **The board MCP server.** `agent-board mcp` is a small stdio MCP server that Claude and Codex are started with, giving them `whoami`, `board`, `connections` and `set_status` tools. It is on by default; a zone's ⋯ menu has **Turn off board MCP** for agents started there afterwards (the command line stays).
+
+Things are named by short refs such as `zone:cd62` or `agent:22a7`, the first characters of their ids, like git's short hashes. A name works too. An agent sees the board, but it cannot approve another agent's permission prompt, type into a terminal or change a setting ([ADR-0010](docs/adr/0010-board-cli-and-mcp.md)).
+
+This is a real run against the fake `claude` the tests use, with a zone and two agents:
+
+```console
+$ agent-board tree
+zone:cd62  web-app  (repo ~/code/web-app)
+  agent:22a7  Fix the failing login test  [waiting]  task: Fix the failing login test
+  agent:e91b  Add dark mode to settings  [waiting]  task: Add dark mode to settings
+
+$ agent-board show agent:22a7
+agent:22a7  Fix the failing login test
+  state      waiting
+  status     not set
+  task       Fix the failing login test
+  harness    claude
+  zone       (in zone:cd62 web-app)
+  repo       ~/code/web-app
+  branch     fix-the-failing-login-test-0a409e
+  worktree   ~/.agent-board/worktrees/web-app-4c737128/fix-the-failing-login-test-0a409e
+  last said  All tests pass.
+```
+
 ### Chat view
 
 Switch a session window from **Terminal** to **Chat** to read the agent's conversation from its transcript: its messages, each tool call as one line that opens to show what went in and how it went, and its subagents' messages. It grows live as the agent works.
@@ -215,6 +245,7 @@ The rest of the decisions are in [`docs/adr/`](docs/adr):
 - [The terminal backend seam](docs/adr/0006-terminal-backends.md)
 - [The in-repo design system](docs/adr/0008-design-system.md)
 - [Approving what edge conditions run](docs/adr/0009-edge-condition-approvals.md)
+- [The board CLI and MCP](docs/adr/0010-board-cli-and-mcp.md)
 
 The domain vocabulary (zone, tile, session, harness, edge…) is in [`CONTEXT.md`](CONTEXT.md).
 

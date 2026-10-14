@@ -95,6 +95,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  status: null,
   ...EXTRAS[state],
 });
 

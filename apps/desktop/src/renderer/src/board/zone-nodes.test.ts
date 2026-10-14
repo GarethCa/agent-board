@@ -15,6 +15,7 @@ const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
   width: 720,
   height: 480,
   codexBypassHookTrust: true,
+  boardMcp: true,
   tracker: null,
   clone: null,
   defaultRepo: null,

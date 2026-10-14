@@ -1358,7 +1358,7 @@ describe('Codex agents', () => {
     expect(await client.call('session.list')).toEqual([expect.objectContaining({ id: agent.sessionId, harness: 'codex' })]);
     const command = await commandLine(client, agent.sessionId);
     expect(command).toContain('--dangerously-bypass-hook-trust');
-    expect(command).toContain('shell_environment_policy.exclude=["AGENT_BOARD_*"]');
+    expect(command).toContain('shell_environment_policy.exclude=["AGENT_BOARD_HOOK_*"]');
     expect(command).not.toMatch(/AGENT_BOARD_HOOK_TOKEN|Bearer/);
 
     await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.event === 'Stop');

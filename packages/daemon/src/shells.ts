@@ -144,7 +144,7 @@ export function createShellHost(options: {
     return announce(get(id));
   };
 
-  const newPane = (cwd: string): SessionInfo => sessions.createShell({ ...INITIAL_SIZE, cwd });
+  const newPane = (cwd: string, zoneId: string | null): SessionInfo => sessions.createShell({ ...INITIAL_SIZE, cwd, zoneId });
 
   /** Where a shell made in the zone starts: its folder, or an unbound zone's default repo, else home. */
   const folderOf = (zoneId: string | null): string => {
@@ -193,7 +193,7 @@ export function createShellHost(options: {
         const place = optionalPlaceParam(fields);
         if (zoneId === null && place === undefined) throw invalidParams('a loose shell needs a position');
         const cwd = folderOf(zoneId);
-        const pane = newPane(cwd);
+        const pane = newPane(cwd, zoneId);
         try {
           return announce(get(insertShell(pane, zoneId, cwd, place)));
         } catch (error) {
@@ -244,7 +244,7 @@ export function createShellHost(options: {
         return queue(shellId, async () => {
           const shell = get(shellId);
           if (!paneIds(shell.layout).includes(sessionId)) throw invalidParams(`no pane ${sessionId} in shell ${shellId}`);
-          const pane = newPane(cwd ?? shell.cwd);
+          const pane = newPane(cwd ?? shell.cwd, shell.zoneId);
           try {
             return save(shellId, splitPane(shell.layout, sessionId, direction, pane.id, randomUUID()));
           } catch (error) {
@@ -287,7 +287,7 @@ export function createShellHost(options: {
           const restore = `${saved === undefined ? '' : `${saved.data}${RESET_MODES}\r\n`}${marker}`;
           // Laid out as it was saved, so wide output doesn't wrap until the window sizes the pane.
           const size = saved === undefined ? INITIAL_SIZE : { cols: saved.cols, rows: saved.rows };
-          sessions.createShell({ ...size, cwd, id: sessionId, restore });
+          sessions.createShell({ ...size, cwd, id: sessionId, restore, zoneId: shell.zoneId });
           log(`resumed pane ${sessionId} of shell ${shellId} in ${cwd}`);
           return announce(get(shellId));
         });

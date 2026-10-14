@@ -1,11 +1,10 @@
 import { parseArgs } from 'node:util';
-import { cliBanner } from './cli-banner.ts';
-import { startDaemon } from './daemon.ts';
+import { BOARD_COMMANDS, runBoardCommand } from './board-cli.ts';
 import { runHookCommand } from './hook-forwarder.ts';
-import { DaemonAlreadyRunningError } from './lock.ts';
 import { describeBuild, runningSessions, type BuildInfo } from './protocol.ts';
 import { stopDaemon } from './stop.ts';
 
+/** The app's own commands; `agent-board --help` documents the rest, the board's. */
 export const USAGE = [
   'usage: agent-board daemon --data-dir <dir> [--idle-timeout-ms <ms>] [--permission-hold-ms <ms>]',
   '       agent-board stop --data-dir <dir> [--force]',
@@ -24,21 +23,28 @@ export interface AgentBoardCliOptions {
 }
 
 /**
- * The `agent-board` command line: `daemon`; `stop`, which stops the daemon on a data dir; and `hook`, the forwarder
- * Codex's hooks and the external hooks run (see `hook-forwarder.ts`). Resolves to the exit code: 0 when the daemon went idle or was
+ * The `agent-board` command line: the board's commands for agents and people (`board-cli.ts`, ADR-0010); `daemon`;
+ * `stop`, which stops the daemon on a data dir; and `hook`, the forwarder Codex's hooks and the external hooks run
+ * (see `hook-forwarder.ts`). Resolves to the exit code: 0 when the daemon went idle or was
  * signalled, or when another daemon already owns the data dir (a launcher that lost a start race is not an error);
  * 0 when `stop` stopped the daemon or none was running, `EXIT_SESSIONS_LIVE` when it refused to end live sessions;
  * 1 when the daemon could not start or stop; 2 on bad arguments.
  */
 export async function runAgentBoardCli(argv: string[], options: AgentBoardCliOptions = {}): Promise<number> {
   const [command, ...args] = argv;
+  if (command === undefined || command === '--help' || command === '-h') return runBoardCommand('help', []);
+  if (BOARD_COMMANDS.has(command)) return runBoardCommand(command, args);
   if (command === 'hook' && args.length === 1 && args[0] === 'codex') return runHookCommand(args);
   if (command === 'hook' && args.length === 2 && args[0] === 'external' && (args[1] === 'claude' || args[1] === 'codex')) {
     return runHookCommand(args);
   }
   if (command === 'stop') return runStopCommand(args);
-  if (command !== 'daemon') {
+  if (command === 'hook') {
     console.error(USAGE);
+    return 2;
+  }
+  if (command !== 'daemon') {
+    console.error(`agent-board: no command ${command}. \`agent-board --help\` lists them.`);
     return 2;
   }
   let values: { 'data-dir'?: string; 'idle-timeout-ms'?: string; 'permission-hold-ms'?: string };
@@ -66,6 +72,10 @@ export async function runAgentBoardCli(argv: string[], options: AgentBoardCliOpt
     return 2;
   }
 
+  // Loaded only to run the daemon: the board commands start often, and need none of it.
+  const { startDaemon } = await import('./daemon.ts');
+  const { DaemonAlreadyRunningError } = await import('./lock.ts');
+  const { cliBanner } = await import('./cli-banner.ts');
   let daemon;
   try {
     daemon = await startDaemon({

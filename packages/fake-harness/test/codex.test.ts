@@ -299,3 +299,40 @@ describe('fake codex -c overrides', () => {
     expect(badHooks.code).toBe(2);
   });
 });
+
+describe('codex MCP servers and the model shell', () => {
+  const server = join(import.meta.dirname, 'fixtures', 'mcp', 'echo-server.mjs');
+
+  it('starts a -c mcp_servers server with only the env vars it names, and hides excluded vars from shell commands', async () => {
+    const result = await runFake('codex', {
+      scenario: 'board',
+      args: [
+        '-c', `mcp_servers.agent-board.command=${JSON.stringify(process.execPath)}`,
+        '-c', `mcp_servers.agent-board.args=[${JSON.stringify(server)}]`,
+        '-c', 'mcp_servers.agent-board.env_vars=["BOARD_VISIBLE"]',
+        '-c', 'shell_environment_policy.exclude=["AGENT_BOARD_HOOK_*"]',
+        'Map the board',
+      ],
+      env: { BOARD_VISIBLE: 'yes', SECRET: 'hidden', AGENT_BOARD_HOOK_TOKEN: 'hook-secret', AGENT_BOARD_HOOK_URL: 'http://hooks' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('The board says: You are on the echo board.');
+    expect(result.stdout).toContain('whoami {} env:yes|-');
+    expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} env:yes|-');
+    expect(result.stdout).toContain('hook env: none none');
+  });
+
+  it('keeps vars named like keys, secrets and tokens from shell commands by default, as Codex does', async () => {
+    const env = { AGENT_BOARD_HOOK_TOKEN: 'hook-secret', AGENT_BOARD_HOOK_URL: 'http://hooks' };
+    expect((await runFake('codex', { scenario: 'board', args: ['Look around'], env })).stdout).toContain('hook env: none http://hooks');
+
+    const ignoring = await runFake('codex', {
+      scenario: 'board',
+      args: ['-c', 'shell_environment_policy.ignore_default_excludes=true', 'Look around'],
+      env,
+    });
+    expect(ignoring.stdout).toContain('There is no agent-board MCP server here.');
+    expect(ignoring.stdout).toContain('hook env: hook-secret http://hooks');
+  });
+});

@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import xtermHeadless from '@xterm/headless';
 import xtermSerialize from '@xterm/addon-serialize';
-import { hashHookToken, newHookToken } from './hook-ingress.ts';
+import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
+import { hashToken, newToken } from './tokens.ts';
 import { createCwdLookup } from './cwd-lookup.ts';
 import { processCwd } from './process-cwd.ts';
 import {
@@ -87,6 +88,11 @@ export interface SessionHostOptions {
   processCwd?(pid: number): Promise<string | undefined>;
   /** Called when a shell session is found in another folder than it was last seen in. */
   onCwd?(sessionId: string): void;
+  /**
+   * Hands every session the board env (ADR-0010): the daemon's socket, a board token of its own, its zone, and the
+   * `agent-board` CLI's folder first on its PATH. None without it.
+   */
+  board?: { socketPath: string; cliDir: string };
 }
 
 /** A session to start: a process in a terminal, and what its row records. */
@@ -102,6 +108,8 @@ export interface SessionSpec extends TerminalSize {
   hookTokenSha256: string;
   /** Output the session's terminal shows before its process's own, e.g. the scrollback of a pane it restores. */
   restore?: string;
+  /** The zone its tile is in as it starts, for its board env; null or absent for none. */
+  zoneId?: string | null;
 }
 
 /**
@@ -136,7 +144,7 @@ export interface SessionHost {
    * Starts a shell session: a new one, or with `id`, an ended one again (a pane being resumed), showing `restore`
    * above its new output.
    */
-  createShell(params: CreateShellParams & { id?: string; restore?: string }): SessionInfo;
+  createShell(params: CreateShellParams & { id?: string; restore?: string; zoneId?: string | null }): SessionInfo;
   /**
    * Starts a session and records it. A session that has ended may be started again under its id, e.g. to relaunch an
    * agent: its row is reused, live again. Throws if the process can't be started, or the id is still live.
@@ -172,6 +180,8 @@ export interface SessionHost {
   folderOf(sessionId: string): Promise<string>;
   /** What the session's terminal last showed, as saved: its scrollback and screen, serialized, and its size. */
   savedScreen(sessionId: string): SavedScreen | undefined;
+  /** The live session holding the board token, if any (ADR-0010). */
+  sessionForBoardToken(token: string): string | undefined;
 }
 
 /**
@@ -229,6 +239,8 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   const screenFile = (sessionId: string) => join(scrollbackDir!, `${sessionId}.json`);
   /** Sessions the user (or the daemon, on their behalf) is ending, which a shutdown then doesn't count as its doing. */
   const killing = new Set<string>();
+  /** Live sessions by the SHA-256 of their board token. Only in memory: a session can't outlive the daemon. */
+  const boardTokens = new Map<string, string>();
   /** Sessions the daemon is ending because it is going away: they are stopped by restart. */
   const stoppedByShutdown = new Set<string>();
 
@@ -393,7 +405,9 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     if (!isAbsolute(cwd)) throw new Error(`the working directory must be an absolute path: ${cwd}`);
     if (!isDirectory(cwd)) throw new Error(`not a directory: ${cwd}`);
     if (sessions.has(id) || exiting.has(id)) throw new Error(`session ${id} is still live`);
-    const terminal = backend.spawn({ id, command: spec.command, args: spec.args, cwd, env: spec.env, cols, rows });
+    const boardToken = options.board === undefined ? undefined : newToken();
+    const env = boardToken === undefined ? spec.env : withBoardEnv(spec.env, options.board!, boardToken, spec.zoneId ?? null);
+    const terminal = backend.spawn({ id, command: spec.command, args: spec.args, cwd, env, cols, rows });
     const createdAt = new Date().toISOString();
     try {
       upsert.run(id, harness, spec.hookTokenSha256, cwd, createdAt);
@@ -401,6 +415,8 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       backend.kill(id, 'SIGKILL');
       throw error;
     }
+    const boardTokenSha256 = boardToken === undefined ? undefined : hashToken(boardToken);
+    if (boardTokenSha256 !== undefined) boardTokens.set(boardTokenSha256, id);
 
     const model = new xtermHeadless.Terminal({ cols, rows, scrollback: SCROLLBACK_LINES, allowProposedApi: true });
     const serializer = new xtermSerialize.SerializeAddon();
@@ -461,6 +477,7 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         };
         killing.delete(id);
         stoppedByShutdown.delete(id);
+        if (boardTokenSha256 !== undefined) boardTokens.delete(boardTokenSha256);
         session.info = ended;
         markEnded.run(ended.endedAt, ended.exitCode, ended.stoppedByRestart ? 1 : 0, id);
         options.onExit?.(ended);
@@ -480,12 +497,14 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   }
 
   return {
-    createShell({ cols, rows, cwd = options.homeDir ?? homedir(), id = randomUUID(), restore }) {
+    createShell({ cols, rows, cwd = options.homeDir ?? homedir(), id = randomUUID(), restore, zoneId }) {
       // Shell sessions get no harness hooks, but every row carries a token; this one is never handed out.
-      const hookTokenSha256 = hashHookToken(newHookToken());
+      const hookTokenSha256 = hashToken(newToken());
       const { shell: command, shellArgs: args } = options;
-      return start({ id, harness: null, command, args, cwd, env: sessionEnv(id), cols, rows, hookTokenSha256, restore });
+      return start({ id, harness: null, command, args, cwd, env: sessionEnv(id), cols, rows, hookTokenSha256, restore, zoneId });
     },
+
+    sessionForBoardToken: (token) => boardTokens.get(hashToken(token)),
 
     start,
 
@@ -581,8 +600,25 @@ export function sessionEnv(
   const env = childEnv(base);
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
-  env.AGENT_BOARD_SESSION_ID = sessionId;
+  env[BOARD_SESSION_ENV] = sessionId;
   return Object.assign(env, extra);
+}
+
+/**
+ * `env` with the board env added (ADR-0010): the socket, the session's board token, its zone if it has one, and the
+ * CLI's folder first on PATH.
+ */
+function withBoardEnv(
+  env: Record<string, string>,
+  board: { socketPath: string; cliDir: string },
+  token: string,
+  zoneId: string | null,
+): Record<string, string> {
+  const next: Record<string, string> = { ...env, [BOARD_SOCKET_ENV]: board.socketPath, [BOARD_TOKEN_ENV]: token };
+  if (zoneId === null) delete next[BOARD_ZONE_ENV];
+  else next[BOARD_ZONE_ENV] = zoneId;
+  next.PATH = env.PATH ? `${board.cliDir}${delimiter}${env.PATH}` : board.cliDir;
+  return next;
 }
 
 function exitCode(exit: TerminalExit): number | null {

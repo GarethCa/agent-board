@@ -4,6 +4,7 @@ import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { daemonStatusText, type DaemonStatusValue } from '../DaemonStatus';
 import { Choice, Choices, Fieldset, Hint, SectionLabel, Tag } from '../ui';
 import { AppearanceSetting } from './AppearanceSetting';
+import { CliInstallSetting } from './CliInstallSetting';
 
 export interface SettingsProps {
   status: DaemonStatusValue;
@@ -16,7 +17,7 @@ export interface SettingsProps {
 
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
- * Dark), what a double-click on a tile opens, and the daemon's status.
+ * Dark), what a double-click on a tile opens, installing the command line, and the daemon's status.
  */
 export function Settings({ status, onError, clickOpens, onClickOpens }: SettingsProps) {
   return (
@@ -48,6 +49,7 @@ export function Settings({ status, onError, clickOpens, onClickOpens }: Settings
           />
         </Choices>
       </Fieldset>
+      <CliInstallSetting onError={onError} />
       <Hint data-testid="daemon-details">{daemonStatusText(status)}</Hint>
     </div>
   );

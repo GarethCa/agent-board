@@ -32,6 +32,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  status: null,
   ...fields,
 });
 

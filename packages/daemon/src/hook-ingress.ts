@@ -1,21 +1,12 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { HookReply } from './permissions.ts';
 import type { Harness } from './protocol.ts';
+import { hashToken } from './tokens.ts';
 
 /** Largest hook body accepted. Hook payloads are small; transcripts travel by path, not inline. */
 const MAX_BODY_BYTES = 1024 * 1024;
-
-/** A new per-session token, handed to the session in its environment. */
-export function newHookToken(): string {
-  return randomBytes(32).toString('base64url');
-}
-
-/** What the database stores in place of the token. */
-export function hashHookToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
-}
 
 export interface HookIngressOptions {
   /** The live session whose token hashes to `tokenSha256`, if any. */
@@ -94,7 +85,7 @@ export async function startHookIngress(options: HookIngressOptions): Promise<Hoo
 
   /** An agent's hooks, if `token` is a live session's. */
   const sessionHandler = (token: string): HookHandler | undefined => {
-    const sessionId = options.sessionForToken(hashHookToken(token));
+    const sessionId = options.sessionForToken(hashToken(token));
     if (sessionId === undefined) return undefined;
     return (payload, signal) => options.onHook(sessionId, payload.hook_event_name, payload, signal);
   };
@@ -102,7 +93,7 @@ export async function startHookIngress(options: HookIngressOptions): Promise<Hoo
   /** External sessions' hooks for `harness`, if `token` is the external hook token. */
   const externalHandler = (token: string, harness: Harness): HookHandler | undefined => {
     const { externalTokenSha256: expected, onExternalHook } = options;
-    if (expected === undefined || onExternalHook === undefined || !sameHash(hashHookToken(token), expected)) return undefined;
+    if (expected === undefined || onExternalHook === undefined || !sameHash(hashToken(token), expected)) return undefined;
     return (payload) => {
       if (typeof payload.session_id !== 'string') throw new RefusedHook('hook body must have a session_id');
       onExternalHook(harness, payload);
