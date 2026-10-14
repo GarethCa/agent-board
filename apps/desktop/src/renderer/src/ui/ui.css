@@ -1,0 +1,1558 @@
+/*
+ * The design system's primitives (ui/*.tsx): the Soft workbench look. Every value comes from tokens.css, and every
+ * colour through a role token, so a control in the dark session window ([data-surface='window']) is the same control.
+ *
+ * Every interactive primitive has the same states: hover, active (pressed), focus-visible (one ring), disabled and,
+ * where it does work, loading (aria-busy). `data-preview` holds a control in one of the pointer and focus states, so
+ * the component gallery can show each one still (main.tsx, #gallery).
+ */
+
+/* Every primitive sizes by its border box, so a full-width field fits its column. */
+[class^='ui-'],
+[class*=' ui-'],
+[class^='ui-']::before,
+[class^='ui-']::after,
+[class*=' ui-']::before,
+[class*=' ui-']::after {
+  box-sizing: border-box;
+}
+
+/* Buttons */
+
+.ui-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1-5);
+  height: var(--control-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-control);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.ui-button svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-button[data-size='sm'] {
+  gap: var(--space-1-25);
+  height: var(--control-sm);
+  padding: 0 var(--space-2-25);
+  border-radius: var(--radius-item);
+  font-size: var(--font-size-sm);
+}
+
+.ui-button[data-size='lg'] {
+  gap: var(--space-2);
+  height: var(--control-lg);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-xl);
+  font-size: var(--font-size-lg);
+}
+
+.ui-button[data-size='xs'] {
+  gap: var(--space-1);
+  height: var(--control-xs);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+}
+
+.ui-button[data-size='xs'] svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ui-button:is(:hover, [data-preview='hover']):not(:disabled, [aria-disabled='true']) {
+  background: var(--hover);
+}
+
+.ui-button:is(:active, [data-preview='active']):not(:disabled, [aria-disabled='true']) {
+  background: var(--pressed);
+}
+
+.ui-button:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ui-button[data-variant='primary'] {
+  border-color: var(--primary-edge);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-primary);
+}
+
+.ui-button[data-variant='primary']:is(:hover, :active, [data-preview='hover'], [data-preview='active']):not(:disabled, [aria-disabled='true']) {
+  background: var(--primary-hover);
+}
+
+.ui-button[data-variant='ghost'] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.ui-button[data-variant='danger'] {
+  border-color: var(--danger-edge);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ui-button[data-variant='danger']:is(:hover, [data-preview='hover']):not(:disabled, [aria-disabled='true']) {
+  border-color: var(--danger);
+}
+
+.ui-button[data-variant='danger']:is(:active, [data-preview='active']):not(:disabled, [aria-disabled='true']) {
+  background: var(--danger-edge);
+}
+
+.ui-button:disabled:not([aria-busy='true']),
+.ui-button[aria-disabled='true'] {
+  border-color: var(--disabled-edge);
+  background: var(--disabled);
+  color: var(--disabled-ink);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.ui-button[data-variant='ghost']:disabled:not([aria-busy='true']) {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* A toggle button while it is on, such as an armed tool or a style in use: it stays on under the pointer. */
+.ui-button[aria-pressed='true']:not(:disabled, [aria-disabled='true']) {
+  background: var(--toggle-on);
+  color: var(--toggle-on-ink);
+}
+
+.ui-button[data-variant='secondary'][aria-pressed='true']:not(:disabled, [aria-disabled='true']) {
+  border-color: var(--accent);
+}
+
+/* Loading: the label stays, so the layout holds still, and the button keeps its variant's look rather than greying. */
+.ui-button[aria-busy='true'] {
+  cursor: progress;
+}
+
+.ui-icon-button {
+  width: var(--control-md);
+  padding: 0;
+}
+
+.ui-icon-button svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.ui-icon-button[data-size='sm'] {
+  width: var(--control-sm);
+  padding: 0;
+}
+
+.ui-icon-button[data-size='sm'] svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-icon-button[data-size='xs'] {
+  width: var(--control-xs);
+  padding: 0;
+}
+
+/* A toggle icon button, such as a mute bell, while it is on. */
+.ui-icon-button[aria-pressed='true'] {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ui-spinner {
+  animation: ui-spin var(--motion-spin) var(--ease-linear) infinite;
+}
+
+@keyframes ui-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+/* Chips: small labels that open something. --chip, --chip-ink and --chip-edge colour one by its data. */
+
+.ui-chip {
+  --chip: var(--tag);
+  --chip-ink: var(--text-soft);
+  --chip-edge: transparent;
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--size-chip);
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--chip-edge);
+  border-radius: var(--radius-sm);
+  background: var(--chip);
+  color: var(--chip-ink);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) var(--ease-out);
+}
+
+.ui-chip svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ui-chip[data-mono='true'] {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+}
+
+.ui-chip[data-tone='accent'] {
+  --chip: var(--accent-soft);
+  --chip-ink: var(--accent-strong);
+}
+
+.ui-chip:is(:hover, [data-preview='hover']):not([aria-disabled='true']) {
+  border-color: color-mix(in srgb, var(--chip-ink) 45%, transparent);
+}
+
+.ui-chip:is(:active, [data-preview='active']):not([aria-disabled='true']) {
+  border-color: var(--chip-ink);
+}
+
+.ui-chip:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ui-chip[aria-disabled='true'] {
+  --chip: var(--disabled);
+  --chip-ink: var(--disabled-ink);
+
+  cursor: not-allowed;
+}
+
+/* Forms */
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ui-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-25);
+}
+
+.ui-field-name {
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.ui-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ui-fieldset > legend {
+  margin-bottom: var(--space-1-5);
+  padding: 0;
+}
+
+.ui-hint,
+.ui-error {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.ui-hint {
+  color: var(--muted);
+}
+
+.ui-error {
+  color: var(--danger);
+}
+
+.ui-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-md);
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-input);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-regular);
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.ui-input[data-size='sm'] {
+  height: var(--control-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-item);
+  font-size: var(--font-size-sm);
+}
+
+.ui-input::placeholder {
+  color: var(--placeholder);
+}
+
+.ui-input:is(:hover, [data-preview='hover']):not(:disabled, :focus) {
+  border-color: var(--check-edge);
+}
+
+.ui-input:is(:focus, [data-preview='focus']) {
+  border-color: var(--focus-edge);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.ui-input:disabled {
+  border-color: var(--disabled-edge);
+  background: var(--disabled);
+  color: var(--disabled-ink);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.ui-input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.ui-textarea {
+  height: auto;
+  padding: var(--space-2) var(--space-2-5);
+  line-height: var(--leading-body);
+  resize: vertical;
+}
+
+.ui-input-wrap,
+.ui-select-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ui-input-icon {
+  position: absolute;
+  left: var(--space-2-5);
+  display: flex;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.ui-input-icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-input[data-icon='true'] {
+  padding-left: var(--space-8);
+}
+
+.ui-select {
+  padding-right: var(--space-8);
+  appearance: none;
+  cursor: pointer;
+}
+
+.ui-select-chevron {
+  position: absolute;
+  right: var(--space-2-5);
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.ui-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-regular);
+  cursor: pointer;
+}
+
+.ui-check:has(:disabled) {
+  color: var(--disabled-ink);
+  cursor: not-allowed;
+}
+
+.ui-checkbox,
+.ui-radio,
+.ui-switch {
+  display: inline-grid;
+  flex: none;
+  place-content: center;
+  margin: 0;
+  border: 1.5px solid var(--check-edge);
+  background: var(--raised);
+  appearance: none;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.ui-checkbox,
+.ui-radio {
+  width: var(--size-check);
+  height: var(--size-check);
+}
+
+.ui-checkbox {
+  border-radius: var(--radius-key);
+}
+
+.ui-radio {
+  border-radius: var(--radius-pill);
+}
+
+.ui-checkbox:is(:hover, [data-preview='hover']):not(:disabled, :checked),
+.ui-radio:is(:hover, [data-preview='hover']):not(:disabled, :checked) {
+  border-color: var(--muted);
+}
+
+.ui-checkbox:is(:active, [data-preview='active']):not(:disabled),
+.ui-radio:is(:active, [data-preview='active']):not(:disabled) {
+  border-color: var(--text-soft);
+  background: var(--pressed);
+}
+
+.ui-checkbox:checked,
+.ui-radio:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The tick, drawn as a border corner so it needs no image. */
+.ui-checkbox:checked::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  translate: 0 -1px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  rotate: 45deg;
+}
+
+.ui-radio:checked::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--on-accent);
+}
+
+.ui-switch {
+  position: relative;
+  width: var(--size-switch);
+  height: var(--size-switch-height);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--switch-off);
+}
+
+.ui-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: var(--size-knob);
+  height: var(--size-knob);
+  border-radius: var(--radius-pill);
+  background: var(--switch-knob);
+  box-shadow: var(--shadow-control);
+  transition: translate var(--motion-fast) var(--ease-out);
+}
+
+.ui-switch:is(:hover, [data-preview='hover']):not(:disabled, :checked) {
+  background: var(--check-edge);
+}
+
+.ui-switch:checked {
+  background: var(--accent);
+}
+
+.ui-switch:is(:active, [data-preview='active']):not(:disabled) {
+  background: color-mix(in srgb, var(--switch-off) 80%, var(--text));
+}
+
+.ui-checkbox:checked:is(:active, [data-preview='active']):not(:disabled),
+.ui-radio:checked:is(:active, [data-preview='active']):not(:disabled),
+.ui-switch:checked:is(:active, [data-preview='active']):not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.ui-switch:checked::after {
+  translate: calc(var(--size-switch) - var(--size-knob) - 4px) 0;
+}
+
+.ui-checkbox:is(:focus-visible, [data-preview='focus']),
+.ui-radio:is(:focus-visible, [data-preview='focus']),
+.ui-switch:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ui-checkbox:disabled,
+.ui-radio:disabled,
+.ui-switch:disabled {
+  border-color: var(--disabled-edge);
+  background: var(--disabled);
+  cursor: not-allowed;
+}
+
+/* A colour to pick: the colour is the swatch's data, set as --swatch. */
+.ui-swatch {
+  width: var(--size-swatch);
+  height: var(--size-swatch);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--sticky-swatch-edge);
+  border-radius: var(--radius-pill);
+  background: var(--swatch);
+  appearance: none;
+  cursor: pointer;
+}
+
+.ui-swatch:checked,
+.ui-swatch[aria-pressed='true'] {
+  outline: var(--focus-ring-width) solid var(--text);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ui-swatch:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* A choice drawn as a card: one of a few big options, such as a new agent's harness. */
+.ui-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  grid-auto-flow: column;
+  gap: var(--space-2);
+}
+
+.ui-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-25);
+  min-width: 0;
+  padding: var(--space-2-25) var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.ui-choice > input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ui-choice:is(:hover, :has([data-preview='hover'])) {
+  border-color: var(--check-edge);
+}
+
+.ui-choice:has(:checked) {
+  border-color: var(--accent);
+  background: var(--accent-faint);
+  box-shadow: var(--shadow-picked);
+}
+
+.ui-choice:has(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.ui-choice-mark {
+  display: flex;
+  flex: none;
+}
+
+.ui-choice-mark svg {
+  width: var(--size-swatch);
+  height: var(--size-swatch);
+}
+
+.ui-choice-label {
+  display: block;
+  font-weight: var(--weight-bold);
+}
+
+.ui-choice-detail {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+/* Cards: dialogs, menus and popovers */
+
+.ui-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-overlay);
+}
+
+.ui-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-dialog);
+  background: var(--scrim);
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+.ui-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--layer-dialog);
+  display: flex;
+  flex-direction: column;
+  width: min(var(--size-dialog), calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--space-8));
+  translate: -50% -50%;
+  animation: ui-rise var(--motion-fast) var(--ease-out);
+}
+
+/* Drawn in place, not over the page: the component gallery. */
+.ui-dialog[data-inline='true'] {
+  position: relative;
+  width: auto;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  translate: none;
+  animation: none;
+}
+
+.ui-dialog:focus-visible {
+  outline: none;
+}
+
+.ui-dialog-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3-5) var(--space-3) var(--space-2-5) var(--space-4-5);
+}
+
+.ui-dialog-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-snug);
+}
+
+.ui-dialog-head .ui-icon-button {
+  margin-left: auto;
+}
+
+.ui-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: 0 var(--space-4-5);
+  overflow: hidden auto;
+}
+
+.ui-dialog-body > p {
+  margin: 0;
+  line-height: var(--leading-body);
+}
+
+.ui-dialog-foot {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-3-5) var(--space-4-5) var(--space-4);
+}
+
+.ui-dialog-foot-start {
+  display: flex;
+  gap: var(--space-2);
+  margin-right: auto;
+}
+
+/* Tabs: a row of them over a panel; the picked one raised */
+
+.ui-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-tab {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-row);
+  padding: 0 var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.ui-tab svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-tab:hover {
+  background: var(--hover);
+}
+
+.ui-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tab[aria-selected='true'] {
+  background: var(--raised);
+  box-shadow: var(--shadow-tab-picked);
+  color: var(--text);
+}
+
+.ui-tab-count {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.ui-popover {
+  z-index: var(--layer-popover);
+  padding: var(--space-3);
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+.ui-menu {
+  z-index: var(--layer-popover);
+  min-width: var(--size-menu);
+  padding: var(--space-1-25);
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+.ui-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-25);
+  width: 100%;
+  height: var(--control-row);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+}
+
+.ui-menu-item svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.ui-menu-item[data-highlighted],
+.ui-menu-item:hover,
+.ui-menu-item[data-active='true'] {
+  background: var(--hover);
+}
+
+.ui-menu-item[data-danger='true'] {
+  color: var(--danger);
+}
+
+.ui-menu-item[data-disabled] {
+  color: var(--disabled-ink);
+  cursor: not-allowed;
+}
+
+.ui-menu-item .ui-kbd {
+  margin-left: auto;
+}
+
+.ui-menu-separator {
+  height: 1px;
+  margin: var(--space-1) var(--space-0-5);
+  background: var(--separator);
+}
+
+/* A row that opens a submenu: its arrow at the end. */
+.ui-menu-item .ui-menu-chevron {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.ui-menu-item[data-state='open'] {
+  background: var(--hover);
+}
+
+/* A row with a line under it saying what it leaves alone. */
+.ui-menu-item[data-hinted='true'] {
+  flex-wrap: wrap;
+  row-gap: var(--space-0-5);
+  height: auto;
+  min-height: var(--control-row);
+  padding-block: var(--space-1-5);
+}
+
+.ui-menu-hint {
+  flex-basis: 100%;
+  max-width: var(--size-menu);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  white-space: normal;
+}
+
+/* A labelled row of colours. */
+.ui-menu-swatches {
+  padding: var(--space-1) var(--space-2) var(--space-1-5);
+}
+
+.ui-menu-label {
+  margin-bottom: var(--space-1-5);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.ui-menu-swatch-row {
+  display: flex;
+  gap: var(--space-1-75);
+}
+
+.ui-menu-swatch-row .ui-swatch[data-highlighted] {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Where a context menu opens: the point that was right-clicked. */
+.ui-context-anchor {
+  position: fixed;
+  top: var(--anchor-y);
+  left: var(--anchor-x);
+  width: 0;
+  height: 0;
+}
+
+/* Chips over everything: tooltips and toasts */
+
+.ui-tooltip {
+  z-index: var(--layer-tooltip);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-75);
+  max-width: var(--size-tooltip);
+  padding: var(--space-1) var(--space-1-5) var(--space-1) var(--space-2-25);
+  border-radius: var(--radius-item);
+  background: var(--inverse);
+  color: var(--on-inverse);
+  box-shadow: var(--shadow-tooltip);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+.ui-tooltip:not(:has(.ui-kbd)) {
+  padding-right: var(--space-2-25);
+}
+
+.ui-tooltip .ui-kbd,
+.ui-toast .ui-kbd {
+  border-color: var(--inverse-edge);
+  background: var(--inverse-raised);
+  color: var(--on-inverse-soft);
+}
+
+/* Top centre, between the board's controls and the inbox: clear of the dock and of the zones' resize handles below. */
+.ui-toasts {
+  position: fixed;
+  top: var(--space-3);
+  left: 50%;
+  z-index: var(--layer-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  translate: -50% 0;
+  list-style: none;
+  pointer-events: none;
+}
+
+.ui-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  max-width: var(--size-toast);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-toast);
+  background: var(--inverse);
+  color: var(--on-inverse);
+  box-shadow: var(--shadow-toast);
+  font-size: var(--font-size-md);
+  line-height: var(--leading-snug);
+  pointer-events: auto;
+  animation: ui-toast-in var(--motion-fast) var(--ease-out);
+}
+
+.ui-toast > svg {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.ui-toast[data-tone='success'] > svg {
+  color: var(--inverse-success);
+}
+
+.ui-toast[data-tone='error'] > svg {
+  color: var(--inverse-danger);
+}
+
+.ui-toast-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-toast-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.ui-toast .ui-button {
+  border-color: var(--inverse-edge);
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+
+.ui-toast .ui-button:is(:hover, :active, [data-preview='hover'], [data-preview='active']) {
+  background: var(--inverse-raised);
+}
+
+.ui-toast .ui-icon-button {
+  border-color: transparent;
+}
+
+/* Labels: badges, tags, state pills and keys */
+
+.ui-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: var(--size-badge);
+  min-width: var(--size-badge);
+  padding: 0 var(--space-1-25);
+  border-radius: var(--radius-pill);
+  background: var(--badge);
+  color: var(--on-badge);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-badge[data-tone='neutral'] {
+  background: var(--badge-neutral);
+  color: var(--text);
+}
+
+.ui-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--size-tag);
+  padding: 0 var(--space-1-75);
+  border-radius: var(--radius-md);
+  background: var(--tag);
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.ui-tag[data-mono='true'] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+}
+
+.ui-tag[data-tone='accent'] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/* An agent state's pill: --pill and --pill-soft pick the state's tokens. */
+.ui-pill {
+  --pill: var(--state-idle-ink);
+  --pill-soft: var(--state-idle-soft);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-25);
+  height: var(--size-pill);
+  padding: 0 var(--space-1-75);
+  border-radius: var(--radius-pill);
+  background: var(--pill-soft);
+  color: var(--pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  transition:
+    background-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out);
+}
+
+.ui-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-pill > svg,
+.ui-pill-dot {
+  flex: none;
+}
+
+.ui-pill-dot {
+  width: var(--size-dot);
+  height: var(--size-dot);
+  border-radius: var(--radius-pill);
+  background: currentcolor;
+}
+
+.ui-pill svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ui-pill[data-state='running'] {
+  --pill: var(--state-running-ink);
+  --pill-soft: var(--state-running-soft);
+}
+
+.ui-pill[data-state='thinking'] {
+  --pill: var(--state-thinking-ink);
+  --pill-soft: var(--state-thinking-soft);
+}
+
+.ui-pill[data-state='waiting'] {
+  --pill: var(--state-waiting-ink);
+  --pill-soft: var(--state-waiting-soft);
+}
+
+.ui-pill[data-state='needs-permission'] {
+  --pill: var(--state-needs-permission-ink);
+  --pill-soft: var(--state-needs-permission-soft);
+}
+
+.ui-pill[data-state='rate-limited'] {
+  --pill: var(--state-rate-limited-ink);
+  --pill-soft: var(--state-rate-limited-soft);
+}
+
+.ui-pill[data-state='failed'] {
+  --pill: var(--state-failed-ink);
+  --pill-soft: var(--state-failed-soft);
+}
+
+.ui-pill[data-state='done'] {
+  --pill: var(--state-done-ink);
+  --pill-soft: var(--state-done-soft);
+}
+
+.ui-pill[data-state='scheduled'] {
+  --pill: var(--state-scheduled-ink);
+  --pill-soft: var(--state-scheduled-soft);
+}
+
+.ui-pill[data-state='stopped-by-restart'] {
+  --pill: var(--state-stopped-by-restart-ink);
+  --pill-soft: var(--state-stopped-by-restart-soft);
+}
+
+.ui-pill[data-state='handing-off'] {
+  --pill: var(--state-handing-off-ink);
+  --pill-soft: var(--state-handing-off-soft);
+}
+
+/* A flow edge's or a hand-off's pill (FlowPill): "new", "sending now", "receiving…". */
+.ui-pill[data-flow] {
+  --pill: var(--flow-pill-ink);
+  --pill-soft: var(--flow-pill);
+}
+
+.ui-kbd {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: var(--size-badge);
+  min-width: var(--size-badge);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--control-edge);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-key);
+  background: var(--raised);
+  color: var(--kbd-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+
+.ui-button[data-variant='primary'] .ui-kbd {
+  border-color: color-mix(in srgb, var(--on-primary) 30%, transparent);
+  background: color-mix(in srgb, var(--on-primary) 16%, transparent);
+  color: var(--on-primary);
+}
+
+.ui-button:disabled .ui-kbd {
+  border-color: var(--disabled-edge);
+  background: transparent;
+  color: inherit;
+}
+
+.ui-kbd-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* An empty state: what would be here, and how to start it */
+
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border: 1.5px dashed var(--empty-edge);
+  border-radius: var(--radius-2xl);
+  background: var(--empty-fill);
+  text-align: center;
+}
+
+.ui-empty[data-framed='false'] {
+  border: 0;
+  background: transparent;
+}
+
+.ui-empty-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+}
+
+.ui-empty-body {
+  max-width: var(--size-empty-body);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm-plus);
+  line-height: var(--leading-snug);
+}
+
+.ui-empty .ui-button {
+  margin-top: var(--space-1-5);
+}
+
+/* Islands: floating pills of controls over the board (chrome C) */
+
+.ui-island {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--island);
+  color: var(--text);
+  box-shadow: var(--shadow-island);
+}
+
+.ui-island-separator {
+  flex: none;
+  width: 1px;
+  height: var(--size-separator);
+  margin: 0 var(--space-1);
+  background: var(--border);
+}
+
+/* A square tool: an icon, and its key in the corner. */
+.ui-tool {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-tool);
+  height: var(--size-tool);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+
+.ui-tool[data-size='sm'] {
+  width: var(--size-tool-sm);
+  height: var(--size-tool-sm);
+}
+
+.ui-tool svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+.ui-tool[data-size='sm'] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.ui-tool:is(:hover, [data-preview='hover']) {
+  background: var(--hover);
+}
+
+.ui-tool:is(:active, [data-preview='active']) {
+  background: var(--pressed);
+}
+
+.ui-tool:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-tool[aria-pressed='true'],
+.ui-tool[data-state='open'] {
+  background: var(--toggle-on);
+  color: var(--toggle-on-ink);
+}
+
+.ui-tool-key {
+  position: absolute;
+  right: var(--space-0-5);
+  bottom: var(--space-0-5);
+  color: var(--key-hint);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-none);
+}
+
+.ui-tool[aria-pressed='true'] .ui-tool-key {
+  color: var(--toggle-on-ink);
+}
+
+/* Sections: a titled group in a side panel, open or closed */
+
+.ui-section {
+  border-bottom: 1px solid var(--separator);
+}
+
+.ui-section:last-child {
+  border-bottom: 0;
+}
+
+.ui-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-75);
+  width: 100%;
+  height: var(--control-section);
+  padding: 0 var(--space-3) 0 var(--space-2-5);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-section-head:is(:hover, [data-preview='hover']) {
+  background: var(--hover);
+}
+
+.ui-section-head:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-section-head svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.ui-section-head .ui-section-label {
+  flex: none;
+  white-space: nowrap;
+}
+
+.ui-section-meta {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-section-body {
+  padding: 0 var(--space-3-5) var(--space-3);
+}
+
+/* A row in a section: an icon or mark, a name with a line of detail under it, and a pill or action at its end. */
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-md);
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm-plus);
+  text-align: left;
+}
+
+button.ui-row {
+  cursor: pointer;
+}
+
+button.ui-row:is(:hover, [data-preview='hover']) {
+  background: var(--hover);
+}
+
+button.ui-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-row > svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.ui-row-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-row-meta {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-row-end {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+/* A small caps label over a group, such as a gallery section or a menu's group. */
+.ui-section-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+/* Hidden from sight but read out: a label the layout has no room to show. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes ui-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-rise {
+  from {
+    opacity: 0;
+    translate: -50% calc(-50% + var(--space-1));
+  }
+}
+
+@keyframes ui-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 calc(-1 * var(--space-1));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-spinner,
+  .ui-scrim,
+  .ui-dialog,
+  .ui-menu,
+  .ui-popover,
+  .ui-tooltip,
+  .ui-toast {
+    animation: none;
+  }
+
+  .ui-button,
+  .ui-tool,
+  .ui-pill {
+    transition: none;
+  }
+}
+
+/* Segmented: a few toggle buttons on a sunken track, one pressed */
+
+.ui-segmented {
+  display: flex;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.ui-segmented button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  height: var(--control-sm);
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ui-segmented button svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ui-segmented button:is(:hover, [data-preview='hover']) {
+  color: var(--text);
+}
+
+.ui-segmented button:is(:focus-visible, [data-preview='focus']) {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.ui-segmented button[aria-pressed='true'] {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-control);
+}

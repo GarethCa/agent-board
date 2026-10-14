@@ -1,0 +1,62 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreExportsUsedInFile": {
+    "interface": true,
+    "type": true
+  },
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/**/main.ts"
+      ],
+      "project": [
+        "scripts/**/*.ts"
+      ]
+    },
+    "apps/desktop": {
+      "entry": [
+        "src/main/index.ts",
+        "src/main/daemon.ts",
+        "src/preload/index.ts",
+        "src/renderer/src/main.tsx",
+        "e2e/**/*.spec.ts",
+        "src/renderer/src/ui/index.ts",
+        "electron.vite.config.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "e2e/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "node-pty",
+        "@xterm/headless",
+        "@xterm/addon-serialize"
+      ]
+    },
+    "packages/fake-harness": {
+      "entry": [
+        "src/cli/*.ts",
+        "test/fixtures/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "packages/tracker": {
+      "entry": [
+        "src/fake-gh.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "packages/daemon": {
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
+    }
+  }
+}

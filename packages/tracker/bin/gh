@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake `gh` for tests. Never reaches GitHub; see packages/tracker/src/fake-github.ts.
+exec node --disable-warning=ExperimentalWarning "$(dirname "$0")/../src/fake-gh.ts" "$@"

@@ -1,0 +1,13 @@
+{
+  "name": "@agent-board/fake-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fake claude/codex CLIs that replay scripted scenarios, plus the guard that keeps tests off the real ones.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

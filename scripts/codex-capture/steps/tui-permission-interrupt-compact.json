@@ -1,0 +1,7 @@
+[["wait",8],
+ ["type","Create a file named x.txt containing hi using a shell command. Then reply done."],["wait",0.5],["key","enter"],
+ ["until","Worked for",90],
+ ["type","Run the shell command: sleep 20 . Then reply done."],["wait",0.5],["key","enter"],
+ ["until","sleep 20",60],["wait",1],["key","esc"],["wait",3],
+ ["type","/compact"],["wait",1],["key","enter"],["until","compact",90],["wait",5],
+ ["type","/quit"],["wait",0.5],["key","enter"],["wait",3]]

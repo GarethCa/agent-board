@@ -1,0 +1,521 @@
+import { memo, useContext, useState, type MouseEvent, type ReactNode } from 'react';
+import {
+  shortIssueId,
+  TRACKER_PROVIDERS,
+  type Agent,
+  type AgentSchedule,
+  type ChecksState,
+  type ExternalSession,
+  type PullRequest,
+  type RecentFolder,
+  type Shell,
+} from '@agent-board/daemon/protocol';
+import { paneIds } from '@agent-board/daemon/pane-layout';
+import { startBlocked } from '@agent-board/daemon/review-doc';
+import { HarnessMark } from './HarnessMark';
+import { useNow } from '../inbox/use-now';
+import { clockBadge } from './schedule';
+import { Bell, BellOff, Check, Clock, Dot, Expand, FileCheck, FileSearch, Folder, GitBranch, Hash, Maximize2, MoreHorizontal, Pencil, Play, RotateCcw, SquareArrowOutUpRight, Trash2, X } from 'lucide-react';
+import { toolSummary } from '../../../shared/needs-you';
+import { Chip, EditableName, FlowPill, IconButton, Menu, RenameButton, StatusPill, Tag, useRenaming, type IconButtonProps, type MenuEntry } from '../ui';
+import { Character } from './Character';
+import { HandoffsContext } from './flow-edges';
+import { checksLabel, tileFooter } from './tile-footer';
+import { ResumeButton } from './RestartBanner';
+import { cx } from '../ui/cx';
+import { STATE_LABELS, TILE_STATE_LABELS } from '../states';
+import { SubagentPerch } from './SubagentPerch';
+import { useRenameRequest } from './rename';
+import { splitReviewerName } from './tile-name';
+import type { ClickOpens } from './click-opens';
+import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type TileProps } from './tile';
+import { folderLabel } from './folders';
+import { panesLabel } from '../session/panes';
+import { canRestart, ENDED_SHELL_LABEL, exitText, RestartAgent } from '../session/RestartAgent';
+import { useReviews } from '../review/ReviewsProvider';
+import { roundsOf } from '../review/reviews';
+
+/**
+ * Hybrid (v1): a calm white tile with a soft shadow and a slight tilt. An agent's tile shows its name, harness,
+ * branch and the pull requests made from it, linked issue, task and state, with an orange outline while it waits for
+ * you, and a clock badge with its next run while it has a schedule. Its subagents perch on its top edge as
+ * characters.
+ */
+export const HybridTile = memo(function HybridTile({ id, tile }: TileProps) {
+  const harness = tile.harness ?? 'shell';
+  if (tile.agent !== undefined) return <AgentTile id={id} agent={tile.agent} repo={tile.repo} />;
+  if (tile.shell !== undefined) return <ShellTile id={id} shell={tile.shell} />;
+  if (tile.external !== undefined) return <ExternalTile id={id} session={tile.external} />;
+  return (
+    <div
+      className="hybrid-tile"
+      data-representation="hybrid"
+      data-harness={harness}
+      style={{ rotate: `${tiltFor(id)}deg` }}
+    >
+      <span className="hybrid-tile-harness">{harness}</span>
+      <span className="hybrid-tile-label">{tile.label}</span>
+    </div>
+  );
+});
+
+function AgentTile({ id, agent, repo }: { id: string; agent: Agent; repo?: string }) {
+  const { expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, resumeAgent, restartAgent, rename, startReview, openReview } =
+    useContext(TileActionsContext);
+  const clickOpens = useContext(ClickOpensContext);
+  const rounds = roundsOf(useReviews(), agent.sessionId);
+  const latestRound = rounds.at(-1);
+  const notStarted = startBlocked(agent, rounds);
+  // A reviewer opens the review it is writing; an implementer starts its next round, or opens the last.
+  const reviewEntries = (): MenuEntry[] =>
+    agent.reviewOf !== null
+      ? [{ label: 'Open review', icon: <FileCheck />, onSelect: () => openReview(agent.reviewOf!) }]
+      : [
+          ...(latestRound === undefined ? [] : [{ label: 'Open review', icon: <FileCheck />, onSelect: () => openReview(agent.sessionId) }]),
+          {
+            label: latestRound === undefined ? 'Review its work' : `Start review round ${latestRound.round + 1}`,
+            icon: <FileSearch />,
+            disabled: notStarted !== undefined,
+            hint: notStarted,
+            onSelect: () => startReview(agent),
+          },
+        ];
+  const shownName = agent.reviewOf === null ? { name: agent.name } : splitReviewerName(agent.name);
+  const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
+  useRenameRequest(id, renaming);
+  const handoffs = useContext(HandoffsContext);
+  const { shown, folded } = tileFooter(agent);
+  const ask = askOf(agent);
+  // A hand-off going along one of its edges shows for as long as the edge shows it, however soon it was over.
+  // Never over its needing you, as in the daemon: the tile would say it no longer waits.
+  const sending = handoffs.sending.has(agent.sessionId) && agent.state !== 'waiting' && agent.state !== 'needs-permission' && ask === undefined;
+  const receiving = !sending && handoffs.receiving.has(agent.sessionId);
+  const state = sending ? 'handing-off' : agent.state;
+  const pill = receiving ? (
+    <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
+  ) : (
+    <StatusPill state={state} label={agent.shellSessionId === null ? TILE_STATE_LABELS[state] : ENDED_SHELL_LABEL} title={STATE_LABELS[state]} />
+  );
+  return (
+    <div
+      className="hybrid-tile hybrid-tile-agent"
+      data-testid="agent-tile"
+      data-representation="hybrid"
+      data-harness={agent.harness}
+      data-state={agent.state}
+      data-session-id={agent.sessionId}
+      data-zone={agent.zoneId ?? ''}
+      data-muted={agent.muted}
+      data-crowded={shown.length > 1 || undefined}
+      data-handoff={sending ? 'sending' : receiving ? 'receiving' : undefined}
+      data-reviewer={agent.reviewOf !== null || undefined}
+      title={clickOpens === 'window' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+      style={{ rotate: `${tiltFor(id)}deg` }}
+      onDoubleClick={() => (clickOpens === 'window' ? openAgent(agent) : expand(id))}
+    >
+      <div className="hybrid-tile-head">
+        <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />
+        <EditableName className="hybrid-tile-name" value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} label="Agent name" />
+        <RenameButton renaming={renaming} />
+        <TileCorner>
+          <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
+          <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
+          {canRestart(agent) && (
+            <TileButton icon={<RotateCcw />} aria-label="Restart" title="Restart it, carrying on its conversation" onClick={() => restartAgent(agent.sessionId)} />
+          )}
+          <TileMenu
+            entries={[
+              otherOpen(clickOpens, () => expand(id), () => openAgent(agent)),
+              ...(canRestart(agent) ? [{ label: 'Restart agent', icon: <RotateCcw />, onSelect: () => restartAgent(agent.sessionId) }] : []),
+              'separator',
+              { label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: renaming.startSoon },
+              { label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => scheduleAgent(agent) },
+              { label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => linkIssue(agent) },
+              {
+                label: agent.muted ? 'Unmute notifications' : 'Mute notifications',
+                icon: agent.muted ? <Bell /> : <BellOff />,
+                onSelect: () => setMuted(agent.sessionId, !agent.muted),
+              },
+              'separator',
+              ...reviewEntries(),
+              'separator',
+              { label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => deleteAgent(agent.sessionId) },
+            ]}
+          />
+        </TileCorner>
+      </div>
+      {shownName.subtitle !== undefined && <span className="hybrid-tile-subtitle">{shownName.subtitle}</span>}
+      <span className="hybrid-tile-branch" title={agent.worktree}>
+        {repo !== undefined && (
+          // Outside every zone of its repo, the tile says which repo it works in.
+          <Tag mono className="hybrid-tile-repo" data-testid="tile-repo" title={`Works in ${agent.repoRoot}`}>
+            {repo}
+          </Tag>
+        )}
+        <GitBranch aria-hidden />
+        {agent.branch}
+      </span>
+      {ask !== undefined ? (
+        <span className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" title={ask.text}>
+          {ask.tool !== undefined && <strong>{ask.tool} </strong>}
+          {ask.text}
+        </span>
+      ) : agent.notice !== null ? (
+        <span className="hybrid-tile-body hybrid-tile-notice" role="note" title={agent.notice}>
+          {agent.notice}
+        </span>
+      ) : (
+        <span className="hybrid-tile-body hybrid-tile-description" data-empty={agent.description === '' || undefined} title={agent.description}>
+          {agent.description || 'No task yet'}
+        </span>
+      )}
+      {agent.state === 'stopped-by-restart' && <ResumeRow onResume={() => resumeAgent(agent.sessionId)} />}
+      {canRestart(agent) && (
+        <span className="hybrid-tile-resume hybrid-tile-restart" onDoubleClick={stopPropagation}>
+          <RestartAgent agent={agent} className="nodrag" />
+          {exitText(agent)}
+        </span>
+      )}
+      <span className="hybrid-tile-footer">
+          {shown.map((badge) => {
+            switch (badge.kind) {
+              case 'issue':
+                return (
+                  <Chip
+                    key="issue"
+                    tone="accent"
+                    mono
+                    className="nodrag"
+                    data-testid="tile-issue"
+                    title={`${badge.issue.title}\nOpen ${badge.issue.id} in ${TRACKER_PROVIDERS[badge.issue.provider].name}`}
+                    onClick={() => openLink(badge.issue.url)}
+                    onDoubleClick={stopPropagation}
+                  >
+                    {shortIssueId(badge.issue)}
+                  </Chip>
+                );
+              case 'pr':
+                return <PullRequestChip key={badge.pr.number} pr={badge.pr} open={() => openLink(badge.pr.url)} />;
+              case 'schedule':
+                return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => scheduleAgent(agent)} />;
+              case 'muted':
+                return (
+                  <span key="muted" className="hybrid-tile-muted" data-testid="tile-muted" role="img" aria-label="Notifications muted" title="Notifications muted">
+                    <BellOff aria-hidden />
+                  </span>
+                );
+            }
+          })}
+          {latestRound !== undefined && (
+            <Chip
+              className="hybrid-tile-review nodrag"
+              data-testid="tile-review"
+              data-status={latestRound.status}
+              title={`Review round ${latestRound.round}: open it`}
+              onClick={() => openReview(agent.sessionId)}
+              onDoubleClick={stopPropagation}
+            >
+              <FileCheck aria-hidden />r{latestRound.round}
+            </Chip>
+          )}
+          {folded.length > 0 && (
+            // A button, so the keyboard reaches it and its tooltip; it opens nothing.
+            <Chip
+              className="hybrid-tile-folded nodrag"
+              data-testid="tile-folded"
+              title={folded.join('\n')}
+              aria-label={`${folded.length} more: ${folded.join('; ')}`}
+              onDoubleClick={stopPropagation}
+            >
+              +{folded.length}
+            </Chip>
+          )}
+          {pill}
+        </span>
+      <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
+      {sending && (
+        // Its robot, handing its payload on, perched at the top left (FlowRules).
+        <span className="hybrid-tile-handoff">
+          <Character harness={agent.harness} pose="handing-off" label={agent.name} />
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** What a tile waiting for you asks, in place of its task: the tool it wants to use, or its last message. */
+function askOf(agent: Agent): { tool?: string; text: string } | undefined {
+  const prompt = agent.permissions[0];
+  if (prompt !== undefined) return { tool: prompt.toolName, text: toolSummary(prompt) };
+  if (agent.state === 'waiting' && agent.lastMessage) return { text: agent.lastMessage };
+  return undefined;
+}
+
+/** A shell tile: plain shells in a zone's folder, or at home loose on the board, split into panes in its session window. */
+function ShellTile({ id, shell }: { id: string; shell: Shell }) {
+  const { expand, openShell, popOutShell, deleteShell, resumeShell, rename } = useContext(TileActionsContext);
+  const clickOpens = useContext(ClickOpensContext);
+  const renaming = useRenaming(shell.name, (name) => rename({ kind: 'shell', shellId: shell.id }, name));
+  useRenameRequest(id, renaming);
+  const panes = paneIds(shell.layout).length;
+  const live = panes - shell.endedPanes.length;
+  const stopped = shell.stoppedPanes.length;
+  return (
+    <div
+      className="hybrid-tile hybrid-tile-agent hybrid-tile-shell"
+      data-testid="shell-tile"
+      data-representation="hybrid"
+      data-harness="shell"
+      data-shell-id={shell.id}
+      data-zone={shell.zoneId ?? ''}
+      data-state={stopped > 0 ? 'stopped-by-restart' : live === 0 ? 'done' : 'idle'}
+      title={clickOpens === 'window' ? 'Double-click to open its terminal window' : 'Double-click to expand it here'}
+      style={{ rotate: `${tiltFor(id)}deg` }}
+      onDoubleClick={() => (clickOpens === 'window' ? openShell(shell) : expand(id))}
+    >
+      <div className="hybrid-tile-head">
+        <HarnessMark className="hybrid-tile-icon" harness="shell" />
+        <EditableName className="hybrid-tile-name" value={shell.name} title={shell.name} renaming={renaming} label="Shell name" />
+        <RenameButton renaming={renaming} />
+        <TileCorner>
+          <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
+          <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
+          <TileMenu
+            entries={[
+              otherOpen(clickOpens, () => expand(id), () => openShell(shell)),
+              'separator',
+              { label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: renaming.startSoon },
+              'separator',
+              { label: 'Delete shell', icon: <Trash2 />, danger: true, onSelect: () => deleteShell(shell.id) },
+            ]}
+          />
+        </TileCorner>
+      </div>
+      <ShellFolderChip shell={shell} />
+      {stopped > 0 && <ResumeRow onResume={() => resumeShell(shell)} />}
+      <span className="hybrid-tile-footer">
+        <Tag className="hybrid-tile-state" data-testid="shell-tile-panes">
+          {panesLabel(panes)}
+          {live < panes && ` · ${live} live`}
+        </Tag>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A shell tile's folder chip (AK1): the folder its first live pane is in, following `cd`, `~` at home. It opens
+ * a menu to start a new pane elsewhere: home, a recent folder, or one browsed for. Running panes never move.
+ */
+function ShellFolderChip({ shell }: { shell: Shell }) {
+  const folders = useContext(ShellFoldersContext);
+  const [recent, setRecent] = useState<RecentFolder[]>([]);
+  const live = paneIds(shell.layout).find((pane) => !shell.endedPanes.includes(pane));
+  const folder = (live === undefined ? undefined : shell.paneFolders[live]) ?? shell.cwd;
+  const elsewhere = recent.filter((each) => each.path !== folder);
+  const entries: MenuEntry[] = [
+    ...(folders.home === undefined || folders.home === folder
+      ? []
+      : [{ label: 'Home ~', icon: <Folder />, onSelect: () => folders.newPaneIn(shell, folders.home) }]),
+    ...elsewhere.map((each) => ({
+      label: each.branch === null ? each.name : `${each.name} (${each.branch})`,
+      icon: <GitBranch />,
+      hint: each.path,
+      onSelect: () => folders.newPaneIn(shell, each.path),
+    })),
+    ...(elsewhere.length > 0 || folders.home !== folder ? ['separator' as const] : []),
+    { label: 'Browse…', icon: <Folder />, onSelect: () => folders.newPaneIn(shell) },
+  ];
+  return (
+    <Menu
+      entries={entries}
+      onOpenChange={(open) => {
+        if (open) void folders.recent().then(setRecent, () => setRecent([]));
+      }}
+    >
+      <Chip
+        className="hybrid-tile-folder nodrag"
+        icon={<Folder />}
+        mono
+        aria-label="Shell folder"
+        data-testid="shell-folder"
+        title={`${folder}: start a new pane in another folder`}
+        onDoubleClick={stopPropagation}
+      >
+        {folderLabel(folder, folders.home)}
+      </Chip>
+    </Menu>
+  );
+}
+
+/** A tile's Resume button, for a session stopped by a restart: nothing starts again until it is pressed. */
+function ResumeRow({ onResume }: { onResume(): Promise<void> }) {
+  return (
+    <span className="hybrid-tile-resume" onDoubleClick={stopPropagation}>
+      <ResumeButton className="nodrag" onResume={onResume} />
+      Stopped by a restart
+    </span>
+  );
+}
+
+/**
+ * A session started outside the app, reported by the global hooks: its folder's name (or the worker's issue and role),
+ * branch, first prompt and state, and what its worker's status file says. It has no terminal here: it can be resumed
+ * in agent-board, becoming an agent, or dismissed.
+ */
+function ExternalTile({ id, session }: { id: string; session: ExternalSession }) {
+  const { expand, dismissExternal, resumeExternal } = useContext(TileActionsContext);
+  const { status } = session;
+  const docs = [status?.handover && `handover ${status.handover}`, status?.reviewDoc && `review ${status.reviewDoc}`].filter(Boolean);
+  return (
+    <div
+      className="hybrid-tile hybrid-tile-agent hybrid-tile-external"
+      data-testid="external-tile"
+      data-representation="hybrid"
+      data-harness={session.harness}
+      data-state={session.state}
+      data-external-id={session.id}
+      data-zone={session.zoneId ?? ''}
+      title={`Started outside agent-board in ${session.cwd}. Double-click for its details.`}
+      style={{ rotate: `${tiltFor(id)}deg` }}
+      onDoubleClick={() => expand(id)}
+    >
+      <div className="hybrid-tile-head">
+        <HarnessMark className="hybrid-tile-icon" harness={session.harness} />
+        <span className="hybrid-tile-name">{session.name}</span>
+        <TileCorner>
+          <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its details" onClick={() => expand(id)} />
+          <TileButton
+            icon={<Play />}
+            aria-label="Resume in agent-board"
+            title="Carry on this session here, as an agent with a terminal of its own"
+            onClick={() => resumeExternal(session)}
+          />
+          <TileMenu
+            entries={[
+              { label: 'Resume in agent-board…', icon: <Play />, onSelect: () => resumeExternal(session) },
+              'separator',
+              // Off the board until it starts again; the session keeps running.
+              { label: 'Dismiss session', icon: <X />, onSelect: () => dismissExternal(session.id) },
+            ]}
+          />
+        </TileCorner>
+      </div>
+      <span className="hybrid-tile-branch" title={session.worktree ?? session.cwd}>
+        {session.branch ?? session.cwd}
+      </span>
+      {status !== null ? (
+        <span className="hybrid-tile-status" data-testid="tile-status" data-status-state={status.state} title={status.summary}>
+          <span className="hybrid-tile-status-state">{status.state}</span> {status.summary}
+        </span>
+      ) : (
+        <span className="hybrid-tile-body hybrid-tile-description" title={session.description}>
+          {session.description}
+        </span>
+      )}
+      {docs.length > 0 && (
+        <span className="hybrid-tile-docs" data-testid="tile-docs" title={docs.join('\n')}>
+          {docs.join(' · ')}
+        </span>
+      )}
+      <span className="hybrid-tile-footer">
+        <Tag>external</Tag>
+        <StatusPill state={session.state} label={TILE_STATE_LABELS[session.state]} title={STATE_LABELS[session.state]} />
+      </span>
+      <SubagentPerch harness={session.harness} subagents={session.subagents} />
+    </div>
+  );
+}
+
+/** Keeps a double-click on a tile's control from also opening its session. */
+const stopPropagation = (event: MouseEvent) => event.stopPropagation();
+
+/** An icon button in a tile's head: small, and kept from dragging the tile or opening its session. */
+function TileButton(props: Omit<IconButtonProps, 'size'>) {
+  return <IconButton size="xs" {...props} className={cx('nodrag', props.className)} onDoubleClick={stopPropagation} />;
+}
+
+/** A tile's More button and its menu of the rarer actions. */
+function TileMenu({ entries }: { entries: MenuEntry[] }) {
+  return (
+    <Menu entries={entries} align="end">
+      <TileButton icon={<MoreHorizontal />} aria-label="More" title="More actions" />
+    </Menu>
+  );
+}
+
+/**
+ * The corner of a tile's head: its actions, unseen until the tile is hovered or holds the focus, but always there
+ * for the keyboard, which shows them as it reaches them. Only their opacity changes, so nothing on the tile moves
+ *; the state lives in the footer.
+ */
+function TileCorner({ children }: { children: ReactNode }) {
+  return (
+    <span className="hybrid-tile-corner">
+      <span className="hybrid-tile-actions">{children}</span>
+    </span>
+  );
+}
+
+/** A scheduled agent's clock chip: when it next runs, or that its schedule is paused or off. Opens its schedule. */
+function ClockChip({ schedule, ended, open }: { schedule: AgentSchedule; ended: boolean; open(): void }) {
+  // Re-rendered every second, so "tomorrow 09:00" turns into "09:00" at midnight.
+  const now = useNow(true);
+  const { label, title } = clockBadge(schedule, ended, new Date(now));
+  return (
+    <Chip
+      icon={<Clock />}
+      className="hybrid-tile-clock nodrag"
+      data-testid="tile-clock"
+      data-enabled={schedule.enabled}
+      aria-label={`Schedule: ${label}`}
+      title={title}
+      onClick={open}
+      onDoubleClick={stopPropagation}
+    >
+      {label}
+    </Chip>
+  );
+}
+
+const CHECK_MARKS: Record<ChecksState, ReactNode> = {
+  passing: <Check aria-hidden />,
+  failing: <X aria-hidden />,
+  pending: <Dot aria-hidden />,
+  none: null,
+};
+
+/** A pull request made from the agent's branch: its number in its state's colour, and a mark for its checks. */
+export function PullRequestChip({ pr, open }: { pr: PullRequest; open(): void }) {
+  const checks = checksLabel(pr);
+  return (
+    <Chip
+      mono
+      className="hybrid-tile-pr nodrag"
+      data-testid="tile-pr"
+      data-state={pr.state}
+      data-checks={pr.checks}
+      aria-label={`Pull request #${pr.number}, ${pr.state}, ${checks}`}
+      title={`#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it on GitHub.`}
+      onClick={open}
+      onDoubleClick={stopPropagation}
+    >
+      #{pr.number}
+      {pr.checks !== 'none' && <span className="hybrid-tile-pr-checks">{CHECK_MARKS[pr.checks]}</span>}
+    </Chip>
+  );
+}
+
+/** The ⋯ menu's way to do, once, what a click on the tile doesn't (AM1): expand it in place, or open its window. */
+function otherOpen(clickOpens: ClickOpens, expand: () => void, open: () => void): MenuEntry {
+  return clickOpens === 'window'
+    ? { label: 'Expand in place', icon: <Expand />, onSelect: expand }
+    : { label: 'Open window', icon: <Maximize2 />, onSelect: open };
+}
+
+/** A small, stable tilt in [-1.5, 1.5] degrees, so tiles look hand-placed but never jitter between renders. */
+function tiltFor(id: string): number {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return ((Math.abs(hash) % 31) - 15) / 10;
+}

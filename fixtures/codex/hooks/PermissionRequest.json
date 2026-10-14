@@ -1,0 +1,14 @@
+{
+  "session_id": "01a11d86-e9c0-7641-8636-5d017e13e6e4",
+  "turn_id": "01a11d87-4ed0-7a41-b899-2948bc1d2d86",
+  "transcript_path": "/Users/dev/.codex/sessions/2026/10/08/rollout-2026-10-08T22-59-03-01a11d86-e9c0-7641-8636-5d017e13e6e4.jsonl",
+  "cwd": "/Users/dev/code/demo",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf 'hi' > x.txt",
+    "description": "May I write x.txt in the workspace with the content hi?"
+  }
+}

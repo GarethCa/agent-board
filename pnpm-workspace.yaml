@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  esbuild: true
+  node-pty: true
+  sharp: false
+# `pnpm build` (or any script) on a fresh clone installs dependencies first.
+verifyDepsBeforeRun: install

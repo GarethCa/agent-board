@@ -1,0 +1,875 @@
+/*
+ * Theme tokens: the only place a colour, spacing, radius, font, shadow or motion value is written as a literal
+ * (docs/theme-tokens.md). Everything else uses var(--token), and tokens.test.ts enforces it.
+ *
+ * Tokens are named for their role, not their look, and each role has its own token. A token whose value is another
+ * token (var(--x)) shares that role's look on purpose: a dark theme overrides the literal ones under
+ * :root[data-theme='dark'] and the aliases follow, unless it overrides them too.
+ */
+:root {
+  color-scheme: light; /* native controls and scrollbars; a dark theme sets dark */
+
+  /* Surfaces */
+  --surface: #f6f4ef; /* the desk */
+  --surface-dot: #cfc9bb; /* the desk's dots */
+  --raised: #ffffff; /* tiles, dialogs, inputs: anything that sits on the desk */
+  --raised-edge: #d8d2c4; /* outline of a raised thing on the minimap */
+  --sunken: var(--surface); /* a well inside a raised thing: a quoted tool input */
+  --border: #e2ddd1; /* a card's edge: a dialog, menu or tile */
+  --control-edge: #ddd7ca; /* a button's, input's or key's edge: a shade firmer than a card's */
+  --separator: #ebe7de; /* a rule between a menu's groups */
+  --hover: #efece4; /* a ghost control or menu row under the pointer, or the one picked */
+  --panel: #fcfbf8; /* a side panel and header inside a raised card: a session window's details */
+  --pressed: #e5e1d8; /* a control while it is pressed */
+  --tag: var(--hover); /* a tag's fill */
+  --scrim: color-mix(in srgb, var(--text) 24%, transparent); /* behind a modal dialog */
+  --minimap-mask: color-mix(in srgb, var(--surface) 60%, transparent); /* the minimap outside the view */
+  --island: color-mix(in srgb, var(--raised) 96%, transparent); /* a floating island of controls over the board */
+  --key-hint: #9a9488; /* a tool's key in its corner: a decoration, as its tooltip names the key too */
+  --shadow-attention-ring: color-mix(in srgb, var(--state-waiting) 14%, transparent); /* round the Needs-you pill while something waits */
+  --scrim-window: color-mix(in srgb, var(--text) 42%, transparent); /* behind a session window shown on the board */
+
+  /* Text */
+  --text: #2b2a27;
+  --text-soft: #4a463f; /* a field's label, a ghost button, a tag */
+  --muted: #6f6a60; /* a hint, a description */
+  --placeholder: #77716a;
+  --neutral-ink: #5f5a50; /* text on a warm neutral fill: a key cap, an idle pill */
+  --kbd-ink: var(--neutral-ink);
+
+  /* Accent: the primary action, links, linked issues, a checked control */
+  --accent: #3b5bdb;
+  --accent-strong: #3354c9; /* an issue key's text, the primary button's edge */
+  --accent-soft: #edf2ff;
+  --accent-faint: #f8faff; /* a picked choice card */
+  --accent-ink: var(--accent); /* the accent as text: a link, a picked row's mark */
+  --toggle-on: var(--accent-soft); /* a toggle button while it is on: an armed tool, a style in use */
+  --toggle-on-ink: #2b44a8;
+  --on-accent: #ffffff; /* text on a saturated fill: the accent or an agent state's mark */
+  --selection: color-mix(in srgb, var(--accent) 8%, transparent); /* the board's drag-to-select box */
+  --selection-edge: var(--accent); /* the box round a selection of several, and the marquee's edge */
+  --snap-guide: #e64980; /* the alignment guides while dragging (WbTools) */
+
+  /* The primary action: Start, Send, Save */
+  --primary: var(--accent);
+  --primary-edge: var(--accent-strong);
+  --primary-hover: var(--accent-strong);
+  --on-primary: #ffffff;
+
+  /* Disabled controls: WCAG exempts their text from contrast */
+  --disabled: #efece6;
+  --disabled-edge: #e6e1d6;
+  --disabled-ink: #8f897d;
+
+  /* Checkboxes and switches */
+  --check-edge: #cfc9bb; /* an unchecked box */
+  --switch-off: var(--neutral-edge); /* an unchecked switch's track */
+  --switch-knob: #ffffff;
+
+  /* Focus: one ring for every control reached from the keyboard; a text field shows it as its edge and halo */
+  --focus: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-edge: #8ea2ef;
+  --focus-halo: color-mix(in srgb, var(--accent) 15%, transparent);
+  --picked-halo: color-mix(in srgb, var(--accent) 13%, transparent); /* round a picked choice card */
+  --shadow-focus: 0 0 0 3px var(--focus-halo);
+  --shadow-picked: 0 0 0 3px var(--picked-halo);
+
+  /* Inverse: a dark chip on the light desk, for tooltips and toasts */
+  --inverse: var(--text);
+  --on-inverse: var(--surface);
+  --inverse-raised: #3d3b37; /* a key inside a tooltip */
+  --inverse-edge: #55524c;
+  --on-inverse-soft: #e9e5dc;
+  --inverse-success: #8ce99a; /* a toast's tick */
+  --inverse-danger: #ffa8a8; /* a toast's cross */
+
+  /* Feedback: errors, warnings and notices that are not an agent's state */
+  --danger: #b00020;
+  --danger-soft: #fff4f4;
+  --danger-edge: #f3cdd2;
+  --warning: #e8590c;
+  --warning-soft: #fff6e6;
+  --warning-edge: #fbc59a; /* a needs-action badge's ring */
+  --success: #237032;
+  --success-soft: #e9f7ec;
+  --neutral: #495057;
+  --neutral-soft: #f1f3f5;
+  --neutral-edge: #d6d0c2; /* a soft neutral edge or track: an unchecked switch, an empty state's frame */
+  --badge: var(--state-waiting-ink); /* a count that wants attention */
+  --on-badge: var(--on-accent);
+  --badge-neutral: var(--border); /* a count badge with nothing to count */
+
+  /* Empty states */
+  --empty-edge: var(--neutral-edge);
+  --empty-fill: color-mix(in srgb, var(--raised) 50%, transparent);
+
+  /*
+   * Agent state (CONTEXT.md "Agent state"). Every state has an -ink token for its pill's label and a -soft one for the
+   * pill's fill; a state the board also marks (an outline, a badge, a character prop) has a plain token for that.
+   */
+  --state-running: #2f9e44;
+  --state-running-ink: var(--success);
+  --state-running-soft: var(--success-soft);
+  --state-thinking-ink: var(--accent);
+  --state-thinking-soft: var(--accent-soft);
+  --state-waiting: #f76707; /* the orange border */
+  --state-waiting-ink: #c2410c;
+  --state-waiting-soft: #fff1e3;
+  --state-needs-permission: var(--state-waiting);
+  --state-needs-permission-ink: var(--state-waiting-ink);
+  --state-needs-permission-soft: var(--state-waiting-soft);
+  --state-idle-ink: var(--neutral-ink);
+  --state-idle-soft: #efece5;
+  --state-rate-limited: #e8a33d; /* the hourglass */
+  --state-rate-limited-ink: #875400;
+  --state-rate-limited-soft: #fcefd6;
+  --state-failed: #c92a2a;
+  --state-failed-ink: var(--state-failed);
+  --state-failed-soft: #fff0f0;
+  --state-done: var(--state-running); /* the tick */
+  --state-done-ink: var(--success);
+  --state-done-soft: var(--success-soft);
+  --state-scheduled: #1864ab; /* the clock badge's text and the state label */
+  --state-scheduled-ink: var(--state-scheduled);
+  --state-scheduled-soft: #e7f5ff; /* the clock badge */
+  --state-stopped-by-restart: #868e96; /* the dashed outline of a tile waiting to be resumed */
+  --state-stopped-by-restart-ink: #495057;
+  --state-stopped-by-restart-soft: #eef0f3;
+  --state-handing-off-ink: var(--flow-label-ink); /* delivering along its flow edges, in the edges' colour */
+  --state-handing-off-soft: var(--flow-label);
+  /* What a tile waiting for you asks, in a warm box under its head */
+  --ask: #fff7ef;
+  --ask-edge: #fde0c4;
+  --ask-ink: #4a3320;
+  --mute-on: var(--state-waiting-ink); /* the bell of an agent whose notifications are muted */
+
+  /* Pull request state (the number's chip) and its checks (the mark after it) */
+  --pr-open: var(--success);
+  --pr-open-soft: var(--success-soft);
+  --pr-draft: var(--neutral);
+  --pr-draft-soft: var(--neutral-soft);
+  --pr-merged: #6741d9;
+  --pr-merged-soft: #f3f0ff;
+  --pr-closed: var(--state-failed);
+  --pr-closed-soft: var(--danger-soft);
+  --checks-passing: var(--success);
+  --checks-failing: var(--danger);
+  --checks-pending: var(--warning);
+
+  /*
+   * Zones. A zone's own colour comes from the daemon (ZONE_COLORS) as --zone-color; these say how much of it tints
+   * each part, so a dark theme can tint more or less.
+   */
+  --zone-fill-mix: 8%;
+  --zone-edge-mix: 45%;
+  --zone-tab-mix: 50%; /* a zone's tab: its colour, half shaded */
+  --zone-tab-shade: var(--text);
+  --on-zone: #ffffff; /* text on a zone's tab */
+  --on-zone-soft: color-mix(in srgb, var(--on-zone) 18%, transparent); /* a chip on a zone's tab */
+  --zone-drop-mix: 18%; /* a zone's fill while a dragged tile or note would drop into it */
+  --zone-outline-edge: var(--accent); /* the dashed outline of a zone being added */
+  --zone-outline-fill: color-mix(in srgb, var(--accent) 4%, transparent);
+  --zone-outline-dash: 2px; /* its dashed edge's width */
+  --clone-track: var(--on-zone-soft); /* a cloning zone's progress bar, on its tab */
+  --clone-fill: var(--on-zone);
+
+  /*
+   * Sticky notes. A note's own colour is its data (STICKY_COLORS in the protocol), set as --sticky-color; a swatch's
+   * as --swatch. StickyNode reads --sticky-padding and --sticky-leading to fit the text.
+   */
+  --sticky-radius: 3px;
+  --sticky-padding: var(--space-3-5);
+  --sticky-leading: 1.25;
+  --sticky-weight: var(--weight-semibold); /* the handwriting's weight */
+  --sticky-resizer: var(--muted); /* the resize handles and outline of a selected note */
+  --sticky-swatch-edge: rgb(0 0 0 / 18%); /* the ring round a colour swatch, on any colour */
+  /*
+   * Each sticky colour's paper and ink, by name (board/items/board-colors.ts): a note stores the light theme's hex, and
+   * a theme draws it as this pair. --sticky-other-ink is for a colour that is no preset.
+   */
+  --sticky-other-ink: var(--text);
+  --sticky-link: var(--accent); /* a link written on a note: on paper in every theme */
+  --sticky-yellow: #fff3a3;
+  --sticky-yellow-ink: var(--sticky-other-ink);
+  --sticky-orange: #ffd8a8;
+  --sticky-orange-ink: var(--sticky-other-ink);
+  --sticky-pink: #fcc2d7;
+  --sticky-pink-ink: var(--sticky-other-ink);
+  --sticky-violet: #d0bfff;
+  --sticky-violet-ink: var(--sticky-other-ink);
+  --sticky-blue: #a5d8ff;
+  --sticky-blue-ink: var(--sticky-other-ink);
+  --sticky-green: #b2f2bb;
+  --sticky-green-ink: var(--sticky-other-ink);
+  --sticky-grey: #e9ecef;
+  --sticky-grey-ink: var(--sticky-other-ink);
+  --sticky-white: #ffffff;
+  --sticky-white-ink: var(--sticky-other-ink);
+
+  /* Link cards: a raised card; the page's icon and domain are muted, its title is set in --font-display */
+  --link-card-icon-size: 16px;
+
+  /*
+   * Text items and shapes. An item's own colours are its data (TEXT_COLORS, SHAPE_FILLS, SHAPE_STROKES in the
+   * protocol), set as --item-color, --shape-fill, --shape-stroke and --swatch. TextNode reads the sizes, --text-item-
+   * leading and --text-item-padding to size itself as it is typed in.
+   */
+  --paint-ink: #2b2a27; /* text, a connector or an outline in Ink, drawn on the desk */
+  --paint-grey: #6f6a60;
+  --paint-red: #c92a2a;
+  --paint-orange: #d9480f;
+  --paint-green: #2f9e44;
+  --paint-blue: #3b5bdb;
+  --paint-violet: #6741d9;
+  --shape-fill-yellow: #fff3bf; /* a shape's fill: paper, like a note's (White is a note's white) */
+  --shape-fill-green: #d3f9d8;
+  --shape-fill-blue: #d0ebff;
+  --shape-fill-pink: #ffdeeb;
+  --shape-ink-ink: #2b2a27; /* text in a filled shape, on its paper: the stored colour in this theme */
+  --shape-ink-grey: #6f6a60;
+  --shape-ink-red: #c92a2a;
+  --shape-ink-orange: #d9480f;
+  --shape-ink-green: #2f9e44;
+  --shape-ink-blue: #3b5bdb;
+  --shape-ink-violet: #6741d9;
+  --text-item-h1-size: 44px;
+  --text-item-h2-size: 28px;
+  --text-item-body-size: 16px;
+  --text-item-leading: 1.25;
+  --text-item-padding: var(--space-2);
+  --text-item-min-width: 24px;
+  --text-item-edit-edge: color-mix(
+    in srgb,
+    var(--accent) 55%,
+    var(--raised)
+  ); /* the dashed outline while typing */
+  --shape-text-h1-size: 22px; /* "L" */
+  --shape-text-h2-size: 17px; /* "M" */
+  --shape-text-body-size: 13px; /* "S" */
+  --shape-leading: 1.2;
+  --shape-padding: var(--space-3);
+  --shape-radius: 16px; /* a rounded rectangle's corners */
+  --item-handle: var(
+    --accent
+  ); /* the resize handles and outline of a selected text or shape */
+  --tool-armed-edge: var(
+    --accent
+  ); /* the outline drawn while dragging out a shape */
+
+  /*
+   * Connectors: thin neutral annotation lines, drawn from a round handle on the middle of an object's side.
+   * A connector's own colour is its data (TEXT_COLORS in the protocol), set as --connector-color. Flow edges (M2) are
+   * the coloured ones, drawn from square ports.
+   */
+  --connector-line: #8a8370;
+  --connector-width: 1.5px;
+  --connector-selected-width: 7px; /* the halo behind a selected line */
+  --connector-halo: color-mix(in srgb, var(--accent) 18%, transparent);
+  --connector-handle-size: 11px;
+  --connector-handle-edge: var(--connector-line);
+  --connector-handle-edge-width: 1.5px;
+  --connector-handle-offset: 10px; /* how far outside its side a handle sits, clear of the resize grips on the side */
+  --connector-zone-top-handle-at: 92%; /* along a zone's top: its tab's buttons are in the way of the middle */
+  --connector-handle-hover-size: 13px;
+  --connector-label-gap: 2px;
+  --connector-bar-gap: 10px; /* between the style bar and the line it is over */
+  --connector-drop-edge: var(--accent); /* the outline of the object a connector would join, while one is dragged */
+  --connector-drop-fill: color-mix(in srgb, var(--accent) 5%, transparent);
+  --connector-drag-dash: 4 4;
+
+  /*
+   * Flow edges: coloured, labelled with what they carry, with a trigger icon (DecR R1): a started-from-an-issue agent's
+   * "issue brief", and the edges between agents, leaving and arriving at a tile's square flow ports.
+   */
+  --flow-edge: var(--accent);
+  --flow-edge-width: 2px;
+  --flow-label: var(--accent-soft);
+  --flow-label-ink: var(--accent-strong);
+  --flow-trigger: var(--accent);
+  --flow-trigger-ink: var(--on-primary);
+  --flow-port-size: 10px; /* a tile's square flow port */
+  --flow-port-at: 70%; /* how far down its side, below the round connector handle in the middle */
+  --flow-port-ring: color-mix(in srgb, var(--flow-edge) 20%, transparent); /* round a port being dragged from or to */
+  --flow-pill: var(--flow-label); /* a flow edge's or a hand-off's pill: "new", "sending now", "receiving…" */
+  --flow-pill-ink: var(--flow-label-ink);
+  --flow-flowing: var(--on-primary); /* the dashes running along an edge a hand-off is going along */
+  --flow-flowing-dash: 2 10;
+  --flow-flowing-run: -24; /* how far they run in one --motion-flowing: two dashes, so the loop is seamless */
+  --flow-payload-from: 8%; /* where along the edge the payload's trip starts and ends, clear of the tiles */
+  --flow-payload-to: 92%;
+  --flow-target-edge: var(--flow-edge); /* a tile a flow edge can be let go on, being dragged over */
+  --flow-target-fill: color-mix(in srgb, var(--flow-edge) 6%, transparent);
+  --flow-not-target: 0.38; /* how faint an object a flow edge can't join is, while one is dragged */
+  --flow-receiving-ring: color-mix(in srgb, var(--flow-edge) 14%, transparent); /* round a tile receiving a hand-off */
+  --flow-held: var(--state-rate-limited-soft); /* a hand-off an edge holds until its conditions pass (FlowRules) */
+  --flow-held-ink: var(--state-rate-limited-ink);
+  --flow-condition-passed: var(--success-soft); /* an Edge rules condition that passed its last check */
+  --flow-condition-passed-edge: color-mix(in srgb, var(--success) 22%, transparent);
+  --flow-condition-passed-ink: var(--success);
+
+  /*
+   * Reviews (AD2): a reviewer's dashed tile, the Review tab's mark, and the review doc viewer's findings by
+   * severity, verdicts and file:line chips.
+   */
+  --reviewer-edge: #9c88e0; /* a reviewer's tile: dashed, as it is ephemeral */
+  --review-mark: var(--pr-merged);
+  --review-mark-soft: var(--pr-merged-soft);
+  --severity-blocker: var(--state-failed);
+  --severity-major: var(--warning);
+  --severity-minor: var(--disabled-ink);
+  --on-severity: var(--on-accent);
+  --verdict-approve: var(--success-soft);
+  --verdict-approve-ink: var(--success);
+  --verdict-changes: var(--state-waiting-soft);
+  --verdict-changes-ink: var(--state-waiting-ink);
+  --review-resolved-ink: var(--disabled-ink); /* a finding a later round struck through */
+  --review-location: var(--hover); /* a finding's file:line chip */
+  --review-rail-width: 128px;
+  --review-actions-width: 168px;
+
+  /* Harness marks, and the characters' bodies */
+  --harness-claude: #d97757;
+  --harness-codex: var(--text);
+  --harness-shell: var(--neutral); /* a plain shell's mark */
+
+  /* Characters: the line and the light parts (eyes, a carried doc) drawn over a body */
+  --figure-ink: var(--text);
+  --figure-paper: var(--raised);
+
+  /* Session window: a terminal is dark whatever the theme */
+  --window-bg: #1b1a18; /* the terminal */
+  --window-chrome: #22211e; /* the strip over the terminal */
+  --window-composer: #1f1e1b; /* the composer's well under it */
+  --window-field: #262521; /* the composer's field */
+  --window-ink: #e6e1d6;
+  --window-ink-soft: #a6a093;
+  --window-line: #2e2c28;
+  --window-edge: #45423d; /* a control's edge */
+  --window-raised: #34322e; /* a label over a terminal: the pane's tab */
+  --window-live: #69db7c; /* the dot of a pane that is attached */
+  --window-focus: #6c8cff; /* the focused pane of a split shell */
+  --window-divider-hover: color-mix(in srgb, var(--window-focus) 50%, transparent);
+  --window-selection: rgb(255 255 255 / 25%); /* selected text in the terminal */
+  --window-accent: #3b5bdb; /* the primary button, e.g. the composer's Send */
+  --window-accent-hover: #3354c9;
+  --window-danger: #ef8a8a;
+  --window-danger-soft: #3a2426;
+  --window-pressed: var(--window-edge);
+  --window-disabled: #333333;
+  --window-disabled-ink: #858585;
+  --window-notice: #3f3420; /* a notice over the terminal, e.g. a held permission prompt */
+  --window-chat-you: #26315c; /* your message in the chat view (AE1) */
+  --window-chat-you-ink: #dbe4ff;
+  --window-added: #8ce99a; /* a tool call's added lines in the chat view: +38 */
+  --window-chat-subagent: #222a40; /* a message between Codex agents in the chat view */
+  /* A code block's highlighting in the chat view, on its block (--window-chrome) or the window */
+  --window-code-keyword: #d0a2f7;
+  --window-code-string: #a9dc9c;
+  --window-code-number: #f2b880;
+  --window-code-comment: #9a9487;
+  --window-code-title: #8fb4ff;
+  --window-code-type: #e8c872;
+  --window-code-attr: #7ccfcf;
+  /* The terminal's 16 ANSI colours: xterm's own, for programs' output on the dark terminal */
+  --ansi-black: #2e3436;
+  --ansi-red: #cc0000;
+  --ansi-green: #4e9a06;
+  --ansi-yellow: #c4a000;
+  --ansi-blue: #3465a4;
+  --ansi-magenta: #75507b;
+  --ansi-cyan: #06989a;
+  --ansi-white: #d3d7cf;
+  --ansi-bright-black: #555753;
+  --ansi-bright-red: #ef2929;
+  --ansi-bright-green: #8ae234;
+  --ansi-bright-yellow: #fce94f;
+  --ansi-bright-blue: #729fcf;
+  --ansi-bright-magenta: #ad7fa8;
+  --ansi-bright-cyan: #34e2e2;
+  --ansi-bright-white: #eeeeec;
+
+  /*
+   * Shadows. Crisp, unblurred layers only on the board: it repaints every tile on each pan frame, and a blurred shadow
+   * on a tilted tile made that cost ~40 ms a frame with 200 tiles (e2e/board-perf.spec.ts). Controls, cards and chips
+   * over the board are few, so they may blur.
+   */
+  --shadow-tile: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
+  --shadow-raised: var(--shadow-tile); /* the inbox, the dock */
+  --shadow-control: 0 1px 0 rgb(43 42 39 / 7%), 0 1px 2px rgb(43 42 39 / 5%); /* a button */
+  --shadow-primary: 0 1px 0 rgb(30 50 140 / 25%), inset 0 1px 0 rgb(255 255 255 / 18%);
+  --shadow-input: inset 0 1px 1px rgb(43 42 39 / 4%);
+  --shadow-overlay: 0 1px 0 rgb(43 42 39 / 5%), 0 12px 28px -12px rgb(43 42 39 / 28%); /* dialogs, menus, popovers */
+  /* An island floating over the board (chrome C): few of them, so they may blur. */
+  --shadow-attention: 0 0 0 3px var(--shadow-attention-ring);
+  --shadow-tab-picked: 0 0 0 1px var(--border); /* the picked tab of a row of tabs */
+  --shadow-row-picked: inset 0 0 0 1.5px var(--accent); /* the picked row of a list to pick from (Add zone) */
+  --shadow-loose-dot: inset 0 0 0 1.5px var(--muted); /* the hollow dot for the board's loose sessions */
+  --shadow-island: 0 1px 0 rgb(43 42 39 / 5%), 0 12px 32px -8px rgb(43 42 39 / 28%), 0 2px 6px rgb(43 42 39 / 8%);
+  --shadow-tooltip: 0 6px 16px -6px rgb(0 0 0 / 40%);
+  --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 45%);
+  /* A tile being dragged (TileCompact mock): blurred, as only the one tile in hand draws it. */
+  --shadow-lifted: 0 2px 0 rgb(43 42 39 / 5%), 0 10px 14px -4px rgb(43 42 39 / 16%), 0 34px 48px -16px rgb(43 42 39 / 42%);
+  --shadow-expanded: 0 1px 0 rgb(40 32 16 / 12%), 0 4px 0 -1px rgb(40 32 16 / 8%), 0 10px 0 -4px rgb(40 32 16 / 5%); /* an expanded tile at rest: unblurred, as several may be open while the board pans */
+  --shadow-window: 0 0 0 1px rgb(43 42 39 / 22%), 0 30px 60px -18px rgb(0 0 0 / 50%), 0 12px 24px -12px rgb(0 0 0 / 25%);
+
+  /* Drag lift: a tile being dragged draws a little bigger and tilts a little further (TileCompact mock). */
+  --lift-scale: 1.04;
+  --lift-tilt: 1.5deg;
+
+  /* Layers: what stacks over what, lowest first. The board's own nodes and panels stack below all of these. */
+  --layer-raised: 2; /* over a sibling: a split shell's divider */
+  --layer-tool: 4; /* an armed tool's overlay: over the board's items, under React Flow's panels (5) */
+  --layer-connector-label: 4; /* a connector's label and style bar: over the lines, which are over the objects they join */
+  --layer-chrome: 10; /* the islands floating over the board: over its panels (5), under a session window */
+  --layer-window: 20; /* a session window shown on the board */
+  --layer-dock: 21; /* the dock, over a shown session window */
+  --layer-dialog: 30; /* a modal dialog and its scrim */
+  --layer-popover: 40; /* menus and popovers, which a dialog may open */
+  --layer-toast: 50;
+  --layer-tooltip: 60;
+
+  /* Spacing: --space-N is N × 4px */
+  --space-px: 1px;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-25: 5px;
+  --space-1-5: 6px;
+  --space-1-75: 7px;
+  --space-2: 8px;
+  --space-2-25: 9px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-4-5: 18px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-5-5: 22px;
+  --space-6-5: 26px;
+  --space-7-5: 30px;
+  --space-9: 36px;
+  --space-10: 40px;
+  --space-11: 44px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-18: 72px;
+  --space-20: 80px;
+  --space-22: 88px;
+  --space-24: 96px;
+  --space-30: 120px;
+
+  /* Radius: a scale, then the roles that sit between its steps */
+  --radius-xs: 3px; /* a zone's colour swatch */
+  --radius-sm: 4px; /* chips */
+  --radius-md: 6px; /* tags, notices */
+  --radius-lg: 8px; /* buttons, inputs, session windows */
+  --radius-xl: 10px; /* tiles, choice cards, the inbox */
+  --radius-chat-you: 12px 12px 4px 12px; /* your message in the chat view, its tail to the bottom right */
+  --radius-2xl: 14px; /* zones, empty states */
+  --radius-pill: 999px;
+  --radius-key: 5px; /* a key cap, a checkbox */
+  --radius-item: 7px; /* a small button, a menu row, a tooltip */
+  --radius-toast: 11px;
+  --radius-card: 12px; /* a dialog, menu or popover */
+  --radius-window: 14px; /* a session window on the board */
+
+  /* Type: body text is --font-size-md; dense chrome (tiles, badges) steps down the scale, headings up it. */
+  --font-sans: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, Menlo, monospace; /* branches, paths, keys and the terminal */
+  --font-hand: Caveat, cursive; /* a sticky note's handwriting */
+  --font-size-2xs: 10.5px; /* a key cap, a section's caps label */
+  --font-size-3xs: 8.5px; /* a tool's key in its corner */
+  --font-size-badge: 11px; /* a count badge */
+  --font-size-xs: 11.5px; /* a pill, code */
+  --font-size-sm: 12px; /* a label, a small button, a tooltip */
+  --font-size-sm-plus: 12.5px; /* an empty state's body */
+  --font-display: var(--font-sans); /* titles on link cards */
+  --font-size-md: 13px; /* body */
+  --font-size-lg: 14.5px; /* a tile's name */
+  --font-size-xl: 15px; /* an empty state's title */
+  --font-size-2xl: 16px; /* a dialog's title */
+  --font-size-3xl: 22px; /* a page's title */
+  --font-size-md-plus: 14px; /* onboarding's body and rows */
+  --font-size-3xl-minus: 19px; /* an onboarding choice's title */
+  --font-size-4xl: 26px; /* an onboarding step's title */
+  --font-size-hero: 32px; /* onboarding's welcome */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-heavy: 800; /* onboarding's step titles */
+  --leading-body: 1.4;
+  --leading-snug: 1.35;
+  --leading-tight: 1.15; /* one-line controls */
+  --leading-none: 1; /* a glyph set in a corner */
+  --tracking-caps: 0.08em; /* small uppercase labels */
+  --tracking-tight: -0.02em; /* large headings */
+  --tracking-snug: -0.01em; /* a window's title */
+  --tracking-heading: -0.025em; /* an onboarding step's title */
+  --tracking-display: -0.03em; /* onboarding's welcome */
+  --leading-roomy: 1.45; /* onboarding's longer copy */
+
+  /* Sizes */
+  --size-badge: 18px; /* a count badge's height and minimum width; a key cap's */
+  --size-pill: 20px; /* a state pill's height */
+  --size-tag: 22px; /* a tag's height */
+  --size-chip: 18px; /* a chip's height: a tile's PR, issue key or schedule */
+  --size-dot: 6px; /* a state pill's dot */
+  --size-dot-md: 8px; /* the Needs-you pill's dot */
+  --size-dot-lg: 10px; /* a zone's colour beside its name */
+  --size-swatch-sm: 9px; /* a zone's colour in a list */
+  --size-logo: 30px; /* the app's mark on the board menu (brand/BRAND.md: about 30px) */
+  --size-panel: 352px; /* the board menu's and settings' panels */
+  --size-inbox: 372px; /* the Needs-you inbox's popover */
+  --size-zoom-level: 52px; /* the zoom island's percentage */
+  --size-minimap-width: 184px;
+  --size-minimap-height: 118px;
+  --size-empty-board: 420px; /* the empty board's welcome */
+  --size-empty-board-mark: 72px; /* the app's mark over it */
+  --size-zone-tab: 28px; /* a zone's tab */
+  --size-clone-bar: 72px; /* a cloning zone's progress bar, on its tab */
+  --size-clone-bar-height: 5px;
+  --size-repo-picker: 360px; /* the repo picker beside a new agent's tile (AH1) */
+  --size-add-zone: 700px; /* the Add zone popover: wide enough for its foot, the name, eight colours and two buttons */
+  --size-add-zone-list: 300px; /* its list's tallest, before it scrolls */
+  --size-add-zone-teams: 190px; /* its Linear tab's teams column, beside the team's projects */
+  --size-add-zone-progress: 96px; /* a Linear project's progress bar */
+  --size-add-zone-mark: 26px; /* a repo owner's initials, a team's key */
+  --size-zone-name: 150px; /* the name field at its foot */
+  --size-flow-label: 120px; /* the room a flow edge's label ("issue brief", "final message") is drawn in */
+  --size-flow-label-height: 24px;
+  --size-flow-note: 136px; /* the note under a flow edge's label: "held until CI green", "paused" */
+  --size-flow-send: 64px; /* the Send button a manual flow edge's label ends in */
+  --size-flow-payload: 124px; /* the payload chip travelling along an edge in a hand-off */
+  --size-flow-payload-height: 26px;
+  --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
+  --size-edge-rules: 384px; /* the Edge rules panel's width (FlowDraw AB2) */
+  --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
+  --size-edge-history-time: 64px; /* its history's times: "14:01", "Fri 17:40" */
+  --size-tile-head: 22px; /* a tile's head row */
+  --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */
+  --size-tile-name: 96px; /* a tile's name, narrowest: it never gives way to badges */
+  --size-details: 316px; /* a session window's details strip */
+  --size-details-min: 200px; /* the least it is dragged to, before it collapses to the rail */
+  --size-chat-io: 240px; /* the most of a tool call's input or output the chat view shows before it scrolls */
+  --size-rail: 54px; /* the details collapsed to an icon rail */
+  --size-composer: 42px; /* the composer's field, one line high */
+  --size-composer-max: 200px; /* the most the composer's field grows to with the lines typed, before it scrolls */
+  --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
+  --size-dock-item: 260px; /* a window's chip in the dock, widest */
+  --size-dock-clear: 200px; /* room the dock leaves each side for the zone and zoom islands */
+  --control-xs: 18px; /* an icon button in a dense row: a tile's head */
+  --control-sm: 26px; /* a small button or input's height */
+  --control-row: 30px; /* a menu's row */
+  --control-md: 32px; /* a button or input's height */
+  --control-lg: 44px; /* a full-page step's main actions: onboarding's */
+  --control-section: 34px; /* a side panel section's heading row */
+  --size-tool: 36px; /* a tool on the creation toolbar */
+  --size-tool-sm: 30px; /* a tool on a smaller island: zoom, the board menu */
+  --size-separator: 22px; /* the rule between an island's groups */
+  --island-inset: 14px; /* how far the islands float from the window's edges (ChromeC) */
+  --island-height: 46px; /* the top islands', so they share a midline with the traffic lights (main/chrome.ts) */
+  --size-traffic-lights: 72px; /* the room macOS's traffic lights take, from the window's left edge */
+  --icon-xs: 12px; /* in a pill or an extra-small control */
+  --icon-sm: 14px; /* in a button or menu row */
+  --icon-md: 16px; /* in a medium icon button, or on its own */
+  --icon-lg: 18px; /* on a toolbar tool */
+  --size-check: 16px; /* a checkbox or radio */
+  --size-switch: 30px; /* a switch's track width */
+  --size-switch-height: 18px;
+  --size-knob: 14px; /* a switch's knob */
+  --size-swatch: 18px; /* a colour swatch */
+  --size-swatch-lg: 20px; /* a colour swatch on a text item's or shape's bar */
+  --size-divider: 7px; /* the grab area between split panes */
+  --size-divider-overhang: calc(var(--size-divider) / 2); /* how far a grab area reaches over each neighbour */
+  --size-tooltip: 240px; /* a tooltip's widest */
+  --size-toast: 380px; /* a toast's widest */
+  --size-menu: 214px; /* a menu's narrowest */
+  --size-empty-body: 200px; /* an empty state's text, widest */
+  --size-dialog: 440px; /* a dialog's width */
+
+  /* Onboarding (mocks X–AA) */
+  --radius-sheet: 20px; /* an onboarding step's card */
+  --shadow-sheet: 0 1px 0 rgb(43 42 39 / 5%), 0 30px 60px -20px rgb(43 42 39 / 45%), 0 8px 18px -10px rgb(43 42 39 / 18%);
+  --shadow-coach: 0 1px 0 rgb(43 42 39 / 5%), 0 24px 48px -16px rgb(0 0 0 / 50%); /* a tour callout */
+  --shadow-tour-ring: 0 0 0 5px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 24px 4px color-mix(in srgb, var(--step-done) 45%, transparent), 0 0 0 100vmax var(--tour-scrim);
+  --onboarding-veil: color-mix(in srgb, var(--surface) 50%, transparent); /* over the board, under a step's card */
+  --blur-veil: 6px;
+  --tour-scrim: rgb(36 35 32 / 56%); /* the tour's dimming, round its spotlight */
+  --step-done: #91a7ff; /* a step's bar once done */
+  --step-todo: var(--border);
+  --linear-mark: #5e6ad2;
+  --size-onboarding-welcome: 760px;
+  --size-onboarding-connect: 820px;
+  --size-onboarding-finish: 860px;
+  --size-onboarding-lead: 520px;
+  --size-onboarding-progress: 180px;
+  --size-onboarding-progress-inline: 120px;
+  --size-onboarding-logo: 64px;
+  --size-onboarding-picture: 128px; /* a welcome point's drawing */
+  --size-onboarding-choice-picture: 210px; /* a finish choice's drawing */
+  --size-onboarding-choice-icon: 28px;
+  --size-onboarding-menu-row: 24px;
+  --size-onboarding-ring: 40px; /* the Connect step's progress ring */
+  --size-onboarding-key: 300px; /* the Linear key field */
+  --size-onboarding-tour-icon: 34px;
+  --size-row-icon: 40px; /* a Connect row's icon tile */
+  --size-step-bar: 5px;
+  --size-mini-bar: 5px; /* a line of text in a drawn tile */
+  --size-coach: 340px; /* a tour callout */
+  --size-beak: 14px; /* a tour callout's pointer */
+  --size-tour-dot-current: 18px;
+  --desk-dot-gap: var(--space-6); /* between the desk's dots */
+  --desk-dot-size: 1.5px;
+
+  /* Motion. theme.ts reads durations in ms or s. */
+  --motion-fast: 120ms; /* a control's hover and press, a menu or dialog appearing */
+  --motion-base: 200ms; /* the board moving to show something */
+  --motion-spin: 800ms; /* one turn of a loading spinner */
+  --motion-pop: 260ms; /* a subagent popping in */
+  --motion-step: 190ms; /* a running character's bob */
+  --motion-stride: 380ms; /* a running character's leg swing: two bobs */
+  --motion-handoff: 1600ms; /* a payload's trip along a flow edge; a hand-off shows for at least this long */
+  --motion-flowing: 600ms; /* the dashes along an edge moving on by one gap */
+  --ease-in: cubic-bezier(0.42, 0, 1, 1); /* leaving */
+  --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1); /* back and forth */
+  --ease-out: cubic-bezier(0, 0, 0.58, 1); /* arriving */
+  --ease-spring: cubic-bezier(0.3, 1.6, 0.6, 1); /* overshoots, then settles */
+  --ease-linear: linear; /* a spinner's steady turn */
+}
+
+/*
+ * The session window is dark in every theme, as a terminal is. Its controls read the same role tokens as everywhere
+ * else, pointed here at the window's own, so a button in it is the same Button. Aliases resolve where they are
+ * declared, so each role a control reads is pointed again here, not only the literals.
+ */
+[data-surface='window'] {
+  color-scheme: dark;
+  --surface: var(--window-chrome);
+  --raised: var(--window-bg);
+  --sunken: var(--window-bg);
+  --border: var(--window-line);
+  --control-edge: var(--window-edge);
+  --separator: var(--window-line);
+  --hover: var(--window-line);
+  --pressed: var(--window-pressed);
+  --tag: var(--window-line);
+  --text: var(--window-ink);
+  --text-soft: var(--window-ink);
+  --muted: var(--window-ink-soft);
+  --placeholder: var(--window-ink-soft);
+  --kbd-ink: var(--window-ink-soft);
+  --primary: var(--window-accent);
+  --primary-edge: var(--window-accent);
+  --primary-hover: var(--window-accent-hover);
+  --on-primary: var(--on-accent);
+  --disabled: var(--window-disabled);
+  --disabled-edge: var(--window-line);
+  --disabled-ink: var(--window-disabled-ink);
+  --danger: var(--window-danger);
+  --danger-soft: var(--window-danger-soft);
+  --danger-edge: var(--window-danger-soft);
+  --warning-soft: var(--window-notice);
+  --focus: var(--window-focus);
+  --focus-edge: var(--window-focus);
+  --focus-halo: color-mix(in srgb, var(--window-focus) 30%, transparent);
+  --shadow-focus: 0 0 0 3px var(--focus-halo);
+  --shadow-control: none;
+  --shadow-input: none;
+}
+
+/*
+ * The dark theme: AN1 Warm graphite. Near-black warm greys, the light
+ * theme's blue kept for fills, state colours muted. It sets every colour the light theme writes as a literal, bar the
+ * few that are the same in both (tokens.test.ts lists them), and the aliases that would otherwise follow the wrong way:
+ * a scrim shaded with the light text, a zone's tab shaded towards it.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --surface: #1b1a19;
+  --surface-dot: #2e2c29;
+  --raised: #242322;
+  --raised-edge: #45423d;
+  --border: #34322f;
+  --control-edge: #3d3a36;
+  --separator: #2c2a28;
+  --hover: #2f2d2a;
+  --panel: #201f1e;
+  --pressed: #3a3733;
+  --scrim: rgb(0 0 0 / 50%);
+  --scrim-window: rgb(0 0 0 / 60%);
+  --key-hint: #7d776c;
+
+  /* Text */
+  --text: #ece8df;
+  --text-soft: #cfc9bb;
+  --muted: #a39d90;
+  --placeholder: #9c968a;
+  --neutral-ink: #b5afa2;
+
+  /* Accent: the blue stays a fill under white text; as text it is lifted */
+  --accent: #3b5bdb;
+  --accent-strong: #b4c3ff;
+  --accent-soft: #262c45;
+  --accent-faint: #22252f;
+  --accent-ink: #9fb2ff;
+  --toggle-on-ink: #9fb2ff;
+  --primary-edge: #4c6ef5;
+  --primary-hover: #3354c9;
+
+  /* Disabled */
+  --disabled: #2a2927;
+  --disabled-edge: #34322f;
+  --disabled-ink: #6f6a60;
+
+  /* Checks and focus */
+  --check-edge: #5a5650;
+  --focus-edge: #5c7cfa;
+
+  /* Inverse: a light chip on the dark desk */
+  --inverse-raised: #d6d1c5;
+  --inverse-edge: #bdb7aa;
+  --on-inverse-soft: #2b2a27;
+  --inverse-success: #2b8a3e;
+  --inverse-danger: #c92a2a;
+
+  /* Feedback */
+  --danger: #ff9a9a;
+  --danger-soft: #3a2224;
+  --danger-edge: #5a3034;
+  --warning: #f08c4a;
+  --warning-soft: #382a1c;
+  --warning-edge: #6a4526;
+  --success: #7fc98b;
+  --success-soft: #26332a;
+  --neutral: #b8b2a6;
+  --neutral-soft: #2c2b28;
+  --neutral-edge: #45423d;
+
+  /* Agent state: muted, as drawn */
+  --state-running: #4f9e5c;
+  --state-thinking-ink: #9fb2ff;
+  --state-waiting: #e07a35;
+  --state-waiting-ink: #f0a46c;
+  --state-waiting-soft: #3a2a1f;
+  --state-idle-soft: #2f2d2a;
+  --state-rate-limited: #d9a441;
+  --state-rate-limited-ink: #e8c06a;
+  --state-rate-limited-soft: #352c1a;
+  --state-failed: #ef8080;
+  --state-failed-soft: #3a2224;
+  --state-scheduled: #7db4e6;
+  --state-scheduled-soft: #1f2c3a;
+  --state-stopped-by-restart: #8f897d;
+  --state-stopped-by-restart-ink: #b5afa2;
+  --state-stopped-by-restart-soft: #2c2b28;
+  --ask: #33281f;
+  --ask-edge: #4a3826;
+  --ask-ink: #f3d9c2;
+
+  /* Pull requests */
+  --pr-merged: #b197fc;
+  --pr-merged-soft: #2e2645;
+
+  /* A review's severity counts: light marks, so dark numbers on them */
+  --severity-minor: #a39d90;
+  --on-severity: #1b1a19;
+  --badge: #c2410c; /* a count under white: the waiting ink is too light for it */
+
+  /* Zones: a lighter tint on the dark desk, and the tab shaded towards the desk rather than the (light) text */
+  --zone-fill-mix: 6%;
+  --zone-edge-mix: 40%;
+  --zone-tab-mix: 55%;
+  --zone-tab-shade: var(--surface);
+
+  /* Sticky notes: each pastel dimmed to about 82% so it doesn't glare, with a dark ink of its own */
+  --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --sticky-other-ink: #2b2614;
+  --sticky-link: #1f3590;
+  --sticky-yellow: #d9cc84;
+  --sticky-yellow-ink: #2b2614;
+  --sticky-orange: #d9b48a;
+  --sticky-orange-ink: #2e1f10;
+  --sticky-pink: #d4a0b4;
+  --sticky-pink-ink: #2e1621;
+  --sticky-violet: #ad9fd6;
+  --sticky-violet-ink: #1f1838;
+  --sticky-blue: #8bb4d4;
+  --sticky-blue-ink: #10212f;
+  --sticky-green: #96c99d;
+  --sticky-green-ink: #132816;
+  --sticky-grey: #c4c6c8;
+  --sticky-grey-ink: #1e2022;
+  --sticky-white: #d6d3cc;
+  --sticky-white-ink: #26231c;
+
+  /* Text, connectors and outlines on the desk: lifted so they read on it */
+  --paint-ink: #ece8df;
+  --paint-grey: #a39d90;
+  --paint-red: #ff8787;
+  --paint-orange: #ffa94d;
+  --paint-green: #69db7c;
+  --paint-blue: #91a7ff;
+  --paint-violet: #b197fc;
+  --shape-fill-yellow: #d9cfa2;
+  --shape-fill-green: #b3d4b8;
+  --shape-fill-blue: #b1c8d9;
+  --shape-fill-pink: #d9bdc8;
+  /* Text in a filled shape: darkened to read on the dimmed fills */
+  --shape-ink-ink: #2b2a27;
+  --shape-ink-grey: #534f48;
+  --shape-ink-red: #9b2020;
+  --shape-ink-orange: #8f300a;
+  --shape-ink-green: #1b5c27;
+  --shape-ink-blue: #2e47ab;
+  --shape-ink-violet: #5536b4;
+
+  /* Flow edges: a lighter line, so a thin one shows on the dark desk */
+  --flow-edge: #6c86f0;
+
+  /* The session window: its terminal an inset well, a step darker than a tile, so it no longer matches the desk */
+  --window-bg: #121110;
+  --window-chrome: #1a1918;
+  --window-composer: #161514;
+  --window-field: #1f1e1c;
+
+  /* The terminal's ANSI colours, warm to match, each but black readable on the well */
+  --ansi-black: #3d3a36;
+  --ansi-red: #e06c6c;
+  --ansi-green: #8cc084;
+  --ansi-yellow: #e0c070;
+  --ansi-blue: #7aa2e0;
+  --ansi-magenta: #c493d6;
+  --ansi-cyan: #6cc4c4;
+  --ansi-white: #cfc9bb;
+  --ansi-bright-black: #8a8478;
+  --ansi-bright-red: #ff8787;
+  --ansi-bright-green: #a9dc9c;
+  --ansi-bright-yellow: #f2d98a;
+  --ansi-bright-blue: #9fb8f5;
+  --ansi-bright-magenta: #dcb0ea;
+  --ansi-bright-cyan: #8edede;
+  --ansi-bright-white: #ece8df;
+
+  /* Shadows: mostly lost on the dark desk, so a tile's is a dark unblurred drop beside its border */
+  --shadow-tile: 0 1px 0 rgb(0 0 0 / 45%), 0 3px 0 -1px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
+  --shadow-control: 0 1px 0 rgb(0 0 0 / 30%);
+  --shadow-primary: 0 1px 0 rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 12%);
+  --shadow-input: inset 0 1px 1px rgb(0 0 0 / 20%);
+  --shadow-overlay: 0 1px 0 rgb(0 0 0 / 30%), 0 12px 28px -12px rgb(0 0 0 / 70%);
+  --shadow-island: 0 12px 28px -10px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 35%);
+  --shadow-lifted: 0 2px 0 rgb(0 0 0 / 30%), 0 10px 14px -4px rgb(0 0 0 / 40%), 0 34px 48px -16px rgb(0 0 0 / 70%);
+  --shadow-expanded: 0 1px 0 rgb(0 0 0 / 45%), 0 4px 0 -1px rgb(0 0 0 / 28%), 0 10px 0 -4px rgb(0 0 0 / 16%);
+  --shadow-window: 0 0 0 1px #3d3a36, 0 30px 60px -18px rgb(0 0 0 / 80%), 0 12px 24px -12px rgb(0 0 0 / 50%);
+
+  /* Onboarding */
+  --shadow-sheet: 0 1px 0 rgb(0 0 0 / 30%), 0 30px 60px -20px rgb(0 0 0 / 75%), 0 8px 18px -10px rgb(0 0 0 / 40%);
+  --shadow-coach: 0 1px 0 rgb(0 0 0 / 30%), 0 24px 48px -16px rgb(0 0 0 / 75%);
+  --tour-scrim: rgb(0 0 0 / 62%);
+}

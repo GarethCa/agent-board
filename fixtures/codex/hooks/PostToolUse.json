@@ -1,0 +1,15 @@
+{
+  "session_id": "01a11d9d-d2ba-70f1-9787-3b02e9bd8484",
+  "turn_id": "01a11d9d-fa06-70a2-b15b-a752695eda07",
+  "transcript_path": "/Users/dev/.codex/sessions/2026/10/08/rollout-2026-10-08T23-24-04-01a11d9d-d2ba-70f1-9787-3b02e9bd8484.jsonl",
+  "cwd": "/Users/dev/code/demo",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf 'hi' > y.txt"
+  },
+  "tool_response": "",
+  "tool_use_id": "exec-578907a2-eccf-4559-a6bd-cbec820fe679"
+}

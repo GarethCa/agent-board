@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in agent-board doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search existing issues first. Security problems go through [SECURITY.md](https://github.com/GarethCa/agent-board/blob/main/SECURITY.md), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any error text.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a zone for …
+        2. Spawn a Claude agent …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: agent-board commit
+      description: Output of `git rev-parse --short HEAD` in your clone.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: macOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness versions
+      description: If the bug involves an agent, the output of `claude --version` and/or `codex --version`.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from the daemon log (`daemon.log` in the app's data directory, `~/Library/Application Support/agent-board` on macOS). Remove anything private first.
+      render: text

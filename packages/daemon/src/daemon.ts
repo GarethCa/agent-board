@@ -1,0 +1,746 @@
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { createServer, type Server, type Socket } from 'node:net';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import {
+  cloneRepo,
+  createGitHubTracker,
+  createKeychainStore,
+  createLinearTracker,
+  listPullRequests,
+  mergePullRequest,
+  type CredentialStore,
+} from '@agent-board/tracker';
+import { agentHandlers, createAgentHost } from './agents.ts';
+import { systemClock, type Clock } from './clock.ts';
+import { externalHookFiles, externalHooksHandlers } from './external-hooks.ts';
+import { createExternalSessionHost, externalHandlers, type ExternalSessionHost } from './external-sessions.ts';
+import { externalResumeHandlers } from './resume-external.ts';
+import { removeExternalHookFile, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
+import { connectorHandlers } from './connectors.ts';
+import { commandPlan } from './flow-approvals.ts';
+import { createConditionChecker, createShellRunner } from './flow-conditions.ts';
+import { createFlowEdgeHost } from './flow-edges.ts';
+import { runGit } from './git.ts';
+import { itemHandlers, itemsLeavingZone } from './items.ts';
+import { hashHookToken, newHookToken, startHookIngress, type HookIngress } from './hook-ingress.ts';
+import { acquireDaemonLock } from './lock.ts';
+import { adoptLoginShellPath } from './login-path.ts';
+import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
+import { daemonPaths, prepareSocketDir } from './paths.ts';
+import {
+  DAEMON_VERSION,
+  eventLine,
+  PROTOCOL_VERSION,
+  lineSplitter,
+  waitsForYou,
+  type BuildInfo,
+  type DaemonEvent,
+  type DaemonHealth,
+  type DaemonMethods,
+  type Harness,
+  type SessionInfo,
+  type TrackerProvider,
+  type ZoneTracker,
+} from './protocol.ts';
+import { createNodePtyBackend } from './node-pty-backend.ts';
+import { dimensionParam, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { DEFAULT_PERMISSION_HOLD_MS } from './permissions.ts';
+import { fixtureFetch } from './link-fixture-fetch.ts';
+import type { FetchLike } from './link-metadata.ts';
+import { createSafeFetch } from './safe-fetch.ts';
+import { createImageStore } from './image-store.ts';
+import { createImageSweeper } from './image-sweeper.ts';
+import { createLinkCards } from './link-cards.ts';
+import { createReviewHost } from './reviews.ts';
+import { handleRpcLine, type RpcHandlers } from './rpc.ts';
+import { createScheduleHost } from './schedules.ts';
+import { createSettings } from './settings.ts';
+import { createShellHost } from './shells.ts';
+import { followSystemTimeZone } from './time-zone.ts';
+import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
+import type { TerminalBackend } from './terminal-backend.ts';
+import { watchPullRequests } from './pull-requests.ts';
+import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
+import { setupHandlers } from './setup-checks.ts';
+import { viewStateHandlers } from './view-state.ts';
+import { createZoneSources, type RepoCloner, type ZoneSources } from './zone-sources.ts';
+import { zoneDissolveHandlers } from './zone-dissolve.ts';
+import { createZoneTable, zoneHandlers } from './zones.ts';
+
+export interface DaemonOptions {
+  /** Holds the database, socket, lock and log. Created if missing. */
+  dataDir: string;
+  /** The build this daemon runs, reported by `daemon.health` so an app can tell it is from another build. */
+  build?: BuildInfo;
+  /** How long the daemon waits with no clients and no live sessions before it exits. */
+  idleTimeoutMs?: number;
+  /** How often it checks whether it is idle. */
+  idleCheckIntervalMs?: number;
+  /** How long its data dir must stay missing (ENOENT, checked on every idle tick) before it exits. */
+  dataDirGraceMs?: number;
+  log?: (message: string) => void;
+  /**
+   * The user's home directory, where a shell session with no folder starts, and every shell in an unbound zone:
+   * `os.homedir()` by default. Tests point it at a temp dir.
+   */
+  homeDir?: string;
+  /** The shell a shell session runs: `$SHELL` by default. */
+  shell?: string;
+  /** Its arguments: `-l` by default, a login shell as terminal apps start, so it gets the user's profile and PATH. */
+  shellArgs?: string[];
+  /** How long killing a session waits after SIGHUP before it sends SIGKILL. */
+  killGraceMs?: number;
+  /** How long a session's output must go quiet before its screen is saved (tests shorten it). */
+  saveQuietMs?: number;
+  /** The longest piece of a terminal snapshot sent in one event (tests shorten it). */
+  snapshotChunkLength?: number;
+  /** Where sessions' terminals live: the built-in node-pty backend by default (ADR-0006). */
+  terminalBackend?: TerminalBackend;
+  /**
+   * Where agent worktrees go (ADR-0007): `$AGENT_BOARD_WORKTREES_DIR`, else `~/.agent-board/worktrees`.
+   */
+  worktreesDir?: string;
+  /**
+   * Where an agent started in a scratch repo gets one (ADR-0007): `$AGENT_BOARD_SCRATCH_DIR`, else
+   * `~/.agent-board/scratch`.
+   */
+  scratchDir?: string;
+  /** The environment agents' harnesses start from: the daemon's own by default. Tests point it at the fakes. */
+  agentEnv?: NodeJS.ProcessEnv;
+  /**
+   * How long a PermissionRequest hook is held for an answer from the needs-you inbox before the harness's own
+   * prompt takes over: `DEFAULT_PERMISSION_HOLD_MS` by default.
+   */
+  permissionHoldMs?: number;
+  /**
+   * How to run this app's `agent-board` CLI, which Codex agents' hooks run as the forwarder. When set, the daemon
+   * (re)writes the shim at `hookShimPath` to run it, at start and before each Codex spawn; without it, the shim is
+   * left as it is.
+   */
+  hookForwarder?: CliLauncher;
+  /**
+   * The stable launcher Codex's hook command names (ADR-0004): `$AGENT_BOARD_HOOK_SHIM`, else
+   * `~/.agent-board/bin/agent-board-hook`.
+   */
+  hookShimPath?: string;
+  /**
+   * Where tracker credentials live: the OS keychain by default, or the macOS keychain file
+   * `$AGENT_BOARD_KEYCHAIN` (for tests).
+   */
+  credentials?: CredentialStore;
+  /**
+   * The trackers zones can use: Linear, at `$AGENT_BOARD_LINEAR_API_URL` if set (for tests), and GitHub through `gh`,
+   * by default.
+   */
+  trackers?: Partial<Record<TrackerProvider, TrackerFactory>>;
+  /**
+   * Where the daemon leaves its address for external sessions' global hooks, which the shim tells them:
+   * `$AGENT_BOARD_EXTERNAL_HOOK_FILE`, else `external-hook.json` beside the shim's `bin` folder
+   * (`~/.agent-board/external-hook.json`).
+   */
+  externalHookFile?: string;
+  /** The global hook files `externalHooks.setEnabled` edits: `~/.claude/settings.json` and `~/.codex/hooks.json`. */
+  externalHookFiles?: Record<Harness, string>;
+  /** The GitHub CLI, for GitHub Issues, agents' pull requests and cloning repos: `$AGENT_BOARD_GH`, else `gh` on PATH. */
+  gh?: string;
+  /**
+   * Where zones made from a GitHub repo clone it, as `<reposDir>/<owner>/<repo>`: `$AGENT_BOARD_REPOS_DIR`, else
+   * `~/.agent-board/repos`.
+   */
+  reposDir?: string;
+  /** How those repos are cloned: with gh (`cloneRepo`) by default. */
+  cloneRepo?: RepoCloner;
+  /**
+   * How often it asks gh for agents' pull requests: `$AGENT_BOARD_PULL_REQUEST_POLL_MS` (for tests), else every
+   * `DEFAULT_PULL_REQUEST_POLL_MS`; 0 never asks gh for them at all.
+   */
+  pullRequestPollMs?: number;
+  /**
+   * How link cards fetch their pages: by default a fetch that refuses this machine and private networks (`createSafeFetch`),
+   * or the HTML file `$AGENT_BOARD_LINK_FETCH_HTML` names for every page (for the app's tests). Tests give a fake one:
+   * nothing in them reaches the network.
+   */
+  linkFetch?: FetchLike;
+  /** How long a stored image is spared by the sweep of unused ones: `DEFAULT_SWEEP_GRACE_MS` by default. */
+  imageSweepGraceMs?: number;
+  /** The time agents' schedules fire by: the system clock by default. Tests drive a fake one. */
+  clock?: Clock;
+  /**
+   * How often hand-offs held by an edge's conditions, and deliveries it queued, are tried again:
+   * `$AGENT_BOARD_FLOW_RECHECK_MS` (for tests), else `DEFAULT_FLOW_RECHECK_MS`; 0 never by itself.
+   */
+  flowRecheckMs?: number;
+}
+
+export interface DaemonExit {
+  reason: 'idle' | 'stopped' | 'data-dir-removed';
+}
+
+export interface Daemon {
+  socketPath: string;
+  hookPort: number;
+  /** Resolves once the daemon has shut down, by `stop()` or because it was idle. */
+  closed: Promise<DaemonExit>;
+  /** What it found as it started: the live sessions it picked up, and how many agents wait for the user. */
+  startedWith: { sessions: number; waiting: number };
+  stop(): Promise<void>;
+}
+
+export const DEFAULT_IDLE_TIMEOUT_MS = 5_000;
+const DEFAULT_DATA_DIR_GRACE_MS = 3_000;
+
+/** True only when the stat fails with ENOENT: any other error (EACCES, EIO, an unmounted volume) is not "removed". */
+function isMissing(path: string): boolean {
+  try {
+    statSync(path);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+/**
+ * A minute: often enough to see a PR's checks finish. One gh call per live agent (and per ended agent with an open
+ * PR) per round: GitHub's 5,000 an hour leave room for dozens of them. A PR an agent opens shows at once anyway: its
+ * agent is asked again when its turn ends.
+ */
+const DEFAULT_PULL_REQUEST_POLL_MS = 60_000;
+
+/**
+ * A minute, as for pull requests: a held hand-off's labels and scripts are checked that often, its gate only once
+ * its agent commits, and its PR checks also each time they change.
+ */
+const DEFAULT_FLOW_RECHECK_MS = 60_000;
+
+/**
+ * Starts the daemon (ADR-0002) on `dataDir`: takes the data dir's lock, opens and migrates the database, starts the
+ * hook ingress and serves JSON-RPC on the socket. Throws `DaemonAlreadyRunningError` if another daemon owns the dir.
+ * It stays up while a client is connected, a session is live or an agent has an enabled schedule, and exits once none
+ * has been true for `idleTimeoutMs`.
+ */
+export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
+  const log = options.log ?? ((message: string) => console.log(`[agent-board daemon] ${message}`));
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const idleCheckIntervalMs = options.idleCheckIntervalMs ?? Math.min(1_000, idleTimeoutMs);
+  const dataDirGraceMs = options.dataDirGraceMs ?? DEFAULT_DATA_DIR_GRACE_MS;
+  const paths = daemonPaths(options.dataDir);
+  mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
+
+  prepareSocketDir(paths);
+  const releaseLock = await acquireDaemonLock(paths.lock, paths.socket);
+  let db: DatabaseSync | undefined;
+  let ingress: HookIngress | undefined;
+  let external: ExternalSessionHost | undefined;
+  try {
+    db = openDatabase(paths.database);
+    const liveSessions = db.prepare('SELECT count(*) AS n FROM sessions WHERE ended_at IS NULL');
+    const sessionForToken = db.prepare('SELECT id FROM sessions WHERE hook_token_sha256 = ? AND ended_at IS NULL');
+    // An ended agent's pane's shell is no session to the user: it neither keeps the daemon up nor stops it stopping.
+    const countLiveSessions = () => (liveSessions.get() as { n: number }).n - agents.fallbackShellCount();
+
+    const clients = new Set<Socket>();
+    const broadcast = (event: DaemonEvent) => {
+      const line = eventLine(event);
+      for (const client of clients) if (!client.destroyed) client.write(line);
+    };
+
+    // Sessions a crashed daemon left live would otherwise keep this one up for good.
+    const lost = reconcileLostSessions(db);
+    if (lost > 0) log(`marked ${lost} session(s) left by a previous daemon as ended`);
+    const shell = options.shell ?? defaultShell();
+    const shellArgs = options.shellArgs ?? defaultShellArgs();
+    const homeDir = options.homeDir ?? homedir();
+    // Once, before anything is spawned: every CLI the daemon runs (git, gh, and the harnesses and shells of its
+    // sessions) is found on its PATH, which is launchd's bare one when the app was opened from the Dock or Finder.
+    const loginPath = await adoptLoginShellPath(shell, shellArgs);
+    if (loginPath !== undefined) log(`using the login shell's PATH: ${process.env.PATH}`);
+    else if (shellArgs.includes('-l')) log(`could not read ${shell}'s login PATH; keeping the daemon's own`);
+    // `agents` and `pullRequests` are created below, once the hook ingress has a port. No session can exit or post a
+    // hook before then.
+    const sessions = createSessionHost({
+      db,
+      scrollbackDir: join(paths.dataDir, 'scrollback'),
+      saveQuietMs: options.saveQuietMs,
+      snapshotChunkLength: options.snapshotChunkLength,
+      backend: options.terminalBackend ?? createNodePtyBackend({ log }),
+      shell,
+      shellArgs,
+      homeDir,
+      killGraceMs: options.killGraceMs,
+      broadcast,
+      log,
+      onCwd: (sessionId) => shells.onPaneFolder(sessionId),
+      onExit: (session) => {
+        agents.onExit(session);
+        reviews.onExit(session.id, session.stoppedByRestart);
+        shells.onSessionExit(session);
+      },
+    });
+
+    const shells = createShellHost({ db, sessions, homeDir, broadcast, log });
+    const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1');
+    const externalSessions = createExternalSessionHost({
+      db,
+      isAgentSession: (id) => isAgentSession.get(id) !== undefined,
+      broadcast,
+      log,
+    });
+    external = externalSessions;
+    const externalToken = newHookToken();
+    ingress = await startHookIngress({
+      sessionForToken: (hash) => (sessionForToken.get(hash) as { id: string } | undefined)?.id,
+      onHook: (sessionId, event, payload, signal) => {
+        broadcast({ type: 'hook', sessionId, event, payload });
+        // The turn has ended: the agent may just have opened a pull request.
+        if (payload.hook_event_name === 'Stop') void pullRequests.refresh(sessionId);
+        return agents.onHook(sessionId, payload, signal);
+      },
+      externalTokenSha256: hashHookToken(externalToken),
+      onExternalHook: (harness, payload) => {
+        externalSessions.onHook(harness, payload).catch((error: Error) => log(`external hook failed: ${error.message}`));
+      },
+    });
+    const hookPort = ingress.port;
+    const gh = options.gh ?? (process.env.AGENT_BOARD_GH || 'gh');
+    const hookShimPath = options.hookShimPath ?? defaultHookShimPath();
+    const externalHookFile = options.externalHookFile ?? defaultExternalHookFile(hookShimPath);
+    // Checked again before each Codex spawn, which fails if it can't be written; other agents don't need it.
+    const ensureHookShim = () => {
+      if (options.hookForwarder) writeHookShim(hookShimPath, options.hookForwarder, externalHookFile);
+    };
+    try {
+      writeExternalHookFile(externalHookFile, { url: `http://127.0.0.1:${hookPort}/external`, token: externalToken });
+    } catch (error) {
+      log(`could not write ${externalHookFile}; external sessions won't be reported: ${(error as Error).message}`);
+    }
+    try {
+      ensureHookShim();
+    } catch (error) {
+      log(`could not write the Codex hook launcher ${hookShimPath}: ${(error as Error).message}`);
+    }
+    const trackers = createTrackerHost({
+      db,
+      credentials:
+        options.credentials ?? createKeychainStore({ keychain: process.env.AGENT_BOARD_KEYCHAIN || undefined }),
+      providers: options.trackers ?? defaultTrackers(gh),
+    });
+    /** The tracker of the zone of the agent's own repo, wherever its tile sits. */
+    const repoZoneTracker = (sessionId: string) => {
+      const zoneId = agents.repoZoneId(sessionId);
+      return zoneId === undefined ? null : trackers.zoneTracker(zoneId);
+    };
+    // `agents` is created just below; the watcher's first round runs from a timer, once it exists.
+    const pullRequests = watchPullRequests({
+      // Not agents whose worktree is gone (removed by hand): gh can't be asked there. Nor one resumed outside git, or
+      // on a detached HEAD, with no branch to have pull requests.
+      agents: () =>
+        agents
+          .list()
+          .filter((agent) => agent.branch !== '' && existsSync(agent.worktree))
+          .map((agent) => ({
+            sessionId: agent.sessionId,
+            branch: agent.branch,
+            worktree: agent.worktree,
+            repo: githubRepo(repoZoneTracker(agent.sessionId)),
+            ended: agent.endedAt !== null,
+          })),
+      pullRequests: (agent) => listPullRequests(agent.branch, { gh, cwd: agent.worktree, repo: agent.repo }),
+      intervalMs:
+        options.pullRequestPollMs ??
+        (Number(process.env.AGENT_BOARD_PULL_REQUEST_POLL_MS) || DEFAULT_PULL_REQUEST_POLL_MS),
+      onChange: (sessionId) => {
+        agents.announce(sessionId);
+        flowEdges.recheck(sessionId);
+      },
+      log,
+    });
+    // `agents` is created just below; a schedule first fires from a timer, once it exists.
+    const schedules = createScheduleHost({
+      db,
+      clock: options.clock ?? systemClock,
+      run: (sessionId, prompt) => agents.runScheduled(sessionId, prompt),
+      onChange: (sessionId) => agents.announce(sessionId),
+      log,
+    });
+    // Gates and scripts an edge's conditions run, all stopped when the daemon shuts down.
+    const conditionShell = createShellRunner();
+    // Keeping only paths from now on drops the copies held now.
+    const settings = createSettings(db, (now, was) => {
+      if (now.heldPayloads === 'path' && was.heldPayloads !== 'path') flowEdges.dropCopies();
+    });
+    // `agents` is created just below; nothing hands off before it exists.
+    const flowEdges = createFlowEdgeHost({
+      db,
+      deliver: (from, to, name, text) => agents.deliver(from, to, name, text),
+      finalMessage: (sessionId) => agents.finalMessage(sessionId),
+      agent: (sessionId) => agents.get(sessionId),
+      conditions: createConditionChecker({
+        pullRequests: (sessionId) => pullRequests.get(sessionId),
+        async issueLabels(sessionId) {
+          const issue = agents.get(sessionId)?.issue;
+          if (issue === null || issue === undefined) return 'it has no linked issue';
+          return (await trackers.issueLabels(issue)) ?? `there is no ${issue.id} any more`;
+        },
+        plan: commandPlan,
+        run: (command, cwd, timeoutMs) => conditionShell.run(command, cwd, timeoutMs),
+        headCommit: async (cwd) => {
+          const head = await runGit(cwd, ['rev-parse', 'HEAD']);
+          return head.ok ? head.stdout : undefined;
+        },
+        now: () => new Date(),
+      }),
+      heldPayloads: () => settings.get().heldPayloads,
+      recheckMs: options.flowRecheckMs ?? (Number(process.env.AGENT_BOARD_FLOW_RECHECK_MS) || DEFAULT_FLOW_RECHECK_MS),
+      broadcast,
+      log,
+    });
+    // Schedules fire on local time, which follows the system's.
+    const stopFollowingTimeZone = followSystemTimeZone({ log });
+    const agents = createAgentHost({
+      db,
+      sessions,
+      worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
+      scratchDir: options.scratchDir ?? (process.env.AGENT_BOARD_SCRATCH_DIR || join(homedir(), '.agent-board', 'scratch')),
+      // The zone table is made below; agents remember folders only once they spawn.
+      rememberFolder: (path) => zoneTable.rememberFolder(path),
+      claudeCommand: 'claude',
+      codexCommand: 'codex',
+      hookShimPath,
+      ensureHookShim,
+      env: options.agentEnv ?? process.env,
+      shell,
+      shellArgs,
+      hookUrl: () => `http://127.0.0.1:${hookPort}/hooks`,
+      permissionHoldMs: options.permissionHoldMs ?? DEFAULT_PERMISSION_HOLD_MS,
+      trackers,
+      pullRequests: (sessionId) => pullRequests.get(sessionId),
+      schedules,
+      onHandoff: (sessionId) => {
+        flowEdges.handOff(sessionId);
+        reviews.onHandoff(sessionId);
+      },
+      onRemoving: (sessionId) => flowEdges.dropAgent(sessionId),
+      broadcast,
+      log,
+    });
+
+    const reviews = createReviewHost({
+      db,
+      agents,
+      pullRequests: (sessionId) => pullRequests.get(sessionId),
+      refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
+      async merge(sessionId, number, head) {
+        const agent = agents.get(sessionId)!;
+        await mergePullRequest(number, { gh, cwd: agent.worktree, repo: githubRepo(repoZoneTracker(sessionId)), headCommit: head });
+        await pullRequests.refresh(sessionId);
+      },
+      broadcast,
+      log,
+    });
+
+    const images = createImageStore(paths.dataDir, { graceMs: options.imageSweepGraceMs });
+    const linkFixture = process.env.AGENT_BOARD_LINK_FETCH_HTML;
+    // Pages a user pasted are not trusted: by default they are fetched without reaching this machine or its network.
+    const linkFetch = options.linkFetch ?? (linkFixture ? fixtureFetch(linkFixture) : createSafeFetch());
+    const sweeper = createImageSweeper(db, images, log);
+    const linkCards = createLinkCards({ fetch: linkFetch, images, trackers, log });
+    const startedAt = new Date().toISOString();
+    const schemaVersion = readSchemaVersion(db);
+    const leavingZone = itemsLeavingZone(db, broadcast);
+    // Sources is created just below; no clone runs before then.
+    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id));
+    const sources: ZoneSources = createZoneSources({
+      db,
+      zones: zoneTable,
+      trackers,
+      reposDir: options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos')),
+      clone: options.cloneRepo ?? ((repo, dir, clone) => cloneRepo(repo, dir, { ...clone, gh })),
+      removeZone: async (id, cloneFailed) => {
+        await leavingZone(id, () => zoneTable.remove(id, cloneFailed === undefined ? {} : { cloneFailed }));
+        // Sessions that were in it by their folder may be in no zone now.
+        externalSessions.placeUnsorted();
+      },
+      log,
+    });
+    await sources.reconcile();
+    const zones = zoneHandlers<unknown>(db, zoneTable, trackers);
+    const handlers: RpcHandlers<DaemonMethods, SessionSubscriber> = {
+      'daemon.health': (): DaemonHealth => ({
+        version: DAEMON_VERSION,
+        build: options.build ?? null,
+        protocolVersion: PROTOCOL_VERSION,
+        pid: process.pid,
+        schemaVersion,
+        hookPort,
+        startedAt,
+        clients: clients.size,
+        liveSessions: countLiveSessions(),
+        homeDir,
+      }),
+      'daemon.stop': (params, subscriber) => {
+        const liveSessions = countLiveSessions();
+        const stopped = optionalBooleanParam(paramsObject(params), 'force') === true || liveSessions === 0;
+        // Once the answer has gone out: shutting down drops every connection, the caller's too.
+        if (stopped) setImmediate(() => subscriber.whenDrained(() => void shutdown('stopped')));
+        return { stopped, liveSessions };
+      },
+      ...sessionHandlers(sessions, {
+        onInput: (sessionId, data) => agents.onInput(sessionId, data),
+        onShellCreated: (session) => shells.adopt(session),
+      }),
+      ...shells.handlers<SessionSubscriber>(),
+      ...zones,
+      'zone.remove': async (params, context) => {
+        const id = (params as { id?: unknown } | undefined)?.id;
+        const result = await leavingZone(typeof id === 'string' ? id : undefined, () => zones['zone.remove'](params, context));
+        externalSessions.placeUnsorted();
+        return result;
+      },
+      // Sessions in its folder are in no zone now, or in another of theirs.
+      'zone.unbind': async (params, context) => {
+        const result = await zones['zone.unbind'](params, context);
+        externalSessions.placeUnsorted();
+        return result;
+      },
+      ...zoneDissolveHandlers<SessionSubscriber>({
+        db,
+        zones: zoneTable,
+        agents,
+        shells,
+        externals: externalSessions,
+        broadcast,
+        removeZone: (id) => leavingZone(id, () => zoneTable.remove(id)),
+      }),
+      ...sources.handlers<SessionSubscriber>(),
+      ...connectorHandlers(db, broadcast),
+      ...flowEdges.handlers<SessionSubscriber>(),
+      ...itemHandlers(db, broadcast, { images, sweeper, linkCards, log }),
+      ...viewStateHandlers<SessionSubscriber>(db),
+      ...settings.handlers<SessionSubscriber>(),
+      ...agentHandlers(agents),
+      // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
+      'agent.delete': (params, context) => {
+        const sessionId = stringParam(paramsObject(params), 'sessionId');
+        return reviews.deleteAgent(sessionId, async () => agentHandlers(agents)['agent.delete'](params, context));
+      },
+      ...reviews.handlers<SessionSubscriber>(),
+      ...trackerHandlers(trackers),
+      ...setupHandlers<SessionSubscriber>({ harnessEnv: options.agentEnv ?? process.env, gh }),
+      ...externalHandlers(externalSessions),
+      ...externalResumeHandlers<SessionSubscriber>({ db, external: externalSessions, agents, broadcast }),
+      ...externalHooksHandlers({
+        files: options.externalHookFiles ?? externalHookFiles(process.env),
+        shimPath: hookShimPath,
+        ensureHookShim,
+      }),
+    };
+
+    const server = createServer((socket) => {
+      clients.add(socket);
+      const subscriber: SessionSubscriber = {
+        send: (event) => {
+          if (!socket.destroyed) socket.write(eventLine(event));
+        },
+        backlog: () => socket.writableLength,
+        whenDrained: (callback) => {
+          if (socket.writableLength === 0) queueMicrotask(callback);
+          else socket.once('drain', callback);
+        },
+      };
+      socket.on('close', () => {
+        clients.delete(socket);
+        sessions.detachAll(subscriber);
+      });
+      socket.on('error', () => socket.destroy());
+      const feed = lineSplitter((line) => {
+        void handleRpcLine(line, handlers, subscriber).then((response) => {
+          if (response !== undefined && !socket.destroyed) socket.write(`${JSON.stringify(response)}\n`);
+        });
+      });
+      socket.setEncoding('utf8').on('data', (chunk: string) => {
+        if (!feed(chunk)) socket.destroy();
+      });
+    });
+    await listen(server, paths.socket);
+
+    let resolveClosed!: (exit: DaemonExit) => void;
+    const closed = new Promise<DaemonExit>((resolve) => (resolveClosed = resolve));
+    let shuttingDown: Promise<void> | undefined;
+    const shutdown = (reason: DaemonExit['reason']): Promise<void> =>
+      (shuttingDown ??= (async () => {
+        log(`shutting down (${reason})`);
+        clearInterval(idleTimer);
+        // External hooks go back to doing nothing, without even starting the app.
+        removeExternalHookFile(externalHookFile, externalToken);
+        externalSessions.stop();
+        pullRequests.stop();
+        flowEdges.stop();
+        conditionShell.stop();
+        sweeper.stop();
+        schedules.close();
+        stopFollowingTimeZone();
+        // A clone the daemon can't see through is cancelled, and its zone and folder go with it.
+        await sources.close();
+        // Unlink the socket first, while it is certainly still ours: once it stops answering, a new daemon may take
+        // the lock and bind a fresh socket at the same path, which a later unlink would delete.
+        if (process.platform !== 'win32') rmSync(paths.socket, { force: true });
+        for (const client of clients) client.destroy();
+        // Kill the sessions once no client can start more: nothing would own their PTYs once we are gone. The user
+        // didn't stop them, so they are stopped by restart, and the app offers to resume them.
+        await Promise.all([new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })]);
+        agents.close();
+        db!.close();
+        releaseLock();
+        resolveClosed({ reason });
+      })());
+
+    let idleSince: number | undefined;
+    let missingSince: number | undefined;
+    const idleTimer = setInterval(() => {
+      // Nothing can use a daemon whose data dir is gone (an e2e run's, deleted with its worktree), whatever it still
+      // holds. Only a definite ENOENT that persists for the grace period counts: ending sessions is not undoable.
+      missingSince = isMissing(paths.dataDir) ? (missingSince ?? Date.now()) : undefined;
+      if (missingSince !== undefined && Date.now() - missingSince >= dataDirGraceMs) {
+        void shutdown('data-dir-removed');
+      } else if (clients.size > 0 || countLiveSessions() > 0 || schedules.hasEnabled() || sources.busy()) {
+        idleSince = undefined;
+      } else if (idleSince === undefined) {
+        idleSince = Date.now();
+      } else if (Date.now() - idleSince >= idleTimeoutMs) {
+        void shutdown('idle');
+      }
+    }, idleCheckIntervalMs);
+    idleTimer.unref();
+
+    log(`listening on ${paths.socket}, hook ingress on 127.0.0.1:${hookPort}, schema version ${schemaVersion}`);
+    const startedWith = { sessions: countLiveSessions(), waiting: agents.list().filter(waitsForYou).length };
+    return { socketPath: paths.socket, hookPort, closed, startedWith, stop: () => shutdown('stopped') };
+  } catch (error) {
+    external?.stop();
+    await ingress?.close();
+    db?.close();
+    releaseLock();
+    throw error;
+  }
+}
+
+function defaultWorktreesDir(): string {
+  return process.env.AGENT_BOARD_WORKTREES_DIR || join(homedir(), '.agent-board', 'worktrees');
+}
+
+/** The zone's GitHub repo, if it takes its issues from one. */
+function githubRepo(tracker: ZoneTracker | null): string | undefined {
+  return tracker?.provider === 'github' ? tracker.scope : undefined;
+}
+
+function defaultHookShimPath(): string {
+  return process.env.AGENT_BOARD_HOOK_SHIM || join(homedir(), '.agent-board', 'bin', 'agent-board-hook');
+}
+
+function defaultExternalHookFile(hookShimPath: string): string {
+  return process.env.AGENT_BOARD_EXTERNAL_HOOK_FILE || join(dirname(dirname(hookShimPath)), 'external-hook.json');
+}
+
+function defaultTrackers(gh: string): Partial<Record<TrackerProvider, TrackerFactory>> {
+  const apiUrl = process.env.AGENT_BOARD_LINEAR_API_URL || undefined;
+  return {
+    linear: (credential) => {
+      if (credential === undefined) throw new Error('Linear needs its API key');
+      return createLinearTracker({ credential, apiUrl });
+    },
+    github: () => createGitHubTracker({ gh }),
+  };
+}
+
+function defaultShell(): string {
+  if (process.platform === 'win32') return process.env.COMSPEC ?? 'cmd.exe';
+  return process.env.SHELL || '/bin/sh';
+}
+
+/**
+ * A login shell, so a daemon started from the Dock (with launchd's bare PATH) still gives the user their profile's
+ * PATH. `AGENT_BOARD_LOGIN_SHELL=0` turns it off, so e2e tests don't depend on the developer's profile.
+ */
+function defaultShellArgs(): string[] {
+  return process.platform === 'win32' || process.env.AGENT_BOARD_LOGIN_SHELL === '0' ? [] : ['-l'];
+}
+
+type SessionMethods = Extract<keyof DaemonMethods, `session.${string}`>;
+
+/** `onInput` hears what clients type into a session, after it is written. */
+function sessionHandlers(
+  sessions: SessionHost,
+  hooks: {
+    onInput(sessionId: string, data: string): void;
+    /** A plain shell made on its own: it needs a tile. */
+    onShellCreated(session: SessionInfo): void;
+  },
+): Pick<RpcHandlers<DaemonMethods, SessionSubscriber>, SessionMethods> {
+  const sessionId = (params: unknown) => stringParam(paramsObject(params), 'sessionId');
+  return {
+    'session.createShell': (params) => {
+      const p = paramsObject(params);
+      const session = sessions.createShell({
+        cols: dimensionParam(p, 'cols'),
+        rows: dimensionParam(p, 'rows'),
+        cwd: optionalStringParam(p, 'cwd'),
+      });
+      hooks.onShellCreated(session);
+      return session;
+    },
+    'session.list': () => sessions.list(),
+    'session.attach': (params, subscriber) => {
+      sessions.attach(sessionId(params), subscriber);
+      return null;
+    },
+    'session.detach': (params, subscriber) => {
+      sessions.detach(sessionId(params), subscriber);
+      return null;
+    },
+    'session.write': (params) => {
+      const id = sessionId(params);
+      const data = stringParam(paramsObject(params), 'data');
+      sessions.write(id, data);
+      hooks.onInput(id, data);
+      return null;
+    },
+    'session.resize': (params) => {
+      const p = paramsObject(params);
+      sessions.resize(sessionId(p), { cols: dimensionParam(p, 'cols'), rows: dimensionParam(p, 'rows') });
+      return null;
+    },
+    'session.kill': (params) => sessions.kill(sessionId(params)),
+    'session.cwd': async (params) => ({ cwd: await sessions.folderOf(sessionId(params)) }),
+  };
+}
+
+function openDatabase(path: string): DatabaseSync {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA busy_timeout = 5000');
+    // What is deleted is overwritten, so a held payload's copy, once delivered or dropped, doesn't linger in the file.
+    db.exec('PRAGMA secure_delete = ON');
+    migrate(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+/** Listens on the socket, replacing a stale socket file (safe: the caller holds the data dir's lock). */
+async function listen(server: Server, socketPath: string): Promise<void> {
+  if (process.platform !== 'win32') rmSync(socketPath, { force: true });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  if (process.platform !== 'win32') chmodSync(socketPath, 0o600);
+}

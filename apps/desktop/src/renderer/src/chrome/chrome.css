@@ -1,0 +1,376 @@
+/*
+ * The app's chrome: islands floating over the full-bleed board. On macOS
+ * (html[data-chrome='inset'], main/chrome.ts) there is no title bar: the traffic lights sit left of the board menu,
+ * on the top islands' midline, and the window drags by a thin strip along the top and the board menu's empty space.
+ */
+
+.island-top-left,
+.island-top-centre,
+.island-top-right,
+.island-bottom-left,
+.island-bottom-right {
+  position: absolute;
+  z-index: var(--layer-chrome);
+}
+
+.island-top-left,
+.island-top-centre,
+.island-top-right {
+  top: var(--island-inset);
+  height: var(--island-height);
+}
+
+.island-top-left {
+  left: var(--island-inset);
+  transition: left var(--motion-base) var(--ease-out);
+}
+
+/* Room for the traffic lights, unless full screen has hidden them. */
+:root[data-chrome='inset']:not([data-full-screen='true']) .island-top-left {
+  left: calc(var(--size-traffic-lights) + var(--island-inset));
+}
+
+.island-top-centre {
+  left: 50%;
+  translate: -50% 0;
+}
+
+.island-top-right {
+  right: var(--island-inset);
+}
+
+.island-bottom-left {
+  bottom: var(--island-inset);
+  left: var(--island-inset);
+}
+
+.island-bottom-right {
+  right: var(--island-inset);
+  bottom: var(--island-inset);
+}
+
+/* Window dragging, on macOS only: the strip along the top, the traffic lights' corner and the board menu's empty space. */
+.window-drag-strip {
+  display: none;
+}
+
+:root[data-chrome='inset'] .window-drag-strip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: var(--layer-chrome);
+  display: block;
+  height: var(--space-2-5);
+  -webkit-app-region: drag;
+}
+
+/* The traffic lights' corner, down to the islands' foot: not while a session window is shown, whose header it would cover
+   (Electron draws drag regions whatever is stacked over them). */
+.window-drag-corner {
+  display: none;
+}
+
+:root[data-chrome='inset'] .window-drag-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--layer-chrome);
+  display: block;
+  width: calc(var(--size-traffic-lights) + var(--island-inset));
+  height: calc(var(--island-height) + var(--island-inset));
+  -webkit-app-region: drag;
+}
+
+:root[data-chrome='inset'] .board:has(.session-window-board) .window-drag-corner {
+  display: none;
+}
+
+:root[data-chrome='inset'] [data-drag-region] {
+  -webkit-app-region: drag;
+}
+
+:root[data-chrome='inset'] [data-drag-region] :is(button, input, a, img, [tabindex], .editable-name) {
+  -webkit-app-region: no-drag;
+}
+
+/* The board menu (top left) */
+
+.board-menu {
+  padding-right: var(--space-1-5);
+}
+
+.board-menu-logo {
+  width: var(--size-logo);
+  height: var(--size-logo);
+  margin: 0 var(--space-1) 0 var(--space-0-5);
+  pointer-events: none;
+}
+
+/* The app's mark (BrandMark): the desk-blue one, or the dark colourway in the dark theme. */
+.brand-mark {
+  display: inline-block;
+  flex: none;
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.brand-mark .brand-mark-dark,
+:root[data-theme='dark'] .brand-mark .brand-mark-light {
+  display: none;
+}
+
+:root[data-theme='dark'] .brand-mark .brand-mark-dark {
+  display: block;
+}
+
+.board-menu-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.board-menu-find {
+  color: var(--muted);
+}
+
+/* The daemon's status: a dot after the board's name. */
+.daemon-status {
+  flex: none;
+  width: var(--size-dot);
+  height: var(--size-dot);
+  margin: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--neutral-edge);
+}
+
+.daemon-status:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.daemon-status[data-state='connected'] {
+  background: var(--state-running);
+}
+
+.daemon-status[data-state='error'] {
+  background: var(--state-failed);
+}
+
+.ui-popover.board-menu-popover {
+  display: flex;
+  flex-direction: column;
+  width: var(--size-panel);
+  max-height: calc(100vh - var(--island-height) - var(--space-8));
+  padding: 0;
+  overflow: hidden;
+}
+
+.board-menu-search {
+  flex: none;
+  padding: var(--space-2-5);
+  border-bottom: 1px solid var(--separator);
+}
+
+.board-menu-sections {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.board-menu-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-menu-session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.board-menu-session .ui-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.board-menu-session .ui-row-name {
+  flex: 1;
+}
+
+.board-menu-swatch {
+  flex: none;
+  width: var(--size-swatch-sm);
+  height: var(--size-swatch-sm);
+  border-radius: var(--radius-xs);
+  background: var(--zone-color);
+}
+
+.board-menu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1-5);
+}
+
+.board-menu .ui-empty,
+.board-menu-popover .ui-empty {
+  padding: var(--space-2) 0;
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Something the daemon said went wrong, under the toolbar. */
+.build-mismatch {
+  position: absolute;
+  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
+  left: 50%;
+  z-index: var(--layer-chrome);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  max-width: calc(100% - var(--space-8));
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
+  background: var(--warning-soft);
+  font-size: var(--font-size-sm);
+  translate: -50% 0;
+}
+
+/* The creation toolbar (top centre) */
+
+.create-toolbar .ui-button {
+  margin-left: var(--space-1);
+}
+
+/* The Needs-you pill and settings (top right) */
+
+.needs-you-pill.ui-button {
+  color: var(--muted);
+}
+
+.needs-you-pill.ui-button > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.needs-you-dot {
+  width: var(--size-dot-md);
+  height: var(--size-dot-md);
+  border-radius: var(--radius-pill);
+  background: var(--neutral-edge);
+}
+
+.needs-you-pill.ui-button[data-attention='true'] {
+  border-color: var(--state-waiting);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+  box-shadow: var(--shadow-attention);
+}
+
+.needs-you-pill.ui-button[data-attention='true'] .needs-you-dot {
+  background: var(--state-waiting);
+}
+
+.ui-popover.needs-you-popover {
+  display: flex;
+  width: var(--size-inbox);
+  max-height: calc(100vh - var(--island-height) - var(--space-8));
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Zones (bottom left) */
+
+.zone-jump {
+  max-width: calc(50% - var(--space-8));
+  overflow-x: auto;
+}
+
+.zone-jump-zone.ui-button {
+  color: var(--text);
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  font-size: var(--font-size-sm);
+  list-style: none;
+}
+
+/* Zoom and the minimap (bottom right) */
+
+.zoom-level {
+  min-width: var(--size-zoom-level);
+  font-variant-numeric: tabular-nums;
+}
+
+.react-flow__panel.board-minimap {
+  /* Above the zoom island. */
+  right: var(--island-inset);
+  bottom: calc(var(--island-inset) + var(--control-md) + var(--space-4));
+  z-index: var(--layer-chrome);
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-island);
+}
+
+/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. */
+:root:has(.edge-rules) .island-bottom-right,
+:root:has(.edge-rules) .react-flow__panel.board-minimap {
+  right: calc(var(--island-inset) * 2 + var(--size-edge-rules));
+}
+
+.react-flow__panel.board-minimap svg {
+  display: block;
+  width: var(--size-minimap-width);
+  height: var(--size-minimap-height);
+}
+
+/* The empty board's welcome, in the middle of the view; the board around it still takes clicks. */
+.empty-board {
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-chrome);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.empty-board .ui-empty {
+  max-width: var(--size-empty-board);
+  padding: var(--space-6) var(--space-8);
+  background: var(--island);
+  box-shadow: var(--shadow-island);
+  pointer-events: auto;
+}
+
+.empty-board-mark {
+  width: var(--size-empty-board-mark);
+  height: var(--size-empty-board-mark);
+}
+
+.empty-board-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .island-top-left,
+  .needs-you-pill {
+    transition: none;
+  }
+}

@@ -1,0 +1,5 @@
+[["wait",6],
+ ["type","Create a file named y.txt containing hi using a shell command (request approval if needed). Then reply done."],["wait",0.5],["key","enter"],
+ ["until","Worked for",120],["wait",3],
+ ["type","Run exactly: env | grep AGENT_BOARD || echo NO_AGENT_BOARD_VARS . Then reply with the output."],["wait",0.5],["key","enter"],
+ ["until","Worked for[\\s\\S]*Worked for",90],["wait",3],["screen"]]

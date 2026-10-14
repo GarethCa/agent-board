@@ -1,0 +1,17 @@
+{
+  "name": "@agent-board/tracker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Issue trackers behind one interface (Linear first), the HTTP fixtures that keep tests off the real APIs, and credentials in the OS keychain.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts",
+    "./providers": "./src/providers.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "record:linear": "node scripts/record-linear.ts",
+    "sanitise:linear": "node scripts/sanitise-recorded.ts"
+  }
+}

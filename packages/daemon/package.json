@@ -1,0 +1,32 @@
+{
+  "name": "@agent-board/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "agent-board daemon: owns sessions and the SQLite database, serves JSON-RPC over a local socket and hook ingress over localhost HTTP.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./cron": "./src/cron.ts",
+    "./pane-layout": "./src/pane-layout.ts",
+    "./paths": "./src/paths.ts",
+    "./pid": "./src/pid.ts",
+    "./protocol": "./src/protocol.ts",
+    "./repo-zone": "./src/repo-zone.ts",
+    "./review-doc": "./src/review-doc.ts",
+    "./spawn": "./src/spawn.ts",
+    "./stop": "./src/stop.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@agent-board/fake-harness": "workspace:*"
+  },
+  "dependencies": {
+    "@agent-board/tracker": "workspace:*",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.1.0"
+  }
+}

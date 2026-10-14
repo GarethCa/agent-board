@@ -1,0 +1,517 @@
+{
+  "source": "recorded from api.linear.app on 2026-10-12",
+  "subject": {
+    "scope": "ACME",
+    "knownIssue": {
+      "provider": "linear",
+      "id": "ACME-105",
+      "scope": "ACME",
+      "title": "agent-board fixture recording abfixture3bec771c",
+      "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+      "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+      "state": "Backlog"
+    },
+    "searchTerm": "abfixture3bec771c",
+    "project": "00000000-0000-4000-8000-000000000001"
+  },
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Teams { teams(first: 250) { nodes { key name } } }",
+          "variables": {}
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "teams": {
+              "nodes": [
+                {
+                  "key": "ACME",
+                  "name": "JarvisBoard"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } } } }",
+          "variables": {
+            "filter": {
+              "team": {
+                "key": {
+                  "eq": "ACME"
+                }
+              },
+              "state": {
+                "type": {
+                  "nin": [
+                    "completed",
+                    "canceled"
+                  ]
+                }
+              }
+            },
+            "first": 50
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "issues": {
+              "nodes": [
+                {
+                  "identifier": "ACME-105",
+                  "title": "agent-board fixture recording abfixture3bec771c",
+                  "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+                  "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+                  "state": {
+                    "name": "Backlog"
+                  },
+                  "team": {
+                    "key": "ACME"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } } } }",
+          "variables": {
+            "term": "abfixture3bec771c",
+            "filter": {
+              "team": {
+                "key": {
+                  "eq": "ACME"
+                }
+              }
+            },
+            "first": 50
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "searchIssues": {
+              "nodes": [
+                {
+                  "identifier": "ACME-105",
+                  "title": "agent-board fixture recording abfixture3bec771c",
+                  "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+                  "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+                  "state": {
+                    "name": "Backlog"
+                  },
+                  "team": {
+                    "key": "ACME"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Projects($filter: ProjectFilter, $first: Int) { projects(filter: $filter, first: $first, orderBy: updatedAt) { nodes { id name description progress status { name } } } }",
+          "variables": {
+            "filter": {
+              "accessibleTeams": {
+                "some": {
+                  "key": {
+                    "eq": "ACME"
+                  }
+                }
+              },
+              "status": {
+                "type": {
+                  "nin": [
+                    "completed",
+                    "canceled"
+                  ]
+                }
+              }
+            },
+            "first": 250
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "projects": {
+              "nodes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000001",
+                  "name": "agent-board v1",
+                  "description": "",
+                  "progress": 0.754950495049505,
+                  "status": {
+                    "name": "Backlog"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Projects($filter: ProjectFilter, $first: Int) { projects(filter: $filter, first: $first, orderBy: updatedAt) { nodes { id name description progress status { name } } } }",
+          "variables": {
+            "filter": {
+              "accessibleTeams": {
+                "some": {
+                  "key": {
+                    "eq": "ACME"
+                  }
+                }
+              },
+              "id": {
+                "eq": "00000000-0000-4000-8000-000000000001"
+              }
+            },
+            "first": 250
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "projects": {
+              "nodes": [
+                {
+                  "id": "00000000-0000-4000-8000-000000000001",
+                  "name": "agent-board v1",
+                  "description": "",
+                  "progress": 0.754950495049505,
+                  "status": {
+                    "name": "Backlog"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Projects($filter: ProjectFilter, $first: Int) { projects(filter: $filter, first: $first, orderBy: updatedAt) { nodes { id name description progress status { name } } } }",
+          "variables": {
+            "filter": {
+              "accessibleTeams": {
+                "some": {
+                  "key": {
+                    "eq": "ACME"
+                  }
+                }
+              },
+              "id": {
+                "eq": "00000000-0000-4000-8000-0000000000ff"
+              }
+            },
+            "first": 250
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "projects": {
+              "nodes": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } } } }",
+          "variables": {
+            "filter": {
+              "team": {
+                "key": {
+                  "eq": "ACME"
+                }
+              },
+              "project": {
+                "id": {
+                  "eq": "00000000-0000-4000-8000-000000000001"
+                }
+              },
+              "state": {
+                "type": {
+                  "nin": [
+                    "completed",
+                    "canceled"
+                  ]
+                }
+              }
+            },
+            "first": 50
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "issues": {
+              "nodes": [
+                {
+                  "identifier": "ACME-105",
+                  "title": "agent-board fixture recording abfixture3bec771c",
+                  "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+                  "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+                  "state": {
+                    "name": "Backlog"
+                  },
+                  "team": {
+                    "key": "ACME"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } } } }",
+          "variables": {
+            "term": "abfixture3bec771c",
+            "filter": {
+              "team": {
+                "key": {
+                  "eq": "ACME"
+                }
+              },
+              "project": {
+                "id": {
+                  "eq": "00000000-0000-4000-8000-000000000001"
+                }
+              }
+            },
+            "first": 50
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "searchIssues": {
+              "nodes": [
+                {
+                  "identifier": "ACME-105",
+                  "title": "agent-board fixture recording abfixture3bec771c",
+                  "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+                  "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+                  "state": {
+                    "name": "Backlog"
+                  },
+                  "team": {
+                    "key": "ACME"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } } }",
+          "variables": {
+            "id": "ACME-105"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "issue": {
+              "identifier": "ACME-105",
+              "title": "agent-board fixture recording abfixture3bec771c",
+              "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
+              "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
+              "state": {
+                "name": "Backlog"
+              },
+              "team": {
+                "key": "ACME"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } } }",
+          "variables": {
+            "id": "ACME-105999"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "errors": [
+            {
+              "message": "Entity not found: Issue",
+              "path": [
+                "issue"
+              ],
+              "locations": [
+                {
+                  "line": 1,
+                  "column": 29
+                }
+              ],
+              "extensions": {
+                "type": "invalid input",
+                "code": "INPUT_ERROR",
+                "statusCode": 400,
+                "userError": true,
+                "userPresentableMessage": "Could not find referenced Issue."
+              }
+            }
+          ],
+          "data": null
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "mutation LinkUrl($issueId: String!, $url: String!, $title: String) { attachmentLinkURL(issueId: $issueId, url: $url, title: $title) { success } }",
+          "variables": {
+            "issueId": "ACME-105",
+            "url": "https://github.com/acme/app/pull/7",
+            "title": "PR #7"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "attachmentLinkURL": {
+              "success": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "mutation Comment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }",
+          "variables": {
+            "input": {
+              "issueId": "ACME-105",
+              "body": "Started by agent-board"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "commentCreate": {
+              "success": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.linear.app/graphql",
+        "body": {
+          "query": "query Teams { teams(first: 250) { nodes { key name } } }",
+          "variables": {}
+        }
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "errors": [
+            {
+              "message": "Authentication required, not authenticated",
+              "extensions": {
+                "type": "authentication error",
+                "code": "AUTHENTICATION_ERROR",
+                "statusCode": 401,
+                "userError": true,
+                "userPresentableMessage": "You need to authenticate to access this operation.",
+                "meta": {},
+                "http": {
+                  "status": 401
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

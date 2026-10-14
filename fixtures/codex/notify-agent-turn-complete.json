@@ -1,0 +1,11 @@
+{
+  "type": "agent-turn-complete",
+  "thread-id": "01a11d86-e9c0-7641-8636-5d017e13e6e4",
+  "turn-id": "01a11d87-4ed0-7a41-b899-2948bc1d2d86",
+  "cwd": "/Users/dev/code/demo",
+  "client": "codex-tui",
+  "input-messages": [
+    "Create a file named x.txt containing hi using a shell command. Then reply done."
+  ],
+  "last-assistant-message": "I couldn\u2019t create `x.txt`; the shell write was rejected by the environment."
+}

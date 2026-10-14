@@ -1,0 +1,203 @@
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createDaemonLink, ensureDaemon, type EnsureDaemonOptions } from '@agent-board/daemon/client';
+import { daemonPaths } from '@agent-board/daemon/paths';
+import { describeBuild } from '@agent-board/daemon/protocol';
+import { spawnDetachedDaemon } from '@agent-board/daemon/spawn';
+import { stopDaemon } from '@agent-board/daemon/stop';
+import { appearanceFrom, themeFor } from '../shared/appearance';
+import { APP_NAME } from '../shared/brand';
+import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
+import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
+import { registerAgentIpc, registerAgentOpening } from './agents';
+import { registerAppearance } from './appearance';
+import { backgroundMode, enterBackgroundMode, headless, revealWindow } from './background';
+import { BUILD } from './build';
+import { chromeOptions } from './chrome';
+import { registerExternalIpc } from './external';
+import { registerConnectorIpc } from './connectors';
+import { registerFlowEdgeIpc } from './flow-edges';
+import { registerReviewIpc } from './reviews';
+import { registerImageProtocol, registerImageScheme, registerItemIpc } from './items';
+import { guardWindow } from './links';
+import { createNotifier, registerNotifications } from './notifications';
+import { registerSessionIpc } from './sessions';
+import { registerSetupIpc, setAppMenu } from './setup';
+import { registerShellIpc } from './shells';
+import { registerTrackerIpc } from './trackers';
+import { daemonViewState, registerViewIpc } from './view';
+import { registerWindowIpc } from './windows';
+import { registerZoneIpc } from './zones';
+
+app.setName(APP_NAME);
+enterBackgroundMode();
+// Tests point the whole app (daemon state and Electron profile) at a temp dir.
+if (process.env.AGENT_BOARD_DATA_DIR) app.setPath('userData', process.env.AGENT_BOARD_DATA_DIR);
+
+// The icon is for Windows and Linux: macOS's About panel shows the app's own icon (the dock's, while it runs).
+app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: describeBuild(BUILD), version: '', iconPath: aboutIcon });
+
+const dataDir = app.getPath('userData');
+const idleTimeoutMs = process.env.AGENT_BOARD_DAEMON_IDLE_TIMEOUT_MS;
+const permissionHoldMs = process.env.AGENT_BOARD_PERMISSION_HOLD_MS;
+
+/** Connects to the daemon, starting `agent-board daemon` detached (so it outlives the app) if none runs. */
+const daemonConnection: EnsureDaemonOptions = {
+  socketPath: daemonPaths(dataDir).socket,
+  start: () =>
+    spawnDetachedDaemon({
+      command: process.execPath,
+      args: [
+        join(import.meta.dirname, 'daemon.js'),
+        'daemon',
+        '--data-dir',
+        dataDir,
+        ...(idleTimeoutMs ? ['--idle-timeout-ms', idleTimeoutMs] : []),
+        ...(permissionHoldMs ? ['--permission-hold-ms', permissionHoldMs] : []),
+      ],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      logPath: daemonPaths(dataDir).log,
+    }),
+};
+const daemon = createDaemonLink(daemonConnection);
+
+/** Opens a renderer window: the board, or with `query` set, one view of it such as a popped-out session window. */
+function openWindow(
+  query: Record<string, string> = {},
+  {
+    title = APP_NAME,
+    width = 1280,
+    height = 800,
+    x,
+    y,
+  }: { title?: string; width?: number; height?: number; x?: number; y?: number } = {},
+): BrowserWindow {
+  const window = new BrowserWindow({
+    width,
+    height,
+    x,
+    y,
+    title,
+    // The desk of the theme it opens in, so it never flashes the other one before the page paints.
+    backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
+    ...chromeOptions(process.platform, WINDOW_QUERY.popOut in query ? 'pop-out' : 'board'),
+    // Background mode shows the window without focus once it has loaded; headless mode never shows it.
+    show: !backgroundMode,
+    webPreferences: {
+      // Headless, the page paints into a bitmap rather than the window, so it renders (and Playwright screenshots it) unshown.
+      offscreen: headless,
+      sandbox: true,
+      contextIsolation: true,
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
+    },
+  });
+
+  if (backgroundMode && !headless) window.once('ready-to-show', () => window.showInactive());
+  // macOS hides the traffic lights in full screen, and the page moves into the room they leave.
+  const sendFullScreen = (fullScreen: boolean) => {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(WINDOW_IPC.fullScreen, fullScreen);
+  };
+  window.on('enter-full-screen', () => sendFullScreen(true));
+  window.on('leave-full-screen', () => sendFullScreen(false));
+
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+  const rendererFile = join(import.meta.dirname, '../renderer/index.html');
+  guardWindow(window, (url) => {
+    const target = new URL(url);
+    return devServerUrl
+      ? target.origin === new URL(devServerUrl).origin
+      : target.protocol === 'file:' && target.pathname === pathToFileURL(rendererFile).pathname;
+  });
+  // The Appearance setting it opens in, for its first paint (renderer/src/themes.ts); later picks reach it as they happen.
+  const withAppearance = { ...query, [WINDOW_QUERY.appearance]: appearance.current() };
+  if (devServerUrl) {
+    void window.loadURL(`${devServerUrl}?${new URLSearchParams(withAppearance)}`);
+  } else {
+    void window.loadFile(rendererFile, { query: withAppearance });
+  }
+  return window;
+}
+
+/** The board's window, while it is open. Popped-out session windows are not boards. */
+let board: BrowserWindow | undefined;
+
+/** Opens the board, with `showing`'s window shown on it, and returns its window. */
+function openBoard(showing?: WindowTarget): BrowserWindow {
+  // Benchmarks fill the board with placeholder tiles and sticky notes (see e2e/board-perf.spec.ts). Never in a packaged build.
+  const placeholders = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_TILES;
+  const stickies = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_STICKIES;
+  const window = openWindow({
+    // Tests keep onboarding from opening by itself on their empty boards, packaged or not; onboarding.spec.ts opts in.
+    ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
+    ...(placeholders ? { placeholders } : {}),
+    ...(stickies ? { stickies } : {}),
+    ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),
+  });
+  board = window;
+  window.on('closed', () => {
+    if (board === window) board = undefined;
+  });
+  return window;
+}
+
+ipcMain.handle(DAEMON_IPC.health, () => daemon.call('daemon.health'));
+ipcMain.handle(DAEMON_IPC.build, () => BUILD);
+// The renderer asks without `force` first, so live sessions are counted at the moment of the restart, not when the
+// banner appeared. The next call starts this build's daemon.
+ipcMain.handle(DAEMON_IPC.restart, async (_event, force: unknown): Promise<RestartDaemonResult> => {
+  const stopped = await stopDaemon(dataDir, { force: force === true });
+  if (stopped.status === 'sessions-live') return stopped;
+  await daemon.call('daemon.health');
+  return { status: 'restarted' };
+});
+registerSessionIpc(daemon, () => ensureDaemon(daemonConnection));
+registerZoneIpc(daemon);
+registerImageScheme();
+registerItemIpc(daemon, dataDir);
+registerConnectorIpc(daemon);
+registerFlowEdgeIpc(daemon);
+registerReviewIpc(daemon);
+registerAgentIpc(daemon, dataDir);
+registerShellIpc(daemon);
+registerExternalIpc(daemon);
+registerTrackerIpc(daemon);
+const notify = createNotifier();
+registerSetupIpc(daemon, notify);
+// Before any window opens. Tests pin the theme with AGENT_BOARD_APPEARANCE, the default when nothing was picked, so a
+// machine in dark mode doesn't change their screenshots.
+const appearance = registerAppearance(dataDir, appearanceFrom(process.env.AGENT_BOARD_APPEARANCE));
+const view = daemonViewState(daemon);
+registerViewIpc(view);
+registerWindowIpc({
+  open: openWindow,
+  view,
+  hasBoard: () => board !== undefined,
+  openBoard,
+});
+const openAgent = registerAgentOpening(() => board ?? openBoard());
+
+let stopNotifications: (() => void) | undefined;
+
+void app.whenReady().then(() => {
+  registerImageProtocol(dataDir);
+  stopNotifications = registerNotifications(daemon, notify, openAgent, () => revealWindow(board ?? openBoard()));
+  setAppMenu(() => board ?? openBoard());
+  // Start (or find) the daemon at launch, not when the window first asks.
+  daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
+  openBoard();
+  // A popped-out session window may still be open: the board comes back whenever it is missing.
+  app.on('activate', () => {
+    if (board === undefined) openBoard();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+// Disconnecting lets the daemon exit once it is idle; it keeps running while sessions are alive.
+app.on('will-quit', () => {
+  stopNotifications?.();
+  daemon.close();
+});

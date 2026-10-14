@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake `codex` for tests. Never spends tokens; see packages/fake-harness/README.md.
+# Followed through symlinks, as an installed CLI often is one.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+exec node --disable-warning=ExperimentalWarning "$(dirname "$self")/../src/cli/codex.ts" "$@"

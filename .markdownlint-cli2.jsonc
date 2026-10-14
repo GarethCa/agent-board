@@ -1,0 +1,20 @@
+// markdownlint config. `pnpm check:local` runs it with markdownlint-cli2 0.23.2; CONTRIBUTING.md has the command.
+{
+  "config": {
+    "default": true,
+    // Paragraphs are written one per line; let the renderer wrap them.
+    "MD013": false,
+    // Table pipe alignment is cosmetic and editors format it differently.
+    "MD060": false,
+    // The centred README header needs a little HTML.
+    "MD033": { "allowed_elements": ["h1", "p", "img", "a", "br"] }
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "**/node_modules/**",
+    // Playwright's failure reports, left by a local run.
+    "**/test-results/**",
+    "**/test-results-visual/**",
+    "**/playwright-report/**"
+  ]
+}

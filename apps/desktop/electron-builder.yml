@@ -1,0 +1,20 @@
+# Packages the built app (out/) as an unsigned macOS .app: `pnpm package`.
+appId: io.github.garethca.agent-board
+productName: agent-board
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+# Unpacked, so the daemon and Codex's hook forwarder (this executable run as Node) and node-pty's spawn-helper run
+# from plain files.
+asar: false
+# node-pty ships N-API prebuilds, which load in Electron as they are: nothing to rebuild.
+npmRebuild: false
+mac:
+  target: dir
+  # Unsigned: a local build for this machine, never distributed.
+  identity: null
+  category: public.app-category.developer-tools
+  # The brand's macOS icon: the art on the macOS icon grid, made into the .icns (brand/BRAND.md).
+  icon: ../../brand/png/app-icon/icon-1024-macos-padded.png

@@ -1,0 +1,14 @@
+{
+  "session_id": "01a11d86-0ed1-79b0-b5f7-5bf941eadee1",
+  "turn_id": "01a11d86-1cdd-7bb2-880d-32629846a4b5",
+  "transcript_path": "/Users/dev/.codex/sessions/2026/10/08/rollout-2026-10-08T22-58-07-01a11d86-0ed1-79b0-b5f7-5bf941eadee1.jsonl",
+  "agent_transcript_path": "/Users/dev/.codex/sessions/2026/10/08/rollout-2026-10-08T22-58-10-01a11d86-1ca5-7020-b9c7-6327506c557a.jsonl",
+  "cwd": "/Users/dev/code/demo",
+  "hook_event_name": "SubagentStop",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "agent_id": "01a11d86-1ca5-7020-b9c7-6327506c557a",
+  "agent_type": "default",
+  "last_assistant_message": "pong"
+}

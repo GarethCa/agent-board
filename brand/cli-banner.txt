@@ -1,0 +1,7 @@
+        ●
+     ╭──┴──╮ /
+  ┌──│ ◕ ◕ │──────┐
+  │ ╭┴──┬──┴──╮   │   agent-board {version}
+  │ │ ▬▬▬│     │   │   daemon up · {sessions} sessions reattached
+  │ ╰────────╯   │   {waiting} agents need you
+  └──────────────┘
