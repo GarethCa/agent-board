@@ -43,6 +43,12 @@ export const agents = (page: Page): Promise<Agent[]> => page.evaluate(() => wind
 export const zones = (page: Page): Promise<Zone[]> => page.evaluate(() => window.agentBoard.zones.list());
 export const sessionWindow = (page: Page) => page.getByTestId('session-window');
 
+/** Opens the details strip of a session window or expanded tile, which start collapsed to the icon rail. */
+export async function showDetails(scope: Locator): Promise<void> {
+  await scope.getByRole('button', { name: 'Show details' }).click();
+  await expect(scope.getByRole('complementary', { name: 'Session details' })).toBeVisible();
+}
+
 /** The zone whose tab is named `name`. */
 export const zoneNamed = (window: Page, name: string): Locator =>
   window.getByTestId('zone').filter({ has: window.getByTestId('zone-tab').getByText(name, { exact: true }) });

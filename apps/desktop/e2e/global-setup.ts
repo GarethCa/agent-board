@@ -1,4 +1,4 @@
-import { harnessGuardGlobalSetup } from '@agent-board/fake-harness';
+import { gitGuardGlobalSetup, harnessGuardGlobalSetup } from '@agent-board/fake-harness';
 import { createFakeGitHub } from '@agent-board/tracker/testing';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -14,6 +14,8 @@ export default function globalSetup(): () => Promise<void> {
   // them race to unpack the same Electron.app and one launches a half-installed binary ("Process failed to launch!").
   createRequire(import.meta.url)('electron');
   const teardownGuard = harnessGuardGlobalSetup();
+  // git in a spec must not see a GIT_DIR from the run's own environment, and the dev repo's core config must come out as it went in.
+  const teardownGit = gitGuardGlobalSetup();
   const dataDir = tempDataDir();
   process.env.AGENT_BOARD_DATA_DIR = dataDir;
   // No app under test reaches the real Linear or the user's keychain: tests that need them pass a fixture server and
@@ -32,6 +34,7 @@ export default function globalSetup(): () => Promise<void> {
     await terminate(left);
     await removeDataDir(dataDir);
     teardownGuard();
+    teardownGit();
     if (left.length > 0) throw new Error(`e2e daemons outlived their run: ${left.join(', ')}`);
   };
 }

@@ -3,14 +3,10 @@ import type { Node } from '@xyflow/react';
 import type {
   BoardItem,
   BoardItemKind,
-  ItemRemovedEvent,
-  ItemUpdatedEvent,
   UpdateItemParams,
 } from '@agent-board/daemon/protocol';
-import { centreOf, contains, type Rect } from '../../geometry';
-
-/** A change to an item, as the daemon announces it. */
-export type ItemChange = ItemUpdatedEvent | ItemRemovedEvent;
+import type { ItemChange } from '../../../../preload/api';
+import { centreOf, contains, rotatedBounds, type Rect } from '../../geometry';
 
 export const ITEM_NODE_PREFIX = 'item:';
 
@@ -89,6 +85,14 @@ function inZOrder<N extends Node>(nodes: N[]): N[] {
     out[places[at]!] = nodes[from]!;
   });
   return out;
+}
+
+/**
+ * What `node`, drawn at `rect` unrotated, takes up on the board: for a rotated item, the upright box round it, which
+ * is what lays things out round it (snapping, the selection box, making room round an expanded tile); otherwise `rect`.
+ */
+export function boundsOnBoard(node: Node, rect: Rect): Rect {
+  return isItemNode(node) ? rotatedBounds(rect, node.data.item.rotation) : rect;
 }
 
 /** `nodes` with `change` applied. */

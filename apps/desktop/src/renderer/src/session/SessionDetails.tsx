@@ -24,9 +24,11 @@ export interface SessionDetailsProps {
   /** A session started outside the app: only what its hooks reported, and no controls (it has no terminal here). */
   external?: ExternalSession;
   shell?: Shell;
-  /** For a shell tile: the pane the controls act on, and how to focus another (e.g. a new one). */
+  /** For the tab showing, an agent's or a shell tile's: the focused pane, and how to focus another (e.g. a new one). */
   focusedPane?: string;
-  onFocusPane(sessionId: string): void;
+  onFocusPane?(sessionId: string): void;
+  /** Splits the tab's focused pane: an agent's own tab the daemon keeps only once it is split. */
+  onSplit?(direction: SplitDirection): void;
   live: boolean;
   /** Says why a control failed, or clears that with undefined when the next one starts. Must be stable. */
   onProblem(problem: string | undefined): void;
@@ -39,11 +41,13 @@ export interface SessionDetailsProps {
 
 /**
  * The session window's details, on its LEFT (V and W): a strip of sections (controls, a shell's panes, the agent's
- * issue, worktree, pull requests, subagents, connections and schedule) in the board menu's section style, or the
+ * issue, worktree, pull requests, subagents and schedule) in the board menu's section style, or the
  * same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
  */
 export function SessionDetails(props: SessionDetailsProps) {
-  const { sessionId, agent, external, shell, focusedPane, onFocusPane, live, onProblem, collapsed, onCollapsed, onOpenLink } = props;
+  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink } = props;
+  // In an agent's window, the agent's own pane, unless a shell pane in one of its tabs has the keyboard.
+  const agentFocused = agent !== undefined && (focusedPane === undefined || focusedPane === agent.sessionId);
   const width = useDetailsWidth();
   const { busy, error, run } = useAction();
   useEffect(() => onProblem(error), [error, onProblem]);
@@ -52,21 +56,9 @@ export function SessionDetails(props: SessionDetailsProps) {
 
   const act = (id: ControlId) => {
     if (sessionId === undefined) return;
-    const action = actionFor(id, sessionId, agent);
-    if (action !== undefined) run(action);
+    run(actionFor(id, sessionId, agent));
   };
-  const controls = external ? [] : sessionControls({ agent, live }).filter((control) => control.id !== 'connections');
-  const split = (direction: SplitDirection) => {
-    if (shell === undefined || focusedPane === undefined) return;
-    run(async () => {
-      const before = paneIds(shell.layout);
-      const changed = await window.agentBoard.shells.split(shell.id, focusedPane, direction).catch((failure: unknown) => {
-        throw new Error(`could not split: ${errorMessage(failure)}`);
-      });
-      const added = paneIds(changed.layout).find((id) => !before.includes(id));
-      if (added !== undefined) onFocusPane(added);
-    });
-  };
+  const controls = external ? [] : sessionControls({ agent, live });
   const closePane = () => {
     if (shell === undefined || focusedPane === undefined) return;
     const neighbour = neighbourOf(shell.layout, focusedPane);
@@ -74,13 +66,14 @@ export function SessionDetails(props: SessionDetailsProps) {
       await window.agentBoard.shells.closePane(shell.id, focusedPane).catch((failure: unknown) => {
         throw new Error(`could not close the pane: ${errorMessage(failure)}`);
       });
-      if (neighbour !== undefined) onFocusPane(neighbour);
+      if (neighbour !== undefined) onFocusPane?.(neighbour);
     });
   };
-  const paneActions = shell && focusedPane !== undefined && [
-    { label: 'Split horizontally', icon: PANE_ICONS.splitHorizontally, hint: 'Split the focused pane side by side', onClick: () => split('horizontal') },
-    { label: 'Split vertically', icon: PANE_ICONS.splitVertically, hint: 'Split the focused pane, one above the other', onClick: () => split('vertical') },
-    { label: 'Close pane', icon: PANE_ICONS.closePane, hint: 'Close the focused pane, ending its shell', onClick: closePane },
+  const paneActions = onSplit !== undefined && [
+    { label: 'Split horizontally', icon: PANE_ICONS.splitHorizontally, hint: 'Split inside the tab: a shell beside the focused pane', onClick: () => onSplit('horizontal') },
+    { label: 'Split vertically', icon: PANE_ICONS.splitVertically, hint: 'Split inside the tab: a shell below the focused pane', onClick: () => onSplit('vertical') },
+    // The agent's own pane is closed by nothing: Stop and Delete end the agent.
+    ...(shell && !agentFocused ? [{ label: 'Close pane', icon: PANE_ICONS.closePane, hint: 'Close the focused pane, ending its shell', onClick: closePane }] : []),
   ];
   const open = (section: SectionId) => {
     setReveal(section);
@@ -93,19 +86,17 @@ export function SessionDetails(props: SessionDetailsProps) {
     );
     return (
       <nav className="session-details session-details-rail" aria-label="Session controls">
-        {controls
-          .filter((control) => control.enabled || control.id === 'stop' || control.id === 'interrupt')
-          .map((control) => (
-            <IconButton
-              key={control.id}
-              icon={CONTROL_ICONS[control.id]}
-              variant={control.id === 'stop' ? 'danger' : 'ghost'}
-              aria-label={control.label}
-              tooltip={control.hint}
-              disabled={!control.enabled || busy}
-              onClick={() => act(control.id)}
-            />
-          ))}
+        {controls.map((control) => (
+          <IconButton
+            key={control.id}
+            icon={CONTROL_ICONS[control.id]}
+            variant={control.id === 'stop' ? 'danger' : 'ghost'}
+            aria-label={control.label}
+            tooltip={control.hint}
+            disabled={!control.enabled || busy}
+            onClick={() => act(control.id)}
+          />
+        ))}
         {paneActions &&
           paneActions.map((action) => (
             <IconButton key={action.label} icon={action.icon} aria-label={action.label} tooltip={action.hint} disabled={busy} onClick={action.onClick} />
@@ -117,7 +108,6 @@ export function SessionDetails(props: SessionDetailsProps) {
             {fact('worktree', 'Worktree and branch')}
             {fact('pulls', pullsLabel(agent))}
             {fact('subagents', subagentsLabel(agent))}
-            {fact('connections', 'Connections')}
             {fact('schedule', 'Schedule')}
           </>
         )}
@@ -154,7 +144,7 @@ export function SessionDetails(props: SessionDetailsProps) {
             </div>
           </Section>
           {paneActions && (
-            <Section label="Panes" meta={paneCount(shell)} {...sectionProps('panes')}>
+            <Section label="Panes" meta={paneCount(shell?.layout)} {...sectionProps('panes')}>
               <div className="session-controls session-controls-column">
                 {paneActions.map((action) => (
                   <Button key={action.label} size="sm" className="session-control" icon={action.icon} disabled={busy} title={action.hint} onClick={action.onClick}>
@@ -169,10 +159,10 @@ export function SessionDetails(props: SessionDetailsProps) {
         {(shell || agent) && (
           <LiveFolder
             // An ended agent's pane is the shell it dropped into, while that runs.
-            sessionId={agent ? (agent.shellSessionId ?? sessionId) : focusedPane}
+            sessionId={agentFocused ? (agent.shellSessionId ?? sessionId) : focusedPane}
             worktree={agent?.worktree}
-            fallback={agent ? agent.cwd : focusedPane === undefined ? undefined : shell?.paneFolders[focusedPane]}
-            pane={shell && paneIds(shell.layout).length > 1 && focusedPane !== undefined ? (paneLabel(shell, focusedPane) ?? shell.name) : undefined}
+            fallback={agentFocused ? agent.cwd : focusedPane === undefined ? undefined : shell?.paneFolders[focusedPane]}
+            pane={!agentFocused && shell && paneIds(shell.layout).length > 1 && focusedPane !== undefined ? (paneLabel(shell, focusedPane) ?? shell.name) : undefined}
             onProblem={onProblem}
           />
         )}
@@ -335,9 +325,6 @@ function AgentSections({
           </ul>
         )}
       </Section>
-      <Section label="Connections" icon={<SectionIcon id="connections" />} meta="None" defaultOpen={false} {...sectionProps('connections')}>
-        <Hint>Flows between agents come with M2.</Hint>
-      </Section>
       <Section label="Schedule" icon={<SectionIcon id="schedule" />} meta={badge === null ? 'None' : badge.label} defaultOpen={false} {...sectionProps('schedule')}>
         {schedule === null ? (
           <Hint>Runs only when you message it. Schedule it from its tile&rsquo;s More menu.</Hint>
@@ -423,7 +410,7 @@ function ControlButton({ control, busy, onClick }: { control: Control; busy: boo
 /** The worktree's folder name, for its section's heading: the full path is under it. */
 const worktreeName = (worktree: string) => worktree.split('/').filter(Boolean).at(-1) ?? worktree;
 
-const paneCount = (shell: Shell) => panesLabel(paneIds(shell.layout).length);
+const paneCount = (layout: Shell['layout'] | undefined) => panesLabel(layout === undefined ? 1 : paneIds(layout).length);
 
 function pullsLabel(agent: Agent): string {
   const failing = agent.pullRequests.filter((pr) => pr.checks === 'failing').length;
@@ -437,9 +424,9 @@ function subagentsLabel(agent: Pick<Agent, 'subagents'>): string {
 
 /**
  * What a control does: the agent's daemon call, or for a shell, the keystroke or kill. Its failure says which control
- * failed. Undefined for the controls not built yet.
+ * failed.
  */
-function actionFor(id: ControlId, sessionId: string, agent: Agent | undefined): (() => Promise<unknown>) | undefined {
+function actionFor(id: ControlId, sessionId: string, agent: Agent | undefined): () => Promise<unknown> {
   const { agents, sessions } = window.agentBoard;
   const failing = (verb: string, action: () => Promise<unknown>) => () =>
     action().catch((failure: unknown) => {
@@ -450,7 +437,5 @@ function actionFor(id: ControlId, sessionId: string, agent: Agent | undefined): 
       return failing('interrupt', agent ? () => agents.interrupt(sessionId) : async () => sessions.write(sessionId, INTERRUPT_KEY));
     case 'stop':
       return failing('stop', agent ? () => agents.stop(sessionId) : () => sessions.kill(sessionId));
-    default:
-      return undefined;
   }
 }

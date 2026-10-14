@@ -8,7 +8,10 @@ import {
   type TrackerScope,
 } from './tracker.ts';
 
-/** Issues the fake tracker starts with: team ACME's, newest first, the last one done, then one of team OPS. */
+/**
+ * Issues the fake tracker starts with: team ACME's, newest first, the last one done, then one of team OPS.
+ * Each has the `project` it is in; ACME-12 is in none of `FAKE_PROJECTS`.
+ */
 export const FAKE_ISSUES: readonly TrackerIssue[] = [
   {
     provider: 'linear',
@@ -18,6 +21,7 @@ export const FAKE_ISSUES: readonly TrackerIssue[] = [
     description: 'Credentials (Linear API key or OAuth) are stored in the OS keychain.',
     url: 'https://linear.app/acme/issue/ACME-16/tracker-interface-with-linear',
     state: 'In Progress',
+    project: 'fake-project-tracker',
   },
   {
     provider: 'linear',
@@ -36,6 +40,7 @@ export const FAKE_ISSUES: readonly TrackerIssue[] = [
     description: 'Fake claude and codex CLIs.',
     url: 'https://linear.app/acme/issue/ACME-2/test-harness-and-ci',
     state: 'Done',
+    project: 'fake-project-harness',
   },
   {
     provider: 'linear',
@@ -67,12 +72,6 @@ export const FAKE_PROJECTS: readonly (TrackerProject & { scope: string })[] = [
   { scope: 'ACME', id: 'fake-project-harness', name: 'Harness', description: '', state: 'Completed', progress: 1 },
 ];
 
-/** Which of `FAKE_PROJECTS` each of `FAKE_ISSUES` is in; ACME-12 is in none. */
-export const FAKE_ISSUE_PROJECTS: Readonly<Record<string, string>> = {
-  'ACME-16': 'fake-project-tracker',
-  'ACME-2': 'fake-project-harness',
-};
-
 const withoutScope = ({ id, name, description, state, progress }: TrackerProject): TrackerProject => ({
   id,
   name,
@@ -89,7 +88,7 @@ export interface FakeTracker extends Tracker {
 
 /**
  * An in-memory Linear-like tracker for tests: teams ACME and OPS with `FAKE_ISSUES` (or `issues`), and ACME's
- * `FAKE_PROJECTS` (an issue's is in `FAKE_ISSUE_PROJECTS`). `Done` issues are closed, and `Completed` projects too.
+ * `FAKE_PROJECTS` (an issue's is its `project`). `Done` issues are closed, and `Completed` projects too.
  * With `refuse`, every call fails as unauthorized, as with a revoked credential. `labels` are issues' labels, by ID.
  */
 export function createFakeTracker(
@@ -107,7 +106,7 @@ export function createFakeTracker(
     return issues.filter((issue) => issue.scope === scope);
   };
   const inProject = (issue: TrackerIssue, project?: string) =>
-    project === undefined || FAKE_ISSUE_PROJECTS[issue.id] === project;
+    project === undefined || issue.project === project;
   const known = async (id: string) => {
     await check();
     if (!issues.some((issue) => issue.id === id)) throw new TrackerError('rejected', `no issue ${id}`);

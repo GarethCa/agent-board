@@ -48,3 +48,36 @@ sessions the restart banner was dismissed for) lives in a `view_state` key/value
 behind `view.get` and `view.set`, not in the renderer's localStorage: a hard kill can lose what Chromium hasn't flushed,
 and the daemon owns board state. Sessions' saved screens are files under the data dir, not rows: they are large, written
 often, and only read back whole.
+
+**2026-10-13**: a session window's terminal tabs are rows of the `shells` table with an owner (`owner_kind`,
+`owner_id`: for now an agent, by its session id), not a table of their own: a tab is a pane tree, as a shell tile is, so
+splitting, resizing, resuming and naming panes stay one code path, and moving a tab between owners (or onto the board as
+a tile) later changes only those two columns. An owned row has no zone or place, so it is never a tile. The agent's own
+tab is such a row too, made when it is first split, its first pane the agent's own session, which no shell call ends.
+`isOwnTab` and `isOwnedBy` in the protocol say which is which. Slice 2 (migration `0036_shell_tile_tabs`) lets a shell
+tile own tabs too (`owner_kind` `'shell'`, `owner_id` the tile's id). The tile's own row stays its first tab, so no pane
+moved; its tabs start in its folder and its zone. Deleting the tile ends its tabs, and when its first tab loses its last
+pane the next tab's layout moves into the tile's row, so the tile keeps its place, name, folder and connectors. A pane
+in a tile's tab speaks for the tile on the board (`sessionCaller`), and one in an agent's tab for the agent.
+Slice 3 (migration `0037_shell_tab_order`) moves tabs: `shell.moveTab` rewrites a row's owner, or its zone and place,
+in one transaction and never touches its sessions, so the PTY, its scrollback and folder go with it, and `sessionCaller`,
+reading the owner as it is asked, has its panes speak for the new owner at once. A shell tile moving into tabs takes its
+own tabs with it, re-owned to the same owner, so a tab's owner is still always a tile or an agent. `tab_order` places a
+tab among its owner's (NULL for older rows, which sort first by rowid), so one moved in lands last and an undone move goes
+back where it was. A pane leaving a split is a new row (`shell.movePane`), and `shell.returnPane` puts the source's layout
+back verbatim for undo. Connectors on a tile that becomes a tab stay in the table and are drawn again if it comes back.
+
+**2026-10-13**: a session window's panes (BH1) are kept in a table of their own, `window_layouts` (migration
+`0039_window_layouts`), one row per owner (`owner_kind`, `owner_id`, as a tab's), holding `WindowLayout` JSON: a split
+tree whose leaves are panes, each an ordered strip of surfaces (`own`, `shell` by id, or `session`, another agent or
+shell tile shown there) and the one it shows. Tabs stay rows of `shells`, so nothing moves, migrates or restarts: an owner
+with no row shows one pane holding its tabs in order, which is today's strip, and a tab's own splits stay in its row. The
+row says only where each surface is drawn; which surfaces there are is the shells table's and the board's, so the window
+reconciles the two as it reads them (gone tabs leave, new ones join a pane), and the daemon never rewrites a layout when
+a tab moves. A layout is refused for an owner being deleted, and goes with it: an agent's in its delete, a shell tile's
+by a trigger whenever its `shells` row goes. Rows can outlive what they name, harmlessly, as the window drops what is
+gone when it next reads them: a tile that became another's tab keeps its row (so an undo finds it), and a layout keeps
+another session's tab until the window opens after it went. Tabs split inside themselves before panes are laid out as
+panes once, by `shell.unsplitTabs`, which the window calls to read its layout: the daemon moves each extra pane into a
+tab of its own (as `shell.movePane` does) and rewrites the layout in the window's turn, so no window open twice, or
+closed half way, can see half of it.

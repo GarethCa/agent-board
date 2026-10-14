@@ -60,6 +60,7 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
 
     await window.getByRole('button', { name: 'Close session window' }).click();
     await tileAction(tile(window), 'Delete agent');
+    await window.getByRole('alertdialog', { name: 'Delete agent?' }).getByRole('button', { name: 'Delete agent' }).click();
     await expect(tile(window)).toHaveCount(0);
     expect(existsSync(agent!.worktree)).toBe(false);
     expect(execFileSync('git', ['-C', repo, 'branch', '--list', agent!.branch], { encoding: 'utf8' })).toBe('');

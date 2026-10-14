@@ -8,6 +8,7 @@ import {
   type ZoneBinding,
   type ZoneLayout,
   type ZoneSettings,
+  type ZoneSnapshot,
   type ZoneTracker,
 } from '@agent-board/daemon/protocol';
 import {
@@ -85,9 +86,10 @@ export function registerZoneIpc(daemon: DaemonLink): void {
   ipcMain.handle(ZONE_IPC.update, (_event, id: string, layout: ZoneLayout) =>
     daemon.call('zone.update', { id, ...layout }),
   );
-  ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) =>
-    daemon.call('zone.configure', { id, codexBypassHookTrust: settings.codexBypassHookTrust, boardMcp: settings.boardMcp }),
-  );
+  ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
+    const { codexBypassHookTrust, boardMcp, agentsOrchestrate } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, boardMcp, agentsOrchestrate });
+  });
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>
     daemon.call('zone.setTracker', { id, tracker }),
   );
@@ -95,18 +97,25 @@ export function registerZoneIpc(daemon: DaemonLink): void {
   ipcMain.handle(ZONE_IPC.setDefaultRepo, (_event, id: string, path: string | null) =>
     daemon.call('zone.setDefaultRepo', { id, path }),
   );
-  ipcMain.handle(ZONE_IPC.setLook, (_event, id: string, look: { name?: string; color?: string }) =>
-    daemon.call('zone.setLook', { id, name: look.name, color: look.color }),
+  ipcMain.handle(ZONE_IPC.setLook, (_event, id: string, look: { name?: string; color?: string; fillOpacity?: number | null }) =>
+    daemon.call('zone.setLook', { id, name: look.name, color: look.color, fillOpacity: look.fillOpacity }),
   );
   ipcMain.handle(ZONE_IPC.dissolve, async (_event, id: string) => {
     await daemon.call('zone.dissolve', { id });
   });
+  ipcMain.handle(ZONE_IPC.restore, (_event, zone: ZoneSnapshot) => daemon.call('zone.restore', zoneSnapshot(zone)));
   ipcMain.handle(ZONE_IPC.browseFolder, async (event, title: string) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const options: OpenDialogOptions = { title: String(title), buttonLabel: 'Choose', properties: ['openDirectory'] };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     return picked.canceled ? undefined : picked.filePaths[0];
   });
+}
+
+/** Only the fields of a zone to restore the daemon takes, whatever else the renderer sent. */
+function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo };
 }
 
 /** Only the fields of a new zone the daemon takes, whatever else the renderer sent. */

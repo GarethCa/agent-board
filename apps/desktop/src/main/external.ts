@@ -3,17 +3,16 @@ import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
 import { AGENT_ERROR, type ExternalResumeWhere, type TileMove } from '@agent-board/daemon/protocol';
 import { EXTERNAL_IPC, type ResumeExternalOptions, type ResumeExternalResult } from '../preload/api';
 import { forwardEvents } from './broadcast';
+import { passthrough, passthroughVoid } from './passthrough';
 
 /** The external session IPC the preload's `external` API calls. Every window hears every change, so tiles stay live. */
 export function registerExternalIpc(daemon: DaemonLink): void {
   forwardEvents(daemon, ['external.updated', 'external.removed'], EXTERNAL_IPC.changed);
 
-  ipcMain.handle(EXTERNAL_IPC.list, () => daemon.call('external.list'));
-  ipcMain.handle(EXTERNAL_IPC.dismiss, async (_event, id: string) => {
-    await daemon.call('external.dismiss', { id });
-  });
-  ipcMain.handle(EXTERNAL_IPC.move, (_event, id: string, move: TileMove) => daemon.call('external.move', { ...move, id }));
-  ipcMain.handle(EXTERNAL_IPC.resumePlan, (_event, id: string) => daemon.call('external.resumePlan', { id }));
+  passthrough(daemon, EXTERNAL_IPC.list, 'external.list');
+  passthroughVoid(daemon, EXTERNAL_IPC.dismiss, 'external.dismiss', (id: string) => ({ id }));
+  passthrough(daemon, EXTERNAL_IPC.move, 'external.move', (id: string, move: TileMove) => ({ ...move, id }));
+  passthrough(daemon, EXTERNAL_IPC.resumePlan, 'external.resumePlan', (id: string) => ({ id }));
   ipcMain.handle(
     EXTERNAL_IPC.resume,
     async (_event, id: string, where: ExternalResumeWhere, options: ResumeExternalOptions): Promise<ResumeExternalResult> => {
@@ -26,8 +25,6 @@ export function registerExternalIpc(daemon: DaemonLink): void {
       }
     },
   );
-  ipcMain.handle(EXTERNAL_IPC.hooksStatus, () => daemon.call('externalHooks.status'));
-  ipcMain.handle(EXTERNAL_IPC.setHooksEnabled, (_event, enabled: boolean) =>
-    daemon.call('externalHooks.setEnabled', { enabled }),
-  );
+  passthrough(daemon, EXTERNAL_IPC.hooksStatus, 'externalHooks.status');
+  passthrough(daemon, EXTERNAL_IPC.setHooksEnabled, 'externalHooks.setEnabled', (enabled: boolean) => ({ enabled }));
 }

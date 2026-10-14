@@ -70,6 +70,7 @@ case "$*" in
   *"Clear build output"*) FAKE_HARNESS_SCENARIO=permission ;;
   *"Prune old jobs"*) FAKE_HARNESS_SCENARIO=subagent-ask FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
   *"reviewer for round"*) FAKE_HARNESS_SCENARIO=review ;;
+  *"Lead two"*) FAKE_HARNESS_SCENARIO=orchestrate ;;
   *"Trace session store"* | *"Resize images"*) FAKE_HARNESS_SCENARIO=subagents-working FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
   *) FAKE_HARNESS_SCENARIO=output FAKE_HARNESS_IDLE_NOTIFY_MS=600000 ;;
 esac
@@ -100,9 +101,9 @@ async function pinPaths(page: Page): Promise<void> {
 }
 
 /**
- * What differs from run to run, fixed, so that drawing the shots again on an unchanged UI gives the same pixels: the tilt
- * of each tile (it comes from a random id; here from its name, so tiles still lean different ways), the random suffix of
- * each branch (a short hash of the rest, which is what it looks like), and the seconds a permission request has waited.
+ * What differs from run to run, fixed, so that drawing the shots again on an unchanged UI gives the same pixels: the
+ * random suffix of each branch (a short hash of the rest, which is what it looks like), and the seconds a permission
+ * request has waited.
  */
 async function pinRandomLooks(page: Page): Promise<void> {
   await pinRandomText(page);
@@ -124,11 +125,6 @@ async function pinRandomLooks(page: Page): Promise<void> {
       for (const char of text) value = (value * 31 + char.charCodeAt(0)) >>> 0;
       return value.toString(16).padStart(8, '0').slice(0, 6);
     };
-    const tilts = ['-1.2deg', '0.8deg', '-0.5deg', '1.1deg', '-0.9deg', '0.4deg'];
-    for (const tile of document.querySelectorAll<HTMLElement>("[data-testid='agent-tile']")) {
-      const name = tile.querySelector('.hybrid-tile-branch')?.textContent ?? tile.textContent ?? '';
-      tile.style.setProperty('rotate', tilts[parseInt(hash(name), 16) % tilts.length]!, 'important');
-    }
     // A reviewer's tile says which branch it reviews, in words that still carry that branch's random suffix.
     for (const tile of document.querySelectorAll("[data-testid='agent-tile']")) {
       const words = document.createTreeWalker(tile, NodeFilter.SHOW_TEXT);
@@ -303,9 +299,9 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     await shoot(window, 'add-zone');
     await window.keyboard.press('Escape');
 
-    // A click opens the session window; Expand in place is the setting that opens the tile where it sits instead.
+    // A double-click opens the session window; Expand in place is the setting that opens the tile where it sits instead.
     const waiting = tile(window).filter({ hasText: 'Which database' });
-    await waiting.click();
+    await waiting.dblclick();
     await expect(sessionWindow(window)).toBeVisible();
     await expect(screen(window)).toContainText('Which database should I use');
     await pinRandomLooks(window);
@@ -313,7 +309,7 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
 
     await setClickOpens(window, 'Expand in place');
-    await waiting.click();
+    await waiting.dblclick();
     await expect(window.getByTestId('expanded-tile')).toBeVisible();
     await expect(screen(window)).toContainText('Which database should I use');
     await pinRandomLooks(window);
@@ -440,6 +436,66 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
     await pinRandomLooks(page);
     await shoot(page, 'chat-view');
     expect((await agents(page)).length).toBe(4);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the README screenshots: an orchestrator with its crew frame, and a shell tab beside an agent', async () => {
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
+  try {
+    await page.setViewportSize(VIEWPORT);
+    const zone = await page.evaluate(async (path) => {
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 900, height: 460, color: '#4c6ef5' });
+      if (result.status !== 'added') throw new Error(result.message);
+      return result.zone;
+    }, makeRepo(dir, 'storefront'));
+    const spawn = (prompt: string, x: number, y: number) =>
+      page.evaluate(
+        async (params) => {
+          const result = await window.agentBoard.agents.spawn(params);
+          if (result.status !== 'started') throw new Error(result.message);
+          return result.agent;
+        },
+        { zoneId: zone.id, prompt, position: { x, y }, cols: 100, rows: 30 },
+      );
+
+    // The orchestrator starts two workers through the board's MCP tool and CLI: each takes a turn's worth of time to start.
+    await spawn('Lead two: Fix checkout flake', 40, 80);
+    await expect(tile(page)).toHaveCount(3, { timeout: 60_000 });
+    const frame = page.getByTestId('crew-frame');
+    await expect(frame).toHaveCount(1);
+    await expect(frame).toContainText(/'s crew$/);
+    await expect(page.locator('[data-testid="agent-tile"][data-orchestrator]').getByTestId('crew-count')).toHaveText('2');
+    await expect(tile(page).filter({ has: page.getByTitle('worker one', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
+    await expect(tile(page).filter({ has: page.getByTitle('worker two', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
+    await page.getByRole('button', { name: 'Fit View' }).click();
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    await shoot(page, 'orchestrator-crew');
+
+    // A shell tab beside an idle worker, in its worktree: nothing on the open session asks for anything, and the
+    // orchestrator's ask (which the user has looked at) no longer counts.
+    const orchestrator = await agents(page).then((all) => all.find((agent) => agent.name.startsWith('Lead two'))!);
+    await page.evaluate((id) => window.agentBoard.agents.markSeen(id), orchestrator.sessionId);
+    await expect(page.getByTestId('inbox-count')).toHaveAttribute('data-count', '0');
+    await tile(page).filter({ has: page.getByTitle('worker one', { exact: true }) }).dblclick();
+    const win = sessionWindow(page);
+    await expect(win).toBeVisible();
+    await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
+    await expect(win.locator('[data-testid="session-tab-view"]:not([hidden])').getByTestId('shell-pane')).toHaveCount(2);
+    const shell = win.locator('[data-testid="session-tab-view"]:not([hidden]) .shell-pane[data-focused="true"]');
+    await shell.getByTestId('session-terminal').click();
+    await page.keyboard.type('ls');
+    await page.keyboard.press('Enter');
+    await expect(shell).toContainText('README.md');
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    await shoot(page, 'shell-tab');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

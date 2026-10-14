@@ -13,7 +13,10 @@ import {
   MAX_STICKY_TEXT,
   type ImageRef,
   type LinkData,
+  MAX_TEXT_FONT_SIZE,
   MAX_TEXT_LENGTH,
+  MIN_TEXT_FONT_SIZE,
+  normalisedAngle,
   SHAPE_TYPES,
   TEXT_ALIGNS,
   TEXT_SIZES,
@@ -108,6 +111,12 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     const owner = 'a text item';
     checkText(owner, data, 'text');
     checkOneOf(owner, data, 'size', TEXT_SIZES);
+    if (data.fontSize !== undefined && !(typeof data.fontSize === 'number' && data.fontSize >= MIN_TEXT_FONT_SIZE && data.fontSize <= MAX_TEXT_FONT_SIZE)) {
+      throw invalidParams(`a text item's fontSize must be a number from ${MIN_TEXT_FONT_SIZE} to ${MAX_TEXT_FONT_SIZE}`);
+    }
+    if (data.minHeight !== undefined && !(typeof data.minHeight === 'number' && data.minHeight >= 0)) {
+      throw invalidParams("a text item's minHeight must be a number, 0 or more");
+    }
     checkOneOf(owner, data, 'align', TEXT_ALIGNS);
     checkBoolean(owner, data, 'bold');
     checkBoolean(owner, data, 'italic');
@@ -157,6 +166,7 @@ interface ItemRow {
   width: number;
   height: number;
   z: number;
+  rotation: number;
   data: string;
   created_at: string;
   updated_at: string;
@@ -182,11 +192,11 @@ export function itemHandlers<Context>(
   const selectAll = db.prepare('SELECT * FROM board_items ORDER BY z, rowid');
   const selectOne = db.prepare('SELECT * FROM board_items WHERE id = ?');
   const insert = db.prepare(
-    `INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, data)
-     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(z), 0) + 1 FROM board_items), ?)`,
+    `INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, rotation, data)
+     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(z), 0) + 1 FROM board_items), ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE board_items SET zone_id = ?, x = ?, y = ?, width = ?, height = ?, z = ?, data = ?,
+    `UPDATE board_items SET zone_id = ?, x = ?, y = ?, width = ?, height = ?, z = ?, rotation = ?, data = ?,
      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
   );
   const remove = db.prepare('DELETE FROM board_items WHERE id = ?');
@@ -228,7 +238,7 @@ export function itemHandlers<Context>(
 
   const writeData = (item: BoardItem, patch: Record<string, unknown>): BoardItem => {
     const data = checkedData(item.kind, { ...item.data, ...patch });
-    update.run(item.zoneId, item.x, item.y, item.width, item.height, item.z, data, item.id);
+    update.run(item.zoneId, item.x, item.y, item.width, item.height, item.z, item.rotation, data, item.id);
     return get(item.id);
   };
 
@@ -265,6 +275,7 @@ export function itemHandlers<Context>(
         finiteNumberParam(fields, 'y'),
         sizeParam(fields, 'width'),
         sizeParam(fields, 'height'),
+        fields.rotation === undefined ? 0 : rotationParam(fields),
         checkedData(kind as BoardItemKind, data),
       );
       const created = announce(get(id));
@@ -295,6 +306,7 @@ export function itemHandlers<Context>(
         has('width') ? sizeParam(fields, 'width') : item.width,
         has('height') ? sizeParam(fields, 'height') : item.height,
         has('z') ? finiteNumberParam(fields, 'z') : item.z,
+        has('rotation') ? rotationParam(fields) : item.rotation,
         has('data') ? checkedData(item.kind, data) : JSON.stringify(item.data),
         item.id,
       );
@@ -347,6 +359,7 @@ function toItem(row: ItemRow): BoardItem {
     width: row.width,
     height: row.height,
     z: row.z,
+    rotation: row.rotation,
     data: JSON.parse(row.data) as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -358,6 +371,11 @@ function sizeParam(fields: Record<string, unknown>, name: string): number {
   const value = finiteNumberParam(fields, name);
   if (value < 1) throw invalidParams(`${name} must be at least 1`);
   return value;
+}
+
+/** An angle in degrees, as kept. */
+function rotationParam(fields: Record<string, unknown>): number {
+  return normalisedAngle(finiteNumberParam(fields, 'rotation'));
 }
 
 function dataParam(fields: Record<string, unknown>): Record<string, unknown> {

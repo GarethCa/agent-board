@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { AgentState } from '@agent-board/daemon/protocol';
-import { ChevronLeft, ChevronRight, FileCheck, GitBranch, MessageSquare, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, MessageSquare, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
-import { commandKey, withCommand } from '../keys';
+import { commandKey, windowShortcut, withWindowShortcut } from '../keys';
 import { STATE_LABELS } from '../states';
 import { Button, IconButton, Kbd, Menu, Segmented, StatusPill, Tabs, type SegmentedOption } from '../ui';
 import { ReviewViewer } from '../review/ReviewViewer';
 import { useReviews } from '../review/ReviewsProvider';
 import { useReviewTabRequests } from '../review/review-tab';
 import { roundsOf, showsReviewTab } from '../review/reviews';
+import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SessionBody, type SessionView, type WindowContent } from './SessionBody';
+import { pendingTab, useTabRequestCount } from './tab-request';
 import type { AttachState } from './TerminalPane';
-import { clampFrame, defaultFrame, EDGES, resizeFrame, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
+import { dropKey } from './shell-moves';
+import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
 
 /** Where the window's session is among its group's, and how to step to the others (AL1). */
 export interface WindowNav {
@@ -36,6 +39,8 @@ interface SessionWindowProps {
   placement: 'board' | 'own-window';
   /** Closes the window. The session keeps running. */
   onClose(): void;
+  /** Deletes the session, asking first if need be (the window closes with it). Absent where the board can't. */
+  onDelete?(): void;
   /** Minimises it to the board's dock. */
   onMinimise?(): void;
   /** Pops it out into its own OS window. */
@@ -56,18 +61,19 @@ interface SessionWindowProps {
  * composer under it for an agent. On the board it has labelled Minimise, Pop out and Close buttons (V-c); popped out,
  * its header holds the OS window's traffic lights on macOS and Back to board, and its details start as an icon rail
  * (W-a). Closing or minimising it detaches; Stop ends the session. An implementer whose work is under review has a
- * Review tab beside its terminal (AD2), with the review doc viewer; the terminal stays attached behind it. An agent's
+ * Review tab beside its terminal (AD2), with the review doc viewer; the terminal stays attached behind it. An orchestrator
+ * has an Activity tab (BB1), with what it did and tried. An agent's
  * header has a Terminal/Chat switch (AE1): the chat view reads its conversation from its transcript instead.
  */
-export function SessionWindow({ content, title, placement, onClose, onMinimise, onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
+export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
-  const [detailsCollapsed, setDetailsCollapsed] = useState(placement === 'own-window');
+  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
   const rounds = roundsOf(useReviews(), content.kind === 'session' ? content.sessionId : '');
-  const [tab, setTab] = useState<'terminal' | 'review'>('terminal');
+  const [tab, setTab] = useState<WindowTab>('terminal');
   // Asked for (from its tile or its reviewer's), it opens on its Review tab, now and whenever asked again: even with its
   // latest round dismissed, whose doc can still be read.
   const [asked, setAsked] = useState(false);
@@ -81,10 +87,26 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
     }
     seenRequests.current = reviewRequests;
   }, [reviewRequests]);
-  const showing = reviewable ? tab : 'terminal';
+  // A terminal tab asked for (a row of its tile's shells chip) shows over Review or Activity: one asked for as
+  // it opens (read as it first renders, before its body takes it), or after.
+  const agentId = content.kind === 'session' ? content.sessionId : undefined;
+  const tabRequests = useTabRequestCount(agentId);
+  const askedAtOpen = useRef(pendingTab(agentId) !== undefined);
+  const seenTabRequests = useRef(tabRequests);
+  useEffect(() => {
+    if (askedAtOpen.current || tabRequests > seenTabRequests.current) setTab('terminal');
+    askedAtOpen.current = false;
+    seenTabRequests.current = tabRequests;
+  }, [tabRequests]);
+  // An orchestrator's Activity tab (BB1), once it has done or tried something (most agents may orchestrate, few do),
+  // or to say its activity could not be read.
+  const activity = useActivity(agent?.sessionId);
+  const orchestrates = agent !== undefined && (activity.lines.length > 0 || activity.error !== undefined);
+  const showing = (tab === 'review' && reviewable) || (tab === 'activity' && orchestrates) ? tab : 'terminal';
   const [view, setView] = useState<SessionView>('terminal');
   const root = useRef<HTMLDivElement>(null);
   const placed = useWindowFrame(root, frame);
+  useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
 
   // ⌘I shows or hides the details.
   useEffect(() => {
@@ -106,6 +128,8 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
       data-testid="session-window"
       data-session-id={content.kind === 'session' ? content.sessionId : undefined}
       data-shell-id={content.kind === 'shell' ? content.shellId : undefined}
+      // A tab, pane or shell tile dropped on it, header too, joins its tabs: an agent's or a shell tile's.
+      data-tab-drop={agent ? dropKey({ kind: 'agent', id: agent.sessionId }) : content.kind === 'shell' ? dropKey({ kind: 'shell', id: content.shellId }) : undefined}
       data-state={attach}
       data-maximised={frame === undefined ? undefined : placed.maximised}
       style={placed.style}
@@ -150,6 +174,11 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
             Back to board
           </Button>
         )}
+        {placement === 'board' && onDelete && (
+          <Button size="sm" variant="danger" icon={<Trash2 />} onClick={onDelete} aria-label="Delete session" tooltip="Delete it, asking first if it is running or has work to lose">
+            Delete
+          </Button>
+        )}
         {placement === 'board' ? (
           <Button size="sm" icon={<X />} onClick={onClose} aria-label="Close session window" tooltip="Back to its tile; the session keeps running">
             Close
@@ -160,15 +189,16 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
           </Menu>
         )}
       </header>
-      {reviewable && (
-        <Tabs<'terminal' | 'review'>
+      {(reviewable || orchestrates) && (
+        <Tabs<WindowTab>
           className="session-window-tabs"
           aria-label="Window tabs"
           value={showing}
           onChange={setTab}
           tabs={[
             { id: 'terminal', label: 'Terminal', icon: <SquareTerminal /> },
-            { id: 'review', label: `Review · round ${rounds.at(-1)!.round}`, icon: <FileCheck /> },
+            ...(reviewable ? [{ id: 'review' as const, label: `Review · round ${rounds.at(-1)!.round}`, icon: <FileCheck /> }] : []),
+            ...(orchestrates ? [{ id: 'activity' as const, label: 'Activity', icon: <Activity /> }] : []),
           ]}
         />
       )}
@@ -180,6 +210,7 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
           notice={notice}
           onAttachState={setAttach}
           view={view}
+          shown={showing === 'terminal'}
           onShowTerminal={() => setView('terminal')}
         />
       </div>
@@ -195,16 +226,49 @@ export function SessionWindow({ content, title, placement, onClose, onMinimise, 
           }}
         />
       )}
+      {showing === 'activity' && agent && <ActivityLog orchestrator={agent} activity={activity} />}
     </div>
   );
 }
+
+/** The window's tabs: its terminal, an implementer's Review (AD2) and an orchestrator's Activity (BB1). */
+type WindowTab = 'terminal' | 'review' | 'activity';
 
 const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
   { id: 'terminal', label: 'Terminal', icon: <SquareTerminal aria-hidden /> },
   { id: 'chat', label: 'Chat', icon: <MessageSquare aria-hidden /> },
 ];
 
-/** ‹ and › with ⌘[ and ⌘] (AL1): each previews the session it goes to. Disabled when the session is alone in its group. */
+/**
+ * A pointer-down on the board outside the window minimises it, and carries on to do its normal job there. Not
+ * outside: the window itself, the dock, the onboarding "Back to setup" pill (that click closes the sign-in window and
+ * needs the click to land), and anything portalled out of the board's DOM (menus, dialogs, popovers and toasts opened
+ * from the window), which a click on is never inside the board. The listener is on the capture phase and never
+ * stops the event, so the board still sees it. A drag that starts inside and ends outside has no pointer-down outside.
+ */
+function useMinimiseOnClickOutside(root: React.RefObject<HTMLDivElement | null>, onMinimise: (() => void) | undefined) {
+  const latest = useRef(onMinimise);
+  latest.current = onMinimise;
+  const active = onMinimise !== undefined;
+  useEffect(() => {
+    if (!active) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const element = root.current;
+      const target = event.target;
+      if (element === null || !(target instanceof Node) || element.contains(target)) return;
+      if (!element.offsetParent?.contains(target)) return;
+      if (target instanceof Element && target.closest('.session-dock, .onboarding-away') !== null) return;
+      latest.current?.();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [root, active]);
+}
+
+/**
+ * ‹ and › with ⌘[ and ⌘] (AL1; Ctrl+Shift+[ and ] off macOS, where Ctrl+[ is the terminal's Esc): each previews the
+ * session it goes to. Disabled when the session is alone in its group.
+ */
 function NavButtons({ nav }: { nav: WindowNav }) {
   const { count, onStep } = nav;
   // Read through a ref: `nav` is new each render, and the listener need only be added once.
@@ -214,10 +278,11 @@ function NavButtons({ nav }: { nav: WindowNav }) {
   // are taken even for a session alone in its group: restacking the board's selection behind this window would go unseen.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!commandKey(event) || event.altKey || event.shiftKey || (event.key !== '[' && event.key !== ']')) return;
+      const key = windowShortcut(event);
+      if (key !== 'BracketLeft' && key !== 'BracketRight') return;
       event.preventDefault();
       event.stopPropagation();
-      if (navRef.current.count > 1) navRef.current.onStep(event.key === '[' ? -1 : 1);
+      if (navRef.current.count > 1) navRef.current.onStep(key === 'BracketLeft' ? -1 : 1);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
@@ -227,7 +292,7 @@ function NavButtons({ nav }: { nav: WindowNav }) {
       <span className="session-nav-preview-muted">{label}</span>
       {to.name}
       {to.state !== undefined && <span className="session-nav-preview-muted">· {STATE_LABELS[to.state]}</span>}
-      <Kbd>{withCommand(key)}</Kbd>
+      <Kbd>{withWindowShortcut(key)}</Kbd>
     </span>
   );
   const alone = count < 2;
@@ -291,7 +356,7 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
     observer.observe(parent);
     return () => observer.disconnect();
   }, [root, onChange]);
-  const kept = saved === null || bounds === undefined ? undefined : clampFrame(saved.frame, bounds);
+  const kept = saved === null || bounds === undefined ? undefined : clampFrame(fromFractions(saved.frame, bounds), bounds);
   const shown = live ?? kept;
   const style: CSSProperties | undefined =
     maximised && live === undefined
@@ -306,8 +371,9 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
   };
   const toggleMaximised = () => {
     if (frame === undefined) return;
-    const base = saved?.frame ?? (bounds && defaultFrame(bounds));
-    if (base !== undefined) frame.onChange({ frame: bounds ? clampFrame(base, bounds) : base, maximised: !maximised });
+    if (bounds === undefined) return;
+    const base = saved === null ? defaultFrame(bounds) : fromFractions(saved.frame, bounds);
+    frame.onChange({ frame: toFractions(clampFrame(base, bounds), bounds), maximised: !maximised });
   };
   return {
     maximised: maximised && live === undefined,
@@ -336,7 +402,7 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
         handle.removeEventListener('pointerup', stop);
         handle.removeEventListener('pointercancel', stop);
         setLive(undefined);
-        frame.onChange({ frame: latest, maximised: false });
+        frame.onChange({ frame: toFractions(latest, bounds), maximised: false });
       };
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', stop);

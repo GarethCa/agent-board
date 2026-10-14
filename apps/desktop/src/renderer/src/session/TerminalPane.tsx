@@ -104,10 +104,11 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     let disposed = false;
     let exited = false;
     let detach: (() => void) | undefined;
-    // Size the session to this pane before attaching, so the snapshot arrives laid out for it.
-    void api
-      .resize(sessionId, { cols: terminal.cols, rows: terminal.rows })
-      .catch(() => {})
+    // Size the session to this pane before attaching, so the snapshot arrives laid out for it: only a pane laid out
+    // on the screen. One hidden (a tab not showing) has no size of its own, and would shrink the session to
+    // xterm's 80×24 under whichever window shows it; it sizes the session once it shows, as it refits.
+    const laidOut = element.getClientRects().length > 0;
+    void (laidOut ? api.resize(sessionId, { cols: terminal.cols, rows: terminal.rows }).catch(() => {}) : Promise.resolve())
       .then(() => {
         if (disposed) return;
         detach = api.attach(sessionId, (event) => {

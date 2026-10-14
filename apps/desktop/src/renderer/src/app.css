@@ -86,6 +86,12 @@ kbd {
   background: color-mix(in srgb, var(--zone-color) var(--zone-fill-mix), transparent);
 }
 
+/* A zone the user set a fill opacity on: its fill, and its edge to match, from the percent ZoneNode sets. */
+.zone[data-fill] {
+  --zone-fill-mix: calc(var(--zone-fill-pct) * 1%);
+  --zone-edge-mix: min(100%, calc(var(--zone-edge-base) + var(--zone-fill-pct) * var(--zone-edge-slope) * 1%));
+}
+
 /* A dragged tile or note would move into it if dropped now. */
 .zone[data-drop-target] {
   border-style: dashed;
@@ -93,14 +99,26 @@ kbd {
   background: color-mix(in srgb, var(--zone-color) var(--zone-drop-mix), transparent);
 }
 
-.zone-tab {
+/*
+ * The room a zone's tab may take along its top: its chips fold into ⋯ to fit it. Presses fall through it.
+ * It ends further in on the right than it starts on the left, clear of the zone's top-right corner and its resize handle.
+ */
+.zone-tab-strip {
   position: absolute;
   top: calc(-1 * var(--space-3-5));
+  right: var(--space-4-5);
   left: var(--space-3-5);
+  display: flex;
+  pointer-events: none;
+}
+
+/* Pressed anywhere but its buttons, the tab drags its zone, as the zone's bare body does. */
+.zone-tab {
   display: flex;
   gap: var(--space-1-75);
   align-items: center;
-  max-width: calc(100% - var(--space-8));
+  min-width: 0;
+  max-width: 100%;
   height: var(--size-zone-tab);
   padding: 0 var(--space-1) 0 var(--space-2-5);
   border-radius: var(--radius-lg);
@@ -111,19 +129,34 @@ kbd {
   font-size: var(--font-size-md);
   font-weight: var(--weight-bold);
   white-space: nowrap;
-  cursor: grab;
+  pointer-events: auto;
 }
 
 .zone-tab-kind {
+  flex: none;
   opacity: 0.8;
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-medium);
 }
 
+/* The last thing to give way, once every chip has folded. */
 .zone-tab-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A zone's name is part of the tab that drags it: it shows the grab of the rest, though a double-click still renames. */
+.zone-tab .editable-name {
+  cursor: inherit;
+}
+
+/* Each chip, measured as it is drawn so that it can fold into ⋯ (see useZoneTabFold). */
+.zone-tab-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
 }
 
 /* The tab's chips, light on its colour. */
@@ -132,6 +165,7 @@ kbd {
   --chip-ink: var(--on-zone);
   --chip-edge: transparent;
 
+  flex: none;
   align-self: center;
 }
 
@@ -175,10 +209,9 @@ kbd {
   cursor: inherit;
 }
 
-/* A tile being dragged lifts off the board: a little bigger, tilted a little further, with a deeper shadow. Its own
-   tilt is its `rotate`; this `transform` adds to it. */
+/* A tile being dragged lifts off the board: a little bigger, with a deeper shadow. It stays straight. */
 .react-flow__node.dragging .hybrid-tile {
-  transform: rotate(var(--lift-tilt)) scale(var(--lift-scale));
+  transform: scale(var(--lift-scale));
   box-shadow: var(--shadow-lifted);
   cursor: grabbing;
 }
@@ -200,9 +233,72 @@ kbd {
   transition: outline-color var(--motion-base) var(--ease-out);
 }
 
-.hybrid-tile-agent[data-state='waiting'],
-.hybrid-tile-agent[data-state='needs-permission'] {
+/* Seen (its session was opened since it began asking) is still waiting, but with no orange outline until it asks again. */
+.hybrid-tile-agent[data-state='waiting']:not([data-seen]),
+.hybrid-tile-agent[data-state='needs-permission']:not([data-seen]) {
   outline-color: var(--tile-state);
+}
+
+/* An orchestrator: an accent edge and halo, and how many agents it started in a badge on its corner. */
+.hybrid-tile-agent[data-orchestrator] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--crew-halo);
+}
+
+.hybrid-tile-crew-count {
+  position: absolute;
+  top: calc(-1 * var(--space-2));
+  right: calc(-1 * var(--space-1-5));
+  min-width: var(--space-4);
+  padding: 0 var(--space-1-5);
+  box-sizing: border-box;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--raised);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  line-height: var(--space-4);
+  text-align: center;
+}
+
+/* Its crew lit while a chip or the orchestrator is hovered (BA3). */
+.hybrid-tile-agent[data-crew-lit] {
+  box-shadow: var(--shadow-tile), 0 0 0 var(--space-1) var(--crew-halo);
+}
+
+/* "↳ from <orchestrator>" on an agent an orchestrator started (BA3), or one outside its crew frame. */
+.hybrid-tile-from {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  color: var(--accent-ink);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+/* An orchestrator's crew (BA2): a dashed frame round the agents it started, beside it, labelled on its top edge. */
+.crew-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--crew-edge);
+  border-radius: var(--radius-xl);
+  pointer-events: none;
+}
+
+.crew-frame-label {
+  position: absolute;
+  top: calc(-1 * var(--space-2));
+  left: var(--space-2);
+  padding: 0 var(--space-1-25);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--zone-color) var(--zone-fill-mix), var(--surface));
+  color: var(--accent-ink);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  line-height: var(--space-4);
+  white-space: nowrap;
 }
 
 /* Stopped by a restart, waiting to be resumed: a quiet dashed outline, and a Resume button. */
@@ -213,6 +309,7 @@ kbd {
 
 .hybrid-tile-resume {
   display: flex;
+  flex: none;
   gap: var(--space-2);
   align-items: center;
   margin-top: auto;
@@ -387,6 +484,9 @@ kbd {
 
 .hybrid-tile-body {
   display: -webkit-box;
+  /* Takes what the head, branch, footer and the rest leave, never more: a long task can't push them off the tile. The
+     lines that fit are set from script (`useFittedLines`); 2 is only the first paint's. */
+  flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -397,6 +497,7 @@ kbd {
 }
 
 .hybrid-tile-description {
+  flex: 1 1 0;
   min-width: 0;
   color: var(--text-soft);
   overflow-wrap: anywhere;
@@ -407,9 +508,24 @@ kbd {
   opacity: 0.7;
 }
 
-/* What a tile waiting for you asks: its question, or the tool it wants. */
+/* Short of room for even one line with its padding, its text keeps the line and loses the padding (`useFittedLines`). */
+.hybrid-tile-body[data-tight] {
+  padding-block: 0;
+  border-block-width: 0;
+}
+
+/* A padded body's text, clamped in a box of its own (`useFittedLines`): overflow clips at the padding, so a line cut off
+   in the body itself would show in the padding below it. */
+.hybrid-tile-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+/* What a tile waiting for you asks: its question, or the tool it wants. It may shrink, so it never pushes the footer off. */
 .hybrid-tile-ask {
-  flex: none;
+  display: block;
+  flex: 0 1 auto;
   padding: var(--space-1-25) var(--space-2);
   border: 1px solid var(--ask-edge);
   border-radius: var(--radius-lg);
@@ -417,9 +533,19 @@ kbd {
   color: var(--ask-ink);
 }
 
+/* The most lines the text of each shows; fewer when the tile has no more room. */
+.hybrid-tile-ask .hybrid-tile-text {
+  -webkit-line-clamp: 2;
+}
+
+.hybrid-tile-notice .hybrid-tile-text {
+  -webkit-line-clamp: 3;
+}
+
 /* Why the agent stopped, or what is wrong with it. */
 .hybrid-tile-notice {
-  flex: none;
+  display: block;
+  flex: 0 1 auto;
   padding: var(--space-1-25) var(--space-2);
   border-radius: var(--radius-md);
   background: var(--danger-soft);
@@ -428,15 +554,10 @@ kbd {
   font-size: var(--font-size-xs);
 }
 
-/* A crowded footer may take two rows, or a Resume row takes one: the task gets one line. */
-.hybrid-tile[data-crowded] .hybrid-tile-body,
-.hybrid-tile-body:has(~ .hybrid-tile-resume) {
-  -webkit-line-clamp: 1;
-}
-
 /* The footer: its badges wrap, and what doesn't fit folds into "+N", so the name keeps its width. */
 .hybrid-tile-footer {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   gap: var(--space-1-25);
   align-items: center;
@@ -445,6 +566,95 @@ kbd {
 
 .hybrid-tile-folded {
   cursor: default;
+}
+
+/* An agent's shells chip (AU1): "2 shells", one dot per shell, and the list it opens. */
+.hybrid-tile-shells {
+  gap: var(--space-1);
+}
+
+.tile-shells-dots {
+  display: inline-flex;
+  gap: var(--space-0-5);
+}
+
+.tile-shells-dot {
+  flex: none;
+  width: var(--size-dot);
+  height: var(--size-dot);
+  border-radius: var(--radius-pill);
+  background: var(--state-idle-ink);
+}
+
+.tile-shells-more {
+  font-size: var(--font-size-2xs);
+  color: var(--muted);
+}
+
+.tile-shells-dot[data-state='running'] {
+  background: var(--state-running);
+}
+
+.tile-shells-dot[data-state='failed'] {
+  background: var(--state-failed);
+}
+
+.ui-popover.tile-shells-popover {
+  padding: var(--space-1-25);
+}
+
+.tile-shells {
+  display: flex;
+  flex-direction: column;
+  min-width: var(--size-menu);
+}
+
+.tile-shells-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  height: var(--control-row);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--font-size-md);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tile-shells-row:is(:hover, :focus-visible) {
+  background: var(--hover);
+  outline: none;
+}
+
+.tile-shells-name {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.tile-shells-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.tile-shells-meta[data-state='failed'] {
+  color: var(--state-failed-ink);
+}
+
+.tile-shells-new {
+  margin-top: var(--space-0-5);
+  border-top: 1px solid var(--separator);
+  border-radius: 0;
+  color: var(--muted);
+}
+
+.tile-shells-new svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 
 /* A muted agent's bell. */
@@ -701,7 +911,7 @@ kbd {
   min-height: 300px;
 }
 
-/* Padded all round, so the shot holds the perched subagents and the tilted tiles' corners. */
+/* Padded all round, so the shot holds the perched subagents and the tiles' shadows. */
 .tile-gallery {
   display: grid;
   grid-template-columns: repeat(3, auto);
@@ -880,6 +1090,10 @@ kbd {
   padding: var(--space-3) var(--space-3-5);
 }
 
+.inbox-item[data-read='true'] .inbox-item-name {
+  font-weight: var(--weight-regular);
+}
+
 .inbox-item + .inbox-item {
   border-top: 1px solid var(--separator);
 }
@@ -989,6 +1203,8 @@ kbd {
   position: absolute;
   inset: 0;
   z-index: var(--layer-window);
+  /* Only dims: a click on it reaches the board (and minimises the window). */
+  pointer-events: none;
   background: var(--scrim-window);
   animation: ui-fade var(--motion-fast) var(--ease-out);
 }
@@ -996,7 +1212,7 @@ kbd {
 .session-window-board {
   position: absolute;
   /* Clear of the dock below it, so another docked window is a click away. */
-  inset: var(--space-6) var(--space-10) calc(var(--space-3) + var(--control-md) + var(--space-6));
+  inset: var(--window-gutter) var(--window-gutter) calc(var(--space-3) + var(--control-md) + var(--window-gutter));
   z-index: var(--layer-window);
   border-radius: var(--radius-window);
   box-shadow: var(--shadow-window);
@@ -1245,6 +1461,11 @@ kbd {
   visibility: visible;
 }
 
+/* A selected compact tile's resize handles: white with an accent edge, as a text box's. */
+.react-flow__resize-control.tile-resize {
+  --xy-resize-background-color: var(--raised);
+}
+
 /* The details, on the left: a strip of sections, or an icon rail. */
 
 .session-details {
@@ -1448,6 +1669,233 @@ kbd {
 
 .session-window-pane-dot[data-state='attached'] {
   background: var(--window-live);
+}
+
+/* An agent's terminal tabs (AS3), cmux-style: the agent's own first, then its shells, + and Split after. */
+.session-tabs {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+}
+
+.session-tabs-list {
+  display: flex;
+  gap: var(--space-0-5);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.session-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: var(--control-sm);
+  border-radius: var(--radius-md);
+  color: var(--window-ink-soft);
+}
+
+.session-tab:hover {
+  background: var(--window-field);
+}
+
+.session-tab[data-active] {
+  background: var(--window-raised);
+  color: var(--window-ink);
+}
+
+.session-tab-button {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--space-2-5);
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.session-tab-label {
+  max-width: var(--size-tab-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-tab-button:focus-visible {
+  outline: 2px solid var(--window-focus);
+  outline-offset: -2px;
+}
+
+/* Tabs and panes drag between windows and onto the board (AT2), as the AT2 mock draws it: the tab dragged
+   dims where it was, lifts as an accent tab under the pointer, and the strip it would land in shows a dashed slot. */
+.session-tab[draggable='true'] {
+  cursor: grab;
+}
+
+.session-tab[data-dragging] {
+  opacity: 0.45;
+}
+
+.session-tab-slot {
+  flex: none;
+  width: var(--size-tab-slot);
+  height: var(--control-sm);
+  border: 1.5px dashed var(--shell-drop-edge);
+  border-radius: var(--radius-md);
+}
+
+.session-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  padding: var(--space-1) var(--space-2-5);
+  border-radius: var(--radius-md);
+  background: var(--shell-ghost);
+  color: var(--on-shell-ghost);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  /* Off the screen: only its picture is the drag's, taken as the drag starts. */
+  translate: -1000px -1000px;
+  rotate: -3deg;
+}
+
+/* The window, or the tile, a dragged tab, pane or shell tile would join the tabs of if let go now. */
+.session-window-body[data-drop-over],
+.hybrid-tile[data-drop-over] {
+  outline: 3px solid var(--shell-drop-halo);
+  outline-offset: -3px;
+}
+
+.shell-pane-head[draggable='true'] {
+  cursor: grab;
+}
+
+/* A shell in an agent's window that runs in another agent's worktree, or outside its own. */
+.session-window-astray {
+  flex: none;
+  max-width: var(--size-astray-hint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A shell tab's close button, shown on the tab showing and one under the pointer or the keyboard. */
+.session-tab .session-tab-close {
+  margin-inline: calc(-1 * var(--space-1-5)) var(--space-0-5);
+  opacity: 0;
+}
+
+.session-tab:is(:hover, :focus-within, [data-active]) .session-tab-close {
+  opacity: 1;
+}
+
+.ui-button.session-tab-new {
+  border: 1px dashed var(--window-edge);
+}
+
+.session-window-pane-dot[data-state='running'] {
+  background: var(--window-live);
+}
+
+.session-window-pane-dot[data-state='failed'] {
+  background: var(--window-danger);
+}
+
+/* A window's panes (BH1), cmux-style: each a box with its strip of tabs, and every tab's surface laid out
+   flat over its pane's box under the strip, so moving a tab to another pane never re-mounts its terminal. With one
+   pane its strip is the window's own, and the surfaces fill the box. */
+.window-panes {
+  --pane-strip: var(--control-section);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.window-panes[data-inline-strip] {
+  --pane-strip: 0px;
+}
+
+.window-pane {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--window-line);
+}
+
+.window-pane > .session-tabs {
+  flex: none;
+  height: var(--pane-strip);
+  padding: 0 var(--space-1-5);
+  border-bottom: 1px solid var(--window-line);
+  background: var(--window-chrome);
+}
+
+/* The pane with the keyboard, of several: its strip is underlined in the focus colour. */
+.window-pane > .session-tabs[data-focused] {
+  box-shadow: var(--shadow-pane-focused);
+}
+
+/* One tab's surface; those not showing stay attached behind the one that is. */
+.session-tab-view {
+  position: absolute;
+  top: calc(var(--pane-top) + var(--pane-strip));
+  display: flex;
+  height: calc(var(--pane-height) - var(--pane-strip));
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-tab-view[hidden] {
+  display: none;
+}
+
+/* Where a tab dragged over a pane would land: its strip from the middle, or a new pane at the nearest edge. */
+.window-pane-drop {
+  position: absolute;
+  z-index: var(--layer-raised);
+  top: calc(var(--pane-top) + var(--pane-strip));
+  height: calc(var(--pane-height) - var(--pane-strip));
+}
+
+.window-pane-drop[data-zone]::after {
+  position: absolute;
+  inset: 0;
+  border: 1.5px dashed var(--shell-drop-edge);
+  border-radius: var(--radius-md);
+  background: var(--shell-drop-fill);
+  content: '';
+}
+
+.window-pane-drop[data-zone='left']::after {
+  right: 50%;
+}
+
+.window-pane-drop[data-zone='right']::after {
+  left: 50%;
+}
+
+.window-pane-drop[data-zone='top']::after {
+  bottom: 50%;
+}
+
+.window-pane-drop[data-zone='bottom']::after {
+  top: 50%;
+}
+
+/* The agent alone in its tab looks as its terminal always did: no pane frame. */
+.shell-pane[data-agent]:only-child {
+  border: 0;
 }
 
 .session-window-status {
@@ -2038,6 +2486,8 @@ kbd {
 
 .hybrid-tile-status {
   display: -webkit-box;
+  flex: 0 1 auto;
+  min-height: 0;
   overflow: hidden;
   font-size: var(--font-size-sm);
   line-height: var(--leading-snug);
@@ -2218,19 +2668,11 @@ kbd {
   border-radius: var(--radius-sm);
   color: var(--item-color);
   font-family: var(--font-sans);
-  font-size: var(--text-item-body-size);
+  font-size: var(--text-font-size, var(--text-item-body-size));
   font-weight: var(--weight-regular);
   line-height: var(--text-item-leading);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-
-.text-item[data-size="h1"] {
-  font-size: var(--text-item-h1-size);
-}
-
-.text-item[data-size="h2"] {
-  font-size: var(--text-item-h2-size);
 }
 
 .text-item[data-bold="true"] {
@@ -2408,6 +2850,17 @@ kbd {
   color: var(--muted);
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-semibold);
+}
+
+.item-bar-select {
+  height: var(--control-row);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm-plus);
 }
 
 .ui-button.item-bar-button {
@@ -2629,9 +3082,27 @@ kbd {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  min-width: 0;
   padding: var(--space-2) var(--space-2-5);
   border-top: 1px solid var(--border);
   background: var(--raised);
+}
+
+/*
+ * However long the model or the base branch, Start stays inside the card: the Model · Role button and the worktree note
+ * give way first, cut short with an ellipsis (their whole text is their title), and Start never shrinks.
+ */
+.ui-button.repo-picker-model-toggle,
+.repo-picker-foot > .repo-picker-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.repo-picker-foot-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .board-tool-ghost[data-from-toolbar] {
@@ -2799,6 +3270,76 @@ kbd {
 
 .connector-bar {
   margin-top: calc(-1 * var(--connector-bar-gap));
+}
+
+/*
+ * A board item at its angle. The node stays the straight box React Flow lays out; what is drawn in it turns,
+ * its connector handles too. A turned item takes the pointer only where it is drawn, not in its box's empty corners,
+ * and hides its resize handles, which would drag along its straight edges.
+ */
+.item-rotor {
+  width: 100%;
+  height: 100%;
+}
+
+.react-flow__node:has(> .item-rotor[data-rotated]) {
+  /* Over React Flow's own inline style. */
+  pointer-events: none !important;
+}
+
+.item-rotor[data-rotated] {
+  pointer-events: auto;
+}
+
+.item-rotor[data-rotated] .react-flow__resize-control {
+  display: none;
+}
+
+.react-flow__node:hover > .item-rotor > .connector-handle,
+.react-flow__node.selected > .item-rotor > .connector-handle {
+  opacity: 1;
+}
+
+/* The handle that turns an item, or every item in a selection of several: under it, the same size on screen at any zoom. */
+.rotate-handle {
+  position: absolute;
+  top: calc(100% + var(--rotate-handle-reach));
+  left: 50%;
+  display: grid;
+  width: var(--rotate-handle-size);
+  height: var(--rotate-handle-size);
+  box-sizing: border-box;
+  place-items: center;
+  border: 1.5px solid var(--item-handle);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-control);
+  color: var(--item-handle);
+  cursor: grab;
+  pointer-events: auto;
+  translate: -50% 0;
+  scale: calc(1 / var(--zoom));
+  transform-origin: top center;
+}
+
+.rotate-handle:is(:hover, [data-preview='hover']) {
+  background: var(--item-handle);
+  color: var(--on-accent);
+}
+
+.rotate-handle:active {
+  cursor: grabbing;
+}
+
+/* In the component gallery, on its own: in its cell, not hung under anything. */
+.component-gallery-grid .rotate-handle {
+  position: static;
+  translate: none;
+}
+
+.rotate-handle svg {
+  width: var(--rotate-handle-icon);
+  height: var(--rotate-handle-icon);
 }
 
 /* The round handle a connector is drawn from: on the middle of each side of an object, while it is hovered or selected. */
@@ -3142,7 +3683,8 @@ kbd {
 }
 
 .add-zone-colors {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(8, var(--size-swatch));
   gap: var(--space-1-5);
 }
 
@@ -3166,17 +3708,26 @@ kbd {
   display: inline-flex;
   gap: var(--space-1-5);
   align-items: center;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-medium);
 }
 
 .zone-clone-bar {
+  flex: none;
   width: var(--size-clone-bar);
   height: var(--size-clone-bar-height);
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: var(--clone-track);
+}
+
+/* On a narrow zone, cut short with the name once every chip has folded. */
+.zone-clone-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .zone-clone-fill {
@@ -3492,6 +4043,7 @@ kbd {
   cursor: text;
 }
 
+
 .editable-name-field {
   flex: 1;
   min-width: var(--size-tile-name);
@@ -3662,6 +4214,22 @@ kbd {
   width: var(--icon-xs);
   height: var(--icon-xs);
   color: var(--muted);
+}
+
+/* Who made an edge an agent made. */
+.edge-rules-made-by {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.edge-rules-made-by svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }
 
 .edge-rules-section {
@@ -3905,6 +4473,26 @@ kbd {
   font-weight: var(--weight-semibold);
 }
 
+/* Else when it last delivered, in the flow colour, ringed: a click on it opens the edge's rules and payload. */
+.flow-edge-delivered {
+  cursor: pointer;
+}
+
+.flow-edge-delivered .flow-edge-note-fill {
+  fill: var(--flow-delivered);
+  stroke: var(--flow-edge);
+  stroke-width: var(--connector-width);
+}
+
+.flow-edge-delivered .flow-edge-note-text {
+  fill: var(--flow-delivered-ink);
+}
+
+/* An edge an orchestrator made: dashed, so it reads as the agents' wiring, not the user's. */
+.flow-edge-agent-made {
+  stroke-dasharray: var(--flow-agent-made-dash);
+}
+
 /* An agent's tile in a hand-off (FlowRules): the sender tinted in the flow colour, its robot perched at its top left
    with the payload, its out port lit; the receiver ringed, its in port lit. */
 .hybrid-tile-agent[data-handoff] {
@@ -3991,6 +4579,90 @@ kbd {
   background: var(--raised);
   font-size: var(--font-size-sm-plus);
   line-height: var(--leading-body);
+}
+
+.activity-log {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2-5);
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+  background: var(--raised);
+  font-size: var(--font-size-sm-plus);
+  line-height: var(--leading-body);
+}
+
+.activity-log-head {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.activity-log-count {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+
+.activity-log-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.activity-log-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.activity-line {
+  display: grid;
+  grid-template-columns: var(--space-18) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+}
+
+.activity-line time {
+  color: var(--muted);
+}
+
+.activity-line-what {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.activity-line-detail {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-line[data-outcome='refused'] {
+  border-color: var(--danger-edge);
+  background: var(--danger-soft);
+}
+
+.activity-line-reason {
+  color: var(--danger);
+}
+
+.activity-log-older {
+  align-self: flex-start;
 }
 
 .review-label {

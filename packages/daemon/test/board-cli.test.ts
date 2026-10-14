@@ -136,7 +136,7 @@ describe('reading the board', () => {
     expect(byRef.out).toContain(`${ref('agent', fixTests.sessionId)}  fix-tests\n  state      waiting\n  status     not set\n`);
     expect(byRef.out).toContain(`  branch     ${fixTests.branch}\n`);
     expect(byRef.out).toContain(`    ${ref('edge', edge.id)}  ${ref('agent', fixTests.sessionId)} fix-tests [waiting] → ${ref('agent', webAgent.sessionId)} web [waiting]\n`);
-    expect(byRef.out).toContain('      carries its final message when its turn ends; never delivered');
+    expect(byRef.out).toContain('      carries its final message when it hands off, or else as its turn ends; never delivered');
     expect((await run(env, 'show', 'fix-tests')).out).toBe(byRef.out);
     expect((await run(env, 'show', fixTests.sessionId)).out).toBe(byRef.out);
     expect((await run(env, 'show', 'agent:FIX-TESTS')).out).toBe(byRef.out);
@@ -168,7 +168,7 @@ describe('reading the board', () => {
     expect((await run(env, 'agents')).out).toContain(`fix-tests  [waiting]  task: Fix the flaky tests  (in ${ref('zone', web.id)} web)\n`);
     expect((await run(env, 'edges')).out).toBe(
       `${ref('edge', edge.id)}  ${ref('agent', fixTests.sessionId)} fix-tests [waiting] → ${ref('agent', webAgent.sessionId)} web [waiting]\n` +
-        '  carries its final message when its turn ends; never delivered\n',
+        '  carries its final message when it hands off, or else as its turn ends; never delivered\n',
     );
     expect(JSON.parse((await run(env, 'shells', '--json')).out)).toHaveLength(2);
   });
@@ -226,5 +226,68 @@ describe('who is calling', () => {
     expect(screen).toContain(`you      ${ref('shell', shell.id)}  ${shell.name}  (a shell tile)\n`);
     expect(screen).toContain(`zone     ${ref('zone', web.id)}  web  (repo ${web.repoRoot})\n`);
     expect(screen).toContain(`session  ${pane}\n`);
+  });
+});
+
+describe('orchestrating from the command line', () => {
+  it('lets the user turn orchestrating on and off for an agent, and shows it', async () => {
+    const { env, client, fixTests } = await board();
+
+    expect(await run(env, 'orchestrate', 'on', 'fix-tests', '--scope', 'repo')).toMatchObject({
+      code: 0,
+      out: `${ref('agent', fixTests.sessionId)} fix-tests may orchestrate in its repo now.\n`,
+    });
+    expect((await client.call('agent.list')).find((agent) => agent.name === 'fix-tests')!.orchestrate).toBe('repo');
+    expect((await run(env, 'show', 'fix-tests')).out).toContain('  orchestrates agents in its repo\n');
+    expect((await run(env, 'orchestrate', 'off', 'fix-tests')).out).toBe(`${ref('agent', fixTests.sessionId)} fix-tests may not orchestrate now.\n`);
+    expect((await client.call('agent.list')).find((agent) => agent.name === 'fix-tests')!.orchestrate).toBeNull();
+  });
+
+  it('refuses the orchestrator commands outside a session, and shows an empty activity log', async () => {
+    const { env } = await board();
+
+    expect(await run(env, 'new', '--', 'Do something')).toMatchObject({
+      code: 1,
+      err: expect.stringContaining('The orchestrator commands work only for an agent in an agent-board session'),
+    });
+    expect(await run(env, 'activity')).toMatchObject({ code: 0, out: 'No orchestrator has done anything yet.\n' });
+  });
+
+  it('checks each command’s options before it connects', async () => {
+    expect(await run({}, 'send', 'agent:1234', '--remove', 'hi')).toMatchObject({ code: 2, err: expect.stringContaining('--remove is not an option of send') });
+    expect(await run({}, 'tree', '--progress', '5')).toMatchObject({ code: 2, err: expect.stringContaining('--progress is only for `status set`') });
+    expect(await run({}, 'wait')).toMatchObject({ code: 2, err: expect.stringContaining('give one or more agent refs') });
+    expect(await run({}, 'wait', 'agent:1234', '--until', 'sleeping')).toMatchObject({ code: 2, err: expect.stringContaining('sleeping is not a state') });
+    expect(await run({}, 'orchestrate', 'maybe', 'agent:1234')).toMatchObject({ code: 2 });
+    expect(await run({}, 'orchestrate', 'on', 'agent:1234', '--scope', 'galaxy')).toMatchObject({ code: 2 });
+    expect(await run({}, 'send', 'agent:1234')).toMatchObject({ code: 2, err: expect.stringContaining('give a message') });
+  });
+});
+
+describe('hand-offs and edges from the command line', () => {
+  it('checks their arguments before it connects', async () => {
+    expect(await run({}, 'handoff', '--data', '{nope')).toMatchObject({ code: 2, err: expect.stringContaining('--data must be JSON') });
+    expect(await run({}, 'handoff', 'agent:1234')).toMatchObject({ code: 2, err: expect.stringContaining('unexpected agent:1234') });
+    expect(await run({}, 'edge', 'add', 'a', 'b')).toMatchObject({ code: 2, err: expect.stringContaining('carries must be message, handover, json') });
+    expect(await run({}, 'edge', 'add', 'a', '--carries', 'message')).toMatchObject({ code: 2, err: expect.stringContaining('give the agent it flows from') });
+    expect(await run({}, 'edge', 'add', 'a', 'b', '--carries', 'message', '--trigger', 'soon')).toMatchObject({ code: 2 });
+    expect(await run({}, 'edge', 'add', 'a', 'b', '--carries', 'message', '--condition', 'gate')).toMatchObject({
+      code: 2,
+      err: expect.stringContaining('a gate condition needs a command'),
+    });
+    expect(await run({}, 'edge', 'add', 'a', 'b', '--carries', 'message', '--condition', 'vibes:good')).toMatchObject({ code: 2 });
+    expect(await run({}, 'edge', 'list', '--carries', 'json')).toMatchObject({ code: 2, err: expect.stringContaining('--carries is only for `edge add`') });
+    expect(await run({}, 'edge', 'drop', 'edge:1234')).toMatchObject({ code: 2 });
+  });
+
+  it('lists edges with `edge list`, and refuses a hand-off or a new edge outside a session', async () => {
+    const { env, edge } = await board();
+
+    expect((await run(env, 'edge', 'list')).out).toContain(ref('edge', edge.id));
+    expect(await run(env, 'handoff', '--message', 'done')).toMatchObject({ code: 1, err: expect.stringContaining('Only an agent in an agent-board session can hand off') });
+    expect(await run(env, 'edge', 'add', 'fix-tests', 'web', '--carries', 'handover', '--condition', 'gate:pnpm check:local')).toMatchObject({
+      code: 1,
+      err: expect.stringContaining('The orchestrator commands work only for an agent'),
+    });
   });
 });

@@ -6,7 +6,9 @@ export type TileBadge =
   | { kind: 'issue'; issue: LinkedIssue }
   | { kind: 'pr'; pr: PullRequest }
   | { kind: 'schedule'; schedule: AgentSchedule }
-  | { kind: 'muted' };
+  | { kind: 'muted' }
+  /** Its shell tabs' shells (AU1): one chip, however many. */
+  | { kind: 'shells' };
 
 export interface TileFooter {
   /** The badges the footer row shows, wrapping onto a second line when it must. */
@@ -19,16 +21,18 @@ export interface TileFooter {
 const MAX_PULL_REQUEST_CHIPS = 2;
 
 /**
- * The tile's footer: its linked issue, its first pull requests, its schedule and a mute's bell as badges, and the pull
- * requests past those folded into a "+N", so the tile's head keeps its name readable however much there is. A notice
- * is no badge (the TileCompact mock folds it): it says why the agent stopped, so the tile's body shows it.
+ * The tile's footer: its linked issue, its first pull requests, its schedule, a mute's bell and its shells chip (when it
+ * has `shells`) as badges, and the pull requests past those folded into a "+N", so the tile's head keeps its name
+ * readable however much there is. A notice is no badge (the TileCompact mock folds it): it says why the agent stopped,
+ * so the tile's body shows it.
  */
-export function tileFooter(agent: Agent): TileFooter {
+export function tileFooter(agent: Agent, shells = 0): TileFooter {
   const shown: TileBadge[] = [];
   if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
   for (const pr of agent.pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS)) shown.push({ kind: 'pr', pr });
   if (agent.schedule !== null) shown.push({ kind: 'schedule', schedule: agent.schedule });
   if (agent.muted) shown.push({ kind: 'muted' });
+  if (shells > 0) shown.push({ kind: 'shells' });
 
   const folded = agent.pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((pr) => `#${pr.number} ${pr.title}: ${pr.state}, ${checksLabel(pr)}`);
   return { shown, folded };

@@ -3,7 +3,6 @@ import { isAbsolute } from 'node:path';
 import { ipcMain, shell, type WebContents } from 'electron';
 import type { DaemonClient, DaemonLink } from '@agent-board/daemon/client';
 import type {
-  CreateShellParams,
   DaemonEvent,
   SessionExitedEvent,
   SessionInfo,
@@ -40,7 +39,6 @@ export function registerSessionIpc(daemon: DaemonLink, connect: () => Promise<Da
   // Every window hears about every session that ends, so lists of sessions stay current.
   forwardEvents(daemon, ['session.exited'], SESSION_IPC.exited);
 
-  ipcMain.handle(SESSION_IPC.createShell, (_event, params: CreateShellParams) => daemon.call('session.createShell', params));
   ipcMain.handle(SESSION_IPC.list, () => daemon.call('session.list'));
   ipcMain.handle(SESSION_IPC.resize, async (_event, sessionId: string, size: TerminalSize) => {
     await daemon.call('session.resize', { sessionId, ...size });

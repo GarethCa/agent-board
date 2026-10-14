@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardItem, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
-import type { Rect } from '../geometry';
+import { rotatedBounds, type Rect } from '../geometry';
 import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, type Movable } from './displace';
 import { bringToFront, EXPANDED_SIZE, expandTile, resizeExpanded } from './expanded';
 import { AGENT_TILE_SIZE, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
@@ -317,7 +317,7 @@ describe('displaced', () => {
 
   it("moves a zone's notes and cards clear of an expanded tile in it, as its tiles", () => {
     const item = (id: string, x: number, y: number): BoardItem =>
-      ({ id, kind: 'sticky', zoneId: 'z', x, y, width: 200, height: 200, z: 0, data: {}, createdAt: '', updatedAt: '' }) as BoardItem;
+      ({ id, kind: 'sticky', zoneId: 'z', x, y, width: 200, height: 200, z: 0, rotation: 0, data: {}, createdAt: '', updatedAt: '' }) as BoardItem;
     const first = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
     const expanded = expandTile([], s('a'));
     const nodes = withTiles(
@@ -338,6 +338,22 @@ describe('displaced', () => {
       expect(clear, id).toBe(true);
       expect(rect.x).toBeGreaterThanOrEqual(ZONE_PADDING);
     }
+  });
+
+  it("moves a rotated note clear by the box round it, not its straight one", () => {
+    const middle = { x: 1000, y: 1000 };
+    // Straight, it would be clear of the expanded tile by more than the gap; turned 45°, its corners reach under it.
+    const note = {
+      id: 'tilted', kind: 'sticky', zoneId: null, x: middle.x + EXPANDED_SIZE.width + 30, y: middle.y, width: 200, height: 200, z: 0,
+      rotation: 45, data: {}, createdAt: '', updatedAt: '',
+    } satisfies BoardItem;
+    const expanded = expandTile([], s('a'));
+    const nodes = withTiles([itemNode(note)], [], [shell('a', null, at(middle.x, middle.y))], [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    const open = boardRect(shown, shown.find((node) => node.id === s('a'))!);
+    const moved = shown.find((node) => node.id === 'item:tilted')!;
+    const bounds = rotatedBounds({ ...moved.position, width: 200, height: 200 }, 45);
+    expect(bounds.x).toBeGreaterThanOrEqual(open.x + open.width + TILE_GAP - 1e-6);
   });
 
   it('reflows live from the size React Flow gives an expanded tile as it is resized', () => {

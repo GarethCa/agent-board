@@ -4,6 +4,7 @@ import { createContext } from 'react';
 import type { Edge } from '@xyflow/react';
 import { DEFAULT_PAYLOAD_PATHS, type FlowCondition, type FlowEdge, type FlowEdgeEvent, type UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import type { FlowEdgeChange } from '../../../preload/api';
+import { whenLabel } from './schedule';
 import { tileNodeId } from './tiles';
 
 export const FLOW_EDGE_TYPE = 'flow';
@@ -20,14 +21,15 @@ export const isFlowPort = (handleId: string | null | undefined): boolean => hand
 
 /**
  * The edges for `edges`, leaving out any whose agent's tile isn't on the board (`nodeIds`): the daemon deletes an edge
- * with its agent, and tells nobody.
+ * with its agent, and tells nobody. `names` are the agents' names, by session, for who made an edge an agent made.
  */
 export function flowEdges(
   edges: readonly FlowEdge[],
   nodeIds: ReadonlySet<string>,
   selected: ReadonlySet<string>,
   live: ReadonlySet<string> = new Set(),
-): Edge<{ edge: FlowEdge; live: boolean }>[] {
+  names: ReadonlyMap<string, string> = new Map(),
+): Edge<{ edge: FlowEdge; live: boolean; madeByName?: string }>[] {
   return edges
     .filter((edge) => nodeIds.has(tileNodeId('agent', edge.from)) && nodeIds.has(tileNodeId('agent', edge.to)))
     .map((edge) => ({
@@ -39,7 +41,7 @@ export function flowEdges(
       targetHandle: FLOW_PORTS.in,
       selected: selected.has(edge.id),
       zIndex: FLOW_Z_INDEX,
-      data: { edge, live: live.has(edge.id) },
+      data: { edge, live: live.has(edge.id), madeByName: edge.madeBy === null ? undefined : names.get(edge.madeBy) },
     }));
 }
 
@@ -145,6 +147,24 @@ export function heldLabel(edge: Pick<FlowEdge, 'held' | 'conditions' | 'checks'>
   if (failed?.needsApproval === true) return 'held until you approve';
   const condition = failed === undefined ? undefined : edge.conditions[edge.checks.indexOf(failed)];
   return condition === undefined ? `held: ${edge.held.reason}` : `held until ${waitsFor(condition)}`;
+}
+
+/** When the edge last delivered, for the chip under its label (`delivered 14:02`); nothing before then, or after a skip. */
+export function deliveredLabel(edge: Pick<FlowEdge, 'lastDelivery'>, now: Date): string | undefined {
+  if (edge.lastDelivery?.delivered !== true) return undefined;
+  return `delivered ${whenLabel(new Date(edge.lastDelivery.at), now)}`;
+}
+
+/**
+ * What a hover over the edge's label says: who made it, if an agent did (`madeBy`, its name if it is still on the
+ * board), and why its last delivery was skipped, if it was.
+ */
+export function edgeTitle(edge: Pick<FlowEdge, 'madeBy' | 'lastDelivery'>, madeByName: string | undefined): string | undefined {
+  const lines = [
+    ...(edge.madeBy === null ? [] : [madeByName === undefined ? 'Made by an orchestrator since deleted' : `Made by ${madeByName}, an orchestrator`]),
+    ...(edge.lastDelivery?.delivered === false ? [`Last delivery skipped: ${edge.lastDelivery.reason}`] : []),
+  ];
+  return lines.length === 0 ? undefined : lines.join('\n');
 }
 
 /** One of an edge's events as its history says it, `to` being the agent it delivers to. */

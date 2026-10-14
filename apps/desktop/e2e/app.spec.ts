@@ -73,7 +73,20 @@ test('headless, no window is ever on screen, yet the board and a popped-out wind
     expect(await popped.evaluate(() => document.visibilityState)).toBe('visible');
     // At one device pixel per CSS pixel, whatever the display: offscreen paint is in software.
     expect(await popped.evaluate(() => devicePixelRatio)).toBe(1);
-    expect((await popped.screenshot()).length).toBeGreaterThan(0);
+    // Painting into a bitmap, not just hidden: every window's page renders offscreen.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((each) => each.webContents.isOffscreen()))).toEqual([
+      true,
+      true,
+    ]);
+    // A page that never painted gives a screenshot of one flat colour; this one has the terminal and its chrome.
+    const shot = (await popped.screenshot()).toString('base64');
+    const colours = await app.evaluate(({ nativeImage }, png) => {
+      const bitmap = nativeImage.createFromBuffer(Buffer.from(png, 'base64')).toBitmap();
+      const seen = new Set<number>();
+      for (let i = 0; i < bitmap.length && seen.size < 10; i += 4) seen.add(bitmap.readUInt32LE(i));
+      return seen.size;
+    }, shot);
+    expect(colours).toBeGreaterThan(1);
     expect(await anyShown()).toBe(false);
   } finally {
     await app.close();

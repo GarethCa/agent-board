@@ -122,6 +122,21 @@ describe('the shipped migrations', () => {
     expect(migrate(db)).toEqual({ from: MIGRATIONS.length - 1, to: MIGRATIONS.length });
   });
 
+  it('give existing zones no fill opacity of their own, so they keep the theme default', () => {
+    const db = new DatabaseSync(':memory:');
+    const added = MIGRATIONS.findIndex((m) => m.name === 'zone_fill_opacity');
+    expect(added).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, added));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+      VALUES ('a', NULL, '', 'ideas', '#4c6ef5', 0, 0, 300, 200)`);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT fill_opacity FROM zones').all()).toEqual([{ fill_opacity: null }]);
+    expect(() => db.exec("UPDATE zones SET fill_opacity = 41")).toThrow(/CHECK/);
+    expect(() => db.exec("UPDATE zones SET fill_opacity = 40")).not.toThrow();
+  });
+
   it("remember existing zones' folders as recent ones, once each, when zones get sources", () => {
     const db = new DatabaseSync(':memory:');
     const sources = MIGRATIONS.findIndex((m) => m.name === 'zone_sources');
@@ -284,5 +299,34 @@ describe('the free agents migration', () => {
 
     expect(() => migrate(db)).toThrow(/free_agents.*NOT NULL constraint failed: agents_new.repo_root/);
     expect(db.prepare('SELECT session_id FROM agents').all()).toEqual([{ session_id: 's' }]);
+  });
+});
+
+describe('the shell tile tabs migration', () => {
+  it("keeps every shell tile and agent's tab, its connectors and owner index, and lets a shell tile own tabs", () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const tileTabs = MIGRATIONS.findIndex((m) => m.name === 'shell_tile_tabs');
+    expect(tileTabs).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, tileTabs));
+    db.exec(`INSERT INTO shells (id, zone_id, name, cwd, layout, created_at, x, y, z)
+        VALUES ('tile', NULL, 'Shell 1', '/home', '{"type":"pane","sessionId":"p"}', '2026-01-01T00:00:00.000Z', 5, 6, 1);
+      INSERT INTO shells (id, zone_id, name, cwd, layout, owner_kind, owner_id) VALUES ('tab', NULL, 'zsh', '/w', '{}', 'agent', 'a');
+      INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side, style, start_end, end_end)
+        VALUES ('c', 'shell', 'tile', 'right', 'shell', 'tab', 'left', 'solid', 'none', 'arrow');`);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT id, zone_id, name, cwd, layout, created_at, x, y, z, owner_kind, owner_id FROM shells ORDER BY rowid').all()).toEqual([
+      { id: 'tile', zone_id: null, name: 'Shell 1', cwd: '/home', layout: '{"type":"pane","sessionId":"p"}', created_at: '2026-01-01T00:00:00.000Z', x: 5, y: 6, z: 1, owner_kind: null, owner_id: null },
+      { id: 'tab', zone_id: null, name: 'zsh', cwd: '/w', layout: '{}', created_at: expect.any(String), x: null, y: null, z: null, owner_kind: 'agent', owner_id: 'a' },
+    ]);
+    db.exec("INSERT INTO shells (id, zone_id, name, cwd, layout, owner_kind, owner_id) VALUES ('tile-tab', NULL, 'zsh', '/home', '{}', 'shell', 'tile')");
+    expect(() => db.exec("INSERT INTO shells (id, zone_id, name, cwd, layout, owner_kind, owner_id) VALUES ('x', NULL, 'S', '/', '{}', 'zone', 'z')")).toThrow(/CHECK/);
+    expect(() => db.exec("INSERT INTO shells (id, zone_id, name, cwd, layout, owner_kind) VALUES ('y', NULL, 'S', '/', '{}', 'shell')")).toThrow(/CHECK/);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'shells' AND name = 'shells_owner'").all()).toHaveLength(1);
+    db.exec("DELETE FROM shells WHERE id = 'tile'");
+    expect(db.prepare('SELECT id FROM connectors').all()).toEqual([]);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });

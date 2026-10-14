@@ -9,6 +9,7 @@ import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringP
 import {
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
+  validZoneFillOpacity,
   ZONE_COLORS,
   type DaemonEvent,
   type DaemonMethods,
@@ -35,6 +36,7 @@ type ZoneMethods = Pick<
   | 'zone.setLook'
   | 'zone.setTracker'
   | 'zone.remove'
+  | 'zone.restore'
 >;
 
 interface ZoneRow {
@@ -44,12 +46,14 @@ interface ZoneRow {
   folder: string;
   name: string;
   color: string;
+  fill_opacity: number | null;
   x: number;
   y: number;
   width: number;
   height: number;
   codex_bypass_hook_trust: number;
   board_mcp: number;
+  agents_orchestrate: number;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -64,6 +68,8 @@ interface ZoneRow {
 
 /** A zone to add, as `ZoneTable.insert` takes it. */
 export interface NewZone extends ZoneLayout {
+  /** Its id; made up if not given. */
+  id?: string;
   repoRoot: string | null;
   folder: string;
   name: string;
@@ -148,12 +154,14 @@ export function createZoneTable(
     folder: row.folder,
     name: row.name,
     color: row.color,
+    fillOpacity: row.fill_opacity,
     x: row.x,
     y: row.y,
     width: row.width,
     height: row.height,
     codexBypassHookTrust: row.codex_bypass_hook_trust === 1,
     boardMcp: row.board_mcp === 1,
+    agentsOrchestrate: row.agents_orchestrate === 1,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -185,7 +193,7 @@ export function createZoneTable(
     find,
     list: () => (selectAll.all() as unknown as ZoneRow[]).map(toZone),
     insert(zone) {
-      const id = randomUUID();
+      const id = zone.id ?? randomUUID();
       insert.run(
         id,
         zone.repoRoot,
@@ -237,18 +245,22 @@ export function createZoneTable(
 
 /**
  * The `zone.*` RPC handlers that need no clone, backed by the `zones` table. They don't use the calling connection. A
- * zone is only bound to a tracker scope that `trackers` confirms.
+ * zone is only bound to a tracker scope that `trackers` confirms. `onOrchestrateChanged` hears a zone's
+ * `agentsOrchestrate` change, to stop or start the agents it reaches orchestrating.
  */
 export function zoneHandlers<Context>(
   db: DatabaseSync,
   zones: ZoneTable,
   trackers: Pick<TrackerHost, 'checkScope'>,
+  onOrchestrateChanged: (zoneId: string, on: boolean) => void,
 ): RpcHandlers<ZoneMethods, Context> {
   const updateLayout = db.prepare('UPDATE zones SET x = ?, y = ?, width = ?, height = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE zones SET name = ? WHERE id = ?');
   const updateColor = db.prepare('UPDATE zones SET color = ? WHERE id = ?');
+  const updateFillOpacity = db.prepare('UPDATE zones SET fill_opacity = ? WHERE id = ?');
   const updateBypass = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
+  const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -350,12 +362,19 @@ export function zoneHandlers<Context>(
       const id = stringParam(fields, 'id');
       const bypass = optionalBooleanParam(fields, 'codexBypassHookTrust');
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
-      if (bypass === undefined && boardMcp === undefined) throw invalidParams('give codexBypassHookTrust or boardMcp');
+      const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
+      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined) {
+        throw invalidParams('give codexBypassHookTrust, boardMcp or agentsOrchestrate');
+      }
       zones.get(id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
+      if (agentsOrchestrate !== undefined) updateAgentsOrchestrate.run(agentsOrchestrate ? 1 : 0, id);
+      // Off, no agent in it orchestrates any more, whoever let it; on, the agents it let orchestrate do again (ADR-0011).
+      if (agentsOrchestrate !== undefined) onOrchestrateChanged(id, agentsOrchestrate);
       return changed(id);
     },
+    // The colour is any #rrggbb, not only a `ZONE_COLORS` one: the pickers offer those, and zones keep whatever they had.
     'zone.setLook': (params) => {
       const fields = paramsObject(params);
       const id = stringParam(fields, 'id');
@@ -363,9 +382,14 @@ export function zoneHandlers<Context>(
       if (name === '') throw invalidParams('name must not be blank');
       const color = optionalStringParam(fields, 'color')?.toLowerCase();
       if (color !== undefined && !/^#[0-9a-f]{6}$/.test(color)) throw invalidParams(`color must be #rrggbb, got ${color}`);
+      const fillOpacity = fields.fillOpacity;
+      if (fillOpacity !== undefined && fillOpacity !== null && !validZoneFillOpacity(fillOpacity)) {
+        throw invalidParams(`fillOpacity must be a whole percent from 0 to 40 in steps of 2, or null, got ${String(fillOpacity)}`);
+      }
       zones.get(id);
       if (name !== undefined) updateName.run(name, id);
       if (color !== undefined) updateColor.run(color, id);
+      if (fillOpacity !== undefined) updateFillOpacity.run(fillOpacity, id);
       return changed(id);
     },
     'zone.setTracker': async (params) => {
@@ -376,6 +400,34 @@ export function zoneHandlers<Context>(
       const tracker = wanted === null ? null : await trackers.checkScope(wanted);
       updateTracker.run(tracker?.provider ?? null, tracker?.scope ?? null, tracker?.project ?? null, id);
       return changed(id);
+    },
+    'zone.restore': async (params) => {
+      const fields = paramsObject(params);
+      const id = stringParam(fields, 'id');
+      const name = stringParam(fields, 'name').trim();
+      if (name === '') throw invalidParams('name must not be blank');
+      const color = stringParam(fields, 'color').toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(color)) throw invalidParams(`color must be #rrggbb, got ${color}`);
+      const fillOpacity = fields.fillOpacity;
+      if (fillOpacity !== null && !validZoneFillOpacity(fillOpacity)) throw invalidParams(`fillOpacity must be a valid percent or null, got ${String(fillOpacity)}`);
+      const layout = layoutParams(fields);
+      const defaultRepo = fields.defaultRepo === null ? null : stringParam(fields, 'defaultRepo');
+      if (defaultRepo !== null && !isAbsolute(defaultRepo)) throw invalidParams(`defaultRepo must be absolute, got ${defaultRepo}`);
+      const tracker = zoneTrackerParam(fields);
+      return queue(`zone ${id}`, async () => {
+        if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
+        // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
+        const folder = defaultRepo === null ? null : await resolveZoneFolder(defaultRepo).catch(() => null);
+        const repo = folder === null ? null : folderPath(folder.repoRoot, folder.folder);
+        zones.insert({ ...layout, id, name, color, repoRoot: null, folder: '', tracker });
+        updateFillOpacity.run(fillOpacity, id);
+        updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
+        updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
+        updateAgentsOrchestrate.run(optionalBooleanParam(fields, 'agentsOrchestrate') === false ? 0 : 1, id);
+        updateDefaultRepo.run(repo, id);
+        if (repo !== null) zones.rememberFolder(repo);
+        return changed(id);
+      });
     },
     'zone.remove': (params) => {
       const id = stringParam(paramsObject(params), 'id');

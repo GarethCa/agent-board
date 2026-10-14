@@ -66,6 +66,10 @@ Double-click a tile for its session window: the live terminal, with the controls
   <img src="docs/assets/screenshots/session-window.png" alt="The session window: details on the left, the live terminal on the right, with Minimise, Pop out and Close in the header" width="760">
 </p>
 
+A window is laid out in **panes**, and each pane has its own tab strip: the agent's own tab, then shells and any other session you show there. **+** or ⌘T opens a shell in the focused pane, and ⌘D splits it. Drag a tab along its strip to reorder it, onto another pane's strip to move it there, or onto the edge of a pane to split a new pane off. Closing a pane's last tab closes the pane.
+
+Tabs move too. Drag a tab, or a split pane, onto another agent's window to move it there, or out onto the board to make it a tile of its own; drag a shell tile onto an agent to bring it in as a tab.
+
 ### Flows between agents
 
 An **edge** carries one agent's work to another when the first finishes. Hover an agent's tile and drag from its square **flow port** (below the middle of its right side) onto another agent's tile; its **Edge rules** open on the right.
@@ -94,6 +98,8 @@ Every agent agent-board starts is told one thing: it is on agent-board, and `age
 - **The `agent-board` command line.** Inside a session it is already on the `PATH`. For your own terminals, **Settings › Command line › Install command-line tool** links it into `~/.local/bin`. It reads the board (`tree`, `zones`, `agents`, `shells`, `edges`, `show <ref>`), and an agent uses it to set its own one-line status, which its tile shows in place of the task. Read commands take `--json`.
 - **The board MCP server.** `agent-board mcp` is a small stdio MCP server that Claude and Codex are started with, giving them `whoami`, `board`, `connections` and `set_status` tools. It is on by default; a zone's ⋯ menu has **Turn off board MCP** for agents started there afterwards (the command line stays).
 
+An agent can also hand off on purpose. `agent-board handoff` (or the `handoff` MCP tool) sends a message over one of the agent's own edges, and `agent-board edge list` shows them. An [orchestrator](#orchestrators) can wire its crew with `agent-board edge add` and `edge remove`; an edge an agent made is drawn dashed and says who made it, and the agent can remove only its own ([ADR-0012](docs/adr/0012-explicit-handoff-and-agent-made-edges.md)).
+
 Things are named by short refs such as `zone:cd62` or `agent:22a7`, the first characters of their ids, like git's short hashes. A name works too. An agent sees the board, but it cannot approve another agent's permission prompt, type into a terminal or change a setting ([ADR-0010](docs/adr/0010-board-cli-and-mcp.md)).
 
 This is a real run against the fake `claude` the tests use, with a zone and two agents:
@@ -116,6 +122,21 @@ agent:22a7  Fix the failing login test
   worktree   ~/.agent-board/worktrees/web-app-4c737128/fix-the-failing-login-test-0a409e
   last said  All tests pass.
 ```
+
+#### Orchestrators
+
+An agent can lead other agents the way you would: start one with a task, wait for its turn to end, read what it handed back, send a follow-up and close it. The commands are `new`, `send`, `wait`, `read`, `interrupt` and `close`, with matching MCP tools; `agent-board help orchestrate` shows the loop.
+
+- **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent you start in the zone may start and steer agents in that zone, and only there. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
+- **Never inherited.** An agent an orchestrator starts runs in its own worktree and branch, and cannot orchestrate itself. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
+- **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board** can show a "from" chip on each agent instead.
+- **An Activity tab.** The orchestrator's session window gets an **Activity** tab listing what it started, sent, interrupted and closed, and what it tried and was refused, with why.
+
+<p align="center">
+  <img src="docs/assets/screenshots/orchestrator-crew.png" alt="An orchestrator's tile with a badge counting its two workers, which sit beside it in a dashed frame labelled with the orchestrator's name" width="880">
+</p>
+
+An orchestrator cannot answer a permission prompt, type raw keys, change a permission mode or a setting, or open a message with a command such as `/model` or `!`. It runs as you, so this limits what the board offers it, not what a determined agent could do on your machine ([ADR-0011](docs/adr/0011-orchestrators.md)).
 
 ### Chat view
 
@@ -246,6 +267,8 @@ The rest of the decisions are in [`docs/adr/`](docs/adr):
 - [The in-repo design system](docs/adr/0008-design-system.md)
 - [Approving what edge conditions run](docs/adr/0009-edge-condition-approvals.md)
 - [The board CLI and MCP](docs/adr/0010-board-cli-and-mcp.md)
+- [Orchestrators](docs/adr/0011-orchestrators.md)
+- [Explicit hand-off and agent-made edges](docs/adr/0012-explicit-handoff-and-agent-made-edges.md)
 
 The domain vocabulary (zone, tile, session, harness, edge…) is in [`CONTEXT.md`](CONTEXT.md).
 

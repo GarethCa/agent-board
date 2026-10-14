@@ -1,11 +1,57 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`agent-board --help > has help for activity 1`] = `
+"usage: agent-board activity [--of <ref>] [--limit <n>] [--json]
+
+What orchestrators did and tried, newest first: each start, message, interrupt and close, done
+or refused (and why).
+
+  --of <ref>     One orchestrator's alone.
+  --limit <n>    At most this many lines: 100 by default.
+  --json         Print it as JSON instead.
+"
+`;
+
 exports[`agent-board --help > has help for agents 1`] = `
 "usage: agent-board agents [--json]   (or: agent-board ls)
 
 Every agent: its ref, name, [state], status (or task) and zone.
 
   --json   Print it as JSON instead.
+"
+`;
+
+exports[`agent-board --help > has help for close 1`] = `
+"usage: agent-board close <ref> [--remove] [--json]
+
+Ends the agent's session, as the user stopping it would. Its tile, worktree and branch stay.
+
+  --remove   Delete it with its worktree and branch instead: only an agent you started, never
+             one with uncommitted changes or commits no other branch has, and never one
+             with a reviewer the user started.
+  --json     Print the agent as JSON.
+"
+`;
+
+exports[`agent-board --help > has help for edge 1`] = `
+"usage: agent-board edge add <from> <to> --carries message|handover|json [--path <file>] [--trigger auto|manual] [--condition <c>]... | edge list | edge remove <ref>
+
+Edges between agents, for an orchestrator (\`agent-board help orchestrate\`). \`edge list\` lists
+every edge, as \`agent-board edges\` does, and anyone may.
+
+\`edge add\` joins <from> to <to>: when <from> hands off, what the edge carries goes to <to> as
+its next message. Both must be in your scope, or you (\`me\`); <to> may not be another
+orchestrator unless your scope is the whole board. The edge is marked as made by you, and the
+user can change or remove it like any other. \`edge remove\` removes an edge you made.
+
+  --carries <c>      message (<from>'s final message, or what it hands off), handover (a
+                     markdown file) or json (a JSON file).
+  --path <file>      The file, relative to <from>'s worktree: handover.md or handoff.json without.
+  --trigger <t>      auto (the default: as <from> hands off) or manual (the user sends it).
+  --condition <c>    Must pass first; repeat for more: gate:<command> (it passes in <from>'s
+                     worktree), pr-checks, label:<label> (on <from>'s issue), script:<command>
+                     (it exits 0). A gate or script runs nothing until the user approves it.
+  --json             Print the edge as JSON.
 "
 `;
 
@@ -21,6 +67,27 @@ ends, or when the user presses Send), the conditions that must pass first, and h
 "
 `;
 
+exports[`agent-board --help > has help for handoff 1`] = `
+"usage: agent-board handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>] [--json]
+
+Hands your finished work to the next agent: along each edge out of your tile (\`agent-board show
+me\` lists them), or with --to along your edge to that agent alone. You hand off only along
+your own edges; an edge's conditions are checked first, so a hand-off may be held until they
+pass. A manual edge is left for the user to send. Each hand-off is logged for the user.
+
+Each edge takes what it carries: an edge carrying a message takes --message (your result, in
+your words); a handover edge the file --handover (its own file, such as handover.md, without);
+a JSON edge --data (its own file without). Call it once the work is ready: when your turn
+ends, the edges you handed off along aren't handed off along again.
+
+  --to <ref>         One agent you have an edge to.
+  --message <text>   The message.
+  --handover <path>  A markdown file in your worktree, relative to it.
+  --data <json>      A JSON value.
+  --json             Print how it went as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for identify 1`] = `
 "usage: agent-board identify [--json]
 
@@ -33,13 +100,106 @@ Outside an agent-board session it says so: you can read the board, but have no t
 "
 `;
 
+exports[`agent-board --help > has help for interrupt 1`] = `
+"usage: agent-board interrupt <ref> [--json]
+
+Interrupts the agent's turn, as Ctrl-C in its terminal would: it waits at its prompt.
+
+  --json   Print the agent as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for mcp 1`] = `
 "usage: agent-board mcp
 
-Serves the board as MCP tools on stdio: whoami, board, connections and set_status. The app adds it
-to the agents it starts; add it to another Claude with:
+Serves the board as MCP tools on stdio: whoami, board, connections, handoff and set_status, and
+for an agent that may orchestrate as it starts, new_agent, send, wait, read, interrupt, close,
+add_edge and remove_edge. The
+app adds it to the agents it starts; add it to another Claude with:
 
   claude mcp add agent-board -- agent-board mcp
+"
+`;
+
+exports[`agent-board --help > has help for new 1`] = `
+"usage: agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--role <role>] [--branch <branch>] [--base <branch or agent ref>] [--issue <id>] [--file <path>] [--] <prompt>
+
+Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
+branch of its zone's repo, as the user starts one. You must be an orchestrator: see
+\`agent-board help orchestrate\`. It prints the new agent's ref.
+
+  --zone <ref>       A zone in your scope; your own by default.
+  --name <name>      Its tile's name; made from the prompt without.
+  --harness <h>      claude (the default) or codex.
+  --model <model>    The harness's model; its default without.
+  --role <role>      implementer, reviewer or follow-up-reviewer.
+  --branch <name>    Its new branch; made from its name without.
+  --base <b>         The branch to cut it from, or an agent's ref (agent:9c1e, agent:impl) for
+                     that agent's branch, as for a reviewer of its work; the repo's HEAD without.
+                     Refused when its project config (.claude, .mcp.json, .codex) differs
+                     from HEAD's.
+  --issue <id>       An issue in the zone's tracker: it comes first in the prompt.
+  --file <path>      Read the prompt from a file.
+  --json             Print the agent as JSON.
+"
+`;
+
+exports[`agent-board --help > has help for orchestrate 1`] = `
+"usage: agent-board orchestrate on|off <ref> [--scope zone|repo|board]
+
+Orchestrating: one agent leading others, as a lead hands work to workers and reviewers and
+reads what they hand back.
+
+The agents the user starts in a zone may orchestrate there, unless the user turns that off
+for the zone (Let agents orchestrate, in the zone's ⋯ menu). An agent an orchestrator starts
+never does. The user can also let one agent orchestrate with \`agent-board orchestrate on <ref>\`
+in a terminal outside agent-board; never from a session on the board, a shell tile's included,
+so no agent lets itself or another orchestrate.
+--scope says where it may act:
+  zone    the agents in the zone its tile is in, and starting agents there (the default)
+  repo    the agents of its repo, in any zone of it
+  board   any agent, in any zone
+It may always act on the agents it started, wherever they are, and never on itself. It may
+read and wait for another orchestrator, but steer one (send, interrupt, close) only with the
+board scope: a message runs under the permissions of the agent that gets it.
+
+As an orchestrator, a loop of implementing and reviewing looks like this:
+  agent-board new --name impl -- 'Fix the flaky login test. Commit on your branch, write
+    .agent-board/handover.md, and end with STATUS: done.'
+  agent-board wait impl                      until its turn ends
+  agent-board read impl                      its final message
+  agent-board read impl .agent-board/handover.md
+  agent-board new --base agent:impl --role reviewer --name review -- 'Review the diff against main'
+  agent-board wait review && agent-board read review
+  agent-board send impl -- 'Fix the review points: ...'
+  agent-board close review --remove
+
+Or wire them once and let hand-offs carry the work: the implementer hands its handover to the
+reviewer by itself (\`agent-board handoff\`, or as its turn ends), once the gate is green:
+  agent-board edge add impl review --carries handover --path .agent-board/handover.md \\
+    --condition 'gate:pnpm check:local'
+A gate or script condition runs nothing until the user approves it in the edge's rules.
+
+What it can't do: answer a permission prompt (the user does), approve an edge's gate or
+script, change a permission mode, a model or a setting, send a harness command (a prompt or
+message starting with ! or a /command; a plugin's namespaced /plugin:command is fine) or any
+control character, start an agent from a base whose project config (.claude, .mcp.json,
+.codex) differs from the repo's HEAD, remove an agent or an edge it didn't make, or start an
+agent that orchestrates. An agent it starts works in its own worktree and branch, as any
+agent does.
+
+  --scope <scope>   zone (the default), repo or board.
+  --json            Print the agent as JSON.
+"
+`;
+
+exports[`agent-board --help > has help for read 1`] = `
+"usage: agent-board read <ref> [<path>] [--json]
+
+Prints the agent's final message from the turn it last finished, or with <path> a text file in
+its worktree (relative to it, such as .agent-board/handover.md), which must stay inside it.
+
+  --json   Print it as JSON instead.
 "
 `;
 
@@ -61,9 +221,36 @@ commands do:
   connector.list
   board.identify
   board.setStatus
+  board.handoff
+  orchestrator.activity
 
-Everything else (starting, typing to, answering for or stopping a session, changing a setting) is
+and, for an agent the user lets orchestrate, the orchestrator commands:
+
+  orchestrator.spawn
+  orchestrator.send
+  orchestrator.wait
+  orchestrator.read
+  orchestrator.interrupt
+  orchestrator.close
+  orchestrator.addEdge
+  orchestrator.removeEdge
+
+Everything else (typing to, answering for or stopping a session directly, changing a setting) is
 refused. Outside a session it reaches every method, as the app does.
+"
+`;
+
+exports[`agent-board --help > has help for send 1`] = `
+"usage: agent-board send <ref> [--file <path>] [--] <message>
+
+Sends the agent <message> (or the text of --file) as its next message, as the user typing it
+would. Only once its turn has ended: wait for it first, or interrupt it. Never to an agent
+that needs the user's permission, and never a harness command (a message starting with ! or
+a /command other than a plugin's /plugin:command). Only printable text, tabs and line
+breaks: no control characters.
+
+  --file <path>   Read the message from a file.
+  --json          Print the agent as JSON.
 "
 `;
 
@@ -113,6 +300,23 @@ and its status, or its task until it sets one. ← marks you.
 "
 `;
 
+exports[`agent-board --help > has help for wait 1`] = `
+"usage: agent-board wait <ref>... [--until <state,...>] [--any] [--timeout <seconds>]
+
+Waits until each agent's turn has ended: it is at its prompt (idle or waiting), needs the user,
+failed, was rate-limited, or has stopped. A turn you started with \`new\` or \`send\` counts
+only once it has begun, so wait straight after them. Prints each agent's line.
+
+Exits 0 when they are there, and 3 when it gave up first: wait again.
+
+  --until <states>   Wait for these states instead, by comma: running, thinking, waiting, needs-permission, idle, rate-limited, failed, done, scheduled, stopped-by-restart, handing-off.
+  --any              Until one of them is there, not all.
+  --timeout <s>      Give up after this many seconds: 50 by default, at most 1800.
+                     Your shell tool may stop a command sooner (Claude's Bash, after 2 minutes).
+  --json             Print them as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for zones 1`] = `
 "usage: agent-board zones [--json]
 
@@ -136,10 +340,11 @@ CONCEPTS
           state (running, thinking, waiting, needs-permission, idle, rate-limited, failed,
           done, ...) and a status: one line it sets to say what it is doing now.
   shell   A tile of plain shell panes.
-  edge    A flow from one agent to another. When the first hands off (its turn ends, or the
-          user presses Send), what the edge carries (that agent's final message, or a file
-          from its worktree) is sent to the second as its next message, once the edge's
-          conditions pass.
+  edge    A flow from one agent to another. When the first hands off (it runs
+          \`agent-board handoff\`, its turn ends, or the user presses Send), what the edge
+          carries (a message, a handover file or JSON) is sent to the second as its next
+          message, once the edge's conditions pass. \`connections\` in the MCP, or
+          \`show me\`, lists yours.
   item    A sticky note, text, shape, image, link card or issue card on the board.
 
 REFS
@@ -158,12 +363,44 @@ COMMANDS
   show <ref>            Everything about one zone, agent, shell, edge or item.
   status set <summary> [--progress <0-100>]
                         Set your own tile's status (agents only). See \`status --help\`.
+  handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
+                        Hand your finished work to the next agent over your own outgoing
+                        edges, once it is ready. See \`handoff --help\`.
   mcp                   Serve these as MCP tools on stdio, for a harness.
   rpc <method> [json]   Call a daemon method directly and print its JSON result. In a session,
-                        only the reads above and your own status.
+                        only the reads above and your own status (and, for an orchestrator,
+                        the orchestrator commands).
 
   Read commands take --json. \`agent-board <command> --help\` says more about one.
-  Starting, messaging and stopping other agents is not here yet.
+
+ORCHESTRATING
+  An agent the user lets orchestrate can start, message, watch and close other agents, as a
+  lead does with workers: in its zone (or its repo, or the whole board, as the user chose),
+  and always the agents it started. \`identify\` says whether you may. The agents you start are
+  linked to you on the board and never orchestrate. Each start, message, interrupt and close
+  is logged for the user. \`agent-board help orchestrate\` shows the loop.
+
+  new [options] [--] <prompt>
+                        Start an agent with <prompt> as its first message.
+  send <ref> [--] <message>
+                        Send an agent its next message, once its turn has ended.
+  wait <ref>...         Wait until each agent's turn has ended: it is at its prompt, needs
+                        the user, or has stopped.
+  read <ref> [<path>]   An agent's final message, or a file in its worktree.
+  interrupt <ref>       Stop an agent's turn; it waits at its prompt.
+  close <ref> [--remove]
+                        End an agent's session. --remove deletes it with its worktree and
+                        branch: only an agent you started, with nothing unsaved.
+  edge add <from> <to> --carries message|handover|json
+                        Join two agents (or you) with an edge, marked as made by you.
+  edge list             Every edge (as \`edges\`).
+  edge remove <ref>     Remove an edge you made.
+
+FOR THE USER
+  orchestrate on|off <ref> [--scope zone|repo|board]
+                        Let an agent orchestrate, or stop it: in a terminal outside
+                        agent-board, never from a session on the board.
+  activity [--of <ref>] What orchestrators did and tried, newest first.
 
 ENVIRONMENT
   The app sets these in every session it starts:

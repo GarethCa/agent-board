@@ -55,11 +55,14 @@ test('Unsorted is a group zone that moves, resizes, renames and dissolves like a
     await expect(inGroup).toHaveCount(2);
     await expect.poll(async () => (await storedExternals(dataDir)).every((session) => session.position !== null)).toBe(true);
 
-    // Moved by its tab, then widened from its bottom-left corner (the bottom-right one sits under the minimap).
+    // Moved by its empty body, then widened from its bottom-left corner (the bottom-right one sits under
+    // the minimap).
     await page.getByRole('button', { name: 'Fit View' }).click();
     await page.getByRole('button', { name: 'Zoom Out' }).click();
-    const tabBox = await settledBox(group().getByTestId('zone-tab'));
-    await dragBy(page, { x: tabBox.x + 10, y: tabBox.y + tabBox.height / 2 }, { x: tabBox.x + 10, y: tabBox.y + 100 });
+    const groupBox = await settledBox(group());
+    const body = { x: groupBox.x + 20, y: groupBox.y + groupBox.height - 16 };
+    expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains('zone') ?? false, body), 'the point is bare zone').toBe(true);
+    await dragBy(page, body, { x: body.x, y: body.y + 100 });
     await expect.poll(async () => (await storedZones(dataDir)).find((zone) => zone.id === unsorted.id)!.y).not.toBe(unsorted.y);
     const moved = (await storedZones(dataDir)).find((zone) => zone.id === unsorted.id)!;
     await group().getByTestId('zone-tab').click({ position: { x: 12, y: 12 } });
@@ -101,6 +104,8 @@ test('Unsorted is a group zone that moves, resizes, renames and dissolves like a
     const drawnAt = await settledBox(staying);
     await strays().getByRole('button', { name: 'Zone options' }).click();
     await page.getByRole('menuitem', { name: 'Dissolve' }).click();
+    // A group holding a tile asks first.
+    await page.getByRole('alertdialog', { name: /^Dissolve/ }).getByRole('button', { name: 'Dissolve' }).click();
     await expect(strays()).toHaveCount(0);
     await expect(page.getByTestId('external-tile').and(page.locator('[data-zone=""]'))).toHaveCount(2);
     const stayed = await settledBox(page.getByTestId('external-tile').and(page.locator('[data-zone=""]')).filter({ hasText: (await storedExternals(dataDir)).find((session) => session.id !== loose.id)!.name }));
@@ -147,6 +152,8 @@ test('a group dissolved right after it was dragged leaves its tile exactly where
     const drawn = await settledBox(tileIn);
     await group.getByRole('button', { name: 'Zone options' }).click();
     await page.getByRole('menuitem', { name: 'Dissolve' }).click();
+    // A group holding a tile asks first.
+    await page.getByRole('alertdialog', { name: /^Dissolve/ }).getByRole('button', { name: 'Dissolve' }).click();
 
     await expect(group).toHaveCount(0);
     await expect(tileIn).toHaveAttribute('data-zone', '');

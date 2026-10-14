@@ -121,3 +121,36 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   shown one's zone, or the loose ones, in board order (rows top to bottom, each left to right, a row taking tiles within
   `ROW_TOLERANCE` of its top), wrapping at the ends; sessions popped out into their own windows are left out. The window
   swaps what it shows rather than closing.
+
+**2026-10-12**:
+
+- **Nothing on the board tilts by itself; items turn only when the user turns them.** Tiles lost their random tilt and
+  the drag lift's extra tilt, and have no rotate handle. A board item keeps an angle, `rotation` (degrees clockwise about
+  its own centre, in [-180, 180), 0 by default), in its own column, kind-agnostic, beside its unrotated
+  `x`, `y`, `width` and `height`. So zone membership (by its centre) and every saved place are unchanged by turning it.
+- **The node stays the straight box; what is drawn in it turns.** `withRotation` wraps each item kind's node, connector
+  handles included, in an `.item-rotor` turned by CSS `rotate`, and has React Flow measure the handles again as the
+  angle changes, so connectors stay on the turned sides. A turned item's node takes no pointer outside what is drawn,
+  and hides its resize handles, which would drag along its straight edges.
+- **Layout uses the box round a turned item** (`boundsOnBoard`): snapping, the selection box, align and distribute, and
+  the reflow round an expanded tile. Copy and paste keep the unrotated box and the angle.
+- **A turn is saved once, as one undo step, when the pointer is let go;** meanwhile the angles are a live store
+  (`LiveRotations`) the turned items read. A selection of several is turned by its box's handle, each item about its own
+  centre.
+
+**2026-10-13**:
+
+- **A zone drags from anywhere on it but its buttons: its tab and its bare body.** Zone nodes have no `dragHandle`.
+  React Flow draws a zone's tiles and items as nodes of their own beside it, not inside its element, so a press on one
+  still moves only that, and the tab's chips and the resize handles are `nodrag`. A press that moves less than
+  `DRAG_THRESHOLD` (4px) is a click, which selects the zone.
+- **A marquee inside a zone starts with Shift held,** since a plain drag there moves the zone. It is React Flow's
+  selection key: held, a press anywhere, on a node too, starts a marquee, which adds to the selection as on bare board.
+- **A zone's tab fits inside it at any size.** The tab sits in a strip as wide as it may be (`.zone-tab-strip`, which
+  lets presses through to the zone). `ZoneNode` lists the chips on the tab in one table, each with what ⋯ offers in
+  its place, and `useZoneTabFold` measures the tab when the strip resizes or the chips or their text change (never on a
+  mere drag). The least needed chips fold into ⋯ first (Tidy, Add issue, the tracker, Bind…, the default repo, New
+  shell, New agent, then a clone's Cancel), each still reachable there: while a zone clones, when it has no ⋯ of its
+  own, a ⋯ holding only what folded appears. Its name, and a clone's progress, are cut short with an ellipsis only once
+  every chip has folded. A folded chip keeps the width it was last drawn at, so one whose text changes while folded may
+  unfold a step early and fold again at once. Zoom is a transform, so the fold doesn't depend on it.

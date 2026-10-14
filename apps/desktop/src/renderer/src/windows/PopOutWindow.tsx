@@ -58,15 +58,20 @@ function PoppedShell({ target: { id, title } }: { target: WindowTarget }) {
   );
 }
 
-/** The session's agent, kept live; undefined for a shell session (or until the list arrives). */
+/** The session's agent, kept live; undefined for a shell session (or until the list arrives). Closes the window when the agent is deleted. */
 function useLiveAgent(sessionId: string): Agent | undefined {
   const [agent, setAgent] = useState<Agent>();
   useEffect(() => {
     let changed = false;
     const unsubscribe = window.agentBoard.agents.onChanged((change) => {
       if ((change.type === 'agent.updated' ? change.agent.sessionId : change.sessionId) !== sessionId) return;
+      if (change.type === 'agent.removed') {
+        // The agent was deleted, perhaps from the CLI or by an orchestrator: nothing is left to show.
+        window.close();
+        return;
+      }
       changed = true;
-      setAgent(change.type === 'agent.updated' ? change.agent : undefined);
+      setAgent(change.agent);
     });
     // A change that lands while the list is in flight is newer than it. Without the list, the window is a plain
     // session's until the agent's next change.

@@ -25,6 +25,19 @@ describe('tidyZone', () => {
     expect(size).toEqual({ width: 720, height: zoneHeightFor(4, 720) });
   });
 
+  it('keeps a resized tile at its size, skips the slots it covers and fits the zone to it', () => {
+    const tiles = [
+      { id: 'big', x: 20, y: 44, width: 400, height: 320 },
+      { id: 'small', x: 500, y: 44 },
+    ];
+    const { positions, size } = tidyZone({ width: 900, height: 300 }, tiles);
+    const big = { ...positions.get('big')!, width: 400, height: 320 };
+    const small = { ...positions.get('small')!, ...AGENT_TILE_SIZE };
+    expect(overlaps(big, small)).toBe(false);
+    expect(size.height).toBeGreaterThanOrEqual(big.y + big.height + TILE_GAP + ZONE_PADDING);
+    expect(size.width).toBeGreaterThanOrEqual(2 * ZONE_PADDING + 400);
+  });
+
   it('breaks a tie in reading order by id, so the same zone always tidies the same way', () => {
     const tiles = [
       { id: 'b', x: 100, y: 100 },

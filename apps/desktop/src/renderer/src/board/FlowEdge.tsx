@@ -3,7 +3,7 @@ import { BaseEdge, getBezierPath, type Edge, type EdgeProps } from '@xyflow/reac
 import type { FlowEdge as FlowEdgeData, FlowEdgeTrigger, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import { Check, FileText, Play, Send, Zap, type LucideIcon } from 'lucide-react';
 import { tokenNumber } from '../theme';
-import { edgeLabel, heldLabel } from './flow-edges';
+import { deliveredLabel, edgeLabel, edgeTitle, heldLabel } from './flow-edges';
 
 /** What a flow edge's label, or its Edge rules, can ask the board to do. */
 export interface FlowEdgeActions {
@@ -57,6 +57,13 @@ function FlowLine(props: {
   title?: string;
   /** A word under its label: what a hand-off it holds waits for (`held until CI green`), `paused` or `queued`. */
   note?: string;
+  /**
+   * With no note, a chip under its label saying when it last delivered (`delivered 14:02`). Clicking it, as anywhere on
+   * the edge, selects it: its Edge rules show what it carried.
+   */
+  delivered?: string;
+  /** An agent made it (an orchestrator): its line is dashed. */
+  agentMade?: boolean;
   testId: string;
   onSend?: () => void;
 }) {
@@ -71,7 +78,7 @@ function FlowLine(props: {
   return (
     <>
       {(props.selected === true || live) && <path d={path} className="connector-halo" />}
-      <BaseEdge id={id} path={path} className="flow-edge" markerEnd="url(#flow-arrow)" />
+      <BaseEdge id={id} path={path} className={props.agentMade === true ? 'flow-edge flow-edge-agent-made' : 'flow-edge'} markerEnd="url(#flow-arrow)" />
       {live && <path d={path} className="flow-edge-flowing" />}
       <g
         className="flow-edge-label"
@@ -79,6 +86,7 @@ function FlowLine(props: {
         data-trigger={props.trigger}
         data-live={live || undefined}
         data-selected={props.selected === true || undefined}
+        data-agent-made={props.agentMade || undefined}
         transform={`translate(${labelX - width / 2} ${labelY - height / 2})`}
       >
         {props.title !== undefined && <title>{props.title}</title>}
@@ -100,11 +108,16 @@ function FlowLine(props: {
           </g>
         )}
       </g>
-      {props.note !== undefined && (
-        <g className="flow-edge-note" data-testid="flow-edge-note" transform={`translate(${labelX} ${labelY + height / 2 + tokenNumber('--space-1')})`}>
+      {(props.note ?? props.delivered) !== undefined && (
+        <g
+          className={props.note === undefined ? 'flow-edge-note flow-edge-delivered' : 'flow-edge-note'}
+          data-testid={props.note === undefined ? 'flow-edge-delivered' : 'flow-edge-note'}
+          transform={`translate(${labelX} ${labelY + height / 2 + tokenNumber('--space-1')})`}
+        >
+          {props.note === undefined && <title>Click to see what it carried</title>}
           <rect className="flow-edge-note-fill" x={-tokenNumber('--size-flow-note') / 2} width={tokenNumber('--size-flow-note')} height={height - 4} rx={(height - 4) / 2} />
           <text className="flow-edge-note-text" y={(height - 4) / 2} textAnchor="middle" dominantBaseline="central">
-            {props.note}
+            {props.note ?? props.delivered}
           </text>
         </g>
       )}
@@ -144,27 +157,29 @@ export const BriefEdge = memo(function BriefEdge(props: EdgeProps) {
   return <FlowLine edge={props} label="issue brief" trigger="auto" mark={BRIEF_MARK} testId="brief-edge" />;
 });
 
-export type AgentFlowEdgeType = Edge<{ edge: FlowEdgeData; live: boolean }, 'flow'>;
+export type AgentFlowEdgeType = Edge<{ edge: FlowEdgeData; live: boolean; madeByName?: string }, 'flow'>;
 
 /**
  * A flow edge between two agents, labelled with what it carries (`plan.md`). Selected, its Edge rules
  * open, where its rules are set; a manual one has a Send button on its label too. Under its label it says when it is
- * paused, what a hand-off it holds waits for, or that it has queued one. A hover over its label says why its last delivery was skipped, if it was.
+ * paused, what a hand-off it holds waits for, that it has queued one, or else when it last delivered. One an agent
+ * made is dashed. A hover over its label says who made it, and why its last delivery was skipped, if it was.
  */
 export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentFlowEdgeType>) {
   const actions = useContext(FlowEdgeActionsContext);
-  const edge = props.data!.edge;
-  const skipped = edge.lastDelivery?.delivered === false ? `Last delivery skipped: ${edge.lastDelivery.reason}` : undefined;
+  const { edge, madeByName } = props.data!;
   return (
     <FlowLine
       edge={props}
       label={edgeLabel(edge)}
       note={edge.paused ? 'paused' : (heldLabel(edge) ?? (edge.queued === null ? undefined : 'queued'))}
+      delivered={deliveredLabel(edge, new Date())}
+      agentMade={edge.madeBy !== null}
       trigger={edge.trigger}
       mark={TRIGGER_MARKS[edge.trigger]}
       selected={props.selected}
       live={props.data!.live}
-      title={skipped}
+      title={edgeTitle(edge, madeByName)}
       testId="flow-edge"
       onSend={edge.trigger === 'manual' ? () => actions.send(edge.id) : undefined}
     />

@@ -1,20 +1,43 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { BoardItem, Connector, FlowEdge, TileMove, ZoneLayout } from '@agent-board/daemon/protocol';
+import type { BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
 
 /**
  * What one board object was or became, for the undo history: an item, a connector or a flow edge whole, a zone's
- * layout, a tile's place, or a tile's or pane's name. Sessions themselves are never in it: undo never starts, stops or
- * sends to one.
+ * layout or look, a group as it was before it was dissolved, a tile's place or size, a tile's or pane's name, or where a shell or a pane of one is: a tab of
+ * whose, at what order, or a tile on the board; a pane in a split as laid out, or alone in a shell. Sessions
+ * themselves are never in it: undo never starts, stops or sends to one, and moving a shell leaves its processes be.
  */
 export type BoardState =
   | { type: 'item'; item: BoardItem }
   | { type: 'connector'; connector: Connector }
   | { type: 'flowEdge'; edge: FlowEdge }
   | { type: 'zone'; layout: ZoneLayout }
+  | { type: 'zoneLook'; look: ZoneLook }
+  | { type: 'zoneGroup'; group: DissolvedGroup }
   | { type: 'tile'; move: TileMove }
-  | { type: 'name'; target: RenameTarget; name: string };
+  | { type: 'tileSize'; size: { width: number; height: number } }
+  | { type: 'name'; target: RenameTarget; name: string }
+  | { type: 'shellPlace'; to: ShellPlace; order: number | null }
+  | { type: 'panePlace'; in: { shellId: string; layout: PaneLayout } }
+  | { type: 'panePlace'; alone: { shellId: string; to: ShellPlace } };
+
+/** What a zone's colour and fill opacity (null for the theme's own) were or became. */
+export type ZoneLook = Pick<Zone, 'color' | 'fillOpacity'>;
+
+/**
+ * A group before it was dissolved: the group itself, and where each of its tiles and items stood in it, so
+ * that undoing the dissolve makes it again, under its own id, and puts them back, with the connectors it had. Nothing in it is a session: the tiles
+ * are only moved.
+ */
+export interface DissolvedGroup {
+  zone: ZoneSnapshot;
+  tiles: { nodeId: string; at: { x: number; y: number } }[];
+  items: { id: string; x: number; y: number }[];
+  /** The connectors on the group itself, which go with it (the daemon deletes them with the zone). */
+  connectors: Connector[];
+}
 
 /** The history's key for each kind of object. */
 export const historyKey = {
@@ -22,7 +45,12 @@ export const historyKey = {
   connector: (id: string) => `connector:${id}`,
   flowEdge: (id: string) => `flow-edge:${id}`,
   zone: (id: string) => `zone:${id}`,
+  zoneLook: (id: string) => `zone-look:${id}`,
+  zoneGroup: (id: string) => `zone-group:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,
+  tileSize: (nodeId: string) => `tile-size:${nodeId}`,
+  shell: (id: string) => `shell:${id}`,
+  pane: (sessionId: string) => `pane:${sessionId}`,
 };
 
 /** One object's change: its key, and what it was and became. */

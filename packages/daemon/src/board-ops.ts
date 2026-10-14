@@ -7,10 +7,22 @@ import { daemonPaths, defaultDataDir } from './paths.ts';
 import {
   BOARD_ERROR,
   type Agent,
+  type AgentRole,
+  type AgentState,
   type BoardCaller,
+  type Harness,
+  type OrchestrateScope,
+  type OrchestratorActivity,
+  notOrchestratingReason,
+  orchestrateScopeWords,
   type BoardItem,
+  FLOW_CONDITION_KINDS,
   type FlowCondition,
   type FlowEdge,
+  FLOW_EDGE_TRIGGERS,
+  type FlowEdgePayload,
+  type FlowEdgeTrigger,
+  type HandoffPayload,
   type Shell,
   statusLine,
   type Zone,
@@ -80,7 +92,8 @@ export async function readBoard(client: DaemonClient): Promise<Board> {
     client.call('flowEdge.list'),
     client.call('item.list'),
   ]);
-  return { zones, agents, shells, edges, items };
+  // An agent's tabs are its own, not shell tiles on the board.
+  return { zones, agents, shells: shells.filter((shell) => shell.owner === null), edges, items };
 }
 
 export const REF_KINDS = ['zone', 'agent', 'shell', 'edge', 'item'] as const;
@@ -294,6 +307,8 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     worktree: agent.worktree,
     issue: agent.issue,
     pullRequests: agent.pullRequests.map(({ number, url, state }) => ({ number, url, state })),
+    orchestrate: agent.orchestrate,
+    spawnedBy: agent.spawnedBy === null ? null : refs.of('agent', agent.spawnedBy),
   };
 }
 
@@ -337,6 +352,7 @@ function edgeJson(refs: BoardRefs, edge: FlowEdge) {
     queued: edge.queued,
     lastDelivery: edge.lastDelivery,
     deliveries: edge.deliveries,
+    madeBy: edge.madeBy === null ? null : refs.of('agent', edge.madeBy),
   };
 }
 
@@ -387,6 +403,9 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
     lines.push(`branch   ${agent.branch || '(none)'} in ${tilde(agent.worktree)}`);
+    if (caller.orchestrate !== null) {
+      lines.push(`you may  orchestrate in ${orchestrateScopeWords(caller.orchestrate, 'your')}: start, message and close agents (\`agent-board help orchestrate\`)`);
+    }
   }
   lines.push(`session  ${caller.sessionId}`, `daemon   ${socketPath}`);
   return {
@@ -397,6 +416,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
         kind: caller.kind,
         name: caller.name,
         session: caller.sessionId,
+        orchestrate: caller.orchestrate,
         zone: zone === undefined ? null : zoneJson(refs, zone),
       },
       socket: socketPath,
@@ -488,7 +508,7 @@ function endLabel(refs: BoardRefs, sessionId: string): string {
 /** What the edge carries, and when, of its `from` agent, called `its`, or `your` to that agent. */
 function edgeRule(edge: FlowEdge, whose: 'its' | 'your' = 'its'): string {
   const what = edge.payload === 'final-message' ? `${whose} final message` : `${edge.path ?? 'a file'} from ${whose} worktree`;
-  const when = edge.trigger === 'auto' ? `when ${whose} turn ends` : 'when the user presses Send';
+  const when = edge.trigger === 'auto' ? `when ${whose === 'its' ? 'it hands off' : 'you hand off'}, or else as ${whose} turn ends` : 'when the user presses Send';
   const conditions = edge.conditions.length === 0 ? '' : `, once ${edge.conditions.map(conditionText).join(' and ')}`;
   return `carries ${what} ${when}${conditions}`;
 }
@@ -520,11 +540,20 @@ function edgeStanding(edge: FlowEdge): string {
   return parts.join('; ');
 }
 
+/** Who made the edge, if an agent did: `, made by agent:9c1e lead`. */
+function madeBy(refs: BoardRefs, edge: FlowEdge): string {
+  if (edge.madeBy === null) return '';
+  const agent = refs.board.agents.find((each) => each.sessionId === edge.madeBy);
+  return `, made by ${refs.of('agent', edge.madeBy)}${agent === undefined ? '' : ` ${agent.name}`}`;
+}
+
+/** What the edge carries and when, how it stands, and who made it, if an agent did: one line. */
+function edgeSummary(refs: BoardRefs, edge: FlowEdge, whose: 'its' | 'your' = 'its'): string {
+  return `${edgeRule(edge, whose)}; ${edgeStanding(edge)}${madeBy(refs, edge)}`;
+}
+
 function edgeLines(refs: BoardRefs, edge: FlowEdge): string[] {
-  return [
-    `${refs.of('edge', edge.id)}  ${endLabel(refs, edge.from)} → ${endLabel(refs, edge.to)}`,
-    `  ${edgeRule(edge)}; ${edgeStanding(edge)}`,
-  ];
+  return [`${refs.of('edge', edge.id)}  ${endLabel(refs, edge.from)} → ${endLabel(refs, edge.to)}`, `  ${edgeSummary(refs, edge)}`];
 }
 
 export function edgesView(refs: BoardRefs): BoardView {
@@ -547,11 +576,14 @@ export function connectionsView(refs: BoardRefs, caller: BoardCaller | null): Bo
   const lines: string[] = [];
   lines.push(out.length === 0 ? 'You hand off to no one: no edge leaves your tile.' : 'You hand off to:');
   for (const edge of out) {
-    lines.push(`  ${endLabel(refs, edge.to)} by ${refs.of('edge', edge.id)}`, `    ${edgeRule(edge, 'your')}; ${edgeStanding(edge)}`);
+    lines.push(`  ${endLabel(refs, edge.to)} by ${refs.of('edge', edge.id)}`, `    ${edgeSummary(refs, edge, 'your')}`);
+  }
+  if (out.some((edge) => edge.trigger === 'auto')) {
+    lines.push('  Hand off with `agent-board handoff` (or the handoff tool) once your work is ready; else your turn\'s end does.');
   }
   lines.push(into.length === 0 ? 'No one hands off to you: no edge comes into your tile.' : 'These hand off to you:');
   for (const edge of into) {
-    lines.push(`  ${endLabel(refs, edge.from)} by ${refs.of('edge', edge.id)}`, `    ${edgeRule(edge)}; ${edgeStanding(edge)}`);
+    lines.push(`  ${endLabel(refs, edge.from)} by ${refs.of('edge', edge.id)}`, `    ${edgeSummary(refs, edge)}`);
   }
   return { text: lines.join('\n'), json: { out: out.map((edge) => edgeJson(refs, edge)), in: into.map((edge) => edgeJson(refs, edge)) } };
 }
@@ -576,12 +608,13 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['kind', zoneWhere(zone)],
             ['tracker', zone.tracker === null ? undefined : `${zone.tracker.provider} ${zone.tracker.scope}`],
             ['board mcp', zone.boardMcp ? 'on' : 'off'],
+            ['agents orchestrate', zone.agentsOrchestrate ? 'on' : 'off'],
           ]),
           '  tiles',
           ...(tiles.length === 0 ? ['    (none)'] : tiles.map((tile) => `    ${tile}`)),
           ...(items.length === 0 ? [] : ['  items', ...items.map((item) => `    ${item}`)]),
         ].join('\n'),
-        json: { ...zoneJson(refs, zone), boardMcp: zone.boardMcp, tiles: tiles.length, items: items.length },
+        json: { ...zoneJson(refs, zone), boardMcp: zone.boardMcp, agentsOrchestrate: zone.agentsOrchestrate, tiles: tiles.length, items: items.length },
       };
     }
     case 'agent': {
@@ -603,6 +636,8 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['issue', agent.issue === null ? undefined : `${agent.issue.id} ${agent.issue.title} ${agent.issue.url}`],
             ['pr', agent.pullRequests.length === 0 ? undefined : agent.pullRequests.map((pr) => `#${pr.number} ${pr.state} ${pr.url}`).join(', ')],
             ['last said', agent.lastMessage === null ? undefined : cut(agent.lastMessage, 200)],
+            ['orchestrates', agent.orchestrate === null ? undefined : `agents in ${orchestrateScopeWords(agent.orchestrate)}`],
+            ['started by', agent.spawnedBy === null ? undefined : endLabel(refs, agent.spawnedBy)],
           ]),
           ...(edges.length === 0 ? [] : ['  edges', ...edges.flatMap((edge) => edgeLines(refs, edge)).map((line) => `    ${line}`)]),
         ].join('\n'),
@@ -641,4 +676,291 @@ export async function setOwnStatus(session: BoardSession, summary: string, progr
     throw new BoardError(`Only an agent in an agent-board session can set its status: there is no ${BOARD_TOKEN_ENV} here.`);
   }
   return session.client.call('board.setStatus', { token: session.token, summary, ...(progress === undefined ? {} : { progress }) });
+}
+
+/** The orchestrator commands' options for a new agent, as typed: refs and names, not ids. */
+export interface NewAgentOptions {
+  prompt: string;
+  /** A zone ref; the caller's zone without. */
+  zone?: string;
+  harness?: string;
+  model?: string;
+  role?: string;
+  name?: string;
+  branch?: string;
+  /** The branch to cut it from, or an agent ref for that agent's branch. */
+  base?: string;
+  issue?: string;
+}
+
+/** The caller, if it may orchestrate, and the agent `ref` names. Throws `BoardError` saying why not. */
+async function orchestratorTarget(session: BoardSession, ref: string): Promise<{ token: string; refs: BoardRefs; agent: Agent }> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  return { token, refs, agent: resolveAgent(refs, ref, caller) };
+}
+
+/** The caller, if it may orchestrate, and the board. Throws `BoardError` saying why not. */
+async function orchestratingCaller(session: BoardSession): Promise<{ caller: BoardCaller; token: string; refs: BoardRefs }> {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`The orchestrator commands work only for an agent in an agent-board session: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  const { caller, token } = session;
+  const refs = new BoardRefs(await readBoard(session.client));
+  if (caller.orchestrate === null) {
+    const agent = caller.kind === 'agent' ? refs.board.agents.find((each) => each.sessionId === caller.tileId) : undefined;
+    throw new BoardError(`${notOrchestratingReason(caller, agent, refs.board.zones)}.`);
+  }
+  return { caller, token, refs };
+}
+
+/** The agent `text` names, as a ref resolves it. */
+function resolveAgent(refs: BoardRefs, text: string, caller: BoardCaller | null): Agent {
+  const object = refs.resolve(text, caller);
+  if (object.kind !== 'agent') throw new BoardError(`${text} is a ${object.kind}, not an agent`);
+  return object.agent;
+}
+
+/** The agent as one line, with its ref read afresh: it may be new since `refs` were. */
+async function freshAgentLine(session: BoardSession, sessionId: string): Promise<{ refs: BoardRefs; agent: Agent; line: string }> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const agent = refs.board.agents.find((each) => each.sessionId === sessionId);
+  if (agent === undefined) throw new BoardError(`agent ${sessionId} is gone`);
+  return { refs, agent, line: agentLine(refs, agent, session.caller) };
+}
+
+/** `new`: starts an agent as the caller, an orchestrator. */
+export async function newAgent(session: BoardSession, options: NewAgentOptions): Promise<BoardView> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  let zoneId: string | undefined;
+  if (options.zone !== undefined) {
+    const object = refs.resolve(options.zone, caller);
+    if (object.kind !== 'zone') throw new BoardError(`${options.zone} is a ${object.kind}, not a zone`);
+    zoneId = object.zone.id;
+  }
+  // An agent's ref names its branch: a reviewer starts from its implementer's tip.
+  let baseBranch = options.base;
+  if (baseBranch !== undefined && /^agent:|^me$/.test(baseBranch)) baseBranch = resolveAgent(refs, baseBranch, caller).branch;
+  const started = await session.client.call('orchestrator.spawn', {
+    token,
+    prompt: options.prompt,
+    ...(zoneId === undefined ? {} : { zoneId }),
+    ...(options.harness === undefined ? {} : { harness: options.harness as Harness }),
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.role === undefined ? {} : { role: options.role as AgentRole }),
+    ...(options.name === undefined ? {} : { name: options.name }),
+    ...(options.branch === undefined ? {} : { branch: options.branch }),
+    ...(baseBranch === undefined ? {} : { baseBranch }),
+    ...(options.issue === undefined ? {} : { issueId: options.issue }),
+  });
+  const fresh = await freshAgentLine(session, started.sessionId);
+  return {
+    text: `Started ${fresh.line}\n  on ${started.branch} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`,
+    json: agentJson(fresh.refs, fresh.agent, session.caller),
+  };
+}
+
+/** `send`: the agent's next message. */
+export async function sendToAgent(session: BoardSession, ref: string, text: string): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.send', { token, sessionId: agent.sessionId, text });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Sent to ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
+/** `wait`: until the agents' turns end (or `until`'s states), or the timeout. */
+export async function waitForAgents(
+  session: BoardSession,
+  agentRefs: string[],
+  options: { until?: AgentState[]; any?: boolean; timeoutMs?: number },
+): Promise<BoardView & { timedOut: boolean }> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const ids = agentRefs.map((ref) => resolveAgent(refs, ref, caller).sessionId);
+  const result = await session.client.call('orchestrator.wait', {
+    token,
+    sessionIds: ids,
+    ...(options.until === undefined ? {} : { states: options.until }),
+    ...(options.any ? { any: true } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+  const lines = result.agents.map((agent) => agentLine(refs, agent, caller));
+  const head = result.timedOut
+    ? `Timed out: ${options.any ? 'none is' : 'not all are'} there yet. Wait again, or look closer with \`agent-board show <ref>\`.`
+    : null;
+  return {
+    text: [...(head === null ? [] : [head]), ...lines].join('\n'),
+    json: { timedOut: result.timedOut, agents: result.agents.map((agent) => agentJson(refs, agent, caller)) },
+    timedOut: result.timedOut,
+  };
+}
+
+/** `read`: the agent's final message, or a file of its worktree. */
+export async function readAgent(session: BoardSession, ref: string, path: string | undefined): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  const result = await session.client.call('orchestrator.read', { token, sessionId: agent.sessionId, ...(path === undefined ? {} : { path }) });
+  return { text: result.text, json: result };
+}
+
+/** `interrupt`: ends the agent's turn. */
+export async function interruptAgent(session: BoardSession, ref: string): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.interrupt', { token, sessionId: agent.sessionId });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Interrupted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
+/** `close`: ends the agent's session, or with `remove` deletes it with its worktree and branch. */
+export async function closeAgent(session: BoardSession, ref: string, remove: boolean): Promise<BoardView> {
+  const { token, refs, agent } = await orchestratorTarget(session, ref);
+  const label = `${refs.of('agent', agent.sessionId)} ${agent.name}`;
+  const closed = await session.client.call('orchestrator.close', { token, sessionId: agent.sessionId, remove });
+  if (closed === null) return { text: `Removed ${label}, its worktree and its branch.`, json: null };
+  return { text: `Closed ${label}: its session ended; its tile, worktree and branch stay.`, json: agentJson(refs, closed, session.caller) };
+}
+
+/** `orchestrate on|off`: the user lets an agent orchestrate, or stops it. Refused in a session. */
+export async function setOrchestrate(session: BoardSession, ref: string, scope: OrchestrateScope | null): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const agent = await session.client.call('agent.setOrchestrate', { sessionId: resolveAgent(refs, ref, session.caller).sessionId, scope });
+  const label = `${refs.of('agent', agent.sessionId)} ${agent.name}`;
+  return {
+    text: scope === null ? `${label} may not orchestrate now.` : `${label} may orchestrate in ${orchestrateScopeWords(scope)} now.`,
+    json: agentJson(refs, agent, session.caller),
+  };
+}
+
+
+/** `activity`: what orchestrators did and tried, newest first. */
+export async function activityView(session: BoardSession, of: string | undefined, limit: number | undefined): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const orchestratorId = of === undefined ? undefined : resolveAgent(refs, of, session.caller).sessionId;
+  const entries = await session.client.call('orchestrator.activity', {
+    ...(orchestratorId === undefined ? {} : { orchestratorId }),
+    ...(limit === undefined ? {} : { limit }),
+  });
+  const line = (entry: OrchestratorActivity) => {
+    const target = entry.targetName === null ? '' : ` ${entry.targetName}`;
+    const detail = entry.detail === '' ? '' : `: ${cut(entry.detail, 80)}`;
+    const outcome = entry.outcome === 'done' ? '' : `  REFUSED: ${entry.reason ?? ''}`;
+    return `${entry.at}  ${entry.orchestratorName}  ${entry.action}${target}${detail}${outcome}`;
+  };
+  return { text: entries.length === 0 ? 'No orchestrator has done anything yet.' : entries.map(line).join('\n'), json: entries };
+}
+
+/** `handoff`: the caller hands its work over its own outgoing edges, or with `to` over its edge to that agent alone. */
+export async function handOff(session: BoardSession, options: HandoffPayload & { to?: string }): Promise<BoardView> {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`Only an agent in an agent-board session can hand off: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  const refs = new BoardRefs(await readBoard(session.client));
+  const to = options.to === undefined ? undefined : resolveAgent(refs, options.to, session.caller).sessionId;
+  const outcomes = await session.client.call('board.handoff', {
+    token: session.token,
+    ...(to === undefined ? {} : { to }),
+    ...(options.message === undefined ? {} : { message: options.message }),
+    ...(options.handoverPath === undefined ? {} : { handoverPath: options.handoverPath }),
+    ...(options.json === undefined ? {} : { json: options.json }),
+  });
+  const line = ({ to: id, outcome, name, reason }: (typeof outcomes)[number]) => {
+    const agent = refs.board.agents.find((each) => each.sessionId === id);
+    return `  ${refs.of('agent', id)}${agent === undefined ? '' : ` ${agent.name}`}: ${outcome} ${name}${reason === null ? '' : `: ${reason}`}`;
+  };
+  return {
+    text: [`Handed off along ${plural(outcomes.length, 'edge')}:`, ...outcomes.map(line)].join('\n'),
+    json: outcomes.map((outcome) => ({ ...outcome, edge: refs.of('edge', outcome.edgeId), to: refs.of('agent', outcome.to) })),
+  };
+}
+
+/** What `--carries` names, as an edge's payload: `message` is its final message. */
+export const EDGE_CARRIES = { message: 'final-message', handover: 'handover', json: 'json' } as const;
+
+/** The condition kinds as typed (`gate:pnpm check:local`, `pr-checks`, `label:ready`, `script:./ready.sh`). */
+const CONDITION_WORDS: Record<string, FlowCondition['kind']> = {
+  gate: 'gate-green',
+  'gate-green': 'gate-green',
+  'pr-checks': 'pr-checks',
+  label: 'issue-label',
+  'issue-label': 'issue-label',
+  script: 'script',
+};
+
+/**
+ * A condition as the CLI types it, `<kind>[:<command or label>]` (`gate:pnpm check:local`), or as the MCP tool takes
+ * it, `{kind, command?, label?}`. Throws `BoardError` for one it can't read, or one missing its command or label.
+ */
+function conditionOf(value: unknown): FlowCondition {
+  let word: string;
+  let text: string;
+  if (typeof value === 'string') {
+    const colon = value.indexOf(':');
+    word = (colon === -1 ? value : value.slice(0, colon)).trim();
+    text = colon === -1 ? '' : value.slice(colon + 1).trim();
+  } else if (typeof value === 'object' && value !== null && typeof (value as { kind?: unknown }).kind === 'string') {
+    const { kind, command, label } = value as { kind: string; command?: unknown; label?: unknown };
+    word = kind;
+    const given = command ?? label;
+    text = typeof given === 'string' ? given.trim() : '';
+  } else {
+    throw new BoardError(`a condition is gate:<command>, pr-checks, label:<label> or script:<command> (as JSON, {kind: ${FLOW_CONDITION_KINDS.join(' | ')}, command?, label?})`);
+  }
+  const kind = CONDITION_WORDS[word];
+  if (kind === undefined) throw new BoardError(`${JSON.stringify(word)} is not a condition: gate:<command>, pr-checks, label:<label> or script:<command>`);
+  if (kind === 'pr-checks') return { kind };
+  if (text === '') throw new BoardError(`a ${word} condition needs ${kind === 'issue-label' ? 'a label' : 'a command'}`);
+  return kind === 'issue-label' ? { kind, label: text } : { kind, command: text };
+}
+
+/** The options of `edge add` (and the `add_edge` tool), as typed: refs, words and conditions not yet checked. */
+export interface AddEdgeOptions {
+  from: string;
+  to: string;
+  carries: string | undefined;
+  path?: string;
+  trigger?: string;
+  conditions?: unknown[];
+}
+
+/** An edge's rules as typed, checked: what it carries, when, and its conditions. Throws `BoardError` for a bad one. */
+export function edgeRules(options: Pick<AddEdgeOptions, 'carries' | 'trigger' | 'conditions'>): {
+  payload: FlowEdgePayload;
+  trigger?: FlowEdgeTrigger;
+  conditions: FlowCondition[];
+} {
+  const { carries, trigger } = options;
+  if (carries === undefined || !Object.hasOwn(EDGE_CARRIES, carries)) {
+    throw new BoardError(`carries must be ${Object.keys(EDGE_CARRIES).join(', ')}`);
+  }
+  if (trigger !== undefined && !(FLOW_EDGE_TRIGGERS as readonly string[]).includes(trigger)) throw new BoardError('the trigger must be auto or manual');
+  return {
+    payload: EDGE_CARRIES[carries as keyof typeof EDGE_CARRIES],
+    ...(trigger === undefined ? {} : { trigger: trigger as FlowEdgeTrigger }),
+    conditions: (options.conditions ?? []).map(conditionOf),
+  };
+}
+
+/** `edge add`: an orchestrator joins two agents of its scope (or itself) with an edge it is marked as making. */
+export async function addEdge(session: BoardSession, options: AddEdgeOptions): Promise<BoardView> {
+  const { conditions, ...rules } = edgeRules(options);
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const edge = await session.client.call('orchestrator.addEdge', {
+    token,
+    from: resolveAgent(refs, options.from, caller).sessionId,
+    to: resolveAgent(refs, options.to, caller).sessionId,
+    ...rules,
+    ...(options.path === undefined ? {} : { path: options.path }),
+    ...(conditions.length === 0 ? {} : { conditions }),
+  });
+  const fresh = new BoardRefs(await readBoard(session.client));
+  const waits = edge.conditions.some((condition) => 'command' in condition)
+    ? '\nIts gate or script runs nothing until the user approves it in the edge\'s rules.'
+    : '';
+  return { text: `Added ${edgeLines(fresh, edge).join('\n')}${waits}`, json: edgeJson(fresh, edge) };
+}
+
+/** `edge remove`: deletes an edge the caller, an orchestrator, made. */
+export async function removeEdge(session: BoardSession, ref: string): Promise<BoardView> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const object = refs.resolve(ref, caller);
+  if (object.kind !== 'edge') throw new BoardError(`${ref} is a ${object.kind}, not an edge`);
+  await session.client.call('orchestrator.removeEdge', { token, id: object.edge.id });
+  return { text: `Removed ${refs.of('edge', object.edge.id)}.`, json: null };
 }

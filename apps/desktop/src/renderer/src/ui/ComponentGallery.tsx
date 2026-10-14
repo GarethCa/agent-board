@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { AGENT_STATES, STICKY_COLORS, ZONE_COLOR_NAMES, ZONE_COLORS } from '@agent-board/daemon/protocol';
 import {
   AlignStartVertical,
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { themedColor } from '../board-colors';
 import { HarnessMark } from '../board/HarnessMark';
+import { RotateGrip } from '../board/items/Rotatable';
 import { Button, Chip, IconButton, Spinner, type ButtonVariant } from './Button';
 import { Dialog } from './Dialog';
 import { EditableName, RenameButton, type Renaming } from './EditableName';
@@ -81,7 +82,7 @@ const CONTEXT_MENU: MenuEntry[] = [
     onPick: nothing,
   },
   'separator',
-  { label: 'Delete', icon: <Trash2 />, shortcut: '⌫', danger: true, hint: 'Deleting a note only. Agents stay running.', onSelect: nothing },
+  { label: 'Delete', icon: <Trash2 />, shortcut: '⌫', danger: true, hint: "Sessions are asked about first, and can't be undone.", onSelect: nothing },
 ];
 
 /**
@@ -393,6 +394,9 @@ export function ComponentGallery() {
               data-preview={state === 'pressed' || state === 'rest' ? undefined : state}
             />
           )}
+        </StateGrid>
+        <StateGrid label="Rotate handle" rows={['handle'] as const} states={['rest', 'hover'] as const}>
+          {(_row, state) => <RotateGrip style={{ '--zoom': 1 } as CSSProperties} data-preview={state === 'hover' ? state : undefined} />}
         </StateGrid>
         <Row label="Island">
           <Island role="toolbar" aria-label="Create">

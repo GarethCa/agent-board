@@ -24,6 +24,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   issue: null,
   notice: null,
   muted: false,
+  seen: false,
   subagents: [],
   pullRequests: [],
   lastMessage: null,
@@ -32,6 +33,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  orchestrate: null,
+  spawnedBy: null,
   status: null,
   ...fields,
 });

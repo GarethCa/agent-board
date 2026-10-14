@@ -12,13 +12,13 @@ const SCENARIOS = [
 ] as const;
 /**
  * "Smooth", per phase, sampled only while input is being sent. The p95 budget is in display frames, measured on the
- * machine running the test, because CI runners draw at 60 Hz and a dev Mac at 120 Hz. Headless, as e2e runs, the
- * window paints offscreen at 60 Hz, and the frames it measures are those (`AGENT_BOARD_HEADED=1` measures the display's).
- * 2.5 frames leaves room for the zoom loop's own pacing: on a 60 Hz runner it waits a round trip per wheel step, which
+ * machine running the test, because CI runners draw at 60 Hz and a dev Mac at 120 Hz. Headless, as e2e runs, the window
+ * paints offscreen at 60 Hz, and the frames it measures are those (`AGENT_BOARD_HEADED=1` measures the display's). 2.5
+ * frames leaves room for the zoom loop's own pacing: on a 60 Hz runner it waits a round trip per wheel step, which
  * makes two-frame gaps normal. p99 catches hitches. It fails the test locally, but on CI it is only reported, because
- * shared runners stall now and then whatever the board does. The blurred tile shadow this gate exists to catch fails p95
- * on all three (offscreen, a blur on every tile measured p95 117 ms against a 42 ms budget). This spec runs in its own Playwright project after the
- * others, so no parallel app competes with it.
+ * shared runners stall now and then whatever the board does. The blurred tile shadow this gate exists to catch fails
+ * p95 on all three (offscreen, a blur on every tile measured p95 117 ms against a 42 ms budget). This spec runs in its
+ * own Playwright project after the others, so no parallel app competes with it.
  */
 const BUDGET = { p95Frames: 2.5, p99Ms: 100 };
 const ON_CI = Boolean(process.env.CI);

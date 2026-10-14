@@ -5,6 +5,8 @@ import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
 const textData: TextData = {
   text: 'Sprint 12',
   size: 'h1',
+  fontSize: 32,
+  minHeight: 0,
   bold: true,
   italic: false,
   align: 'left',
@@ -74,6 +76,9 @@ describe('text and shape board items', () => {
     const item = await client.call('item.create', text());
 
     await expect(client.call('item.create', text({ ...textData, size: 'h6' }))).rejects.toThrow('size must be one of');
+    await expect(client.call('item.create', text({ ...textData, fontSize: 2 }))).rejects.toThrow('fontSize');
+    await expect(client.call('item.create', text({ ...textData, fontSize: '16' }))).rejects.toMatchObject(invalid);
+    await expect(client.call('item.create', text({ ...textData, minHeight: -1 }))).rejects.toThrow('minHeight');
     await expect(client.call('item.create', text({ ...textData, align: 'justify' }))).rejects.toMatchObject(invalid);
     await expect(client.call('item.create', text({ ...textData, color: 'red' }))).rejects.toThrow(
       'color must be #rrggbb',

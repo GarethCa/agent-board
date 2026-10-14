@@ -5,7 +5,7 @@ export { EditableName, MENU_FOCUS_RETURN_MS, RenameButton, useRenaming, type Ren
 export { EmptyState } from './EmptyState';
 export { Checkbox, Choice, Choices, ErrorText, Field, Fieldset, Hint, Input, Radio, Select, Swatch, SwatchRadio, Switch, Textarea } from './Field';
 export { Badge, FlowPill, Kbd, SectionLabel, Shortcut, StatusPill, Tag } from './Label';
-export { ContextMenu, Menu, MenuPreview, type MenuAction, type MenuEntry, type Submenu, type SwatchRow } from './Menu';
+export { ContextMenu, Menu, MenuPreview, type MenuAction, type MenuEntry, type MenuHeading, type Submenu, type SwatchRow } from './Menu';
 export { AnchoredPopover, Popover, PopoverPreview } from './Popover';
 export { ToastProvider, ToastView, useToast, type ToastOptions, type ToastTone } from './Toast';
 export { Tooltip, TooltipPreview, TooltipProvider } from './Tooltip';

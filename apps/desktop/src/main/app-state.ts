@@ -1,6 +1,6 @@
 import type { Agent, AgentState } from '@agent-board/daemon/protocol';
 import { APP_NAME } from '../shared/brand';
-import { needsYou } from '../shared/needs-you';
+import { unseenCount } from '../shared/needs-you';
 
 /**
  * The whole app's state, which the mark shows (brand/BRAND.md, "States"): `needs` while an agent waits for input or
@@ -20,7 +20,7 @@ export type DockIcon = `dock-${Colourway}-${AppState}`;
  */
 const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off']);
 
-/** The app's state, and how many agents wait for the user (the needs-you inbox's size). */
+/** The app's state, and how many agents wait for the user (the needs-you inbox's unseen asks). */
 export interface AppStatus {
   state: AppState;
   waiting: number;
@@ -28,7 +28,7 @@ export interface AppStatus {
 
 /** The app's status over `agents`. */
 export function appStateOf(agents: readonly Agent[]): AppStatus {
-  const waiting = needsYou(agents).length;
+  const waiting = unseenCount(agents);
   if (waiting > 0) return { state: 'needs', waiting };
   const working = agents.some((agent) => agent.endedAt === null && WORKING.has(agent.state));
   return { state: working ? 'working' : 'quiet', waiting };

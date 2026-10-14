@@ -22,7 +22,7 @@ export interface LinearTrackerOptions {
   fetch?: typeof fetch;
 }
 
-const ISSUE_FIELDS = 'identifier title description url state { name } team { key }';
+const ISSUE_FIELDS = 'identifier title description url state { name } team { key } project { id }';
 
 const PROJECT_FIELDS = 'id name description progress status { name }';
 
@@ -52,6 +52,7 @@ interface LinearIssue {
   url: string;
   state: { name: string };
   team: { key: string };
+  project: { id: string } | null;
 }
 
 interface LinearProject {
@@ -203,5 +204,6 @@ function toIssue(issue: LinearIssue): TrackerIssue {
     description: issue.description ?? '',
     url: issue.url,
     state: issue.state.name,
+    ...(issue.project == null ? {} : { project: issue.project.id }),
   };
 }

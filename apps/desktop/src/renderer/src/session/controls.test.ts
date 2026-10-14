@@ -10,13 +10,11 @@ const enabled = (controls: ReturnType<typeof sessionControls>) =>
   controls.filter((control) => control.enabled).map((control) => control.id);
 
 describe('session window controls', () => {
-  it('lists every control in the sidebar, in order, with the ones not built yet disabled', () => {
+  it('lists only controls that work: interrupt and stop, in order', () => {
     const controls = sessionControls({ agent: agent('running'), live: true });
 
-    expect(controls.map((control) => control.id)).toEqual<ControlId[]>(['interrupt', 'pause', 'handOff', 'fork', 'stop', 'connections']);
-    for (const id of ['pause', 'handOff', 'fork', 'connections']) {
-      expect(controls.find((control) => control.id === id)).toMatchObject({ enabled: false, hint: expect.stringMatching(/not built yet/i) });
-    }
+    expect(controls.map((control) => control.id)).toEqual<ControlId[]>(['interrupt', 'stop']);
+    expect(controls.some((control) => /not built yet/i.test(control.hint))).toBe(false);
   });
 
   it.each<AgentState>(['running', 'thinking', 'needs-permission'])('interrupts and stops an agent that is %s', (state) => {

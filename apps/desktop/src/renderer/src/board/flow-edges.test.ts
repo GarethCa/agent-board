@@ -4,10 +4,12 @@ import { AGENT_NODE_PREFIX } from './tiles';
 import {
   conditionName,
   edgeLabel,
+  edgeTitle,
   FLOW_EDGE_TYPE,
   flowEdgeIdOf,
   flowEdges,
   handoffEnds,
+  deliveredLabel,
   heldLabel,
   historyLine,
   isFlowEdge,
@@ -35,6 +37,7 @@ const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge>
   history: [],
   deliveries: 0,
   delivering: false,
+  madeBy: null,
   createdAt: '',
   updatedAt: '',
   ...overrides,
@@ -195,5 +198,29 @@ describe('withRules and withRulesOf', () => {
     // Refused, while a delivery was heard of: that stays.
     const heard = { ...changed, deliveries: 2, history: [{ at: 't', kind: 'delivered' as const, detail: 'x' }] };
     expect(withRulesOf(heard, was, { payload: 'handover', paused: true })).toEqual({ ...was, deliveries: 2, history: heard.history });
+  });
+});
+
+describe('deliveredLabel', () => {
+  const now = new Date(2026, 9, 13, 15, 0);
+  const at = new Date(2026, 9, 13, 14, 2).toISOString();
+
+  it('says when the edge last delivered, by its local time', () => {
+    expect(deliveredLabel(edge('e', 'a', 'b', { lastDelivery: { at, delivered: true, reason: null } }), now)).toBe('delivered 14:02');
+  });
+
+  it('says nothing before its first delivery, or after a skipped one', () => {
+    expect(deliveredLabel(edge('e', 'a', 'b'), now)).toBeUndefined();
+    expect(deliveredLabel(edge('e', 'a', 'b', { lastDelivery: { at, delivered: false, reason: 'B was busy' } }), now)).toBeUndefined();
+  });
+});
+
+describe('edgeTitle', () => {
+  it('says who made an edge an agent made, and why its last delivery was skipped', () => {
+    const skipped = { lastDelivery: { at: '', delivered: false, reason: 'B was busy' } };
+    expect(edgeTitle(edge('e', 'a', 'b'), 'lead')).toBeUndefined();
+    expect(edgeTitle(edge('e', 'a', 'b', { madeBy: 'o' }), 'lead')).toBe('Made by lead, an orchestrator');
+    expect(edgeTitle(edge('e', 'a', 'b', { madeBy: 'o', ...skipped }), undefined)).toBe('Made by an orchestrator since deleted\nLast delivery skipped: B was busy');
+    expect(edgeTitle(edge('e', 'a', 'b', skipped), undefined)).toBe('Last delivery skipped: B was busy');
   });
 });

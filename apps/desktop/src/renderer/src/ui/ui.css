@@ -885,9 +885,49 @@
   font-weight: var(--weight-semibold);
 }
 
+/* A heading over a group of a menu's rows, lined up with their labels. */
+.ui-menu-heading {
+  padding: var(--space-1-5) var(--space-2) var(--space-0-5);
+}
+
 .ui-menu-swatch-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(8, var(--size-swatch));
   gap: var(--space-1-75);
+}
+
+/* A labelled slider, with its value beside it. */
+.ui-menu-slider {
+  padding: var(--space-1) var(--space-2) var(--space-1-5);
+}
+
+.ui-menu-slider {
+  border-radius: var(--radius-lg);
+  outline: none;
+}
+
+.ui-menu-slider[data-highlighted] {
+  background: var(--hover);
+}
+
+.ui-menu-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-menu-slider-row input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.ui-menu-slider-row output {
+  min-width: var(--size-slider-value);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  text-align: right;
 }
 
 .ui-menu-swatch-row .ui-swatch[data-highlighted] {
@@ -1055,6 +1095,12 @@
 .ui-tag[data-tone='accent'] {
   background: var(--accent-soft);
   color: var(--accent-strong);
+}
+
+/* Something to mind that isn't wrong: a shell running in another agent's worktree. */
+.ui-tag[data-tone='warning'] {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 /* An agent state's pill: --pill and --pill-soft pick the state's tokens. */

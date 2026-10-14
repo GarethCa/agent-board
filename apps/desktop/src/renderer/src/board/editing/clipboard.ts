@@ -6,8 +6,8 @@ import { boundsOf } from './snap';
 /** The clipboard type board items are copied under, beside plain text for other apps. */
 export const BOARD_CLIPBOARD_TYPE = 'application/x-agent-board+json';
 
-/** An item as copied: where it is on the board, out of any zone. */
-export type CopiedItem = Pick<BoardItem, 'id' | 'kind' | 'x' | 'y' | 'width' | 'height' | 'data'>;
+/** An item as copied: where it is on the board, out of any zone, at its angle. */
+export type CopiedItem = Pick<BoardItem, 'id' | 'kind' | 'x' | 'y' | 'width' | 'height' | 'rotation' | 'data'>;
 /** A connector between two copied items, as copied. */
 export type CopiedConnector = Omit<Connector, 'createdAt' | 'updatedAt'>;
 
@@ -21,7 +21,7 @@ export function copied(items: readonly { item: BoardItem; at: { x: number; y: nu
   const ids = new Set(items.map(({ item }) => item.id));
   const joinsCopied = (end: Connector['from']) => end.type === 'item' && ids.has(end.id);
   return {
-    items: items.map(({ item: { id, kind, width, height, data }, at }) => ({ id, kind, x: at.x, y: at.y, width, height, data })),
+    items: items.map(({ item: { id, kind, width, height, rotation, data }, at }) => ({ id, kind, x: at.x, y: at.y, width, height, rotation, data })),
     connectors: connectors
       .filter((connector) => joinsCopied(connector.from) && joinsCopied(connector.to))
       .map(({ id, from, to, style, startEnd, endEnd, color, label }) => ({ id, from, to, style, startEnd, endEnd, color, label })),
@@ -52,13 +52,15 @@ export const serialiseCopied = (copy: Copied): string => JSON.stringify(copy);
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
-function isCopiedItem(value: unknown): value is CopiedItem {
+/** Whether `value` is a copied item; one copied before items had angles has none. */
+function isCopiedItem(value: unknown): value is Omit<CopiedItem, 'rotation'> & { rotation?: number } {
   if (typeof value !== 'object' || value === null) return false;
   const item = value as Record<string, unknown>;
   return (
     typeof item.id === 'string' &&
     BOARD_ITEM_KINDS.includes(item.kind as BoardItemKind) &&
     [item.x, item.y, item.width, item.height].every(isNumber) &&
+    (item.rotation === undefined || isNumber(item.rotation)) &&
     typeof item.data === 'object' &&
     item.data !== null
   );
@@ -78,7 +80,7 @@ export function parseCopied(text: string): Copied | undefined {
   const ids = new Set(items.map((item) => item.id));
   const joins = (end: unknown) => typeof end === 'object' && end !== null && ids.has((end as { id?: unknown }).id as string);
   return {
-    items,
+    items: items.map((item) => ({ ...item, rotation: item.rotation ?? 0 })),
     connectors: (connectors as CopiedConnector[]).filter(
       (connector) => typeof connector === 'object' && connector !== null && joins(connector.from) && joins(connector.to),
     ),

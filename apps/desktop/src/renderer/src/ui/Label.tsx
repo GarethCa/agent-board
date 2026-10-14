@@ -12,7 +12,7 @@ export function Badge({ tone = 'attention', className, ...rest }: SpanProps & { 
 }
 
 /** A short label: a zone's kind, an issue key (`accent`, `mono`), a PR number (`mono`). */
-export function Tag({ tone, mono = false, className, ...rest }: SpanProps & { tone?: 'accent'; mono?: boolean }) {
+export function Tag({ tone, mono = false, className, ...rest }: SpanProps & { tone?: 'accent' | 'warning'; mono?: boolean }) {
   return <span className={cx('ui-tag', className)} data-tone={tone} data-mono={mono || undefined} {...rest} />;
 }
 

@@ -148,6 +148,8 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
   // Until the daemon says its name, the branch made from it can't be shown: wait, unless one was typed.
   const canStart = picked !== undefined && !starting && (issue !== undefined || agentName !== undefined || typedBranch !== undefined);
   const base = baseBranch.trim() || 'HEAD';
+  const worksIn = scratch ? 'new scratch repo' : `worktree off ${base}`;
+  const modelRole = `${HARNESSES[harness].label} · ${model.trim() || 'default model'} · ${role === '' ? 'no role' : ROLE_LABELS[role]}`;
 
   return (
     <AnchoredPopover anchor={anchor} open onOpenChange={(open) => open || onCancel()} aria-label="Choose where the agent works" className="repo-picker">
@@ -290,15 +292,19 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
           <Button
             size="sm"
             variant="ghost"
+            className="repo-picker-model-toggle"
+            title={modelRole}
             aria-label="Model and role"
             aria-expanded={showModel}
             icon={<HarnessMark harness={harness} />}
             trailingIcon={<ChevronDown />}
             onClick={() => setShowModel((open) => !open)}
           >
-            {HARNESSES[harness].label} · {model.trim() || 'default model'} · {role === '' ? 'no role' : ROLE_LABELS[role]}
+            <span className="repo-picker-foot-text">{modelRole}</span>
           </Button>
-          <span className="repo-picker-meta add-zone-mono">{scratch ? 'new scratch repo' : `worktree off ${base}`}</span>
+          <span className="repo-picker-meta repo-picker-foot-text add-zone-mono" title={worksIn}>
+            {worksIn}
+          </span>
           <span className="add-zone-spacer" />
           <Button type="submit" variant="primary" size="sm" loading={starting} disabled={!canStart}>
             Start

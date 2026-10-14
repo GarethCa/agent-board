@@ -9,7 +9,8 @@
       "title": "agent-board fixture recording abfixture3bec771c",
       "description": "Scratch issue made by packages/tracker/scripts/record-linear.ts (abfixture3bec771c). It deletes it when done; delete it by hand if it is still here.",
       "url": "https://linear.app/workspace/issue/ACME-105/agent-board-fixture-recording-abfixture3bec771c",
-      "state": "Backlog"
+      "state": "Backlog",
+      "project": "00000000-0000-4000-8000-000000000001"
     },
     "searchTerm": "abfixture3bec771c",
     "project": "00000000-0000-4000-8000-000000000001"
@@ -45,7 +46,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } } } }",
+          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } project { id } } } }",
           "variables": {
             "filter": {
               "team": {
@@ -82,6 +83,9 @@
                   },
                   "team": {
                     "key": "ACME"
+                  },
+                  "project": {
+                    "id": "00000000-0000-4000-8000-000000000001"
                   }
                 }
               ]
@@ -95,7 +99,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } } } }",
+          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } project { id } } } }",
           "variables": {
             "term": "abfixture3bec771c",
             "filter": {
@@ -125,6 +129,9 @@
                   },
                   "team": {
                     "key": "ACME"
+                  },
+                  "project": {
+                    "id": "00000000-0000-4000-8000-000000000001"
                   }
                 }
               ]
@@ -265,7 +272,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } } } }",
+          "query": "query Issues($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { nodes { identifier title description url state { name } team { key } project { id } } } }",
           "variables": {
             "filter": {
               "team": {
@@ -307,6 +314,9 @@
                   },
                   "team": {
                     "key": "ACME"
+                  },
+                  "project": {
+                    "id": "00000000-0000-4000-8000-000000000001"
                   }
                 }
               ]
@@ -320,7 +330,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } } } }",
+          "query": "query SearchIssues($term: String!, $filter: IssueFilter, $first: Int) { searchIssues(term: $term, filter: $filter, first: $first) { nodes { identifier title description url state { name } team { key } project { id } } } }",
           "variables": {
             "term": "abfixture3bec771c",
             "filter": {
@@ -355,6 +365,9 @@
                   },
                   "team": {
                     "key": "ACME"
+                  },
+                  "project": {
+                    "id": "00000000-0000-4000-8000-000000000001"
                   }
                 }
               ]
@@ -368,7 +381,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } } }",
+          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } project { id } } }",
           "variables": {
             "id": "ACME-105"
           }
@@ -388,6 +401,9 @@
               },
               "team": {
                 "key": "ACME"
+              },
+              "project": {
+                "id": "00000000-0000-4000-8000-000000000001"
               }
             }
           }
@@ -399,7 +415,7 @@
         "method": "POST",
         "url": "https://api.linear.app/graphql",
         "body": {
-          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } } }",
+          "query": "query Issue($id: String!) { issue(id: $id) { identifier title description url state { name } team { key } project { id } } }",
           "variables": {
             "id": "ACME-105999"
           }

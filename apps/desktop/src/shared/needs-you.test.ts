@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
-import { heldPrompts, needsYou, secondsLeft, toolSummary } from './needs-you';
+import { heldPrompts, needsYou, secondsLeft, toolSummary, unseenCount } from './needs-you';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
   sessionId,
@@ -23,6 +23,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   issue: null,
   notice: null,
   muted: false,
+  seen: false,
   subagents: [],
   pullRequests: [],
   lastMessage: null,
@@ -31,6 +32,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  orchestrate: null,
+  spawnedBy: null,
   status: null,
   ...fields,
 });
@@ -44,6 +47,14 @@ const prompt: PermissionPrompt = {
   heldUntil: '2026-10-09T10:00:20.000Z',
 };
 const lapsed: PermissionPrompt = { ...prompt, id: 'p2', heldUntil: null };
+
+describe('the unseen count', () => {
+  it('leaves out an ask whose session was opened, but keeps it in the inbox', () => {
+    const agents = [agent('a', 'waiting'), agent('b', 'waiting', { seen: true }), agent('c', 'needs-permission', { permissions: [prompt], seen: true })];
+    expect(unseenCount(agents)).toBe(1);
+    expect(needsYou(agents)).toHaveLength(3);
+  });
+});
 
 describe('the needs-you inbox', () => {
   it('lists the agents waiting for input or needing permission, in board order', () => {

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement, ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from 'react';
 import * as RadixMenu from '@radix-ui/react-dropdown-menu';
 import { ChevronRight } from 'lucide-react';
 import { Swatch } from './Field';
@@ -35,10 +35,125 @@ export interface SwatchRow {
   onPick(value: string): void;
 }
 
-export type MenuEntry = MenuAction | Submenu | SwatchRow | 'separator';
+/**
+ * A labelled slider of whole steps. `onChange` is called on every tick of a drag, for a preview; `onCommit` once the
+ * drag (or a key press) is done and the value differs from the last committed, so a drag is one change to save;
+ * `onCancel` instead if nothing is to be saved after a preview.
+ */
+export interface SliderRow {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  /** The value as shown beside the slider, such as `8%`. */
+  format(value: number): string;
+  onChange(value: number): void;
+  onCommit(value: number): void;
+  /** Called when what `onChange` previewed is not to be saved: the drag ended where it began, or the menu closed mid-drag. */
+  onCancel(): void;
+}
+
+/** A label over the rows after it, naming them as a group, such as "Run a script". */
+export interface MenuHeading {
+  heading: string;
+}
+
+export type MenuEntry = MenuAction | Submenu | SwatchRow | SliderRow | MenuHeading | 'separator';
 
 const isSubmenu = (entry: MenuEntry): entry is Submenu => typeof entry === 'object' && 'entries' in entry;
 const isSwatchRow = (entry: MenuEntry): entry is SwatchRow => typeof entry === 'object' && 'swatches' in entry;
+const isSliderRow = (entry: MenuEntry): entry is SliderRow => typeof entry === 'object' && 'onCommit' in entry;
+const isHeading = (entry: MenuEntry): entry is MenuHeading => typeof entry === 'object' && 'heading' in entry;
+
+/**
+ * A slider in a menu, as a row the menu's own arrow keys reach (Up and Down move on, as for any row). Left and Right
+ * step it, Home and End go to its ends, and each key press is saved as it is let go. Its range input is for the
+ * pointer only: dragging it previews every tick and saves once, on release.
+ */
+function MenuSlider({ entry }: { entry: SliderRow }) {
+  const [value, setValue] = useState(entry.value);
+  const shown = useRef(entry.value);
+  const committed = useRef(entry.value);
+  // Whether the entry has been told of a preview that is neither saved nor taken back yet.
+  const previewing = useRef(false);
+  const item = useRef<HTMLDivElement>(null);
+  const latest = useRef(entry);
+  latest.current = entry;
+  const show = (next: number) => {
+    shown.current = next;
+    previewing.current = true;
+    setValue(next);
+    entry.onChange(next);
+  };
+  const commit = () => {
+    const next = shown.current;
+    if (next !== committed.current) {
+      committed.current = next;
+      previewing.current = false;
+      entry.onCommit(next);
+    } else if (previewing.current) {
+      // Dragged and put back where it began: nothing to save, and the preview goes.
+      previewing.current = false;
+      entry.onCancel();
+    }
+  };
+  // The menu closed mid-drag (Escape): what was previewed is not saved, so it is taken back.
+  useEffect(
+    () => () => {
+      if (previewing.current) latest.current.onCancel();
+    },
+    [],
+  );
+  const step = (event: KeyboardEvent) => {
+    const { min, max, step: by } = entry;
+    const next =
+      event.key === 'ArrowRight' ? shown.current + by : event.key === 'ArrowLeft' ? shown.current - by : event.key === 'Home' ? min : event.key === 'End' ? max : undefined;
+    if (next === undefined) return;
+    // Handled here: the menu must not take Left and Right for its submenus, nor the board the key as its own.
+    event.preventDefault();
+    event.stopPropagation();
+    show(Math.min(max, Math.max(min, next)));
+  };
+  return (
+    <RadixMenu.Item
+      ref={item}
+      className="ui-menu-slider"
+      role="slider"
+      aria-label={entry.label}
+      aria-valuemin={entry.min}
+      aria-valuemax={entry.max}
+      aria-valuenow={value}
+      aria-valuetext={entry.format(value)}
+      aria-orientation="horizontal"
+      // Not a choice: a click on the row, or Enter on it, keeps the menu open.
+      onSelect={(event) => event.preventDefault()}
+      onKeyDown={step}
+      onKeyUp={commit}
+    >
+      <span className="ui-menu-label" aria-hidden="true">
+        {entry.label}
+      </span>
+      <div className="ui-menu-slider-row">
+        <input
+          type="range"
+          tabIndex={-1}
+          aria-hidden="true"
+          min={entry.min}
+          max={entry.max}
+          step={entry.step}
+          value={value}
+          onChange={(event) => show(event.target.valueAsNumber)}
+          onPointerUp={commit}
+          // A click may focus it; the row is what the keys belong to.
+          onFocus={() => item.current?.focus()}
+          onKeyDown={(event) => event.preventDefault()}
+        />
+        <output aria-hidden="true">{entry.format(value)}</output>
+      </div>
+    </RadixMenu.Item>
+  );
+}
 
 interface MenuProps {
   /** The button that opens it: one element that takes a ref and DOM props, such as a Button. */
@@ -55,6 +170,13 @@ interface MenuProps {
 function Entries({ entries }: { entries: MenuEntry[] }) {
   return entries.map((entry, index) => {
     if (entry === 'separator') return <RadixMenu.Separator key={`separator-${index}`} className="ui-menu-separator" />;
+    if (isHeading(entry)) {
+      return (
+        <RadixMenu.Label key={`heading-${entry.heading}`} className="ui-section-label ui-menu-heading">
+          {entry.heading}
+        </RadixMenu.Label>
+      );
+    }
     if (isSwatchRow(entry)) {
       return (
         <RadixMenu.Group key={entry.label} className="ui-menu-swatches" aria-label={entry.label}>
@@ -69,6 +191,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
         </RadixMenu.Group>
       );
     }
+    if (isSliderRow(entry)) return <MenuSlider key={entry.label} entry={entry} />;
     if (isSubmenu(entry)) {
       return (
         <RadixMenu.Sub key={entry.label}>
@@ -156,6 +279,13 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
     <div className="ui-card ui-menu" role="menu" aria-label="Menu preview">
       {entries.map((entry, index) => {
         if (entry === 'separator') return <div key={`separator-${index}`} role="separator" className="ui-menu-separator" />;
+        if (isHeading(entry)) {
+          return (
+            <div key={`heading-${entry.heading}`} className="ui-section-label ui-menu-heading">
+              {entry.heading}
+            </div>
+          );
+        }
         if (isSwatchRow(entry)) {
           return (
             <div key={entry.label} role="group" className="ui-menu-swatches" aria-label={entry.label}>
@@ -164,6 +294,17 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
                 {entry.swatches.map((swatch) => (
                   <Swatch key={swatch.value} color={swatch.color ?? swatch.value} pressed={swatch.pressed} aria-label={swatch.name} onClick={() => {}} />
                 ))}
+              </div>
+            </div>
+          );
+        }
+        if (isSliderRow(entry)) {
+          return (
+            <div key={entry.label} role="group" className="ui-menu-slider" aria-label={entry.label}>
+              <div className="ui-menu-label">{entry.label}</div>
+              <div className="ui-menu-slider-row">
+                <input type="range" aria-label={entry.label} min={entry.min} max={entry.max} step={entry.step} value={entry.value} readOnly />
+                <output>{entry.format(entry.value)}</output>
               </div>
             </div>
           );

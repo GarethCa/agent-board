@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from './board-helpers.ts';
-import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -21,6 +21,8 @@ test("a shell window's details follow the focused pane's folder through cd and p
     await browseForZone(window);
     await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    await showDetails(sessionWindow(window));
+    await sessionWindow(window).getByTestId('session-terminal').click();
     await expect(folder(window)).toHaveText(repo);
 
     // A cd shows up without any other sign of it.
@@ -39,7 +41,7 @@ test("a shell window's details follow the focused pane's folder through cd and p
     await expect(folder(window)).toHaveText(dir);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -58,6 +60,7 @@ test("an agent window shows its live folder beside its fixed worktree, hinting w
     const [agent] = await agents(window);
     await tile(window).dblclick();
     await expect(sessionWindow(window)).toBeVisible();
+    await showDetails(sessionWindow(window));
 
     const worktree = sessionWindow(window).getByRole('region', { name: 'Worktree and branch' }).getByText(agent!.worktree, { exact: true });
     await expect(folder(window)).toHaveText(agent!.cwd);
@@ -76,7 +79,7 @@ test("an agent window shows its live folder beside its fixed worktree, hinting w
     await expect(worktree).toBeVisible();
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });

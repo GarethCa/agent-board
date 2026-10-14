@@ -16,6 +16,7 @@ import { HarnessMark } from './HarnessMark';
 import { PullRequestChip } from './HybridTile';
 import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';
+import { dropKey } from '../session/shell-moves';
 
 const stopPropagation = (event: MouseEvent) => event.stopPropagation();
 
@@ -31,8 +32,8 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
  * details. Its corners and edges resize it, what it would cover moving as it goes.
  */
 export function ExpandedTile({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
-  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, openLink } = useContext(TileActionsContext);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(false);
+  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink } = useContext(TileActionsContext);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
   const { agent, shell, external } = tile;
@@ -42,12 +43,14 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
       ? { kind: 'shell', shellId: shell.id, shell }
       : undefined;
   const popOut = agent ? () => popOutAgent(agent) : shell ? () => popOutShell(shell) : undefined;
-  // As its tile's ⋯ menu deletes it, asking the same first. An external session isn't agent-board's to delete.
+  // As its tile's ⋯ menu deletes it, asking the same first. An external session is only taken off the board.
   const remove = agent
     ? { label: 'Delete agent', run: () => deleteAgent(agent.sessionId) }
     : shell
       ? { label: 'Delete shell', run: () => deleteShell(shell.id) }
-      : undefined;
+      : external
+        ? { label: 'Remove from board', run: () => dismissExternal(external.id) }
+        : undefined;
 
   // ⌘I shows or hides the details, while the expanded tile has the keyboard.
   const onKeyDown = (event: KeyboardEvent) => {
@@ -66,6 +69,8 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
       data-session-id={agent?.sessionId}
       data-shell-id={shell?.id}
       data-external-id={external?.id}
+      // A tab, pane or shell tile dropped on it, header too, joins its tabs.
+      data-tab-drop={agent ? dropKey({ kind: 'agent', id: agent.sessionId }) : shell ? dropKey({ kind: 'shell', id: shell.id }) : undefined}
       aria-label={`${name}, expanded`}
       onPointerDownCapture={() => expand(id)}
       // Not for the board: a double-click in the terminal selects a word.
@@ -165,7 +170,6 @@ function ExternalBody({
       <SessionDetails
         sessionId={undefined}
         external={session}
-        onFocusPane={ignore}
         live={false}
         onProblem={ignore}
         collapsed={detailsCollapsed}

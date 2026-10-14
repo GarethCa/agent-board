@@ -22,6 +22,8 @@ export interface TrackerIssue {
   url: string;
   /** Its workflow state's name, e.g. `In Progress`, `Open`. */
   state: string;
+  /** The ID of the project it is in (a `TrackerProject.id`), for a tracker that has projects; absent if it is in none. */
+  project?: string;
 }
 
 /** A group of a scope's issues a tracker keeps together: a Linear project. */

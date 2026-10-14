@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { layoutText, textItemSize, type TextBox } from './text-layout';
+import { clampTextHeight, layoutText, resizedText, textItemSize, type TextBox } from './text-layout';
 
 // Every character is 10px wide.
 const measure = (text: string) => text.length * 10;
@@ -47,5 +47,32 @@ describe('textItemSize', () => {
       width: 40,
       height: 4 * 20 + 10,
     });
+  });
+});
+
+describe('resizedText', () => {
+  const from = { width: 200, height: 40 };
+  it('holds the box to the height it was dragged to, when that is taller than its text', () => {
+    expect(resizedText({ from, to: { width: 200, height: 150 }, minHeight: 0, needs: 40 })).toEqual({ widthChanged: false, minHeight: 150 });
+  });
+
+  it('lets the box fit its text again when dragged down to it', () => {
+    expect(resizedText({ from: { width: 200, height: 150 }, to: { width: 200, height: 40 }, minHeight: 150, needs: 40 }).minHeight).toBe(0);
+  });
+
+  it('keeps what was held, or nothing, when a drag changes only the width', () => {
+    expect(resizedText({ from, to: { width: 300, height: 40 }, minHeight: 0, needs: 20 })).toEqual({ widthChanged: true, minHeight: 0 });
+    expect(resizedText({ from: { width: 200, height: 150 }, to: { width: 300, height: 150 }, minHeight: 150, needs: 20 }).minHeight).toBe(150);
+  });
+
+  it('is not a width change when only the height moved', () => {
+    expect(resizedText({ from, to: { width: 200.4, height: 90 }, minHeight: 0, needs: 40 }).widthChanged).toBe(false);
+  });
+});
+
+describe('clampTextHeight', () => {
+  it('is as tall as the text, or as the height dragged to if more', () => {
+    expect(clampTextHeight(0, 60)).toBe(60);
+    expect(clampTextHeight(200, 60)).toBe(200);
   });
 });

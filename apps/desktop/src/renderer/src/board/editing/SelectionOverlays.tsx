@@ -1,7 +1,8 @@
 import { memo, type CSSProperties } from 'react';
-import { useStore, ViewportPortal, type ReactFlowState } from '@xyflow/react';
+import { useStore, useStoreApi, ViewportPortal, type ReactFlowState } from '@xyflow/react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
-import { ITEM_NODE_PREFIX } from '../items/items';
+import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX } from '../items/items';
+import { SelectionRotateHandle } from '../items/Rotatable';
 import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../tiles';
 import type { Rect } from '../../geometry';
 import { selectedNodes } from './selection';
@@ -41,24 +42,40 @@ function selectionLabel(kinds: readonly (keyof typeof NAMES)[]): string {
 
 interface Box extends Rect {
   label: string;
+  /** Whether it holds items, which its handle turns. */
+  rotatable: boolean;
 }
 
 /** The box round the selected nodes, when there are two or more; what is in a selected zone counts with it. */
 function selectedBox(state: ReactFlowState): Box | undefined {
   const { top } = selectedNodes(state.nodeLookup.values());
   if (top.length < 2) return undefined;
-  const bounds = boundsOf(top.map((node) => ({ ...node.internals.positionAbsolute, width: node.measured.width ?? 0, height: node.measured.height ?? 0 })))!;
+  const bounds = boundsOf(
+    top.map((node) => boundsOnBoard(node, { ...node.internals.positionAbsolute, width: node.measured.width ?? 0, height: node.measured.height ?? 0 })),
+  )!;
   const kinds = top.flatMap((node) => kindOf(node.id, node.type) ?? []);
-  return { ...bounds, label: selectionLabel(kinds) };
+  return { ...bounds, label: selectionLabel(kinds), rotatable: top.some(isItemNode) };
 }
 
 const sameBox = (a: Box | undefined, b: Box | undefined) =>
-  a === b || (a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && a.label === b.label);
+  a === b || (a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && a.label === b.label && a.rotatable === b.rotatable);
 
-/** One box round a selection of several, labelled with what is in it (WbTools). */
+/** The selected items, each with its angle. */
+function selectedItems(state: ReactFlowState) {
+  return selectedNodes(state.nodeLookup.values())
+    .all.map((node) => node.internals.userNode)
+    .filter(isItemNode)
+    .map((node) => ({ id: node.data.item.id, rotation: node.data.item.rotation }));
+}
+
+/**
+ * One box round a selection of several, labelled with what is in it (WbTools), with a handle under it that turns each
+ * item in it about its own centre.
+ */
 export const SelectionBox = memo(function SelectionBox() {
   const box = useStore(selectedBox, sameBox);
   const zoom = useStore((state) => state.transform[2]);
+  const store = useStoreApi();
   if (box === undefined) return null;
   return (
     <ViewportPortal>
@@ -68,6 +85,7 @@ export const SelectionBox = memo(function SelectionBox() {
         style={{ '--box-x': `${box.x}px`, '--box-y': `${box.y}px`, '--box-width': `${box.width}px`, '--box-height': `${box.height}px`, '--zoom': zoom } as CSSProperties}
       >
         <span className="selection-box-label">{box.label}</span>
+        {box.rotatable && <SelectionRotateHandle items={() => selectedItems(store.getState())} />}
       </div>
     </ViewportPortal>
   );

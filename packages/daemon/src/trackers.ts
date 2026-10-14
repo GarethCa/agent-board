@@ -196,12 +196,16 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
       });
     },
     async issue(zoneId, issueId) {
-      const { provider, scope } = requiredZoneTracker(zoneId);
+      const { provider, scope, project } = requiredZoneTracker(zoneId);
       return call(async () => {
         const client = await tracker(provider);
         const issue = await client.getIssue(issueId);
-        // The zone's issues are its scope's: an issue from another team is no more its than a missing one.
+        // The zone's issues are its scope's (and its project's, if it has one): an issue from another team or project is
+        // no more its than a missing one.
         if (issue?.scope !== scope) throw invalidParams(`${scope} has no issue ${issueId}`);
+        if (project !== undefined && issue.project !== project) {
+          throw invalidParams(`${scope}'s project ${project} has no issue ${issueId}`);
+        }
         return { issue, branch: client.branchName(issue) };
       });
     },

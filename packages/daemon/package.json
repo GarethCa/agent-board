@@ -10,6 +10,7 @@
     "./client": "./src/client.ts",
     "./cron": "./src/cron.ts",
     "./pane-layout": "./src/pane-layout.ts",
+    "./window-layout": "./src/window-layout.ts",
     "./paths": "./src/paths.ts",
     "./pid": "./src/pid.ts",
     "./protocol": "./src/protocol.ts",

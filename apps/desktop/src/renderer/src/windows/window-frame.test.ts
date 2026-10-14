@@ -1,16 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { clampFrame, defaultFrame, frameFrom, MIN_HEIGHT, MIN_WIDTH, resizeFrame } from './window-frame';
+import { clampFrame, defaultFrame, frameFrom, fromFractions, MIN_HEIGHT, MIN_WIDTH, resizeFrame, toFractions } from './window-frame';
 
 const bounds = { width: 1200, height: 800 };
 const frame = { x: 100, y: 80, width: 600, height: 400 };
 
 describe('the saved window frame', () => {
   it('reads back what was saved, and nothing else', () => {
-    expect(frameFrom({ ...frame, maximised: false })).toEqual({ frame, maximised: false });
-    expect(frameFrom({ ...frame, maximised: true })).toEqual({ frame, maximised: true });
+    const half = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+    expect(frameFrom({ ...half, maximised: false })).toEqual({ frame: half, maximised: false });
+    expect(frameFrom({ ...half, maximised: true })).toEqual({ frame: half, maximised: true });
     expect(frameFrom(null)).toBeUndefined();
     expect(frameFrom({ ...frame, width: 'wide', maximised: false })).toBeUndefined();
     expect(frameFrom({ ...frame, width: Number.NaN, maximised: false })).toBeUndefined();
+  });
+});
+
+describe('a frame saved in pixels by an older version', () => {
+  it('is dropped when restored, so the window fills the board', () => {
+    expect(frameFrom({ ...frame, maximised: false })).toBeUndefined();
+  });
+
+  it('keeps being maximised, with the default size to restore to', () => {
+    expect(frameFrom({ ...frame, maximised: true })).toEqual({ frame: { x: 0.15, y: 0.125, width: 0.7, height: 0.75 }, maximised: true });
+  });
+});
+
+describe('a frame as fractions of the board', () => {
+  it('scales with the board', () => {
+    const half = toFractions({ x: 300, y: 200, width: 600, height: 400 }, bounds);
+    expect(half).toEqual({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 });
+    expect(fromFractions(half, { width: 2400, height: 1600 })).toEqual({ x: 600, y: 400, width: 1200, height: 800 });
   });
 });
 

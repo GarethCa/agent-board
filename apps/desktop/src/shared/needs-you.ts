@@ -1,4 +1,4 @@
-import { waitsForYou, type Agent, type PermissionPrompt } from '@agent-board/daemon/protocol';
+import { needsYouNow, waitsForYou, type Agent, type PermissionPrompt } from '@agent-board/daemon/protocol';
 
 /** Longest tool summary shown; the full input is in the agent's terminal. */
 const MAX_SUMMARY_LENGTH = 300;
@@ -9,6 +9,11 @@ const MAX_SUMMARY_LENGTH = 300;
  */
 export function needsYou(agents: readonly Agent[]): Agent[] {
   return agents.filter(waitsForYou);
+}
+
+/** How many agents need the user now: those in the inbox whose ask they haven't opened the session of yet. */
+export function unseenCount(agents: readonly Agent[]): number {
+  return agents.filter(needsYouNow).length;
 }
 
 /** The agent's prompts the inbox can still answer: the daemon holds their hooks. */

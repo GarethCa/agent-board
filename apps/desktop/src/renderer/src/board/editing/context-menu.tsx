@@ -18,6 +18,7 @@ import {
   Grid3x3,
   LayoutGrid,
   Pencil,
+  RotateCcw,
   SquareDashedMousePointer,
   Trash2,
 } from 'lucide-react';
@@ -38,6 +39,8 @@ export interface ContextActions {
   align(how: Alignment): void;
   distribute(axis: 'x' | 'y'): void;
   setColor(patch: (value: string) => Record<string, unknown>, kind: BoardItemKind, value: string): void;
+  /** Turns the selected items back straight. */
+  resetRotation(): void;
   deleteSelection(): void;
   selectAll(): void;
   /** Whether a drag snaps to the grid, and turns that on or off. */
@@ -47,9 +50,12 @@ export interface ContextActions {
   tidyLoose(): void;
 }
 
+/** The key that turns the selected items back straight, as the menu and the shortcut help write it. */
+export const RESET_ROTATION_KEY = '⇧R';
+
 /**
- * The context menu on a selection (WbTools): duplicate and copy, z-order, align, each selected kind's colour, and
- * delete, which leaves sessions alone and says so.
+ * The context menu on a selection (WbTools): duplicate and copy, z-order, align, reset rotation, each selected kind's
+ * colour, and delete, which asks before it deletes a session.
  */
 export function selectionEntries(selection: SelectionSummary, selectedConnectors: number, actions: ContextActions): MenuEntry[] {
   const hasItems = selection.items.length > 0;
@@ -93,6 +99,13 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
         { label: 'Distribute vertically', icon: <AlignVerticalDistributeCenter />, disabled: movable < 3, onSelect: () => actions.distribute('y') },
       ],
     },
+    {
+      label: 'Reset rotation',
+      icon: <RotateCcw />,
+      shortcut: RESET_ROTATION_KEY,
+      disabled: !selection.items.some((node) => node.data.item.rotation !== 0),
+      onSelect: actions.resetRotation,
+    },
     ...(colours.length > 0 ? ['separator' as const, ...colours] : []),
     'separator',
     {
@@ -100,8 +113,8 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
       icon: <Trash2 />,
       shortcut: '⌫',
       danger: true,
-      disabled: !hasItems && selectedConnectors === 0,
-      hint: selection.hasSessions ? 'Deletes the notes and items only. Sessions stay running.' : undefined,
+      disabled: !hasItems && selectedConnectors === 0 && !selection.hasSessions,
+      hint: selection.hasSessions ? "Sessions are asked about first, and can't be undone." : undefined,
       onSelect: actions.deleteSelection,
     },
   ];

@@ -3,6 +3,7 @@
 // them. Pure, so every case is unit-tested.
 import type { Rect } from '../geometry';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
+import { boundsOnBoard } from './items/items';
 import { clearOf, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
 import { isSessionTile, isZone, type BoardNode } from './tiles';
 
@@ -261,7 +262,7 @@ export function displaced(nodes: BoardNode[], expanded: ExpandedTiles, overlaps:
     const entry = open.get(node.id);
     if (entry !== undefined) return { ...at(node), ...(node.resizing === true ? sizeOf(node) : { width: entry.width, height: entry.height }) };
     const rect = { ...at(node), ...sizeOf(node) };
-    return isSessionTile(node) ? perched(rect) : rect;
+    return isSessionTile(node) ? perched(rect) : boundsOnBoard(node, rect);
   };
   const move = (moves: Map<string, { x: number; y: number }>, movables: readonly Movable[]) => {
     for (const { id, rect } of movables) {

@@ -70,6 +70,15 @@ test('with global hooks on, claude sessions started in other terminals appear in
     await expect(tile).toHaveAttribute('data-state', 'waiting');
     await expect(tile.getByTestId('tile-status')).toContainText('Writing the tests first');
 
+    // Still running elsewhere: removing it says so, and Cancel leaves it be.
+    await tileAction(tile, 'Remove from board');
+    const removing = window.getByRole('alertdialog', { name: 'Remove from board?' });
+    await expect(removing).toContainText('keeps running elsewhere');
+    await expect(removing).not.toContainText("can't be undone");
+    await removing.getByRole('button', { name: 'Cancel' }).click();
+    await expect(tile).toHaveCount(1);
+    expect(session.exitCode).toBeNull();
+
     writeStatus(repo, { state: 'done', summary: 'Pushed the branch', handover: '.agent-board/handover.md' });
     await expect(tile.getByTestId('tile-status')).toHaveAttribute('data-status-state', 'done');
     await expect(tile.getByTestId('tile-status')).toContainText('Pushed the branch');
@@ -93,7 +102,7 @@ test('with global hooks on, claude sessions started in other terminals appear in
     await expect(looseTile).toHaveAttribute('data-state', 'done');
     await expect(externalTile(window)).toHaveCount(2);
 
-    await tileAction(looseTile, 'Dismiss session');
+    await tileAction(looseTile, 'Remove from board');
     await expect(externalTile(window)).toHaveCount(1);
     // The group stays, empty, as any group does.
     await expect(unsortedZone).toHaveCount(1);

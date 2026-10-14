@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from './layout';
-import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
@@ -13,7 +13,7 @@ const zone = (id: string, x = 0, repoRoot: string | null = '/code/app'): ZoneNod
 const agent = (sessionId: string, zoneId: string | null, position: TilePosition | null = null, repoRoot = '/code/app') =>
   ({ sessionId, zoneId, position, repoRoot, name: sessionId, harness: 'claude' }) as Agent;
 const shell = (id: string, zoneId: string | null, position: TilePosition | null = null) =>
-  ({ id, zoneId, position, name: id, cwd: '/', layout: { type: 'pane', sessionId: `${id}-pane` }, endedPanes: [] }) as unknown as Shell;
+  ({ id, zoneId, position, name: id, cwd: '/', layout: { type: 'pane', sessionId: `${id}-pane` }, endedPanes: [], owner: null }) as unknown as Shell;
 const external = (id: string, zoneId: string | null, position: TilePosition | null = null) =>
   ({ id, zoneId, position, name: id, harness: 'claude' }) as ExternalSession;
 
@@ -21,6 +21,23 @@ const tiles = (nodes: BoardNode[]) => nodes.filter((node): node is TileNodeType 
 const tile = (nodes: BoardNode[], id: string) => tiles(nodes).find((node) => node.id === id)!;
 
 describe('withTiles', () => {
+  it("gives an agent's tabs to its tile, never tiles of their own", () => {
+    const tab = { ...shell('tab', null), owner: { kind: 'agent', id: 'a' } } as Shell;
+    const nodes = withTiles([zone('z')], [agent('a', 'z'), agent('b', 'z')], [shell('s', 'z'), tab], []);
+
+    expect(tiles(nodes).map((node) => node.id)).toEqual([tileNodeId('agent', 'a'), tileNodeId('agent', 'b'), tileNodeId('shell', 's')]);
+    expect(tile(nodes, tileNodeId('agent', 'a')).data.tabs).toEqual([tab]);
+    expect(tile(nodes, tileNodeId('agent', 'b')).data.tabs).toBeUndefined();
+  });
+
+  it("makes no tile of a shell tile's tabs, nor gives them to an agent that shares the id", () => {
+    const tab = { ...shell('tab', null), owner: { kind: 'shell', id: 's' } } as Shell;
+    const nodes = withTiles([zone('z')], [agent('s', 'z')], [shell('s', 'z'), tab], []);
+
+    expect(tiles(nodes).map((node) => node.id)).toEqual([tileNodeId('agent', 's'), tileNodeId('shell', 's')]);
+    expect(tile(nodes, tileNodeId('agent', 's')).data.tabs).toBeUndefined();
+  });
+
   it('puts tiles with no place in free slots, in the order tileSlot always laid them out', () => {
     const nodes = withTiles([zone('z')], [agent('a', 'z'), agent('b', 'z')], [shell('s', 'z')], [external('e', 'z')]);
 
@@ -115,6 +132,23 @@ describe('withTiles', () => {
     expect(grown!.data.covers).toMatchObject({ right: grown!.width, bottom: grown!.height, left: far.x - ZONE_PADDING });
   });
 
+  it('draws a resized tile at its own size, grows its zone to hold it and slots the others clear of it', () => {
+    const sizes = { 'agent:a': { width: 480, height: 320 } };
+    const nodes = withTiles([zone('z')], [agent('a', 'z', { x: 700, y: 500, z: 1 }), agent('b', 'z')], [], [], new Map(), [], sizes);
+    expect(tile(nodes, 'agent:a')).toMatchObject({ width: 480, height: 320 });
+    expect(tile(nodes, 'agent:b')).toMatchObject(AGENT_TILE_SIZE);
+    const [grown] = nodes as ZoneNodeType[];
+    expect(grown!.width).toBe(700 + 480 + ZONE_PADDING);
+    expect(grown!.height).toBeGreaterThanOrEqual(500 + 320 + ZONE_PADDING);
+  });
+
+  it('keeps the size React Flow has for a compact tile while it is resized', () => {
+    const [first] = tiles(withTiles([zone('z')], [agent('a', 'z', { x: 20, y: 44, z: 1 })], [], []));
+    const resizing = { ...first!, width: 333, height: 222, resizing: true };
+    const nodes = withTiles([zone('z'), resizing], [agent('a', 'z', { x: 20, y: 44, z: 1 })], [], [], new Map(), [], { 'agent:a': { width: 400, height: 304 } });
+    expect(tile(nodes, 'agent:a')).toMatchObject({ width: 333, height: 222 });
+  });
+
   it('leaves out tiles of zones the board does not have', () => {
     expect(tiles(withTiles([], [agent('a', 'gone')], [shell('s', 'gone')], []))).toEqual([]);
   });
@@ -158,12 +192,28 @@ describe('withTiles', () => {
 
   it('slots a tile with no place clear of the zone\'s board items', () => {
     const item = itemNode({
-      id: 'i', kind: 'issue', zoneId: 'z', x: 30, y: 40, width: 240, height: 112, z: 1, data: {}, createdAt: '', updatedAt: '',
+      id: 'i', kind: 'issue', zoneId: 'z', x: 30, y: 40, width: 240, height: 112, z: 1, rotation: 0, data: {}, createdAt: '', updatedAt: '',
     });
     const nodes = withTiles([zone('z'), item], [agent('a', 'z')], [], []);
 
     expect(tile(nodes, 'agent:a').position).not.toEqual(tileSlot(0, 800));
     expect(tile(nodes, 'agent:a').position).toEqual(tileSlot(1, 800));
+  });
+});
+
+describe('shellWithPane', () => {
+  it("finds the shell tile a pane is in, through its tabs too, but never an agent's tab", () => {
+    const tile = shell('s', null);
+    const tileTab = { ...shell('t', null), owner: { kind: 'shell', id: 's' } } as Shell;
+    const agentTab = { ...shell('a', null), owner: { kind: 'agent', id: 'agent' } } as Shell;
+    const shells = [tile, tileTab, agentTab];
+
+    expect([shellWithPane(shells, 's-pane'), shellWithPane(shells, 't-pane'), shellWithPane(shells, 'a-pane'), shellWithPane(shells, 'nope')]).toEqual([
+      tile,
+      tile,
+      undefined,
+      undefined,
+    ]);
   });
 });
 

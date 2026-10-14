@@ -30,6 +30,13 @@ describe('appStateOf', () => {
     expect(appStateOf(resting.map((state, i) => agent(String(i), state)))).toEqual({ state: 'quiet', waiting: 0 });
   });
 
+  it('leaves a seen ask out: quiet and not counted, until the agent asks again', () => {
+    expect(appStateOf([agent('a', 'waiting', { seen: true })])).toEqual({ state: 'quiet', waiting: 0 });
+    expect(appStateOf([agent('a', 'waiting', { seen: true }), agent('b', 'needs-permission')])).toEqual({ state: 'needs', waiting: 1 });
+    expect(appStateOf([agent('a', 'waiting', { seen: true }), agent('b', 'running')])).toEqual({ state: 'working', waiting: 0 });
+    expect(appStateOf([agent('a', 'waiting', { seen: false })])).toEqual({ state: 'needs', waiting: 1 });
+  });
+
   it('ignores an ended agent, whatever state it was left in', () => {
     expect(appStateOf([agent('a', 'waiting', { endedAt: '2026-10-12T10:00:00.000Z' })])).toEqual({ state: 'quiet', waiting: 0 });
     expect(appStateOf([agent('a', 'running', { endedAt: '2026-10-12T10:00:00.000Z' })])).toEqual({ state: 'quiet', waiting: 0 });

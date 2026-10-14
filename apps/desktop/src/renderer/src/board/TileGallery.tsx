@@ -83,6 +83,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   notice: null,
   issue: null,
   muted: false,
+  seen: false,
   pullRequests: [],
   createdAt: AT,
   endedAt: null,
@@ -95,6 +96,8 @@ export const galleryAgent = (state: AgentState): Agent => ({
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  orchestrate: null,
+  spawnedBy: null,
   status: null,
   ...EXTRAS[state],
 });
@@ -154,6 +157,12 @@ const SHELL: Shell = {
   },
   endedPanes: ['right'],
   stoppedPanes: [],
+  exitCodes: { right: 0 },
+  busyPanes: [],
+  panePorts: {},
+  failedCommands: {},
+  owner: null,
+  tabOrder: null,
   createdAt: AT,
 };
 

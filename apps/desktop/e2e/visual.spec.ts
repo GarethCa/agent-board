@@ -45,8 +45,6 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await spawnAgent(window, 'monorepo', 'Tidy the tokens');
     await expect(tile(window)).toHaveCount(2);
     await expect(tile(window).nth(1)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-    // A tile's tilt comes from its random id; pin it so the shot is the same every run.
-    await window.addStyleTag({ content: '.hybrid-tile { rotate: 1deg !important; }' });
 
     // Branch names end in a random suffix, and the worktrees' folders and the daemon's pid differ run to run: pinned.
     await pinRandomText(window);
@@ -76,7 +74,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await restorePointer();
     await window.keyboard.press('Escape');
 
-    // A tile expanded in place: its details on the left, its terminal beside them, the tile beside it pushed clear.
+    // A tile expanded in place: its details collapsed to the icon rail on the left, its terminal beside them, the tile beside it pushed clear.
     await setClickOpens(window, 'Expand in place');
     const viewport = () => window.locator('.react-flow__viewport').evaluate((element) => (element as HTMLElement).style.transform);
     const unmoved = await viewport();
@@ -98,7 +96,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await pinRandomText(window);
     restorePointer = await ignorePointer(window);
     await settle(window);
-    await expect.soft(window.locator('.board')).toHaveScreenshot('expanded-tile.png', { ...SHOT, mask: [screen(window), window.getByTestId('details-folder')] });
+    await expect.soft(window.locator('.board')).toHaveScreenshot('expanded-tile.png', { ...SHOT, mask: [screen(window)] });
     await restorePointer();
     await expandedTile.getByRole('button', { name: 'Collapse' }).click();
     await expect(expandedTile).toHaveCount(0);
@@ -107,19 +105,101 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await tile(window).first().dblclick();
     await expect(screen(window)).toContainText('Which database should I use');
     await pinRandomText(window);
-    // The terminal's text and cursor are masked, not its background; so is the live folder, a temp path of the run.
+    // The terminal's text and cursor are masked, not its background.
     await ignorePointer(window);
     await settle(window);
-    await expect.soft(window.locator('body')).toHaveScreenshot('session-window.png', {
-      ...SHOT,
-      mask: [screen(window), window.getByTestId('details-folder')],
-    });
+    await expect.soft(window.locator('body')).toHaveScreenshot('session-window.png', { ...SHOT, mask: [screen(window)] });
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a shell tile's session window with tabs, split into two panes each with its strip", async () => {
+  needsBaselines('shell-window-tabs');
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    const tabs = sessionWindow(window).getByTestId('session-tab');
+    await expect(tabs).toHaveCount(1);
+    await window.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+t`);
+    await expect(tabs).toHaveCount(2);
+    await window.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
+    await expect(sessionWindow(window).getByTestId('window-pane')).toHaveCount(2);
+    await expect(sessionWindow(window).locator('.xterm-rows')).toHaveCount(3);
+    await pinRandomText(window);
+    await ignorePointer(window);
+    await settle(window);
+    // The shells' prompts and the tile's folder (a temporary one) differ run to run.
+    await expect.soft(window.locator('body')).toHaveScreenshot('shell-window-tabs.png', {
+      ...SHOT,
+      mask: [sessionWindow(window).locator('.xterm-rows'), sessionWindow(window).locator('.session-window-where')],
+    });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Zones in four colours with every fill opacity from none to the most, and a zone's menu with its 16 colours and slider. */
+for (const { theme, suffix } of [
+  { theme: 'light', suffix: '' },
+  { theme: 'dark', suffix: '-dark' },
+] as const) {
+  test(`zone colours and fill opacity: four zones and the zone menu, ${theme}`, async () => {
+    needsBaselines(`zone-looks${suffix}`, `zone-menu${suffix}`);
+    const { dir, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      const looks = [
+        { name: 'Theme default', color: '#4c6ef5', fillOpacity: null },
+        { name: 'Outline only', color: '#fd7e14', fillOpacity: 0 },
+        { name: 'Soft', color: '#be4bdb', fillOpacity: 20 },
+        { name: 'Strong', color: '#495057', fillOpacity: 40 },
+      ];
+      await window.evaluate(async (wanted) => {
+        const { zones } = globalThis.window.agentBoard;
+        for (const [index, look] of wanted.entries()) {
+          const zone = await zones.addUnbound({ name: look.name, x: (index % 2) * 320, y: Math.floor(index / 2) * 220, width: 300, height: 200 });
+          await zones.setLook(zone.id, { color: look.color, fillOpacity: look.fillOpacity });
+        }
+      }, looks);
+      await expect(window.getByTestId('zone')).toHaveCount(4);
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await pinRandomText(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`zone-looks${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await window.getByTestId('zone').first().getByRole('button', { name: 'Zone options' }).click();
+      await expect(window.getByRole('slider', { name: 'Fill opacity' })).toBeVisible();
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`zone-menu${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close().catch(() => {});
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 /** Waits until the board's view stops moving: after a fit or a jump, which animate. */
 async function viewSettled(window: Page): Promise<void> {
@@ -222,7 +302,7 @@ test('the dark theme (AN1): a busy board with notes, text, a shape and a flow ed
     await expect.soft(window.locator('body')).toHaveScreenshot('dark-chat-view.png', SHOT);
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -262,7 +342,7 @@ for (const theme of ['light', 'dark'] as const) {
       await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shot}.png`, SHOT);
     } finally {
       await app.close();
-      removeDataDir(dataDir);
+      await removeDataDir(dataDir);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -300,7 +380,7 @@ test("the dark theme (AN1): a review doc in its implementer's session window", a
     await expect.soft(window.locator('body')).toHaveScreenshot('dark-review-viewer.png', { ...SHOT, mask: [viewer.locator('.review-round-when')] });
   } finally {
     await app.close();
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -346,7 +426,7 @@ test('first-run onboarding: each step, with nothing installed', async () => {
     );
     await step('onboarding-finish', () => expect(window.getByRole('dialog', { name: 'You’re set up' })).toBeVisible(), async () => {});
   } finally {
-    removeDataDir(dataDir);
+    await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -386,7 +466,7 @@ for (const { theme, suffix } of THEMES) {
       await expect.soft(window.getByTestId('character-gallery')).toHaveScreenshot(`character-gallery${suffix}.png`, SHOT);
     } finally {
       await app.close();
-      removeDataDir(dataDir);
+      await removeDataDir(dataDir);
     }
   });
 }
@@ -414,7 +494,47 @@ for (const { theme, suffix } of THEMES) {
       }
     } finally {
       await app.close();
-      removeDataDir(dataDir);
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+for (const { theme, suffix } of THEMES) {
+  test(`the text style bar with its font size control, ${theme}`, async () => {
+    needsBaselines(`text-style-bar${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...RENDER_ENV, ...(theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {}), SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+    );
+    try {
+      await window.setViewportSize(VIEWPORT);
+      if (theme === 'dark') await window.emulateMedia({ colorScheme: 'dark' });
+      await pinFonts(window);
+      await window.evaluate(async () => {
+        await globalThis.window.agentBoard.items.create({
+          kind: 'text',
+          zoneId: null,
+          x: 0,
+          y: 0,
+          width: 300,
+          height: 60,
+          data: { text: 'Launch week', size: 'h1', fontSize: 32, bold: true, italic: false, align: 'left', color: '#2b2a27', wrap: true },
+        });
+      });
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await window.getByTestId('text-item').click();
+      const bar = window.getByRole('toolbar', { name: 'Text style' });
+      await expect(bar).toBeVisible();
+      await pinRandomText(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(bar).toHaveScreenshot(`text-style-bar${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
     }
   });
 }

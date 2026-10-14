@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
-import { launch, screen, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch, type Scratch } from './scratch.ts';
 
@@ -76,6 +76,88 @@ test('answering a waiting agent from the inbox delivers the text and it resumes;
     // ...until it waits once more.
     await openInbox(window);
     await expect(waiting.getByTestId('inbox-last-message')).toHaveText('Done: Ship it.');
+  });
+});
+
+test('opening a waiting agent marks it seen: it stops needing you until it asks again', async () => {
+  await withApp(scratch('waiting'), async (window) => {
+    const agent = await spawn(window, 'Pick a database');
+    const agentTile = tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+    await expect(agentTile).not.toHaveAttribute('data-seen', /.*/);
+
+    await openFromTile(window, agent);
+
+    // Seen: no orange on the tile, nothing counted, but still waiting in the inbox, read.
+    await expect(count(window)).toHaveAttribute('data-count', '0');
+    await expect(agentTile).toHaveAttribute('data-seen', 'true');
+    await expect(agentTile).toHaveAttribute('data-state', 'waiting');
+    await openInbox(window);
+    await expect(item(window, agent.sessionId)).toHaveAttribute('data-read', 'true');
+
+    // It works on an answer and waits again: it needs you once more, though its window is still open.
+    await window.getByTestId('session-terminal').click();
+    await window.keyboard.type('SQLite');
+    await window.keyboard.press('Enter');
+    await expect(screen(window)).toContainText('Going with SQLite.');
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+    await expect(agentTile).not.toHaveAttribute('data-seen', /.*/);
+  });
+});
+
+test('every way into a waiting agent marks it seen: ‹ › in the session window', async () => {
+  await withApp(scratch('waiting'), async (window) => {
+    const first = await spawn(window, 'Pick a database');
+    const second = await spawn(window, 'Pick a cache');
+    const third = await spawn(window, 'Pick a queue');
+    const tileOf = (agent: Agent) => tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
+    await expect(count(window)).toHaveAttribute('data-count', '3');
+
+    // ‹ › swaps the window to the next waiting agent, which is seen as it shows.
+    await openFromTile(window, first);
+    await expect(count(window)).toHaveAttribute('data-count', '2');
+    const shown = sessionWindow(window);
+    await shown.getByRole('button', { name: 'Next session' }).click();
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+    await shown.getByRole('button', { name: 'Previous session' }).click();
+    await shown.getByRole('button', { name: 'Previous session' }).click();
+    await expect(count(window)).toHaveAttribute('data-count', '0');
+    for (const agent of [first, second, third]) await expect(tileOf(agent)).toHaveAttribute('data-seen', 'true');
+    await window.getByRole('button', { name: 'Close session window' }).click();
+  });
+});
+
+test('the inbox’s Open shows a waiting agent as seen', async () => {
+  await withApp(scratch('waiting'), async (window) => {
+    const first = await spawn(window, 'Pick a database');
+    await spawn(window, 'Pick a cache');
+    await expect(count(window)).toHaveAttribute('data-count', '2');
+
+    await openInbox(window);
+    await item(window, first.sessionId).getByRole('button', { name: 'Open' }).click();
+    await expect(sessionWindow(window)).toBeVisible();
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+  });
+});
+
+test('an expanded tile marks its agent seen when it opens and each time it is brought to the front', async () => {
+  await withApp(scratch('waiting'), async (window) => {
+    await setClickOpens(window, 'Expand in place');
+    const agent = await spawn(window, 'Pick a database');
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+
+    await tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`)).dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    await expect(expanded).toBeVisible();
+    await expect(count(window)).toHaveAttribute('data-count', '0');
+
+    // It works and asks again while still expanded: it needs you, until the tile is clicked to the front.
+    await expanded.getByTestId('session-terminal').click();
+    await window.keyboard.type('SQLite');
+    await window.keyboard.press('Enter');
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+    await expanded.locator('.session-window-head').click();
+    await expect(count(window)).toHaveAttribute('data-count', '0');
   });
 });
 
