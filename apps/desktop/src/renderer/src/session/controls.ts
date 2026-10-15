@@ -1,5 +1,5 @@
 // Which of the session window's sidebar controls work right now. Pure, so the rules are unit-tested.
-import { INTERRUPTIBLE_STATES, type Agent } from '@agent-board/daemon/protocol';
+import { isMidTurn, type Agent } from '@agent-board/daemon/protocol';
 
 export type ControlId = 'interrupt' | 'stop';
 
@@ -17,7 +17,7 @@ export interface Control {
  */
 export function sessionControls({ agent, live }: { agent?: Agent; live: boolean }): Control[] {
   const running = live && (agent === undefined || agent.endedAt === null);
-  const midTurn = agent === undefined || INTERRUPTIBLE_STATES.has(agent.state);
+  const midTurn = agent === undefined || isMidTurn(agent);
   const ended = 'The session has ended';
   return [
     {

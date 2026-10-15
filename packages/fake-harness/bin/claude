@@ -1,9 +1,5 @@
-#!/bin/sh
-# Fake `claude` for tests. Never spends tokens; see packages/fake-harness/README.md.
-# Followed through symlinks, as an installed CLI often is one.
-self=$0
-while [ -L "$self" ]; do
-  link=$(readlink "$self")
-  case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
-done
-exec node --disable-warning=ExperimentalWarning "$(dirname "$self")/../src/cli/claude.ts" "$@"
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
+// Fake `claude` for tests. Never spends tokens; see packages/fake-harness/README.md.
+// A node script run directly, as an npm-installed CLI is, so the daemon can tell by its script that it is this one.
+// Node follows a symlink to this file, as an installed CLI often is one.
+await import('../src/cli/claude.ts');

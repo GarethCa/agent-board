@@ -23,6 +23,7 @@ const connector = (id: string, from: string, to: string): Connector => ({
   to: { type: 'item', id: to, side: 'left' },
   ...DEFAULT_CONNECTOR_LOOK,
   label: 'next',
+  points: [{ x: 100, y: -40 }],
   createdAt: '',
   updatedAt: '',
 });
@@ -68,8 +69,21 @@ describe('placed', () => {
       { id: 'new-2', x: 220, y: 30, data: { text: 'second' } },
     ]);
     expect(connectors).toEqual([
-      expect.objectContaining({ id: 'new-3', from: { type: 'item', id: 'new-1', side: 'right' }, to: { type: 'item', id: 'new-2', side: 'left' }, label: 'next' }),
+      expect.objectContaining({
+        id: 'new-3',
+        from: { type: 'item', id: 'new-1', side: 'right' },
+        to: { type: 'item', id: 'new-2', side: 'left' },
+        label: 'next',
+        // Its bends are kept from the middle of its ends, so they come with the copies as they are.
+        points: [{ x: 100, y: -40 }],
+      }),
     ]);
+  });
+
+  it('takes a connector copied before lines bent as having no bends', () => {
+    const copy = twoNotes();
+    const older = JSON.stringify({ ...copy, connectors: copy.connectors.map((connector) => ({ ...connector, points: undefined })) });
+    expect(parseCopied(older)?.connectors[0]!.points).toEqual([]);
   });
 });
 

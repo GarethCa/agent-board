@@ -76,6 +76,26 @@ describe('connectors over the socket', () => {
     );
   });
 
+  it('bends through points, and moves an end to another side of its object, keeping its look', async () => {
+    const { client, a, b } = await twoStickies();
+    const connector = await client.call('connector.create', between(a.id, b.id, { style: 'elbow', label: 'see' }));
+    expect(connector.points).toEqual([]);
+
+    const points = [{ x: 250, y: -30 }];
+    const reshaped = await client.call('connector.update', { id: connector.id, points, fromSide: 'bottom', toSide: 'top' });
+
+    expect(reshaped).toMatchObject({ points, style: 'elbow', label: 'see' });
+    expect(reshaped.from).toEqual({ ...connector.from, side: 'bottom' });
+    expect(reshaped.to).toEqual({ ...connector.to, side: 'top' });
+    expect(await client.call('connector.list')).toEqual([reshaped]);
+    await expect(client.call('connector.update', { id: connector.id, toSide: 'middle' as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('connector.update', { id: connector.id, points: [{ x: 1 }] as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    // Made again by undo, as it was.
+    await client.call('connector.delete', { id: connector.id });
+    const again = await client.call('connector.create', { ...between(a.id, b.id), id: connector.id, points });
+    expect(again.points).toEqual(points);
+  });
+
   it('deletes a connector and tells every client', async () => {
     const { daemon, client, a, b } = await twoStickies();
     const other = recordEvents(await connectTestClient(daemon));

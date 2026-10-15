@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { ChevronsDownUp, ChevronsUpDown, ClipboardList, GitPullRequest, Globe } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import type { Agent, Shell, ShellOwner } from '@agent-board/daemon/protocol';
@@ -15,20 +15,30 @@ import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
 import { composerKey, droppedPath, insertAt } from './composer-input';
-import { canRestart, ENDED_SHELL_LABEL, exitText, RestartAgent } from './RestartAgent';
-import { HARNESS_COMMANDS, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
-import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, shellMover } from './shell-moves';
+import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
+import { HARNESS_COMMANDS, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
+import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
 import type { StripTab } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
 import { PaneStrip, WindowPanes } from './WindowPanes';
+import { PullRequestTab } from './PullRequestTab';
+import { WebTab } from './WebTab';
+import { GateTab } from '../gate/GateTab';
+import { PlanTab } from '../plan/PlanTab';
+import { gateDot } from '../gate/gate-view';
+import { useGateRuns } from '../gate/GatesProvider';
+import { WebLinkContext } from './web-links';
 import { useSeenWhileShown } from './mark-seen';
 
 /**
  * What a session window or an expanded tile shows: one session's terminal (with its agent, live, for an agent's
  * controls and composer), or a shell tile's panes, its controls acting on the focused pane. The shell is undefined
- * until it is listed.
+ * until it is listed. Or, popped out only, a tab window's tabs (slice 4), which are no session's.
  */
-export type WindowContent = { kind: 'session'; sessionId: string; agent?: Agent } | { kind: 'shell'; shellId: string; shell: Shell | undefined };
+export type WindowContent =
+  | { kind: 'session'; sessionId: string; agent?: Agent }
+  | { kind: 'shell'; shellId: string; shell: Shell | undefined }
+  | { kind: 'tabs'; id: string };
 
 interface SessionBodyProps {
   content: WindowContent;
@@ -77,11 +87,12 @@ export function SessionBody({
     (paneId: string, status: PaneStatus) => setPaneStatuses((current) => ({ ...current, [paneId]: status })),
     [],
   );
-  const owner: TabOwner | undefined = agent ? { kind: 'agent', agent } : shell ? { kind: 'shell', shell } : undefined;
-  // Tabs and panes drag between windows and onto the board (AT2), where the board can move them: not in a
-  // pop-out, where a tab still moves among its own window's panes.
-  const moves = shellMover.use();
+  const owner: TabOwner | undefined = agent ? { kind: 'agent', agent } : shell ? { kind: 'shell', shell } : content.kind === 'tabs' ? content : undefined;
+  // Tabs and panes drag between windows and onto the board (AT2), and between OS windows, where the
+  // board can move them: a pop-out asks it to.
+  const moves = tabMover.use();
   const panes = useWindowPanes(owner, { onProblem: setProblem, moves });
+  const gateRuns = useGateRuns();
   const dropOver = dropOverValue.use();
   const worktrees = agentWorktrees.use();
   const from = owner === undefined ? undefined : shellOwner(owner);
@@ -146,8 +157,8 @@ export function SessionBody({
           autoFocus={autoFocus}
           // In its tab, it has the keyboard while that tab shows and it is the tab's focused pane.
           focused={panes === undefined || (panes.focusedPane.active.key === OWN_SURFACE && anyFocus === agent?.sessionId)}
-          // The shell an ended agent dropped into is a plain shell.
-          harness={content.agent?.shellSessionId ? null : (content.agent?.harness ?? null)}
+          // The shell an ended agent dropped into is a plain shell, until the user runs its harness in it.
+          harness={content.agent?.shellSessionId ? content.agent.shellHarness : (content.agent?.harness ?? null)}
         />
       </div>
       {agent && (
@@ -171,6 +182,10 @@ export function SessionBody({
     const closable = panes?.closable(surface) ?? false;
     const base = { id: surface.key, label: surface.label, closable };
     if (surface.kind === 'agent') return { ...base, dot: paneStatuses[surface.agent.sessionId]?.state ?? 'attaching', closeHint: 'Close the tab; the session keeps running' };
+    if (surface.kind === 'pr') return { ...base, icon: <GitPullRequest />, title: `${surface.pr.repo}#${surface.pr.number}`, closeHint: 'Close the tab' };
+    if (surface.kind === 'web') return { ...base, icon: <Globe />, title: surface.web.url, closeHint: 'Close the tab and forget its cookies' };
+    if (surface.kind === 'plan') return { ...base, icon: <ClipboardList />, title: `${surface.agent.name}'s plans`, closeHint: 'Close the tab; its plans stay in its history' };
+    if (surface.kind === 'gate') return { ...base, dot: gateDot(gateRuns.get(surface.gate.sessionId)), title: `${surface.agent.name}'s merge gate`, closeHint: 'Close the tab; the gate keeps its last run' };
     if (surface.kind === 'tile') return { ...base, dot: worstState(windowShells({ kind: 'shell', shell: surface.shell }, [surface.shell]).map((each) => each.state)) ?? 'idle', closeHint: 'Close the tab; its shells keep running' };
     const dots = panes?.dots.get(surface.key);
     const dot = agent && surface.key === OWN_SURFACE ? (dots === 'failed' ? 'failed' : single.state) : (dots ?? 'idle');
@@ -192,12 +207,14 @@ export function SessionBody({
     );
 
   return (
+    <WebLinkContext.Provider value={panes?.openWeb}>
     <div
       className="session-window-body"
       onKeyDownCapture={panes?.onKeyDown}
       data-tab-drop={from === undefined ? undefined : dropKey(from)}
       data-drop-over={(from !== undefined && dropOver === dropKey(from)) || undefined}
     >
+      {content.kind !== 'tabs' && (
       <SessionDetails
         sessionId={controlSession}
         agent={agent}
@@ -210,8 +227,17 @@ export function SessionBody({
         collapsed={detailsCollapsed}
         onCollapsed={onDetailsCollapsed}
         onOpenLink={openLink}
+        onOpenPullRequest={
+          panes &&
+          ((pr) => {
+            const surface = pullRequestSurfaceOf(pr);
+            if (surface === undefined) openLink(pr.url);
+            else panes.open(surface);
+          })
+        }
       />
-      <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
+      )}
+      {content.kind !== 'tabs' && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
           {panes ? (
@@ -240,8 +266,9 @@ export function SessionBody({
             </Tag>
           )}
           <span className="session-window-status" data-testid="session-window-status" data-error={pane.state === 'exited' || problem !== undefined}>
-            {statusText(pane, tabShellFocused || otherFocused ? undefined : agent)}
-            {problem && ` · ${problem}`}
+            {/* A tab window has no session of its own to tell of: only another's shown in it, and what went wrong. */}
+            {content.kind !== 'tabs' || otherFocused ? statusText(pane, tabShellFocused || otherFocused ? undefined : agent) : null}
+            {problem && `${content.kind !== 'tabs' || otherFocused ? ' · ' : ''}${problem}`}
           </span>
         </div>
         {notice}
@@ -257,7 +284,7 @@ export function SessionBody({
             <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} />
           ) : content.kind === 'session' ? (
             sessionView
-          ) : (
+          ) : content.kind === 'tabs' ? null : (
             <p className="session-window-pending">Loading panes…</p>
           )}
         </div>
@@ -265,6 +292,7 @@ export function SessionBody({
       </div>
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
     </div>
+    </WebLinkContext.Provider>
   );
 }
 
@@ -379,7 +407,32 @@ function SurfaceView({
         onStatus={(status) => onPaneStatus(agent.sessionId, status)}
         focused={keyboard}
         autoFocus={autoFocus}
-        harness={agent.shellSessionId ? null : agent.harness}
+        harness={agent.shellSessionId ? agent.shellHarness : agent.harness}
+      />
+    );
+  }
+  if (surface.kind === 'pr') return <PullRequestTab pr={surface.pr} visible={shown && visible} />;
+  if (surface.kind === 'gate') return <GateTab sessionId={surface.gate.sessionId} agent={surface.agent} visible={shown && visible} />;
+  if (surface.kind === 'plan') {
+    const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
+    return (
+      <PlanTab
+        agent={surface.agent}
+        visible={shown && visible}
+        onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
+        onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
+      />
+    );
+  }
+  if (surface.kind === 'web') {
+    const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
+    return (
+      <WebTab
+        web={surface.web}
+        visible={shown && visible}
+        onNavigate={(url) => panes.navigated({ ...surface.web, url })}
+        onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
+        onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
       />
     );
   }
@@ -430,7 +483,7 @@ function statusText({ state, ended, problem }: PaneStatus, agent: Agent | undefi
     case 'attaching':
       return 'attaching…';
     case 'attached':
-      if (agent?.shellSessionId != null) return ENDED_SHELL_LABEL;
+      if (agent?.shellSessionId != null) return endedShellLabel(agent);
       return agent ? STATE_LABELS[agent.state] : 'running';
     case 'exited':
       // An agent's own state says how it went: a stop and a clean exit are both just ended.

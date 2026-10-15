@@ -56,9 +56,14 @@ export async function listPullRequests(
     number: pr.number,
     title: pr.title,
     url: pr.url,
-    state: pr.state === 'OPEN' ? (pr.isDraft ? 'draft' : 'open') : pr.state === 'MERGED' ? 'merged' : 'closed',
+    state: pullRequestState(pr),
     checks: checksState(pr.statusCheckRollup ?? []),
   }));
+}
+
+/** A pull request's state as gh gives it, with a draft told apart. */
+export function pullRequestState(pr: { state: 'OPEN' | 'CLOSED' | 'MERGED'; isDraft: boolean }): PullRequestState {
+  return pr.state === 'OPEN' ? (pr.isDraft ? 'draft' : 'open') : pr.state === 'MERGED' ? 'merged' : 'closed';
 }
 
 /**
@@ -79,6 +84,38 @@ export async function mergePullRequest(number: number, options: GhOptions & { cw
     ],
     options,
   );
+}
+
+/**
+ * Opens a pull request of `head`, a branch already pushed, into the repo's default branch through the user's own `gh`
+ * login, in `repo` or else the one gh infers from the remotes at `cwd`; resolves with its URL. The description goes on
+ * stdin, never on the command line; with `draft`, it opens as a draft. Failures, such as one already open for the branch, are
+ * `TrackerError`s.
+ */
+export async function createPullRequest(
+  options: GhOptions & { cwd: string; repo?: string; head: string; title: string; body: string; draft?: boolean },
+): Promise<string> {
+  const out = await runGh(
+    [
+      'pr',
+      'create',
+      ...(options.repo === undefined ? [] : ['--repo', options.repo]),
+      '--head',
+      options.head,
+      '--title',
+      options.title,
+      '--body-file',
+      '-',
+      ...(options.draft === true ? ['--draft'] : []),
+    ],
+    { ...options, input: options.body },
+  );
+  return out.trim().split('\n').at(-1) ?? '';
+}
+
+/** Deletes the branch from the GitHub repo (`owner/repo`) through the user's own `gh` login. Failures are `TrackerError`s. */
+export async function deleteRemoteBranch(repo: string, branch: string, options: GhOptions & { cwd?: string } = {}): Promise<void> {
+  await runGh(['api', '-X', 'DELETE', `repos/${repo}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`], options);
 }
 
 /** Conclusions of a finished check run that fail it, as GitHub's own rollup counts them. */

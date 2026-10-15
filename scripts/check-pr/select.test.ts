@@ -124,6 +124,21 @@ describe('selectChecks', () => {
     expect(selectChecks(['packages/daemon/src/trackers.ts']).e2e).toEqual(['trackers.spec.ts']);
   });
 
+  it('maps the PR tab, its IPC, its daemon methods and its GitHub calls to the PR tab spec', () => {
+    for (const file of [
+      'apps/desktop/src/renderer/src/session/PullRequestTab.tsx',
+      'apps/desktop/src/renderer/src/session/use-pull-request.ts',
+      'apps/desktop/src/renderer/src/session/pr-diff.ts',
+      'apps/desktop/src/main/pull-requests.ts',
+      'packages/daemon/src/pull-request-tabs.ts',
+      'packages/tracker/src/pull-request-details.ts',
+      'packages/tracker/src/pull-request-ref.ts',
+      'packages/tracker/src/fake-gh.ts',
+    ]) {
+      expect(selectChecks([file]).e2e, file).toContain('pr-tab.spec.ts');
+    }
+  });
+
   it('maps the chat view and the transcript adapters to the chat view spec', () => {
     expect(selectChecks(['apps/desktop/src/renderer/src/session/ChatView.tsx']).e2e).toContain('chat-view.spec.ts');
     expect(selectChecks(['packages/daemon/src/transcript-adapters.ts']).e2e).toEqual(['chat-view.spec.ts']);

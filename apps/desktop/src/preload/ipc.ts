@@ -16,5 +16,23 @@ export function ipcCalls(ipc: Pick<IpcRenderer, 'invoke' | 'on' | 'off'>) {
       ipc.on(channel, handler);
       return () => ipc.off(channel, handler);
     },
+    /**
+     * Like `subscribe`, for a channel whose messages begin with the id of who they are for: one listener serves them all,
+     * so a hundred terminals don't each run every message through a listener of their own. Listens only while some id
+     * does.
+     */
+    keyed<Args extends unknown[]>(channel: string): (id: string, listener: (...args: Args) => void) => () => void {
+      const listeners = new Map<string, (...args: Args) => void>();
+      const dispatch = (_event: IpcRendererEvent, id: string, ...args: unknown[]) => listeners.get(id)?.(...(args as Args));
+      return (id, listener) => {
+        if (listeners.size === 0) ipc.on(channel, dispatch);
+        listeners.set(id, listener);
+        return () => {
+          if (listeners.get(id) !== listener) return;
+          listeners.delete(id);
+          if (listeners.size === 0) ipc.off(channel, dispatch);
+        };
+      };
+    },
   };
 }

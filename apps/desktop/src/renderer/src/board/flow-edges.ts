@@ -1,23 +1,20 @@
-// Flow edges: the daemon's edges between agents, each drawn from one tile's square out port to the other's in
-// port, in the flow look the "issue brief" edge has.
+// Flow edges: the daemon's edges between agents, each drawn from a side of one tile to a side of the other
+//, in the flow look the "issue brief" edge has.
 import { createContext } from 'react';
 import type { Edge } from '@xyflow/react';
 import { DEFAULT_PAYLOAD_PATHS, type FlowCondition, type FlowEdge, type FlowEdgeEvent, type UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import type { FlowEdgeChange } from '../../../preload/api';
+import { upperFirst } from '../upper-first';
 import { whenLabel } from './schedule';
 import { tileNodeId } from './tiles';
 
 export const FLOW_EDGE_TYPE = 'flow';
 const FLOW_EDGE_PREFIX = 'flow:';
-/** The square ports an agent's tile has: a flow leaves from the out port and arrives at the in port. */
-export const FLOW_PORTS = { out: 'flow-out', in: 'flow-in' } as const;
 /** Over the nodes, like connectors. */
 const FLOW_Z_INDEX = 3;
 
 export const isFlowEdge = (edge: Pick<Edge, 'id'>): boolean => edge.id.startsWith(FLOW_EDGE_PREFIX);
 export const flowEdgeIdOf = (edge: Pick<Edge, 'id'>): string => edge.id.slice(FLOW_EDGE_PREFIX.length);
-/** Whether a drag started on a tile's flow port, so draws a flow edge, not a connector. */
-export const isFlowPort = (handleId: string | null | undefined): boolean => handleId === FLOW_PORTS.out || handleId === FLOW_PORTS.in;
 
 /**
  * The edges for `edges`, leaving out any whose agent's tile isn't on the board (`nodeIds`): the daemon deletes an edge
@@ -36,9 +33,10 @@ export function flowEdges(
       id: `${FLOW_EDGE_PREFIX}${edge.id}`,
       type: FLOW_EDGE_TYPE,
       source: tileNodeId('agent', edge.from),
-      sourceHandle: FLOW_PORTS.out,
+      // On the round handles a connector joins, one on each side.
+      sourceHandle: edge.fromSide,
       target: tileNodeId('agent', edge.to),
-      targetHandle: FLOW_PORTS.in,
+      targetHandle: edge.toSide,
       selected: selected.has(edge.id),
       zIndex: FLOW_Z_INDEX,
       data: { edge, live: live.has(edge.id), madeByName: edge.madeBy === null ? undefined : names.get(edge.madeBy) },
@@ -109,6 +107,9 @@ export function edgeLabel(edge: Pick<FlowEdge, 'payload' | 'path'>): string {
   return `${name.slice(0, LABEL_CHARACTERS - extension.length - 1)}…${extension}`;
 }
 
+/** What a new edge carries, as its label says: its agent's final message, unless it is given another payload. */
+export const NEW_EDGE_LABEL = edgeLabel({ payload: 'final-message', path: null });
+
 /** A condition as the Edge rules list it. */
 export function conditionName(condition: FlowCondition): string {
   switch (condition.kind) {
@@ -149,19 +150,51 @@ export function heldLabel(edge: Pick<FlowEdge, 'held' | 'conditions' | 'checks'>
   return condition === undefined ? `held: ${edge.held.reason}` : `held until ${waitsFor(condition)}`;
 }
 
+/**
+ * The bold line that opens each section of the Edge rules (BQ3): when the edge sends, what it sends, and what it waits
+ * for (what a hand-off it holds waits for, if it holds one).
+ */
+export function rulesSummary(
+  edge: Pick<FlowEdge, 'trigger' | 'payload' | 'path' | 'conditions' | 'held' | 'checks'>,
+  names: { from: string },
+): { when: string; what: string; onlyIf: string } {
+  const held = heldLabel(edge);
+  return {
+    when: edge.trigger === 'auto' ? `Sends by itself when ${names.from} hands off` : 'Sends when you press Send',
+    what:
+      edge.payload === 'final-message' || edge.path === null
+        ? `Sends ${names.from}'s final message`
+        : `Sends ${edge.path}${edge.payload === 'json' ? ' as JSON' : ''} from its worktree`,
+    onlyIf:
+      held !== undefined
+        ? upperFirst(held)
+        : edge.conditions.length === 0
+          ? 'Nothing to wait for'
+          : `Waits until ${edge.conditions.map(waitsFor).join(' and ')}`,
+  };
+}
+
 /** When the edge last delivered, for the chip under its label (`delivered 14:02`); nothing before then, or after a skip. */
 export function deliveredLabel(edge: Pick<FlowEdge, 'lastDelivery'>, now: Date): string | undefined {
   if (edge.lastDelivery?.delivered !== true) return undefined;
   return `delivered ${whenLabel(new Date(edge.lastDelivery.at), now)}`;
 }
 
+/** Who made the edge, if an agent did: an orchestrator wiring it, or a named hand-off's one-off. */
+export function madeByText(edge: Pick<FlowEdge, 'madeBy' | 'oneOff'>, madeByName: string | undefined): string | undefined {
+  if (edge.madeBy === null) return undefined;
+  if (edge.oneOff) return `A one-off hand-off from ${madeByName ?? 'an agent since deleted'}`;
+  return madeByName === undefined ? 'Made by an orchestrator since deleted' : `Made by ${madeByName}, an orchestrator`;
+}
+
 /**
  * What a hover over the edge's label says: who made it, if an agent did (`madeBy`, its name if it is still on the
  * board), and why its last delivery was skipped, if it was.
  */
-export function edgeTitle(edge: Pick<FlowEdge, 'madeBy' | 'lastDelivery'>, madeByName: string | undefined): string | undefined {
+export function edgeTitle(edge: Pick<FlowEdge, 'madeBy' | 'oneOff' | 'lastDelivery'>, madeByName: string | undefined): string | undefined {
+  const made = madeByText(edge, madeByName);
   const lines = [
-    ...(edge.madeBy === null ? [] : [madeByName === undefined ? 'Made by an orchestrator since deleted' : `Made by ${madeByName}, an orchestrator`]),
+    ...(made === undefined ? [] : [made]),
     ...(edge.lastDelivery?.delivered === false ? [`Last delivery skipped: ${edge.lastDelivery.reason}`] : []),
   ];
   return lines.length === 0 ? undefined : lines.join('\n');
@@ -196,8 +229,11 @@ export function panClear(span: { left: number; right: number }, panelLeft: numbe
   return Math.max(0, Math.min(over, span.left - margin));
 }
 
-/** What a change to an edge's rules makes of it at once, before the daemon answers: a new payload takes its default file. */
-export function withRules(edge: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'id'>): FlowEdge {
+/**
+ * What a change to an edge's rules or shape makes of it at once, before the daemon answers: a new payload takes its
+ * default file.
+ */
+export function withChanges(edge: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'id'>): FlowEdge {
   const payload = changes.payload ?? edge.payload;
   const path =
     payload === 'final-message' ? null : (changes.path ?? (payload === edge.payload ? edge.path : DEFAULT_PAYLOAD_PATHS[payload]));
@@ -211,11 +247,15 @@ export function withRules(edge: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'i
     checks: changes.conditions === undefined ? edge.checks : conditions.map(() => null),
     deliverAs: changes.deliverAs ?? edge.deliverAs,
     paused: changes.paused ?? edge.paused,
+    fromSide: changes.fromSide ?? edge.fromSide,
+    toSide: changes.toSide ?? edge.toSide,
+    style: changes.style ?? edge.style,
+    points: changes.points ?? edge.points,
   };
 }
 
-/** `edge` with the rules `changes` touched put back as they were in `was`, the rest as the daemon last said. */
-export function withRulesOf(edge: FlowEdge, was: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'id'>): FlowEdge {
+/** `edge` with what `changes` touched put back as it was in `was`, the rest as the daemon last said. */
+export function withChangesUndone(edge: FlowEdge, was: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'id'>): FlowEdge {
   const keys = new Set<keyof FlowEdge>(Object.keys(changes) as (keyof FlowEdge)[]);
   if (keys.has('payload')) keys.add('path');
   if (keys.has('conditions')) keys.add('checks');

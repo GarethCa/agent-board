@@ -91,10 +91,13 @@ export class McpClient {
     return this.tools;
   }
 
-  /** Calls a tool the server listed; one it didn't list is an error, as in a harness, which offers the model no such tool. */
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+  /**
+   * Calls a tool the server listed; one it didn't list is an error, as in a harness, which offers the model no such tool.
+   * Once `signal` aborts (the turn was interrupted), the call is cancelled, as a harness does: `notifications/cancelled`.
+   */
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolResult> {
     if (!(await this.listTools()).includes(name)) return { text: `No such tool available: ${name}`, isError: true };
-    const result = (await this.request('tools/call', { name, arguments: args })) as {
+    const result = (await this.request('tools/call', { name, arguments: args }, signal)) as {
       content?: { type: string; text?: string }[];
       isError?: boolean;
     };
@@ -102,11 +105,20 @@ export class McpClient {
     return { text, isError: result.isError === true };
   }
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  private request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, (message) => (message.error ? reject(new Error(message.error.message)) : resolve(message.result)));
       this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      signal?.addEventListener(
+        'abort',
+        () => {
+          if (!this.pending.delete(id)) return;
+          this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: 'interrupted' } })}\n`);
+          reject(new Error('cancelled'));
+        },
+        { once: true },
+      );
     });
   }
 }

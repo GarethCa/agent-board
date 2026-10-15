@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, OWN_TAB, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, type TabOwner } from './tabs';
+import { liveShellCount, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -164,6 +164,48 @@ describe("a window's surfaces", () => {
       ['session:shell:tile', 'Shell 1', 'tile'],
     ]);
     expect(surfaces.map((each) => each.surface)).toEqual([{ kind: 'own' }, { kind: 'shell', shellId: 'zsh' }, session('agent', 'agent-2'), session('shell', 'tile')]);
+  });
+
+  it('shows the pull requests its layout holds, each as PR and its number', () => {
+    const pr: Surface = { kind: 'pr', repo: 'acme/app', number: 41 };
+    const surfaces = windowSurfaces(byAgent, [], [pr, session('agent', 'agent-2')], targets);
+    expect(surfaces.map((each) => [each.key, each.label, each.kind])).toEqual([
+      ['own', 'claude', 'tab'],
+      ['session:agent:agent-2', 'impl-auth', 'agent'],
+      ['pr:acme/app#41', 'PR #41', 'pr'],
+    ]);
+  });
+
+  it('shows the web pages its layout holds among its pull requests, in their order, each named by its host', () => {
+    const pr: Surface = { kind: 'pr', repo: 'acme/app', number: 41 };
+    const web: Surface = { kind: 'web', id: 'w1', url: 'http://localhost:5173/app' };
+    const surfaces = windowSurfaces(byAgent, [], [web, pr], targets);
+    expect(surfaces.map((each) => [each.key, each.label, each.kind])).toEqual([
+      ['own', 'claude', 'tab'],
+      ['web:w1', 'localhost:5173', 'web'],
+      ['pr:acme/app#41', 'PR #41', 'pr'],
+    ]);
+  });
+
+  it("offers the agent's pull requests not shown yet, newest first, as their number and title", () => {
+    const pullRequests = [
+      { number: 42, title: 'Add the dock', url: 'https://github.com/acme/app/pull/42', state: 'open', checks: 'passing' },
+      { number: 41, title: 'Fix the login', url: 'https://github.com/acme/app/pull/41', state: 'merged', checks: 'none' },
+      { number: 40, title: 'Not on GitHub', url: 'https://example.com/pull/40', state: 'open', checks: 'none' },
+    ] as const;
+    expect(pullRequestChoices(pullRequests, [{ kind: 'pr', repo: 'acme/app', number: 41 }])).toEqual([{ label: '#42 Add the dock', surface: { kind: 'pr', repo: 'acme/app', number: 42 } }]);
+  });
+
+  it("is only what a tab window's layout holds, and its own and shell tabs are none of it (slice 4)", () => {
+    const tabs: TabOwner = { kind: 'tabs', id: 'popped' };
+    const pr: Surface = { kind: 'pr', repo: 'acme/app', number: 41 };
+    const zsh = shell('zsh', pane('p1'));
+    const surfaces = windowSurfaces(tabs, [zsh], [pr, session('agent', 'agent-1'), { kind: 'own' }], targets);
+    expect(surfaces.map((each) => [each.key, each.kind])).toEqual([
+      ['session:agent:agent-1', 'agent'],
+      ['pr:acme/app#41', 'pr'],
+    ]);
+    expect(windowTabs(tabs, [zsh])).toEqual([]);
   });
 
   it('never shows the window its own session as another', () => {

@@ -1,17 +1,24 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Columns2, FolderOpen, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Columns2, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
 import type { PackageScripts } from '@agent-board/daemon/protocol';
 import { withWindowShortcut } from '../keys';
 import { Button, IconButton, Kbd, Menu, type MenuEntry } from '../ui';
 import type { AttachState } from './TerminalPane';
 import type { ShellState } from './tabs';
-import { dragKey, setShellDrag, SHELL_DRAG_TYPE, shellDrag, startDrag, useShellDrag, type ShellDrag } from './shell-moves';
+
+/** A Gate tab's dot: spinning while its run runs, then green or red; idle with none, or stopped. */
+export type GateDot = 'gate-running' | 'gate-passed' | 'gate-failed';
+import { dragKey, dropTaken, endDrag, tabDrag, startDrag, useTabDrag, type TabDrag } from './shell-moves';
 
 export interface StripTab {
   id: string;
   label: string;
-  /** Its dot: how an agent's own pane is attached, or how its shells are doing. */
-  dot: AttachState | ShellState;
+  /** Its dot: how an agent's own pane is attached, how its shells are doing, or how a gate's run is. */
+  dot?: AttachState | ShellState | GateDot;
+  /** An icon in place of its dot, for a tab that shows no session: a pull request's. */
+  icon?: ReactNode;
+  /** What its tooltip names it, where its label alone may not tell it apart: a pull request's `owner/repo#N`. */
+  title?: string;
   /** A tab can be closed (its ×, a middle-click, ⌘W): every one but an agent's own. */
   closable: boolean;
   /** What its × says it does. */
@@ -36,16 +43,22 @@ interface TabStripProps {
   scripts(): Promise<PackageScripts>;
   /** The other agents and shell tiles the + menu offers to show as a tab here. */
   sessions: { label: string; onSelect(): void }[];
+  /** The agent's pull requests the + menu offers to open as a tab here (BI1). */
+  pullRequests?: { label: string; onSelect(): void }[];
+  /** Asks for a page to open in a web tab here (BI2): the + menu's "Web…". */
+  onOpenWeb?(): void;
   /** Named "Shell", not just +, while the window has no tab but its own, so the way to one is plain to see. */
   named: boolean;
+  /** Whether + offers shells and Split makes one: not in a tab window (slice 4), which holds none. True by default. */
+  shells?: boolean;
   /** Splits the pane, a new shell tab beside it (⌘D). */
   onSplit(): void;
   /** The id of the panel that shows a tab, for its `aria-controls`. */
   panelId(tabId: string): string;
   /** What the tab drags as (AT2); undefined for one that stays put, and for every tab where nothing drags. */
-  dragOf?(tabId: string): ShellDrag | undefined;
+  dragOf?(tabId: string): TabDrag | undefined;
   /** What the strip does with a tab or pane dropped on it at `index` among its tabs, if it would take it. */
-  drop?: { accepts(drag: ShellDrag): boolean; onDrop(drag: ShellDrag, index: number): void };
+  drop?: { accepts(drag: TabDrag): boolean; onDrop(drag: TabDrag, index: number): void };
 }
 
 /**
@@ -66,7 +79,10 @@ export function TabStrip({
   onRunScript,
   scripts,
   sessions,
+  pullRequests = [],
+  onOpenWeb,
   named,
+  shells = true,
   onSplit,
   panelId,
   dragOf,
@@ -74,7 +90,7 @@ export function TabStrip({
 }: TabStripProps) {
   const list = useRef<HTMLDivElement>(null);
   // A tab or pane held over the strip that would land here shows a slot where it would go.
-  const dragging = useShellDrag();
+  const dragging = useTabDrag();
   const accepting = dragging !== undefined && drop?.accepts(dragging) === true;
   /** Where among the tabs a drag held over the strip would land, if one is. */
   const [over, setOver] = useState<number>();
@@ -110,6 +126,7 @@ export function TabStrip({
   const openMenu = (open: boolean) => {
     setMenuOpen(open);
     if (!open) return;
+    if (!shells) return;
     setFound('looking');
     scripts().then(setFound, () => setFound('failed'));
   };
@@ -119,14 +136,18 @@ export function TabStrip({
       : found === 'failed' || found.scripts.length === 0
         ? [{ label: found === 'failed' ? 'Could not read package.json' : 'No package.json scripts here', disabled: true, onSelect: () => {} }]
         : found.scripts.map((script) => ({ label: script, icon: <Play />, hint: `${found.runner} run ${script}`, onSelect: () => onRunScript(script) }));
-  const entries: MenuEntry[] = [
+  const shellEntries: MenuEntry[] = [
     { label: `New shell ${here}`, icon: <SquareTerminal />, shortcut: withWindowShortcut('T'), onSelect: onNewShell },
     { label: 'New shell at a folder…', icon: <FolderOpen />, onSelect: onNewShellAt },
-    'separator',
-    { heading: 'Run a script' },
-    ...scriptEntries,
+  ];
+  const entries: MenuEntry[] = [
+    ...(shells ? shellEntries : []),
+    ...(onOpenWeb === undefined ? [] : [{ label: 'Web…', icon: <Globe />, hint: 'A dev server, or an https page', onSelect: onOpenWeb }]),
+    ...(shells ? (['separator', { heading: 'Run a script' }, ...scriptEntries] as MenuEntry[]) : []),
     ...(sessions.length === 0 ? [] : (['separator', { heading: 'Show a session' }] as MenuEntry[])),
     ...sessions.map((session): MenuEntry => ({ label: session.label, icon: <PanelsTopLeft />, onSelect: session.onSelect })),
+    ...(pullRequests.length === 0 ? [] : (['separator', { heading: 'Open a pull request' }] as MenuEntry[])),
+    ...pullRequests.map((pr): MenuEntry => ({ label: pr.label, icon: <GitPullRequest />, onSelect: pr.onSelect })),
   ];
   const slot = over !== undefined && accepting ? <span className="session-tab-slot" data-testid="session-tab-slot" aria-hidden /> : null;
   return (
@@ -136,7 +157,7 @@ export function TabStrip({
       data-focused={focused || undefined}
       data-drop-over={(over !== undefined && accepting) || undefined}
       onDragOver={(event) => {
-        if (!accepting || !event.dataTransfer.types.includes(SHELL_DRAG_TYPE)) return;
+        if (!accepting) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         setOver(indexAt(event.clientX));
@@ -145,13 +166,13 @@ export function TabStrip({
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(undefined);
       }}
       onDrop={(event) => {
-        const drag = shellDrag();
+        const drag = tabDrag();
         if (drag === undefined || drop === undefined || !drop.accepts(drag)) return;
         // The strip's, not the board's under it.
         event.preventDefault();
         event.stopPropagation();
         setOver(undefined);
-        setShellDrag(undefined);
+        dropTaken();
         drop.onDrop(drag, indexAt(event.clientX));
       }}
     >
@@ -169,7 +190,7 @@ export function TabStrip({
                 data-dragging={(drag !== undefined && dragging !== undefined && dragKey(dragging) === dragKey(drag)) || undefined}
                 draggable={drag !== undefined}
                 onDragStart={drag === undefined ? undefined : (event) => startDrag(event, drag, tab.label)}
-                onDragEnd={drag === undefined ? undefined : () => setShellDrag(undefined)}
+                onDragEnd={drag === undefined ? undefined : (event) => endDrag(event, drag)}
                 // A middle-click closes a shell tab, as in a browser; held down, it neither scrolls nor pastes.
                 onMouseDown={tab.closable ? (event) => event.button === 1 && event.preventDefault() : undefined}
                 onAuxClick={
@@ -189,10 +210,10 @@ export function TabStrip({
                   aria-selected={tab.id === active}
                   aria-controls={panelId(tab.id)}
                   tabIndex={tab.id === active ? 0 : -1}
-                  title={index < 9 ? `${tab.label} (${withWindowShortcut(String(index + 1))})` : tab.label}
+                  title={index < 9 ? `${tab.title ?? tab.label} (${withWindowShortcut(String(index + 1))})` : (tab.title ?? tab.label)}
                   onClick={() => onSelect(tab.id)}
                 >
-                  <span className="session-window-pane-dot" data-state={tab.dot} aria-hidden />
+                  {tab.icon === undefined ? <span className="session-window-pane-dot" data-state={tab.dot} aria-hidden /> : <span className="session-tab-icon" aria-hidden>{tab.icon}</span>}
                   <span className="session-tab-label">{tab.label}</span>
                 </button>
                 {tab.closable && (
@@ -229,6 +250,7 @@ export function TabStrip({
           {named ? 'Shell' : undefined}
         </Button>
       </Menu>
+      {shells && (
       <IconButton
         className="session-tab-split"
         icon={<Columns2 />}
@@ -243,6 +265,7 @@ export function TabStrip({
         }
         onClick={onSplit}
       />
+      )}
     </div>
   );
 }

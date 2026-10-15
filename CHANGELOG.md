@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.4.0 (2026-10-15)
+
+- Gates test waits for the token line, not the echoed command's :end
+- Public README and screenshots for v0.4.0
+- Edges: Arrow-or-Hand-off on agent-to-agent drops (⌥ skips), Edge rules in four sections, bendable lines on any side, collapsing labels
+- Governance loosened as reviewed: user-side callers orchestrate, peers steer, children may orchestrate (depth 3), draft PRs from agents
+- Agents with no conversation start fresh on resume; Shift+Enter and Restart follow a harness run in the fallback shell
+- The fake harness's tool timeout counts from the call, not the MCP server's start
+- One e2e run at a time across the machine, fewer Playwright workers under load, and leftover test processes reaped
+- A session window never reaches under the macOS traffic lights, windowed
+- README screenshots space out agents so edges, arrowheads and the Edge rules panel read clearly
+- Tile footers and New agent's chips stay inside their edges, with a +N fold
+- Launch the harness by a resolved absolute path, so claude set up only in .zshrc is found
+- Agents ask questions and present plans: one-click answers in the inbox, and a Plan tab with a locked-down HTML view
+- Model and role when starting an agent: chip menus, zone role templates, detached reviewers and tile badges
+- Every zone can be deleted, with ⌫, the context menu and its ⋯ menu, and undone
+- Add zone uses your local copy (Use my copy…, Find my local copies) and gets a File browser tab
+- Merge gate in the app: a Gate tab, Open PR and Merge in the window header, and Approve for others' PRs
+- README screenshots for panes, the PR tab and the web tab; text for the pane model and dragging tabs between windows
+- Drag tabs to, from and between pop-out windows on the pane model
+- Web tab: a locked-down view of a local dev server or https page, as a tab in a pane
+- Native PR tab: a pull request's description, checks, diffs and comments, with confirmed Approve and Merge
+- Break-it minors: split minimum, the seen pill everywhere, long names, zone rename undo, one IPC listener, keyboard paths
+
 ## v0.3.0 (2026-10-14)
 
 - Deleted agents' windows close, dead controls go, and Dissolve asks first and can be undone

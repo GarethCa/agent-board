@@ -3,8 +3,8 @@ import type { AgentState } from '@agent-board/daemon/protocol';
 import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, MessageSquare, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
 import { commandKey, windowShortcut, withWindowShortcut } from '../keys';
-import { STATE_LABELS } from '../states';
-import { Button, IconButton, Kbd, Menu, Segmented, StatusPill, Tabs, type SegmentedOption } from '../ui';
+import { agentPill, STATE_LABELS } from '../states';
+import { Button, IconButton, Kbd, Menu, Segmented, StatusPill, Tabs, useToast, type SegmentedOption } from '../ui';
 import { ReviewViewer } from '../review/ReviewViewer';
 import { useReviews } from '../review/ReviewsProvider';
 import { useReviewTabRequests } from '../review/review-tab';
@@ -12,9 +12,15 @@ import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SessionBody, type SessionView, type WindowContent } from './SessionBody';
-import { pendingTab, useTabRequestCount } from './tab-request';
+import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
+import { gateSurfaceOf } from './tabs';
+import { isRunGateKey } from './window-keys';
+import { GateControls } from '../gate/GateControls';
+import { gated } from '../gate/gate-view';
+import { errorMessage } from '../../../shared/errors';
 import type { AttachState } from './TerminalPane';
 import { dropKey } from './shell-moves';
+import { tokenNumber } from '../theme';
 import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
 
 /** Where the window's session is among its group's, and how to step to the others (AL1). */
@@ -118,6 +124,21 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+  // ⌘⇧G runs its gate, wherever the focus is in the window, the terminal too, and shows it in a Gate tab.
+  const gateAgent = agent && gated(agent) ? agent.sessionId : undefined;
+  const toast = useToast();
+  useEffect(() => {
+    if (gateAgent === undefined) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isRunGateKey(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestTab(gateAgent, gateSurfaceOf(gateAgent));
+      window.agentBoard.gates.run(gateAgent).catch((failure: unknown) => toast.show({ tone: 'error', message: `Could not run the gate: ${errorMessage(failure)}` }));
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [gateAgent, toast]);
 
   return (
     <div
@@ -128,6 +149,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
       data-testid="session-window"
       data-session-id={content.kind === 'session' ? content.sessionId : undefined}
       data-shell-id={content.kind === 'shell' ? content.shellId : undefined}
+      data-tab-window-id={content.kind === 'tabs' ? content.id : undefined}
       // A tab, pane or shell tile dropped on it, header too, joins its tabs: an agent's or a shell tile's.
       data-tab-drop={agent ? dropKey({ kind: 'agent', id: agent.sessionId }) : content.kind === 'shell' ? dropKey({ kind: 'shell', id: content.shellId }) : undefined}
       data-state={attach}
@@ -137,9 +159,9 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
       {frame && EDGES.map((edge) => <span key={edge} className={`session-window-edge session-window-edge-${edge}`} data-edge={edge} onPointerDown={(event) => placed.startResize(event, edge)} />)}
       <header className="session-window-head" data-drag-region={placement === 'own-window' || undefined} onDoubleClick={placed.onHeaderDoubleClick}>
         {nav && <NavButtons nav={nav} />}
-        <HarnessMark className="session-window-mark" harness={agent?.harness ?? 'shell'} />
+        {content.kind !== 'tabs' && <HarnessMark className="session-window-mark" harness={agent?.harness ?? 'shell'} />}
         <SessionName agent={agent} shell={shell} name={name} title={title} />
-        {agent && <StatusPill state={agent.state} />}
+        {agent && <StatusPill {...agentPill(agent)} />}
         {nav && <NavCount nav={nav} />}
         {where !== undefined && (
           <span className="session-window-where" title={agent?.worktree ?? where}>
@@ -148,11 +170,13 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           </span>
         )}
         <span className="session-window-head-fill" />
+        {/* Its merge gate (BM3), for an agent with a branch of its own. */}
+        {agent && gated(agent) && <GateControls agent={agent} visible />}
         {/* How its terminal tab shows it: hidden over the Review tab, whose own tabs lead back. */}
         {agent && showing === 'terminal' && <Segmented<SessionView> className="session-window-view-switch" aria-label="View" value={view} onChange={setView} options={VIEW_OPTIONS} />}
         {onMinimise && (
           <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip="Minimise to the dock; it keeps running">
-            Minimise
+            <span className="session-window-folding-label">Minimise</span>
           </Button>
         )}
         {frame && (
@@ -166,7 +190,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         )}
         {onPopOut && (
           <Button variant="ghost" size="sm" icon={<SquareArrowOutUpRight />} onClick={onPopOut} aria-label="Pop out session window" tooltip="Into its own window">
-            Pop out
+            <span className="session-window-folding-label">Pop out</span>
           </Button>
         )}
         {onPopIn && (
@@ -337,6 +361,16 @@ function NavCount({ nav }: { nav: WindowNav }) {
 }
 
 /**
+ * How far down from the board's top edge a session window stays: on macOS, windowed, below the row of islands the traffic
+ * lights float in, as its stylesheet places it filling the board (`.session-window-board`). Otherwise nothing.
+ */
+function clearTop(): number {
+  const { chrome, fullScreen } = document.documentElement.dataset;
+  if (chrome !== 'inset' || fullScreen === 'true') return 0;
+  return tokenNumber('--island-inset') + tokenNumber('--island-height') + tokenNumber('--space-2');
+}
+
+/**
  * The board window's size and place: maximised it fills the board as its stylesheet says; otherwise it is
  * placed at the saved frame, kept inside the board, and resized by dragging any of its edges or corners.
  */
@@ -350,11 +384,17 @@ function useWindowFrame(root: React.RefObject<HTMLDivElement | null>, frame: Ses
   useEffect(() => {
     const parent = root.current?.offsetParent;
     if (!(parent instanceof HTMLElement) || onChange === undefined) return;
-    const measure = () => setBounds({ width: parent.clientWidth, height: parent.clientHeight });
+    const measure = () => setBounds({ width: parent.clientWidth, height: parent.clientHeight, top: clearTop() });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
-    return () => observer.disconnect();
+    // Full screen hides the traffic lights, and the room kept for them goes with them.
+    const fullScreen = new MutationObserver(measure);
+    fullScreen.observe(document.documentElement, { attributes: true, attributeFilter: ['data-full-screen'] });
+    return () => {
+      observer.disconnect();
+      fullScreen.disconnect();
+    };
   }, [root, onChange]);
   const kept = saved === null || bounds === undefined ? undefined : clampFrame(fromFractions(saved.frame, bounds), bounds);
   const shown = live ?? kept;

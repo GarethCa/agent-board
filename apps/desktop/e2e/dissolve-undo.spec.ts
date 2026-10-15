@@ -4,7 +4,7 @@ import { agents, launch, tile, zoneNamed, zones, SHELL_ENV } from './agent-helpe
 import { addEmptyZone, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-test('Dissolve asks when the group holds tiles, and ⌘Z brings the group back as it was, ⇧⌘Z dissolves it again', async () => {
+test('Delete zone asks, ⌘Z brings the group back as it was with its tiles in it, and ⇧⌘Z deletes it again', async () => {
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, SHELL_ENV);
   try {
@@ -24,19 +24,19 @@ test('Dissolve asks when the group holds tiles, and ⌘Z brings the group back a
 
     const dissolve = async () => {
       await zoneNamed(page, 'G1').getByRole('button', { name: 'Zone options' }).click();
-      await page.getByRole('menuitem', { name: 'Dissolve' }).click();
+      await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
     };
 
     // Cancelled, nothing happens.
     await dissolve();
-    const confirm = page.getByRole('alertdialog', { name: 'Dissolve G1?' });
+    const confirm = page.getByRole('alertdialog', { name: 'Delete zone G1?' });
     await expect(confirm).toContainText('⌘Z brings it back');
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     expect(await zones(page)).toEqual([before]);
 
     // Confirmed: the group goes, the tile stays loose.
     await dissolve();
-    await confirm.getByRole('button', { name: 'Dissolve' }).click();
+    await confirm.getByRole('button', { name: 'Delete' }).click();
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     expect(await zones(page)).toEqual([]);
     await expect(shell).toHaveCount(1);
@@ -54,7 +54,7 @@ test('Dissolve asks when the group holds tiles, and ⌘Z brings the group back a
       .poll(async () => (await page.evaluate(() => window.agentBoard.items.list())).find((item) => item.id === sticky.id))
       .toMatchObject({ zoneId: before!.id, x: 300, y: 200 });
 
-    // ⇧⌘Z: dissolved again.
+    // ⇧⌘Z: deleted again.
     await page.keyboard.press('Meta+Shift+Z');
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     expect((await page.evaluate(() => window.agentBoard.shells.list()))[0]!.zoneId).toBeNull();
@@ -64,15 +64,15 @@ test('Dissolve asks when the group holds tiles, and ⌘Z brings the group back a
   }
 });
 
-test('an empty group dissolves at once, and ⌘Z brings it back', async () => {
+test('an empty group asks too, and ⌘Z brings it back', async () => {
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, SHELL_ENV);
   try {
     await addEmptyZone(page, 'G1');
     const [before] = await zones(page);
     await zoneNamed(page, 'G1').getByRole('button', { name: 'Zone options' }).click();
-    await page.getByRole('menuitem', { name: 'Dissolve' }).click();
-    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
+    await page.getByRole('alertdialog', { name: 'Delete zone G1?' }).getByRole('button', { name: 'Delete' }).click();
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
 
     await page.keyboard.press('Meta+Z');
@@ -85,7 +85,7 @@ test('an empty group dissolves at once, and ⌘Z brings it back', async () => {
   }
 });
 
-test('undoing a Dissolve brings back an agent tile, the default repo and the connectors on the group; a group with only a connector asks too', async () => {
+test('undoing a delete brings back an agent tile, the default repo and the connectors on the group; a group with only a connector asks too', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, env);
@@ -108,8 +108,8 @@ test('undoing a Dissolve brings back an agent tile, the default repo and the con
     expect(before!.defaultRepo).not.toBeNull();
 
     await zoneNamed(page, 'G1').getByRole('button', { name: 'Zone options' }).click();
-    await page.getByRole('menuitem', { name: 'Dissolve' }).click();
-    await page.getByRole('alertdialog', { name: 'Dissolve G1?' }).getByRole('button', { name: 'Dissolve' }).click();
+    await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
+    await page.getByRole('alertdialog', { name: 'Delete zone G1?' }).getByRole('button', { name: 'Delete' }).click();
     await expect(zoneNamed(page, 'G1')).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => window.agentBoard.connectors.list())).toEqual([]);
 
@@ -134,7 +134,7 @@ test('undoing a Dissolve brings back an agent tile, the default repo and the con
   }
 });
 
-test('a group with nothing but a connector asks before it dissolves', async () => {
+test('a group with nothing but a connector asks before it is deleted', async () => {
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, SHELL_ENV);
   try {
@@ -148,8 +148,8 @@ test('a group with nothing but a connector asks before it dissolves', async () =
       { zoneId: zone!.id, itemId: sticky.id },
     );
     await zoneNamed(page, 'G1').getByRole('button', { name: 'Zone options' }).click();
-    await page.getByRole('menuitem', { name: 'Dissolve' }).click();
-    await expect(page.getByRole('alertdialog', { name: 'Dissolve G1?' })).toContainText('connectors');
+    await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
+    await expect(page.getByRole('alertdialog', { name: 'Delete zone G1?' })).toContainText('connectors');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

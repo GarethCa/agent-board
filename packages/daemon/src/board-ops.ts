@@ -1,19 +1,26 @@
 // The board as the agent-facing CLI and MCP see it (ADR-0010): one module both call, over the daemon methods the app
 // uses (plus `board.identify` and `board.setStatus`). Refs, resolving them, and each view as text and as JSON.
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { resolve as resolvePath } from 'node:path';
 import { BOARD_DATA_DIR_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
+import type { AskSpec, PlanSpec } from './asks.ts';
 import { connectDaemon, DaemonRpcError, type DaemonClient } from './client.ts';
+import { shortCommit } from './gate-rules.ts';
 import { daemonPaths, defaultDataDir } from './paths.ts';
 import {
   BOARD_ERROR,
+  DEFAULT_ASK_WAIT_MS,
+  DEFAULT_PLAN_WAIT_MS,
   type Agent,
+  type PlanDecision,
+  type PlanFormat,
   type AgentRole,
   type AgentState,
   type BoardCaller,
   type Harness,
   type OrchestrateScope,
   type OrchestratorActivity,
-  notOrchestratingReason,
   orchestrateScopeWords,
   type BoardItem,
   FLOW_CONDITION_KINDS,
@@ -299,6 +306,7 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     harness: agent.harness,
     model: agent.model,
     role: agent.role,
+    reviews: agent.reviews,
     state: agent.state,
     status: agent.status,
     task: agent.description,
@@ -386,7 +394,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   if (caller === null) {
     return {
       text: [
-        `You are not in an agent-board session (no ${BOARD_TOKEN_ENV}): you can read the board but set no status.`,
+        `You are not in an agent-board session (no ${BOARD_TOKEN_ENV}): you act as the user, and set no status.`,
         `daemon  ${socketPath}`,
       ].join('\n'),
       json: { you: null, socket: socketPath },
@@ -397,9 +405,10 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
     caller.kind === 'agent'
       ? refs.board.agents.find((agent) => agent.sessionId === caller.tileId)
       : refs.board.shells.find((shell) => shell.id === caller.tileId);
-  const lines = [`you      ${refs.of(caller.kind, caller.tileId)}  ${caller.name}  (${caller.kind === 'agent' ? 'an agent' : 'a shell tile'})`];
+  const what = caller.side === 'agent' ? 'an agent' : caller.kind === 'agent' ? "a shell in the agent's window" : 'a shell tile';
+  const lines = [`you      ${refs.of(caller.kind, caller.tileId)}  ${caller.name}  (${what})`];
   lines.push(`zone     ${zone === undefined ? 'none: your tile is loose on the board' : zoneLine(refs, zone)}`);
-  if (caller.kind === 'agent' && tile !== undefined) {
+  if (caller.side === 'agent' && tile !== undefined) {
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
     lines.push(`branch   ${agent.branch || '(none)'} in ${tilde(agent.worktree)}`);
@@ -407,6 +416,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
       lines.push(`you may  orchestrate in ${orchestrateScopeWords(caller.orchestrate, 'your')}: start, message and close agents (\`agent-board help orchestrate\`)`);
     }
   }
+  if (caller.side === 'user') lines.push('you may  act for the user: start, message and close any agent, and turn orchestrating on and off');
   lines.push(`session  ${caller.sessionId}`, `daemon   ${socketPath}`);
   return {
     text: lines.join('\n'),
@@ -414,6 +424,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
       you: {
         ref: refs.of(caller.kind, caller.tileId),
         kind: caller.kind,
+        side: caller.side,
         name: caller.name,
         session: caller.sessionId,
         orchestrate: caller.orchestrate,
@@ -631,7 +642,7 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['role', agent.role],
             ['zone', inZone(refs, agent.zoneId)],
             ['repo', tilde(agent.repoRoot)],
-            ['branch', agent.branch || '(none)'],
+            ['branch', agent.reviews === null ? agent.branch || '(none)' : `(none): reviews ${agent.reviews.branch} at ${shortCommit(agent.reviews.head)}, detached`],
             ['worktree', tilde(agent.worktree)],
             ['issue', agent.issue === null ? undefined : `${agent.issue.id} ${agent.issue.title} ${agent.issue.url}`],
             ['pr', agent.pullRequests.length === 0 ? undefined : agent.pullRequests.map((pr) => `#${pr.number} ${pr.state} ${pr.url}`).join(', ')],
@@ -693,23 +704,19 @@ export interface NewAgentOptions {
   issue?: string;
 }
 
-/** The caller, if it may orchestrate, and the agent `ref` names. Throws `BoardError` saying why not. */
-async function orchestratorTarget(session: BoardSession, ref: string): Promise<{ token: string; refs: BoardRefs; agent: Agent }> {
+/** The caller, and the agent `ref` names. */
+async function orchestratorTarget(session: BoardSession, ref: string): Promise<{ token: string | undefined; refs: BoardRefs; agent: Agent }> {
   const { caller, token, refs } = await orchestratingCaller(session);
   return { token, refs, agent: resolveAgent(refs, ref, caller) };
 }
 
-/** The caller, if it may orchestrate, and the board. Throws `BoardError` saying why not. */
-async function orchestratingCaller(session: BoardSession): Promise<{ caller: BoardCaller; token: string; refs: BoardRefs }> {
-  if (session.token === undefined || session.caller === null) {
-    throw new BoardError(`The orchestrator commands work only for an agent in an agent-board session: there is no ${BOARD_TOKEN_ENV} here.`);
-  }
+/**
+ * The caller and the board, for an orchestrator command. The daemon decides whether the caller may: an agent
+ * the user lets orchestrate, a shell on the board, or the user outside a session, with no token.
+ */
+async function orchestratingCaller(session: BoardSession): Promise<{ caller: BoardCaller | null; token: string | undefined; refs: BoardRefs }> {
   const { caller, token } = session;
   const refs = new BoardRefs(await readBoard(session.client));
-  if (caller.orchestrate === null) {
-    const agent = caller.kind === 'agent' ? refs.board.agents.find((each) => each.sessionId === caller.tileId) : undefined;
-    throw new BoardError(`${notOrchestratingReason(caller, agent, refs.board.zones)}.`);
-  }
   return { caller, token, refs };
 }
 
@@ -728,6 +735,11 @@ async function freshAgentLine(session: BoardSession, sessionId: string): Promise
   return { refs, agent, line: agentLine(refs, agent, session.caller) };
 }
 
+/** Where a new agent works: on its branch, or, a reviewer, detached at the tip of the branch it reviews. */
+function checkout(agent: Agent): string {
+  return agent.reviews === null ? `on ${agent.branch}` : `detached at ${shortCommit(agent.reviews.head)} of ${agent.reviews.branch}`;
+}
+
 /** `new`: starts an agent as the caller, an orchestrator. */
 export async function newAgent(session: BoardSession, options: NewAgentOptions): Promise<BoardView> {
   const { caller, token, refs } = await orchestratingCaller(session);
@@ -737,9 +749,14 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     if (object.kind !== 'zone') throw new BoardError(`${options.zone} is a ${object.kind}, not a zone`);
     zoneId = object.zone.id;
   }
-  // An agent's ref names its branch: a reviewer starts from its implementer's tip.
+  // An agent's ref names its branch: a reviewer starts from its implementer's tip. A reviewer's names the branch it
+  // reviews, so a follow-up can be based on the reviewer before it.
   let baseBranch = options.base;
-  if (baseBranch !== undefined && /^agent:|^me$/.test(baseBranch)) baseBranch = resolveAgent(refs, baseBranch, caller).branch;
+  if (baseBranch !== undefined && /^agent:|^me$/.test(baseBranch)) {
+    const agent = resolveAgent(refs, baseBranch, caller);
+    baseBranch = agent.reviews?.branch ?? agent.branch;
+    if (baseBranch === '') throw new BoardError(`${options.base} has no branch to start from: it works outside git, or on a detached HEAD`);
+  }
   const started = await session.client.call('orchestrator.spawn', {
     token,
     prompt: options.prompt,
@@ -754,7 +771,7 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
   });
   const fresh = await freshAgentLine(session, started.sessionId);
   return {
-    text: `Started ${fresh.line}\n  on ${started.branch} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`,
+    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`,
     json: agentJson(fresh.refs, fresh.agent, session.caller),
   };
 }
@@ -817,7 +834,7 @@ export async function closeAgent(session: BoardSession, ref: string, remove: boo
   return { text: `Closed ${label}: its session ended; its tile, worktree and branch stay.`, json: agentJson(refs, closed, session.caller) };
 }
 
-/** `orchestrate on|off`: the user lets an agent orchestrate, or stops it. Refused in a session. */
+/** `orchestrate on|off`: the user lets an agent orchestrate, or stops it. Refused to an agent's own session. */
 export async function setOrchestrate(session: BoardSession, ref: string, scope: OrchestrateScope | null): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
   const agent = await session.client.call('agent.setOrchestrate', { sessionId: resolveAgent(refs, ref, session.caller).sessionId, scope });
@@ -963,4 +980,79 @@ export async function removeEdge(session: BoardSession, ref: string): Promise<Bo
   if (object.kind !== 'edge') throw new BoardError(`${ref} is a ${object.kind}, not an edge`);
   await session.client.call('orchestrator.removeEdge', { token, id: object.edge.id });
   return { text: `Removed ${refs.of('edge', object.edge.id)}.`, json: null };
+}
+
+/** The caller's board token, for a call only an agent in a session makes: `doing` says what, in the refusal. */
+function agentToken(session: BoardSession, doing: string): string {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`Only an agent in an agent-board session can ${doing}: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  return session.token;
+}
+
+/** `open-pr`: the caller, an agent, opens a pull request of its own branch, always as a draft. */
+export async function openOwnPullRequest(session: BoardSession): Promise<BoardView> {
+  const pr = await session.client.call('board.openPullRequest', { token: agentToken(session, 'open a pull request') });
+  return { text: `Opened #${pr.number} as a draft: ${pr.url}\nMarking it ready, and merging, are the user's.`, json: pr };
+}
+
+/** A wait in minutes, as a model reads it. */
+const minutes = (ms: number) => `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? '' : 's'}`;
+
+/** `ask`: asks the user a question in the needs-you inbox and waits for the answer. */
+export async function askUser(
+  session: BoardSession,
+  question: AskSpec,
+): Promise<BoardView> {
+  const token = agentToken(session, 'ask the user');
+  const result = await session.client.call('board.ask', { token, ...question });
+  const waited = minutes(question.timeoutMs ?? DEFAULT_ASK_WAIT_MS);
+  const text =
+    result.outcome === 'answered'
+      ? `The user answered: ${result.answer}`
+      : result.outcome === 'skipped'
+        ? 'The user skipped the question without answering. Carry on with your best judgement, and say what you assumed.'
+        : `No answer came within ${waited}. Carry on with your best judgement and say what you assumed, or ask again later.`;
+  return { text, json: result };
+}
+
+/** A plan's body, as the agent gives it: inline Markdown or HTML, or a file in its folder (by its extension). */
+export interface PlanSource {
+  markdown?: string;
+  html?: string;
+  path?: string;
+}
+
+/** The body and format of a plan from exactly one of its sources; a file is read relative to `cwd`. */
+export function readPlanSource(source: PlanSource, cwd: string): { body: string; format: PlanFormat } {
+  const given = (['markdown', 'html', 'path'] as const).filter((key) => source[key] !== undefined);
+  if (given.length !== 1) throw new BoardError('give the plan as exactly one of markdown, html or path');
+  if (source.markdown !== undefined) return { body: source.markdown, format: 'markdown' };
+  if (source.html !== undefined) return { body: source.html, format: 'html' };
+  const path = resolvePath(cwd, source.path!);
+  let body: string;
+  try {
+    body = readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new BoardError(`can't read the plan at ${path}: ${(error as Error).message}`);
+  }
+  return { body, format: /\.html?$/i.test(path) ? 'html' : 'markdown' };
+}
+
+/** `present_plan`: shows the user a plan, its next version, and waits for their decision. */
+export async function presentPlan(
+  session: BoardSession,
+  plan: PlanSpec,
+): Promise<BoardView> {
+  const token = agentToken(session, 'present a plan');
+  const { version, decision } = await session.client.call('board.presentPlan', { token, ...plan });
+  const comments = decision.comments === '' ? '' : `\n\nTheir comments:\n${decision.comments}`;
+  const said: Record<PlanDecision['outcome'], string> = {
+    approved: `The user approved plan v${version}. Go ahead with it.${comments}`,
+    'changes-requested': `The user asked for changes to plan v${version}.${comments}\n\nRevise the plan and present it again.`,
+    rejected: `The user rejected plan v${version}. Don't carry it out.${comments}`,
+    'timed-out': `No decision on plan v${version} came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
+    withdrawn: `Plan v${version} was withdrawn before the user decided.`,
+  };
+  return { text: said[decision.outcome], json: { version, decision } };
 }

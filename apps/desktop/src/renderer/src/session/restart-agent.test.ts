@@ -3,7 +3,7 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import { canRestart, exitText } from './RestartAgent';
 
 const agent = (fields: Partial<Agent>): Agent =>
-  ({ harness: 'claude', state: 'done', endedAt: '2026-10-11T12:00:00.000Z', exitCode: 0, reviewOf: null, ...fields }) as Agent;
+  ({ harness: 'claude', state: 'done', endedAt: '2026-10-11T12:00:00.000Z', exitCode: 0, reviewOf: null, shellHarness: null, ...fields }) as Agent;
 
 describe('restarting an ended agent', () => {
   it('is offered for an agent that ended, not one still running or stopped by a restart (which has Resume)', () => {
@@ -15,6 +15,8 @@ describe('restarting an ended agent', () => {
 
   it('is not offered for a reviewer, whose round ended with it', () => {
     expect(canRestart(agent({ reviewOf: 'implementer' }))).toBe(false);
+    // Not while its harness runs by hand in the shell its pane dropped into.
+    expect(canRestart(agent({ shellHarness: 'claude' }))).toBe(false);
   });
 
   it('says how its process went, with the code when there is one', () => {

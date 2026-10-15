@@ -5,13 +5,20 @@ import { commandPlan } from './flow-approvals.ts';
 import type { Approvals, ConditionChecker } from './flow-conditions.ts';
 import { checkPayloadPath, MAX_PAYLOAD_BYTES, payloadName, readPayload, type PayloadRead } from './flow-payloads.ts';
 import { keyedQueue } from './keyed-queue.ts';
-import { CLIENT_ID, invalidParams, oneOf, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
+import { CLIENT_ID, invalidParams, oneOf, optionalBooleanParam, paramsObject, pointsParam, stringParam } from './params.ts';
 import {
+  CONNECTOR_SIDES,
+  CONNECTOR_STYLES,
+  DEFAULT_FLOW_EDGE_SHAPE,
+  type ConnectorSide,
+  type ConnectorStyle,
+  type FlowEdgeShape,
   DEFAULT_PAYLOAD_PATHS,
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_DELIVERY_MODES,
   FLOW_EDGE_HISTORY,
   FLOW_EDGE_PAYLOADS,
+  FLOW_EDGE_SHAPE_KEYS,
   FLOW_EDGE_TRIGGERS,
   type DaemonEvent,
   type DaemonMethods,
@@ -85,12 +92,15 @@ export interface FlowEdgeHost {
    * carries. A manual edge is left for the user. Resolves with how each went, or `checking` for one still being checked
    * after `HANDOFF_ANSWER_MS`, whose outcome `onSettled` hears once it has one. Throws `invalidParams` for no such edge,
    * or a bad payload. An edge it hands off along counts as this turn's until its next turn boundary (`turnBoundary`).
+   * With `reach`, a `to` it has no edge to (which `reach` throws for unless the agent may hand to it) gets a one-off
+   * edge, manual and made by the agent, delivered along at once; named again, it goes along that edge.
    */
   handOffExplicitly(
     sessionId: string,
     payload: HandoffPayload,
     to?: string,
     onSettled?: (outcome: HandoffOutcome) => void,
+    reach?: (to: string) => void,
   ): Promise<HandoffOutcome[]>;
   /**
    * The agent's turn began, or ended without a `Stop`: what it handed off explicitly before belongs to no turn whose
@@ -138,6 +148,13 @@ interface FlowEdgeRow {
   delivered_at: string | null;
   skipped_because: string | null;
   made_by: string | null;
+  one_off: number;
+  one_off_name: string | null;
+  one_off_text: string | null;
+  from_side: ConnectorSide;
+  to_side: ConnectorSide;
+  style: ConnectorStyle;
+  points: string;
   created_at: string;
   updated_at: string;
 }
@@ -169,6 +186,18 @@ function conditionsParam(value: unknown): FlowCondition[] {
   });
 }
 
+const RULE_FIELDS = ['trigger', 'payload', 'path', 'conditions', 'deliverAs', 'paused'] as const;
+
+/** An edge's shape from a client's params, each part not given as it is in `had`. */
+function shapeParams(fields: Record<string, unknown>, had: FlowEdgeShape): FlowEdgeShape {
+  return {
+    fromSide: fields.fromSide === undefined ? had.fromSide : oneOf(fields, 'fromSide', CONNECTOR_SIDES),
+    toSide: fields.toSide === undefined ? had.toSide : oneOf(fields, 'toSide', CONNECTOR_SIDES),
+    style: fields.style === undefined ? had.style : oneOf(fields, 'style', CONNECTOR_STYLES),
+    points: fields.points === undefined ? had.points : pointsParam(fields, 'points'),
+  };
+}
+
 /**
  * Flow edges, backed by the `flow_edges` table, and the delivery along them. An edge goes with
  * either agent through its foreign keys, which don't announce it. Every other change, each delivery included, is
@@ -190,14 +219,28 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
   const selectQueued = db.prepare('SELECT * FROM flow_edges WHERE queued_since IS NOT NULL AND paused = 0 ORDER BY rowid');
   const selectQueuedIn = db.prepare('SELECT * FROM flow_edges WHERE queued_since IS NOT NULL AND paused = 0 AND to_session_id = ? ORDER BY rowid');
   const selectOfAgent = db.prepare('SELECT id FROM flow_edges WHERE from_session_id = ? OR to_session_id = ?');
+  /**
+   * The edges that hand off by themselves: auto ones. A named hand-off's one-off edge is left out, so a reply along it
+   * is never refused; it never relaunches an ended agent instead (`handOffOnce`), which keeps two agents from starting
+   * each other for ever.
+   */
   const selectAutoEdges = db.prepare("SELECT from_session_id, to_session_id FROM flow_edges WHERE trigger = 'auto'");
   const selectEvents = db.prepare('SELECT at, kind, detail FROM flow_edge_events WHERE edge_id = ? ORDER BY id DESC LIMIT ?');
   const countDeliveries = db.prepare("SELECT count(*) AS n FROM flow_edge_events WHERE edge_id = ? AND kind = 'delivered'");
   const agentExists = db.prepare('SELECT 1 FROM agents WHERE session_id = ?');
   const selectOut = db.prepare('SELECT * FROM flow_edges WHERE from_session_id = ? ORDER BY rowid');
   const insert = db.prepare(
-    `INSERT INTO flow_edges (id, from_session_id, to_session_id, trigger, payload, path, conditions, deliver_as, paused, made_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO flow_edges (id, from_session_id, to_session_id, trigger, payload, path, conditions, deliver_as, paused, made_by, one_off,
+     from_side, to_side, style, points)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const updateShape = db.prepare(
+    `UPDATE flow_edges SET from_side = ?, to_side = ?, style = ?, points = ?,
+     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
+  );
+  const keepOneOff = db.prepare('UPDATE flow_edges SET one_off_name = ?, one_off_text = ? WHERE id = ?');
+  const updatePayload = db.prepare(
+    "UPDATE flow_edges SET payload = ?, path = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
   );
   const updateRules = db.prepare(
     `UPDATE flow_edges SET trigger = ?, payload = ?, path = ?, conditions = ?, approvals = ?, deliver_as = ?, paused = ?,
@@ -286,6 +329,11 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
       deliveries: (countDeliveries.get(row.id) as { n: number }).n,
       delivering: delivering.has(row.id),
       madeBy: row.made_by,
+      oneOff: row.one_off === 1,
+      fromSide: row.from_side,
+      toSide: row.to_side,
+      style: row.style,
+      points: JSON.parse(row.points) as FlowEdge['points'],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -353,15 +401,10 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
   };
 
   /**
-   * Tries `payload` along the edge to its `to` agent: how it went. An edge an agent made never starts an ended `to`
-   * again by itself (ADR-0012): the user ended it, and an orchestrator may not send to an ended agent. Unless `byUser`,
-   * whose Send does.
+   * Tries `payload` along the edge to its `to` agent: how it went. An ended `to` starts again, along any edge, whoever
+   * made it (ADR-0012).
    */
-  const attempt = async (row: FlowEdgeRow, payload: Payload, byUser = false): Promise<RunStart> => {
-    const to = options.agent(row.to_session_id);
-    if (row.made_by !== null && !byUser && to !== undefined && to.endedAt !== null) {
-      return { started: false, reason: `${to.name} has ended, and an edge an agent made never starts it again: Send does` };
-    }
+  const attempt = async (row: FlowEdgeRow, payload: Payload): Promise<RunStart> => {
     recount(delivering, row.id, 1);
     announceId(row.id);
     const result = await options
@@ -380,9 +423,8 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     row: FlowEdgeRow,
     payload: Payload,
     copy = keepsCopy(row),
-    byUser = false,
   ): Promise<{ edge: FlowEdge; outcome: Outcome } | undefined> => {
-    const result = await attempt(row, payload, byUser);
+    const result = await attempt(row, payload);
     if (!result.started && result.busy === true && find(row.id)?.deliver_as === 'queue') {
       if (updateQueue.run(payload.name, copy ? payload.text : null, row.id).changes === 0) return undefined;
       record(row.id, 'queued', result.reason);
@@ -594,9 +636,81 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     const id = fields.id === undefined ? randomUUID() : stringParam(fields, 'id');
     if (!CLIENT_ID.test(id)) throw invalidParams('a flow edge id is letters, digits and -, at most 64');
     if (find(id) !== undefined) throw invalidParams(`flow edge ${id} already exists`);
-    insert.run(id, from, to, trigger, payload, path, JSON.stringify(conditions), deliverAs, paused ? 1 : 0, madeBy ?? null);
+    const shape = shapeParams(fields, DEFAULT_FLOW_EDGE_SHAPE);
+    insert.run(
+      id,
+      from,
+      to,
+      trigger,
+      payload,
+      path,
+      JSON.stringify(conditions),
+      deliverAs,
+      paused ? 1 : 0,
+      madeBy ?? null,
+      0,
+      shape.fromSide,
+      shape.toSide,
+      shape.style,
+      JSON.stringify(shape.points),
+    );
     return announce(get(id));
   };
+
+  /** What a named hand-off's one-off edge carries, by what it was given: a message, else a handover file, else JSON. */
+  const oneOffPayload = (payload: HandoffPayload): { payload: FlowEdgePayload; path: string | null } => {
+    if (payload.message !== undefined) return { payload: 'final-message', path: null };
+    if (payload.handoverPath !== undefined) return { payload: 'handover', path: checkPayloadPath(payload.handoverPath) };
+    if (payload.json !== undefined) return { payload: 'json', path: DEFAULT_PAYLOAD_PATHS.json };
+    throw invalidParams('give a message, a handover file or JSON to hand to an agent you name');
+  };
+
+  /**
+   * The one-off edge from `from` to `to` for a named hand-off: made, manual, marked as made by `from`, or the
+   * one there carrying what this hand-off gives it now.
+   */
+  const oneOffEdge = (from: string, to: string, payload: HandoffPayload, had: FlowEdgeRow | undefined): FlowEdgeRow => {
+    const carries = oneOffPayload(payload);
+    if (had === undefined) {
+      if (agentExists.get(to) === undefined) throw invalidParams(`no agent ${to}`);
+      const id = randomUUID();
+      // Drawn as an edge always was until it is reshaped.
+      const { fromSide, toSide, style, points } = DEFAULT_FLOW_EDGE_SHAPE;
+      insert.run(id, from, to, 'manual', carries.payload, carries.path, '[]', 'message', 0, from, 1, fromSide, toSide, style, JSON.stringify(points));
+      announce(get(id));
+      return find(id)!;
+    }
+    if (had.payload !== carries.payload || had.path !== carries.path) updatePayload.run(carries.payload, carries.path, had.id);
+    return find(had.id)!;
+  };
+
+  /**
+   * Delivers a named hand-off along its one-off edge at once: it has no conditions, and is the agent's own to send. It
+   * never starts an ended agent again: the user ended it, and only the user's Send along the edge does.
+   */
+  const handOffOnce = (row: FlowEdgeRow, given: (() => Promise<PayloadOrProblem>) | undefined) =>
+    serially(row.id, async (): Promise<Outcome | undefined> => {
+      const to = options.agent(row.to_session_id);
+      if (to !== undefined && to.endedAt !== null) {
+        const reason = `${to.name} has ended: a named hand-off never starts it again, the user's Send or an edge the user drew does`;
+        skip(row.id, reason);
+        return { outcome: 'skipped', name: payloadName(row.payload, row.path), reason };
+      }
+      const payload = await (given ?? (() => read(row)))();
+      if ('problem' in payload) {
+        skip(row.id, payload.problem);
+        return { outcome: 'skipped', name: payload.name, reason: payload.problem };
+      }
+      keepOneOff.run(payload.name, payload.text, row.id);
+      const now = find(row.id);
+      return now === undefined ? undefined : (await deliverAlong(now, payload, true))?.outcome;
+    });
+
+  /** What the edge carries now: a one-off edge what its last named hand-off carried (`keepOneOff`), else its payload. */
+  const current = async (row: FlowEdgeRow): Promise<PayloadRead> =>
+    row.one_off === 1 && row.one_off_text !== null
+      ? { name: row.one_off_name ?? 'payload', text: row.one_off_text, shown: row.one_off_text, bytes: Buffer.byteLength(row.one_off_text) }
+      : read(row);
 
   const removeEdge = (id: string) => {
     if (remove.run(id).changes === 0) throw invalidParams(`no flow edge ${id}`);
@@ -621,8 +735,13 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
       handedOff.delete(sessionId);
     },
 
-    async handOffExplicitly(sessionId, payload, to, onSettled) {
-      const out = (selectOut.all(sessionId) as unknown as FlowEdgeRow[]).filter((row) => to === undefined || row.to_session_id === to);
+    async handOffExplicitly(sessionId, payload, to, onSettled, reach) {
+      let out = (selectOut.all(sessionId) as unknown as FlowEdgeRow[]).filter((row) => to === undefined || row.to_session_id === to);
+      // Named, with no edge of the user's to it (or its own one-off one): a one-off edge, where `reach` lets it.
+      if (to !== undefined && reach !== undefined && (out.length === 0 || out[0]!.one_off === 1)) {
+        reach(to);
+        out = [oneOffEdge(sessionId, to, payload, out[0])];
+      }
       if (out.length === 0) {
         throw invalidParams(
           to === undefined
@@ -639,6 +758,10 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         out.map(async (row): Promise<HandoffOutcome> => {
           const edge = { edgeId: row.id, to: row.to_session_id };
           const name = payloadName(row.payload, row.path);
+          if (row.one_off === 1) {
+            const once = await handOffOnce(row, given.get(row.id));
+            return { ...edge, ...(once ?? { outcome: 'skipped', name, reason: 'the edge went as you handed off' }) };
+          }
           if (row.trigger !== 'auto') return { ...edge, outcome: 'skipped', name, reason: 'the edge is manual: the user sends it' };
           // Its Stop leaves out an edge this turn handed off along; one skipped is left to it, to try with its final message.
           turn.add(row.id);
@@ -696,6 +819,18 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         const fields = paramsObject(params);
         const row = find(stringParam(fields, 'id'));
         if (row === undefined) throw invalidParams(`no flow edge ${String(fields.id)}`);
+        // How it is drawn changes nothing it does, so a reshape alone touches none of its rules, holds or queue. Every
+        // field is checked before any is saved, so a call refused for one changes nothing.
+        const shape = shapeParams(fields, toFlowEdge(row));
+        const reshape = () => {
+          if (FLOW_EDGE_SHAPE_KEYS.some((name) => fields[name] !== undefined)) {
+            updateShape.run(shape.fromSide, shape.toSide, shape.style, JSON.stringify(shape.points), row.id);
+          }
+        };
+        if (!RULE_FIELDS.some((name) => fields[name] !== undefined)) {
+          reshape();
+          return announce(get(row.id));
+        }
         const trigger = fields.trigger === undefined ? row.trigger : oneOf(fields, 'trigger', FLOW_EDGE_TRIGGERS);
         const payload = fields.payload === undefined ? row.payload : oneOf(fields, 'payload', FLOW_EDGE_PAYLOADS);
         const path = pathFor(payload, fields.path, row);
@@ -706,6 +841,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         const deliverAs = fields.deliverAs === undefined ? row.deliver_as : oneOf(fields, 'deliverAs', FLOW_EDGE_DELIVERY_MODES);
         const paused = optionalBooleanParam(fields, 'paused') ?? row.paused === 1;
         if (trigger === 'auto' && row.trigger !== 'auto') refuseAutoLoop(row.from_session_id, row.to_session_id);
+        reshape();
         updateRules.run(trigger, payload, path, conditions, approvals, deliverAs, paused ? 1 : 0, row.id);
         if (conditions !== row.conditions) checks.delete(row.id);
         if (row.held_since !== null) {
@@ -741,14 +877,15 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         const id = stringParam(paramsObject(params), 'id');
         const row = find(id);
         if (row === undefined) throw invalidParams(`no flow edge ${id}`);
-        const payload = await read(row);
+        // A one-off edge replays what its last named hand-off carried.
+        const payload = await current(row);
         if ('problem' in payload) throw invalidParams(payload.problem);
         if (row.held_since !== null && clearHold.run(id, row.held_since).changes > 0) {
           record(id, 'released', 'sent by hand');
         }
         // A newer delivery replaces the one queued.
         clearQueue.run(id, row.queued_since);
-        const sent = await deliverAlong(row, payload, keepsCopy(row), true);
+        const sent = await deliverAlong(row, payload, keepsCopy(row));
         if (sent === undefined) throw invalidParams(`flow edge ${id} went while it was being sent`);
         return sent.edge;
       },
@@ -756,7 +893,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         const id = stringParam(paramsObject(params), 'id');
         const row = find(id);
         if (row === undefined) throw invalidParams(`no flow edge ${id}`);
-        const payload = await read(row);
+        const payload = await current(row);
         return 'problem' in payload ? payload : { name: payload.name, text: payload.shown, bytes: payload.bytes };
       },
       'flowEdge.commands': async (params) => {

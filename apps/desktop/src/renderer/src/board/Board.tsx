@@ -43,10 +43,10 @@ import {
   type Shell,
   type ShellPlace,
   type Zone,
-  type ZoneSnapshot,
   type ZoneBinding,
   type TileMove,
   type ZoneLayout,
+  zoneSnapshot,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { repoZoneOf } from '@agent-board/daemon/repo-zone';
@@ -56,9 +56,9 @@ import type { ZoneSource } from '../chrome/zones';
 import { errorMessage } from '../../../shared/errors';
 import { ZOOM_KEY } from '../keys';
 import { tokenNumber } from '../theme';
-import { Button, ContextMenu, Dialog, MENU_FOCUS_RETURN_MS, useToast } from '../ui';
+import { Button, Checkbox, ContextMenu, Dialog, MENU_FOCUS_RETURN_MS, useToast } from '../ui';
 import { markSeen } from '../session/mark-seen';
-import { SessionWindowsLayer, useSessionWindows } from '../windows/SessionWindows';
+import { handOffWebTabs, SessionWindowsLayer, useSessionWindows } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
 import { requestReviewTab } from '../review/review-tab';
 import { requestTab } from '../session/tab-request';
@@ -67,20 +67,23 @@ import {
   dropKey,
   dropMove,
   dropOver,
+  dropTaken,
   ownerAtPoint,
   paneAtPoint,
   placeOf,
-  setShellDrag,
-  SHELL_DRAG_TYPE,
-  shellDrag,
-  shellMover,
+  tabDrag,
+  tabMover,
+  surfaceMoveChanges,
   tabMoveChanges,
   tilesFirst,
-  useShellDrag,
-  type ShellDrag,
-  type ShellMove,
+  useDragsFromOtherWindows,
+  useTabDrag,
+  type TabDrag,
+  type SurfaceMove,
+  type TabMove,
 } from '../session/shell-moves';
-import { liveShellCount } from '../session/tabs';
+import { boardDrop } from '../session/window-drags';
+import { gateSurfaceOf, liveShellCount, planSurfaceOf, pullRequestSurfaceOf, tabSurface, tabWindowTitle } from '../session/tabs';
 import { shownWindow } from '../windows/session-windows';
 import { ConnectorActionsContext, type ConnectorActions } from './connectors/actions';
 import { ConnectorEdge, ConnectorMarkers } from './connectors/ConnectorEdge';
@@ -94,15 +97,18 @@ import {
   nearestSide,
   newEndAt,
   nodeIdOf,
+  shapeOf,
   withConnector,
   withConnectorChange,
+  withConnectorParams,
 } from './connectors/endpoints';
 import { AddZonePopover } from './AddZonePopover';
 import { draggedZoneLayout, popoverPlacement } from './add-zone';
-import { AgentFlowEdge, BriefEdge, FlowEdgeActionsContext } from './FlowEdge';
-import { FLOW_EDGE_TYPE, FLOW_PORTS, flowEdgeIdOf, flowEdges, handoffEnds, HandoffsContext, isFlowEdge, isFlowPort, panClear } from './flow-edges';
+import { AgentFlowEdge, BriefEdge, FlowEdgeActionsContext, type FlowEdgeActions } from './FlowEdge';
+import { FLOW_EDGE_TYPE, flowEdgeIdOf, flowEdges, handoffEnds, HandoffsContext, isFlowEdge, NEW_EDGE_LABEL, panClear } from './flow-edges';
 import { useFlowEdges } from './use-flow-edges';
-import { ConnectionLine } from './ConnectionLine';
+import { ConnectionLine, HandingOffContext } from './ConnectionLine';
+import { HandOffChooser } from './connectors/HandOffChooser';
 import { EdgeRules } from './EdgeRules';
 import { BRIEF_EDGE_TYPE, briefEdges, cardHasAgent, issueCardFor } from './brief-edges';
 import { handlesLost } from './handle-bounds';
@@ -119,6 +125,7 @@ import { selectedNodes } from './editing/selection';
 import { agentLine, deleteLines, externalEnded, externalLine, needsConfirmation, type DeleteTargets } from './editing/delete-plan';
 import { useEditing } from './editing/use-editing';
 import { renameDirect, renameKey, paneLabel, RenameRequestContext, type RenameTarget } from './rename';
+import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
 import { useSnapping } from './editing/use-snapping';
 import {
@@ -161,16 +168,18 @@ import { MIN_SHAPE_SIZE } from './items/ShapeNode';
 import { ITEM_KINDS, ITEM_NODE_TYPES, type ItemKind } from './items/kinds';
 import { liveRotations, LiveRotationsContext, withRotation } from './items/Rotatable';
 import { classifyDrop, classifyPaste, imageBoardSize, imageProblem, type Incoming } from './items/paste';
-import type { ConnectorChange, ItemChange, ShellChange, WindowTarget, ZoneChange } from '../../../preload/api';
+import type { ConnectorChange, ItemChange, ScreenPoint, ShellChange, WindowTarget, ZoneChange } from '../../../preload/api';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { useProvideBoardCommands, type BoardCommands } from './commands';
 import { keepTileSizes, tileSizeOf, tileSizesFrom, withTileSize, type TileSizes } from './tile-size';
-import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, ZONE_PADDING } from './layout';
+import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, TILE_GAP, ZONE_PADDING } from './layout';
 import { tidyLoose as tidyLooseLayout, tidyZone as tidyZoneLayout } from './tidy';
 import { LinkIssueDialog } from './LinkIssueDialog';
 import { ScheduleDialog } from './ScheduleDialog';
+import { GateCommandDialog } from '../gate/GateCommandDialog';
 import { ResumeExternalDialog } from './ResumeExternalDialog';
 import { NewAgentDialog } from './NewAgentDialog';
+import { RoleTemplatesDialog } from './RoleTemplatesDialog';
 import { DefaultRepoDialog } from './DefaultRepoDialog';
 import { useRestartBanner } from './RestartBanner';
 import { changeBacklog } from './change-backlog';
@@ -274,6 +283,27 @@ function keyboardToBoard(): void {
   );
 }
 
+/** After a move, or its undo or redo: the board has the keyboard, and so does no popped-out window's terminal. */
+function movesSettled(): void {
+  keyboardToBoard();
+  window.agentBoard.tabDrags.settled();
+}
+
+/**
+ * Moves a pull request, web or session tab between windows (slice 4), as the daemon lays both out: a web
+ * tab's page handed off first, so the window it goes to takes it as it is, and handed back if the move fails.
+ */
+async function moveSurface({ surface, from, to }: SurfaceMove) {
+  const web = surface.kind === 'web' ? surface.id : undefined;
+  if (web !== undefined) await window.agentBoard.webTabs.handOff(web);
+  try {
+    return await window.agentBoard.shells.moveSurface(surface, from, to);
+  } catch (error) {
+    if (web !== undefined) await window.agentBoard.webTabs.cancelHandOff(web);
+    throw error;
+  }
+}
+
 /** `items` with `item` added, or replacing the one with the same key. */
 function upsertBy<T>(items: T[], item: T, key: (item: T) => string): T[] {
   const index = items.findIndex((known) => key(known) === key(item));
@@ -345,13 +375,18 @@ interface PendingDelete {
   confirm: string;
   /** Offered beside `confirm` where an agent's worktree and branch could be kept: runs with `keep`. */
   keepLabel?: string;
-  run(keep: boolean): void;
+  /** An unticked box under the lines (deleting a managed clone with its zone): `run` has whether it was ticked. */
+  cloneLabel?: string;
+  run(keep: boolean, deleteClone: boolean): void;
 }
 
-/** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */
+/** The id of the hint shown while a "Connect to…" waits for its other end. */
+const CONNECT_HINT = 'connect-to';
+
 /** How long a rename request waits for its tile to open its field before it lapses, ms. */
 const RENAME_REQUEST_MS = 250;
 
+/** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */
 const CONTROLS = 'button, a, input, textarea, select, [role="menuitem"], .nodrag, .editable-name';
 
 /** How many times the board lists agents again when changes keep landing while the list is in flight. */
@@ -409,10 +444,14 @@ function BoardView() {
   const [editingConnector, setEditingConnector] = useState<string>();
   /** Whether a connector is being dragged from a handle: every object shows its handles, and the one under it is marked. */
   const [connecting, setConnecting] = useState(false);
-  /** Whether a new flow edge is being drawn from a tile's flow port: every agent's tile shows its ports. */
-  const [drawingFlow, setDrawingFlow] = useState(false);
-  /** Whether Escape has called off the flow edge being dragged: letting go then joins nothing. */
-  const flowDrawCancelled = useRef(false);
+  /** Whether the connector being dragged leaves an agent's tile, so could be a hand-off. */
+  const connectingFromAgent = useRef(false);
+  /** Whether ⌥ is held while it is, so let go on another agent's tile it is a hand-off: only agents' tiles are targets. */
+  const [handingOff, setHandingOff] = useState(false);
+  /** Whether Escape has called off the hand-off being dragged: letting go then joins nothing. */
+  const handOffCancelled = useRef(false);
+  /** A connector just dropped from one agent's tile on another's, until the chooser says what it is. */
+  const [handOffChoice, setHandOffChoice] = useState<{ connectorId: string; from: string; to: string; at: { x: number; y: number } }>();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [externals, setExternals] = useState<ExternalSession[]>([]);
   /** Undefined until listed. */
@@ -432,7 +471,17 @@ function BoardView() {
   /** The agent whose issue is being picked, and its zone. */
   const [linking, setLinking] = useState<{ agent: Agent; zone: Zone }>();
   const [scheduling, setScheduling] = useState<Agent>();
+  const [gateCommandZone, setGateCommandZone] = useState<Zone>();
+  const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
   const { windows, show: showWindow, close: closeWindow, popOut } = useSessionWindows();
+  /** Pops out the tab window a tab went into, if it isn't out already (a redo of its pop-out). */
+  const popOutTabWindow = useCallback(
+    (owner: { kind: string; id: string } | undefined, surface: SurfaceMove['surface'], at?: ScreenPoint) => {
+      if (owner?.kind !== 'tabs' || windowsRef.current.some((entry) => entry.id === owner.id)) return;
+      popOut({ kind: 'tabs', id: owner.id, title: tabWindowTitle(surface) }, at);
+    },
+    [popOut],
+  );
   const windowsRef = useRef(windows);
   windowsRef.current = windows;
   /**
@@ -489,6 +538,11 @@ function BoardView() {
     (agent: Agent) => showWindow({ kind: 'session', id: agent.sessionId, title: agentTitle(agent) }),
     [showWindow],
   );
+  /**
+   * Whether the agent's window is popped out into an OS window of its own. That runs in another renderer, which can't
+   * hear a tab asked for: it is only brought forward, and nothing is left waiting for the next window on the board.
+   */
+  const poppedOut = useCallback((sessionId: string) => windowsRef.current.some((entry) => entry.id === sessionId && entry.placement === 'popped'), []);
   /** The agent the user asked to open from its notification, until the board has its agents to open it. */
   const [openRequest, setOpenRequest] = useState<string>();
   const [pendingDeletes, setPendingDeletes] = useState<PendingDelete[]>([]);
@@ -499,7 +553,14 @@ function BoardView() {
     [],
   );
   /** Drops the delete being asked about: it was confirmed or cancelled. */
-  const settleDelete = useCallback(() => setPendingDeletes((current) => current.slice(1)), []);
+  const settleDelete = useCallback(() => {
+    setPendingDeletes((current) => current.slice(1));
+    setCloneTicked(false);
+  }, []);
+  /** Whether the box a delete offers (`cloneLabel`) is ticked: it starts unticked for each. */
+  const [cloneTicked, setCloneTicked] = useState(false);
+  /** The home directory loose shells start in, for shell tiles' folder chips and `~` in paths; undefined until the daemon says. */
+  const [home, setHome] = useState<string>();
   /** An ended agent to restart once the user says so, as the shell its pane dropped into is running something. */
   const [pendingRestart, setPendingRestart] = useState<{ sessionId: string; message: string }>();
   /** The external session being resumed in agent-board, and where the board draws a tile it slotted into its zone. */
@@ -895,9 +956,18 @@ function BoardView() {
   /** The name of what a rename target names now, as the board last heard it: '' for a pane without a label. */
   const nameOf = useCallback((target: RenameTarget): string | undefined => {
     if (target.kind === 'agent') return agentsRef.current.find((agent) => agent.sessionId === target.sessionId)?.name;
+    if (target.kind === 'zone') return nodesRef.current.filter(isZone).find((node) => node.id === target.zoneId)?.data.zone.name;
     const shell = shellsRef.current?.find((known) => known.id === target.shellId);
     if (shell === undefined) return undefined;
     return target.kind === 'shell' ? shell.name : (paneLabel(shell, target.sessionId) ?? '');
+  }, []);
+  /** A zone's new name on the board: the daemon sends no change for it, so the board follows what it saved. */
+  const showZoneName = useCallback((target: RenameTarget, name: string) => {
+    if (target.kind !== 'zone') return;
+    setNodes((current) => {
+      const known = current.filter(isZone).find((node) => node.id === target.zoneId);
+      return known === undefined ? current : withZone(current, { ...known.data.zone, name });
+    });
   }, []);
   const tileActions = useMemo<TileActions>(
     () => ({
@@ -1014,6 +1084,7 @@ function BoardView() {
         if (before === undefined) return;
         try {
           const saved = await renameDirect(target, name);
+          showZoneName(target, saved);
           history.record([[renameKey(target), { type: 'name', target, name: before }, { type: 'name', target, name: saved }]]);
         } catch (error) {
           report(target.kind === 'pane' ? 'label the pane' : 'rename it')(error);
@@ -1046,17 +1117,31 @@ function BoardView() {
       },
       openTab(agent, tab) {
         const show = (tabId: string) => {
-          // A window popped out into an OS window of its own runs in another renderer, which can't hear the request:
-          // it is brought forward as it is, and nothing is left waiting for the next window on the board.
-          const popped = windowsRef.current.some((entry) => entry.id === agent.sessionId && entry.placement === 'popped');
-          if (!popped) requestTab(agent.sessionId, tabId);
+          if (!poppedOut(agent.sessionId)) requestTab(agent.sessionId, tabSurface(tabId));
           openAgent(agent);
         };
         if (tab !== undefined) return show(tab);
         window.agentBoard.shells.createTab({ kind: 'agent', id: agent.sessionId }).then((shell) => show(shell.id), report('open a shell'));
       },
+      openPullRequest(agent, pr) {
+        const surface = pullRequestSurfaceOf(pr);
+        // One not on GitHub as gh names it has no tab to open in: it opens in the browser, as it did before PR tabs.
+        if (surface === undefined) return void window.agentBoard.trackers.openLink(pr.url).catch(report('open the link'));
+        if (!poppedOut(agent.sessionId)) requestTab(agent.sessionId, surface);
+        // Its expanded tile shows its tabs as its window would, and takes the request there.
+        if (!expandedRef.current.some((tile) => tile.id === tileNodeId('agent', agent.sessionId))) openAgent(agent);
+      },
+      openGate(agent, run) {
+        if (run) void window.agentBoard.gates.run(agent.sessionId).catch(report('run the gate'));
+        if (!poppedOut(agent.sessionId)) requestTab(agent.sessionId, gateSurfaceOf(agent.sessionId));
+        if (!expandedRef.current.some((tile) => tile.id === tileNodeId('agent', agent.sessionId))) openAgent(agent);
+      },
+      openPlan(agent) {
+        if (!poppedOut(agent.sessionId)) requestTab(agent.sessionId, planSurfaceOf(agent.sessionId));
+        if (!expandedRef.current.some((tile) => tile.id === tileNodeId('agent', agent.sessionId))) openAgent(agent);
+      },
     }),
-    [openAgent, openShell, showWindow, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, history, nameOf],
+    [openAgent, openShell, showWindow, poppedOut, popOut, deleteAgent, deleteShell, dismissExternal, askDelete, restartAgent, getNodes, getInternalNode, inView, bringIntoView, report, history, nameOf],
   );
 
   const restartBanner = useRestartBanner(agents, shells, tileActions);
@@ -1187,63 +1272,105 @@ function BoardView() {
   );
 
   /**
-   * Makes a move of a whole shell, or of a pane out of its split, that the user dropped (AT2), and records it
-   * for undo. Nothing restarts: only the shell's owner, or its place, changes. The window it lands in keeps the tab it
-   * shows, so the keyboard stays where it was and ⌘Z can take the move back.
+   * Makes a move the user dropped, in any window, across OS windows too (AT2), and records it for undo: a
+   * whole shell, a pane out of its split, or a pull request, web or session tab between windows. Nothing restarts:
+   * only a shell's owner or place, or where a tab is, changes. The window it lands in keeps the tab it shows, so the
+   * keyboard stays where it was and ⌘Z can take the move back. Resolves with whether it was made (a refusal is said),
+   * and the shell moved, for a shell.
    */
-  const moveShell = useCallback(
-    (move: ShellMove) => {
+  const moveTab = useCallback(
+    (move: TabMove): Promise<{ made: boolean; shell?: Shell }> => {
       const before = shellsRef.current ?? [];
-      if (move.kind === 'tab') {
-        window.agentBoard.shells.moveTab(move.shellId, move.to).then((moved) => {
-          tookShells(moved);
-          history.record(tabMoveChanges(before, moved));
-          keyboardToBoard();
-        }, report('move the shell'));
-        return;
-      }
-      window.agentBoard.shells.movePane(move.shellId, move.sessionId, move.to).then(({ moved, source, layoutBefore }) => {
-        tookShells([source, moved]);
-        const to = placeOf(moved);
-        if (to !== undefined) {
-          history.record([
-            [historyKey.pane(move.sessionId), { type: 'panePlace', in: { shellId: source.id, layout: layoutBefore } }, { type: 'panePlace', alone: { shellId: moved.id, to } }],
-          ]);
-        }
-        keyboardToBoard();
-      }, report('move the pane'));
+      const made =
+        move.kind === 'surface'
+          ? moveSurface(move).then(({ was }) => {
+              history.record(surfaceMoveChanges(move, was));
+              return undefined;
+            })
+          : move.kind === 'tab'
+            ? window.agentBoard.shells.moveTab(move.shellId, move.to).then((moved) => {
+                tookShells(moved);
+                history.record(tabMoveChanges(before, moved));
+                return moved.find((shell) => shell.id === move.shellId);
+              })
+            : window.agentBoard.shells.movePane(move.shellId, move.sessionId, move.to).then(({ moved, source, layoutBefore }) => {
+                tookShells([source, moved]);
+                const to = placeOf(moved);
+                if (to !== undefined) {
+                  history.record([
+                    [historyKey.pane(move.sessionId), { type: 'panePlace', in: { shellId: source.id, layout: layoutBefore } }, { type: 'panePlace', alone: { shellId: moved.id, to } }],
+                  ]);
+                }
+                return moved;
+              });
+      return made.then(
+        (moved) => {
+          movesSettled();
+          return { made: true, ...(moved === undefined ? {} : { shell: moved }) };
+        },
+        (error: unknown) => {
+          report(move.kind === 'tab' ? 'move the shell' : move.kind === 'pane' ? 'move the pane' : 'move the tab')(error);
+          return { made: false };
+        },
+      );
     },
     [history, report, tookShells],
   );
 
-  // The windows and tiles make the moves dropped on them through the board, while it is there.
+  // The windows and tiles make the moves dropped on them through the board, while it is there, and so do popped-out
+  // windows, through main, as do their ⌘Z and ⇧⌘Z: one undo history has every move.
+  useDragsFromOtherWindows();
   useEffect(() => {
-    shellMover.set(moveShell);
-    return () => shellMover.set(undefined);
-  }, [moveShell]);
+    tabMover.set((move) => void moveTab(move));
+    const unsubscribe = [
+      window.agentBoard.tabDrags.onMakeMove((move) => void moveTab(move)),
+      window.agentBoard.tabDrags.onReplay((action) => (action === 'undo' ? history.undo() : history.redo())),
+    ];
+    return () => {
+      tabMover.set(undefined);
+      for (const each of unsubscribe) each();
+    };
+  }, [moveTab, history]);
   // What a dragged tab, pane or shell tile is over is shown only while one is dragged.
-  const draggingShell = useShellDrag();
+  const draggingTab = useTabDrag();
   useEffect(() => {
-    if (draggingShell === undefined) dropOver.set(undefined);
-  }, [draggingShell]);
+    if (draggingTab === undefined) dropOver.set(undefined);
+  }, [draggingTab]);
 
   /**
    * Where a tab or pane dropped at `point` (on the screen) goes: into the tabs of the window or tile under it, or onto
-   * the board as a shell tile centred there. Dropped on a window that won't take it (its own), it stays.
+   * the board as a shell tile centred there. Dropped on a window that won't take it (its own), it stays. A tab that is
+   * only a place in a window goes as `boardDrop` says (slice 4).
    */
-  const shellDropped = (drag: ShellDrag, point: { x: number; y: number }) => {
+  const shellDropped = (drag: TabDrag, point: { x: number; y: number }) => {
     const owner = ownerAtPoint(point.x, point.y);
     const onWindow = document.elementFromPoint(point.x, point.y)?.closest(SESSION_SURFACES) != null;
+    if (drag.kind === 'surface') {
+      if (owner === undefined && onWindow) return;
+      const popped = windowsRef.current.some((entry) => entry.id === drag.from.id && entry.placement === 'popped');
+      const done = boardDrop(drag, owner, popped);
+      if (done?.kind === 'move') void moveTab(done.move);
+      else if (done?.kind === 'popIn') {
+        // Its web tabs' pages come back with it, as they are.
+        const target = windowTargetOf(done.owner);
+        void (target === undefined ? Promise.resolve() : handOffWebTabs(target)).then(() => window.agentBoard.windows.popIn(done.owner.id));
+      }
+      return;
+    }
     if (owner !== undefined || onWindow) {
       const move = owner === undefined ? undefined : dropMove(drag, { owner }, paneAtPoint(point.x, point.y));
-      if (move !== undefined) moveShell(move);
+      if (move !== undefined) void moveTab(move);
       return;
     }
     const at = screenToFlowPosition(point);
     const corner = { x: at.x - AGENT_TILE_SIZE.width / 2, y: at.y - AGENT_TILE_SIZE.height / 2 };
     const move = dropMove(drag, { tile: { ...placeOnBoard(corner, AGENT_TILE_SIZE, zoneLayouts()), toFront: true } });
-    if (move !== undefined) moveShell(move);
+    if (move !== undefined) void moveTab(move);
   };
+
+  /** Whether a drag held over the board at `point` would land on the tile or window there, which shows it would. */
+  const landsOn = (drag: TabDrag, owner: ReturnType<typeof ownerAtPoint>): boolean =>
+    owner !== undefined && (drag.kind === 'surface' ? boardDrop(drag, owner, false) !== undefined : dropMove(drag, { owner }) !== undefined);
 
   /** The agent a lone shell tile dragged to `point` would become a tab of, dropped now: its tile's or window's under it. */
   const adopterOf = (dragged: BoardNode[], point: { x: number; y: number } | undefined) => {
@@ -1402,10 +1529,10 @@ function BoardView() {
         if (connector === undefined) return;
         // The saves of one label's typing undo together.
         const typing = params.label === undefined ? undefined : `label:${params.id}`;
-        history.record([[historyKey.connector(params.id), { type: 'connector', connector }, { type: 'connector', connector: { ...connector, ...params } }]], typing);
+        history.record([[historyKey.connector(params.id), { type: 'connector', connector }, { type: 'connector', connector: withConnectorParams(connector, params) }]], typing);
         setConnectors((current) => {
           const known = current.find((connector) => connector.id === params.id);
-          return known === undefined ? current : withConnector(current, { ...known, ...params });
+          return known === undefined ? current : withConnector(current, withConnectorParams(known, params));
         });
         onceCreated(params.id, () => window.agentBoard.connectors.update(params)).catch(report('save the connector'));
       },
@@ -1425,6 +1552,19 @@ function BoardView() {
     [onceCreated, report, editingConnector, setNodes, history],
   );
 
+  // As a click on its line selects it: alone, with nothing else selected.
+  const flowEdgeActions = useMemo<FlowEdgeActions>(
+    () => ({
+      ...flow.actions,
+      select(id) {
+        setNodes((current) => current.map((node) => (node.selected === true ? { ...node, selected: false } : node)));
+        setSelectedConnectors(new Set());
+        flow.actions.select(id);
+      },
+    }),
+    [flow.actions, setNodes],
+  );
+
   /**
    * Puts `connector` on the board under its own id, as given: a new one, a copy, or one an undo brings back. It shows at
    * once; the daemon is told once both objects it joins exist there (a note made for it is still on its way).
@@ -1433,12 +1573,12 @@ function BoardView() {
     (connector: Connector) => {
       history.record([[historyKey.connector(connector.id), null, { type: 'connector', connector }]]);
       setConnectors((current) => withConnector(current, connector));
-      const { id, from, to, style, startEnd, endEnd, color, label } = connector;
+      const { id, from, to, style, startEnd, endEnd, color, label, points } = connector;
       const waits = [from, to]
         .flatMap((end) => (end.type === 'item' ? [pendingCreates.current.get(end.id)] : []))
         .filter((p) => p !== undefined);
       const created = Promise.all(waits)
-        .then(() => window.agentBoard.connectors.create({ id, from, to, style, startEnd, endEnd, color, label }))
+        .then(() => window.agentBoard.connectors.create({ id, from, to, style, startEnd, endEnd, color, label, points }))
         .then(
           // Only the times are the daemon's to add: a look or label changed meanwhile is newer than its answer.
           ({ createdAt, updatedAt }) =>
@@ -1455,12 +1595,18 @@ function BoardView() {
     },
     [report, history],
   );
-  /** Joins `from` to `to` with a new connector of the default look. */
+  /** Joins `from` to `to` with a new connector of the default look; its id. */
   const createConnector = useCallback(
-    (from: ConnectorEnd, to: ConnectorEnd) =>
-      putConnector({ id: crypto.randomUUID(), from, to, ...DEFAULT_CONNECTOR_LOOK, createdAt: '', updatedAt: '' }),
+    (from: ConnectorEnd, to: ConnectorEnd) => {
+      const id = crypto.randomUUID();
+      putConnector({ id, from, to, ...DEFAULT_CONNECTOR_LOOK, points: [], createdAt: '', updatedAt: '' });
+      return id;
+    },
     [putConnector],
   );
+
+  /** The board node a "Connect to…" is waiting to be told the other end of, until it is clicked or called off. */
+  const [connectingFrom, setConnectingFrom] = useState<string>();
 
   /** The rectangle of a board node, on the board. */
   const rectOf = useCallback(
@@ -1478,6 +1624,50 @@ function BoardView() {
     [getInternalNode],
   );
 
+  /** Joins two nodes with a connector, each at its side facing the other. */
+  const connectNodes = useCallback(
+    (fromId: string, toId: string) => {
+      const nodes = getNodes();
+      const [from, to] = [fromId, toId].map((id) => nodes.find((known) => known.id === id));
+      const [fromRect, toRect] = [rectOf(fromId), rectOf(toId)];
+      if (from === undefined || to === undefined || fromRect === undefined || toRect === undefined || fromId === toId) return;
+      const middle = (rect: { x: number; y: number; width: number; height: number }) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+      const fromEnd = endOfNode(from, nearestSide(fromRect, middle(toRect)));
+      const toEnd = endOfNode(to, nearestSide(toRect, middle(fromRect)));
+      if (fromEnd !== undefined && toEnd !== undefined) createConnector(fromEnd, toEnd);
+    },
+    [getNodes, rectOf, createConnector],
+  );
+
+  // "Connect to…" has picked its first end: the next click on an object is the other, anything else calls it off.
+  useEffect(() => {
+    if (connectingFrom === undefined) return;
+    // Shown for as long as the mode lasts (not for a few seconds), and dismissing it ends the mode: a click is never
+    // silently a connector.
+    const finish = () => setConnectingFrom(undefined);
+    toasts.show({ id: CONNECT_HINT, message: 'Click what to connect it to. Esc cancels.', tone: 'info', persistent: true, onDismissed: finish });
+    const onPointerDown = (event: PointerEvent) => {
+      const target = (event.target as Element | null)?.closest?.('.react-flow__node')?.getAttribute('data-id');
+      if (target === undefined || target === null || target === connectingFrom) return finish();
+      event.preventDefault();
+      event.stopPropagation();
+      connectNodes(connectingFrom, target);
+      finish();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      finish();
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKeyDown, true);
+      toasts.dismiss(CONNECT_HINT);
+    };
+  }, [connectingFrom, connectNodes, toasts]);
+
   /**
    * A connector dragged from a handle was let go. On an object (on one of its handles, or anywhere on it) it joins the
    * two, at that handle's side or else the side facing the other; on empty board it makes a new sticky note there, joined; anywhere else, nothing happens.
@@ -1485,28 +1675,15 @@ function BoardView() {
   const connectorDropped = useCallback(
     (event: MouseEvent | TouchEvent, { fromNode, fromHandle, toNode, toHandle }: FinalConnectionState) => {
       setConnecting(false);
-      setDrawingFlow(false);
-      if (flowDrawCancelled.current) {
-        flowDrawCancelled.current = false;
+      setHandingOff(false);
+      if (handOffCancelled.current) {
+        handOffCancelled.current = false;
         return;
       }
       if (fromNode === null || fromHandle?.id == null) return;
       const touch = 'changedTouches' in event ? event.changedTouches[0] : event;
       if (touch === undefined) return;
       const point = { x: touch.clientX, y: touch.clientY };
-      if (isFlowPort(fromHandle.id)) {
-        // A flow joins two agents' tiles: let go on another one (anywhere on it), it flows out of the out port's.
-        const nodeId = toNode?.id ?? (() => {
-          const drop = dropAt(point, new Set());
-          return drop.type === 'node' ? drop.nodeId : undefined;
-        })();
-        const there = nodeId === undefined ? undefined : tileSubject(nodeId);
-        const here = tileSubject(fromNode.id);
-        if (there?.kind !== 'agent' || here?.kind !== 'agent' || there.id === here.id) return;
-        const [from, to] = fromHandle.id === FLOW_PORTS.out ? [here.id, there.id] : [there.id, here.id];
-        flow.actions.create(from, to);
-        return;
-      }
       const at = screenToFlowPosition(point);
       const from = endOfNode(fromNode, fromHandle.id as ConnectorSide);
       if (from === undefined) return;
@@ -1531,7 +1708,19 @@ function BoardView() {
         if (target.nodeId === fromNode.id) return;
         const node = nodes.find((known) => known.id === target.nodeId);
         const to = node && endOfNode(node, target.side);
-        if (to !== undefined) createConnector(from, to);
+        if (to === undefined) return;
+        // From one agent to another it can be a hand-off: with ⌥ held it is one, and otherwise the chooser
+        // asks, the arrow drawn meanwhile.
+        const [here, there] = [tileSubject(fromNode.id), tileSubject(target.nodeId)];
+        if (here?.kind === 'agent' && there?.kind === 'agent') {
+          if (event.altKey) {
+            void flow.actions.create(here.id, there.id, { fromSide: from.side, toSide: to.side });
+            return;
+          }
+          setHandOffChoice({ connectorId: createConnector(from, to), from: here.id, to: there.id, at: point });
+          return;
+        }
+        createConnector(from, to);
         return;
       }
       const source = rectOf(fromNode.id);
@@ -1543,6 +1732,27 @@ function BoardView() {
     [screenToFlowPosition, getNodes, rectOf, createConnector, createItem, flow.actions],
   );
 
+  /**
+   * The chooser picked Hand off for the arrow just drawn between two agents: it becomes a hand-off, from the
+   * same sides in the same shape, its Edge rules open. One undo makes it the arrow again.
+   */
+  const handOff = useCallback(
+    ({ connectorId, from, to }: { connectorId: string; from: string; to: string }) => {
+      setHandOffChoice(undefined);
+      const connector = connectorsRef.current.find((known) => known.id === connectorId);
+      if (connector === undefined) return;
+      const shape = shapeOf(connector);
+      const replaced: Change = [historyKey.connector(connectorId), { type: 'connector', connector }, null];
+      void flow.actions.create(from, to, shape, [replaced]).then((made) => {
+        if (!made) return;
+        // Not through connectorActions.remove, which would record it on its own.
+        setConnectors((current) => current.filter((known) => known.id !== connectorId));
+        onceCreated(connectorId, () => window.agentBoard.connectors.delete(connectorId)).catch(report('delete the connector'));
+      });
+    },
+    [flow.actions, onceCreated, report],
+  );
+
   /** The tool armed for the next click or drag on the board (T, S, or its button), if any. */
   const [tool, setTool] = useState<ArmedTool>();
   /** How a drag on the board acts while no tool is armed (V, H, or the toolbar). */
@@ -1552,20 +1762,36 @@ function BoardView() {
     setMode(picked);
   }, []);
 
-  // Escape calls off a flow edge being dragged (FlowDraw): nothing is joined, wherever it is let go.
+  // While a connector is dragged from an agent's tile, holding ⌥ makes it a hand-off (BP8): the line thickens
+  // and says what it carries before it is let go.
   useEffect(() => {
-    if (!drawingFlow) return;
+    if (!connecting || !connectingFromAgent.current) return;
+    const onAlt = (event: KeyboardEvent | PointerEvent) => setHandingOff(event.altKey);
+    window.addEventListener('keydown', onAlt, { capture: true });
+    window.addEventListener('keyup', onAlt, { capture: true });
+    window.addEventListener('pointermove', onAlt, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', onAlt, { capture: true });
+      window.removeEventListener('keyup', onAlt, { capture: true });
+      window.removeEventListener('pointermove', onAlt, { capture: true });
+    };
+  }, [connecting]);
+
+  // Escape calls off a hand-off being dragged (FlowDraw): nothing is joined, wherever it is let go.
+  useEffect(() => {
+    if (!handingOff) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      flowDrawCancelled.current = true;
+      handOffCancelled.current = true;
       flowStore.getState().cancelConnection();
-      setDrawingFlow(false);
+      setConnecting(false);
+      setHandingOff(false);
     };
     // Before the board's own Escape, which would also put a tile down.
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, [drawingFlow, flowStore]);
+  }, [handingOff, flowStore]);
 
   // N adds a note at the pointer, or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, H pans.
@@ -1580,6 +1806,8 @@ function BoardView() {
         if (event.defaultPrevented || (active !== null && active !== document.body && active.closest('.react-flow') === null)) return;
         return setExpanded(collapseFront);
       }
+      // F2 has asked a tile to open its name field, which is yet to take the keys: they are the name's, not a shortcut.
+      if (renameRequest !== undefined) return;
       const key = event.key.toLowerCase();
       if (key === 'n') {
         event.preventDefault();
@@ -1595,7 +1823,7 @@ function BoardView() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, tool, createItem, boardCentre, screenToFlowPosition, pickMode]);
+  }, [loaded, tool, renameRequest, createItem, boardCentre, screenToFlowPosition, pickMode]);
 
   /** Adds `file` as an image item centred on `centre`: its bytes go to the daemon's image store first. */
   const addImage = useCallback(
@@ -1775,47 +2003,76 @@ function BoardView() {
     [moveTilesTo, saveZoneLayout],
   );
 
+  /** What deleting `zones` leaves of each: the tiles that stay loose and the connectors that go with it. */
+  const zonesToDelete = useCallback(
+    (zones: Zone[]): ZoneToDelete[] =>
+      zones.map((zone) => ({
+        zone,
+        tiles: nodesRef.current.filter((node) => node.parentId === zone.id && isSessionTile(node)).length,
+        connectors: connectorsRef.current.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'zone' && end.id === zone.id)).length,
+      })),
+    [],
+  );
+
   /**
-   * Dissolves a group: the daemon puts its tiles loose where they are drawn and removes it, as one step; its
-   * notes, cards and connectors stay where they are, as when a zone goes. One step to undo, which makes the
-   * group again and puts back what was in it; and a group holding tiles asks first.
+   * Deletes zones, after the user has confirmed, then runs `then` as part of the same undo step if
+   * they all went (the rest of a mixed selection): for each, the daemon puts its tiles loose where they
+   * are drawn and removes it, as one step; its notes, cards and connectors stay where they are, as when a zone goes (the
+   * connectors on the zone itself go with it). No session, worktree, branch or repo folder is touched; with
+   * `deleteClone`, a managed clone's folder goes too. One step to undo, which makes the zones again, bound to
+   * their repos, and puts back what was in them.
    */
-  const dissolveZone = useCallback(
-    (zone: Zone) => {
-      const held = nodesRef.current.filter((node) => node.parentId === zone.id);
-      const tiles = held.filter(isSessionTile);
-      const group: DissolvedGroup = {
-        zone: snapshotOfZone(zone),
-        tiles: tiles.map((node) => ({ nodeId: node.id, at: node.position })),
-        items: held.filter(isItemNode).map(({ data: { item } }) => ({ id: item.id, x: item.x, y: item.y })),
-        connectors: connectorsRef.current.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'zone' && end.id === zone.id)),
-      };
-      const run = async () => {
-        setNotice(undefined);
+  const removeZones = useCallback(
+    async (zones: Zone[], deleteClone: boolean, then?: () => void) => {
+      setNotice(undefined);
+      const recorded: [string, BoardState, null][] = [];
+      const removed: { zone: Zone; cloneError: string | null }[] = [];
+      for (const zone of zones) {
+        const held = nodesRef.current.filter((node) => node.parentId === zone.id);
+        const group: DissolvedGroup = {
+          zone: zoneSnapshot(zone),
+          tiles: held.filter(isSessionTile).map((node) => ({ nodeId: node.id, at: node.position })),
+          items: held.filter(isItemNode).map(({ data: { item } }) => ({ id: item.id, x: item.x, y: item.y })),
+          connectors: connectorsRef.current.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'zone' && end.id === zone.id)),
+        };
+        let cloneError: string | null;
         try {
-          await window.agentBoard.zones.dissolve(zone.id);
-          // The daemon deleted the connectors on the group with it, and doesn't announce that.
-          const gone = new Set(group.connectors.map((connector) => connector.id));
-          if (gone.size > 0) setConnectors((current) => current.filter((connector) => !gone.has(connector.id)));
-          history.record([[historyKey.zoneGroup(zone.id), { type: 'zoneGroup', group }, null]]);
-          toasts.show({ tone: 'success', message: `${zone.name} is dissolved: its tiles stay where they are` });
+          ({ cloneError } = await window.agentBoard.zones.dissolve(zone.id, { deleteClone: deleteClone && zone.managedClone }));
         } catch (error) {
-          report('dissolve the zone')(error);
+          report(`delete ${zone.name}`)(error);
+          continue;
         }
-      };
-      if (tiles.length === 0 && group.connectors.length === 0) return void run();
-      askDelete({
-        title: `Dissolve ${zone.name}?`,
-        lines: [
-          tiles.length === 0
-            ? 'The group goes, with the connectors on it; ⌘Z brings it back.'
-            : `Its ${tiles.length === 1 ? 'tile stays' : `${tiles.length} tiles stay`} on the board where ${tiles.length === 1 ? 'it is' : 'they are'}. The group goes, with any connectors on it; ⌘Z brings it back.`,
-        ],
-        confirm: 'Dissolve',
-        run: () => void run(),
+        // The daemon deleted the connectors on the zone with it, and doesn't announce that.
+        const gone = new Set(group.connectors.map((connector) => connector.id));
+        if (gone.size > 0) setConnectors((current) => current.filter((connector) => !gone.has(connector.id)));
+        recorded.push([historyKey.zoneGroup(zone.id), { type: 'zoneGroup', group }, null]);
+        removed.push({ zone, cloneError });
+      }
+      history.record(recorded);
+      // The rest of a mixed selection goes only if every zone did, and in this step, so one ⌘Z takes it all back.
+      if (removed.length === zones.length) then?.();
+      const failed = removed.filter((each) => each.cloneError !== null);
+      if (removed.length === 0) return;
+      toasts.show({
+        tone: failed.length > 0 ? 'error' : 'success',
+        message:
+          failed.length > 0
+            ? `${failed.map((each) => each.zone.name).join(', ')} deleted, but its clone could not be removed: ${failed[0]!.cloneError}`
+            : removed.length === 1
+              ? `${removed[0]!.zone.name} is deleted: its tiles stay where they are`
+              : `${removed.length} zones are deleted: their tiles stay where they are`,
       });
     },
-    [report, toasts, history, askDelete],
+    [report, toasts, history],
+  );
+
+  /** Asks to delete `zones` in one confirmation that names them, then deletes them. */
+  const deleteZones = useCallback(
+    (zones: Zone[]) => {
+      const { title, lines, cloneLabel } = zoneDeleteText(zonesToDelete(zones), home);
+      askDelete({ title, lines, confirm: 'Delete', cloneLabel: cloneLabel, run: (_keep, deleteClone) => void removeZones(zones, deleteClone) });
+    },
+    [askDelete, removeZones, zonesToDelete, home],
   );
 
   /** Tidies the tiles loose on the board: in a grid where they are, clear of zones and items. Saved, as one step to undo. */
@@ -1870,12 +2127,15 @@ function BoardView() {
           laidOut(current.map((node) => (isZone(node) && node.id === id ? { ...node, position: { x: layout.x, y: layout.y }, width: layout.width, height: layout.height } : node))),
         );
       } else if (state?.type === 'zoneGroup') {
-        // Undoing a dissolve: the group again under its own id, then its tiles and items back in it. This runs after the
+        // Undoing a delete: the zone again under its own id, then its tiles and items back in it. This runs after the
         // undo has returned, so it must not record: the tile move is the unrecorded one, and the items go to the daemon,
         // whose word of them updates the board.
         const { zone, tiles, items, connectors } = state.group;
         if (nodeIds.has(zone.id)) continue;
         window.agentBoard.zones.restore(zone).then((restored) => {
+          if (zone.repoRoot != null && restored.repoRoot === null) {
+            toasts.show({ message: `${restored.name} is back as a group: its repo is no longer there` });
+          }
           setNodes((current) => withZone(current, restored));
           for (const { nodeId, at } of tiles) {
             const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
@@ -1886,20 +2146,20 @@ function BoardView() {
           }
           // The daemon deleted these with the group. Made straight away, not through putConnector, which would record.
           for (const connector of connectors) {
-            const { id, from, to, style, startEnd, endEnd, color, label } = connector;
+            const { id, from, to, style, startEnd, endEnd, color, label, points } = connector;
             const present = (end: ConnectorEnd) => end.type === 'zone' || nodesRef.current.some((known) => known.id === nodeIdOf(end));
             if (!present(from) || !present(to)) continue;
             setConnectors((current) => withConnector(current, connector));
-            window.agentBoard.connectors.create({ id, from, to, style, startEnd, endEnd, color, label }).catch((error: unknown) => {
+            window.agentBoard.connectors.create({ id, from, to, style, startEnd, endEnd, color, label, points }).catch((error: unknown) => {
               setConnectors((current) => current.filter((known) => known.id !== id));
               report('put a connector back')(error);
             });
           }
         }, report('bring the group back'));
       } else if (state === null && key.startsWith(historyKey.zoneGroup(''))) {
-        // Redoing a dissolve.
+        // Redoing a delete.
         const id = key.slice(historyKey.zoneGroup('').length);
-        if (nodeIds.has(id)) window.agentBoard.zones.dissolve(id).catch(report('dissolve the zone'));
+        if (nodeIds.has(id)) window.agentBoard.zones.dissolve(id).catch(report('delete the zone'));
       } else if (state?.type === 'zoneLook') {
         const id = key.slice(historyKey.zoneLook('').length);
         if (!nodeIds.has(id)) continue;
@@ -1913,7 +2173,7 @@ function BoardView() {
         if (nodeIds.has(nodeId)) setTileSizes((current) => withTileSize(current, nodeId, state.size));
       } else if (state?.type === 'name') {
         // Not through the tile action, which would record it; and left be if the session or shell has gone.
-        if (nameOf(state.target) !== undefined) renameDirect(state.target, state.name).catch(report('undo the rename'));
+        if (nameOf(state.target) !== undefined) renameDirect(state.target, state.name).then((saved) => showZoneName(state.target, saved), report('undo the rename'));
       }
     }
     for (const state of entries) {
@@ -1922,14 +2182,17 @@ function BoardView() {
       const present = (end: ConnectorEnd) => nodeIds.has(nodeIdOf(end)) || coming.has(nodeIdOf(end));
       if (!present(connector.from) || !present(connector.to)) continue;
       if (connectorsRef.current.some((known) => known.id === connector.id)) {
-        const { id, style, startEnd, endEnd, color, label } = connector;
-        connectorActions.update({ id, style, startEnd, endEnd, color, label });
+        const { id, startEnd, endEnd, color, label } = connector;
+        connectorActions.update({ id, startEnd, endEnd, color, label, ...shapeOf(connector) });
       } else putConnector(connector);
     }
-    // Only between agents still on the board: undo never brings back an agent, or the edge with it.
+    // Only between agents still on the board: undo never brings back an agent, or the edge with it. One still there is
+    // only reshaped: its rules stay as they are now.
     for (const state of entries) {
-      if (state?.type !== 'flowEdge' || flowEdgesRef.current.some((known) => known.id === state.edge.id)) continue;
-      if (nodeIds.has(tileNodeId('agent', state.edge.from)) && nodeIds.has(tileNodeId('agent', state.edge.to))) flow.actions.restore(state.edge);
+      if (state?.type !== 'flowEdge') continue;
+      const { id, fromSide, toSide, style, points } = state.edge;
+      if (flowEdgesRef.current.some((known) => known.id === id)) flow.actions.update(id, { fromSide, toSide, style, points });
+      else if (nodeIds.has(tileNodeId('agent', state.edge.from)) && nodeIds.has(tileNodeId('agent', state.edge.to))) flow.actions.restore(state.edge);
     }
     // Shells and panes moved between windows and the board, one call after another: a shell tile is back on
     // the board before its tabs go back to it. One gone meanwhile is left be.
@@ -1937,7 +2200,8 @@ function BoardView() {
       [...states].flatMap(([key, state]) => (state?.type === 'shellPlace' ? [{ id: key.slice(historyKey.shell('').length), to: state.to, order: state.order }] : [])),
     );
     const panePlaces = [...states].flatMap(([key, state]) => (state?.type === 'panePlace' ? [{ sessionId: key.slice(historyKey.pane('').length), state }] : []));
-    if (shellPlaces.length === 0 && panePlaces.length === 0) return;
+    const surfacePlaces = [...states.values()].flatMap((state) => (state?.type === 'surfacePlace' ? [state] : []));
+    if (shellPlaces.length === 0 && panePlaces.length === 0 && surfacePlaces.length === 0) return;
     /** Whether the owner or zone a shell would go back to has gone meanwhile (deleted, say): it stays where it is. */
     const placeGone = (to: ShellPlace) =>
       'owner' in to
@@ -1969,8 +2233,16 @@ function BoardView() {
         tookShells([source, moved]);
       });
     }
+    // Tabs that are only a place in a window, back into the window they were in, out of the one they are in
+    // now; a tab window they go back into pops out again. One whose window has gone meanwhile is said, and left be.
+    for (const state of surfacePlaces) {
+      then(async () => {
+        await moveSurface({ kind: 'surface', surface: state.surface, from: state.from, to: state.in });
+        popOutTabWindow(state.in?.owner, state.surface);
+      });
+    }
     // The keyboard stays the board's, so ⌘Z and ⇧⌘Z go on stepping through moves.
-    void moving.then(keyboardToBoard);
+    void moving.then(movesSettled);
   };
 
   /** Moves the zone's top-left corner to `at` on the board, what is in it with it, and saves it. */
@@ -2051,13 +2323,29 @@ function BoardView() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [loaded, editing.selection, clickOpens, tileActions]);
 
+  /** Deletes the items and connectors `picked` at confirm time and the sessions in `targets`, those with a worktree keeping it if `keep`. */
+  const deleteTargets = useCallback(
+    (targets: DeleteTargets, sessions: TileNodeType[], keep: boolean, picked: ReturnType<typeof editing.selectedForDelete>) => {
+      editing.deleteSelection(picked);
+      for (const agent of targets.agents) deleteAgent(agent.sessionId, false, keep);
+      for (const node of sessions) if (node.data.shell !== undefined) deleteShell(node.data.shell.id);
+      for (const external of targets.externals) dismissExternal(external.id);
+    },
+    [editing, deleteAgent, deleteShell, dismissExternal],
+  );
+
   /**
    * Deletes what is selected, as ⌫ and the context menu do: items and connectors at once, undoably; a lone session as its
-   * tile's own delete does, asking if it needs to; anything more with a session in it behind one combined question.
+   * tile's own delete does, asking if it needs to; anything more with a session in it behind one combined question; and
+   * zones, with anything else selected, always behind one question that names them.
    */
   const deleteSelected = useCallback(() => {
-    const sessions = selectedNodes(nodesRef.current).all.filter(isSessionTile);
-    if (sessions.length === 0) return editing.deleteSelection();
+    const selected = selectedNodes(nodesRef.current).all;
+    const sessions = selected.filter(isSessionTile);
+    const zones = selected.filter(isZone).map((node) => node.data.zone);
+    if (sessions.length === 0 && zones.length === 0) return editing.deleteSelection();
+    // What is selected now: the confirmation may wait, and a zone's delete takes a while.
+    const picked = editing.selectedForDelete();
     const targets: DeleteTargets = {
       agents: sessions.flatMap((node) => node.data.agent ?? []),
       shells: sessions.flatMap((node) =>
@@ -2068,6 +2356,29 @@ function BoardView() {
       connectors: selectedConnectorsRef.current.size,
       agentShells: new Map(sessions.flatMap((node) => (node.data.agent === undefined ? [] : [[node.data.agent.sessionId, liveShellCount({ kind: 'agent', agent: node.data.agent }, shellsRef.current ?? [])]]))),
     };
+    if (zones.length > 0) {
+      const cloning = zones.filter((zone) => zone.clone !== null);
+      if (cloning.length === zones.length && sessions.length === 0 && targets.items === 0 && targets.connectors === 0) {
+        return report(`delete ${cloning[0]!.name}`)(new Error('It is still cloning: cancel the clone first'));
+      }
+      const going = zones.filter((zone) => zone.clone === null);
+      const text = going.length > 0 ? zoneDeleteText(zonesToDelete(going), home) : { title: '', lines: [], cloneLabel: undefined };
+      const others = sessions.length > 0 || targets.items > 0 || targets.connectors > 0;
+      // An agent that works in a clone, or worktrees kept, stop the daemon deleting it: the box isn't offered then.
+      const inClone = going.some((zone) => zone.managedClone && targets.agents.some((agent) => agent.repoRoot === zone.repoRoot));
+      const lines = [...(others ? deleteLines(targets) : []), ...text.lines];
+      if (cloning.length > 0) lines.push(`${cloning.map((zone) => zone.name).join(', ')} ${cloning.length === 1 ? 'is' : 'are'} still cloning, and stay${cloning.length === 1 ? 's' : ''}.`);
+      if (inClone && text.cloneLabel !== undefined) lines.push('The clone stays while an agent in this selection works in it: delete those agents first to delete the clone.');
+      askDelete({
+        title: others ? 'Delete selection?' : text.title,
+        lines,
+        confirm: 'Delete',
+        keepLabel: targets.agents.some((agent) => agent.ownsWorktree) ? 'Delete, keeping worktrees' : undefined,
+        cloneLabel: inClone ? undefined : text.cloneLabel,
+        run: (keep, deleteClone) => void removeZones(going, deleteClone, () => deleteTargets(targets, sessions, keep, picked)),
+      });
+      return;
+    }
     if (!needsConfirmation(targets)) {
       const { agent, shell, external } = sessions[0]!.data;
       if (agent !== undefined) return tileActions.deleteAgent(agent.sessionId);
@@ -2080,14 +2391,9 @@ function BoardView() {
       lines: deleteLines(targets),
       confirm: 'Delete',
       keepLabel: targets.agents.some((agent) => agent.ownsWorktree) ? 'Delete, keeping worktrees' : undefined,
-      run(keep) {
-        editing.deleteSelection();
-        for (const agent of targets.agents) deleteAgent(agent.sessionId, false, keep);
-        for (const node of sessions) if (node.data.shell !== undefined) deleteShell(node.data.shell.id);
-        for (const external of targets.externals) dismissExternal(external.id);
-      },
+      run: (keep) => deleteTargets(targets, sessions, keep, picked),
     });
-  }, [editing, tileActions, askDelete, deleteAgent, deleteShell, dismissExternal]);
+  }, [editing, tileActions, askDelete, deleteTargets, zonesToDelete, removeZones, report, home]);
 
   // Whether the pointer last went down inside an expanded tile or a session window: then a ⌫ is for what is shown there.
   const pointerInSession = useRef(false);
@@ -2106,6 +2412,13 @@ function BoardView() {
     rename: () => {
       const [node] = editing.selection().nodes;
       if (node !== undefined) setTimeout(() => setRenameRequest(node.id), MENU_FOCUS_RETURN_MS);
+    },
+    // Two selected join at once; one waits for its other end.
+    connect: () => {
+      const [first, second] = editing.selection().nodes;
+      if (first === undefined) return;
+      if (second === undefined) setConnectingFrom(first.id);
+      else connectNodes(first.id, second.id);
     },
     grid,
     toggleGrid,
@@ -2149,6 +2462,70 @@ function BoardView() {
       .map((node) => ({ ...node.position, ...sizeOfNode(node) })),
     ...[...looseSpots.current].map((spot) => spot.rect),
   ];
+
+  /** The window of the agent or shell tile `owner` names, as the board opens it. */
+  const windowTargetOf = (owner: { kind: string; id: string }): WindowTarget | undefined => {
+    if (owner.kind === 'agent') {
+      const agent = agentsRef.current.find((known) => known.sessionId === owner.id);
+      return agent && { kind: 'session', id: agent.sessionId, title: agentTitle(agent) };
+    }
+    const shell = owner.kind === 'shell' ? shellsRef.current?.find((known) => known.id === owner.id && known.owner === null) : undefined;
+    return shell && { kind: 'shell', id: shell.id, title: shellTitle(shell) };
+  };
+
+  /**
+   * Pops a tab let go outside every window (slice 4) out into an OS window of its own, at `at` on the screen.
+   * A shell tab or a pane becomes a shell tile loose on the board, beside the tile of the window it left and clear of
+   * everything, and that tile's window pops out; a shell tile's own tab, alone, pops its window out as it is. A
+   * window's own tab pops its window out; another session's leaves the window, and that session's window pops out. A
+   * pull request or web tab goes into a tab window of its own. Undone, the tab goes back; the windows stay as they are.
+   */
+  const popOutDragged = (drag: TabDrag, at: ScreenPoint) => {
+    if (drag.kind === 'surface') {
+      const { surface, from } = drag;
+      if (surface.kind === 'own') {
+        const target = windowTargetOf(from);
+        if (target !== undefined) popOut(target, at);
+        return;
+      }
+      if (surface.kind === 'session') {
+        const target = windowTargetOf(surface.target);
+        if (target === undefined) return;
+        // Only once it has left the window: refused, it is still shown there, and nothing pops out.
+        void moveTab({ kind: 'surface', surface, from, to: null }).then(({ made }) => made && popOut(target, at));
+        return;
+      }
+      if (surface.kind !== 'pr' && surface.kind !== 'web' && surface.kind !== 'gate') return;
+      const owner = { kind: 'tabs', id: crypto.randomUUID() } as const;
+      void moveTab({ kind: 'surface', surface, from, to: { owner } }).then(({ made }) => made && popOutTabWindow(owner, surface, at));
+      return;
+    }
+    const shell = shellsRef.current?.find((known) => known.id === drag.shellId);
+    if (shell === undefined) return;
+    if (drag.kind === 'tab' && shell.owner === null) {
+      popOut({ kind: 'shell', id: shell.id, title: shellTitle(shell) }, at);
+      return;
+    }
+    const left = getNodes().find((node) => node.id === tileNodeId(drag.from.kind === 'agent' ? 'agent' : 'shell', drag.from.id));
+    const centre = boardCentre();
+    const beside =
+      left === undefined
+        ? { x: centre.x - AGENT_TILE_SIZE.width / 2, y: centre.y - AGENT_TILE_SIZE.height / 2 }
+        : { x: absoluteOf(left).x + AGENT_TILE_SIZE.width + TILE_GAP, y: absoluteOf(left).y };
+    const position = freeSpotFor(beside, AGENT_TILE_SIZE, [...zoneLayouts(), ...looseTiles()]);
+    const move = dropMove(drag, { tile: { zoneId: null, ...position, toFront: true } });
+    if (move === undefined) return;
+    void moveTab(move).then(({ shell: moved }) => {
+      if (moved?.owner === null) popOut({ kind: 'shell', id: moved.id, title: shellTitle(moved) }, at);
+    });
+  };
+  const popOutDraggedRef = useRef(popOutDragged);
+  popOutDraggedRef.current = popOutDragged;
+  useEffect(() => window.agentBoard.tabDrags.onPopOut((drag, at) => popOutDraggedRef.current(drag, at)), []);
+  // Loaded, and listening for them: the moves and pop-outs a popped-out window made while the board was closed come now.
+  useEffect(() => {
+    if (loaded) window.agentBoard.tabDrags.ready();
+  }, [loaded]);
 
   /** A free spot for a new zone, near the middle of the view, clear of the zones and loose tiles. */
   const newZoneSpot = () => {
@@ -2201,8 +2578,6 @@ function BoardView() {
     },
     [report, reloadExternals, setNodes, toasts],
   );
-  /** The home directory loose shells start in, for shell tiles' folder chips; undefined until the daemon says. */
-  const [home, setHome] = useState<string>();
   useEffect(() => {
     window.agentBoard.daemonHealth().then((health) => setHome(health.homeDir), () => {});
   }, []);
@@ -2238,10 +2613,7 @@ function BoardView() {
       },
       pickDefaultRepo: setDefaultRepoZone,
       tidy: (zone) => tidyZone(zone.id),
-      async rename(zone, name) {
-        const saved = await window.agentBoard.zones.setLook(zone.id, { name });
-        setNodes((current) => withZone(current, saved));
-      },
+      rename: (zone, name) => tileActions.rename({ kind: 'zone', zoneId: zone.id }, name),
       recolor(zone, color) {
         const { fillOpacity } = zone;
         history.record([[historyKey.zoneLook(zone.id), { type: 'zoneLook', look: { color: zone.color, fillOpacity } }, { type: 'zoneLook', look: { color, fillOpacity } }]]);
@@ -2270,7 +2642,7 @@ function BoardView() {
         history.record([[historyKey.zoneLook(zone.id), { type: 'zoneLook', look: { color: zone.color, fillOpacity: before } }, { type: 'zoneLook', look: { color: zone.color, fillOpacity } }]]);
         window.agentBoard.zones.setLook(zone.id, { fillOpacity }).then((saved) => setNodes((current) => withZone(current, saved)), report("set the zone's fill opacity"));
       },
-      dissolve: dissolveZone,
+      deleteZone: (zone: Zone) => deleteZones([zone]),
       setBoardMcp(zone, boardMcp) {
         window.agentBoard.zones.configure(zone.id, { boardMcp }).then(
           (saved) => {
@@ -2280,6 +2652,8 @@ function BoardView() {
           report('change the zone’s board MCP setting'),
         );
       },
+      editGateCommand: setGateCommandZone,
+      editRoleTemplates: setRoleTemplatesZone,
       setAgentsOrchestrate(zone, agentsOrchestrate) {
         window.agentBoard.zones.configure(zone.id, { agentsOrchestrate }).then(
           (saved) => {
@@ -2295,7 +2669,7 @@ function BoardView() {
         );
       },
     }),
-    [setNodes, reloadExternals, toasts, report, tidyZone, dissolveZone, history],
+    [setNodes, reloadExternals, toasts, report, tidyZone, deleteZones, history],
   );
   /**
    * Starts a shell tile loose on the board and opens its window, typing `command` into it if given (the PTY holds it
@@ -2508,7 +2882,7 @@ function BoardView() {
 
   return (
     <div
-      className={connecting ? 'board board-connecting' : drawingFlow ? 'board board-drawing-flow' : 'board'}
+      className={handingOff ? 'board board-connecting board-drawing-flow' : connecting ? 'board board-connecting' : 'board'}
       ref={container}
       data-mode={mode}
       onPointerMove={(event) => {
@@ -2519,18 +2893,24 @@ function BoardView() {
       }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
-        const drag = event.dataTransfer.types.includes(SHELL_DRAG_TYPE) ? shellDrag() : undefined;
+        // A tab dragged in this window or another of the app's: that a drag is on is heard from main, as its data
+        // type may not reach a window it didn't start in.
+        const drag = tabDrag();
         if (drag === undefined) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         const owner = ownerAtPoint(event.clientX, event.clientY);
-        dropOver.set(owner !== undefined && dropMove(drag, { owner }) !== undefined ? dropKey(owner) : undefined);
+        dropOver.set(owner !== undefined && landsOn(drag, owner) ? dropKey(owner) : undefined);
+      }}
+      onDragLeave={(event) => {
+        // Off the window, the tile or window it was over is no longer shown.
+        if (event.relatedTarget === null) dropOver.set(undefined);
       }}
       onDrop={(event) => {
-        const drag = event.dataTransfer.types.includes(SHELL_DRAG_TYPE) ? shellDrag() : undefined;
+        const drag = tabDrag();
         if (drag !== undefined) {
           event.preventDefault();
-          setShellDrag(undefined);
+          dropTaken();
           shellDropped(drag, { x: event.clientX, y: event.clientY });
           return;
         }
@@ -2576,8 +2956,9 @@ function BoardView() {
                           <LiveRotationsContext value={rotations}>
                           <SeveralSelectedContext value={severalSelected}>
                           <ConnectorActionsContext value={connectorActions}>
-                          <FlowEdgeActionsContext value={flow.actions}>
+                          <FlowEdgeActionsContext value={flowEdgeActions}>
                           <HandoffsContext value={handoffs}>
+                          <HandingOffContext value={handingOff}>
                             <RepresentationProvider style={DEFAULT_REPRESENTATION}>
                               <ReactFlow
                               nodes={shown}
@@ -2587,10 +2968,11 @@ function BoardView() {
                               // A connector can join any two objects, whichever handles: the sides are the user's choice.
                               connectionMode={ConnectionMode.Loose}
                               edgesReconnectable={false}
-                              onConnectStart={(_event, { handleId }) => {
-                                flowDrawCancelled.current = false;
-                                if (isFlowPort(handleId)) setDrawingFlow(true);
-                                else setConnecting(true);
+                              onConnectStart={(event, { nodeId }) => {
+                                handOffCancelled.current = false;
+                                connectingFromAgent.current = nodeId !== null && tileSubject(nodeId)?.kind === 'agent';
+                                setHandingOff(connectingFromAgent.current && event.altKey);
+                                setConnecting(true);
                               }}
                               connectionLineComponent={ConnectionLine}
                               onConnectEnd={connectorDropped}
@@ -2647,7 +3029,7 @@ function BoardView() {
                                 // rather than overlapping it.
                                 const adopter = adopterOf(dragged, pointOf(event));
                                 if (adopter !== undefined) {
-                                  moveShell({ kind: 'tab', shellId: (dragged[0] as TileNodeType).data.shell!.id, to: { owner: adopter } });
+                                  void moveTab({ kind: 'tab', shellId: (dragged[0] as TileNodeType).data.shell!.id, to: { owner: adopter } });
                                   return;
                                 }
                                 // Where it was last drawn: snapped, and under the pointer, which React Flow's own reckoning isn't.
@@ -2657,14 +3039,14 @@ function BoardView() {
                                 for (const node of dragged.filter(isItemNode)) itemDropped(node);
                                 for (const node of dragged.filter(isSessionTile)) tileDropped(node);
                               }}
-                              // Items, connectors and sessions are deleted from the keyboard, sessions behind a confirmation:
-                              // removing a zone needs a designed, confirmed flow first.
+                              // Items, connectors, sessions and zones are deleted from the keyboard, sessions and zones behind a
+                              // confirmation.
                               deleteKeyCode={['Backspace', 'Delete']}
                               // React Flow adds a deleted node's children (a zone's notes) to the list: only items selected
                               // themselves go, and a connector selected itself: one on a deleted item goes with it, in the daemon.
                               onBeforeDelete={async ({ nodes: doomed, edges: doomedEdges }) => {
-                                // With a session selected the board deletes it all itself, after asking (see deleteSelected).
-                                if (doomed.some((node) => isSessionTile(node) && node.selected === true)) {
+                                // With a session or a zone selected the board deletes it all itself, after asking (see deleteSelected).
+                                if (doomed.some((node) => (isSessionTile(node) || isZone(node)) && node.selected === true)) {
                                   // Never from inside a session's window, its expanded tile or a dialog: the key is theirs.
                                   const inSession = pointerInSession.current || document.activeElement?.closest(SESSION_SURFACES) != null;
                                   if (!inSession && document.querySelector(KEY_BLOCKERS) === null) deleteSelected();
@@ -2766,7 +3148,16 @@ function BoardView() {
                                 </ViewportPortal>
                               )}
                             </ReactFlow>
+                            {handOffChoice !== undefined && (
+                              <HandOffChooser
+                                at={handOffChoice.at}
+                                payload={NEW_EDGE_LABEL}
+                                onArrow={() => setHandOffChoice(undefined)}
+                                onHandOff={() => handOff(handOffChoice)}
+                              />
+                            )}
                           </RepresentationProvider>
+                          </HandingOffContext>
                           </HandoffsContext>
                           </FlowEdgeActionsContext>
                           </ConnectorActionsContext>
@@ -2793,7 +3184,7 @@ function BoardView() {
       )}
       <BoardChrome
         loaded={loaded}
-        empty={loaded && nodes.length === 0}
+        empty={loaded && nodes.length === 0 && !placeSession.placing}
         loadedEmpty={loadedEmpty}
         zones={zones}
         agents={agents}
@@ -2846,6 +3237,7 @@ function BoardView() {
         <NewAgentDialog
           key={newAgent.zone.id}
           zone={newAgent.zone}
+          agents={agents}
           issue={newAgent.issue}
           onStarted={(agent) => {
             const zone = newAgent.zone;
@@ -2918,6 +3310,20 @@ function BoardView() {
           onCancel={() => setLinking(undefined)}
         />
       )}
+      {roleTemplatesZone !== undefined && (
+        <RoleTemplatesDialog key={roleTemplatesZone.id} zone={roleTemplatesZone} onClose={() => setRoleTemplatesZone(undefined)} />
+      )}
+      {gateCommandZone !== undefined && (
+        <GateCommandDialog
+          key={gateCommandZone.id}
+          zone={gateCommandZone}
+          onSaved={(saved) => {
+            setGateCommandZone(undefined);
+            setNodes((current) => withZone(current, saved));
+          }}
+          onCancel={() => setGateCommandZone(undefined)}
+        />
+      )}
       {scheduling !== undefined && (
         <ScheduleDialog
           key={scheduling.sessionId}
@@ -2954,9 +3360,12 @@ function BoardView() {
               {pendingDelete.keepLabel !== undefined && (
                 <Button
                   variant="secondary"
+                  disabled={cloneTicked}
+                  title={cloneTicked ? 'A clone can only be deleted with the worktrees it holds' : undefined}
                   onClick={() => {
+                    const deleteClone = cloneTicked;
                     settleDelete();
-                    pendingDelete.run(true);
+                    pendingDelete.run(true, deleteClone);
                   }}
                 >
                   {pendingDelete.keepLabel}
@@ -2965,8 +3374,9 @@ function BoardView() {
               <Button
                 variant="danger"
                 onClick={() => {
+                  const deleteClone = cloneTicked;
                   settleDelete();
-                  pendingDelete.run(false);
+                  pendingDelete.run(false, deleteClone);
                 }}
               >
                 {pendingDelete.confirm}
@@ -2978,6 +3388,9 @@ function BoardView() {
             // Lines may repeat (two shells of one name), and the list is fixed for the dialog.
             <p key={index}>{line}</p>
           ))}
+          {pendingDelete.cloneLabel !== undefined && (
+            <Checkbox label={pendingDelete.cloneLabel} checked={cloneTicked} onChange={(event) => setCloneTicked(event.target.checked)} />
+          )}
         </Dialog>
       )}
       {resumingExternal !== undefined && (
@@ -3040,12 +3453,6 @@ function minimapColor(node: Node): string {
 function leastUsedColor(used: string[]): string {
   const uses = (color: string) => used.filter((each) => each === color).length;
   return ZONE_COLORS.reduce((best, color) => (uses(color) < uses(best) ? color : best));
-}
-
-/** What `zone.restore` needs to make `zone` again. */
-function snapshotOfZone(zone: Zone): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo };
 }
 
 /** `nodes` with a zone change from the daemon applied. */

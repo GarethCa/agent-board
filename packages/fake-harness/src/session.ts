@@ -232,11 +232,34 @@ export class FakeSession {
    * Calls an MCP server's tool as the model would, starting the server the first time: a tool call named
    * `mcp__<server>__<tool>`, its result's text printed. Undefined when the config names no such server.
    */
-  async callMcpTool(server: string, tool: string, args: Record<string, unknown>): Promise<McpToolResult | undefined> {
+  async callMcpTool(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    { giveUpMs }: { giveUpMs?: number } = {},
+  ): Promise<McpToolResult | undefined> {
     const config = this.dialect.mcpServers[server];
     if (config === undefined) return undefined;
     this.mcpClients[server] ??= new McpClient(config, this.dialect.cwd);
-    const result = await this.untilInterrupted(this.mcpClients[server].callTool(tool, args));
+    // The server is started and has listed its tools before the call goes out, as in a harness, so a tool timeout
+    // counts from the call itself: one that also counted the server's start could give up before the call was sent.
+    await this.untilInterrupted(this.mcpClients[server].listTools());
+    const cancel = new AbortController();
+    const call = this.mcpClients[server].callTool(tool, args, cancel.signal);
+    call.catch(() => {});
+    // With `giveUpMs`, a harness whose own tool timeout passes first: it drops the call, sending no cancel, and the
+    // model reads that the tool timed out.
+    const timedOut: McpToolResult = { text: `MCP tool ${tool} timed out`, isError: true };
+    const raced =
+      giveUpMs === undefined ? call : Promise.race([call, new Promise<McpToolResult>((resolve) => setTimeout(() => resolve(timedOut), giveUpMs))]);
+    let result: McpToolResult;
+    try {
+      result = await this.untilInterrupted(raced);
+    } catch (error) {
+      // An interrupted turn cancels the call it was in, as the real CLIs are expected to (unless told to drop it).
+      if (process.env.FAKE_HARNESS_MCP_CANCEL !== '0') cancel.abort();
+      throw error;
+    }
     await this.runTool(`mcp__${server}__${tool}`, args, { content: [{ type: 'text', text: result.text }], isError: result.isError });
     this.print(`${result.text}\n`);
     return result;

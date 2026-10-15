@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paneFocusShortcut, windowShortcut, withPaneFocusShortcut, withWindowShortcut } from './keys';
+import { historyStep, paneFocusShortcut, windowShortcut, withPaneFocusShortcut, withWindowShortcut } from './keys';
 
 const press = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   code,
@@ -47,5 +47,23 @@ describe("moving between a session window's panes", () => {
 
   it('is written as the platform presses it', () => {
     expect([withPaneFocusShortcut('←', true), withPaneFocusShortcut('←', false)]).toEqual(['⌘⌥←', 'Ctrl+Shift+Alt+←']);
+  });
+});
+
+describe('the history keys', () => {
+  // The command key held either way, whichever platform runs the test.
+  const command = (key: string, more: { shiftKey?: boolean; altKey?: boolean } = {}) => ({ key, metaKey: true, ctrlKey: true, shiftKey: false, altKey: false, ...more });
+
+  it('are ⌘Z to undo, and ⇧⌘Z or ⌘Y to redo', () => {
+    expect(historyStep(command('z'))).toBe('undo');
+    expect(historyStep(command('Z', { shiftKey: true }))).toBe('redo');
+    expect(historyStep(command('y'))).toBe('redo');
+  });
+
+  it('are nothing else: no command key, Alt held, or another key', () => {
+    expect(historyStep({ ...command('z'), metaKey: false, ctrlKey: false })).toBeUndefined();
+    expect(historyStep(command('z', { altKey: true }))).toBeUndefined();
+    expect(historyStep(command('y', { shiftKey: true }))).toBeUndefined();
+    expect(historyStep(command('x'))).toBeUndefined();
   });
 });

@@ -11,6 +11,10 @@ export interface ToastOptions {
   id?: string;
   /** One action, such as Retry or Open. Taking it dismisses the toast. */
   action?: { label: string; onClick(): void };
+  /** Stays until dismissed, as an error does, for a toast that says what mode the app is in. */
+  persistent?: boolean;
+  /** Called when the person dismisses it (its × or its action), not when the code does. */
+  onDismissed?(): void;
 }
 
 type Toast = ToastOptions & Required<Pick<ToastOptions, 'tone' | 'id'>>;
@@ -47,7 +51,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       );
       clearTimeout(timers.current.get(id));
       timers.current.delete(id);
-      if (toast.tone !== 'error') timers.current.set(id, setTimeout(() => dismiss(id), LINGER_MS));
+      if (toast.tone !== 'error' && !toast.persistent) timers.current.set(id, setTimeout(() => dismiss(id), LINGER_MS));
       return id;
     },
     [dismiss],
@@ -69,7 +73,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       <ol className="ui-toasts" aria-label="Notifications" aria-live="polite">
         {toasts.map((toast) => (
           <li key={toast.id}>
-            <ToastView {...toast} onDismiss={() => dismiss(toast.id)} />
+            <ToastView
+              {...toast}
+              onDismiss={() => {
+                dismiss(toast.id);
+                toast.onDismissed?.();
+              }}
+            />
           </li>
         ))}
       </ol>

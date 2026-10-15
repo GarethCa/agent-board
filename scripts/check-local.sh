@@ -8,6 +8,7 @@
 # The heavy runs never overlap: the unit tests have 5-second timeouts and the e2e waits on app state, and both fail when
 # starved. So the wall time is the build plus the slowest of the rest, not the sum. For the per-PR subset, see `pnpm check:pr`.
 #
+# The visual and e2e steps hold the machine-wide e2e lock (scripts/e2e-lock), so gates in several worktrees take turns.
 # The gate is native only: the visual spec runs on this machine's own baselines.
 # On Linux with no display, the end-to-end tests run on a virtual display (scripts/e2e-headless.sh). Logs go to $CHECK_LOG_DIR (default: a temp dir).
 set -u
@@ -27,14 +28,22 @@ if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
   visual="sh scripts/e2e-headless.sh $visual"
 fi
 
+# Run as agent-board's merge gate (AGENT_BOARD_GATE set), it marks its steps for the app's Gate tab (ADR-0013): each
+# step's start, naming its log so the tab can follow it, and its end. Only with an absolute log dir, as the tab needs.
+marks=
+case "${AGENT_BOARD_GATE:-}:$log_dir" in 1:/*) marks=1 ;; esac
+[ -n "$marks" ] && echo "::gate steps lint typecheck test build e2e visual markdownlint knip"
+
 # Runs a step in the background; its outcome and time land in $log_dir/<name>.result for the table below to read.
 start() {
   name=$1
   shift
   (
     started=$(date +%s)
+    [ -n "$marks" ] && echo "::gate start $name log=$log_dir/$name.log"
     if "$@" >"$log_dir/$name.log" 2>&1; then outcome=pass; else outcome=FAIL; fi
     echo "$outcome $(($(date +%s) - started))" >"$log_dir/$name.result"
+    [ -n "$marks" ] && if [ "$outcome" = pass ]; then echo "::gate end $name pass"; else echo "::gate end $name fail"; fi
     echo "$name: $outcome (log: $log_dir/$name.log)"
   ) &
 }
@@ -53,9 +62,9 @@ wait
 if [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
   # Stage 3: the Electron runs. The native visual run goes first, alone (about ten seconds): its screenshots differ when
   # other apps are launching beside it. Then the e2e.
-  start visual sh -c "$visual"
+  start visual node scripts/e2e-lock/main.ts visual -- sh -c "$visual"
   wait
-  start e2e sh -c "$e2e"
+  start e2e node scripts/e2e-lock/main.ts e2e -- sh -c "$e2e"
   wait
 else
   # The e2e drives the built app; with the build broken it would test a stale one.

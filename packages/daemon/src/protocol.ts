@@ -1,6 +1,12 @@
 import type {
   ChecksState,
   PullRequest,
+  PullRequestCheck,
+  PullRequestComment,
+  PullRequestDetails,
+  PullRequestFile,
+  PullRequestRef,
+  PullRequestReview,
   PullRequestState,
   TrackerIssue,
   TrackerProject,
@@ -9,12 +15,21 @@ import type {
 import type { TrackerProvider } from '@agent-board/tracker/providers';
 import pkg from '../package.json' with { type: 'json' };
 import { paneIds, type PaneLayout, type SplitDirection } from './pane-layout.ts';
-import type { WindowLayout } from './window-layout.ts';
+import type { Placement, Surface, WindowLayout } from './window-layout.ts';
+import type { GateCleanup, GateRun } from './gate-rules.ts';
 
 export type { PaneLayout, SplitDirection };
+export type { GateCleanup, GateRun, GateRunStatus } from './gate-rules.ts';
+export type { GateStep, GateStepStatus } from './gate-output.ts';
 export type {
   ChecksState,
   PullRequest,
+  PullRequestCheck,
+  PullRequestComment,
+  PullRequestDetails,
+  PullRequestFile,
+  PullRequestRef,
+  PullRequestReview,
   PullRequestState,
   TrackerIssue,
   TrackerProject,
@@ -23,6 +38,7 @@ export type {
 };
 // The provider table has no Node imports, so clients (the app's renderer) can use it too.
 export { isTrackerProvider, shortIssueId, TRACKER_PROVIDERS } from '@agent-board/tracker/providers';
+export { pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
 import { isTrackerProvider } from '@agent-board/tracker/providers';
 
 /**
@@ -47,7 +63,7 @@ export function sameBuild(app: BuildInfo, daemon: BuildInfo | null): boolean {
   return daemon !== null && daemon.sha === app.sha;
 }
 
-/** A build as people should quote it: `abc1234 · 2026-10-09`. */
+/** A build as people should quote it: `abc1234 · 2026-01-01`. */
 export function describeBuild(build: BuildInfo | null): string {
   return build === null ? 'unknown build' : `${build.sha} · ${build.date.slice(0, 10)}`;
 }
@@ -118,10 +134,21 @@ export interface Zone {
    * any more, whoever let it. An agent an orchestrator starts never orchestrates.
    */
   agentsOrchestrate: boolean;
+  /**
+   * The merge gate: the command that checks an agent's work before it is merged, such as `pnpm check:local`, run
+   * in the agent's worktree only when the user asks; null for none. It runs through `sh -c` (`gateCommandArgv`), and may
+   * mark its steps (ADR-0013).
+   */
+  gateCommand: string | null;
   /** Where the zone's issues come from, or null if it has no tracker. */
   tracker: ZoneTracker | null;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
+  /**
+   * Whether it is bound to a whole repo the daemon cloned into its repos folder (`<repos dir>/<owner>/<repo>`), which
+   * deleting the zone can delete too (`zone.dissolve` with `deleteClone`). False for every other zone.
+   */
+  managedClone: boolean;
   /**
    * An unbound zone's default repo: a repo's root, or a folder in one, that agents started in it without a
    * repo of their own are cut from, and its shells start in. Null for none, and for every bound zone.
@@ -130,11 +157,21 @@ export interface Zone {
   createdAt: string;
 }
 
-/** A group as it can be made again (`zone.restore`): what a user set on it, not what is derived or in flight. */
+/**
+ * A zone as it can be made again (`zone.restore`): what a user set on it, not what is derived or in flight. A zone that
+ * was bound to a repo has the `repoRoot` and `folder` it was bound to; a group has neither.
+ */
 export type ZoneSnapshot = Pick<
   Zone,
-  'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'tracker' | 'defaultRepo'
->;
+  'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
+> &
+  Partial<Pick<Zone, 'repoRoot' | 'folder'>>;
+
+/** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
+export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder };
+}
 
 /**
  * A GitHub repo the daemon is cloning for a zone (`zone.clone`). The zone stays unbound, and starts no agent, until the
@@ -190,8 +227,22 @@ export interface GitHubRepoSource {
   localPath: string | null;
   /** Where `zone.clone` would clone it: `<repos dir>/<owner>/<repo>`. */
   clonePath: string;
+  /** Whether `localPath` is a copy `zone.findCopies` found, rather than one a zone, a recent folder or the managed folder has. */
+  foundCopy: boolean;
   /** Whether a zone on the board is bound to its local clone. */
   onBoard: boolean;
+}
+
+/** A folder the user picked, once the daemon has looked at it. */
+export interface CheckedFolder {
+  /** The folder, resolved: a repo's root, or a folder inside it. */
+  path: string;
+  /** The root of the git repo it is in. */
+  repoRoot: string;
+  /** The lowercase `owner/repo` of that repo's GitHub `origin`, or null when it has none. */
+  gitHubRepo: string | null;
+  /** The name a zone for it gets: the repo's, then the folder in it (`monorepo/apps/web`). */
+  name: string;
 }
 
 export type ZoneKind = 'repo' | 'folder' | 'unbound';
@@ -256,6 +307,7 @@ export interface ZoneSettings {
   codexBypassHookTrust: boolean;
   boardMcp: boolean;
   agentsOrchestrate: boolean;
+  gateCommand: string | null;
 }
 
 /** A zone's issue tracker: a provider and a scope in it, such as Linear team `ACME`. */
@@ -576,6 +628,18 @@ export type ConnectorLineEnd = (typeof CONNECTOR_LINE_ENDS)[number];
 /** The most characters a connector's label may have. */
 export const MAX_CONNECTOR_LABEL = 500;
 
+/**
+ * A bend a connector's or flow edge's line passes through: how far it is, on the board, from the middle of the line's
+ * two ends (where they meet their objects). So a line whose objects move together keeps its shape, and one whose end
+ * moves stretches with it.
+ */
+export interface EdgePoint {
+  x: number;
+  y: number;
+}
+/** The most bends a line may have. */
+export const MAX_EDGE_POINTS = 32;
+
 /** One end of a connector: the object it is fixed to, and the side of it. */
 export interface ConnectorEnd {
   type: ConnectorEndType;
@@ -599,6 +663,8 @@ export interface Connector {
   color: string | null;
   /** The text on the middle of the line; empty for none. */
   label: string;
+  /** The bends its line passes through, from `from` to `to`; none for the style's own path between its ends. */
+  points: EdgePoint[];
   createdAt: string;
   updatedAt: string;
 }
@@ -625,12 +691,30 @@ export interface CreateConnectorParams {
   endEnd?: ConnectorLineEnd;
   color?: string | null;
   label?: string;
+  points?: EdgePoint[];
 }
 
-/** A change to a connector's look or label: only the fields given change. Its ends are fixed; delete and draw anew. */
+/**
+ * A change to a connector's look, label or shape: only the fields given change. Its objects are fixed (delete and draw
+ * anew), but either end can move to another side of its object.
+ */
 export type UpdateConnectorParams = { id: string } & Partial<
-  Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label'>
+  Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label' | 'points'> & { fromSide: ConnectorSide; toSide: ConnectorSide }
 >;
+
+/**
+ * How a flow edge's line is drawn: the side of each tile it leaves and arrives at, its style, and its bends.
+ * An edge given none leaves the right side and arrives at the left, curved, as edges always did.
+ */
+export interface FlowEdgeShape {
+  fromSide: ConnectorSide;
+  toSide: ConnectorSide;
+  style: ConnectorStyle;
+  points: EdgePoint[];
+}
+/** The fields of an edge that make up its shape: a change to any of them reshapes it, and leaves its rules be. */
+export const FLOW_EDGE_SHAPE_KEYS = ['fromSide', 'toSide', 'style', 'points'] as const satisfies readonly (keyof FlowEdgeShape)[];
+export const DEFAULT_FLOW_EDGE_SHAPE = { fromSide: 'right', toSide: 'left', style: 'curved', points: [] } as const satisfies FlowEdgeShape;
 
 /**
  * When a flow edge delivers: `auto` as soon as its `from` agent hands off (its turn ends with a final message), or
@@ -730,7 +814,7 @@ export interface FlowDelivery {
  * `to` as its next message when `from` hands off, by itself or when the user sends it, once its conditions pass.
  * Unlike a connector it carries something. Deleted with either agent.
  */
-export interface FlowEdge {
+export interface FlowEdge extends FlowEdgeShape {
   id: string;
   /** The agents' sessions. */
   from: string;
@@ -760,6 +844,11 @@ export interface FlowEdge {
   delivering: boolean;
   /** The agent that made it, an orchestrator (`orchestrator.addEdge`); null for one the user drew. */
   madeBy: string | null;
+  /**
+   * Made by a named hand-off (`board.handoff` with `to`): manual, drawn afterwards to show it, its last payload
+   * replayed by Send. Named again, it hands off along it.
+   */
+  oneOff: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -771,7 +860,7 @@ export const FLOW_EDGE_HISTORY = 20;
  * A new flow edge: `final-message`, `auto` and no conditions unless given; a file payload's `path` is its default
  * unless given. A client may pick its `id`, as for a connector, and does to make one again on redo.
  */
-export interface CreateFlowEdgeParams {
+export interface CreateFlowEdgeParams extends Partial<FlowEdgeShape> {
   id?: string;
   from: string;
   to: string;
@@ -823,11 +912,11 @@ export interface ReviewRound {
 }
 
 /**
- * A change to an edge's rules: only the fields given change. Changing its payload resets its path unless one is given.
- * A hand-off it holds is dropped when its payload changes or it is made manual; one it queued, when it is made to
- * deliver as a message.
+ * A change to an edge's rules, or its shape: only the fields given change. Changing its payload resets its path unless
+ * one is given. A hand-off it holds is dropped when its payload changes or it is made manual; one it queued, when it is
+ * made to deliver as a message. Its shape is only how it is drawn, and changes none of that.
  */
-export interface UpdateFlowEdgeParams {
+export interface UpdateFlowEdgeParams extends Partial<FlowEdgeShape> {
   id: string;
   trigger?: FlowEdgeTrigger;
   payload?: FlowEdgePayload;
@@ -847,6 +936,9 @@ export type HeldPayloadStorage = (typeof HELD_PAYLOAD_STORAGE)[number];
 /** The settings the daemon keeps and acts on. */
 export interface DaemonSettings {
   heldPayloads: HeldPayloadStorage;
+  /** The absolute path of the `claude` and `codex` executables, or empty to look for them. */
+  claudePath: string;
+  codexPath: string;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -888,7 +980,7 @@ export interface HandoffOutcome {
 }
 
 /** A new edge an orchestrator makes (`orchestrator.addEdge`): as `CreateFlowEdgeParams`, without an id. */
-export type OrchestratorEdgeParams = Omit<CreateFlowEdgeParams, 'id' | 'paused'>;
+export type OrchestratorEdgeParams = Omit<CreateFlowEdgeParams, 'id' | 'paused' | keyof FlowEdgeShape>;
 
 /**
  * Where the user put a session's tile: relative to its zone, so it moves with the zone, or a board position for a
@@ -965,8 +1057,13 @@ export type SessionState = (typeof SESSION_STATES)[number];
 export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off'] as const;
 export type AgentState = (typeof AGENT_STATES)[number];
 
-/** States an agent is mid-turn in: the only ones `agent.interrupt` accepts. */
+/** States an agent is mid-turn in, which `agent.interrupt` accepts; as does an agent waiting on the user mid-call (`isMidTurn`). */
 export const INTERRUPTIBLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission']);
+
+/** Whether the agent is mid-turn, which `agent.interrupt` takes: working, or with its call waiting on the user. */
+export function isMidTurn(agent: Pick<Agent, 'state' | 'ask' | 'plan'>): boolean {
+  return INTERRUPTIBLE_STATES.has(agent.state) || waitsOnUser(agent);
+}
 
 /**
  * Whether an agent waits for the user: live, and waiting for input or needing permission, or with any permission
@@ -1008,6 +1105,11 @@ export interface Agent {
   model: string | null;
   /** The role it was started in, or null for none. */
   role: AgentRole | null;
+  /**
+   * For an agent started as a reviewer or follow-up reviewer: the branch it reviews and the commit it checked
+   * out, detached, in a worktree of its own (its `branch` is then ''). Null for any other agent.
+   */
+  reviews: ReviewedBranch | null;
   name: string;
   /**
    * What it is working on: the task it was started with. For an agent started from an issue, the typed task, else the
@@ -1056,6 +1158,8 @@ export interface Agent {
    * terminal shows instead of its own. Null otherwise.
    */
   shellSessionId: string | null;
+  /** Its own harness, while the user runs it by hand in the shell its pane dropped into (the tile shows it, and Restart waits). */
+  shellHarness: Harness | null;
   /** The subagents it has spawned that are still running, or finished a moment ago; oldest first. */
   subagents: Subagent[];
   /**
@@ -1068,6 +1172,16 @@ export interface Agent {
    * agent is `needs-permission`.
    */
   permissions: PermissionPrompt[];
+  /**
+   * The question it asks the user through the board (`board.ask`) and waits on, mid-turn; null while it asks
+   * none. While it asks, it is `waiting`.
+   */
+  ask: AgentAsk | null;
+  /**
+   * Its latest plan (`board.presentPlan`): v1, v2… with its decision once the user has made one. While that is
+   * still to make, it waits on it and is `waiting`. Null before its first; `plan.list` has them all, with their bodies.
+   */
+  plan: PlanSummary | null;
   /** Its cron schedule, which makes it a long-lived agent; null for none. */
   schedule: AgentSchedule | null;
   /** For a reviewer, the agent whose work it reviews, its implementer; null for any other agent. */
@@ -1086,6 +1200,12 @@ export interface Agent {
   orchestrate: OrchestrateScope | null;
   /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is deleted). */
   spawnedBy: string | null;
+}
+
+/** The branch a reviewer reviews, and the commit of it its detached checkout is at. */
+export interface ReviewedBranch {
+  branch: string;
+  head: string;
 }
 
 /**
@@ -1147,6 +1267,105 @@ export interface PermissionDecision {
   behavior: 'allow' | 'deny';
   message?: string;
 }
+
+/**
+ * A question an agent asks the user through the board (`board.ask`), in the needs-you inbox until the user
+ * answers or skips it, it times out, or the agent stops waiting (its call cancelled, its turn over). Only the user's
+ * click answers it: a timeout tells the agent there was no answer.
+ */
+export interface AgentAsk {
+  /** Names this question, so an answer can't land on another one. */
+  id: string;
+  question: string;
+  /** The answers it offers, each a button; at most `MAX_ASK_OPTIONS`. */
+  options: string[];
+  /** Whether the user may reply in their own words: always, for a question with no options. */
+  freeText: boolean;
+  askedAt: string;
+  /** When it stops waiting, with no answer. */
+  expiresAt: string;
+}
+
+/** The user's answer to an agent's question: one of its options (by index), their own words, or skipping it. */
+export type AskAnswer = { option: number } | { text: string } | { skip: true };
+
+/** What `board.ask` tells the agent: the answer, or that there was none. */
+export interface AskResult {
+  outcome: 'answered' | 'skipped' | 'timed-out';
+  /** The option picked, or the user's words; null with no answer. */
+  answer: string | null;
+}
+
+/** Most options a question offers: one per key 1-9. */
+export const MAX_ASK_OPTIONS = 9;
+/** Longest question, and option, an agent may ask. */
+export const MAX_QUESTION_LENGTH = 2_000;
+export const MAX_OPTION_LENGTH = 200;
+/** Longest plan title, and plan body (Markdown or HTML), in characters. */
+export const MAX_PLAN_TITLE_LENGTH = 200;
+export const MAX_PLAN_LENGTH = 1_000_000;
+/** Longest reply or comments the user sends back. */
+export const MAX_REPLY_LENGTH = 20_000;
+
+/**
+ * How long a question and a plan wait for the user by default, and at most. Unlike `orchestrator.wait`, the call blocks
+ * for all of it: Claude gives a stdio MCP tool call far longer than this, and Codex is given `tool_timeout_sec` over the
+ * longest (ADR-0014).
+ */
+export const DEFAULT_ASK_WAIT_MS = 30 * 60_000;
+export const DEFAULT_PLAN_WAIT_MS = 60 * 60_000;
+export const MAX_ASK_WAIT_MS = 4 * 60 * 60_000;
+
+/** How a plan is written: rendered as Markdown, or as untrusted HTML in a locked-down view of its own. */
+export const PLAN_FORMATS = ['markdown', 'html'] as const;
+export type PlanFormat = (typeof PLAN_FORMATS)[number];
+
+/** The decisions the user makes on a plan. */
+export const PLAN_OUTCOMES = ['approved', 'changes-requested', 'rejected'] as const;
+export type PlanOutcome = (typeof PLAN_OUTCOMES)[number];
+
+/**
+ * How a plan ended: the user's decision, or none, as it `timed-out` or was `withdrawn` (the agent stopped waiting: its
+ * call cancelled, its turn over, its session or the daemon gone).
+ */
+export interface PlanDecision {
+  outcome: PlanOutcome | 'timed-out' | 'withdrawn';
+  /** The user's comments for the agent; '' for none. */
+  comments: string;
+  decidedAt: string;
+}
+
+/** A plan an agent presented (`board.presentPlan`), without its body. */
+export interface PlanSummary {
+  id: string;
+  /** 1 for the agent's first plan, then 2, 3… */
+  version: number;
+  title: string;
+  format: PlanFormat;
+  presentedAt: string;
+  /** When the agent stops waiting on it. */
+  expiresAt: string;
+  /** Null while the user is still to decide. */
+  decision: PlanDecision | null;
+}
+
+/** A plan, with its body. */
+export interface Plan extends PlanSummary {
+  body: string;
+}
+
+/** What `board.presentPlan` tells the agent. */
+export interface PlanResult {
+  version: number;
+  decision: PlanDecision;
+}
+
+/** Whether the agent waits on its latest plan. */
+export const planPending = <T extends Pick<Agent, 'plan'>>(agent: T): agent is T & { plan: PlanSummary & { decision: null } } =>
+  agent.plan !== null && agent.plan.decision === null;
+
+/** Whether the agent's call waits on the user: a question it asks, or its latest plan. */
+export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'plan'>): boolean => agent.ask !== null || planPending(agent);
 
 /**
  * An agent spawned by an agent inside the same harness process (e.g. Claude's Agent tool), drawn as a character on
@@ -1297,8 +1516,15 @@ export interface BoardCaller {
   name: string;
   zoneId: string | null;
   /**
-   * The scope it may orchestrate in: its agent's, when the session is that agent's own; null for a shell tile,
-   * an ended agent's shell, and an agent the user hasn't let orchestrate.
+   * Whom it acts for: `agent` for an agent's own live session; `user` for every other, a shell tile, a tab
+   * (an agent's too) and an ended agent's shell, and whatever the user runs in it by hand. The user's side
+   * orchestrates at board scope, and may turn orchestrating on and off, but never answers a permission prompt, types
+   * into a session or changes another setting (ADR-0010).
+   */
+  side: 'agent' | 'user';
+  /**
+   * The scope it may orchestrate in: its agent's, for an agent's own session (null while the user hasn't let
+   * it); `board` for the user's side.
    */
   orchestrate: OrchestrateScope | null;
 }
@@ -1343,30 +1569,33 @@ export function orchestratorTextRefusal(text: string): string | undefined {
   return undefined;
 }
 
+/**
+ * How many agents deep a crew goes: the user's agent, the agents it starts, and theirs. The last never
+ * orchestrates by its zone's switch, and no orchestrator that deep starts another, so a loop can't fan out without bound.
+ */
+export const MAX_CREW_DEPTH = 3;
+
 /** Where the zone setting that lets agents orchestrate is, for messages. */
 export const ORCHESTRATE_SETTING = "Let agents orchestrate, in the zone's ⋯ menu";
 
 /**
  * Why the session `caller` may not orchestrate, for it to be told so, and what would change that. `agent` is its tile's
- * agent, if it is one's, and `zones` the board's. It may not when an orchestrator started it (never), its session has
- * ended, it is in no zone, its zone doesn't let agents orchestrate, or the user didn't start it there while it did.
+ * agent, if it is one's, with whether the user turned it off and how deep in a crew it is; `zones` are the board's. It
+ * may not when its session has ended, the user turned it off, it is as deep in a crew as an agent goes, it is in no
+ * zone, or its zone doesn't let agents orchestrate.
  */
 export function notOrchestratingReason(
   caller: Pick<BoardCaller, 'sessionId' | 'name'>,
-  agent: Pick<Agent, 'sessionId' | 'spawnedBy' | 'endedAt' | 'zoneId'> | undefined,
+  agent: (Pick<Agent, 'sessionId' | 'endedAt' | 'zoneId'> & { off: boolean; depth: number }) | undefined,
   zones: readonly Pick<Zone, 'id' | 'name' | 'agentsOrchestrate'>[],
 ): string {
   const { name } = caller;
-  if (agent === undefined) return `${name} may not orchestrate: only an agent can, not a shell`;
-  // An ended agent's pane drops into a shell holding its tile: that shell never orchestrates for it.
-  if (agent.sessionId !== caller.sessionId || agent.endedAt !== null) return `${name} may not orchestrate: it has ended, and its shell never orchestrates for it`;
+  if (agent === undefined || agent.sessionId !== caller.sessionId || agent.endedAt !== null) return `${name} may not orchestrate: its session has ended`;
+  if (agent.off) return `${name} may not orchestrate: the user turned it off. The user can turn it on again (agent-board orchestrate on)`;
+  if (agent.depth >= MAX_CREW_DEPTH - 1) return `${name} may not orchestrate: it is ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes`;
   const zone = zones.find((each) => each.id === agent.zoneId);
-  if (agent.spawnedBy !== null) return `${name} may not orchestrate: an agent an orchestrator started never does`;
   if (zone === undefined) return `${name} may not orchestrate: it is in no zone, and agents orchestrate in a zone that lets them (${ORCHESTRATE_SETTING})`;
-  if (!zone.agentsOrchestrate) {
-    return `${name} may not orchestrate: orchestrating is off in ${zone.name}. The user can turn it on (${ORCHESTRATE_SETTING}) for the agents started there after`;
-  }
-  return `${name} may not orchestrate: the user didn't start it in ${zone.name} while orchestrating was on there. The agents the user starts there now may`;
+  return `${name} may not orchestrate: orchestrating is off in ${zone.name}. The user can turn it on (${ORCHESTRATE_SETTING})`;
 }
 
 /**
@@ -1545,6 +1774,13 @@ export interface ShellOwner {
   id: string;
 }
 
+/**
+ * Whose session window a layout is: an agent's or a shell tile's, or a tab window's (`tabs`, slice 4), an
+ * OS window that is no session's, holding pull request, web and session tabs dragged out of windows on their own. A
+ * tab window never owns a shell.
+ */
+export type WindowOwner = ShellOwner | { kind: 'tabs'; id: string };
+
 /** Whether the shell is one of the owner's tabs (for an agent, its own tab or a shell tab; for a shell tile, a tab after its first). */
 export const isOwnedBy = (shell: Pick<Shell, 'owner'>, owner: ShellOwner): boolean => shell.owner?.kind === owner.kind && shell.owner.id === owner.id;
 
@@ -1569,10 +1805,35 @@ export interface PackageScripts {
 export type AgentRepo = { path: string } | { scratch: true };
 
 /**
- * The roles an agent can be started in: what its work is in a flow. Recorded and shown.
+ * The roles an agent can be started in: what its work is in a flow. Each starts with its zone's template for the
+ * role (`RoleTemplate`), filled in; a reviewer, and a follow-up reviewer, work on a detached checkout of the branch they
+ * review.
  */
-export const AGENT_ROLES = ['implementer', 'reviewer', 'follow-up-reviewer'] as const;
+export const AGENT_ROLES = ['implementer', 'reviewer', 'follow-up-reviewer', 'custom'] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
+
+/** The variables a role template's editor offers to insert, in its order. */
+export const TEMPLATE_VARIABLES = ['issue', 'branch', 'worktree', 'prev_review'] as const;
+
+/** The longest role template a zone keeps. */
+export const MAX_ROLE_TEMPLATE_LENGTH = 50_000;
+
+/** The roles that review a branch: they start on a detached checkout of it, with no branch of their own. */
+export const REVIEWER_ROLES: readonly AgentRole[] = ['reviewer', 'follow-up-reviewer'];
+
+/**
+ * A zone's prompt template for a role: what an agent started in the role, in the zone or loose in its repo, begins with.
+ * Its `{{issue}}`, `{{branch}}`, `{{worktree}}` and `{{prev_review}}` (and the worker prompts' `{{round}}`,
+ * `{{impl_worktree}}` and `{{prev_sha}}`) are filled in as plain text when the agent starts.
+ */
+export interface RoleTemplate {
+  role: AgentRole;
+  body: string;
+  /** The repo's worker prompt it is seeded from (`review-prompt.md`), or null for the app's own. */
+  seed: string | null;
+  /** When the user last saved it for the zone; null while it is its seed. */
+  editedAt: string | null;
+}
 
 /**
  * Starts an agent in a new worktree, on a new branch, with `prompt` as its first task. Its repo is `repo` if given,
@@ -1583,7 +1844,7 @@ export type SpawnAgentParams = TerminalSize & {
   zoneId: string | null;
   /** The repo to cut its worktree from, instead of its zone's. */
   repo?: AgentRepo;
-  /** The branch to cut it from: the repo's HEAD without. */
+  /** The branch to cut it from: the repo's HEAD without. For a reviewer, the branch it reviews. */
   baseBranch?: string;
   /** Its new branch's name, which the repo must not have yet: made from its name (or issue) without. */
   branch?: string;
@@ -1591,7 +1852,11 @@ export type SpawnAgentParams = TerminalSize & {
   harness?: Harness;
   /** The harness's model (`--model` for Claude, `-m` for Codex): its own default without. A name, never an option. */
   model?: string;
-  /** Its role, none without. */
+  /**
+   * Its role, none without: it starts with its zone's template for the role, filled in, before the issue and `prompt`.
+   * A reviewer or follow-up reviewer starts on a detached checkout of `baseBranch` (the repo's checked-out branch
+   * without), the branch it reviews, and takes no `branch` of its own.
+   */
   role?: AgentRole;
   /** Its first message. Empty or missing starts it at its prompt, named `new-agent-N`; no message is sent. */
   prompt?: string;
@@ -1768,13 +2033,16 @@ export interface DaemonMethods {
    * How the owner's session window lays out its tabs (BH1): its panes, each with a strip. Null until its
    * window first saves one, when the window shows one pane holding its tabs in their order.
    */
-  'shell.windowLayout': { params: { owner: ShellOwner }; result: WindowLayout | null };
+  'shell.windowLayout': { params: { owner: WindowOwner }; result: WindowLayout | null };
   /**
    * Keeps how the owner's session window lays out its tabs, until the owner goes. Which surfaces it holds is the
    * window's to settle: a tab gone meanwhile is dropped as the window reads it back. Fails with `invalidParams` for a
-   * layout that isn't one, or an owner `shell.createTab` would refuse.
+   * layout that isn't one, an owner `shell.createTab` would refuse, or a tab window's (`tabs`) holding anything but
+   * pull request, web and session tabs. Given `base`, the layout the window made it from (null for none), it is kept only
+   * if the daemon still has that one: a write made before a tab moved in or out (`shell.moveSurface`) is dropped, as the
+   * window hears of the move anyway. Resolves with the layout kept now.
    */
-  'shell.setWindowLayout': { params: { owner: ShellOwner; layout: WindowLayout }; result: WindowLayout };
+  'shell.setWindowLayout': { params: { owner: WindowOwner; layout: WindowLayout; base?: WindowLayout | null }; result: WindowLayout | null };
   /**
    * Lays the owner's tabs that were split inside themselves before windows had panes out as its window's panes
    *: each pane of such a tab but its first (an agent's own tab keeps the agent) moves out into a tab of its
@@ -1782,7 +2050,28 @@ export interface DaemonMethods {
    * stay. Resolves with the window's layout as kept (null for none) and the owner's tabs as they are now, so a window
    * lays the layout out against tabs it may not have heard of yet. Fails as `shell.setWindowLayout` does for the owner.
    */
-  'shell.unsplitTabs': { params: { owner: ShellOwner }; result: { layout: WindowLayout | null; tabs: Shell[] } };
+  'shell.unsplitTabs': { params: { owner: WindowOwner }; result: { layout: WindowLayout | null; tabs: Shell[] } };
+  /**
+   * Moves a tab that is only a place in a window (a pull request, a web page or another session) out of the window
+   * `from` and into `to`'s, at `placement` (else its last pane's strip), as one change (slice 4); `from` null
+   * puts it into a window from none, and `to` null takes it out of every window. A window laid out by no saved layout
+   * yet is laid out from its tabs first; a tab window starts as one pane, and goes (its layout null) with its last tab.
+   * Every client hears each window's new layout (`window.layout`). Resolves with both layouts and where the tab was in
+   * `from` (for an undo). Fails with `invalidParams` for any other tab, one not in `from`'s window, one `to`'s already
+   * shows, a session into its own window, or an owner `shell.createTab` would refuse (one being deleted).
+   */
+  'shell.moveSurface': {
+    params: { surface: Surface; from: WindowOwner | null; to: { owner: WindowOwner; placement?: Placement } | null };
+    result: { from: WindowLayout | null; to: WindowLayout | null; was: Placement | null };
+  };
+  /**
+   * Forgets a tab window's layout as the window closes, its tabs with it: only if it is still `layout`, the one the window
+   * last showed, so a tab moved in since (a redo as it closed) is kept. Resolves with whether it forgot it. Fails with
+   * `invalidParams` for any other owner.
+   */
+  'shell.forgetWindow': { params: { owner: WindowOwner; layout: WindowLayout }; result: boolean };
+  /** Every tab window's layout kept, oldest first: for the board to show again any it has lost track of. */
+  'shell.tabWindows': { params: undefined; result: { owner: { kind: 'tabs'; id: string }; layout: WindowLayout }[] };
   /** Every zone, oldest first. */
   'zone.list': { params: undefined; result: Zone[] };
   /**
@@ -1815,6 +2104,18 @@ export interface DaemonMethods {
    */
   'zone.githubRepos': { params: undefined; result: GitHubRepoSource[] };
   /**
+   * Looks at a folder the user picked: it must be a git repo's root, or a folder inside one. Nothing is bound. Fails with
+   * `invalidParams` for a path that is not absolute, not a folder, or not in a git repo. With `repo` set it must also be
+   * a copy of that GitHub repo, its `origin` being that repo; the failure names the repo it is the copy of instead.
+   */
+  'zone.checkFolder': { params: { path: string; repo?: string }; result: CheckedFolder };
+  /**
+   * Looks one level deep in `~/code`, `~/src`, `~/Developer`, `~/projects` and `~/GitHub` (those that exist) for git
+   * repos with a GitHub `origin`, and adds them to the clones `zone.githubRepos` knows, until the daemon restarts.
+   * Resolves with how many repos it found.
+   */
+  'zone.findCopies': { params: undefined; result: { found: number } };
+  /**
    * Binds an unbound zone, keeping its name: `as: 'repo'` to the git repo `path` is in, as `zone.add` would; `as:
    * 'project'` to a new repo made in `path`, an empty or missing folder. Binding is one-way. Fails with
    * `invalidParams` for an unknown or already-bound zone, a `path` that is not absolute, not in a git repo (`repo`),
@@ -1834,23 +2135,43 @@ export interface DaemonMethods {
   'zone.setDefaultRepo': { params: { id: string; path: string | null }; result: Zone };
   /** Moves and resizes a zone. Fails with `invalidParams` for an unknown id or a size under `MIN_ZONE_SIZE`. */
   'zone.update': { params: { id: string } & ZoneLayout; result: Zone };
-  /** Fails with `invalidParams` for an unknown id, or a zone that still has agents. */
+  /**
+   * Removes a zone that has nothing in it. Fails with `invalidParams` for an unknown id, or a zone that still has agents.
+   * No app surface calls it: the app deletes a zone with `zone.dissolve`. It stays as the daemon's own seam, which its
+   * tests make and clear zones with.
+   */
   'zone.remove': { params: { id: string }; result: null };
   /**
-   * Dissolves a group in one step: every tile of its (agents, shells, external sessions) is put loose on the board
-   * where it is drawn, and the zone goes; its board items and connectors stay where they are. All or nothing. Fails
-   * with `invalidParams` for an unknown id, a zone bound to a repo, or one still cloning.
+   * Deletes a zone in one step, and is the app's one way to: every tile of its (agents, shells, external
+   * sessions) is put loose on the board where it is drawn, and the zone goes; its board items and connectors stay where
+   * they are. No session, worktree or branch is deleted, and the folder of a zone bound to a repo is never touched. All
+   * or nothing. With `deleteClone`, a zone that is a managed clone (`managedClone`) also has its clone folder deleted
+   * once the zone is gone, and the owner folder above it if that is empty; refused while any agent works in that clone,
+   * while it has linked worktrees (kept ones too: their branches live in it) or while another zone is on it, and for
+   * a zone that is not a managed clone. If the folder can't be removed the zone is gone all the same, and `cloneError`
+   * says why. Fails with `invalidParams` for an unknown id or a zone still
+   * cloning.
    */
-  'zone.dissolve': { params: { id: string }; result: null };
+  'zone.dissolve': { params: { id: string; deleteClone?: boolean }; result: { cloneError: string | null } };
   /**
-   * Makes a dissolved group again, under its own id and with everything it had (so undoing a dissolve restores it, not
-   * a look-alike). Its tiles are moved back in by the caller. Always an unbound group. Fails with `invalidParams`
-   * for an id in use, a blank name, a bad colour, fill opacity or layout, or a default repo that is not absolute. A
-   * default repo that no longer resolves to a git folder is left out. The tracker is trusted as `zone.list` gave it.
+   * Makes a deleted zone again, under its own id and with everything it had (so undoing a delete restores it, not a
+   * look-alike). Its tiles are moved back in by the caller. A snapshot with a `repoRoot` binds it to that repo again; one
+   * whose repo no longer resolves, or with none, is a group. Fails with `invalidParams` for an id in use, a blank name,
+   * a bad colour, fill opacity or layout, or a default repo or repo root that is not absolute. A default repo that no
+   * longer resolves to a git folder is left out. The tracker is trusted as `zone.list` gave it.
    */
   'zone.restore': { params: ZoneSnapshot; result: Zone };
   /** Renames a zone and/or recolours it (`#rrggbb`). Fails with `invalidParams` for an unknown id, a blank name or a bad colour. */
   'zone.setLook': { params: { id: string; name?: string; color?: string; fillOpacity?: number | null }; result: Zone };
+  /** The zone's template for each role, in `AGENT_ROLES` order. Fails with `invalidParams` for an unknown zone. */
+  'zone.roleTemplates': { params: { id: string }; result: RoleTemplate[] };
+  /**
+   * Saves the zone's template for a role. Fails with `invalidParams` for an unknown zone or role, or a body over
+   * `MAX_ROLE_TEMPLATE_LENGTH`.
+   */
+  'zone.setRoleTemplate': { params: { id: string; role: AgentRole; body: string }; result: RoleTemplate };
+  /** Puts the zone's template for a role back to its seed. Fails with `invalidParams` for an unknown zone or role. */
+  'zone.resetRoleTemplate': { params: { id: string; role: AgentRole }; result: RoleTemplate };
   /** Changes the zone's settings given. Fails with `invalidParams` for an unknown id, or none given. */
   'zone.configure': { params: { id: string } & Partial<ZoneSettings>; result: Zone };
   /**
@@ -1950,22 +2271,23 @@ export interface DaemonMethods {
    */
   'agent.setOrchestrate': { params: SessionRef & { scope: OrchestrateScope | null }; result: Agent };
   /**
-   * The orchestrator methods (ADR-0011). Each acts as the agent holding `token`, which must be an agent's own
-   * session's, with `orchestrate` on: else `BOARD_ERROR.notAllowed`. A target outside its scope (`OrchestrateScope`),
-   * or itself, is `BOARD_ERROR.outOfScope`. Each spawn, send, interrupt and close is logged, done or refused
-   * (`orchestrator.activity`).
+   * The orchestrator methods (ADR-0011). Each acts as the session holding `token`: an agent's own session,
+   * with `orchestrate` on, else `BOARD_ERROR.notAllowed`; or a user-side one (`BoardCaller.side`), at board scope. With
+   * no token, on a connection that never presented one, it acts as the user, at board scope. A target
+   * outside its scope (`OrchestrateScope`), or an agent itself, is `BOARD_ERROR.outOfScope`. Each spawn, send,
+   * interrupt and close is logged, done or refused (`orchestrator.activity`).
    *
    * `spawn` starts an agent as `agent.spawn` does, in a zone of its scope (its own zone by default), with
-   * `spawnedBy` the orchestrator. A prompt (and a `send`'s text) is refused with `invalidParams` when
+   * `spawnedBy` the orchestrator agent (none for the user's side, whose agents are the user's). A prompt (and a `send`'s text) is refused with `invalidParams` when
    * `orchestratorTextRefusal` says why. With `baseBranch`, also when the base's project config (`.claude`, `.mcp.json`,
    * `.codex`) differs from the repo's HEAD: the agent would start under settings the orchestrator chose.
    */
-  'orchestrator.spawn': { params: { token: string } & OrchestratorSpawnParams; result: Agent };
+  'orchestrator.spawn': { params: { token?: string } & OrchestratorSpawnParams; result: Agent };
   /**
    * Sends `text` as the agent's next message (`agent.answer`). Only to a live agent at its prompt, between turns: one
    * that is working, needs permission or has ended is refused with `invalidParams`.
    */
-  'orchestrator.send': { params: { token: string; sessionId: string; text: string }; result: Agent };
+  'orchestrator.send': { params: { token?: string; sessionId: string; text: string }; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -1973,7 +2295,7 @@ export interface DaemonMethods {
    * answered by the idle before it. An agent deleted meanwhile fails it with `invalidParams`.
    */
   'orchestrator.wait': {
-    params: { token: string; sessionIds: string[]; states?: AgentState[]; any?: boolean; timeoutMs?: number };
+    params: { token?: string; sessionIds: string[]; states?: AgentState[]; any?: boolean; timeoutMs?: number };
     result: OrchestratorWaitResult;
   };
   /**
@@ -1981,28 +2303,28 @@ export interface DaemonMethods {
    * and inside it once links are followed; at most `MAX_ORCHESTRATOR_READ_BYTES`). Fails with `invalidParams` when there
    * is none.
    */
-  'orchestrator.read': { params: { token: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
+  'orchestrator.read': { params: { token?: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
   /** Interrupts the agent's turn (`agent.interrupt`). */
-  'orchestrator.interrupt': { params: { token: string; sessionId: string }; result: Agent };
+  'orchestrator.interrupt': { params: { token?: string; sessionId: string }; result: Agent };
   /**
    * Ends the agent's session, keeping its tile, worktree and branch (`agent.stop`); with `remove`, deletes it with its
    * worktree and branch (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an agent the
    * orchestrator started may be. Resolves with the agent, or null once removed.
    */
-  'orchestrator.close': { params: { token: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
   /**
    * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
    * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
    * edge into another orchestrator would steer it). A gate or script condition runs nothing until the user approves it
    * (ADR-0009): an orchestrator can't.
    */
-  'orchestrator.addEdge': { params: { token: string } & OrchestratorEdgeParams; result: FlowEdge };
-  /** Deletes a flow edge it made, and only one it made: the user's edges, and other agents', are the user's. */
-  'orchestrator.removeEdge': { params: { token: string; id: string }; result: null };
+  'orchestrator.addEdge': { params: { token?: string } & OrchestratorEdgeParams; result: FlowEdge };
+  /** Deletes a flow edge it, or an agent in its crew, made; a user-side caller any. The user's are the user's. */
+  'orchestrator.removeEdge': { params: { token?: string; id: string }; result: null };
   /**
    * The orchestrators' activity log, newest first: `orchestratorId`'s alone if given, at most `limit`
-   * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. A
-   * board token's connection reads only the lines its own tile wrote.
+   * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. Every
+   * connection reads every line.
    */
   'orchestrator.activity': { params: { orchestratorId?: string; limit?: number; before?: number }; result: OrchestratorActivity[] };
   /**
@@ -2027,6 +2349,39 @@ export interface DaemonMethods {
    * logged (`orchestrator.activity`). Its turn's end then hands off along the others alone.
    */
   'board.handoff': { params: { token: string; to?: string } & HandoffPayload; result: HandoffOutcome[] };
+  /**
+   * The live agent holding `token` asks the user `question`, with `options` as buttons and, with `freeText`
+   * (always with no options), a reply field. Resolves once the user answers or skips it, or after `timeoutMs`
+   * (`DEFAULT_ASK_WAIT_MS`, at most `MAX_ASK_WAIT_MS`) with no answer. It goes, unanswered, when the connection closes
+   * (the harness cancelled the call) or the agent's turn ends. Fails with `invalidParams` for a shell's token, a caller
+   * that already asks or waits on a plan, or a bad question.
+   */
+  'board.ask': {
+    params: { token: string; question: string; options?: string[]; freeText?: boolean; timeoutMs?: number };
+    result: AskResult;
+  };
+  /**
+   * The live agent holding `token` presents a plan, its next version, and waits for the user to approve it,
+   * request changes or reject it, with comments. Kept in its history whatever happens. Resolves with the decision, or
+   * `timed-out` after `timeoutMs` (`DEFAULT_PLAN_WAIT_MS`, at most `MAX_ASK_WAIT_MS`); `withdrawn` once the connection
+   * closes or its turn ends. Fails as `board.ask` does, and for an empty or too long plan.
+   */
+  'board.presentPlan': {
+    params: { token: string; title: string; body: string; format: PlanFormat; timeoutMs?: number };
+    result: PlanResult;
+  };
+  /**
+   * Answers the agent's question `askId`. Fails with `invalidParams` once it no longer asks it (answered, timed out or
+   * gone), or for an answer it doesn't take: an option it doesn't have, or words to a question without `freeText`.
+   */
+  'ask.answer': { params: SessionRef & { askId: string; answer: AskAnswer }; result: null };
+  /** The agent's plans, oldest first, with their bodies and decisions. */
+  'plan.list': { params: SessionRef; result: Plan[] };
+  /**
+   * Decides the agent's plan `planId`, while it waits on it. Fails with `invalidParams` once it doesn't (decided, timed
+   * out or withdrawn).
+   */
+  'plan.decide': { params: SessionRef & { planId: string; outcome: PlanOutcome; comments?: string }; result: PlanSummary };
   /**
    * Moves the agent's tile within its zone, into any other (another repo's, or an unbound one) or out onto the board
    * (`zoneId` null). Only its tile moves. Fails with `invalidParams` for an unknown zone or agent.
@@ -2154,6 +2509,78 @@ export interface DaemonMethods {
   /** Sets how many review rounds the implementer may have, 1 to `MAX_REVIEW_CAP`. */
   'review.setCap': { params: { sessionId: string; cap: number }; result: Agent };
   /**
+   * Reads a pull request whole for its PR tab (BI1) with gh: its description, checks, changed files with
+   * their diffs, reviews and comments, and whether the user may merge or approve it. Fails with
+   * `TRACKER_ERROR.unavailable` when GitHub can't be reached or its rate limit is reached, `TRACKER_ERROR.unauthorized`
+   * when gh isn't logged in, and `invalidParams` for anything GitHub refuses, such as an unknown pull request.
+   */
+  'pullRequest.details': { params: PullRequestRef; result: PullRequestDetails };
+  /**
+   * Approves the pull request as the gh user at `headCommit`, the commit the user saw, refusing with `invalidParams` if
+   * its head has moved on since; then reads it again. Fails as `pullRequest.details` does.
+   */
+  'pullRequest.approve': { params: PullRequestRef & { headCommit: string }; result: PullRequestActed };
+  /**
+   * Squash-merges the pull request while its head is still `headCommit`, the commit the user saw, so nothing pushed
+   * since is merged; then reads it again. One a merge gate guards (`gatedBy`) whose gate hasn't passed on `headCommit`
+   * is refused with `invalidParams` unless `pastGate`, the user's confirmation that they merge past it.
+   * Fails as `pullRequest.details` does.
+   */
+  'pullRequest.merge': { params: PullRequestRef & { headCommit: string; pastGate?: boolean }; result: PullRequestActed };
+  /** Every agent's latest merge gate run, one per agent that has run its gate. */
+  'gate.list': { params: undefined; result: GateRun[] };
+  /**
+   * What the agent's gate buttons need: its latest run, its zone's gate command, the commit its worktree is at (null
+   * when it has none, or its worktree is gone), and how many files there are uncommitted. Fails with `invalidParams` for
+   * an unknown agent.
+   */
+  'gate.status': { params: SessionRef; result: GateStatus };
+  /**
+   * Runs the gate command of the zone of the agent's repo in its worktree, through `sh -c`, in a process group
+   * of its own, replacing its last run; resolves as it starts, and `gate.updated` follows its steps (ADR-0013). The
+   * user's alone, never an agent's. Fails with `invalidParams` for an unknown agent, one whose zone has no gate command,
+   * one whose worktree is gone or has no commit, or one whose gate is already running.
+   */
+  'gate.run': { params: SessionRef; result: GateRun };
+  /** Stops the agent's gate, its whole process group; the run ends `stopped`. Nothing happens if none is running. */
+  'gate.stop': { params: SessionRef; result: null };
+  /**
+   * A piece of the agent's latest run's log, kept under the data dir per agent and commit: a step's (its own lines, or
+   * the file it named), or with no `step` the whole output. From byte `since` on, else the last part; `next` is where to
+   * read on from. Fails with `invalidParams` for an agent that has no run, or a step it hasn't.
+   */
+  'gate.log': { params: SessionRef & { step?: string; since?: number }; result: GateLog };
+  /**
+   * Opens a pull request of the agent's branch (BM3): pushes it, then has gh make one, titled after its issue
+   * (or its name), described from the repo's pull request template filled from its worktree's `.agent-board/handover.md`
+   * with the gate table (in a zone with a gate), and `Fixes` its issue. It pushes the commit checked, not whatever the
+   * branch is at by then. Fails with `invalidParams` when anything is uncommitted, when in a zone with a gate the gate hasn't
+   * passed on its head (`openPullRequestBlocked`), when the worktree isn't on its branch, or when it has an open pull
+   * request already.
+   */
+  'gate.openPullRequest': { params: SessionRef; result: PullRequest };
+  /**
+   * The agent whose tile holds `token` opens a pull request of its own branch as `gate.openPullRequest` does, always as
+   * a draft: marking it ready, running the gate and merging stay the user's. Fails with `invalidParams` for any
+   * token but an agent's own session's (a shell's is the user's, who has Open PR), and as `gate.openPullRequest` does.
+   */
+  'board.openPullRequest': { params: { token: string }; result: PullRequest };
+  /**
+   * Squash-merges the agent's pull request `number` while its head is `headCommit` (BM3), only if GitHub's checks
+   * are green and, in a zone with a gate command, its gate passed on that commit (`mergeBlocked`, checked again here),
+   * then cleans up as `cleanup` says: its worktree and branch only while the worktree is still at `headCommit` with nothing
+   * uncommitted, so no work that wasn't merged is lost.
+   * Fails with `invalidParams` saying why when it may not merge; once merged, a clean-up step that fails is reported in
+   * `GateMerged.failed`, never as a failure.
+   */
+  'gate.merge': { params: SessionRef & { number: number; headCommit: string; cleanup: GateCleanup }; result: GateMerged };
+  /**
+   * Pastes the failing step's last lines at the agent's prompt as one bracketed paste, sending nothing: checked
+   * as it writes, so never into a pending permission prompt, nor an agent that has ended. Fails with `invalidParams` then,
+   * and for an agent whose latest run didn't fail at `step`.
+   */
+  'gate.sendFailure': { params: SessionRef & { step: string }; result: null };
+  /**
    * Takes the image file at `path` into the image store, content-addressed, and resolves with its reference for an
    * image item. The file must be in the data dir's `images/incoming` folder; it is moved away. A copy already stored
    * is kept once. Fails with `invalidParams` for a file over `MAX_IMAGE_BYTES` or not a PNG, JPEG, GIF or WebP.
@@ -2222,8 +2649,8 @@ export const BOARD_ERROR = {
 
 /**
  * What a connection that has presented a session's board token (`board.identify`, `board.setStatus`) may call: the
- * board's reads and its own status, nothing that starts, steers, answers for or stops a session, or changes a setting
- * (ADR-0010). A connection that never presents one is the user's, with the whole API.
+ * board's reads, its own status and hand-offs, and asking the user a question or presenting a plan (ADR-0014); nothing
+ * that starts, steers, answers for or stops a session, or changes a setting (ADR-0010). A connection that never presents one is the user's, with the whole API.
  */
 export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
   'daemon.health',
@@ -2236,6 +2663,9 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.identify',
   'board.setStatus',
   'board.handoff',
+  'board.ask',
+  'board.presentPlan',
+  'board.openPullRequest',
   'orchestrator.activity',
 ]);
 
@@ -2254,6 +2684,13 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.removeEdge',
 ]);
 
+/**
+ * What a user-side session's connection (`BoardCaller.side`) may call beyond those: turning an agent's
+ * orchestrating on and off. The daemon refuses an agent's own session it. A zone's switch, like every setting, stays the
+ * app's.
+ */
+export const USER_SIDE_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>(['agent.setOrchestrate']);
+
 /** Most of a file `orchestrator.read` returns. */
 export const MAX_ORCHESTRATOR_READ_BYTES = 256 * 1024;
 
@@ -2269,6 +2706,44 @@ export function isStatusProgress(value: unknown): value is number {
 /** A status as one line: `Moving session ids to the daemon · 40%`. */
 export function statusLine(status: Pick<AgentStatus, 'summary' | 'progress'>): string {
   return status.progress === null ? status.summary : `${status.summary} · ${status.progress}%`;
+}
+
+/**
+ * What an approve or merge answers once it is done (BI1): the pull request as it is now, or, when reading it
+ * again failed, why: the action itself still happened.
+ */
+export type PullRequestActed = { details: PullRequestDetails } | { readError: string };
+
+/** What `gate.status` answers. */
+export interface GateStatus {
+  run: GateRun | null;
+  command: string | null;
+  head: string | null;
+  /** The branch the worktree has checked out, or null for a detached HEAD (or no worktree). */
+  branch: string | null;
+  uncommitted: number;
+}
+
+/** A piece of a gate log (`gate.log`). */
+export interface GateLog {
+  text: string;
+  /** The byte to read on from. */
+  next: number;
+  /** Set when `since` was past the log's end, as when the run started again: `text` is from its start. */
+  reset?: true;
+}
+
+
+/** What `gate.merge` answers once merged: each clean-up step done, and each that failed with why. */
+export interface GateMerged {
+  done: (keyof GateCleanup)[];
+  failed: { step: keyof GateCleanup; why: string }[];
+}
+
+/** Sent to every client when an agent's gate run starts, a step of it starts or ends, or it ends. */
+export interface GateUpdatedEvent {
+  type: 'gate.updated';
+  run: GateRun;
 }
 
 /**
@@ -2426,6 +2901,16 @@ export interface ShellUpdatedEvent {
   shell: Shell;
 }
 
+/**
+ * Sent to every client when a window's layout changes other than by the window itself (slice 4): a tab moved
+ * into or out of it from another window (`shell.moveSurface`). Null once a tab window has no tab left.
+ */
+export interface WindowLayoutEvent {
+  type: 'window.layout';
+  owner: WindowOwner;
+  layout: WindowLayout | null;
+}
+
 /** Sent to every client when a shell tile is removed. */
 export interface ShellRemovedEvent {
   type: 'shell.removed';
@@ -2443,8 +2928,10 @@ export type DaemonEvent =
   | FlowEdgeUpdatedEvent
   | FlowEdgeRemovedEvent
   | ReviewUpdatedEvent
+  | GateUpdatedEvent
   | ShellUpdatedEvent
   | ShellRemovedEvent
+  | WindowLayoutEvent
   | ExternalUpdatedEvent
   | ExternalRemovedEvent
   | HookEvent

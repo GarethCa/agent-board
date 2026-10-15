@@ -85,3 +85,16 @@ describe('dragging an edge or corner', () => {
     expect(resizeFrame(frame, 'n', 0, -5000, bounds)).toMatchObject({ y: 0, height: 480 });
   });
 });
+
+describe('a board with its top edge kept clear (the traffic lights)', () => {
+  const clear = { ...bounds, top: 68 };
+
+  it('keeps a frame below it, shrinking one that would not fit', () => {
+    expect(clampFrame({ x: 0, y: 0, width: 600, height: 400 }, clear).y).toBe(68);
+    expect(clampFrame({ x: 0, y: 0, width: 600, height: 800 }, clear)).toMatchObject({ y: 68, height: 732 });
+  });
+
+  it('stops dragging the top edge at it', () => {
+    expect(resizeFrame({ x: 100, y: 100, width: 600, height: 400 }, 'n', 0, -500, clear)).toMatchObject({ y: 68, height: 432 });
+  });
+});

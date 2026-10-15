@@ -3,7 +3,7 @@ import type { Agent, AgentState } from '@agent-board/daemon/protocol';
 import { appIndicator, appStateOf } from './app-state';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent =>
-  ({ sessionId, name: `Agent ${sessionId}`, state, endedAt: null, permissions: [], ...fields }) as Agent;
+  ({ sessionId, name: `Agent ${sessionId}`, state, endedAt: null, permissions: [], ask: null, plan: null, ...fields }) as Agent;
 
 describe('appStateOf', () => {
   it('is needs while any agent waits for input or permission, counting each waiting agent', () => {

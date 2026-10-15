@@ -44,6 +44,8 @@ export interface PlaceSession {
   placeShell(at: { x: number; y: number }): void;
   /** The repo picker and the tile it points at, while one is open: drawn in board coordinates. */
   picker: ReactNode;
+  /** Whether an agent waits on the picker: its stand-in tile is on the board though it isn't a node yet. */
+  placing: boolean;
 }
 
 export function usePlaceSession({ zones, zoneLayouts, onAgent, onShell, report }: PlaceSessionOptions): PlaceSession {
@@ -154,9 +156,10 @@ export function usePlaceSession({ zones, zoneLayouts, onAgent, onShell, report }
       />
     );
 
+  const placing = pending !== undefined;
   return useMemo(
-    () => ({ placeAgent, newAgentIn, pickForIssue, placeShell, picker }),
-    [placeAgent, newAgentIn, pickForIssue, placeShell, picker],
+    () => ({ placeAgent, newAgentIn, pickForIssue, placeShell, picker, placing }),
+    [placeAgent, newAgentIn, pickForIssue, placeShell, picker, placing],
   );
 }
 

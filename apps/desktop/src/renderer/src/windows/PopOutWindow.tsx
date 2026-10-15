@@ -1,17 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SessionWindow } from '../session/SessionWindow';
+import { keptLayout } from '../session/use-window-panes';
+import { handOffWebTabs } from './SessionWindows';
+import { usePopOutMoves } from './use-pop-out-moves';
 
-/** A session window popped out into its own OS window: the whole window, with a button to pop it back in. */
+/**
+ * A session window popped out into its own OS window: the whole window, with a button to pop it back in; or a tab
+ * window (slice 4). Tabs drag to and from it, the board making the moves.
+ */
 export function PopOutWindow({ target }: { target: WindowTarget }) {
   useEffect(() => {
     document.title = target.title;
   }, [target.title]);
-  return target.kind === 'shell' ? <PoppedShell target={target} /> : <PoppedSession target={target} />;
+  const [moveProblem, setMoveProblem] = useState<string>();
+  usePopOutMoves(setMoveProblem);
+  const notice = <Notice problem={moveProblem} />;
+  if (target.kind === 'tabs') return <PoppedTabs target={target} notice={notice} />;
+  return target.kind === 'shell' ? <PoppedShell target={target} notice={notice} /> : <PoppedSession target={target} notice={notice} />;
 }
+
+/** Why something in the window went wrong, over its tabs; nothing while all is well. */
+function Notice({ problem }: { problem: string | undefined }) {
+  return (
+    problem && (
+      <p className="session-window-notice" role="alert">
+        {problem}
+      </p>
+    )
+  );
+}
+
+/** A popped-out window, and what it shows over its tabs besides its own notices: why a move couldn't be made. */
+type PoppedProps = { target: WindowTarget; notice: ReactNode };
 
 /** Keeps the OS window's title in step with the session's name, which can be renamed. */
 function useWindowTitle(name: string | undefined) {
@@ -20,9 +44,11 @@ function useWindowTitle(name: string | undefined) {
   }, [name]);
 }
 
-const popIn = (id: string) => () => void window.agentBoard.windows.popIn(id);
+/** Back to the board, its web tabs' pages going with it as they are. */
+const popIn = (target: WindowTarget) => () => void handOffWebTabs(target).then(() => window.agentBoard.windows.popIn(target.id));
 
-function PoppedSession({ target: { id, title } }: { target: WindowTarget }) {
+function PoppedSession({ target, notice }: PoppedProps) {
+  const { id, title } = target;
   const agent = useLiveAgent(id);
   useWindowTitle(agent?.name);
   return (
@@ -31,13 +57,19 @@ function PoppedSession({ target: { id, title } }: { target: WindowTarget }) {
       title={title}
       placement="own-window"
       onClose={() => window.close()}
-      onPopIn={popIn(id)}
-      notice={agent && <HeldPromptsNotice agent={agent} />}
+      onPopIn={popIn(target)}
+      notice={
+        <>
+          {notice}
+          {agent && <HeldPromptsNotice agent={agent} />}
+        </>
+      }
     />
   );
 }
 
-function PoppedShell({ target: { id, title } }: { target: WindowTarget }) {
+function PoppedShell({ target, notice }: PoppedProps) {
+  const { id, title } = target;
   const { shell, problem } = useLiveShell(id);
   useWindowTitle(shell?.name);
   return (
@@ -46,16 +78,57 @@ function PoppedShell({ target: { id, title } }: { target: WindowTarget }) {
       title={title}
       placement="own-window"
       onClose={() => window.close()}
-      onPopIn={popIn(id)}
+      onPopIn={popIn(target)}
       notice={
-        problem && (
-          <p className="session-window-notice" role="alert">
-            {problem}
-          </p>
-        )
+        <>
+          {notice}
+          <Notice problem={problem} />
+        </>
       }
     />
   );
+}
+
+/**
+ * A tab window (slice 4): the pull request, web and session tabs dragged out of windows on their own, laid out
+ * as any window's. It closes once its last tab leaves; closed, it takes its tabs with it.
+ */
+function PoppedTabs({ target: { id, title }, notice }: PoppedProps) {
+  useTabWindowLayout(id);
+  return <SessionWindow content={{ kind: 'tabs', id }} title={title} placement="own-window" onClose={() => window.close()} notice={notice} />;
+}
+
+/**
+ * Closes the tab window once it has no tab left: its last moved out, or none kept for it (since a restart, say). Closed
+ * by the user (Close window, or the OS window's own close), it forgets its tabs as it last showed them: a tab moved
+ * into it as it closes (a redo) keeps it, and the board shows it again.
+ */
+function useTabWindowLayout(id: string): void {
+  useEffect(() => {
+    const owner = { kind: 'tabs', id } as const;
+    let heard = false;
+    const unsubscribe = window.agentBoard.shells.onWindowLayout((change) => {
+      if (change.owner.kind !== 'tabs' || change.owner.id !== id) return;
+      heard = true;
+      if (change.layout === null) window.close();
+    });
+    window.agentBoard.shells.windowLayout(owner).then(
+      (layout) => {
+        if (!heard && layout === null) window.close();
+      },
+      () => {},
+    );
+    // One call, sent as the page goes: the layout as this window last kept or heard it.
+    const forget = () => {
+      const shown = keptLayout(owner);
+      if (shown != null) void window.agentBoard.shells.forgetWindow(owner, shown).catch(() => false);
+    };
+    window.addEventListener('beforeunload', forget);
+    return () => {
+      unsubscribe();
+      window.removeEventListener('beforeunload', forget);
+    };
+  }, [id]);
 }
 
 /** The session's agent, kept live; undefined for a shell session (or until the list arrives). Closes the window when the agent is deleted. */
@@ -86,7 +159,10 @@ function useLiveAgent(sessionId: string): Agent | undefined {
   return agent;
 }
 
-/** The shell tile, kept live: undefined until it is listed, with why if listing it failed. Closes the window when the tile goes. */
+/**
+ * The shell tile, kept live: undefined until it is listed, with why if listing it failed. Closes the window when the
+ * tile goes, or becomes another's tab.
+ */
 function useLiveShell(shellId: string): { shell: Shell | undefined; problem: string | undefined } {
   const [shell, setShell] = useState<Shell>();
   const [problem, setProblem] = useState<string>();
@@ -98,6 +174,11 @@ function useLiveShell(shellId: string): { shell: Shell | undefined; problem: str
         return;
       }
       if (change.shell.id !== shellId) return;
+      // Become another's tab (its only tab dragged into another window): it has no window of its own any more.
+      if (change.shell.owner !== null) {
+        window.close();
+        return;
+      }
       changed = true;
       setShell(change.shell);
       setProblem(undefined);
@@ -106,7 +187,7 @@ function useLiveShell(shellId: string): { shell: Shell | undefined; problem: str
       (shells) => {
         if (changed) return;
         const found = shells.find((known) => known.id === shellId);
-        if (found === undefined) window.close();
+        if (found === undefined || found.owner !== null) window.close();
         else setShell(found);
       },
       (error: unknown) => {

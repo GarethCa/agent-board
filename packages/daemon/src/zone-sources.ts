@@ -1,7 +1,7 @@
 // Where a new zone comes from besides a picked folder: a GitHub repo, cloned by the daemon when there is no
 // local clone of it, and the folders zones were made for before.
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, realpath, rm, rmdir } from 'node:fs/promises';
+import { mkdir, readdir, realpath, rm, rmdir, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { CloneOptions, CloneProgress } from '@agent-board/tracker';
@@ -13,7 +13,10 @@ import type { RpcHandlers } from './rpc.ts';
 import { zoneTrackerParam, type TrackerHost } from './trackers.ts';
 import { newZoneParams, type CloneFolders, type ZoneTable } from './zones.ts';
 
-type SourceMethods = Pick<DaemonMethods, 'zone.clone' | 'zone.cancelClone' | 'zone.recentFolders' | 'zone.githubRepos'>;
+type SourceMethods = Pick<
+  DaemonMethods,
+  'zone.clone' | 'zone.cancelClone' | 'zone.recentFolders' | 'zone.githubRepos' | 'zone.checkFolder' | 'zone.findCopies'
+>;
 
 /** Clones a repo into a folder: `cloneRepo` through gh outside tests. */
 export type RepoCloner = (repo: string, dir: string, options: Pick<CloneOptions, 'onProgress' | 'signal'>) => Promise<void>;
@@ -24,6 +27,8 @@ export interface ZoneSourceOptions {
   trackers: Pick<TrackerHost, 'checkScope' | 'scopes'>;
   /** Where `zone.clone` clones repos: `<reposDir>/<owner>/<repo>`. */
   reposDir: string;
+  /** The folders `zone.findCopies` looks one level deep in, those that exist. */
+  copyRoots: readonly string[];
   clone: RepoCloner;
   /** Removes a zone, announcing it (with why its clone failed, if it did) and the items it held. */
   removeZone(id: string, cloneFailed?: string): Promise<void>;
@@ -66,6 +71,10 @@ export function shortFailure(message: string): string {
 export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
   const { db, zones, trackers, log } = options;
   const recent = db.prepare('SELECT path, used_at FROM recent_folders ORDER BY used_at DESC, rowid DESC');
+  /** Local copies `zone.findCopies` found, by lowercase `owner/repo`: known until the daemon restarts. */
+  let found: ReadonlyMap<string, string> = new Map();
+  /** The scan under way, which a second `zone.findCopies` shares rather than starts over. */
+  let scanning: Promise<{ found: number }> | undefined;
   const running = new Map<string, { controller: AbortController; done: Promise<void>; progress?: CloneProgress }>();
   /** Clones into one folder start one at a time: a second finds the first's zone, and reuses it. */
   const queue = keyedQueue();
@@ -173,14 +182,14 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
           // A clone into the folder is already under way (another window, a retry): its zone is the one.
           const under = zones.cloning().find((zone) => zone.clone?.path === path && running.has(zone.id));
           if (under !== undefined) return under;
-          const found = existsSync(path);
-          if (found && (await readdir(path)).length > 0) {
+          const exists = existsSync(path);
+          if (exists && (await readdir(path)).length > 0) {
             throw invalidParams(`${path} already exists: add it as a folder instead`);
           }
           const madeOwner = !existsSync(dirname(path));
           await mkdir(dirname(path), { recursive: true });
-          if (!found) await mkdir(path);
-          const made = { madeFolder: !found, madeOwner };
+          if (!exists) await mkdir(path);
+          const made = { madeFolder: !exists, madeOwner };
           const zone = zones.insert({
             ...look,
             name: look.name ?? repo.split('/')[1]!,
@@ -203,13 +212,13 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
       'zone.recentFolders': async () => {
         const onBoard = boardFolders(zones.list());
         const rows = recent.all() as { path: string; used_at: string }[];
-        const found: RecentFolder[] = [];
+        const folders: RecentFolder[] = [];
         for (const row of rows) {
-          if (found.length >= MAX_RECENT) break;
+          if (folders.length >= MAX_RECENT) break;
           if (!existsSync(row.path)) continue;
           const head = await runGit(row.path, ['rev-parse', '--abbrev-ref', 'HEAD']);
           if (!head.ok) continue;
-          found.push({
+          folders.push({
             path: row.path,
             name: basename(row.path),
             branch: head.stdout === 'HEAD' ? null : head.stdout,
@@ -217,24 +226,59 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
             onBoard: onBoard.has(row.path),
           });
         }
-        return found;
+        return folders;
       },
       'zone.githubRepos': async () => {
         const scopes = await trackers.scopes('github');
-        const known = await knownClones(options.reposDir, zones.list(), recent.all() as { path: string }[]);
+        const known = await knownClones(options.reposDir, zones.list(), recent.all() as { path: string }[], found);
         const onBoard = boardFolders(zones.list());
         return scopes.map((scope): GitHubRepoSource => {
           const [owner, name] = scope.key.split('/') as [string, string];
-          const localPath = known.get(scope.key.toLowerCase()) ?? null;
+          const localPath = known.clones.get(scope.key.toLowerCase()) ?? null;
           return {
             repo: scope.key,
             name: scope.name,
             description: scope.description ?? null,
             localPath,
             clonePath: join(options.reposDir, owner, name),
+            foundCopy: localPath !== null && known.foundByScan.has(scope.key.toLowerCase()),
             onBoard: localPath !== null && onBoard.has(localPath),
           };
         });
+      },
+      'zone.checkFolder': async (params) => {
+        const fields = paramsObject(params);
+        const wanted = fields.repo === undefined ? undefined : stringParam(fields, 'repo').trim().toLowerCase();
+        const picked = stringParam(fields, 'path');
+        if (!isAbsolute(picked)) throw invalidParams(`path must be absolute, got ${picked}`);
+        // The folder may be a link or hold `..`: it is judged, and bound, as the folder it really is.
+        const path = await realpath(picked).catch(() => undefined);
+        if (path === undefined) throw invalidParams(`${picked} is not a folder`);
+        const top = await runGit(path, ['rev-parse', '--show-toplevel']);
+        if (!top.ok) throw invalidParams(`${path} is not inside a git repository`);
+        const origin = await runGit(path, ['remote', 'get-url', 'origin']);
+        const gitHubRepo = (origin.ok ? gitHubRepoOf(origin.stdout) : undefined) ?? null;
+        if (wanted !== undefined && gitHubRepo !== wanted) {
+          throw invalidParams(
+            gitHubRepo === null
+              ? `${path} is a git repo with no GitHub origin, not a copy of ${wanted}`
+              : `That folder's origin is ${gitHubRepo}, not ${wanted}`,
+          );
+        }
+        const repoRoot = await realpath(top.stdout);
+        const folder = relative(repoRoot, path);
+        return { path, repoRoot, gitHubRepo, name: folder === '' ? basename(repoRoot) : `${basename(repoRoot)}/${folder}` };
+      },
+      'zone.findCopies': () => {
+        scanning ??= scanForCopies(options.copyRoots)
+          .then((copies) => {
+            found = copies;
+            return { found: copies.size };
+          })
+          .finally(() => {
+            scanning = undefined;
+          });
+        return scanning;
       },
     }),
   };
@@ -249,13 +293,14 @@ function boardFolders(zones: readonly Zone[]): Set<string> {
 
 /**
  * The local clones the daemon knows of, by lowercase `owner/repo`: the repos of zones and recent folders whose `origin`
- * is on GitHub, and those in the managed folder.
+ * is on GitHub, those in the managed folder, and those the user had the daemon look for.
  */
 async function knownClones(
   reposDir: string,
   zones: readonly Zone[],
   recent: readonly { path: string }[],
-): Promise<Map<string, string>> {
+  found: ReadonlyMap<string, string>,
+): Promise<{ clones: Map<string, string>; foundByScan: Set<string> }> {
   const candidates = new Set<string>();
   for (const zone of zones) if (zone.repoRoot !== null) candidates.add(zone.repoRoot);
   for (const { path } of recent) if (existsSync(path)) candidates.add(path);
@@ -276,10 +321,85 @@ async function knownClones(
     const repo = origin.ok ? gitHubRepoOf(origin.stdout) : undefined;
     if (repo !== undefined && !clones.has(repo)) clones.set(repo, root);
   }
-  return clones;
+  const foundByScan = new Set<string>();
+  for (const [repo, root] of found) {
+    if (clones.has(repo) || !existsSync(root)) continue;
+    clones.set(repo, root);
+    foundByScan.add(repo);
+  }
+  return { clones, foundByScan };
 }
 
-/** The lowercase `owner/repo` of a GitHub remote URL (https or ssh), or undefined for any other. */
-function gitHubRepoOf(url: string): string | undefined {
-  return /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim())?.[1]?.toLowerCase();
+/** The longest one `git remote get-url` may take in a scan, and the most that run at once. */
+const SCAN_GIT_TIMEOUT_MS = 5000;
+const SCAN_CONCURRENCY = 8;
+/** How long a scan may run in all, and the most entries it looks at in a folder: a huge or slow folder is cut short. */
+const SCAN_DEADLINE_MS = 20000;
+const SCAN_MAX_ENTRIES = 2000;
+
+/** What `scanForCopies` asks of the file system, so a test can make a mount hang. */
+export interface ScanFs {
+  readdir(path: string): Promise<string[]>;
+  isDirectory(path: string): Promise<boolean>;
+}
+
+const realFs: ScanFs = {
+  readdir: (path) => readdir(path).catch(() => []),
+  isDirectory: async (path) => (await stat(path).catch(() => undefined))?.isDirectory() === true,
+};
+
+/**
+ * The repos in the entries of `roots`, one level deep, by lowercase `owner/repo`: those whose own `.git` is a folder
+ * (not a linked worktree's or a submodule's file) and whose `origin` is on GitHub. Of two copies of a repo the first
+ * wins, by root order and then by name. It never runs past `deadlineMs`, not even on a `readdir` or `stat` that hangs
+ * (a dead mount): it then resolves with what it has found so far.
+ */
+export function scanForCopies(
+  roots: readonly string[],
+  { deadlineMs = SCAN_DEADLINE_MS, fs = realFs }: { deadlineMs?: number; fs?: ScanFs } = {},
+): Promise<Map<string, string>> {
+  const deadline = Date.now() + deadlineMs;
+  /** Each root's hits by entry, in root order: the order the first copy of a repo is chosen in. */
+  const found: ({ repo: string; dir: string } | undefined)[][] = roots.map(() => []);
+  const merged = () => {
+    const copies = new Map<string, string>();
+    for (const hit of found.flat()) if (hit !== undefined && !copies.has(hit.repo)) copies.set(hit.repo, hit.dir);
+    return copies;
+  };
+  const scan = async () => {
+    for (const [rootIndex, root] of roots.entries()) {
+      const entries = (await fs.readdir(root)).sort().slice(0, SCAN_MAX_ENTRIES);
+      const hits = found[rootIndex]!;
+      let next = 0;
+      const worker = async () => {
+        while (next < entries.length && Date.now() < deadline) {
+          const index = next++;
+          const dir = join(root, entries[index]!);
+          if (!(await fs.isDirectory(join(dir, '.git')))) continue;
+          const origin = await runGit(dir, ['remote', 'get-url', 'origin'], SCAN_GIT_TIMEOUT_MS);
+          const repo = origin.ok ? gitHubRepoOf(origin.stdout) : undefined;
+          const real = repo === undefined ? undefined : await realpath(dir).catch(() => undefined);
+          if (repo !== undefined && real !== undefined) hits[index] = { repo, dir: real };
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, entries.length) }, worker));
+    }
+  };
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(merged()), Math.max(0, deadline - Date.now()));
+    scan().then(
+      () => resolve(merged()),
+      () => resolve(merged()),
+    ).finally(() => clearTimeout(timer));
+  });
+}
+
+/**
+ * The lowercase `owner/repo` of a GitHub remote URL, or undefined for any other host (a lookalike such as
+ * `notgithub.com` too): `https://` (with a user or port), `ssh://git@github.com[:port]/` and `git@github.com:`.
+ */
+export function gitHubRepoOf(url: string): string | undefined {
+  const match =
+    /^(?:https?:\/\/(?:[^@/\s]+@)?|ssh:\/\/(?:[^@/\s]+@)?|git@)github\.com(?::\d+)?[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return match?.[1]?.toLowerCase();
 }

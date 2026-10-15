@@ -5,6 +5,9 @@ import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
 import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
+import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
+import { newAgent, openBoardSession } from '../src/board-ops.ts';
+import { paneIds } from '../src/pane-layout.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -44,14 +47,22 @@ async function untilAgent(recorder: Setup['recorder'], sessionId: string, match:
  * presented, as the CLI and MCP do. With `orchestrate`, the user lets it orchestrate in that scope.
  */
 async function agentSide(setup: Setup, zoneId: string, orchestrate?: 'zone' | 'repo' | 'board') {
+  const agent = await setup.client.call('agent.spawn', { zoneId, prompt: 'Print your board identity', ...SIZE, ...(orchestrate ? { orchestrate } : {}) });
+  return { agent, ...(await agentSideOf(setup, agent.sessionId)) };
+}
+
+/**
+ * Connects as the agent `sessionId`, started with the prompt `Print your board identity`: its board token presented,
+ * as its CLI does.
+ */
+async function agentSideOf(setup: Setup, sessionId: string) {
   const { daemon, client, recorder } = setup;
-  const agent = await client.call('agent.spawn', { zoneId, prompt: 'Print your board identity', ...SIZE, ...(orchestrate ? { orchestrate } : {}) });
-  await client.call('session.attach', { sessionId: agent.sessionId });
-  await recorder.waitForText(agent.sessionId, ':end\r\n');
-  const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
+  await client.call('session.attach', { sessionId });
+  await recorder.waitForText(sessionId, ':end\r\n');
+  const token = /identity:(.*):end\r\n/.exec(recorder.screenText(sessionId))![1]!;
   const connection = await connectTestClient(daemon);
   await connection.call('board.identify', { token });
-  return { agent, token, connection };
+  return { token, connection };
 }
 
 /** An agent the user started, at its prompt with nothing in its worktree: `spawn` with no prompt. */
@@ -94,14 +105,17 @@ describe('letting an agent orchestrate', () => {
     });
   });
 
-  it('never passes to the agents an orchestrator starts, and keeps settings and permissions out of its reach', async () => {
+  it('passes to the agents an orchestrator starts only by their zone, and keeps settings and permissions out of its reach', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'board');
     const worker = await connection.call('orchestrator.spawn', { token, prompt: 'Write the handover', name: 'child' });
     expect(worker.orchestrate).toBeNull();
-    // Whatever it is asked for: orchestrate is the user's spawn's alone.
+    // Whatever it is asked for: a scope by hand is the user's alone.
     const asked = await connection.call('orchestrator.spawn', { token, name: 'sneaky', orchestrate: 'board' } as never);
     expect(asked.orchestrate).toBeNull();
+    // Its zone's switch lets it orchestrate there, as it does any agent there.
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.orchestrate === 'zone');
 
     const refused = [
       connection.call('agent.setOrchestrate', { sessionId: worker.sessionId, scope: 'zone' }),
@@ -115,21 +129,169 @@ describe('letting an agent orchestrate', () => {
     for (const call of refused) await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
   });
 
-  it("never lets an ended orchestrator's shell orchestrate for it", async () => {
+  it('stops at three agents deep: the user\'s, the agents it starts, and theirs, which never orchestrate', async () => {
+    const setup = await orchestrateDaemon();
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    const lead = await agentSide(setup, setup.zone.id);
+    const child = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'child', prompt: 'Print your board identity' });
+    expect(child.orchestrate).toBe('zone');
+    const childSide = await agentSideOf(setup, child.sessionId);
+
+    const grandchild = await childSide.connection.call('orchestrator.spawn', { token: childSide.token, name: 'grandchild', prompt: 'Print your board identity' });
+    expect(grandchild.spawnedBy).toBe(child.sessionId);
+    expect(grandchild.orchestrate).toBeNull();
+    // Even let orchestrate by hand, the third starts no fourth.
+    await setup.client.call('agent.setOrchestrate', { sessionId: grandchild.sessionId, scope: 'zone' });
+    const third = await agentSideOf(setup, grandchild.sessionId);
+    await expect(third.connection.call('orchestrator.spawn', { token: third.token, name: 'fourth' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/3 agents deep in a crew/),
+    });
+
+    // Its depth was fixed as it started: removing the agent between them leaves it as deep as it was.
+    // The switch going off clears its grant by hand; back on, its zone alone speaks for it.
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false });
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    await lead.connection.call('orchestrator.close', { token: lead.token, sessionId: child.sessionId, remove: true });
+    const orphan = (await setup.client.call('agent.list')).find((each) => each.sessionId === grandchild.sessionId)!;
+    expect(orphan).toMatchObject({ spawnedBy: null, orchestrate: null });
+    await expect(third.connection.call('orchestrator.spawn', { token: third.token, name: 'fourth' })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+      message: expect.stringMatching(/3 agents deep in a crew/),
+    });
+  });
+
+});
+
+/** Connects as the shell session `pane`, with the board token it holds, as a CLI run in it by hand does. */
+async function shellSide(setup: Setup, pane: string) {
+  await setup.client.call('session.attach', { sessionId: pane });
+  await setup.client.call('session.write', { sessionId: pane, data: 'echo "identity:$AGENT_BOARD_IDENTITY:end"\r' });
+  await setup.recorder.waitForText(pane, ':end\r\n');
+  const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(pane))![1]!;
+  return { token, connection: await connectTestClient(setup.daemon) };
+}
+
+describe('a user-side caller: a shell, or the user with no token', () => {
+  it("acts for the user from an ended agent's shell, at board scope, logged as that shell; its agents are the user's", async () => {
+    const setup = await orchestrateDaemon();
+    const { agent } = await agentSide(setup, setup.zone.id);
+    const target = await agentSide(setup, setup.other.id, 'board');
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    const ended = await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.shellSessionId !== null);
+    const { token, connection } = await shellSide(setup, ended.shellSessionId!);
+
+    expect(await connection.call('board.identify', { token })).toMatchObject({ tileId: agent.sessionId, side: 'user', orchestrate: 'board' });
+    // It removes an agent the user started, as the user does in the app.
+    const users = await userAgent(setup.client, setup.zone.id, 'users');
+    await expect(connection.call('orchestrator.close', { token, sessionId: users.sessionId, remove: true })).resolves.toBeNull();
+    // Anywhere on the board, an orchestrator of any scope included.
+    const started = await connection.call('orchestrator.spawn', { token, zoneId: setup.other.id, name: 'by-hand' });
+    expect(started.spawnedBy).toBeNull();
+    await expect(connection.call('orchestrator.send', { token, sessionId: target.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ orchestratorId: agent.sessionId, orchestratorName: `${agent.name}'s shell`, action: 'send', outcome: 'done' });
+  });
+
+  it("acts for the user from a shell tile and an agent's tab, and may turn orchestrating on and off", async () => {
+    const setup = await orchestrateDaemon();
+    const { agent } = await agentSide(setup, setup.zone.id);
+    const tile = await setup.client.call('shell.create', { zoneId: setup.zone.id });
+    const tab = await setup.client.call('shell.createTab', { owner: { kind: 'agent', id: agent.sessionId } });
+    for (const pane of [tile.layout, tab.layout].map((layout) => paneIds(layout)[0]!)) {
+      const { token, connection } = await shellSide(setup, pane);
+      expect(await connection.call('board.identify', { token })).toMatchObject({ side: 'user', orchestrate: 'board' });
+      await expect(connection.call('orchestrator.send', { token, sessionId: agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+      await connection.call('orchestrator.wait', { token, sessionIds: [agent.sessionId] });
+      expect(await connection.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: 'repo' })).toMatchObject({ orchestrate: 'repo' });
+      expect(await connection.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: null })).toMatchObject({ orchestrate: null });
+      // Its zone's settings, its switch included, and permissions, stay the user's own in the app (G8, G22).
+      const refused = [
+        connection.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true }),
+        connection.call('zone.configure', { id: setup.zone.id, gateCommand: 'true' }),
+        connection.call('session.write', { sessionId: agent.sessionId, data: 'y\r' }),
+        connection.call('agent.answer', { sessionId: agent.sessionId, text: 'yes' }),
+        connection.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: 'r', behavior: 'allow' } as never),
+      ];
+      for (const call of refused) await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    }
+  });
+
+  it("keeps an ended agent's own connection the agent's: never the user's side", async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, connection, token } = await agentSide(setup, setup.zone.id);
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null);
+    for (const call of [
+      connection.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: 'board' }),
+      connection.call('orchestrator.spawn', { zoneId: setup.zone.id } as never),
+    ]) {
+      await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    }
+    await expect(connection.call('orchestrator.spawn', { token, zoneId: setup.zone.id })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.orchestrate).toBeNull();
+  });
+
+  it("keeps an agent's own token off the switches (G11)", async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, connection } = await agentSide(setup, setup.zone.id, 'board');
+    await expect(connection.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: 'board' })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await expect(connection.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+
+  it('acts for the user with no token, at board scope, logged as the user', async () => {
+    const setup = await orchestrateDaemon();
+    const started = await setup.client.call('orchestrator.spawn', { zoneId: setup.other.id, name: 'tokenless', prompt: 'Write the handover' });
+    expect(started.spawnedBy).toBeNull();
+    await setup.client.call('orchestrator.wait', { sessionIds: [started.sessionId] });
+    expect((await setup.client.call('orchestrator.read', { sessionId: started.sessionId })).text).toBeTruthy();
+    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId })).resolves.toBeDefined();
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ orchestratorName: 'you', action: 'close', outcome: 'done' });
+    // And removes it, as the user does in the app, but never one with unsaved work.
+    await expect(setup.client.call('orchestrator.close', { sessionId: started.sessionId, remove: true })).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork });
+    const clean = await setup.client.call('orchestrator.spawn', { zoneId: setup.other.id, name: 'clean' });
+    await expect(setup.client.call('orchestrator.close', { sessionId: clean.sessionId, remove: true })).resolves.toBeNull();
+    expect((await setup.client.call('agent.list')).some((each) => each.sessionId === clean.sessionId)).toBe(false);
+    // A connection that presented a token is that session's: it may not drop it to act as the user.
+    const { connection } = await agentSide(setup, setup.zone.id);
+    await expect(connection.call('orchestrator.spawn', { zoneId: setup.zone.id } as never)).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+
+  it("refuses to restart an agent while its own harness runs by hand in its fallback shell, even forced, and restarts it once that exits", async () => {
     const setup = await orchestrateDaemon();
     const { agent } = await agentSide(setup, setup.zone.id, 'zone');
     await setup.client.call('agent.stop', { sessionId: agent.sessionId });
     const ended = await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.shellSessionId !== null);
     const shell = ended.shellSessionId!;
+    expect(ended.shellHarness).toBeNull();
     await setup.client.call('session.attach', { sessionId: shell });
-    await setup.client.call('session.write', { sessionId: shell, data: 'echo "identity:$AGENT_BOARD_IDENTITY:end"\r' });
-    await setup.recorder.waitForText(shell, ':end\r\n');
-    const token = /identity:(.*):end\r\n/.exec(setup.recorder.screenText(shell))![1]!;
 
-    const connection = await connectTestClient(setup.daemon);
-    expect(await connection.call('board.identify', { token })).toMatchObject({ tileId: agent.sessionId, orchestrate: null });
-    await expect(connection.call('orchestrator.spawn', { token })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
-  });
+    // Once the shell is up (input typed while it starts can be flushed), the user types `claude` in it. It has the
+    // daemon's own PATH: the fake one is put first, never a real claude.
+    await setup.client.call('session.write', { sessionId: shell, data: 'echo ready-$((1 + 2))\r' });
+    await setup.recorder.waitForText(shell, 'ready-3\r\n');
+    const fakePath = fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir() }).PATH;
+    await setup.client.call('session.write', { sessionId: shell, data: `PATH='${fakePath}' claude\r` });
+    const live = await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.shellHarness === 'claude');
+    expect(live.endedAt).not.toBeNull();
+    await expect(setup.client.call('agent.resume', { sessionId: agent.sessionId, force: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringContaining('claude is running in its shell'),
+    });
+
+    // The harness exits back to the shell prompt: Restart works again.
+    const before = setup.recorder.events.length;
+    // Ctrl-C twice, as the fake asks ("Press Ctrl-C again to exit").
+    await setup.client.call('session.write', { sessionId: shell, data: '\x03' });
+    await setup.recorder.waitForText(shell, 'Press Ctrl-C again');
+    await setup.client.call('session.write', { sessionId: shell, data: '\x03' });
+    await setup.recorder.waitFor(
+      (e: DaemonEvent): e is AgentUpdatedEvent =>
+        e.type === 'agent.updated' && e.agent.sessionId === agent.sessionId && e.agent.shellHarness === null && setup.recorder.events.indexOf(e) >= before,
+    );
+    await expect(setup.client.call('agent.resume', { sessionId: agent.sessionId })).resolves.toMatchObject({ endedAt: null });
+  }, 30_000);
 });
 
 describe('a zone whose agents may orchestrate', () => {
@@ -140,42 +302,58 @@ describe('a zone whose agents may orchestrate', () => {
     expect((await agentSide(setup, fresh.id)).agent.orchestrate).toBe('zone');
   });
 
-  it('lets the agents the user starts there orchestrate in it, not those already there', async () => {
+  it('lets every live agent in it orchestrate there, those already there and those an orchestrator started', async () => {
     const setup = await orchestrateDaemon();
     const before = await agentSide(setup, setup.zone.id);
     expect(before.agent.orchestrate).toBeNull();
 
     expect(await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true })).toMatchObject({ agentsOrchestrate: true });
-    expect(await before.connection.call('board.identify', { token: before.token })).toMatchObject({ orchestrate: null });
-    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
-    expect(agent.orchestrate).toBe('zone');
-    const child = await connection.call('orchestrator.spawn', { token, name: 'child' });
+    expect(await before.connection.call('board.identify', { token: before.token })).toMatchObject({ orchestrate: 'zone' });
+    const child = await before.connection.call('orchestrator.spawn', { token: before.token, name: 'child' });
     expect(child.zoneId).toBe(setup.zone.id);
-    // Started in the zone, but by an orchestrator: it never orchestrates.
-    expect(child.orchestrate).toBeNull();
+    expect(child.orchestrate).toBe('zone');
     // A board token is refused the switch.
-    await expect(connection.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false })).rejects.toMatchObject({
+    await expect(before.connection.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false })).rejects.toMatchObject({
       code: BOARD_ERROR.notAllowed,
     });
   });
 
-  it('grants nothing to an agent outside it: one moved in, or one the zone let orchestrate moved out', async () => {
+  it('grants by where the agent is now: moved in, it orchestrates; moved out, it orchestrates only where the switch is on', async () => {
     const setup = await orchestrateDaemon();
     await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
-    await setup.client.call('zone.configure', { id: setup.other.id, agentsOrchestrate: true });
     const outsider = await agentSide(setup, setup.sameRepo.id);
+    expect(outsider.agent.orchestrate).toBeNull();
     await setup.client.call('agent.move', { sessionId: outsider.agent.sessionId, zoneId: setup.zone.id, x: 0, y: 400 });
-    expect(await outsider.connection.call('board.identify', { token: outsider.token })).toMatchObject({ orchestrate: null });
+    expect(await outsider.connection.call('board.identify', { token: outsider.token })).toMatchObject({ orchestrate: 'zone' });
 
     const { agent, token, connection } = await agentSide(setup, setup.zone.id);
-    // Into another zone, even one whose agents may orchestrate, or loose: the zone's grant stays behind.
+    // Into a zone whose switch is off, or loose: it orchestrates nowhere.
     for (const zoneId of [setup.other.id, null]) {
       const moved = await setup.client.call('agent.move', { sessionId: agent.sessionId, zoneId, x: 0, y: 0 });
       expect(moved.orchestrate).toBeNull();
       await expect(connection.call('orchestrator.spawn', { token })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
     }
-    // Back in the zone that granted it, it orchestrates there again.
-    expect((await setup.client.call('agent.move', { sessionId: agent.sessionId, zoneId: setup.zone.id, x: 0, y: 0 })).orchestrate).toBe('zone');
+    // Into one whose switch is on, it orchestrates there.
+    await setup.client.call('zone.configure', { id: setup.other.id, agentsOrchestrate: true });
+    expect((await setup.client.call('agent.move', { sessionId: agent.sessionId, zoneId: setup.other.id, x: 0, y: 0 })).orchestrate).toBe('zone');
+  });
+
+  it('keeps an agent the user turned off off, whatever its zone says, until the user turns it on', async () => {
+    const setup = await orchestrateDaemon();
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    expect(agent.orchestrate).toBe('zone');
+
+    expect(await setup.client.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: null })).toMatchObject({ orchestrate: null });
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: false });
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    expect(await connection.call('board.identify', { token })).toMatchObject({ orchestrate: null });
+    await expect(connection.call('orchestrator.spawn', { token })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+      message: expect.stringMatching(/the user turned it off/),
+    });
+
+    expect(await setup.client.call('agent.setOrchestrate', { sessionId: agent.sessionId, scope: 'repo' })).toMatchObject({ orchestrate: 'repo' });
   });
 
   it('switched off, stops every live agent in it orchestrating at its next call, and no other', async () => {
@@ -196,13 +374,12 @@ describe('a zone whose agents may orchestrate', () => {
       });
     }
     expect(await elsewhere.connection.call('board.identify', { token: elsewhere.token })).toMatchObject({ orchestrate: 'zone' });
-    // On again, the agents it let orchestrate do again; the grant by hand is gone for good, and says so truly.
+    // On again, every agent in it orchestrates in the zone: the grant by hand is gone for good, so the wider scope too.
     await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
     await untilAgent(setup.recorder, granted.agent.sessionId, (seen) => seen.orchestrate === 'zone');
-    expect(await granted.connection.call('board.identify', { token: granted.token })).toMatchObject({ orchestrate: 'zone' });
-    await expect(byHand.connection.call('orchestrator.spawn', { token: byHand.token })).rejects.toMatchObject({
-      message: expect.stringMatching(/the user didn't start it in web while orchestrating was on there\. The agents the user starts there now may/),
-    });
+    for (const { token, connection } of [granted, byHand]) {
+      expect(await connection.call('board.identify', { token })).toMatchObject({ orchestrate: 'zone' });
+    }
   });
 });
 
@@ -447,6 +624,18 @@ describe('steering a turn', () => {
     expect((await connection.call('orchestrator.read', { token, sessionId: worker.sessionId })).text).toBe('Done: Do it faster.');
   });
 
+  it('never types to an agent waiting mid-turn on the user’s answer to its question', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await connection.call('orchestrator.spawn', { token, name: 'asker', prompt: 'Ask in words: What should the banner say?' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.ask !== null);
+
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Free shipping' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/waiting on the user's answer to its question or plan/),
+    });
+  });
+
   it('never types to an agent that needs the user’s permission', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
@@ -482,21 +671,31 @@ describe('steering a turn', () => {
     expect((await connection.call('orchestrator.read', { token, sessionId: slow.sessionId })).text).toBe('Slow work done.');
   });
 
-  it('steers another orchestrator only with the whole board as its scope', async () => {
+  it('steers another orchestrator unless its scope is wider: board > repo > zone', async () => {
     const setup = await orchestrateDaemon();
     const narrow = await agentSide(setup, setup.zone.id, 'zone');
+    const peer = await agentSide(setup, setup.zone.id, 'zone');
+    const repo = await agentSide(setup, setup.zone.id, 'repo');
     const wide = await agentSide(setup, setup.zone.id, 'board');
 
-    await expect(narrow.connection.call('orchestrator.send', { token: narrow.token, sessionId: wide.agent.sessionId, text: 'close everything' })).rejects.toMatchObject({
+    for (const target of [repo, wide]) {
+      await expect(narrow.connection.call('orchestrator.send', { token: narrow.token, sessionId: target.agent.sessionId, text: 'close everything' })).rejects.toMatchObject({
+        code: BOARD_ERROR.outOfScope,
+        message: expect.stringMatching(/is an orchestrator whose scope is wider than yours/),
+      });
+      await expect(narrow.connection.call('orchestrator.close', { token: narrow.token, sessionId: target.agent.sessionId })).rejects.toMatchObject({
+        code: BOARD_ERROR.outOfScope,
+      });
+    }
+    await expect(repo.connection.call('orchestrator.interrupt', { token: repo.token, sessionId: wide.agent.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
-      message: expect.stringMatching(/is an orchestrator/),
     });
-    await expect(narrow.connection.call('orchestrator.close', { token: narrow.token, sessionId: wide.agent.sessionId })).rejects.toMatchObject({
-      code: BOARD_ERROR.outOfScope,
-    });
-    // It may still watch it.
+    // It may still watch one.
     expect((await narrow.connection.call('orchestrator.wait', { token: narrow.token, sessionIds: [wide.agent.sessionId] })).timedOut).toBe(false);
-    await expect(wide.connection.call('orchestrator.send', { token: wide.token, sessionId: narrow.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+    // A peer of the same scope, or a narrower one, it may steer.
+    await expect(narrow.connection.call('orchestrator.send', { token: narrow.token, sessionId: peer.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+    await expect(repo.connection.call('orchestrator.send', { token: repo.token, sessionId: narrow.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+    await expect(wide.connection.call('orchestrator.send', { token: wide.token, sessionId: repo.agent.sessionId, text: 'Carry on' })).resolves.toBeDefined();
   });
 
   it('starts no agent from a base whose project config differs from the repo’s HEAD', async () => {
@@ -622,23 +821,20 @@ describe('the activity log', () => {
     expect(log[1]!.reason).toMatch(/only for an orchestrator/);
   });
 
-  it('shows a session only its own tile’s lines', async () => {
+  it('shows every session every line, live and read', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id, 'zone');
     const other = await agentSide(setup, setup.zone.id);
-    const leadHears = recordEvents(lead.connection);
     const otherHears = recordEvents(other.connection);
-    await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'child', prompt: 'A secret plan' });
+    await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'child', prompt: 'A plan' });
 
-    // Live too: the event reaches the user and the lead, never another session.
     const isActivity = (e: DaemonEvent): e is OrchestratorActivityEvent => e.type === 'orchestrator.activity';
-    await leadHears.waitFor(isActivity);
+    await otherHears.waitFor(isActivity);
     await setup.recorder.waitFor(isActivity);
-    expect(otherHears.events.filter(isActivity)).toEqual([]);
 
-    expect(await other.connection.call('orchestrator.activity', {})).toEqual([]);
-    expect(await other.connection.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId })).toEqual([]);
-    expect(await lead.connection.call('orchestrator.activity', {})).toHaveLength(1);
+    expect(await other.connection.call('orchestrator.activity', {})).toHaveLength(1);
+    expect(await other.connection.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId })).toHaveLength(1);
+    expect(await other.connection.call('orchestrator.activity', { orchestratorId: other.agent.sessionId })).toEqual([]);
     expect(await setup.client.call('orchestrator.activity', {})).toHaveLength(1);
   });
 });
@@ -700,12 +896,12 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'connections', 'handoff', 'set_status', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'add_edge', 'list_edges', 'remove_edge', 'close',
+      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'set_status', 'open_pr', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'add_edge', 'list_edges', 'remove_edge', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
     expect((await plainMcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'set_status']);
+    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'set_status', 'open_pr']);
   });
 
   it('joins two of its agents with an edge, and removes it, over the tools', async () => {
@@ -755,27 +951,30 @@ describe('edges an orchestrator makes', () => {
     expect((await setup.client.call('flowEdge.list')).map(({ id }) => id)).toEqual([back.id]);
   });
 
-  it('refuses an end outside its scope, or another orchestrator to send to unless its scope is the whole board, and logs it', async () => {
+  it('refuses an end outside its scope, or into an orchestrator with a wider scope, and logs it', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'zone');
     const mine = await userAgent(setup.client, setup.zone.id, 'mine');
     const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
-    const peer = await agentSide(setup, setup.zone.id, 'board');
+    const wide = await agentSide(setup, setup.zone.id, 'board');
+    const peer = await agentSide(setup, setup.zone.id, 'zone');
 
     for (const [from, to] of [
       [mine.sessionId, elsewhere.sessionId],
       [elsewhere.sessionId, mine.sessionId],
-      [mine.sessionId, peer.agent.sessionId],
+      [mine.sessionId, wide.agent.sessionId],
     ] as const) {
       await expect(connection.call('orchestrator.addEdge', { token, from, to })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     }
-    // Reading one is fine: an edge out of another orchestrator carries what it hands off, and steers no one.
-    await connection.call('orchestrator.addEdge', { token, from: peer.agent.sessionId, to: mine.sessionId });
-    // A whole-board orchestrator may wire into another.
-    await peer.connection.call('orchestrator.addEdge', { token: peer.token, from: elsewhere.sessionId, to: me.sessionId });
+    // Out of a wider one is fine: an edge out of it carries what it hands off, and steers no one.
+    await connection.call('orchestrator.addEdge', { token, from: wide.agent.sessionId, to: mine.sessionId });
+    // Into a peer of the same scope is fine.
+    await connection.call('orchestrator.addEdge', { token, from: mine.sessionId, to: peer.agent.sessionId });
+    // A whole-board orchestrator may wire into any.
+    await wide.connection.call('orchestrator.addEdge', { token: wide.token, from: elsewhere.sessionId, to: me.sessionId });
 
     const log = await setup.client.call('orchestrator.activity', { orchestratorId: me.sessionId });
-    expect(log.map(({ outcome }) => outcome)).toEqual(['done', 'refused', 'refused', 'refused']);
+    expect(log.map(({ outcome }) => outcome)).toEqual(['done', 'done', 'refused', 'refused', 'refused']);
   });
 
   it('never approves a gate or script it puts on an edge, nor sends, drops or changes an edge', async () => {
@@ -809,30 +1008,21 @@ describe('edges an orchestrator makes', () => {
     }
   });
 
-  it('never joins an edge into an agent the user ended, nor starts one again along an edge it made', async () => {
+  it('joins an edge into an agent that has ended, and starts it again along it, as the user\'s edges do', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'zone');
     const worker = await connection.call('orchestrator.spawn', { token, name: 'worker' });
-    const edge = await connection.call('orchestrator.addEdge', { token, from: me.sessionId, to: worker.sessionId });
     await setup.client.call('agent.stop', { sessionId: worker.sessionId });
     await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.endedAt !== null);
 
-    const other = await connection.call('orchestrator.spawn', { token, name: 'other' });
-    await setup.client.call('agent.stop', { sessionId: other.sessionId });
-    await untilAgent(setup.recorder, other.sessionId, (seen) => seen.endedAt !== null);
-    await expect(connection.call('orchestrator.addEdge', { token, from: me.sessionId, to: other.sessionId })).rejects.toMatchObject({
-      code: RPC_ERROR.invalidParams,
-      message: expect.stringMatching(/has ended/),
-    });
-
-    // Its hand-off along the edge it made is skipped, saying why: the worker stays ended.
+    const edge = await connection.call('orchestrator.addEdge', { token, from: me.sessionId, to: worker.sessionId });
     expect(await connection.call('board.handoff', { token, message: 'Start again' })).toEqual([
-      { edgeId: edge.id, to: worker.sessionId, outcome: 'skipped', name: 'message', reason: expect.stringMatching(/^worker has ended, and an edge an agent made never starts it again/) },
+      { edgeId: edge.id, to: worker.sessionId, outcome: 'delivered', name: 'message', reason: null },
     ]);
-    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === worker.sessionId)!.endedAt).not.toBeNull();
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.endedAt === null);
   });
 
-  it('removes only an edge it made', async () => {
+  it('removes only an edge its crew made: itself, or an agent it started, or theirs', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'board');
     const impl = await userAgent(setup.client, setup.zone.id, 'impl');
@@ -844,10 +1034,23 @@ describe('edges an orchestrator makes', () => {
     for (const id of [users.id, others.id]) {
       await expect(connection.call('orchestrator.removeEdge', { token, id })).rejects.toMatchObject({
         code: BOARD_ERROR.outOfScope,
-        message: expect.stringMatching(/only edges it made/),
+        message: expect.stringMatching(/only edges its crew made/),
       });
     }
     expect(await setup.client.call('flowEdge.list')).toHaveLength(2);
+
+    await setup.client.call('zone.configure', { id: setup.zone.id, agentsOrchestrate: true });
+    const child = await connection.call('orchestrator.spawn', { token, name: 'child', prompt: 'Print your board identity' });
+    const childSide = await agentSideOf(setup, child.sessionId);
+    const childs = await childSide.connection.call('orchestrator.addEdge', { token: childSide.token, from: child.sessionId, to: impl.sessionId, trigger: 'manual' });
+    expect(childs.madeBy).toBe(child.sessionId);
+    await expect(connection.call('orchestrator.removeEdge', { token, id: childs.id })).resolves.toBeNull();
+
+    // The user's side removes any, as the user does in the app.
+    const tile = await setup.client.call('shell.create', { zoneId: setup.zone.id });
+    const shell = await shellSide(setup, paneIds(tile.layout)[0]!);
+    for (const id of [users.id, others.id]) await shell.connection.call('orchestrator.removeEdge', { token: shell.token, id });
+    expect(await setup.client.call('flowEdge.list')).toEqual([]);
   });
 
   it('is refused an agent that may not orchestrate', async () => {
@@ -859,5 +1062,27 @@ describe('edges an orchestrator makes', () => {
       code: BOARD_ERROR.notAllowed,
     });
     expect(await setup.client.call('flowEdge.list')).toEqual([]);
+  });
+});
+
+describe('a reviewer an orchestrator starts', () => {
+  it('works on a detached checkout of its implementer’s branch, `new` says so, and a follow-up can be based on it', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
+    const tip = git(implementer.worktree, 'rev-parse', 'HEAD').slice(0, 7);
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: 'agent:impl' });
+
+      expect(started.text).toContain(`\n  detached at ${tip} of ${implementer.branch} in `);
+      expect(started.json).toMatchObject({ role: 'reviewer', reviews: { branch: implementer.branch } });
+
+      // A follow-up based on that reviewer reviews the same branch.
+      const followUp = await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review' });
+      expect(followUp.json).toMatchObject({ role: 'follow-up-reviewer', reviews: { branch: implementer.branch } });
+    } finally {
+      session.close();
+    }
   });
 });

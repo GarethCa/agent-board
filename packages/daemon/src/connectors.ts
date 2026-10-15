@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { CLIENT_ID, invalidParams, oneOf, paramsObject, stringParam } from './params.ts';
+import { CLIENT_ID, invalidParams, oneOf, paramsObject, pointsParam, stringParam } from './params.ts';
 import {
   CONNECTOR_END_TYPES,
   CONNECTOR_LINE_ENDS,
@@ -42,6 +42,7 @@ interface ConnectorRow {
   end_end: Connector['endEnd'];
   color: string | null;
   label: string;
+  points: string;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +57,7 @@ function toConnector(row: ConnectorRow): Connector {
     endEnd: row.end_end,
     color: row.color,
     label: row.label,
+    points: JSON.parse(row.points) as Connector['points'],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -117,11 +119,11 @@ export function connectorHandlers<Context>(
   const selectAll = db.prepare('SELECT * FROM connectors ORDER BY created_at, rowid');
   const selectOne = db.prepare('SELECT * FROM connectors WHERE id = ?');
   const insert = db.prepare(
-    `INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side, style, start_end, end_end, color, label)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side, style, start_end, end_end, color, label, points)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, color = ?, label = ?,
+    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, color = ?, label = ?, points = ?, from_side = ?, to_side = ?,
      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
   );
   const remove = db.prepare('DELETE FROM connectors WHERE id = ?');
@@ -170,6 +172,7 @@ export function connectorHandlers<Context>(
         given('endEnd') ? oneOf(fields, 'endEnd', CONNECTOR_LINE_ENDS) : DEFAULT_CONNECTOR_LOOK.endEnd,
         given('color') ? colorParam(fields) : DEFAULT_CONNECTOR_LOOK.color,
         given('label') ? labelParam(fields) : DEFAULT_CONNECTOR_LOOK.label,
+        JSON.stringify(given('points') ? pointsParam(fields, 'points') : []),
       );
       return announce(get(id));
     },
@@ -183,6 +186,9 @@ export function connectorHandlers<Context>(
         given('endEnd') ? oneOf(fields, 'endEnd', CONNECTOR_LINE_ENDS) : connector.endEnd,
         given('color') ? colorParam(fields) : connector.color,
         given('label') ? labelParam(fields) : connector.label,
+        JSON.stringify(given('points') ? pointsParam(fields, 'points') : connector.points),
+        given('fromSide') ? oneOf(fields, 'fromSide', CONNECTOR_SIDES) : connector.from.side,
+        given('toSide') ? oneOf(fields, 'toSide', CONNECTOR_SIDES) : connector.to.side,
         connector.id,
       );
       return announce(get(connector.id));

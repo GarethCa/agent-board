@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
-import { CircleCheck, Clock, Download, FolderGit2, GitBranch, ListTodo, Search, SquareDashed } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactElement, type ReactNode } from 'react';
+import { CircleCheck, Clock, Download, FolderGit2, FolderOpen, GitBranch, ListTodo, Search, SquareDashed } from 'lucide-react';
 import {
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
+  type CheckedFolder,
   type GitHubRepoSource,
   type NewZoneParams,
   type RecentFolder,
@@ -14,6 +15,8 @@ import {
 import { errorMessage } from '../../../shared/errors';
 import { AnchoredPopover, Button, ErrorText, Hint, Input, Kbd, Select, SwatchRadio, Tabs } from '../ui';
 import type { ZoneSource } from '../chrome/zones';
+import { tildify } from '../session/live-folder';
+import { useHomeDir } from '../session/SessionDetails';
 import { matches, type PopoverPlacement } from './add-zone';
 import { apiKeyHint, GhLoginHelp, LINEAR_KEY_PLACEHOLDER } from './tracker-help';
 
@@ -24,6 +27,7 @@ const SOURCES: { id: ZoneSource; label: string; icon: ReactNode }[] = [
   { id: 'github', label: 'GitHub', icon: <GitBranch /> },
   { id: 'linear', label: 'Linear', icon: <ListTodo /> },
   { id: 'recent', label: 'Recent', icon: <Clock /> },
+  { id: 'folder', label: 'File browser', icon: <FolderOpen /> },
 ];
 
 /** What the tab has picked, to add a zone for. */
@@ -31,6 +35,7 @@ type Picked =
   | { source: 'github'; repo: GitHubRepoSource }
   | { source: 'linear'; team: TrackerScope; project?: TrackerProject }
   | { source: 'recent'; folder: RecentFolder }
+  | { source: 'folder'; folder: CheckedFolder }
   | { source: 'empty' };
 
 /** A list a tab loads: loading, loaded, or why it can't be shown (a login it needs first, or an error). */
@@ -79,6 +84,14 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
   const [apiKey, setApiKey] = useState('');
   /** Bumped to ask for the repos or teams again, after logging in. */
   const [attempt, setAttempt] = useState(0);
+  const home = useHomeDir();
+  /** The folders the user chose as their copy of a GitHub repo here, by `owner/repo`. */
+  const [copies, setCopies] = useState<Record<string, string>>({});
+  /** The repos whose local copy the user chose here with Use my copy…; the daemon says which it found. */
+  const [mine, setMine] = useState<ReadonlySet<string>>(new Set());
+  /** What "Find my local copies" last did: its count, or that it is running. */
+  const [finding, setFinding] = useState<string>();
+  const [folder, setFolder] = useState<CheckedFolder>();
 
   useEffect(() => {
     let cancelled = false;
@@ -100,6 +113,15 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
       cancelled = true;
     };
   }, [attempt]);
+
+  /** The repos as listed, with the copies chosen here as their local clones. */
+  const listed = useMemo<Loaded<GitHubRepoSource>>(
+    () =>
+      repos.status === 'ok'
+        ? { status: 'ok', items: repos.items.map((repo) => (repo.localPath === null && copies[repo.repo] !== undefined ? { ...repo, localPath: copies[repo.repo]! } : repo)) }
+        : repos,
+    [repos, copies],
+  );
 
   const linearTeam = picked?.source === 'linear' ? picked.team.key : undefined;
   useEffect(() => {
@@ -127,7 +149,9 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
         ? (picked.project ?? picked.team).name
         : picked?.source === 'recent'
           ? picked.folder.name
-          : '';
+          : picked?.source === 'folder'
+            ? picked.folder.name
+            : '';
   const name = (typedName ?? defaultName).trim();
 
   const look = (): NewZoneParams => ({ ...layout, name: name || undefined, color });
@@ -153,12 +177,14 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
         };
         const params = { ...look(), name: name || defaultName, tracker };
         if (bindTo.startsWith('folder:')) return addFolder(bindTo.slice('folder:'.length), params);
-        const repo = repos.status === 'ok' ? repos.items.find((each) => `github:${each.repo}` === bindTo) : undefined;
+        const repo = listed.status === 'ok' ? listed.items.find((each) => `github:${each.repo}` === bindTo) : undefined;
         if (repo === undefined) return window.agentBoard.zones.addUnbound(params);
         // A GitHub repo: its clone here, or one the daemon makes, with the team's issues.
         return repo.localPath === null ? window.agentBoard.zones.clone(repo.repo, params) : addFolder(repo.localPath, params);
       }
       case 'recent':
+        return addFolder(picked.folder.path, look());
+      case 'folder':
         return addFolder(picked.folder.path, look());
       case 'empty':
         return window.agentBoard.zones.addUnbound({ ...look(), name });
@@ -179,12 +205,48 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
     );
   };
 
-  const browse = () => {
+  /** Asks for a folder, and has the daemon look at it (and check it is a copy of `repo`, if given). */
+  const pickFolder = async (title: string, repo?: string): Promise<CheckedFolder | undefined> => {
     setError(undefined);
-    window.agentBoard.zones.add(look()).then((result) => {
-      if (result.status === 'added') onAdded(result.zone);
-      else if (result.status === 'rejected') setError(result.message);
-    }, (failure: unknown) => setError(errorMessage(failure)));
+    try {
+      const path = await window.agentBoard.zones.browseFolder(title);
+      if (path === undefined) return undefined;
+      const result = await window.agentBoard.zones.checkFolder(path, repo);
+      if (result.status === 'rejected') setError(result.message);
+      else return result.folder;
+    } catch (failure) {
+      setError(errorMessage(failure));
+    }
+    return undefined;
+  };
+
+  const browse = async () => {
+    const found = await pickFolder('Add a zone');
+    if (found === undefined) return;
+    setFolder(found);
+    setPicked({ source: 'folder', folder: found });
+  };
+
+  const useCopy = async (repo: GitHubRepoSource) => {
+    const found = await pickFolder(`Your copy of ${repo.repo}`, repo.repo);
+    if (found === undefined) return;
+    setCopies((current) => ({ ...current, [repo.repo]: found.path }));
+    setMine((current) => new Set(current).add(repo.repo));
+    setPicked({ source: 'github', repo: { ...repo, localPath: found.path } });
+  };
+
+  const findCopies = async () => {
+    setError(undefined);
+    setFinding('Looking…');
+    try {
+      const count = await window.agentBoard.zones.findCopies();
+      const result = await window.agentBoard.zones.githubRepos();
+      if (result.status === 'ok') setRepos({ status: 'ok', items: result.repos });
+      setFinding(count === 0 ? 'No git repos with a GitHub origin found' : `Found ${count} ${count === 1 ? 'repo' : 'repos'}`);
+    } catch (failure) {
+      setFinding(undefined);
+      setError(errorMessage(failure));
+    }
   };
 
   const connectLinear = () => {
@@ -232,26 +294,46 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
 
         <div className="add-zone-body" role="tabpanel" aria-label={SOURCES.find((tab) => tab.id === source)?.label}>
           {source === 'github' && (
-            <SourceList
-              loaded={repos}
-              login={
-                <Hint>
-                  <GhLoginHelp />, then{' '}
-                  <button type="button" className="add-zone-link" onClick={() => setAttempt((n) => n + 1)}>
-                    try again
+            <>
+              <SourceList
+                loaded={listed}
+                login={
+                  <Hint>
+                    <GhLoginHelp />, then{' '}
+                    <button type="button" className="add-zone-link" onClick={() => setAttempt((n) => n + 1)}>
+                      try again
+                    </button>
+                    .
+                  </Hint>
+                }
+                filter={(repo) => matches([repo.repo, repo.description], query)}
+                empty="No repos match"
+                label="GitHub repos"
+                keyOf={(repo) => repo.repo}
+                isPicked={(repo) => picked?.source === 'github' && picked.repo.repo === repo.repo}
+                isDisabled={(repo) => repo.onBoard}
+                onPick={(repo) => setPicked({ source: 'github', repo })}
+                row={(repo) => <RepoRow repo={repo} mine={mine.has(repo.repo)} home={home} />}
+                aside={(repo) =>
+                  !repo.onBoard &&
+                  repo.localPath === null &&
+                  copies[repo.repo] === undefined && (
+                    <button type="button" className="add-zone-link add-zone-use-copy" onClick={() => void useCopy(repo)}>
+                      Use my copy…
+                    </button>
+                  )
+                }
+              />
+              {repos.status === 'ok' && (
+                <p className="add-zone-browse">
+                  Already have them cloned?{' '}
+                  <button type="button" className="add-zone-link" onClick={() => void findCopies()}>
+                    Find my local copies
                   </button>
-                  .
-                </Hint>
-              }
-              filter={(repo) => matches([repo.repo, repo.description], query)}
-              empty="No repos match"
-              label="GitHub repos"
-              keyOf={(repo) => repo.repo}
-              isPicked={(repo) => picked?.source === 'github' && picked.repo.repo === repo.repo}
-              isDisabled={(repo) => repo.onBoard}
-              onPick={(repo) => setPicked({ source: 'github', repo })}
-              row={(repo) => <RepoRow repo={repo} />}
-            />
+                  {finding !== undefined && <span role="status"> · {finding}</span>}
+                </p>
+              )}
+            </>
           )}
           {source === 'linear' && (
             <>
@@ -374,12 +456,31 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
                   </>
                 )}
               />
+            </>
+          )}
+          {source === 'folder' && (
+            <>
               <p className="add-zone-browse">
-                Not listed?{' '}
-                <button type="button" className="add-zone-link" onClick={browse}>
-                  Browse…
-                </button>
+                <Button type="button" variant="ghost" onClick={() => void browse()}>
+                  {folder === undefined ? 'Choose a folder…' : 'Choose another folder…'}
+                </Button>
               </p>
+              {folder === undefined ? (
+                <Hint>Pick a git repo, or a folder inside one, anywhere on this machine.</Hint>
+              ) : (
+                <ul className="add-zone-list" aria-label="Chosen folder">
+                  <li className="add-zone-row" data-picked>
+                    <FolderGit2 className="add-zone-row-icon" />
+                    <span className="add-zone-row-main">
+                      <span className="add-zone-row-title add-zone-mono">{tildify(folder.path, home)}</span>
+                      <span className="add-zone-row-detail add-zone-mono">
+                        {folder.path === folder.repoRoot ? 'Repo' : `In the repo at ${tildify(folder.repoRoot, home)}`}
+                        {folder.gitHubRepo !== null && ` · origin ${folder.gitHubRepo}`}
+                      </span>
+                    </span>
+                  </li>
+                </ul>
+              )}
             </>
           )}
           {source === 'empty' && (
@@ -442,10 +543,12 @@ interface SourceListProps<T> {
   isDisabled?(item: T): boolean;
   onPick(item: T): void;
   row(item: T): ReactNode;
+  /** A control beside a row, outside the option: a button does not belong inside one. */
+  aside?(item: T): ReactNode;
 }
 
 /** A tab's list of things to add a zone for: one can be picked. */
-function SourceList<T>({ loaded, login, filter, empty, label, keyOf, isPicked, isDisabled, onPick, row }: SourceListProps<T>) {
+function SourceList<T>({ loaded, login, filter, empty, label, keyOf, isPicked, isDisabled, onPick, row, aside }: SourceListProps<T>) {
   if (loaded.status === 'loading') return <Hint>Loading…</Hint>;
   if (loaded.status === 'error') return <ErrorText>{loaded.message}</ErrorText>;
   if (loaded.status === 'login') {
@@ -464,21 +567,23 @@ function SourceList<T>({ loaded, login, filter, empty, label, keyOf, isPicked, i
         const disabled = isDisabled?.(item) ?? false;
         const pick = () => disabled || onPick(item);
         return (
-          <li
-            key={keyOf(item)}
-            className="add-zone-row"
-            role="option"
-            aria-selected={isPicked(item)}
-            aria-disabled={disabled || undefined}
-            tabIndex={disabled ? -1 : 0}
-            onClick={pick}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter' && event.key !== ' ') return;
-              event.preventDefault();
-              pick();
-            }}
-          >
-            {row(item)}
+          <li key={keyOf(item)} className="add-zone-item" role="presentation">
+            <div
+              className="add-zone-row"
+              role="option"
+              aria-selected={isPicked(item)}
+              aria-disabled={disabled || undefined}
+              tabIndex={disabled ? -1 : 0}
+              onClick={pick}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                pick();
+              }}
+            >
+              {row(item)}
+            </div>
+            {aside?.(item)}
           </li>
         );
       })}
@@ -515,7 +620,16 @@ function ProjectRow({ project }: { project: TrackerProject }) {
 }
 
 /** A GitHub repo: who owns it, what it is, and whether it is cloned here or will be. */
-function RepoRow({ repo }: { repo: GitHubRepoSource }) {
+function RepoRow({
+  repo,
+  mine,
+  home,
+}: {
+  repo: GitHubRepoSource;
+  /** Whether its local copy is one the user chose here. */
+  mine: boolean;
+  home: string | undefined;
+}) {
   const [owner] = repo.repo.split('/');
   return (
     <>
@@ -533,12 +647,12 @@ function RepoRow({ repo }: { repo: GitHubRepoSource }) {
       ) : repo.localPath !== null ? (
         <span className="add-zone-where" data-cloned="true">
           <CircleCheck />
-          cloned at <span className="add-zone-mono">{repo.localPath}</span>
+          {mine || repo.foundCopy ? 'your copy at' : 'uses'} <span className="add-zone-mono">{tildify(repo.localPath, home)}</span>
         </span>
       ) : (
         <span className="add-zone-where">
           <Download />
-          will clone to <span className="add-zone-mono">{repo.clonePath}</span>
+          will clone to <span className="add-zone-mono">{tildify(repo.clonePath, home)}</span>
         </span>
       )}
     </>

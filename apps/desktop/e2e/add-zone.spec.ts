@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { createFakeGitHub, createTempKeychain, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
+import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, launch, LINEAR_API_KEY, serveLinearFixtures, zoneNamed, zones } from './agent-helpers.ts';
@@ -84,7 +85,7 @@ test('a zone from a GitHub repo clones it into the managed folder, with New agen
   }
 });
 
-test('a zone from a recent folder needs no picker; Browse… is the only way to it', async () => {
+test('a zone from a recent folder needs no picker; the File browser tab is the only way to it', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -111,6 +112,50 @@ test('a zone from a recent folder needs no picker; Browse… is the only way to 
   } finally {
     await app.close();
     await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Use my copy… on a GitHub row binds the zone to a folder whose origin is that repo, from its top or a subfolder, and refuses another repo\'s', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const reposDir = join(dir, 'repos');
+  const github = createFakeGitHub({
+    ...FAKE_GITHUB_STATE,
+    repos: [
+      { nameWithOwner: 'acme/app', description: 'The app', cloneFrom: repo },
+      { nameWithOwner: 'acme/ops', description: 'Ops' },
+    ],
+  });
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'git@github.com:Acme/App.git']);
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_REPOS_DIR: reposDir });
+  try {
+    const popover = await openAddZone(window, 'GitHub');
+    const row = popover.getByRole('option').filter({ hasText: 'The app' });
+    await expect(row).toContainText('will clone to');
+
+    // Another repo's folder: refused, saying which repo it is, and nothing is picked.
+    await pickFolderNext(app, repo);
+    await popover.locator('.add-zone-item').filter({ hasText: 'Ops' }).getByRole('button', { name: 'Use my copy…' }).click();
+    await expect(popover.getByRole('alert')).toContainText("That folder's origin is acme/app, not acme/ops");
+    await expect(popover.getByRole('option', { selected: true })).toHaveCount(0);
+
+    // A subfolder of the right repo: the row now uses it, and nothing is cloned.
+    const subfolder = join(repo, 'apps', 'web');
+    await pickFolderNext(app, subfolder);
+    await popover.locator('.add-zone-item').filter({ hasText: 'The app' }).getByRole('button', { name: 'Use my copy…' }).click();
+    await expect(row).toContainText(`your copy at ${subfolder}`);
+    await expect(popover.getByRole('button', { name: /^Add zone/ })).toBeEnabled();
+    await popover.getByRole('button', { name: /^Add zone/ }).click();
+    await expect(popover).toBeHidden();
+
+    const [zone] = await zones(window);
+    expect(zone).toMatchObject({ kind: 'folder', repoRoot: repo, folder: 'apps/web', tracker: { provider: 'github', scope: 'acme/app' } });
+    expect(existsSync(join(reposDir, 'acme', 'app'))).toBe(false);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    github.dispose();
     rmSync(dir, { recursive: true, force: true });
   }
 });

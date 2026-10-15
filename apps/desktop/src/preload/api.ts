@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentRemovedEvent,
+  AgentRole,
   AgentUpdatedEvent,
   BoardItem,
   BuildInfo,
@@ -16,7 +17,11 @@ import type {
   FlowEdgeUpdatedEvent,
   FlowDeliveredPayload,
   FlowPayloadPreview,
+  RoleTemplate,
   UpdateFlowEdgeParams,
+  PullRequestActed,
+  PullRequestDetails,
+  PullRequestRef,
   ReviewRound,
   ReviewUpdatedEvent,
   CreateItemParams,
@@ -41,6 +46,8 @@ import type {
   PackageScripts,
   ShellOwner,
   ShellPlace,
+  WindowLayoutEvent,
+  WindowOwner,
   PaneLayout,
   Shell,
   TileMove,
@@ -60,6 +67,7 @@ import type {
   UpdateItemParams,
   GitHubRepoSource,
   NewZoneParams,
+  CheckedFolder,
   RecentFolder,
   Zone,
   ZoneBinding,
@@ -71,8 +79,19 @@ import type {
   ZoneTracker,
   OrchestratorActivity,
   OrchestratorActivityEvent,
+  GateCleanup,
+  PullRequest,
+  GateLog,
+  GateMerged,
+  GateRun,
+  GateStatus,
+  GateUpdatedEvent,
+  AskAnswer,
+  Plan,
+  PlanOutcome,
+  PlanSummary,
 } from '@agent-board/daemon/protocol';
-import type { WindowLayout } from '@agent-board/daemon/window-layout';
+import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
 
 /** The app lost its connection to the daemon for this attachment; the session itself may still be running. */
@@ -149,6 +168,11 @@ export type AddZoneResult =
   /** The picked folder can't be a zone (e.g. it is not in a git repo); `message` says why. */
   | { status: 'rejected'; message: string };
 
+/** The outcome of the daemon looking at a folder the user picked. */
+export type CheckFolderResult =
+  | { status: 'ok'; folder: CheckedFolder }
+  | { status: 'rejected'; message: string };
+
 /** The outcome of asking the user for a folder and binding an unbound zone to it. */
 export type BindZoneResult =
   | { status: 'bound'; zone: Zone }
@@ -178,12 +202,17 @@ export const ZONE_IPC = {
   cancelClone: 'zone:cancelClone',
   recentFolders: 'zone:recentFolders',
   githubRepos: 'zone:githubRepos',
+  checkFolder: 'zone:checkFolder',
+  findCopies: 'zone:findCopies',
   bind: 'zone:bind',
   update: 'zone:update',
   configure: 'zone:configure',
   setTracker: 'zone:setTracker',
   unbind: 'zone:unbind',
   setDefaultRepo: 'zone:setDefaultRepo',
+  roleTemplates: 'zone:roleTemplates',
+  setRoleTemplate: 'zone:setRoleTemplate',
+  resetRoleTemplate: 'zone:resetRoleTemplate',
   setLook: 'zone:setLook',
   dissolve: 'zone:dissolve',
   restore: 'zone:restore',
@@ -214,6 +243,13 @@ export interface ZonesApi {
   recentFolders(): Promise<RecentFolder[]>;
   /** The GitHub repos gh can see, most recently pushed first, with the local clone of each the daemon knows. */
   githubRepos(): Promise<GitHubReposResult>;
+  /**
+   * Has the daemon look at a picked folder: in a git repo, and with `repo` (`owner/repo`) set, a copy of that GitHub
+   * repo. `rejected` says why not.
+   */
+  checkFolder(path: string, repo?: string): Promise<CheckFolderResult>;
+  /** Has the daemon look one level deep in the usual code folders for copies of GitHub repos; resolves with how many it found. */
+  findCopies(): Promise<number>;
   /** Shows a folder picker and binds the unbound zone to the picked folder, as a repo or as a new project. */
   bind(id: string, as: ZoneBinding): Promise<BindZoneResult>;
   /** Moves and resizes a zone. */
@@ -226,11 +262,21 @@ export interface ZonesApi {
   unbind(id: string): Promise<Zone>;
   /** Sets a group's default repo (a repo, or a folder in one), or clears it with null. */
   setDefaultRepo(id: string, path: string | null): Promise<Zone>;
+  /** The zone's prompt template for each role. */
+  roleTemplates(id: string): Promise<RoleTemplate[]>;
+  /** Saves the zone's template for a role. */
+  setRoleTemplate(id: string, role: AgentRole, body: string): Promise<RoleTemplate>;
+  /** Puts the zone's template for a role back to its seed, the repo's worker prompt or the app's own. */
+  resetRoleTemplate(id: string, role: AgentRole): Promise<RoleTemplate>;
   /** Renames the zone, recolours it (`#rrggbb`) and/or sets its fill opacity (a percent, or null for the theme's own). */
   setLook(id: string, look: { name?: string; color?: string; fillOpacity?: number | null }): Promise<Zone>;
-  /** Dissolves a group in one step: its tiles go loose where they are drawn, then it goes; its items stay. */
-  dissolve(id: string): Promise<void>;
-  /** Makes a dissolved group again, under its own id and with what it had; undoing a dissolve does. */
+  /**
+   * Deletes a zone of any kind in one step: its tiles go loose where they are drawn, then it goes; its items stay, and
+   * no session, worktree, branch or repo folder is touched. With `deleteClone`, a managed clone's folder goes too, and
+   * `cloneError` says why it could not (the zone is deleted all the same).
+   */
+  dissolve(id: string, options?: { deleteClone?: boolean }): Promise<{ cloneError: string | null }>;
+  /** Makes a deleted zone again, under its own id and with what it had, bound to its repo if it still resolves; undoing a delete does. */
   restore(zone: ZoneSnapshot): Promise<Zone>;
   /** Shows a folder picker ("Browse…") titled `title`, and resolves with the picked folder, or undefined if cancelled. */
   browseFolder(title: string): Promise<string | undefined>;
@@ -345,6 +391,182 @@ export interface ReviewsApi {
    * announced: drop them when it goes. Returns the unsubscribe function.
    */
   onChanged(listener: (change: ReviewUpdatedEvent) => void): () => void;
+}
+
+/** The PR tab's IPC channels between the preload and main (BI1). */
+export const PULL_REQUEST_IPC = {
+  details: 'pull-request:details',
+  approve: 'pull-request:approve',
+  merge: 'pull-request:merge',
+} as const;
+
+/**
+ * A pull request as its PR tab shows it, read from GitHub by the daemon with the user's own gh login: no GitHub token
+ * reaches the app. Merge and approve only when the user clicks for it, and never on their own.
+ */
+export interface PullRequestsApi {
+  details(ref: PullRequestRef): Promise<PullRequestDetails>;
+  /**
+   * Approves it as the gh user at `headCommit`, the commit shown, refusing if it has moved on since; answers with it as
+   * it is now, or why it couldn't be read again.
+   */
+  approve(ref: PullRequestRef, headCommit: string): Promise<PullRequestActed>;
+  /**
+   * Squash-merges it while its head is still `headCommit`, the commit shown; answers as `approve` does. `pastGate` once
+   * the user confirmed merging past a gate that hasn't passed on it (`gateBlocked`).
+   */
+  merge(ref: PullRequestRef, headCommit: string, pastGate: boolean): Promise<PullRequestActed>;
+}
+
+/** The merge gate's IPC channels between the preload and main. */
+export const GATE_IPC = {
+  list: 'gate:list',
+  status: 'gate:status',
+  run: 'gate:run',
+  stop: 'gate:stop',
+  log: 'gate:log',
+  sendFailure: 'gate:sendFailure',
+  openPullRequest: 'gate:openPullRequest',
+  merge: 'gate:merge',
+  changed: 'gate:changed',
+} as const;
+
+/**
+ * An agent's merge gate: its zone's gate command run in its worktree, then Open PR and Merge behind it. Each
+ * runs only when the user clicks; the app never runs the gate, opens a pull request or merges by itself.
+ */
+export interface GatesApi {
+  /** Every agent's latest run. */
+  list(): Promise<GateRun[]>;
+  /** The agent's latest run, its zone's gate command, the commit its worktree is at and how much is uncommitted. */
+  status(sessionId: string): Promise<GateStatus>;
+  run(sessionId: string): Promise<GateRun>;
+  /** Stops the run and everything it started. */
+  stop(sessionId: string): Promise<null>;
+  /** A step's log (or, with none, the whole output) from byte `since` on, else its last part. */
+  log(sessionId: string, step?: string, since?: number): Promise<GateLog>;
+  /** Pastes the failing step's last lines at the agent's prompt, sending nothing; refused while it waits on a permission prompt. */
+  sendFailure(sessionId: string, step: string): Promise<null>;
+  /** Pushes its branch and opens a pull request from the template, its handover and (in a zone with a gate) the gate table. */
+  openPullRequest(sessionId: string): Promise<PullRequest>;
+  /**
+   * Squash-merges its pull request at `headCommit`, the commit shown, once GitHub (and in a zone with one, the gate)
+   * allows, then cleans up as `cleanup` says, keeping a worktree that holds anything that wasn't merged.
+   */
+  merge(sessionId: string, number: number, headCommit: string, cleanup: GateCleanup): Promise<GateMerged>;
+  /** Calls `listener` whenever any agent's run starts, moves on a step or ends. Returns the unsubscribe function. */
+  onChanged(listener: (change: GateUpdatedEvent) => void): () => void;
+}
+
+/** The IPC channels for agents' questions and plans. */
+export const ASK_IPC = {
+  answer: 'ask:answer',
+  plans: 'plan:list',
+  decide: 'plan:decide',
+} as const;
+
+/** What the user does with the questions and plans agents wait on. Only their clicks answer them. */
+export interface AsksApi {
+  /** Answers the agent's question `askId`: an option, their own words, or a skip. */
+  answer(sessionId: string, askId: string, answer: AskAnswer): Promise<void>;
+  /** The agent's plans, oldest first, with their bodies. */
+  plans(sessionId: string): Promise<Plan[]>;
+  /** Decides the agent's plan `planId` while it waits on it. */
+  decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): Promise<PlanSummary>;
+}
+
+/** The web tab's IPC channels between the preload and main (BI2). */
+export const WEB_TAB_IPC = {
+  open: 'web-tab:open',
+  /** An agent's HTML plan, drawn as a web tab's page is, locked down harder. */
+  openPlan: 'web-tab:openPlan',
+  close: 'web-tab:close',
+  forget: 'web-tab:forget',
+  handOff: 'web-tab:handOff',
+  cancelHandOff: 'web-tab:cancelHandOff',
+  /** renderer → main, sent (not invoked) as often as the tab moves: `(tabId, WebTabBounds | null)`. */
+  setBounds: 'web-tab:setBounds',
+  load: 'web-tab:load',
+  back: 'web-tab:back',
+  forward: 'web-tab:forward',
+  reload: 'web-tab:reload',
+  openInBrowser: 'web-tab:openInBrowser',
+  openOffered: 'web-tab:openOffered',
+  dismissOffered: 'web-tab:dismissOffered',
+  /** main → renderer: `(tabId, WebTabState)` as its page loads, moves on or is stopped. */
+  changed: 'web-tab:changed',
+  /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
+  key: 'web-tab:key',
+} as const;
+
+/** Where a web tab's page is drawn in its window, in CSS pixels from the top left of the page. */
+export interface WebTabBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** How a web tab's page is doing, for its address row. */
+export interface WebTabState {
+  /** The page's URL, or the one it is loading before it first has one. */
+  url: string;
+  title: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+  /** Whether the page has the keyboard: clicked into, so its tab's pane is the window's focused one. */
+  focused: boolean;
+  /** Why the page isn't showing what was asked: it couldn't load, or it was stopped going somewhere it may not. */
+  problem?: string;
+  /** The https page the page last asked to open in a new window: never opened but by the user's click (`openOffered`). */
+  offered?: string;
+}
+
+/** A key pressed in a web tab's page that is its window's to act on, as a `KeyboardEvent` would carry it. */
+export type WebTabKey = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>;
+
+/**
+ * A web tab's page (BI2): a locked-down web view the main process lays over the tab's area of this window. It
+ * shows https pages and http ones on this machine only, in a session partition of its own, with no access to the app.
+ */
+export interface WebTabsApi {
+  /**
+   * Makes the tab's page, hidden until `setBounds` places it, and loads `url`. `onState` hears how it is doing and `onKey`
+   * the window's own shortcuts pressed in it. Returns the function that takes the page away; its partition's data is
+   * kept until `forget`.
+   */
+  open(tabId: string, url: string, listeners: { onState(state: WebTabState): void; onKey(key: WebTabKey): void }): () => void;
+  /**
+   * Makes a page for an agent's HTML plan, as `open` does for a web page: served from memory, offline, going
+   * nowhere and opening nothing (`plan-lockdown.ts`). `forget` lets its page go.
+   */
+  openPlan(tabId: string, html: string, listeners: { onState(state: WebTabState): void; onKey(key: WebTabKey): void }): () => void;
+  /** Draws the page at `bounds`, or hides it with null. */
+  setBounds(tabId: string, bounds: WebTabBounds | null): void;
+  /** Goes to `url`, if a web tab may show it (`isWebTabUrl`). */
+  load(tabId: string, url: string): Promise<void>;
+  back(tabId: string): Promise<void>;
+  forward(tabId: string): Promise<void>;
+  reload(tabId: string): Promise<void>;
+  /** Opens the page's URL in the OS browser. */
+  openInBrowser(tabId: string): Promise<void>;
+  /**
+   * Opens the page the page asked to open (`WebTabState.offered`) in the OS browser, as the user clicked for it: only if
+   * it is still `shown`, the one the tab showed them.
+   */
+  openOffered(tabId: string, shown: string): Promise<void>;
+  /** Lets the page the page asked to open go unopened. */
+  dismissOffered(tabId: string): Promise<void>;
+  /** The tab was closed: its page goes, and its partition's cookies, storage and cache with it. */
+  forget(tabId: string): Promise<void>;
+  /**
+   * The tab moves to another window (slice 4), in any window: its page waits, hidden, for the window that
+   * opens it next, which takes it as it is, with no reload. One no window takes in a while goes, with its partition's data.
+   */
+  handOff(tabId: string): Promise<void>;
+  /** The move fell through: a page still waiting goes back to the window it left. */
+  cancelHandOff(tabId: string): Promise<void>;
 }
 
 /** The orchestrator IPC channels between the preload and main. */
@@ -523,8 +745,13 @@ export const SHELL_IPC = {
   windowLayout: 'shell:windowLayout',
   setWindowLayout: 'shell:setWindowLayout',
   unsplitTabs: 'shell:unsplitTabs',
+  moveSurface: 'shell:moveSurface',
+  forgetWindow: 'shell:forgetWindow',
+  tabWindows: 'shell:tabWindows',
   /** main → renderer: `(ShellChange)` for every shell tile change. */
   changed: 'shell:changed',
+  /** main → renderer: `(WindowLayoutEvent)` when a window's layout changes other than by the window itself. */
+  layoutChanged: 'shell:layoutChanged',
 } as const;
 
 export interface ShellsApi {
@@ -552,16 +779,34 @@ export interface ShellsApi {
   movePane(shellId: string, sessionId: string, to: ShellPlace, id?: string): Promise<{ moved: Shell; source: Shell; layoutBefore: PaneLayout }>;
   /** Puts a pane moved out by `movePane` back into the shell, as `layout`, its own shell going. */
   returnPane(shellId: string, sessionId: string, layout: PaneLayout): Promise<Shell>;
-  /** How the owner's session window lays out its tabs in panes; null until it first keeps one. */
-  windowLayout(owner: ShellOwner): Promise<WindowLayout | null>;
-  /** Keeps how the owner's session window lays out its tabs in panes. */
-  setWindowLayout(owner: ShellOwner, layout: WindowLayout): Promise<WindowLayout>;
+  /** How the owner's session window (or a tab window) lays out its tabs in panes; null until it first keeps one. */
+  windowLayout(owner: WindowOwner): Promise<WindowLayout | null>;
+  /**
+   * Keeps how the owner's session window (or a tab window) lays out its tabs in panes: given `base`, the layout it was
+   * made from, only if the daemon still has that one. Resolves with the layout kept now.
+   */
+  setWindowLayout(owner: WindowOwner, layout: WindowLayout, base?: WindowLayout | null): Promise<WindowLayout | null>;
   /**
    * Reads how the owner's session window lays out its tabs, as it opens: tabs split inside themselves before windows
    * had panes are laid out as its panes first, no shell restarting. The layout is null until it first keeps one; the
    * tabs are the owner's as they are now.
    */
-  unsplitTabs(owner: ShellOwner): Promise<{ layout: WindowLayout | null; tabs: Shell[] }>;
+  unsplitTabs(owner: WindowOwner): Promise<{ layout: WindowLayout | null; tabs: Shell[] }>;
+  /**
+   * Moves a pull request, web or session tab out of the window `from` and into `to`'s, at `placement` (slice
+   * 4); null for none, either way. Resolves with both layouts and where it was in `from`. Every window hears of both.
+   */
+  moveSurface(
+    surface: Surface,
+    from: WindowOwner | null,
+    to: { owner: WindowOwner; placement?: Placement } | null,
+  ): Promise<{ from: WindowLayout | null; to: WindowLayout | null; was: Placement | null }>;
+  /** Forgets a tab window's layout as it closes, if it is still `layout`, the one it last showed; resolves with whether it did. */
+  forgetWindow(owner: WindowOwner, layout: WindowLayout): Promise<boolean>;
+  /** Every tab window's layout kept: for the board to show again those it has lost track of. */
+  tabWindows(): Promise<{ owner: { kind: 'tabs'; id: string }; layout: WindowLayout }[]>;
+  /** Calls `listener` when a window's layout changes other than by the window itself: a tab moved in or out. */
+  onWindowLayout(listener: (change: WindowLayoutEvent) => void): () => void;
   /** Splits the pane in two, the new pane after it. `horizontal` puts them side by side. */
   split(shellId: string, sessionId: string, direction: SplitDirection, cwd?: string): Promise<Shell>;
   /** Moves a split's divider. */
@@ -675,8 +920,14 @@ export interface TrackersApi {
 /** How a popped-out session window went away: popped back in to the board, or closed. */
 export type PopOutEnd = 'popIn' | 'closed';
 
-/** What a session window shows: one session's terminal, or a shell tile's panes. */
-export type WindowKind = 'session' | 'shell';
+/**
+ * What a session window shows: one session's terminal, or a shell tile's panes; or, popped out only, a tab window's
+ * tabs (slice 4), which are no session's.
+ */
+export type WindowKind = 'session' | 'shell' | 'tabs';
+
+/** The kind a renderer's query names, if it is one. */
+const windowKindFrom = (kind: string | null): WindowKind => (kind === 'shell' || kind === 'tabs' ? kind : 'session');
 
 /** A session window's subject: a session ID or a shell tile ID, as `kind` says, and what its title bar calls it. */
 export interface WindowTarget {
@@ -696,7 +947,7 @@ export const WINDOW_QUERY = { popOut: 'popOut', show: 'show', kind: 'kind', titl
 export function windowTargetFrom(query: URLSearchParams, idKey: string): WindowTarget | undefined {
   const id = query.get(idKey);
   if (id === null) return undefined;
-  return { kind: query.get(WINDOW_QUERY.kind) === 'shell' ? 'shell' : 'session', id, title: query.get(WINDOW_QUERY.title) ?? '' };
+  return { kind: windowKindFrom(query.get(WINDOW_QUERY.kind)), id, title: query.get(WINDOW_QUERY.title) ?? '' };
 }
 
 /**
@@ -721,12 +972,101 @@ export const WINDOW_IPC = {
   fullScreen: 'window:fullScreen',
 } as const;
 
+/** A point on the screen, in the units of a window's bounds. */
+export interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * What is dragged out of a session window's strip (AT2): a tab (its shell, whole), one pane of a
+ * split, or a tab that is only a place in its window (its own session's, a pull request, a web page, another session),
+ * by its surface; and the window it is dragged from.
+ */
+export type TabDrag =
+  | { kind: 'tab'; shellId: string; from: ShellOwner }
+  | { kind: 'pane'; shellId: string; sessionId: string; from: ShellOwner }
+  | { kind: 'surface'; surface: Surface; from: WindowOwner };
+
+/** A move of a shell: whole, or a pane out of its split into a shell of its own. */
+export type ShellMove = { kind: 'tab'; shellId: string; to: ShellPlace } | { kind: 'pane'; shellId: string; sessionId: string; to: ShellPlace };
+
+/** A move of a tab that is only a place in a window, out of one window (or none) into another (or none). */
+export interface SurfaceMove {
+  kind: 'surface';
+  surface: Surface;
+  from: WindowOwner | null;
+  to: { owner: WindowOwner; placement?: Placement } | null;
+}
+
+/** A move a drop makes, which the board records for undo. */
+export type TabMove = ShellMove | SurfaceMove;
+
+/**
+ * The IPC that lets tabs drag between OS windows (slice 4; ADR-0001): every window hears what is dragged,
+ * main pops out what was let go outside every window, and the board's window makes every move and keeps their undo.
+ */
+export const TAB_DRAG_IPC = {
+  /** renderer → main: `(TabDrag | null)` as a drag starts in a window, and as it ends or a window takes it. */
+  set: 'tabDrag:set',
+  /** main → renderer: `(TabDrag | null)`, to every window. */
+  changed: 'tabDrag:changed',
+  /** renderer → main: `(TabDrag, ScreenPoint?)` when no window took a drag: let go outside them all, the board pops it out there. */
+  untaken: 'tabDrag:untaken',
+  /** renderer → main: `(TabMove)` from a popped-out window, for the board. */
+  move: 'tabDrag:move',
+  /** renderer → main: `('undo' | 'redo')` from a popped-out window, for the board's history. */
+  history: 'tabDrag:history',
+  /** board → main: it hears the moves, pop-outs and undo below from now on; what waited for it comes now. */
+  ready: 'tabDrag:ready',
+  /** board → main: it made a move, or undid or redid one. */
+  settled: 'tabDrag:settled',
+  /** main → board: `(TabMove)` to make. */
+  makeMove: 'tabDrag:makeMove',
+  /** main → board: `(TabDrag, ScreenPoint)` let go outside every window: pop it out there. */
+  popOut: 'tabDrag:popOut',
+  /** main → board: `('undo' | 'redo')`. */
+  replay: 'tabDrag:replay',
+  /** main → renderer: the board made a move, or undid or redid one, to every window. */
+  settledAll: 'tabDrag:settledAll',
+} as const;
+
+export interface TabDragsApi {
+  /** Tells every window a tab is dragged in this one (undefined once it ends, or is taken): its data can't be read until it drops. */
+  set(drag: TabDrag | undefined): void;
+  /** Calls `listener` when a drag starts or ends in any window. Returns the unsubscribe function. */
+  onChanged(listener: (drag: TabDrag | undefined) => void): () => void;
+  /**
+   * A drag no window took has ended, at `at` on the screen if its end said: let go outside every window of the app,
+   * the board pops it out there. Refused from a window it wasn't dragged from.
+   */
+  untaken(drag: TabDrag, at?: ScreenPoint): Promise<void>;
+  /**
+   * From a popped-out window: has the board make the move and record it for undo, opening the board's window if it is
+   * closed. Refused for a move neither into nor (for a tab that is only a place in a window) out of its own window.
+   */
+  move(move: TabMove): Promise<void>;
+  /** From a popped-out window: ⌘Z or ⇧⌘Z, for the board's undo history. Fails while the board's window is closed. */
+  history(action: 'undo' | 'redo'): Promise<void>;
+  /** From the board: it made a move, or undid or redid one, so every window gives its keyboard back. */
+  settled(): void;
+  /** Calls `listener` when the board made a move, or undid or redid one. */
+  onSettled(listener: () => void): () => void;
+  /** From the board, once it is loaded and listening: the moves and pop-outs that waited for it come now. */
+  ready(): void;
+  /** In the board: the other windows' moves, the drags let go outside every window, and their ⌘Z. Each returns its unsubscribe function. */
+  onMakeMove(listener: (move: TabMove) => void): () => void;
+  onPopOut(listener: (drag: TabDrag, at: ScreenPoint) => void): () => void;
+  onReplay(listener: (action: 'undo' | 'redo') => void): () => void;
+}
+
 export interface WindowsApi {
   /**
    * Opens the window in its own OS window, or brings it forward if it is already out. With `reveal: false` (the board
-   * taking back the windows it had), one already out is left where it is.
+   * taking back the windows it had), one already out is left where it is. Given `at` (where a tab dragged out of a
+   * window was let go), it opens, or moves, with its tab strip under that point.
    */
-  popOut(target: WindowTarget, options?: { reveal?: boolean }): Promise<void>;
+  popOut(target: WindowTarget, options?: { reveal?: boolean; at?: ScreenPoint }): Promise<void>;
   /** From a popped-out window: closes it, and the board shows it again. */
   popIn(id: string): Promise<void>;
   /** Closes the popped-out OS window with this ID, if there is one: e.g. its agent was deleted. */
@@ -815,12 +1155,17 @@ export interface AgentBoardApi {
   connectors: ConnectorsApi;
   flowEdges: FlowEdgesApi;
   reviews: ReviewsApi;
+  pullRequests: PullRequestsApi;
+  gates: GatesApi;
+  asks: AsksApi;
+  webTabs: WebTabsApi;
   orchestrators: OrchestratorsApi;
   agents: AgentsApi;
   shells: ShellsApi;
   external: ExternalApi;
   trackers: TrackersApi;
   windows: WindowsApi;
+  tabDrags: TabDragsApi;
   view: ViewApi;
   appearance: AppearanceApi;
   setup: SetupApi;

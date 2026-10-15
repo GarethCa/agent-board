@@ -196,7 +196,7 @@ describe("an agent's tabs", () => {
 });
 
 describe('the board', () => {
-  it("identifies a shell in one of an agent's tabs as the agent's tile, never orchestrating", async () => {
+  it("identifies a shell in one of an agent's tabs as the agent's tile, on the user's side", async () => {
     const { client, recorder } = await setup();
     const { agent } = await spawnAgent(client);
     const tab = await client.call('shell.createTab', { owner: { kind: 'agent', id: agent.sessionId } });
@@ -212,7 +212,8 @@ describe('the board', () => {
       tileId: agent.sessionId,
       name: agent.name,
       zoneId: agent.zoneId,
-      orchestrate: null,
+      side: 'user',
+      orchestrate: 'board',
     });
   });
 

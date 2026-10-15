@@ -216,7 +216,8 @@ export function createExternalSessionHost(options: ExternalSessionHostOptions): 
      FROM zones z`,
   );
   const markUnsorted = db.prepare('UPDATE zones SET unsorted = 1 WHERE id = ?');
-  const zoneTable = createZoneTable(db, options.broadcast, () => undefined);
+  // It only makes the Unsorted group, which is bound to no repo, so which folders are managed clones doesn't matter.
+  const zoneTable = createZoneTable(db, options.broadcast, () => undefined, '');
   const insert = db.prepare(
     `INSERT INTO external_sessions (id, harness, session_id, cwd, worktree, repo_root, folder, branch, state)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,

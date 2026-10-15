@@ -34,6 +34,37 @@ describe('invoke', () => {
   });
 });
 
+describe('keyed', () => {
+  it('shares one listener on the channel between every key, and routes each message by its id', () => {
+    const { ipc, emitter } = fakeIpc(async () => undefined);
+    const listen = ipcCalls(ipc).keyed<[string]>('session:event');
+    const heard: string[] = [];
+    const stops = ['a', 'b', 'c'].map((id) => listen(id, (message) => heard.push(`${id}:${message}`)));
+
+    expect(emitter.listenerCount('session:event')).toBe(1);
+    emitter.emit('session:event', {}, 'b', 'hi');
+    emitter.emit('session:event', {}, 'zzz', 'nobody');
+    stops[1]!();
+    emitter.emit('session:event', {}, 'b', 'again');
+    emitter.emit('session:event', {}, 'a', 'there');
+
+    expect(heard).toEqual(['b:hi', 'a:there']);
+    stops[0]!();
+    stops[2]!();
+    expect(emitter.listenerCount('session:event')).toBe(0);
+  });
+
+  it('listens again after the last one went', () => {
+    const { ipc, emitter } = fakeIpc(async () => undefined);
+    const listen = ipcCalls(ipc).keyed<[string]>('session:event');
+    listen('a', () => {})();
+    const heard: string[] = [];
+    listen('a', (message) => heard.push(message));
+    emitter.emit('session:event', {}, 'a', 'hello');
+    expect(heard).toEqual(['hello']);
+  });
+});
+
 describe('subscribe', () => {
   it('passes each message on the channel to the listener, without the IPC event, until unsubscribed', () => {
     const { ipc, emitter } = fakeIpc(async () => undefined);

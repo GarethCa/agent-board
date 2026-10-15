@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import { ChevronDown, FolderOpen, GitBranch, Search, Sparkles, X } from 'lucide-react';
+import { FolderOpen, GitBranch, Search, Sparkles, X } from 'lucide-react';
 import {
-  AGENT_ROLES,
   shortIssueId,
   type AgentRepo,
   type AgentRole,
@@ -10,29 +9,18 @@ import {
   type RecentFolder,
 } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { HARNESSES } from '../harness';
-import { AnchoredPopover, Button, ErrorText, Hint, IconButton, Input, Kbd, SectionLabel, Select } from '../ui';
+import { AnchoredPopover, Button, ErrorText, Hint, IconButton, Input, Kbd, SectionLabel } from '../ui';
 import { matches } from './add-zone';
+import { AgentSetupChips, DEFAULT_SETUP, reviews, roleNote, type AgentSetup } from './AgentSetup';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from './codex-notice';
-import { HarnessMark } from './HarnessMark';
 import { FolderLine, FolderRow, useRecentFolders } from './RecentFolders';
-
-/** The models offered for each harness, besides its own default; any other can be typed. */
-const MODELS: Record<Harness, string[]> = { claude: ['opus', 'sonnet', 'haiku'], codex: ['gpt-5-codex', 'gpt-5'] };
-
-/** How each role reads in the picker. */
-const ROLE_LABELS: Record<AgentRole, string> = {
-  implementer: 'Implementer',
-  reviewer: 'Reviewer',
-  'follow-up-reviewer': 'Follow-up reviewer',
-};
 
 /** What the picker starts an agent with. */
 export interface RepoChoice {
   repo: AgentRepo;
-  /** The repo's branch to cut it from: its HEAD without. */
+  /** The repo's branch to cut it from: its HEAD without. A reviewer's is the branch it reviews. */
   baseBranch?: string;
-  /** Its new branch: from its name, or its issue, without. */
+  /** Its new branch: from its name, or its issue, without. A reviewer has none. */
   branch?: string;
   harness: Harness;
   /** The harness's own default without. */
@@ -61,7 +49,8 @@ interface RepoPickerProps {
 /**
  * The repo picker (AH1): a popover on a new agent's tile, for when no zone gives it a repo. A recent repo (the
  * last used preselected), Browse… for any folder, or a scratch repo; a base branch and a new branch prefilled from the
- * agent's name; then Start. The footer's compact Model · Role row stays collapsed on the defaults until opened.
+ * agent's name; then Start. The footer's harness, model and role chips (BJ3) show what will start; a reviewer
+ * reviews the base branch, on a detached checkout of it, so it has no new branch.
  */
 export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: RepoPickerProps) {
   const [query, setQuery] = useState('');
@@ -69,10 +58,9 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
   const [baseBranch, setBaseBranch] = useState('');
   /** The branch typed, or undefined to take the one made from its name (or its issue's). */
   const [typedBranch, setTypedBranch] = useState<string>();
-  const [harness, setHarness] = useState<Harness>('claude');
-  const [model, setModel] = useState('');
-  const [role, setRole] = useState<AgentRole | ''>('');
-  const [showModel, setShowModel] = useState(false);
+  const [setup, setSetup] = useState<AgentSetup>(DEFAULT_SETUP);
+  const { harness, model, role } = setup;
+  const reviewer = reviews(role);
   const [starting, setStarting] = useState(false);
   const [confirm, setConfirm] = useState<string>();
   const [error, setError] = useState<string>();
@@ -115,10 +103,10 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
     onStart({
       repo: picked.kind === 'scratch' ? { scratch: true } : { path: picked.folder.path },
       baseBranch: baseBranch.trim() || undefined,
-      branch: branch || undefined,
+      branch: reviewer ? undefined : branch || undefined,
       harness,
       model: model.trim() || undefined,
-      role: role || undefined,
+      role: role ?? undefined,
       allowProjectCodexConfig,
     }).then(
       (result) => {
@@ -148,8 +136,7 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
   // Until the daemon says its name, the branch made from it can't be shown: wait, unless one was typed.
   const canStart = picked !== undefined && !starting && (issue !== undefined || agentName !== undefined || typedBranch !== undefined);
   const base = baseBranch.trim() || 'HEAD';
-  const worksIn = scratch ? 'new scratch repo' : `worktree off ${base}`;
-  const modelRole = `${HARNESSES[harness].label} · ${model.trim() || 'default model'} · ${role === '' ? 'no role' : ROLE_LABELS[role]}`;
+  const worksIn = scratch ? 'new scratch repo' : reviewer ? `detached checkout of ${base}` : `worktree off ${base}`;
 
   return (
     <AnchoredPopover anchor={anchor} open onOpenChange={(open) => open || onCancel()} aria-label="Choose where the agent works" className="repo-picker">
@@ -208,71 +195,33 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
           <hr className="repo-picker-rule" />
           <div className="repo-picker-branches">
             <label className="repo-picker-field">
-              Base branch
+              {reviewer ? 'Branch to review' : 'Base branch'}
               <Input
                 size="sm"
                 icon={<GitBranch />}
                 className="add-zone-mono"
-                aria-label="Base branch"
+                aria-label={reviewer ? 'Branch to review' : 'Base branch'}
                 placeholder="HEAD"
                 disabled={scratch}
                 value={scratch ? '' : baseBranch}
                 onChange={(event) => setBaseBranch(event.target.value)}
               />
             </label>
-            <label className="repo-picker-field">
-              New branch
-              <Input
-                size="sm"
-                className="add-zone-mono"
-                aria-label="New branch"
-                placeholder={issue === undefined ? 'From its name' : 'From the issue'}
-                value={typedBranch ?? prefilled}
-                onChange={(event) => setTypedBranch(event.target.value)}
-              />
-            </label>
-          </div>
-          {showModel && (
-            <div className="repo-picker-model" role="group" aria-label="Model and role">
+            {!reviewer && (
               <label className="repo-picker-field">
-                Harness
-                <Select size="sm" aria-label="Harness" value={harness} onChange={(event) => setHarness(event.target.value as Harness)}>
-                  {(Object.keys(HARNESSES) as Harness[]).map((choice) => (
-                    <option key={choice} value={choice}>
-                      {HARNESSES[choice].label}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className="repo-picker-field">
-                Model
+                New branch
                 <Input
                   size="sm"
-                  aria-label="Model"
-                  placeholder="Default"
-                  list="repo-picker-models"
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
+                  className="add-zone-mono"
+                  aria-label="New branch"
+                  placeholder={issue === undefined ? 'From its name' : 'From the issue'}
+                  value={typedBranch ?? prefilled}
+                  onChange={(event) => setTypedBranch(event.target.value)}
                 />
-                <datalist id="repo-picker-models">
-                  {MODELS[harness].map((choice) => (
-                    <option key={choice} value={choice} />
-                  ))}
-                </datalist>
               </label>
-              <label className="repo-picker-field">
-                Role
-                <Select size="sm" aria-label="Role" value={role} onChange={(event) => setRole(event.target.value as AgentRole | '')}>
-                  <option value="">No role</option>
-                  {AGENT_ROLES.map((choice) => (
-                    <option key={choice} value={choice}>
-                      {ROLE_LABELS[choice]}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            </div>
-          )}
+            )}
+          </div>
+          {role !== null && <Hint>{roleNote(role, "the repo's")}</Hint>}
           {harness === 'codex' && !seenNotice && (
             <div className="repo-picker-notice">
               <CodexBypassExplanation />
@@ -289,24 +238,10 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
           {(error ?? loadError) !== undefined && <ErrorText>{error ?? loadError}</ErrorText>}
         </div>
         <div className="repo-picker-foot">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="repo-picker-model-toggle"
-            title={modelRole}
-            aria-label="Model and role"
-            aria-expanded={showModel}
-            icon={<HarnessMark harness={harness} />}
-            trailingIcon={<ChevronDown />}
-            onClick={() => setShowModel((open) => !open)}
-          >
-            <span className="repo-picker-foot-text">{modelRole}</span>
-          </Button>
-          <span className="repo-picker-meta repo-picker-foot-text add-zone-mono" title={worksIn}>
-            {worksIn}
-          </span>
+          <AgentSetupChips setup={setup} onChange={setSetup} />
           <span className="add-zone-spacer" />
-          <Button type="submit" variant="primary" size="sm" loading={starting} disabled={!canStart}>
+          {/* The picker is narrow: where it works is Start's tooltip. */}
+          <Button type="submit" variant="primary" size="sm" loading={starting} disabled={!canStart} tooltip={worksIn}>
             Start
             <Kbd aria-hidden>⏎</Kbd>
           </Button>

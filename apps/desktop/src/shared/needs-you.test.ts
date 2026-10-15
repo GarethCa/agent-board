@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
-import { heldPrompts, needsYou, secondsLeft, toolSummary, unseenCount } from './needs-you';
+import { heldPrompts, needsYou, secondsLeft, toolSummary, unseenCount, waitLeft } from './needs-you';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
   sessionId,
@@ -10,6 +10,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   harness: 'claude',
   model: null,
   role: null,
+  reviews: null,
   name: sessionId,
   description: '',
   branch: sessionId,
@@ -20,6 +21,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   endedAt: null,
   exitCode: null,
   shellSessionId: null,
+  shellHarness: null,
   issue: null,
   notice: null,
   muted: false,
@@ -28,6 +30,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   pullRequests: [],
   lastMessage: null,
   permissions: [],
+  ask: null,
+  plan: null,
   schedule: null,
   reviewOf: null,
   reviewCap: 3,
@@ -110,5 +114,16 @@ describe('tool summaries', () => {
     const summary = toolSummary({ ...prompt, toolInput: { command: 'x'.repeat(1_000) } });
     expect(summary.length).toBeLessThanOrEqual(300);
     expect(summary.endsWith('…')).toBe(true);
+  });
+});
+
+describe('how long a question or plan still waits', () => {
+  const at = Date.parse('2026-10-14T14:00:00.000Z');
+  it('says it in minutes, then in seconds, then that it is over', () => {
+    expect(waitLeft('2026-10-14T14:28:00.000Z', at)).toBe('28 more minutes');
+    expect(waitLeft('2026-10-14T14:01:00.000Z', at)).toBe('1 more minute');
+    expect(waitLeft('2026-10-14T14:00:59.000Z', at)).toBe('59 more seconds');
+    expect(waitLeft('2026-10-14T14:00:01.000Z', at)).toBe('1 more second');
+    expect(waitLeft('2026-10-14T13:59:00.000Z', at)).toBe('no longer');
   });
 });

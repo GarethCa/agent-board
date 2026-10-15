@@ -16,6 +16,7 @@ import { Gallery } from './Gallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
 import { ReviewsProvider } from './review/ReviewsProvider';
+import { GatesProvider } from './gate/GatesProvider';
 import { followTheme } from './themes';
 import { ToastProvider, TooltipProvider } from './ui';
 
@@ -52,14 +53,18 @@ createRoot(root).render(
       <ToastProvider>
         {popOut !== undefined ? (
           <ReviewsProvider>
-            <PopOutWindow target={popOut} />
+            <GatesProvider>
+              <PopOutWindow target={popOut} />
+            </GatesProvider>
           </ReviewsProvider>
         ) : location.hash === '#gallery' ? (
           // A dev gallery of every primitive, tile state and character pose, for checking how they look.
           <Gallery />
         ) : (
           <ReviewsProvider>
-            <App />
+            <GatesProvider>
+              <App />
+            </GatesProvider>
           </ReviewsProvider>
         )}
       </ToastProvider>

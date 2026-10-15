@@ -8,7 +8,7 @@ import xtermSerialize from '@xterm/addon-serialize';
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
 import { hashToken, newToken } from './tokens.ts';
 import { createCwdLookup } from './cwd-lookup.ts';
-import { foregroundOf, type Foreground } from './foreground.ts';
+import { foregroundOf, harnessOfProgram, type Foreground } from './foreground.ts';
 import { lastExitStatus, shellIntegrationEnv } from './shell-integration.ts';
 import { processCwd } from './process-cwd.ts';
 import {
@@ -65,6 +65,8 @@ export interface SessionSubscriber {
 export interface ShellState {
   busy: boolean;
   ports: number[];
+  /** The agent harness in the foreground (`claude` or `codex`), else null. */
+  harness: Harness | null;
   lastStatus: number | undefined;
 }
 
@@ -99,6 +101,8 @@ export interface SessionHostOptions {
   onCwd?(sessionId: string): void;
   /** What a shell's process is running, and the ports it listens on: `foregroundOf` by default. */
   foreground?(pid: number): Promise<Foreground>;
+  /** Where each agent harness is (absolute): a shell's foreground program counts as one only if it is that file. */
+  harnessPath?(harness: Harness): string | undefined;
   /** Called when a shell session's `SessionHost.shellState` changes: a command started or ended, a port opened, a command failed. */
   onShellState?(sessionId: string): void;
   /**
@@ -195,6 +199,8 @@ export interface SessionHost {
   killAll(options: { stoppedByRestart: boolean }): Promise<void>;
   /** Deletes the session's saved screen, once nothing will show it again. */
   forget(sessionId: string): void;
+  /** The harness in the shell's foreground now, read fresh rather than as of the last quiet save. */
+  shellHarnessNow(sessionId: string): Promise<Harness | null>;
   /**
    * How a live shell session is doing: whether it was running a command when its output last went quiet, the
    * ports that command listens on, and the exit status of its last command if its shell reports it. Nothing for an
@@ -262,7 +268,10 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   const saveQuietMs = options.saveQuietMs ?? SAVE_QUIET_MS;
   const saveMaxWaitMs = options.saveMaxWaitMs ?? SAVE_MAX_WAIT_MS;
   const lookupCwd = createCwdLookup({ find: options.processCwd ?? processCwd });
-  const findForeground = options.foreground ?? foregroundOf;
+  const findForeground = async (pid: number): Promise<Foreground> => {
+    const foreground = await (options.foreground ?? foregroundOf)(pid);
+    return { ...foreground, harness: harnessOfProgram(foreground.program, (harness) => options.harnessPath?.(harness)) };
+  };
   const { scrollbackDir } = options;
   if (scrollbackDir !== undefined) mkdirSync(scrollbackDir, { recursive: true, mode: 0o700 });
   const screenFile = (sessionId: string) => join(scrollbackDir!, `${sessionId}.json`);
@@ -312,8 +321,9 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         options.onCwd?.(id);
       });
       void findForeground(pid).then((foreground) => {
-        const known = session.foreground ?? { busy: false, ports: [] };
-        if (!sessions.has(id) || (foreground.busy === known.busy && foreground.ports.join() === known.ports.join())) return;
+        const known = session.foreground ?? { busy: false, ports: [], harness: null };
+        const same = foreground.busy === known.busy && foreground.ports.join() === known.ports.join() && (foreground.harness ?? null) === (known.harness ?? null);
+        if (!sessions.has(id) || same) return;
         session.foreground = foreground;
         options.onShellState?.(id);
       });
@@ -595,7 +605,23 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
 
     shellState(sessionId) {
       const session = sessions.get(sessionId);
-      return { busy: session?.foreground?.busy ?? false, ports: session?.foreground?.ports ?? [], lastStatus: session?.lastStatus };
+      return {
+        busy: session?.foreground?.busy ?? false,
+        ports: session?.foreground?.ports ?? [],
+        harness: session?.foreground?.harness ?? null,
+        lastStatus: session?.lastStatus,
+      };
+    },
+
+    async shellHarnessNow(sessionId) {
+      const session = sessions.get(sessionId);
+      if (session === undefined) return null;
+      const foreground = await findForeground(session.info.pid);
+      const changed = (foreground.harness ?? null) !== (session.foreground?.harness ?? null);
+      session.foreground = foreground;
+      // The tile follows what was just read, not the last quiet save.
+      if (changed) options.onShellState?.(sessionId);
+      return foreground.harness ?? null;
     },
 
     forget(sessionId) {

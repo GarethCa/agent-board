@@ -6,7 +6,7 @@ import { useBoardCommands } from './board/commands';
 import { HarnessMark } from './board/HarnessMark';
 import { errorMessage } from '../../shared/errors';
 import { HARNESSES } from './harness';
-import { STATE_LABELS, TILE_STATE_LABELS } from './states';
+import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from './states';
 import { Button, EmptyState, PanelRow, Section, StatusPill, Tag, Tooltip, useToast } from './ui';
 import { useSessionWindows } from './windows/SessionWindows';
 import { panesLabel } from './session/panes';
@@ -64,7 +64,7 @@ export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAge
               id={agent.sessionId}
               mark={<HarnessMark harness={agent.harness} />}
               name={agent.name}
-              end={<StatusPill state={agent.state} label={TILE_STATE_LABELS[agent.state]} title={STATE_LABELS[agent.state]} />}
+              end={<StatusPill {...agentPill(agent, TILE_STATE_LABELS)} title={STATE_LABELS[agent.state]} />}
               onShow={picked(() => board.focusSession(agent.sessionId))}
               onOpen={picked(() => onOpenAgent(agent))}
             />

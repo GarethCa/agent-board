@@ -1,19 +1,19 @@
 import { useState, type FormEvent } from 'react';
-import { shortIssueId, type Agent, type Harness, type Zone } from '@agent-board/daemon/protocol';
+import { shortIssueId, type Agent, type Zone } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { HARNESSES } from '../harness';
-import { Button, Checkbox, Choice, Choices, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Textarea } from '../ui';
+import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Select, Textarea } from '../ui';
+import { AgentSetupChips, DEFAULT_SETUP, reviews, roleNote, type AgentSetup } from './AgentSetup';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from './codex-notice';
-import { HarnessMark } from './HarnessMark';
 import { NEW_AGENT_SIZE } from './layout';
 import { IssuePicker, type PickedIssue } from './IssuePicker';
-
-
-/** What each harness runs, under its name on the harness cards. */
-const HARNESS_DETAILS: Record<Harness, string> = { claude: 'Claude Code CLI', codex: 'Codex CLI' };
+import { reviewable, reviewSpawn } from './review-target';
+import { repoName } from './tiles';
 
 interface NewAgentDialogProps {
   zone: Zone;
+  /** The agents on the board: a reviewer reviews the branch of one of its zone's repo. */
+  agents: readonly Agent[];
   /** The issue to start from, picked already (from an issue card). */
   issue?: PickedIssue;
   onStarted(agent: Agent): void;
@@ -29,12 +29,19 @@ interface NewAgentDialogProps {
 type Step = { kind: 'form' } | { kind: 'bypass-notice' } | { kind: 'project-config'; message: string };
 
 /**
- * Asks for a new agent's harness (and optionally its task and name), then starts it in the zone. In a zone with a
+ * Asks for a new agent's task and name (optional), with its harness, model and role in the footer's chips
+ * (BJ3), then starts it in the zone. A reviewer picks the agent whose branch it reviews. In a zone with a
  * tracker it can start from an issue instead: the issue becomes its prompt (the task, if any, follows it) and names
  * its branch. The zone's Codex setting is saved only when a Codex agent starts, so Cancel leaves it as it was.
  */
-export function NewAgentDialog({ zone, issue: initialIssue, onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
-  const [harness, setHarness] = useState<Harness>('claude');
+export function NewAgentDialog({ zone, agents, issue: initialIssue, onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
+  const [setup, setSetup] = useState<AgentSetup>(DEFAULT_SETUP);
+  const { harness, model, role } = setup;
+  const candidates = reviewable(zone, agents);
+  /** The agent whose branch a reviewer reviews, by session id: '' for the zone's repo's checked-out branch. */
+  const [reviewed, setReviewed] = useState(candidates[0]?.sessionId ?? '');
+  /** A group with no default repo has no checked-out branch of its own to review. */
+  const ownBranch = zone.repoRoot !== null || zone.defaultRepo !== null;
   const [prompt, setPrompt] = useState('');
   const [name, setName] = useState('');
   const [issue, setIssue] = useState<PickedIssue | undefined>(initialIssue);
@@ -55,6 +62,9 @@ export function NewAgentDialog({ zone, issue: initialIssue, onStarted, onCancel,
       const result = await window.agentBoard.agents.spawn({
         zoneId: zone.id,
         harness,
+        model: model || undefined,
+        role: role ?? undefined,
+        ...(reviews(role) ? reviewSpawn(zone, candidates.find((agent) => agent.sessionId === reviewed)) : {}),
         prompt,
         name: name.trim() || undefined,
         issueId: issue?.id,
@@ -142,6 +152,7 @@ export function NewAgentDialog({ zone, issue: initialIssue, onStarted, onCancel,
       }
       onClose={onCancel}
       onSubmit={submit}
+      footerStart={<AgentSetupChips setup={setup} onChange={setSetup} />}
       footer={
         <>
           <Button variant="ghost" onClick={onCancel}>
@@ -154,19 +165,6 @@ export function NewAgentDialog({ zone, issue: initialIssue, onStarted, onCancel,
         </>
       }
     >
-      <Choices aria-label="Harness">
-        {(['claude', 'codex'] as const).map((choice) => (
-          <Choice
-            key={choice}
-            name="harness"
-            label={HARNESSES[choice].label}
-            detail={HARNESS_DETAILS[choice]}
-            mark={<HarnessMark harness={choice} />}
-            checked={harness === choice}
-            onChange={() => setHarness(choice)}
-          />
-        ))}
-      </Choices>
       {zone.tracker !== null && (
         <Fieldset legend="Start from an issue (optional)">
           <IssuePicker zone={zone} selected={issue} onSelect={setIssue} />
@@ -191,6 +189,25 @@ export function NewAgentDialog({ zone, issue: initialIssue, onStarted, onCancel,
           onChange={(event) => setName(event.target.value)}
         />
       </Field>
+      {reviews(role) && (
+        <Field label="Reviews">
+          <Select value={reviewed} onChange={(event) => setReviewed(event.target.value)}>
+            {candidates.map((agent) => (
+              <option key={agent.sessionId} value={agent.sessionId}>
+                {agent.name} · {agent.branch}
+                {agent.repoRoot === zone.repoRoot ? '' : ` (${repoName(agent.repoRoot)})`}
+              </option>
+            ))}
+            {ownBranch && <option value="">The repo&apos;s checked-out branch</option>}
+          </Select>
+        </Field>
+      )}
+      {role !== null && (
+        <Hint>
+          {roleNote(role, `${zone.name}'s`)}
+          {reviews(role) && ' It starts on a detached checkout of that branch, in a worktree of its own.'}
+        </Hint>
+      )}
       {harness === 'codex' && (
         <>
           <Checkbox label="Skip Codex's hook review in this zone" checked={bypass} onChange={(event) => setBypass(event.target.checked)} />

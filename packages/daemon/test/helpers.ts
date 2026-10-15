@@ -63,6 +63,8 @@ export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Pro
     shellArgs: [],
     // Never the user's home directory, where a shell with no folder starts.
     homeDir: tempDataDir(),
+    // Never a harness the developer has installed (/opt/homebrew/bin, ~/.local/bin…).
+    harnessDirs: [],
     // Never the real ~/.agent-board/bin, ~/.claude or ~/.codex.
     hookShimPath: join(tempDataDir(), 'bin', 'agent-board-hook'),
     externalHookFile: join(tempDataDir(), 'external-hook.json'),

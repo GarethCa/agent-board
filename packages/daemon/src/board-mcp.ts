@@ -3,8 +3,11 @@
 import {
   addEdge,
   BoardError,
+  askUser,
   BoardRefs,
   closeAgent,
+  presentPlan,
+  readPlanSource,
   EDGE_CARRIES,
   edgesView,
   handOff,
@@ -18,6 +21,7 @@ import {
   readBoard,
   sendToAgent,
   setOwnStatus,
+  openOwnPullRequest,
   treeView,
   waitForAgents,
   type BoardSession,
@@ -27,6 +31,13 @@ import {
   AGENT_ROLES,
   AGENT_STATES,
   DAEMON_VERSION,
+  DEFAULT_ASK_WAIT_MS,
+  DEFAULT_PLAN_WAIT_MS,
+  MAX_ASK_OPTIONS,
+  MAX_ASK_WAIT_MS,
+  MAX_OPTION_LENGTH,
+  MAX_PLAN_TITLE_LENGTH,
+  MAX_QUESTION_LENGTH,
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
@@ -94,11 +105,60 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'One agent you have an edge to, by ref or name; every edge out of you without.' },
+        to: {
+          type: 'string',
+          description:
+            'One agent, by ref or name: along your edge to it, or, with none, a one-off edge in your scope; every edge out of you without.',
+        },
         message: { type: 'string', description: 'What a message edge carries: your result, in your words.' },
         handover_path: { type: 'string', description: 'A markdown file in your worktree, relative to it, for a handover edge.' },
         json: { description: 'A JSON value, for a JSON edge.' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ask',
+    description:
+      'Ask the user a question you can\'t settle yourself, and wait for the answer: it shows in their Needs you inbox, ' +
+      'each option a button, and your tile says you ask them. Returns their answer, or that they skipped it or no ' +
+      `answer came in time (${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default): then carry on with your best judgement. ` +
+      'One question at a time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', maxLength: MAX_QUESTION_LENGTH, description: 'The question, in a sentence or two.' },
+        options: {
+          type: 'array',
+          items: { type: 'string', maxLength: MAX_OPTION_LENGTH },
+          maxItems: MAX_ASK_OPTIONS,
+          description: 'Short answers to pick from, one click each. Without, the user replies in their own words.',
+        },
+        free_text: { type: 'boolean', description: 'Let the user reply in their own words besides the options.' },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait.' },
+      },
+      required: ['question'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'present_plan',
+    description:
+      'Show the user your plan before you carry it out, and wait for their decision: it waits in their Needs you inbox ' +
+      'and they read it in a Plan tab in your window, kept as v1, v2… in your history; they approve it, ask for ' +
+      'changes (with comments) or reject it. Give ' +
+      'it as Markdown, as HTML (shown sandboxed, offline: no network, no navigation), or as the path of a .md or .html ' +
+      `file. Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, present the revised plan again.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What the plan is for, in a line.' },
+        markdown: { type: 'string', description: 'The plan as Markdown.' },
+        html: { type: 'string', description: 'The plan as a self-contained HTML page.' },
+        path: { type: 'string', description: 'A .md or .html file holding the plan, relative to your working directory.' },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait.' },
+      },
+      required: ['title'],
       additionalProperties: false,
     },
   },
@@ -117,11 +177,19 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'open_pr',
+    description:
+      'Open a pull request of your branch, always as a draft, filled from .agent-board/handover.md. Commit first; in a ' +
+      'zone with a gate, the gate must have passed on that commit. Marking it ready and merging stay the user\'s. As ' +
+      '`agent-board open-pr`.',
+    inputSchema: NO_INPUT,
+  },
 ];
 
 const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e) or unique name.' };
 
-/** The orchestrator's tools (ADR-0011), listed only to an agent that may orchestrate. As the CLI's commands. */
+/** The orchestrator's tools (ADR-0011), listed only to a session that may orchestrate (a shell's too). As the CLI's commands. */
 export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'new_agent',
@@ -136,10 +204,16 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         name: { type: 'string', description: "Its tile's name." },
         zone: { type: 'string', description: 'A zone ref; yours by default.' },
         harness: { type: 'string', enum: [...HARNESSES] },
-        model: { type: 'string' },
-        role: { type: 'string', enum: [...AGENT_ROLES] },
-        branch: { type: 'string', description: 'Its new branch; made from its name by default.' },
-        base: { type: 'string', description: "The branch to cut it from, or an agent ref for that agent's branch." },
+        model: { type: 'string', description: "The harness's model (opus, sonnet, haiku; gpt-5-codex, gpt-5); its default without." },
+        role: {
+          type: 'string',
+          enum: [...AGENT_ROLES],
+          description:
+            "Its role: it starts with its zone's template for the role, then the prompt. A reviewer or follow-up-reviewer " +
+            'works on a detached checkout of base (the branch it reviews), with no branch of its own.',
+        },
+        branch: { type: 'string', description: 'Its new branch; made from its name by default. Not for a reviewer.' },
+        base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch." },
         issue: { type: 'string', description: "An issue in the zone's tracker, which comes first in its prompt." },
       },
       required: ['prompt'],
@@ -232,7 +306,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'remove_edge',
-    description: 'Remove an edge you made. As `agent-board edge remove`.',
+    description: 'Remove an edge you, or an agent you started, made. As `agent-board edge remove`.',
     inputSchema: {
       type: 'object',
       properties: { edge: { type: 'string', description: 'The edge, by ref (edge:e5aa).' } },
@@ -253,6 +327,11 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
 ];
+
+/** What a call is handled with: a signal that aborts once the client cancels it (`notifications/cancelled`). */
+interface McpCall {
+  signal: AbortSignal;
+}
 
 interface McpMethods {
   initialize: { params: { protocolVersion?: string }; result: unknown };
@@ -277,11 +356,20 @@ function stringArg(args: Record<string, unknown>, name: string, optional = false
   return value;
 }
 
+/** A tool's `timeout_minutes`, as the daemon's `timeoutMs`; nothing when absent. */
+function timeoutArg(args: Record<string, unknown>): { timeoutMs?: number } {
+  const minutes = args.timeout_minutes;
+  if (minutes === undefined) return {};
+  if (!Number.isInteger(minutes) || (minutes as number) < 1) throw new BoardError('timeout_minutes must be a whole number of minutes');
+  return { timeoutMs: (minutes as number) * 60_000 };
+}
+
 /** What each tool does with a board session and its arguments: the text the model reads. */
 const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>) => Promise<string>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
+  open_pr: async (session) => (await openOwnPullRequest(session)).text,
   set_status: async (session, { summary, progress }) => {
     if (typeof summary !== 'string') throw new BoardError('summary must be a string');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
@@ -339,6 +427,25 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
       })
     ).text;
   },
+  ask: async (session, args) => {
+    const { options, free_text: freeText } = args;
+    if (options !== undefined && (!Array.isArray(options) || !options.every((option) => typeof option === 'string'))) {
+      throw new BoardError('options must be a list of strings');
+    }
+    if (freeText !== undefined && typeof freeText !== 'boolean') throw new BoardError('free_text must be true or false');
+    return (
+      await askUser(session, {
+        question: stringArg(args, 'question'),
+        ...(options === undefined ? {} : { options: options as string[] }),
+        ...(freeText === undefined ? {} : { freeText }),
+        ...timeoutArg(args),
+      })
+    ).text;
+  },
+  present_plan: async (session, args) => {
+    const source = { markdown: stringArg(args, 'markdown', true), html: stringArg(args, 'html', true), path: stringArg(args, 'path', true) };
+    return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, process.cwd()), ...timeoutArg(args) })).text;
+  },
   list_edges: async (session) => edgesView(new BoardRefs(await readBoard(session.client))).text,
   remove_edge: async (session, args) => (await removeEdge(session, stringArg(args, 'edge'))).text,
 };
@@ -354,9 +461,19 @@ async function whoIs(env: NodeJS.ProcessEnv | undefined): Promise<BoardCaller | 
   }
 }
 
-/** Runs one tool call against the board, connecting afresh, so a daemon restarted meanwhile is found again. */
-async function callTool(call: (typeof TOOL_CALLS)[string], args: Record<string, unknown>, env: NodeJS.ProcessEnv | undefined): Promise<string> {
+/**
+ * Runs one tool call against the board, connecting afresh, so a daemon restarted meanwhile is found again. Cancelled
+ * (`signal`), its connection closes, which ends what it waits on in the daemon: a question, a plan, a wait.
+ */
+async function callTool(
+  call: (typeof TOOL_CALLS)[string],
+  args: Record<string, unknown>,
+  env: NodeJS.ProcessEnv | undefined,
+  signal: AbortSignal,
+): Promise<string> {
   const session = await openBoardSession(env);
+  if (signal.aborted) session.close();
+  else signal.addEventListener('abort', () => session.close(), { once: true });
   try {
     return await call(session, args);
   } finally {
@@ -365,7 +482,7 @@ async function callTool(call: (typeof TOOL_CALLS)[string], args: Record<string, 
 }
 
 /** The MCP methods, over `env`'s board session. */
-function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods> {
+function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods, McpCall> {
   return {
     initialize: async (params) => {
       const asked = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
@@ -383,12 +500,12 @@ function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods> {
     'tools/list': async () => ({
       tools: (await whoIs(env))?.orchestrate != null ? [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS] : BOARD_MCP_TOOLS,
     }),
-    'tools/call': async (params) => {
+    'tools/call': async (params, { signal }) => {
       const { name, arguments: args = {} } = (params ?? {}) as McpMethods['tools/call']['params'];
       const call = typeof name === 'string' && Object.hasOwn(TOOL_CALLS, name) ? TOOL_CALLS[name]! : undefined;
       if (call === undefined) throw new RpcMethodError(RPC_ERROR.invalidParams, `no tool ${String(name)}`);
       try {
-        return { content: [{ type: 'text', text: await callTool(call, args, env) }] };
+        return { content: [{ type: 'text', text: await callTool(call, args, env, signal) }] };
       } catch (error) {
         // A refusal is the tool's answer, for the model to read; anything else is the server's failure.
         if (error instanceof BoardError || error instanceof DaemonRpcError) {
@@ -404,10 +521,27 @@ function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods> {
 export async function serveBoardMcp(options: { env?: NodeJS.ProcessEnv } = {}): Promise<number> {
   const handlers = boardMcpHandlers(options.env);
   const pending = new Set<Promise<void>>();
+  /** The calls under way, by request id, so the client can cancel one. */
+  const calls = new Map<unknown, AbortController>();
   const feed = lineSplitter((line) => {
     if (line.trim() === '') return;
-    const handled = handleRpcLine(line, handlers, undefined).then((response) => {
-      if (response !== undefined) process.stdout.write(`${JSON.stringify(response)}\n`);
+    let message: { id?: unknown; method?: unknown; params?: { requestId?: unknown } } | null = null;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      // handleRpcLine answers a parse error.
+    }
+    // The client gave up on a call (its user interrupted the turn, or its timeout passed): it hears no answer.
+    if (message?.method === 'notifications/cancelled') {
+      calls.get(message.params?.requestId)?.abort();
+      return;
+    }
+    const controller = new AbortController();
+    const id = message?.id;
+    if (id !== undefined) calls.set(id, controller);
+    const handled = handleRpcLine(line, handlers, { signal: controller.signal }).then((response) => {
+      if (calls.get(id) === controller) calls.delete(id);
+      if (response !== undefined && !controller.signal.aborted) process.stdout.write(`${JSON.stringify(response)}\n`);
     });
     pending.add(handled);
     void handled.finally(() => pending.delete(handled));

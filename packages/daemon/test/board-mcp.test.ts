@@ -113,6 +113,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'board', command: 'tree' },
     { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
     { tool: 'set_status', command: 'status', positional: ['summary'] },
+    { tool: 'open_pr', command: 'open-pr' },
     { tool: 'new_agent', command: 'new', renamed: { prompt: 'file' } },
     { tool: 'send', command: 'send', positional: ['agent'], renamed: { text: 'file' } },
     { tool: 'wait', command: 'wait', positional: ['agents'], renamed: { timeout_seconds: 'timeout' } },
@@ -124,7 +125,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
   ];
   /** Tools with no command of their own, and commands with no tool, each for a reason. */
-  const MCP_ONLY = ['connections'];
+  // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
+  const MCP_ONLY = ['connections', 'ask', 'present_plan'];
   const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc'];
 
   const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];

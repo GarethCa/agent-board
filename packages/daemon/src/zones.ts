@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { gateCommandArgv } from './gate-rules.ts';
 import { runGit } from './git.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { folderPath } from './repo-zone.ts';
@@ -54,6 +55,7 @@ interface ZoneRow {
   codex_bypass_hook_trust: number;
   board_mcp: number;
   agents_orchestrate: number;
+  gate_command: string | null;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -83,6 +85,12 @@ export interface NewZone extends ZoneLayout {
 export interface CloneFolders {
   madeFolder: boolean;
   madeOwner: boolean;
+}
+
+/** Whether `path` is `<reposDir>/<owner>/<repo>`, where `zone.clone` clones a repo. */
+function isManagedClonePath(reposDir: string, path: string): boolean {
+  const inside = relative(reposDir, path);
+  return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside) && inside.split(sep).length === 2;
 }
 
 /** The `zones` table, shared by the `zone.*` handlers and the clones they start. */
@@ -117,6 +125,8 @@ export function createZoneTable(
   db: DatabaseSync,
   broadcast: (event: DaemonEvent) => void,
   cloneProgress: (id: string) => Pick<ZoneClone, 'phase' | 'percent'> | undefined,
+  /** Where managed clones are (`<reposDir>/<owner>/<repo>`). */
+  reposDir: string,
 ): ZoneTable {
   const selectAll = db.prepare('SELECT * FROM zones ORDER BY rowid');
   const selectOne = db.prepare('SELECT * FROM zones WHERE id = ?');
@@ -162,6 +172,7 @@ export function createZoneTable(
     codexBypassHookTrust: row.codex_bypass_hook_trust === 1,
     boardMcp: row.board_mcp === 1,
     agentsOrchestrate: row.agents_orchestrate === 1,
+    gateCommand: row.gate_command,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -174,6 +185,7 @@ export function createZoneTable(
       row.clone_repo === null || row.clone_path === null
         ? null
         : { repo: row.clone_repo, path: row.clone_path, phase: null, percent: null, ...cloneProgress(row.id) },
+    managedClone: row.repo_root !== null && row.folder === '' && isManagedClonePath(reposDir, row.repo_root),
     defaultRepo: row.default_repo,
     createdAt: row.created_at,
   });
@@ -261,6 +273,7 @@ export function zoneHandlers<Context>(
   const updateBypass = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
   const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
+  const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -363,10 +376,12 @@ export function zoneHandlers<Context>(
       const bypass = optionalBooleanParam(fields, 'codexBypassHookTrust');
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
       const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
-      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined) {
-        throw invalidParams('give codexBypassHookTrust, boardMcp or agentsOrchestrate');
+      const gateCommand = gateCommandParam(fields);
+      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined) {
+        throw invalidParams('give codexBypassHookTrust, boardMcp, agentsOrchestrate or gateCommand');
       }
       zones.get(id);
+      if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
       if (agentsOrchestrate !== undefined) updateAgentsOrchestrate.run(agentsOrchestrate ? 1 : 0, id);
@@ -414,16 +429,22 @@ export function zoneHandlers<Context>(
       const defaultRepo = fields.defaultRepo === null ? null : stringParam(fields, 'defaultRepo');
       if (defaultRepo !== null && !isAbsolute(defaultRepo)) throw invalidParams(`defaultRepo must be absolute, got ${defaultRepo}`);
       const tracker = zoneTrackerParam(fields);
+      const repoRoot = fields.repoRoot === undefined || fields.repoRoot === null ? null : stringParam(fields, 'repoRoot');
+      if (repoRoot !== null && !isAbsolute(repoRoot)) throw invalidParams(`repoRoot must be absolute, got ${repoRoot}`);
+      const boundFolder = optionalStringParam(fields, 'folder') ?? '';
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
         const folder = defaultRepo === null ? null : await resolveZoneFolder(defaultRepo).catch(() => null);
         const repo = folder === null ? null : folderPath(folder.repoRoot, folder.folder);
-        zones.insert({ ...layout, id, name, color, repoRoot: null, folder: '', tracker });
+        // A zone that was bound to a repo is bound again if it still is one; if not, it comes back as the group it is.
+        const bound = repoRoot === null ? null : await resolveZoneFolder(folderPath(repoRoot, boundFolder)).catch(() => null);
+        zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker });
         updateFillOpacity.run(fillOpacity, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
         updateAgentsOrchestrate.run(optionalBooleanParam(fields, 'agentsOrchestrate') === false ? 0 : 1, id);
+        updateGateCommand.run(gateCommandParam(fields) ?? null, id);
         updateDefaultRepo.run(repo, id);
         if (repo !== null) zones.rememberFolder(repo);
         return changed(id);
@@ -561,4 +582,20 @@ function noZone(id: string): RpcMethodError {
 
 function throwNoZone(id: string): never {
   throw noZone(id);
+}
+
+/** The `gateCommand` param: undefined when absent, null for none (or only spaces), else a command `gateCommandArgv` can run. */
+function gateCommandParam(fields: Record<string, unknown>): string | null | undefined {
+  const value = fields.gateCommand;
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string') throw invalidParams('gateCommand must be a string or null');
+  const command = value.trim();
+  if (command === '') return null;
+  try {
+    gateCommandArgv(command);
+  } catch (error) {
+    throw invalidParams((error as Error).message);
+  }
+  return command;
 }

@@ -15,15 +15,19 @@ export interface FakeGitHubState {
   loggedIn?: boolean;
   /**
    * The repos the user can see, most recently pushed first. `gh repo clone` clones one from the local git repo
-   * `cloneFrom`, and fails for one without.
+   * `cloneFrom`, and fails for one without. Squash merges are allowed unless `squashMergeAllowed` is false.
    */
-  repos: { nameWithOwner: string; description: string | null; cloneFrom?: string }[];
+  repos: { nameWithOwner: string; description: string | null; cloneFrom?: string; squashMergeAllowed?: boolean }[];
   /** How long `gh repo clone` waits, after its first progress line, before it clones: for watching or cancelling one. */
   cloneDelayMs?: number;
   /** Issues, most recently updated first. */
   issues: FakeGitHubIssue[];
   /** Pull requests, newest first. `gh pr list` in any directory sees all of them, whatever its remote. */
   pullRequests: FakeGitHubPullRequest[];
+  /** What the user may do in each repo (`gh repo view --json viewerPermission`), by `nameWithOwner`: `WRITE` unless set. */
+  viewerPermissions?: Record<string, 'ADMIN' | 'MAINTAIN' | 'WRITE' | 'TRIAGE' | 'READ'>;
+  /** True: every GitHub call fails as gh does once GitHub's API rate limit is reached. */
+  rateLimited?: boolean;
 }
 
 export interface FakeGitHubIssue {
@@ -47,6 +51,24 @@ export interface FakeGitHubPullRequest {
   statusCheckRollup: Record<string, unknown>[];
   /** The commit its head branch is at, which `gh pr merge --match-head-commit` must name; any commit when unset. */
   headRefOid?: string;
+  /** Its description: empty unless set. */
+  body?: string;
+  /** Its author's login: `hubot` unless set (the fake's user is `octocat`). */
+  author?: string;
+  /** The branch it merges into: `main` unless set. */
+  baseRefName?: string;
+  /** Whether it merges cleanly, as GitHub says: `MERGEABLE` unless set. */
+  mergeable?: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  /** GitHub's merge state (`CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, `UNSTABLE`, `HAS_HOOKS`, `UNKNOWN`): `CLEAN` unless set. */
+  mergeStateStatus?: string;
+  /** Its changed files, as the REST API's `pulls/N/files` gives them. */
+  files?: { filename: string; status: string; additions: number; deletions: number; patch?: string; previous_filename?: string }[];
+  /** Its reviews, oldest first. Approving through `gh api …/reviews` adds one, with the commit it approved. */
+  reviews?: { author: string; state: string; body: string; submittedAt: string; commitId?: string }[];
+  /** Its conversation's comments, oldest first. */
+  comments?: { author: string; body: string; createdAt: string }[];
+  /** Its review comments on lines of its diff, oldest first. */
+  reviewComments?: { id: number; author: string; path: string; line: number | null; body: string; createdAt: string }[];
 }
 
 /** One run of the fake `gh`. */
@@ -81,6 +103,8 @@ export interface FakeGitHub {
   readonly gh: string;
   /** Replaces the state the fake answers from. */
   setState(state: FakeGitHubState): void;
+  /** The state as it is now, with what the fake's own calls changed (a pull request opened or merged). */
+  state(): FakeGitHubState;
   /** Every run of the fake so far, oldest first. */
   calls(): FakeGhCall[];
 }
@@ -106,6 +130,7 @@ export function createFakeGitHub(state: FakeGitHubState = FAKE_GITHUB_STATE): Fa
   return {
     gh,
     setState,
+    state: () => JSON.parse(readFileSync(stateFile, 'utf8')) as FakeGitHubState,
     calls() {
       let log: string;
       try {

@@ -2,7 +2,9 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialo
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
 import {
   RPC_ERROR,
+  zoneSnapshot,
   TRACKER_ERROR,
+  type AgentRole,
   type NewZoneParams,
   type Zone,
   type ZoneBinding,
@@ -16,6 +18,7 @@ import {
   type AddFolderResult,
   type AddZoneResult,
   type BindZoneResult,
+  type CheckFolderResult,
   type GitHubReposResult,
 } from '../preload/api';
 import { forwardEvents } from './broadcast';
@@ -77,6 +80,16 @@ export function registerZoneIpc(daemon: DaemonLink): void {
       throw error;
     }
   });
+  ipcMain.handle(ZONE_IPC.checkFolder, async (_event, path: string, repo?: string): Promise<CheckFolderResult> => {
+    try {
+      return { status: 'ok', folder: await daemon.call('zone.checkFolder', { path: String(path), ...(repo === undefined ? {} : { repo: String(repo) }) }) };
+    } catch (error) {
+      // The daemon refused the folder (not in a git repo, another repo's): its message is meant for the user.
+      if (error instanceof DaemonRpcError && error.code === RPC_ERROR.invalidParams) return { status: 'rejected', message: error.message };
+      throw error;
+    }
+  });
+  ipcMain.handle(ZONE_IPC.findCopies, async () => (await daemon.call('zone.findCopies')).found);
   ipcMain.handle(ZONE_IPC.bind, async (event, id: string, as: ZoneBinding): Promise<BindZoneResult> => {
     const result = await withPickedFolder(event, as === 'project' ? BIND_PROJECT : BIND_REPO, (path) =>
       daemon.call('zone.bind', { id, as, path }),
@@ -87,8 +100,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
-    const { codexBypassHookTrust, boardMcp, agentsOrchestrate } = settings;
-    return daemon.call('zone.configure', { id, codexBypassHookTrust, boardMcp, agentsOrchestrate });
+    const { codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand });
   });
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>
     daemon.call('zone.setTracker', { id, tracker }),
@@ -97,12 +110,19 @@ export function registerZoneIpc(daemon: DaemonLink): void {
   ipcMain.handle(ZONE_IPC.setDefaultRepo, (_event, id: string, path: string | null) =>
     daemon.call('zone.setDefaultRepo', { id, path }),
   );
+  ipcMain.handle(ZONE_IPC.roleTemplates, (_event, id: string) => daemon.call('zone.roleTemplates', { id }));
+  ipcMain.handle(ZONE_IPC.setRoleTemplate, (_event, id: string, role: AgentRole, body: string) =>
+    daemon.call('zone.setRoleTemplate', { id, role, body }),
+  );
+  ipcMain.handle(ZONE_IPC.resetRoleTemplate, (_event, id: string, role: AgentRole) =>
+    daemon.call('zone.resetRoleTemplate', { id, role }),
+  );
   ipcMain.handle(ZONE_IPC.setLook, (_event, id: string, look: { name?: string; color?: string; fillOpacity?: number | null }) =>
     daemon.call('zone.setLook', { id, name: look.name, color: look.color, fillOpacity: look.fillOpacity }),
   );
-  ipcMain.handle(ZONE_IPC.dissolve, async (_event, id: string) => {
-    await daemon.call('zone.dissolve', { id });
-  });
+  ipcMain.handle(ZONE_IPC.dissolve, (_event, id: string, options?: { deleteClone?: boolean }) =>
+    daemon.call('zone.dissolve', { id, deleteClone: options?.deleteClone === true }),
+  );
   ipcMain.handle(ZONE_IPC.restore, (_event, zone: ZoneSnapshot) => daemon.call('zone.restore', zoneSnapshot(zone)));
   ipcMain.handle(ZONE_IPC.browseFolder, async (event, title: string) => {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -110,12 +130,6 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     return picked.canceled ? undefined : picked.filePaths[0];
   });
-}
-
-/** Only the fields of a zone to restore the daemon takes, whatever else the renderer sent. */
-function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo };
 }
 
 /** Only the fields of a new zone the daemon takes, whatever else the renderer sent. */

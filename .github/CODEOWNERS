@@ -1,0 +1,5 @@
+# Code owners for agent-board. GitHub asks them to review every pull request, and the `main` ruleset
+# requires one of their approvals before a merge. The last matching line wins.
+# Syntax: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @GarethCa

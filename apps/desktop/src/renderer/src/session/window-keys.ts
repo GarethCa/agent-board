@@ -31,3 +31,11 @@ export function windowPaneKey(event: KeyPress, isMac = mac): WindowPaneKey | und
   const digit = key === undefined ? undefined : /^Digit([1-9])$/.exec(key)?.[1];
   return digit === undefined ? undefined : { kind: 'tab', digit: Number(digit) };
 }
+
+/** Whether a key press runs the agent's gate: ⌘⇧G on macOS, Ctrl+Shift+G elsewhere, where Ctrl+Shift is the window's chord. */
+export function isRunGateKey(event: KeyPress, isMac = mac): boolean {
+  return windowShortcut(event, isMac) === (isMac ? 'Shift+KeyG' : 'KeyG');
+}
+
+/** Run gate's shortcut as the platform writes it. */
+export const runGateShortcut = (isMac = mac): string => (isMac ? '⌘⇧G' : 'Ctrl+Shift+G');

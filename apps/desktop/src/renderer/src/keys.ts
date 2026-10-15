@@ -7,6 +7,19 @@ export function commandKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>): b
   return mac ? event.metaKey : event.ctrlKey;
 }
 
+/** Whether `event` asks to undo (⌘Z) or redo (⇧⌘Z, or ⌘Y): the board's history keys, wherever they are pressed. */
+export function historyStep(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'key'>): 'undo' | 'redo' | undefined {
+  if (event.altKey || !commandKey(event)) return undefined;
+  const key = event.key.toLowerCase();
+  if (key === 'z') return event.shiftKey ? 'redo' : 'undo';
+  return key === 'y' && !event.shiftKey ? 'redo' : undefined;
+}
+
+/** Whether the focus is in a dialog or a menu, whose keys are their own. */
+export function inOverlay(): boolean {
+  return document.activeElement?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') != null;
+}
+
 /** A shortcut with the command key as the platform writes it: `⌘K`, or `Ctrl+K`. */
 export function withCommand(key: string): string {
   return mac ? `⌘${key}` : `Ctrl+${key}`;

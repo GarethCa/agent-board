@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing.ts",
-    "./providers": "./src/providers.ts"
+    "./providers": "./src/providers.ts",
+    "./pull-request-ref": "./src/pull-request-ref.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

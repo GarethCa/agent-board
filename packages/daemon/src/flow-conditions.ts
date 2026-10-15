@@ -180,7 +180,7 @@ export interface ShellRunner {
 }
 
 /** Stops the process group led by `child`: asks, then after a grace kills. */
-function stopGroup(child: ChildProcess): void {
+export function stopGroup(child: ChildProcess): void {
   const signal = (name: NodeJS.Signals) => {
     try {
       // A negative pid is the whole group, on POSIX; Windows has no groups, so only the shell.

@@ -111,8 +111,8 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/session/Shell*', ['shell-panes.spec.ts']],
   ['apps/desktop/src/renderer/src/board/ShellsChip.tsx', ['agent-tabs.spec.ts']],
   ['apps/desktop/src/renderer/src/session/{SessionBody.tsx,TerminalPane.tsx,newline-keys.ts}', ['terminal-newline.spec.ts']],
-  ['apps/desktop/src/renderer/src/session/**', ['session.spec.ts', 'session-window.spec.ts', 'shell-panes.spec.ts', 'chat-view.spec.ts', 'agent-tabs.spec.ts', 'shell-tile-tabs.spec.ts', 'tab-moves.spec.ts']],
-  ['apps/desktop/src/renderer/src/windows/**', ['session-window.spec.ts']],
+  ['apps/desktop/src/renderer/src/session/**', ['session.spec.ts', 'session-window.spec.ts', 'shell-panes.spec.ts', 'chat-view.spec.ts', 'agent-tabs.spec.ts', 'shell-tile-tabs.spec.ts', 'tab-moves.spec.ts', 'popout-moves.spec.ts']],
+  ['apps/desktop/src/renderer/src/windows/**', ['session-window.spec.ts', 'popout-moves.spec.ts']],
   ['apps/desktop/src/main/zones.ts', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
   ['apps/desktop/src/main/flow-edges.ts', ['flow-edges.spec.ts']],
   ['apps/desktop/src/main/reviews.ts', ['reviews.spec.ts']],
@@ -124,6 +124,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/main/{agents,sessions}.ts', ['agents.spec.ts', 'session.spec.ts']],
   ['apps/desktop/src/main/agents.ts', ['chat-view.spec.ts']],
   ['apps/desktop/src/main/{windows,chrome}.ts', ['session-window.spec.ts']],
+  ['apps/desktop/src/main/{windows,tab-drags,web-tabs}.ts', ['popout-moves.spec.ts']],
   ['apps/desktop/src/main/appearance.ts', ['appearance.spec.ts']],
   ['apps/desktop/src/renderer/src/themes.ts', ['appearance.spec.ts']],
   ['apps/desktop/src/main/{daemon,background}.ts', ['daemon.spec.ts', 'daemon-reaping.spec.ts', 'reboot.spec.ts', 'app.spec.ts', 'notifications.spec.ts']],
@@ -131,6 +132,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/reviews.ts', ['reviews.spec.ts']],
   ['packages/daemon/src/review-doc.ts', ['reviews.spec.ts']],
   ['packages/daemon/src/{shells,pane-layout,node-pty-backend}.ts', ['shell-panes.spec.ts']],
+  ['packages/daemon/src/{shells,window-layout}.ts', ['popout-moves.spec.ts']],
   ['packages/daemon/src/{schedules,cron}.ts', ['schedules.spec.ts']],
   ['packages/daemon/src/{image-store,image-sweeper,link-*,safe-fetch}.ts', ['images-and-links.spec.ts']],
   ['packages/daemon/src/{external-*,hook-*}.ts', ['external.spec.ts']],
@@ -144,6 +146,22 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/trackers.ts', ['trackers.spec.ts']],
   ['packages/daemon/src/{transcripts,transcript-adapters}.ts', ['chat-view.spec.ts']],
   ['packages/tracker/**', ['trackers.spec.ts']],
+  // The PR tab (BI1), from the GitHub calls and the fake gh to the tab.
+  ['apps/desktop/src/renderer/src/session/{PullRequestTab.tsx,use-pull-request.ts,pr-diff.ts}', ['pr-tab.spec.ts']],
+  ['apps/desktop/src/main/pull-requests.ts', ['pr-tab.spec.ts']],
+  ['packages/daemon/src/pull-request-tabs.ts', ['pr-tab.spec.ts']],
+  ['packages/tracker/src/{pull-request-details,pull-request-ref,fake-gh,fake-github}.ts', ['pr-tab.spec.ts']],
+  // The merge gate, from the fake gate command and gh calls to the Gate tab and the header's Open PR and Merge.
+  ['apps/desktop/src/renderer/src/gate/**', ['merge-gate.spec.ts']],
+  ['apps/desktop/src/main/gates.ts', ['merge-gate.spec.ts']],
+  ['packages/daemon/src/{gates,gate-actions,gate-output,gate-rules,worktrees}.ts', ['merge-gate.spec.ts']],
+  ['packages/tracker/src/{pull-requests,pull-request-details,fake-gh,fake-github}.ts', ['merge-gate.spec.ts']],
+  ['fixtures/gate/**', ['merge-gate.spec.ts']],
+  // Questions and plans an agent puts to the user, from the board MCP to the inbox, the tile and the Plan tab.
+  ['apps/desktop/src/renderer/src/plan/**', ['ask-plan.spec.ts']],
+  ['apps/desktop/src/renderer/src/inbox/**', ['ask-plan.spec.ts']],
+  ['apps/desktop/src/main/{asks,plan-lockdown,web-lockdown,web-tabs}.ts', ['ask-plan.spec.ts']],
+  ['packages/daemon/src/{asks,board-mcp,board-ops}.ts', ['ask-plan.spec.ts']],
 ];
 
 export interface Plan {

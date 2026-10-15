@@ -6,7 +6,7 @@ import type { Agent, Zone } from '@agent-board/daemon/protocol';
 import { createTempKeychain } from '@agent-board/tracker/testing';
 import { rmSync } from 'node:fs';
 import { withDaemon } from './board-helpers.ts';
-import { agents, launch, sessionWindow, LINEAR_API_KEY, serveLinearFixtures, SHELL_ENV, tile, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, launch, pickInChip, sessionWindow, LINEAR_API_KEY, serveLinearFixtures, SHELL_ENV, tile, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, openAddZone, pickFolderNext, placeWithTool, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -47,23 +47,27 @@ test('the Agent tool starts an agent loose on the board, in a repo picked for it
     // A drop on bare board: the new tile waits for a repo, with the picker on it (AH1).
     await placeWithTool(window, 'New agent');
     await expect(window.getByTestId('pending-tile')).toContainText('new-agent-1');
+    // Placing again moves the picker to the new spot; the empty board's welcome stays away from the stand-in tile.
+    await placeWithTool(window, 'New agent', { x: 800, y: 300 });
+    await expect(window.getByTestId('pending-tile')).toHaveCount(1);
+    await expect(window.getByText('An empty board')).toHaveCount(0);
     await pickFolderNext(app, repo);
     await picker(window).getByRole('button', { name: 'Browse…' }).click();
     await picker(window).getByRole('textbox', { name: 'New branch' }).fill('agent/first-loose');
-    // The compact Model · Role row (AH1), collapsed on the defaults until opened.
-    const modelRole = picker(window).getByRole('button', { name: 'Model and role' });
-    await expect(modelRole).toContainText('Claude · default model · no role');
-    await modelRole.click();
-    await picker(window).getByRole('combobox', { name: 'Model' }).fill('haiku');
-    await picker(window).getByRole('combobox', { name: 'Role' }).selectOption('Reviewer');
-    await expect(modelRole).toContainText('Claude · haiku · Reviewer');
+    // The harness, model and role chips (BJ3), on the defaults until picked.
+    const chips = picker(window).getByRole('group', { name: 'Harness, model and role' });
+    await expect(chips).toHaveText(/Claude\s*Default\s*No role/);
+    await pickInChip(picker(window), 'Model', 'Haiku');
+    await pickInChip(picker(window), 'Role', 'Implementer');
+    await expect(chips).toHaveText(/Claude\s*Haiku\s*Implementer/);
+    await expect(picker(window)).toContainText("Uses the repo's Implementer template.");
     await picker(window).getByRole('button', { name: /^Start/ }).click();
 
     await expect(tile(window)).toHaveCount(1);
     await expect(tile(window)).toHaveAttribute('data-zone', '');
     await expect(window.getByTestId('pending-tile')).toHaveCount(0);
     const [first] = (await stored(dataDir)).agents;
-    expect(first).toMatchObject({ zoneId: null, repoRoot: repo, branch: 'agent/first-loose', name: 'new-agent-1', model: 'haiku', role: 'reviewer' });
+    expect(first).toMatchObject({ zoneId: null, repoRoot: repo, branch: 'agent/first-loose', name: 'new-agent-1', model: 'haiku', role: 'implementer' });
 
     // The next one remembers the repo: it is preselected, so ⏎ starts it.
     await placeWithTool(window, 'New agent', { x: 240, y: 460 });
@@ -307,12 +311,13 @@ for (const appearance of ['light', 'dark'] as const) {
       await pickFolderNext(app, repo);
       await picker(window).getByRole('button', { name: 'Browse…' }).click();
       await picker(window).getByRole('textbox', { name: 'Base branch' }).fill('origin/release/2026-10-a-very-long-base-branch-name-indeed');
-      await picker(window).getByRole('button', { name: 'Model and role' }).click();
-      await picker(window).getByRole('combobox', { name: 'Model' }).fill('claude-opus-5-5-with-a-very-long-model-name');
-      await picker(window).getByRole('combobox', { name: 'Role' }).selectOption('Reviewer');
+      await pickInChip(picker(window), 'Model', 'Other…');
+      await picker(window).getByRole('textbox', { name: 'Model id' }).fill('claude-opus-5-5-with-a-very-long-model-name');
+      await picker(window).getByRole('textbox', { name: 'Model id' }).press('Enter');
+      await pickInChip(picker(window), 'Role', 'Follow-up reviewer');
 
       const card = (await picker(window).boundingBox())!;
-      for (const control of [picker(window).getByRole('button', { name: /^Start/ }), picker(window).getByRole('button', { name: 'Model and role' })]) {
+      for (const control of [picker(window).getByRole('button', { name: /^Start/ }), picker(window).getByRole('button', { name: /^Model:/ })]) {
         const box = (await control.boundingBox())!;
         expect(box.x, 'inside the card on the left').toBeGreaterThanOrEqual(card.x);
         expect(box.x + box.width, 'inside the card on the right').toBeLessThanOrEqual(card.x + card.width);

@@ -18,6 +18,11 @@ export interface FakeHarnessEnvOptions {
   idleNotifyMs?: number;
   /** Replay the scenario for every later prompt too, instead of a plain turn. Defaults to false. */
   repeat?: boolean;
+  /**
+   * Whether an interrupted turn cancels the MCP call it was in (`notifications/cancelled`), as the real CLIs are
+   * expected to. Defaults to true; false plays a harness that just drops the call.
+   */
+  mcpCancel?: boolean;
   base?: NodeJS.ProcessEnv;
 }
 
@@ -34,6 +39,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_STEP_DELAY_MS: String(options.stepDelayMs ?? 0),
     FAKE_HARNESS_IDLE_NOTIFY_MS: String(options.idleNotifyMs ?? 0),
     FAKE_HARNESS_REPEAT: options.repeat ? '1' : '0',
+    FAKE_HARNESS_MCP_CANCEL: options.mcpCancel === false ? '0' : '1',
   };
 }
 

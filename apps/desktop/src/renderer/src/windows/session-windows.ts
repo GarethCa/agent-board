@@ -82,7 +82,9 @@ export function restoreWindows(saved: unknown, current: SessionWindows): Session
   for (const entry of Array.isArray(saved) ? (saved as unknown[]) : []) {
     if (typeof entry !== 'object' || entry === null) continue;
     const { kind, id, title, placement } = entry as Record<string, unknown>;
-    if ((kind !== 'session' && kind !== 'shell') || typeof id !== 'string' || typeof title !== 'string') continue;
+    if ((kind !== 'session' && kind !== 'shell' && kind !== 'tabs') || typeof id !== 'string' || typeof title !== 'string') continue;
+    // A tab window is only ever an OS window of its own.
+    if (kind === 'tabs' && placement !== 'popped') continue;
     if (!PLACEMENTS.includes(placement as Placement) || restored.some((known) => known.id === id)) continue;
     const shownAlready = placement === 'shown' && restored.some((known) => known.placement === 'shown');
     restored.push({ kind, id, title, placement: shownAlready ? 'docked' : (placement as Placement) });
@@ -107,3 +109,4 @@ function place(windows: SessionWindows, { id, title }: WindowTarget): SessionWin
 function update(windows: SessionWindows, id: string, change: (entry: SessionWindowEntry) => SessionWindowEntry): SessionWindows {
   return windows.some((entry) => entry.id === id) ? windows.map((entry) => (entry.id === id ? change(entry) : entry)) : windows;
 }
+

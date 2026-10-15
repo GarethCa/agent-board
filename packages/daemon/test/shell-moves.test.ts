@@ -78,7 +78,7 @@ describe('moving a tab', () => {
     expect(session?.endedAt ?? null).toBeNull();
     expect((await client.call('session.list')).length).toBe(sessions);
     expect(recorder.screenText(pane)).toContain('before-ok');
-    expect(await identify(client, recorder, daemon, pane)).toMatchObject({ kind: 'agent', tileId: to.sessionId, name: to.name, orchestrate: null });
+    expect(await identify(client, recorder, daemon, pane)).toMatchObject({ kind: 'agent', tileId: to.sessionId, name: to.name, side: 'user', orchestrate: 'board' });
   });
 
   it('moves a tab onto the board as a shell tile, keeping its name and folder, and back into its tabs where it was', async () => {

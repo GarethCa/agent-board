@@ -315,6 +315,13 @@ function LinearRow({ state, onChange, onOpenLink }: { state: LinearState; onChan
       (error: unknown) => setRefused(errorMessage(error)),
     ).finally(() => setTesting(false));
   };
+  const disconnect = () => {
+    setRefused(undefined);
+    window.agentBoard.trackers.disconnect('linear').then(
+      () => onChange({ status: 'none' }),
+      (error: unknown) => setRefused(errorMessage(error)),
+    );
+  };
   const connected = state.status === 'connected';
   const why = refused ?? (state.status === 'none' ? state.refused : undefined);
   return (
@@ -345,6 +352,9 @@ function LinearRow({ state, onChange, onOpenLink }: { state: LinearState; onChan
               <Check className="onboarding-ok-icon" />
               <span className="onboarding-ok">Teams {state.teams.map((team) => team.key).join(', ') || 'none yet'}</span>
               <span className="onboarding-row-quiet">key in your keychain</span>
+              <button type="button" className="onboarding-link" onClick={disconnect}>
+                Disconnect
+              </button>
             </span>
           )}
           {why !== undefined && <ErrorText className="onboarding-row-detail">{why}</ErrorText>}

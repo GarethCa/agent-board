@@ -11,9 +11,9 @@ Board state (zones, tiles, sessions, edges, schedules, runs, tracker links) live
 
 ## Amendments
 
-**2026-10-10**: `migrate()` runs migrations with foreign keys off, and turns them back on afterwards if they were on. SQLite can't drop a `NOT NULL`, so making `zones.repo_root` nullable rebuilds the `zones` table (create, copy, drop, rename). With foreign keys on, dropping a table that `agents` and `shells` reference fails. Before each migration commits, `migrate()` runs `PRAGMA foreign_key_check`. A broken reference fails the migration and rolls it back, so turning foreign keys off never lets a migration leave a dangling reference. This is SQLite's documented procedure for changing a table's schema.
+**Update**: `migrate()` runs migrations with foreign keys off, and turns them back on afterwards if they were on. SQLite can't drop a `NOT NULL`, so making `zones.repo_root` nullable rebuilds the `zones` table (create, copy, drop, rename). With foreign keys on, dropping a table that `agents` and `shells` reference fails. Before each migration commits, `migrate()` runs `PRAGMA foreign_key_check`. A broken reference fails the migration and rolls it back, so turning foreign keys off never lets a migration leave a dangling reference. This is SQLite's documented procedure for changing a table's schema.
 
-**2026-10-10**: board items live in their own `board_items` table, with kind-specific fields in a JSON `data`
+**Update**: board items live in their own `board_items` table, with kind-specific fields in a JSON `data`
 column so a new kind needs no migration. The daemon checks `data` against the item's kind on every write, and caps it
 at 64 KiB. One rule lives in the schema rather than the daemon: a `BEFORE DELETE ON zones` trigger moves a removed
 zone's items out onto the board at the same absolute place, so no code path that removes a zone can leave items
@@ -21,7 +21,7 @@ pointing at it. `zone.remove` then announces the moved items as `item.updated`. 
 (drop and recreate) drops this trigger with it, and must create it again; `migrate.test.ts` checks the trigger
 exists after every shipped migration.
 
-**2026-10-10**: image bytes are not in SQLite. The daemon keeps them as files under `<data dir>/images/`,
+**Update**: image bytes are not in SQLite. The daemon keeps them as files under `<data dir>/images/`,
 content-addressed as `<sha256>.<ext>`, so the same bytes pasted twice are stored once. An image item's `data` holds only
 the sha256 and extension; a link card's holds its URL and the page's metadata, with its favicon kept the same way. The
 app hands the daemon the bytes by writing a file in `images/incoming/` and calling `image.import` (a 20 MB image as base64
@@ -33,7 +33,7 @@ image pasted into an agent's composer goes through `images/incoming/` too, with 
 copy in `<data dir>/pasted-images/` for the agent to read: nothing on the board references it, so the sweep must not
 see it.
 
-**2026-10-10**: connectors are not board items: they have their own `connectors` table (migration 0016), not
+**Update**: connectors are not board items: they have their own `connectors` table (migration 0016), not
 `kind = 'connector'` in `board_items`. An item's place, size, `z` and zone mean nothing to a line, and a connector joins
 objects from five tables (zones, items, agents, shells, external sessions), so its ends are a `(type, id)` pair and a
 side, in columns. SQLite can't hold that as a foreign key, so five `AFTER DELETE` triggers (`connectors_leave_deleted_*`)
@@ -43,13 +43,13 @@ announces `connector.updated` and `connector.removed` for what a client does to 
 its object: clients drop it as they hear the object go. An external session is only hidden when dismissed (its row
 stays), so its connectors are hidden with it and return with it. The daemon checks both ends exist when a connector is made.
 
-**2026-10-10**: how the app left the board (its viewport, its session windows, popped-out windows' places, the
+**Update**: how the app left the board (its viewport, its session windows, popped-out windows' places, the
 sessions the restart banner was dismissed for) lives in a `view_state` key/value table of JSON values (64 KiB each),
 behind `view.get` and `view.set`, not in the renderer's localStorage: a hard kill can lose what Chromium hasn't flushed,
 and the daemon owns board state. Sessions' saved screens are files under the data dir, not rows: they are large, written
 often, and only read back whole.
 
-**2026-10-13**: a session window's terminal tabs are rows of the `shells` table with an owner (`owner_kind`,
+**Update**: a session window's terminal tabs are rows of the `shells` table with an owner (`owner_kind`,
 `owner_id`: for now an agent, by its session id), not a table of their own: a tab is a pane tree, as a shell tile is, so
 splitting, resizing, resuming and naming panes stay one code path, and moving a tab between owners (or onto the board as
 a tile) later changes only those two columns. An owned row has no zone or place, so it is never a tile. The agent's own
@@ -67,7 +67,7 @@ tab among its owner's (NULL for older rows, which sort first by rowid), so one m
 back where it was. A pane leaving a split is a new row (`shell.movePane`), and `shell.returnPane` puts the source's layout
 back verbatim for undo. Connectors on a tile that becomes a tab stay in the table and are drawn again if it comes back.
 
-**2026-10-13**: a session window's panes (BH1) are kept in a table of their own, `window_layouts` (migration
+**Update**: a session window's panes (BH1) are kept in a table of their own, `window_layouts` (migration
 `0039_window_layouts`), one row per owner (`owner_kind`, `owner_id`, as a tab's), holding `WindowLayout` JSON: a split
 tree whose leaves are panes, each an ordered strip of surfaces (`own`, `shell` by id, or `session`, another agent or
 shell tile shown there) and the one it shows. Tabs stay rows of `shells`, so nothing moves, migrates or restarts: an owner

@@ -258,3 +258,27 @@ test("a permission prompt shows a Show prompt banner over the terminal, and answ
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('splitting stops when a pane would be left too small to use, and says why', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await newShell(window);
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    const panes = sessionWindow(window).getByTestId('window-pane');
+    // Split until it refuses: each press adds a pane, or says why it can't.
+    const status = sessionWindow(window).getByTestId('session-window-status');
+    for (let i = 0; i < 10 && !/no room to split/.test((await status.textContent()) ?? ''); i++) {
+      const before = await panes.count();
+      await window.keyboard.press('ControlOrMeta+d');
+      await expect.poll(async () => (await panes.count()) > before || /no room to split/.test((await status.textContent()) ?? '')).toBe(true);
+    }
+    await expect(status).toContainText('no room to split');
+    expect(await panes.count()).toBeGreaterThan(1);
+    // Every pane kept room for a usable terminal.
+    for (const box of await panes.evaluateAll((all) => all.map((pane) => pane.getBoundingClientRect().width))) expect(box).toBeGreaterThan(100);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

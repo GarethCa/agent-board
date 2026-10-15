@@ -48,7 +48,7 @@ async function dropKeepingPlace(window: Page, tile: Locator, from: { x: number; 
 const boardPlaceOf = (window: Page, tile: Locator) =>
   window.locator('.react-flow__node').filter({ has: tile }).evaluate((node) => (node as HTMLElement).style.transform);
 
-/** Adds a zone for `path`, a repo or a folder in one, through Add zone's Browse…. */
+/** Adds a zone for `path`, a repo or a folder in one, through Add zone's File browser tab. */
 async function addZone(app: ElectronApplication, window: Page, path: string): Promise<void> {
   const before = await window.getByTestId('zone').count();
   await pickFolderNext(app, path);

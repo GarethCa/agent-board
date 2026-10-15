@@ -24,31 +24,44 @@ interface Command {
   flags: Map<string, string>;
   /** What follows `--`: for `repo clone`, git's own flags. */
   passthrough: string[];
+  /** `gh api`'s `-f key=value` fields, in order. */
+  fields: Map<string, string>;
 }
 
 const FLAG_ALIASES: Record<string, string> = { '-R': '--repo', '-L': '--limit', '-S': '--search', '-H': '--head', '-F': '--body-file' };
 
 /** Flags that take no value. */
-const SWITCHES = new Set(['--squash']);
+const SWITCHES = new Set(['--squash', '--draft']);
+
+/** Who the fake is logged in as. */
+const FAKE_USER = 'octocat';
+
+/** Who opened a pull request whose author isn't set: not the fake's user, so it may approve it. */
+const DEFAULT_AUTHOR = 'hubot';
 
 function parse(argv: string[]): Command {
   const words: string[] = [];
   const flags = new Map<string, string>();
+  const fields = new Map<string, string>();
   const end = argv.indexOf('--');
   const own = end === -1 ? argv : argv.slice(0, end);
   for (let i = 0; i < own.length; i++) {
     const arg = own[i]!;
     if (SWITCHES.has(arg)) flags.set(arg, '');
+    else if (arg === '-f') {
+      const [key, ...value] = (own[++i] ?? '').split('=');
+      fields.set(key!, value.join('='));
+    }
     else if (arg.startsWith('-') && arg !== '-') flags.set(FLAG_ALIASES[arg] ?? arg, own[++i] ?? '');
     else words.push(arg);
   }
-  return { words, flags, passthrough: end === -1 ? [] : argv.slice(end + 1) };
+  return { words, flags, fields, passthrough: end === -1 ? [] : argv.slice(end + 1) };
 }
 
 function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
   const command = words.slice(0, 2).join(' ');
   const fields = (flags.get('--json') ?? '').split(',').filter(Boolean);
-  if (command === 'api user') return { login: 'octocat' };
+  if (command === 'api user') return { login: FAKE_USER };
   if (command.startsWith('api ') && words[1]!.startsWith('user/repos')) {
     return state.repos.map((repo) => ({
       full_name: repo.nameWithOwner,
@@ -58,7 +71,25 @@ function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
   }
   if (command === 'repo view') {
     const repo = findRepo(state, words[2]!);
-    return pick({ nameWithOwner: repo.nameWithOwner, name: repo.nameWithOwner.split('/')[1], description: repo.description }, fields);
+    const viewerPermission = state.viewerPermissions?.[repo.nameWithOwner] ?? 'WRITE';
+    const squashMergeAllowed = repo.squashMergeAllowed ?? true;
+    return pick({ nameWithOwner: repo.nameWithOwner, name: repo.nameWithOwner.split('/')[1], description: repo.description, viewerPermission, squashMergeAllowed }, fields);
+  }
+  const pullApi = /^repos\/([\w.-]+\/[\w.-]+)\/pulls\/(\d+)\/(files|comments)(?:\?.*)?$/.exec(words[0] === 'api' ? (words[1] ?? '') : '');
+  if (pullApi !== null) {
+    const [, name, number, what] = pullApi;
+    const found = state.pullRequests.find((pr) => pr.repo.toLowerCase() === name!.toLowerCase() && pr.number === Number(number));
+    if (found === undefined) throw new GhExit(1, 'gh: Not Found (HTTP 404)');
+    if (what === 'files') return found.files ?? [];
+    return (found.reviewComments ?? []).map((comment) => ({
+      id: comment.id,
+      user: { login: comment.author },
+      path: comment.path,
+      line: comment.line,
+      body: comment.body,
+      created_at: comment.createdAt,
+      html_url: `https://github.com/${found.repo}/pull/${found.number}#discussion_r${comment.id}`,
+    }));
   }
   if (command === 'issue list') {
     const repo = findRepo(state, flags.get('--repo') ?? '').nameWithOwner;
@@ -128,6 +159,26 @@ function cloneRepo(state: FakeGitHubState, { words, passthrough }: Command): voi
   }
 }
 
+/**
+ * `gh api repos/<repo>/pulls/<number>/reviews -X POST -f event=APPROVE -f commit_id=<sha>`: approves an open pull
+ * request as the fake's user, octocat, at the commit named (any, as GitHub records a review of an older commit too),
+ * answering with the review as GitHub does; GitHub refuses to let anyone approve their own.
+ */
+function approveReview(state: FakeGitHubState, stateFile: string, { words, fields }: Command): void {
+  const [, repo, number] = /^repos\/([\w.-]+\/[\w.-]+)\/pulls\/(\d+)\/reviews$/.exec(words[1] ?? '') ?? [];
+  const found = state.pullRequests.find((pr) => pr.repo.toLowerCase() === repo?.toLowerCase() && pr.number === Number(number));
+  if (found === undefined) throw new GhExit(1, 'gh: Not Found (HTTP 404)');
+  if (fields.get('event') !== 'APPROVE') throw new GhExit(1, 'fake gh: only APPROVE reviews are supported');
+  if ((found.author ?? DEFAULT_AUTHOR) === FAKE_USER) {
+    throw new GhExit(1, 'gh: Unprocessable Entity (HTTP 422)\n{"message":"Unprocessable Entity","errors":["Can not approve your own pull request"]}');
+  }
+  const commitId = fields.get('commit_id') ?? found.headRefOid ?? '';
+  const review = { author: FAKE_USER, state: 'APPROVED', body: '', submittedAt: new Date().toISOString(), commitId };
+  const pullRequests = state.pullRequests.map((pr) => (pr === found ? { ...pr, reviews: [...(pr.reviews ?? []), review] } : pr));
+  writeFileSync(stateFile, JSON.stringify({ ...state, pullRequests }));
+  process.stdout.write(`${JSON.stringify({ id: 1, user: { login: FAKE_USER }, state: 'APPROVED', commit_id: commitId })}\n`);
+}
+
 /** `gh pr merge <number> [--repo <repo>] --squash`: merges an open pull request, saying so on stderr as gh does. */
 function mergePullRequest(state: FakeGitHubState, stateFile: string, { words, flags }: Command): void {
   const repo = flags.get('--repo') ?? remoteRepo();
@@ -145,6 +196,34 @@ function mergePullRequest(state: FakeGitHubState, stateFile: string, { words, fl
   const pullRequests = state.pullRequests.map((pr) => (pr === found ? { ...pr, state: 'MERGED' as const } : pr));
   writeFileSync(stateFile, JSON.stringify({ ...state, pullRequests }));
   process.stderr.write(`✓ Squashed and merged pull request ${repo}#${number} (${found.title})\n`);
+}
+
+/**
+ * `gh pr create [--repo <repo>] --head <branch> --title <title> --body-file -`: opens a pull request as the fake's user,
+ * octocat, numbered after every issue and pull request of the repo, at the commit the branch is at in the current
+ * directory's git repo (the real git), and prints its URL as gh does. One already open for the branch is refused.
+ */
+function createPullRequest(state: FakeGitHubState, stateFile: string, { flags }: Command, body: string): void {
+  const repo = flags.get('--repo') ?? remoteRepo();
+  const head = flags.get('--head') ?? '';
+  const open = state.pullRequests.find((pr) => pr.repo.toLowerCase() === repo.toLowerCase() && pr.headRefName === head && pr.state === 'OPEN');
+  if (open !== undefined) throw new GhExit(1, `a pull request for branch "${head}" into branch "main" already exists:\nhttps://github.com/${repo}/pull/${open.number}`);
+  let headRefOid: string;
+  try {
+    headRefOid = execFileSync('git', ['rev-parse', `refs/heads/${head}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch {
+    throw new GhExit(1, `pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and ${head}, Head ref must be a branch (createPullRequest)`);
+  }
+  const numbers = [...state.issues, ...state.pullRequests].filter((each) => each.repo.toLowerCase() === repo.toLowerCase()).map((each) => each.number);
+  const number = Math.max(0, ...numbers) + 1;
+  const pr: FakeGitHubPullRequest = { repo, number, title: flags.get('--title') ?? '', headRefName: head, state: 'OPEN', isDraft: flags.has('--draft'), statusCheckRollup: [], headRefOid, body, author: FAKE_USER };
+  writeFileSync(stateFile, JSON.stringify({ ...state, pullRequests: [pr, ...state.pullRequests] }));
+  process.stdout.write(`https://github.com/${repo}/pull/${number}\n`);
+}
+
+/** `gh api -X DELETE repos/<repo>/git/refs/heads/<branch>`: deletes nothing, but answers as GitHub does (204, no body). */
+function deleteRef({ words }: Command): void {
+  if (!/^repos\/[\w.-]+\/[\w.-]+\/git\/refs\/heads\/.+$/.test(words[1] ?? '')) throw new GhExit(1, 'gh: Not Found (HTTP 404)');
 }
 
 /** Remote names gh prefers, in order, when it infers the repo from the current directory's remotes. */
@@ -194,8 +273,24 @@ function issueJson(issue: FakeGitHubIssue) {
   };
 }
 
+/** A pull request as `gh pr view --json` and `gh pr list --json` give it. */
 function pullRequestJson(pr: FakeGitHubPullRequest) {
-  return { ...pr, body: '', labels: [], url: `https://github.com/${pr.repo}/pull/${pr.number}` };
+  const { files = [], reviews = [], comments = [], author = DEFAULT_AUTHOR } = pr;
+  return {
+    ...pr,
+    body: pr.body ?? '',
+    labels: [],
+    url: `https://github.com/${pr.repo}/pull/${pr.number}`,
+    author: { login: author },
+    baseRefName: pr.baseRefName ?? 'main',
+    mergeable: pr.mergeable ?? 'MERGEABLE',
+    mergeStateStatus: pr.mergeStateStatus ?? 'CLEAN',
+    changedFiles: files.length,
+    additions: files.reduce((sum, file) => sum + file.additions, 0),
+    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+    reviews: reviews.map((review) => ({ state: review.state, body: review.body, submittedAt: review.submittedAt, author: { login: review.author } })),
+    comments: comments.map(({ author: by, ...comment }) => ({ ...comment, author: { login: by } })),
+  };
 }
 
 /** Only the asked-for fields, keys sorted, as `gh --json` prints them. */
@@ -248,9 +343,14 @@ function main(): void {
           'Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.',
       );
     }
+    // As gh fails once GitHub's API rate limit is reached, for REST and GraphQL calls alike.
+    if (state.rateLimited === true) throw new GhExit(1, 'GraphQL: API rate limit exceeded for user ID 1. (rateLimit)');
     const command = parse(args);
     if (command.words[0] === 'repo' && command.words[1] === 'clone') cloneRepo(state, command);
+    else if (command.words[0] === 'api' && command.flags.get('-X') === 'POST' && command.words[1]?.endsWith('/reviews')) approveReview(state, stateFile, command);
     else if (command.words[0] === 'pr' && command.words[1] === 'merge') mergePullRequest(state, stateFile, command);
+    else if (command.words[0] === 'pr' && command.words[1] === 'create') createPullRequest(state, stateFile, command, stdin);
+    else if (command.words[0] === 'api' && command.flags.get('-X') === 'DELETE') deleteRef(command);
     else process.stdout.write(`${JSON.stringify(answer(state, command))}\n`);
   } catch (error) {
     if (!(error instanceof GhExit)) throw error;

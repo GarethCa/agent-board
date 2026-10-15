@@ -27,10 +27,14 @@ export const EDGES: readonly Edge[] = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw
 export const MIN_WIDTH = 520;
 export const MIN_HEIGHT = 320;
 
-/** The board's size, which the window stays inside. */
+/**
+ * The board's size, which the window stays inside, less `top` px kept clear along its top edge: on macOS, windowed, the
+ * traffic lights float over the board's top-left, so a window never reaches under them.
+ */
 export interface Bounds {
   width: number;
   height: number;
+  top?: number;
 }
 
 /** The default restored size as fractions of the board: most of it, centred. */
@@ -71,12 +75,14 @@ export function frameFrom(saved: unknown): SavedFrame | undefined {
 /** The frame kept inside the board and at least the least size (or the board's, if that is smaller). */
 export function clampFrame(frame: Frame, bounds: Bounds): Frame {
   const width = Math.min(Math.max(frame.width, Math.min(MIN_WIDTH, bounds.width)), bounds.width);
-  const height = Math.min(Math.max(frame.height, Math.min(MIN_HEIGHT, bounds.height)), bounds.height);
+  const top = bounds.top ?? 0;
+  const room = bounds.height - top;
+  const height = Math.min(Math.max(frame.height, Math.min(MIN_HEIGHT, room)), room);
   return {
     width,
     height,
     x: Math.min(Math.max(frame.x, 0), bounds.width - width),
-    y: Math.min(Math.max(frame.y, 0), bounds.height - height),
+    y: Math.min(Math.max(frame.y, top), bounds.height - height),
   };
 }
 
@@ -92,7 +98,7 @@ export function resizeFrame(frame: Frame, edge: Edge, dx: number, dy: number, bo
     width = right - x;
   }
   if (edge.includes('n')) {
-    y = Math.min(Math.max(y + dy, 0), bottom - MIN_HEIGHT);
+    y = Math.min(Math.max(y + dy, bounds.top ?? 0), bottom - MIN_HEIGHT);
     height = bottom - y;
   }
   return { x, y, width, height };

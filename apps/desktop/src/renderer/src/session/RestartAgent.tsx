@@ -8,7 +8,8 @@ import { Button, ErrorText } from '../ui';
  * Whether the agent ended on its own or was stopped (not by a restart, which has its own Resume): it can restart. Not
  * a reviewer, whose round ended with it.
  */
-export const canRestart = (agent: Agent): boolean => agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.reviewOf === null;
+export const canRestart = (agent: Agent): boolean =>
+  agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.reviewOf === null && agent.shellHarness === null;
 
 /** How an ended agent's process went, for its pane's banner: `claude exited (code 0)`. */
 export function exitText(agent: Agent): string {
@@ -16,7 +17,11 @@ export function exitText(agent: Agent): string {
 }
 
 /** The shell an ended agent's pane dropped into, when it has one: what its state says on the tile and the window. */
-export const ENDED_SHELL_LABEL = 'ended · shell';
+const ENDED_SHELL_LABEL = 'ended · shell';
+
+/** What the tile and window say of an ended agent's shell: its harness is running in it by hand, or it is a plain shell. */
+export const endedShellLabel = (agent: Pick<Agent, 'shellHarness'>): string =>
+  agent.shellHarness === null ? ENDED_SHELL_LABEL : `${agent.shellHarness} running in this shell`;
 
 /**
  * Restart agent, for an ended agent: relaunches it in its worktree, carrying on its conversation. If the shell its

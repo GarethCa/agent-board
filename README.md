@@ -45,6 +45,8 @@ The screenshots are real captures of the running app, driven by a fake `claude` 
 
 The **Needs you** pill counts agents that are waiting or want permission. Its popover lets you answer a question, or allow or deny a command, right there. Tiles that need you get an orange border, and macOS notifications bring you back.
 
+An agent can also ask you through the board: a question with a button per answer (or a reply in your own words, or Skip), or a plan for you to approve, send back with comments or reject, which opens in a **Plan** tab with its versions. Its call waits until you answer; nothing answers for you, and an HTML plan runs offline in a locked-down view of its own ([ADR-0014](docs/adr/0014-questions-and-plans.md)).
+
 <p align="center">
   <img src="docs/assets/screenshots/inbox.png" alt="The Needs you popover listing a waiting agent with an answer box and two permission requests with Deny and Allow buttons" width="760">
 </p>
@@ -52,6 +54,10 @@ The **Needs you** pill counts agents that are waiting or want permission. Its po
 ### Zones and groups
 
 A **zone** is a tinted region for a project: a git repo, a folder inside one, a GitHub repo agent-board clones for you, or a Linear team. A **group**, drawn dashed, is a zone bound to nothing yet. Each agent is a **tile** with its name, branch, state and last message, and its subagents perch on it as small characters while they work. Stickies, text, shapes, images, link cards and connectors let you annotate the board like a whiteboard.
+
+When you add a zone for a GitHub repo you already have cloned, it can use that copy (**Use my copy…**, or **Find my local copies**) instead of a fresh clone, and the **File browser** tab picks a folder that isn't listed. Any zone can be deleted, with ⌫, its context menu or its ⋯ menu, and the delete can be undone.
+
+When you start an agent, the chips beside the task pick its model and, optionally, a role: implementer, reviewer, follow-up reviewer or custom. A role starts the agent with its zone's role template, filled in, and shows as a badge on its tile. A reviewer reads a branch on a detached checkout, so it has no branch of its own to push.
 
 <p align="center">
   <img src="docs/assets/screenshots/add-zone.png" alt="The Add zone popover on its GitHub tab, listing repositories that will be cloned" width="440">
@@ -68,15 +74,33 @@ Double-click a tile for its session window: the live terminal, with the controls
 
 A window is laid out in **panes**, and each pane has its own tab strip: the agent's own tab, then shells and any other session you show there. **+** or ⌘T opens a shell in the focused pane, and ⌘D splits it. Drag a tab along its strip to reorder it, onto another pane's strip to move it there, or onto the edge of a pane to split a new pane off. Closing a pane's last tab closes the pane.
 
+<p align="center">
+  <img src="docs/assets/screenshots/session-panes.png" alt="An agent's session window with two panes: the left pane's strip reads claude and PR #41 above the agent's terminal, and the right pane's strip reads sh above a shell in the agent's worktree" width="760">
+</p>
+
 Tabs move too. Drag a tab, or a split pane, onto another agent's window to move it there, or out onto the board to make it a tile of its own; drag a shell tile onto an agent to bring it in as a tab.
+
+An agent's pull request opens as a **PR tab**, from the PR chip on its tile: the description, checks, each file's diff and the review comments, read from GitHub through `gh`, with **Approve** and **Squash and merge** when GitHub allows them, each asking first.
+
+<p align="center">
+  <img src="docs/assets/screenshots/pr-tab.png" alt="A PR tab: the pull request's title, Open state, Approve and Squash and merge buttons, its description, three passing checks and the diff of one changed file" width="760">
+</p>
+
+A zone can have a **gate command**, such as `pnpm check:local`, set from its tab's ⋯ menu. **Run gate** (⌘⇧G, the details' Gate section or the tile's ⋯) runs it in the agent's worktree, only when you ask, into a **Gate tab**: its steps as a table, the picked step's log streaming under it, and on a failure **Send failure**, which pastes the failing lines at the agent's prompt for you to send. The window's header offers **Open PR**, which pushes the branch and opens a pull request from the repo's template and the agent's `.agent-board/handover.md`, and **Merge**, which squash-merges only once GitHub's checks are green and, in a zone with a gate, the gate passed on the pull request's head. A PR tab may merge it before the gate passed there, once you confirm going past the gate. An agent may open its own pull request too (`agent-board open-pr`), always as a draft. The command runs through `sh -c`, so `&&` and pipes work ([ADR-0013](docs/adr/0013-merge-gate.md)).
+
+A dev server opens as a **web tab**: **Web…** in the + menu, or ⌘-click a `localhost` address in a terminal. It is a locked-down web view that shows only https pages and http ones on your machine, in a session of its own, with no access to the app.
+
+<p align="center">
+  <img src="docs/assets/screenshots/web-tab.png" alt="A web tab in the left pane showing a local storefront page at localhost:5173 under an address row, beside a shell in the right pane" width="760">
+</p>
 
 ### Flows between agents
 
-An **edge** carries one agent's work to another when the first finishes. Hover an agent's tile and drag from its square **flow port** (below the middle of its right side) onto another agent's tile; its **Edge rules** open on the right.
+An **edge** carries one agent's work to another when the first finishes. Hover an agent's tile and drag from one of its round handles onto another agent's tile, then pick **Hand off** (or press H) in the chooser; **Arrow**, the default, keeps a plain arrow. Hold **⌥** while dragging to make a hand-off straight away. Its **Edge rules** open on the right, in four sections: When, What, Only if and History. Like an arrow, an edge is straight, elbow or curved, can be bent by dragging the handle halfway along it, and its ends dragged to other sides of their tiles.
 
 - **Payload:** the agent's final message, a markdown file from its worktree (`handover.md` unless you name another, such as `plan.md`) or a JSON file (`handoff.json`). A file must sit inside the worktree and be at most 64 KB.
-- **Trigger:** automatic when the agent's turn ends, or manual, with a **Send** button on the edge. If the receiver is busy, the delivery is skipped, or waits for its turn to end if you pick **Queue after turn**.
-- **Conditions:** an automatic edge can wait until *PR checks* pass, a *gate* command (such as `pnpm check:local`) passes in the sender's worktree, the sender's issue has a label, or a *custom script* exits 0. Gates and scripts only run after you approve the exact command, shown whole ([ADR-0009](docs/adr/0009-edge-condition-approvals.md)). While a condition fails, the hand-off is **held** and checked again, and the edge says what it is held until.
+- **Trigger:** automatic when the agent hands off (it runs `agent-board handoff`, or calls the board MCP's `handoff` tool, once its work is ready) or else when its turn ends, or manual, with a **Send** button on the edge. If the receiver is busy, the delivery is skipped, or waits for its turn to end if you pick **Wait for its turn**.
+- **Conditions:** an automatic edge can wait until *PR checks* pass, a *gate* command (such as `pnpm check:local`) passes in the sender's worktree, the sender's issue has a label, or a *custom script* exits 0. Gates and scripts only run after you approve the exact command, shown whole under the condition ([ADR-0009](docs/adr/0009-edge-condition-approvals.md)). While a condition fails, the hand-off is **held** and checked again, and the edge says what it is held until.
 - Each edge keeps its history, and can be paused, deleted or sent now. A hand-off shows travelling along its edge, and the receiver reads "receiving…". Deleting an edge can be undone.
 
 <p align="center">
@@ -125,10 +149,10 @@ agent:22a7  Fix the failing login test
 
 #### Orchestrators
 
-An agent can lead other agents the way you would: start one with a task, wait for its turn to end, read what it handed back, send a follow-up and close it. The commands are `new`, `send`, `wait`, `read`, `interrupt` and `close`, with matching MCP tools; `agent-board help orchestrate` shows the loop.
+An agent can lead other agents the way you would: start one with a task, wait for its turn to end, read what it handed back, send a follow-up and close it. The commands are `new`, `send`, `wait`, `read`, `interrupt` and `close`, with matching MCP tools, and they work from any shell on the board or your own terminal too, where they act for you; `agent-board help orchestrate` shows the loop.
 
-- **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent you start in the zone may start and steer agents in that zone, and only there. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
-- **Never inherited.** An agent an orchestrator starts runs in its own worktree and branch, and cannot orchestrate itself. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
+- **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent in the zone may start and steer agents in that zone, and only there. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
+- **Crews go three deep.** An agent an orchestrator starts runs in its own worktree and branch, and leads its own crew only as its zone allows, three agents deep at most. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
 - **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board** can show a "from" chip on each agent instead.
 - **An Activity tab.** The orchestrator's session window gets an **Activity** tab listing what it started, sent, interrupted and closed, and what it tried and was refused, with why.
 
@@ -203,7 +227,7 @@ No. It starts your own `claude` and `codex` through your login shell, with their
 No. Each session it starts reports its state through the CLIs' own hooks, to a daemon on your machine ([ADR-0004](docs/adr/0004-agent-telemetry.md)). Nothing leaves your machine except what your CLIs and `gh` already send.
 
 **What happens to my sessions when I close the app?**
-They keep running. A background process, `agent-board daemon`, owns them, and the app reconnects when it opens. After a reboot, their tiles keep their last output and offer **Resume**.
+They keep running. A background process, `agent-board daemon`, owns them, and the app reconnects when it opens. After a reboot, their tiles keep their last output and offer **Resume**, which picks the conversation up where it stopped (an agent that never got one starts fresh).
 
 **Where does it put my code?**
 Each agent works in its own git worktree under `~/.agent-board/worktrees/`, on its own branch, so agents never trip over each other or your checkout.
@@ -269,6 +293,8 @@ The rest of the decisions are in [`docs/adr/`](docs/adr):
 - [The board CLI and MCP](docs/adr/0010-board-cli-and-mcp.md)
 - [Orchestrators](docs/adr/0011-orchestrators.md)
 - [Explicit hand-off and agent-made edges](docs/adr/0012-explicit-handoff-and-agent-made-edges.md)
+- [The merge gate](docs/adr/0013-merge-gate.md)
+- [Questions and plans](docs/adr/0014-questions-and-plans.md)
 
 The domain vocabulary (zone, tile, session, harness, edge…) is in [`CONTEXT.md`](CONTEXT.md).
 

@@ -687,6 +687,62 @@ describe('Claude agents', () => {
       });
     });
 
+    it('starts a Claude agent that never had a turn fresh under the same id, instead of failing to resume it', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('waiting', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      await first.daemon.stop();
+      const second = await agentDaemon('waiting', { dataDir, home: first.home });
+
+      const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      expect(resumed).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: 'No earlier conversation: started fresh' });
+      const sessionStart = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
+      );
+      expect(sessionStart.payload).toMatchObject({ source: 'startup', session_id: agent.sessionId });
+    });
+
+    it('starts a Claude agent whose transcript is gone fresh on its task', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('waiting', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'waiting');
+      await first.daemon.stop();
+      rmSync(join(first.home, '.claude', 'projects'), { recursive: true, force: true });
+      const second = await agentDaemon('waiting', { dataDir, home: first.home });
+
+      const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      expect(resumed.notice).toBe('No earlier conversation: started fresh');
+      const sessionStart = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
+      );
+      expect(sessionStart.payload).toMatchObject({ source: 'startup', session_id: agent.sessionId });
+      // Its task goes again as its first message.
+      await second.client.call('session.attach', { sessionId: agent.sessionId });
+      await second.recorder.waitForText(agent.sessionId, 'Which database should I use');
+    });
+
+    it('starts a Codex agent that has no session id fresh, with a notice', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('waiting', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, harness: 'codex', ...SIZE });
+      await first.daemon.stop();
+      const second = await agentDaemon('waiting', { dataDir, home: first.home });
+
+      const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      expect(resumed).toMatchObject({ endedAt: null, notice: 'No earlier conversation: started fresh' });
+      const sessionStart = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
+      );
+      expect(sessionStart.payload).toMatchObject({ source: 'startup' });
+    });
+
     it('resumes a Codex agent in its own conversation, by the id Codex gave it', async () => {
       const dataDir = tempDataDir();
       const first = await agentDaemon('waiting', { dataDir });
@@ -785,6 +841,22 @@ describe('an agent that exited', () => {
     );
     expect(sessionStart.payload).toMatchObject({ session_id: agent.sessionId });
     expect((await client.call('session.list')).map((session) => session.id)).not.toContain(shellId);
+  });
+
+  it('restarts one that never had a turn fresh under the same id', async () => {
+    const daemon = await agentDaemon('waiting');
+    const zone = await addZone(daemon.client, tempRepo());
+    const agent = await daemon.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    await daemon.client.call('session.write', { sessionId: agent.sessionId, data: '\x04' });
+    await untilAgent(daemon.recorder, agent.sessionId, (a) => a.shellSessionId !== null);
+
+    const restarted = await daemon.client.call('agent.resume', { sessionId: agent.sessionId });
+
+    expect(restarted).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: 'No earlier conversation: started fresh' });
+    const sessionStart = await daemon.recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart' && e.payload.source === 'startup',
+    );
+    expect(sessionStart.payload).toMatchObject({ session_id: agent.sessionId });
   });
 
   it('starts a Codex agent afresh when Codex can\'t resume its conversation', async () => {

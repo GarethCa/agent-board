@@ -1,6 +1,6 @@
 import { createContext } from 'react';
 import type { Node } from '@xyflow/react';
-import type { Agent, ExternalSession, Harness, RecentFolder, Shell } from '@agent-board/daemon/protocol';
+import type { Agent, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
 import type { ClickOpens } from './click-opens';
 import { renameDirect, type RenameTarget } from './rename';
 
@@ -102,6 +102,18 @@ export interface TileActions {
    * started when `tab` is undefined.
    */
   openTab(agent: Agent, tab: string | undefined): void;
+  /**
+   * Opens one of the agent's pull requests in a PR tab (BI1): in its expanded tile, if it is expanded, else in
+   * its session window; in the focused pane, or where its tab already is.
+   */
+  openPullRequest(agent: Agent, pr: PullRequest): void;
+  /**
+   * Opens the agent's Gate tab (BL1) where a PR tab would open, and with `run`, runs its gate first (only ever
+   * on the user's click), saying why when it can't.
+   */
+  openGate(agent: Agent, run: boolean): void;
+  /** Opens the agent's Plan tab (BO2) where a PR tab would open. */
+  openPlan(agent: Agent): void;
 }
 
 /** What a double-click on an agent's or shell tile opens: its tiles' tooltips and ⋯ menus say so. */
@@ -133,6 +145,9 @@ export const TileActionsContext = createContext<TileActions>({
   startReview: () => {},
   openReview: () => {},
   openTab: () => {},
+  openGate: () => {},
+  openPlan: () => {},
+  openPullRequest: () => {},
 });
 
 /** What a shell tile's folder chip needs (AK1): home, to show it as `~`, and where to open a new pane. */

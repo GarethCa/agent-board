@@ -284,6 +284,9 @@
   --connector-handle-offset: 10px; /* how far outside its side a handle sits, clear of the resize grips on the side */
   --connector-zone-top-handle-at: 92%; /* along a zone's top: its tab's buttons are in the way of the middle */
   --connector-handle-hover-size: 13px;
+  --line-handle-size: 10px; /* an end or bend of a selected line */
+  --line-insert-size: 8px; /* halfway along a stretch of it, where a new bend is pulled out */
+  --line-insert-opacity: 0.6;
   --connector-label-gap: 2px;
   --connector-bar-gap: 10px; /* between the style bar and the line it is over */
   --connector-drop-edge: var(--accent); /* the outline of the object a connector would join, while one is dragged */
@@ -297,7 +300,8 @@
 
   /*
    * Flow edges: coloured, labelled with what they carry, with a trigger icon (DecR R1): a started-from-an-issue agent's
-   * "issue brief", and the edges between agents, leaving and arriving at a tile's square flow ports.
+   * "issue brief", and the edges between agents, leaving and arriving at any side of their tiles
+   *.
    */
   --flow-edge: var(--accent);
   --flow-edge-width: 2px;
@@ -305,9 +309,7 @@
   --flow-label-ink: var(--accent-strong);
   --flow-trigger: var(--accent);
   --flow-trigger-ink: var(--on-primary);
-  --flow-port-size: 10px; /* a tile's square flow port */
-  --flow-port-at: 70%; /* how far down its side, below the round connector handle in the middle */
-  --flow-port-ring: color-mix(in srgb, var(--flow-edge) 20%, transparent); /* round a port being dragged from or to */
+  --flow-ring: color-mix(in srgb, var(--flow-edge) 20%, transparent); /* round a hand-off's payload on its way */
   --flow-pill: var(--flow-label); /* a flow edge's or a hand-off's pill: "new", "sending now", "receiving…" */
   --flow-pill-ink: var(--flow-label-ink);
   --flow-flowing: var(--on-primary); /* the dashes running along an edge a hand-off is going along */
@@ -317,7 +319,6 @@
   --flow-payload-to: 92%;
   --flow-target-edge: var(--flow-edge); /* a tile a flow edge can be let go on, being dragged over */
   --flow-target-fill: color-mix(in srgb, var(--flow-edge) 6%, transparent);
-  --flow-not-target: 0.38; /* how faint an object a flow edge can't join is, while one is dragged */
   --flow-receiving-ring: color-mix(in srgb, var(--flow-edge) 14%, transparent); /* round a tile receiving a hand-off */
   --flow-held: var(--state-rate-limited-soft); /* a hand-off an edge holds until its conditions pass (FlowRules) */
   --flow-held-ink: var(--state-rate-limited-ink);
@@ -382,6 +383,8 @@
   --window-chat-you: #26315c; /* your message in the chat view (AE1) */
   --window-chat-you-ink: #dbe4ff;
   --window-added: #8ce99a; /* a tool call's added lines in the chat view: +38 */
+  --window-diff-added: #1f3324; /* an added line's row in a PR tab's diff */
+  --window-diff-hunk: #23283a; /* a hunk's header row in a PR tab's diff */
   --window-chat-subagent: #222a40; /* a message between Codex agents in the chat view */
   /* A code block's highlighting in the chat view, on its block (--window-chrome) or the window */
   --window-code-keyword: #d0a2f7;
@@ -544,6 +547,7 @@
   --size-logo: 30px; /* the app's mark on the board menu (brand/BRAND.md: about 30px) */
   --size-panel: 352px; /* the board menu's and settings' panels */
   --size-inbox: 372px; /* the Needs-you inbox's popover */
+  --size-gate-popover: 340px; /* Merge's popover in a session window's header */
   --size-zoom-level: 52px; /* the zoom island's percentage */
   --size-minimap-width: 184px;
   --size-minimap-height: 118px;
@@ -553,6 +557,8 @@
   --size-clone-bar: 72px; /* a cloning zone's progress bar, on its tab */
   --size-clone-bar-height: 5px;
   --size-repo-picker: 360px; /* the repo picker beside a new agent's tile (AH1) */
+  --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor (BK2) */
+  --size-agent-setup-model: 140px; /* the typed model id in place of the model chip (BJ3) */
   --size-add-zone: 700px; /* the Add zone popover: wide enough for its foot, the name, eight colours and two buttons */
   --size-add-zone-list: 300px; /* its list's tallest, before it scrolls */
   --size-add-zone-teams: 190px; /* its Linear tab's teams column, beside the team's projects */
@@ -568,6 +574,7 @@
   --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
   --size-edge-rules: 384px; /* the Edge rules panel's width (FlowDraw AB2) */
   --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
+  --size-edge-file: 120px; /* the least its payload file field narrows to before it wraps under the switch (BQ3) */
   --size-edge-history-time: 64px; /* its history's times: "14:01", "Fri 17:40" */
   --size-tile-head: 22px; /* a tile's head row */
   --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */

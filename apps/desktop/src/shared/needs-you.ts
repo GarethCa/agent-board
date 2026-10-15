@@ -36,3 +36,15 @@ export function toolSummary(prompt: PermissionPrompt): string {
   else summary = JSON.stringify(input);
   return summary.length <= MAX_SUMMARY_LENGTH ? summary : `${summary.slice(0, MAX_SUMMARY_LENGTH - 1)}…`;
 }
+
+/**
+ * How much longer a question or plan waits for the user, until `expiresAt`: "28 more minutes", rounded up,
+ * then the seconds of its last minute.
+ */
+export function waitLeft(expiresAt: string, now: number): string {
+  const seconds = Math.ceil((Date.parse(expiresAt) - now) / 1000);
+  if (seconds <= 0) return 'no longer';
+  if (seconds < 60) return `${seconds} more second${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} more minute${minutes === 1 ? '' : 's'}`;
+}

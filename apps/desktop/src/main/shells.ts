@@ -1,6 +1,7 @@
+import { app, ipcMain } from 'electron';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import type { CreateShellTileParams, PaneLayout, ShellOwner, ShellPlace, SplitDirection, TileMove } from '@agent-board/daemon/protocol';
-import type { WindowLayout } from '@agent-board/daemon/window-layout';
+import type { CreateShellTileParams, PaneLayout, ShellOwner, ShellPlace, SplitDirection, TileMove, WindowOwner } from '@agent-board/daemon/protocol';
+import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import { SHELL_IPC } from '../preload/api';
 import { forwardEvents } from './broadcast';
 import { passthrough, passthroughVoid } from './passthrough';
@@ -8,6 +9,7 @@ import { passthrough, passthroughVoid } from './passthrough';
 /** The shell tile IPC the preload's `shells` API calls. Every window hears every change, so tiles stay live. */
 export function registerShellIpc(daemon: DaemonLink): void {
   forwardEvents(daemon, ['shell.updated', 'shell.removed'], SHELL_IPC.changed);
+  forwardEvents(daemon, ['window.layout'], SHELL_IPC.layoutChanged);
 
   passthrough(daemon, SHELL_IPC.list, 'shell.list');
   passthrough(daemon, SHELL_IPC.createTab, 'shell.createTab', (owner: ShellOwner, options?: { cwd?: unknown; script?: unknown }) => ({
@@ -31,9 +33,26 @@ export function registerShellIpc(daemon: DaemonLink): void {
     ...(typeof id === 'string' ? { id } : {}),
   }));
   passthrough(daemon, SHELL_IPC.returnPane, 'shell.returnPane', (shellId: string, sessionId: string, layout: PaneLayout) => ({ shellId, sessionId, layout }));
-  passthrough(daemon, SHELL_IPC.windowLayout, 'shell.windowLayout', (owner: ShellOwner) => ({ owner }));
-  passthrough(daemon, SHELL_IPC.unsplitTabs, 'shell.unsplitTabs', (owner: ShellOwner) => ({ owner }));
-  passthrough(daemon, SHELL_IPC.setWindowLayout, 'shell.setWindowLayout', (owner: ShellOwner, layout: WindowLayout) => ({ owner, layout }));
+  passthrough(daemon, SHELL_IPC.windowLayout, 'shell.windowLayout', (owner: WindowOwner) => ({ owner }));
+  passthrough(daemon, SHELL_IPC.unsplitTabs, 'shell.unsplitTabs', (owner: WindowOwner) => ({ owner }));
+  passthrough(daemon, SHELL_IPC.setWindowLayout, 'shell.setWindowLayout', (owner: WindowOwner, layout: WindowLayout, base?: WindowLayout | null) => ({
+    owner,
+    layout,
+    ...(base === undefined ? {} : { base }),
+  }));
+  passthrough(
+    daemon,
+    SHELL_IPC.moveSurface,
+    'shell.moveSurface',
+    (surface: Surface, from: WindowOwner | null, to: { owner: WindowOwner; placement?: Placement } | null) => ({ surface, from, to }),
+  );
+  // A tab window closed by the app quitting isn't closed by the user: it opens again, with its tabs, at the next start.
+  let quitting = false;
+  app.on('before-quit', () => (quitting = true));
+  ipcMain.handle(SHELL_IPC.forgetWindow, (_event, owner: WindowOwner, layout: WindowLayout) =>
+    quitting ? false : daemon.call('shell.forgetWindow', { owner, layout }),
+  );
+  passthrough(daemon, SHELL_IPC.tabWindows, 'shell.tabWindows');
   passthrough(daemon, SHELL_IPC.split, 'shell.split', (shellId: string, sessionId: string, direction: SplitDirection, cwd?: string) => ({
     shellId,
     sessionId,

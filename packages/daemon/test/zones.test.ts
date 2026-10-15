@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DaemonRpcError } from '../src/client.ts';
-import { RPC_ERROR } from '../src/protocol.ts';
+import { RPC_ERROR, zoneSnapshot } from '../src/protocol.ts';
 import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
 
 /** A fresh git repo named `name` with an `apps/web` folder, removed when the test ends. */
@@ -132,6 +132,18 @@ describe('zones over the socket', () => {
     await expect(client.call('zone.configure', { id: 'missing', codexBypassHookTrust: true })).rejects.toThrow(/no zone missing/);
   });
 
+  it('sets and clears a zone\'s gate command: none by default, and one that chains through the shell', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.add', { path: tempRepo(), ...at });
+    expect(zone.gateCommand).toBeNull();
+
+    const set = await client.call('zone.configure', { id: zone.id, gateCommand: '  pnpm check:local ' });
+
+    expect(set).toEqual({ ...zone, gateCommand: 'pnpm check:local' });
+    expect(await client.call('zone.configure', { id: zone.id, gateCommand: 'pnpm lint && pnpm test' })).toMatchObject({ gateCommand: 'pnpm lint && pnpm test' });
+    expect(await client.call('zone.configure', { id: zone.id, gateCommand: '  ' })).toEqual(zone);
+  });
+
   it('renames and recolours a zone, either alone', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
@@ -151,29 +163,46 @@ describe('zones over the socket', () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
     await client.call('zone.setLook', { id: zone.id, color: '#12b886', fillOpacity: 12 });
-    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false });
+    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false, gateCommand: 'make check' });
     const full = await client.call('zone.setDefaultRepo', { id: zone.id, path: tempRepo() });
     await client.call('zone.dissolve', { id: zone.id });
     expect(await client.call('zone.list')).toEqual([]);
 
-    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo } = full;
-    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo });
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo } = full;
+    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo });
 
     expect(restored).toEqual({ ...full, createdAt: restored.createdAt });
     expect(await client.call('zone.list')).toEqual([restored]);
-    await expect(client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker, defaultRepo })).rejects.toMatchObject({
+    await expect(client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
     });
+  });
+
+  it('restores a deleted repo zone bound to its repo, and unbound if the repo has gone', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const repo = tempRepo('mine');
+    const zone = await client.call('zone.add', { path: join(repo, 'apps', 'web'), ...at });
+    await client.call('zone.dissolve', { id: zone.id });
+    const snapshot = zoneSnapshot(zone);
+    const { id } = zone;
+
+    const restored = await client.call('zone.restore', snapshot);
+    expect(restored).toEqual({ ...zone, createdAt: restored.createdAt });
+    expect(restored).toMatchObject({ kind: 'folder', repoRoot: zone.repoRoot, folder: 'apps/web' });
+
+    await client.call('zone.dissolve', { id });
+    const gone = await client.call('zone.restore', { ...snapshot, repoRoot: join(tempPlainFolder(), 'gone') });
+    expect(gone).toMatchObject({ kind: 'unbound', repoRoot: null, folder: '' });
   });
 
   it('restores a group without a default repo whose folder has gone, rather than failing', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
-    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker } = zone;
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker } = zone;
     await client.call('zone.dissolve', { id });
 
     const restored = await client.call('zone.restore', {
-      id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, tracker,
+      id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker,
       defaultRepo: join(tempPlainFolder(), 'gone'),
     });
 

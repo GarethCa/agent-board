@@ -358,6 +358,11 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+/* The pencil is laid over the end of the name's box: a name long enough to fill it leaves the pencil room instead. */
+.hybrid-tile-name-long {
+  padding-inline-end: calc(var(--rename-gap) + var(--control-xs));
+}
+
 /* A reviewer's "Review · r1", under its implementer's name rather than on the end of it. */
 .hybrid-tile-subtitle {
   color: var(--muted);
@@ -538,6 +543,11 @@ kbd {
   -webkit-line-clamp: 2;
 }
 
+/* A question asked through the board: its options on its second line. */
+.hybrid-tile-ask[data-question] .hybrid-tile-text {
+  white-space: pre-line;
+}
+
 .hybrid-tile-notice .hybrid-tile-text {
   -webkit-line-clamp: 3;
 }
@@ -564,8 +574,32 @@ kbd {
   margin-top: auto;
 }
 
+/* However long one is, it stays inside the tile: a badge gives way, its text cut short with an ellipsis (its tooltip has the rest). */
+.hybrid-tile-footer > :is(.ui-chip, .ui-tag) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.hybrid-tile-footer > [data-folded] {
+  display: none;
+}
+
+.hybrid-tile-badge-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .hybrid-tile-folded {
   cursor: default;
+}
+
+/* The model and role badges: quiet tags, their marks icon-sized. */
+.hybrid-tile-setup svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }
 
 /* An agent's shells chip (AU1): "2 shells", one dot per shell, and the list it opens. */
@@ -1176,6 +1210,87 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* A question an agent asks through the board (BN1): one button per option, a reply field, a timer line. */
+.inbox-ask,
+.inbox-plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.inbox-ask-question {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.inbox-ask-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+.inbox-ask-option .ui-kbd {
+  margin-left: var(--space-1);
+}
+
+.inbox-ask-timer {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.inbox-ask-timer svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.inbox-ask-skip {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.inbox-ask-skip:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.inbox-plan-head {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+}
+
+.inbox-plan-head svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.inbox-plan-title {
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-plan-version {
+  margin-right: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
 /* In the session window, over its terminal. */
 .held-notice,
 .session-window-notice {
@@ -1585,6 +1700,7 @@ kbd {
 
 .details-soft {
   margin-top: var(--space-1);
+  overflow-wrap: anywhere;
   color: var(--muted);
 }
 
@@ -1806,8 +1922,21 @@ kbd {
   background: var(--window-live);
 }
 
-.session-window-pane-dot[data-state='failed'] {
+.session-window-pane-dot[data-state='failed'],
+.session-window-pane-dot[data-state='gate-failed'] {
   background: var(--window-danger);
+}
+
+.session-window-pane-dot[data-state='gate-passed'] {
+  background: var(--window-live);
+}
+
+/* A Gate tab's dot while its run runs (BL1): a ring that turns. */
+.session-window-pane-dot[data-state='gate-running'] {
+  border: 2px solid var(--window-live);
+  border-right-color: transparent;
+  background: transparent;
+  animation: ui-spin var(--motion-spin) var(--ease-linear) infinite;
 }
 
 /* A window's panes (BH1), cmux-style: each a box with its strip of tabs, and every tab's surface laid out
@@ -3054,8 +3183,7 @@ kbd {
   color: var(--accent-ink);
 }
 
-.repo-picker-branches,
-.repo-picker-model {
+.repo-picker-branches {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: var(--space-2);
@@ -3088,21 +3216,121 @@ kbd {
   background: var(--raised);
 }
 
-/*
- * However long the model or the base branch, Start stays inside the card: the Model · Role button and the worktree note
- * give way first, cut short with an ellipsis (their whole text is their title), and Start never shrinks.
- */
-.ui-button.repo-picker-model-toggle,
-.repo-picker-foot > .repo-picker-meta {
+/* The harness, model and role chips (BJ3), in the repo picker's and New agent's footers. */
+.agent-setup {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-0-5);
+  align-items: center;
+  min-width: 0;
+}
+
+/* However long the model, Start stays inside the card: only the model chip gives way, its text cut short with an ellipsis; the
+   harness and the role keep their full text. */
+.ui-button.agent-setup-chip {
+  flex: none;
+}
+
+.ui-button.agent-setup-chip.agent-setup-model-chip {
   flex: 0 1 auto;
   min-width: 0;
 }
 
-.repo-picker-foot-text {
+.agent-setup-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-setup-model {
+  flex: 0 1 var(--size-agent-setup-model);
+  min-width: 0;
+}
+
+/* Where an unpicked row's tick would be, so the labels line up. */
+.agent-setup-blank {
+  display: inline-block;
+  width: var(--icon-sm);
+}
+
+/* A zone's role templates (BK2): the roles on the left, the picked one's editor on the right. */
+.ui-dialog:has(.role-templates-body) {
+  width: min(var(--size-role-templates), calc(100vw - var(--space-8)));
+}
+
+.role-templates-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.role-templates-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+
+.role-templates-role {
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: start;
+  cursor: pointer;
+}
+
+.role-templates-role:hover {
+  background: var(--hover);
+}
+
+.role-templates-role[aria-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.role-templates-role:last-child:not([aria-selected='true']) {
+  color: var(--accent-ink);
+}
+
+.role-templates-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.role-templates-insert {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.role-templates-insert-label {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.role-templates-variable {
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.ui-textarea.role-templates-text {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
 }
 
 .board-tool-ghost[data-from-toolbar] {
@@ -3256,6 +3484,42 @@ kbd {
   font-size: var(--font-size-sm);
   font-style: italic;
   white-space: nowrap;
+}
+
+/* The handles of a selected line: a round one on each end, dragged to another side of its object; a square
+   one on each bend; and a smaller, fainter one halfway along each stretch, pulled out into a new bend. */
+.line-handle {
+  position: absolute;
+  width: var(--line-handle-size);
+  height: var(--line-handle-size);
+  border: var(--connector-handle-edge-width) solid var(--accent);
+  background: var(--raised);
+  cursor: grab;
+  pointer-events: all;
+}
+
+.line-handle:active {
+  cursor: grabbing;
+}
+
+.line-handle-end {
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.line-handle-bend {
+  border-radius: var(--radius-xs);
+}
+
+.line-handle-insert {
+  width: var(--line-insert-size);
+  height: var(--line-insert-size);
+  border-radius: var(--radius-pill);
+  opacity: var(--line-insert-opacity);
+}
+
+.line-handle-insert:hover {
+  opacity: 1;
 }
 
 .connector-label-input {
@@ -3505,8 +3769,16 @@ kbd {
   list-style: none;
 }
 
+.add-zone-item {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
 .add-zone-row {
   display: flex;
+  flex: 1;
+  min-width: 0;
   gap: var(--space-2-5);
   align-items: center;
   min-height: var(--control-section);
@@ -3640,6 +3912,12 @@ kbd {
 
 .add-zone-link:hover {
   text-decoration: underline;
+}
+
+.add-zone-use-copy {
+  flex: none;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
 }
 
 .add-zone-browse {
@@ -3797,6 +4075,26 @@ kbd {
   pointer-events: none;
 }
 
+/* A label too long for its line: a marker, its trigger in a dot, showing the label while the pointer is on
+   it or it has focus; a click on it selects the edge, as one on its line does. */
+.flow-edge-label[data-collapsed] {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.flow-edge-reveal {
+  fill: transparent;
+}
+
+.flow-edge-marker:focus-visible {
+  outline: none;
+}
+
+.flow-edge-marker:focus-visible > .flow-edge-trigger-dot {
+  stroke: var(--focus);
+  stroke-width: var(--focus-ring-width);
+}
+
 .flow-edge-pill {
   fill: var(--flow-label);
 }
@@ -3846,58 +4144,19 @@ kbd {
   font-weight: var(--weight-semibold);
 }
 
-/* A tile's square flow ports (CONTEXT.md "Connector handle"): an edge leaves from the right one and arrives at the
-   left one. Below the middle of the side, clear of the round connector handles. */
-.react-flow__handle.flow-port {
-  top: var(--flow-port-at);
-  width: var(--flow-port-size);
-  height: var(--flow-port-size);
-  min-width: 0;
-  min-height: 0;
-  border: var(--connector-handle-edge-width) solid var(--flow-edge);
-  border-radius: var(--radius-xs);
-  background: var(--raised);
-  opacity: 0;
-  transition: opacity var(--motion-fast);
-}
-
-.react-flow__node:hover > .flow-port,
-.react-flow__node.selected > .flow-port,
-.board-drawing-flow .flow-port {
-  opacity: 1;
-}
-
-.react-flow__handle.flow-port:hover {
-  box-shadow: 0 0 0 var(--space-1) var(--flow-port-ring);
-}
-
-/* Filled out, hollow in (FlowDraw). */
-.react-flow__handle.flow-port[data-handleid='flow-out'] {
-  background: var(--flow-edge);
-}
-
-.board-drawing-flow .react-flow__connection-path {
+.react-flow__connection-path.flow-connection-ghost {
   fill: none;
   stroke: var(--flow-edge);
   stroke-width: var(--flow-edge-width);
   stroke-dasharray: var(--connector-drag-dash);
 }
 
-/* While a flow edge is dragged, only agents' tiles are targets: everything else fades, and the tile under the pointer
-   gets a dashed halo and lights its in port. */
-.board-drawing-flow .react-flow__node:not([data-id^='agent:'], .react-flow__node-zone) {
-  opacity: var(--flow-not-target);
-}
-
+/* While ⌥ is held over another agent's tile, the tile gets a dashed halo: let go, it is a hand-off. */
 .board-drawing-flow .react-flow__node[data-id^='agent:']:not(:has(> .connectingfrom)):hover {
   outline: var(--flow-edge-width) dashed var(--flow-target-edge);
   outline-offset: var(--space-1-5);
   border-radius: var(--radius-xl);
   background: var(--flow-target-fill);
-}
-
-.board-drawing-flow .react-flow__node[data-id^='agent:']:not(:has(> .connectingfrom)):hover > .flow-port[data-handleid='flow-in'] {
-  box-shadow: 0 0 0 var(--space-1) var(--flow-port-ring);
 }
 
 .flow-drop-hint {
@@ -3918,6 +4177,58 @@ kbd {
 .flow-drop-hint svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
+}
+
+/* Over another agent without ⌥ (BP8): only a hint, in the board's neutral ink. */
+.flow-drop-hint:not([data-handing-off]) {
+  background: var(--inverse);
+  color: var(--on-inverse);
+  font-weight: var(--weight-medium);
+}
+
+/* With ⌥ held, what the hand-off will carry, on the middle of the line being drawn. */
+.flow-drag-payload {
+  width: max-content;
+  height: var(--size-flow-label-height);
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-pill);
+  background: var(--flow-trigger);
+  color: var(--flow-trigger-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--size-flow-label-height);
+  translate: -50% -50%;
+  white-space: nowrap;
+}
+
+/* What a connector dropped from one agent on another is (BP5): Arrow or Hand off, beside where it was let go. */
+.handoff-chooser-anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.handoff-chooser {
+  padding: var(--space-1);
+}
+
+.handoff-chooser-options {
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.handoff-chooser-option:focus-visible {
+  background: var(--hover);
+}
+
+.handoff-chooser-option .ui-kbd + .ui-kbd {
+  margin-left: 0;
+}
+
+.handoff-chooser-payload {
+  color: var(--flow-edge);
+  font-family: var(--font-mono);
 }
 
 .flow-arrow {
@@ -3960,7 +4271,7 @@ kbd {
 
 .flow-payload-fill {
   fill: var(--flow-trigger);
-  stroke: var(--flow-port-ring);
+  stroke: var(--flow-ring);
   stroke-width: var(--space-1);
   paint-order: stroke;
 }
@@ -4058,6 +4369,16 @@ kbd {
 
 .session-window-head {
   --rename-gap: var(--space-2-5);
+
+  container-type: inline-size;
+}
+
+/* With the merge gate's controls in it (BM3), a header short of room folds Minimise and Pop out to their icons,
+   which keep their tooltips and names; Delete and Close keep their words. */
+@container (max-width: 1400px) {
+  .session-window-head:has(.gate-controls) .session-window-folding-label {
+    display: none;
+  }
 }
 
 .shell-pane-head {
@@ -4276,28 +4597,26 @@ kbd {
   white-space: nowrap;
 }
 
-/* Trigger and Deliver as, side by side (FlowRules), with a hint under both. */
-.edge-rules-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-1-5) var(--space-3);
+/* The bold line that opens each section (BQ3): what it does, in words. */
+.edge-rules-summary {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
 }
 
-.edge-rules-pair > div {
+.edge-rules-busy,
+.edge-rules-payload {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5) var(--space-2);
 }
 
-.edge-rules-pair > .edge-rules-hint {
-  grid-column: 1 / -1;
-}
-
-/* The payload's switch: Final message, handover.md, JSON. */
 .edge-rules-file {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex: 1 1 var(--size-edge-file);
+  min-width: 0;
 }
 
 .edge-rules-file .ui-input {
@@ -4305,9 +4624,6 @@ kbd {
   min-width: 0;
 }
 
-.edge-rules-file .edge-rules-hint {
-  flex: none;
-}
 
 .edge-rules-conditions,
 .edge-rules-history {
@@ -4319,12 +4635,12 @@ kbd {
   list-style: none;
 }
 
-/* A condition: what it is, how its last check went, and a remove button; green once it passed. */
+/* A condition: what it is, how its last check went, and a remove button; green once it passed. Under them, a command
+   not yet approved shows what it runs and asks for approval. */
 .edge-rules-condition {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--space-1-5);
-  height: var(--control-md);
   padding: 0 var(--space-1) 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -4343,7 +4659,14 @@ kbd {
   border-color: var(--flow-held-ink);
 }
 
-.edge-rules-condition > svg {
+.edge-rules-condition-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-md);
+}
+
+.edge-rules-condition-row > svg {
   flex: none;
   width: var(--icon-xs);
   height: var(--icon-xs);
@@ -4366,6 +4689,23 @@ kbd {
   font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.edge-rules-condition-check[data-unapproved] {
+  color: var(--flow-held-ink);
+}
+
+.edge-rules-approve {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-1) var(--space-2) 0;
+  font-weight: var(--weight-regular);
+}
+
+.edge-rules-approve .edge-rules-preview {
+  align-self: stretch;
 }
 
 .edge-rules-adding {
@@ -4503,12 +4843,6 @@ kbd {
   box-shadow: 0 0 0 var(--space-1) var(--flow-receiving-ring), var(--shadow-tile);
 }
 
-.hybrid-tile-agent[data-handoff='receiving'] ~ .flow-port[data-handleid='flow-in'],
-.hybrid-tile-agent[data-handoff='sending'] ~ .flow-port[data-handleid='flow-out'] {
-  opacity: 1;
-  box-shadow: 0 0 0 var(--space-1) var(--flow-port-ring);
-}
-
 .hybrid-tile-handoff .character {
   width: var(--size-handoff-figure);
   height: auto;
@@ -4552,6 +4886,19 @@ kbd {
 .hybrid-tile-review[data-status='reviewing'] {
   --chip: var(--state-thinking-soft);
   --chip-ink: var(--state-thinking-ink);
+}
+
+/* An agent's latest plan: orange while it waits on your decision. */
+.hybrid-tile-plan {
+  --chip: var(--tag);
+  --chip-ink: var(--muted);
+
+  font-family: var(--font-mono);
+}
+
+.hybrid-tile-plan[data-pending] {
+  --chip: var(--state-waiting-soft);
+  --chip-ink: var(--state-waiting-ink);
 }
 
 .session-window-tabs {
@@ -4910,6 +5257,97 @@ kbd {
   margin: 0 0 var(--space-2);
 }
 
+/* The Plan tab (BO2): the Review tab's rail of versions, the plan, and the decision under it. */
+.plan-doc {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.plan-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.plan-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--separator);
+}
+
+.plan-head svg {
+  flex: none;
+  align-self: center;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  color: var(--muted);
+}
+
+.plan-head h4 {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-markdown {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+}
+
+.plan-decision,
+.plan-decided {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-4);
+  border-top: 1px solid var(--separator);
+  background: var(--panel);
+}
+
+.plan-decision[data-compact] {
+  padding: 0;
+  border-top: 0;
+  background: none;
+}
+
+.plan-decision-comments {
+  resize: vertical;
+}
+
+.plan-decision-actions {
+  display: flex;
+  gap: var(--space-1-5);
+  justify-content: flex-end;
+}
+
+.plan-decided {
+  flex-flow: row wrap;
+  align-items: baseline;
+}
+
+.plan-comments {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
 .review-actions {
   display: flex;
   flex: none;
@@ -5030,4 +5468,657 @@ kbd {
   flex-direction: column;
   gap: var(--space-4);
   grid-column: 1 / -1;
+}
+
+/* A PR tab (BI1): a pull request drawn by the app from GitHub, in the dark window column beside a terminal. */
+.pr-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--raised);
+  font-size: var(--font-size-sm-plus);
+  line-height: var(--leading-body);
+}
+
+.pr-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-3) var(--space-4) var(--space-2-5);
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+}
+
+.pr-title-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.pr-title-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.pr-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-snug);
+}
+
+.pr-number {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+
+.pr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--muted);
+}
+
+.pr-meta code,
+.pr-comment-where {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pr-meta-end {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin-left: auto;
+}
+
+.pr-state {
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--tag);
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-bold);
+}
+
+.pr-state[data-state='open'] {
+  background: var(--window-diff-added);
+  color: var(--window-added);
+}
+
+.pr-state[data-state='merged'] {
+  background: var(--window-chat-you);
+  color: var(--window-chat-you-ink);
+}
+
+.pr-state[data-state='closed'] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.pr-actions .pr-merge:not(:disabled) {
+  border-color: var(--success);
+  background: var(--success);
+  color: var(--on-primary);
+}
+
+.pr-quiet,
+.pr-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.pr-empty {
+  padding: var(--space-4);
+}
+
+.pr-error {
+  margin: 0;
+}
+
+/* The merge dialog's warning when the gate hasn't passed on the head. */
+.pr-past-gate {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warning-edge);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
+.pr-body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+}
+
+.pr-section + .pr-section {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--separator);
+}
+
+.pr-section-head {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.pr-additions {
+  color: var(--window-added);
+}
+
+.pr-deletions {
+  color: var(--danger);
+}
+
+.pr-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-check {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.pr-check a {
+  color: var(--window-code-title);
+}
+
+.pr-check-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+.pr-check[data-state='passing'] .pr-check-icon {
+  color: var(--window-added);
+}
+
+.pr-check[data-state='failing'] .pr-check-icon {
+  color: var(--danger);
+}
+
+.pr-check[data-state='pending'] .pr-check-icon {
+  color: var(--window-code-number);
+}
+
+.pr-file {
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.pr-file-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1-5) var(--space-2-5);
+  background: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pr-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pr-file-note {
+  padding: var(--space-2) var(--space-2-5);
+}
+
+.pr-diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-body);
+}
+
+.pr-diff-number {
+  width: 1%;
+  padding: 0 var(--space-1-5);
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.pr-diff-text {
+  padding: 0 var(--space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pr-diff tr[data-kind='addition'] {
+  background: var(--window-diff-added);
+}
+
+.pr-diff tr[data-kind='deletion'] {
+  background: var(--danger-soft);
+}
+
+.pr-diff tr[data-kind='hunk'],
+.pr-diff tr[data-kind='note'] {
+  background: var(--window-diff-hunk);
+  color: var(--muted);
+}
+
+.pr-comment {
+  padding: var(--space-2) 0;
+}
+
+.pr-comment + .pr-comment {
+  border-top: 1px solid var(--separator);
+}
+
+.pr-comment-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: baseline;
+  margin-bottom: var(--space-1);
+}
+
+/* A tab that shows no session has an icon where a session's dot would be. */
+.session-tab-icon {
+  display: inline-flex;
+  color: var(--window-ink-soft);
+}
+
+.session-tab-icon svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+/*
+ * The merge gate. BL1: a Gate tab in the dark window column, like a PR tab:
+ * its headline and command, its steps as a table, and the picked step's log under it. A run on an older commit, or with
+ * uncommitted changes, is greyed. BM3: Run gate or the gate's badge, Open PR and Merge in the window's header.
+ */
+.gate-view {
+  font-size: var(--font-size-sm);
+}
+
+.gate-view[data-stale] :is(.gate-headline, .gate-steps) {
+  opacity: 0.55;
+}
+
+.gate-title-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.gate-headline {
+  flex: none;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.gate-headline[data-tone='passed'] {
+  color: var(--window-live);
+}
+
+.gate-headline[data-tone='failed'] {
+  color: var(--danger);
+}
+
+.gate-command,
+.gate-command-inline,
+.gate-log,
+.gate-step-name,
+.gate-step-time {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.gate-command {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gate-command-inline {
+  margin-left: var(--space-1-5);
+  opacity: 0.8;
+}
+
+.gate-stale {
+  color: var(--text-soft);
+}
+
+.gate-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--window-code-title);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.gate-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-4);
+}
+
+.gate-steps {
+  flex: none;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.gate-steps th {
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  text-align: left;
+}
+
+.gate-steps td {
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  vertical-align: middle;
+}
+
+.gate-steps tbody tr {
+  cursor: pointer;
+}
+
+.gate-steps tbody tr:hover {
+  background: var(--surface);
+}
+
+.gate-steps tbody tr[aria-selected='true'] {
+  background: var(--window-raised);
+}
+
+.gate-steps tbody tr:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.gate-step-result {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--muted);
+}
+
+.gate-step-icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+tr[data-status='passed'] .gate-step-result {
+  color: var(--window-live);
+}
+
+tr[data-status='failed'] .gate-step-result {
+  color: var(--danger);
+  font-weight: var(--weight-bold);
+}
+
+tr[data-status='running'] .gate-step-result {
+  color: var(--text-soft);
+}
+
+tr[data-status='running'] .gate-step-icon {
+  animation: ui-spin var(--motion-spin) var(--ease-linear) infinite;
+}
+
+.gate-step-time {
+  color: var(--muted);
+}
+
+.gate-log-head {
+  flex: none;
+  margin-top: var(--space-3);
+  padding: var(--space-1-5) var(--space-4);
+  border-top: 1px solid var(--separator);
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.gate-log {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  overflow: auto;
+  color: var(--window-ink);
+  line-height: var(--leading-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* In the window's header (BM3). */
+.gate-controls {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.gate-why {
+  display: inline-flex;
+  border-radius: var(--radius-md);
+}
+
+.gate-why:focus-visible {
+  box-shadow: var(--shadow-focus);
+  outline: none;
+}
+
+.gate-header-badge,
+.hybrid-tile-gate {
+  --chip: var(--state-thinking-soft);
+  --chip-ink: var(--state-thinking-ink);
+
+  font-family: var(--font-mono);
+}
+
+:is(.gate-header-badge, .hybrid-tile-gate)[data-status='passed'] {
+  --chip: var(--success-soft);
+  --chip-ink: var(--success);
+}
+
+:is(.gate-header-badge, .hybrid-tile-gate)[data-status='failed'] {
+  --chip: var(--danger-soft);
+  --chip-ink: var(--danger);
+}
+
+:is(.gate-header-badge, .hybrid-tile-gate)[data-status='stopped'] {
+  --chip: var(--tag);
+  --chip-ink: var(--muted);
+}
+
+.gate-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: var(--size-gate-popover);
+  margin: 0;
+}
+
+.gate-popover-title {
+  margin: 0;
+  font-weight: var(--weight-bold);
+}
+
+.gate-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gate-conditions li {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: flex-start;
+  color: var(--text-soft);
+}
+
+.gate-conditions svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin-top: var(--space-0-5);
+  color: var(--danger);
+}
+
+.gate-conditions li[data-ok='true'] svg {
+  color: var(--success);
+}
+
+.gate-then {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  border: 0;
+  border-top: 1px solid var(--separator);
+}
+
+.gate-then legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.gate-popover-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+.gate-why-line {
+  font-size: var(--font-size-xs);
+}
+
+/* A web tab (BI2): its address row over the area the main process draws its page in. */
+.web-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--raised);
+}
+
+.web-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+}
+
+.web-address {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.web-offer {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+}
+
+.web-offer-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-offer code {
+  font-family: var(--font-mono);
+}
+
+.web-problem {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+
+.web-problem .ui-error {
+  margin: 0;
+}
+
+/* The page's area. What is drawn in it shows only while the page is hidden: something over it, or dragged across it. */
+.web-page {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  color: var(--muted);
+}
+
+.web-page-under {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.web-page-under svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }

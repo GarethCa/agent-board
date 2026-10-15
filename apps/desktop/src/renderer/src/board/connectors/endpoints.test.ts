@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Connector } from '@agent-board/daemon/protocol';
-import { connectorEdges, endOfNode, nearestSide, newEndAt, nodeIdOf, withConnector, withConnectorChange } from './endpoints';
+import { connectorEdges, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
 
 const connector = (overrides: Partial<Connector> = {}): Connector => ({
   id: 'c1',
@@ -11,9 +11,24 @@ const connector = (overrides: Partial<Connector> = {}): Connector => ({
   endEnd: 'arrow',
   color: null,
   label: '',
+  points: [],
   createdAt: '',
   updatedAt: '',
   ...overrides,
+});
+
+describe('shapeOf', () => {
+  it('is how the connector is drawn, as a hand-off made from it is', () => {
+    expect(shapeOf(connector({ style: 'elbow', points: [{ x: 3, y: 4 }] }))).toEqual({ fromSide: 'right', toSide: 'left', style: 'elbow', points: [{ x: 3, y: 4 }] });
+  });
+});
+
+describe('withConnectorParams', () => {
+  it('changes what was given, an end moving to another side of its object', () => {
+    const changed = withConnectorParams(connector(), { id: 'c1', label: 'see', fromSide: 'bottom', points: [{ x: 1, y: 2 }] });
+    expect(changed).toMatchObject({ label: 'see', from: { type: 'item', id: 'a', side: 'bottom' }, to: { side: 'left' }, points: [{ x: 1, y: 2 }] });
+    expect(changed).not.toHaveProperty('fromSide');
+  });
 });
 
 describe('node ids', () => {

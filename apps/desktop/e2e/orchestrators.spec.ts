@@ -84,12 +84,15 @@ test('an orchestrator wires itself to its worker and hands off along the edge: d
     await expect(edge).toHaveCount(1, { timeout: 4 * TURN_MS });
     await expect(edge).toHaveAttribute('data-agent-made', 'true');
     await expect(edge.locator('title')).toHaveText(`Made by ${lead}, an orchestrator`);
+    // Between tiles this close its label is a marker: hovered, it shows the label and when it delivered.
+    await expect(edge).toHaveAttribute('data-collapsed', 'true');
+    await edge.locator('.flow-edge-trigger-dot').hover();
     const delivered = window.getByTestId('flow-edge-delivered');
     await expect(delivered.locator('text')).toHaveText(/^delivered \d\d:\d\d$/, { timeout: 2 * TURN_MS });
 
     await delivered.click();
     const rules = window.getByRole('complementary', { name: 'Edge rules' });
-    await expect(rules.getByTestId('edge-rules-made-by')).toHaveText(`Made by ${lead}. You can change or delete it like any other.`);
+    await expect(rules.getByTestId('edge-rules-made-by')).toHaveText(`Made by ${lead}, an orchestrator. You can change or delete it like any other.`);
     await expect(rules.getByTestId('edge-rules-delivered')).toHaveText('Review it');
 
     // Its Activity tab lists the worker it started, the edge it made and the hand-off.

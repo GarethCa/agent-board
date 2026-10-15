@@ -243,14 +243,17 @@ describe('orchestrating from the command line', () => {
     expect((await client.call('agent.list')).find((agent) => agent.name === 'fix-tests')!.orchestrate).toBeNull();
   });
 
-  it('refuses the orchestrator commands outside a session, and shows an empty activity log', async () => {
-    const { env } = await board();
-
-    expect(await run(env, 'new', '--', 'Do something')).toMatchObject({
-      code: 1,
-      err: expect.stringContaining('The orchestrator commands work only for an agent in an agent-board session'),
-    });
+  it('runs the orchestrator commands as the user outside a session, logged as you', async () => {
+    const { env, client, web } = await board();
     expect(await run(env, 'activity')).toMatchObject({ code: 0, out: 'No orchestrator has done anything yet.\n' });
+
+    expect(await run(env, 'new', '--', 'Do something')).toMatchObject({ code: 1, err: expect.stringContaining('name the zone to start the agent in') });
+    const started = await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'by-hand', '--', 'Do something');
+    expect(started).toMatchObject({ code: 0, err: '' });
+    const agent = (await client.call('agent.list')).find((each) => each.name === 'by-hand')!;
+    expect(agent.spawnedBy).toBeNull();
+    expect(await run(env, 'close', 'by-hand')).toMatchObject({ code: 0 });
+    expect((await run(env, 'activity')).out).toMatch(/you {2}close by-hand\n.*you {2}spawn by-hand/s);
   });
 
   it('checks each command’s options before it connects', async () => {
@@ -280,14 +283,15 @@ describe('hand-offs and edges from the command line', () => {
     expect(await run({}, 'edge', 'drop', 'edge:1234')).toMatchObject({ code: 2 });
   });
 
-  it('lists edges with `edge list`, and refuses a hand-off or a new edge outside a session', async () => {
-    const { env, edge } = await board();
+  it('lists edges with `edge list`, refuses a hand-off outside a session, and adds an edge there as the user', async () => {
+    const { env, edge, webAgent } = await board();
 
     expect((await run(env, 'edge', 'list')).out).toContain(ref('edge', edge.id));
     expect(await run(env, 'handoff', '--message', 'done')).toMatchObject({ code: 1, err: expect.stringContaining('Only an agent in an agent-board session can hand off') });
-    expect(await run(env, 'edge', 'add', 'fix-tests', 'web', '--carries', 'handover', '--condition', 'gate:pnpm check:local')).toMatchObject({
-      code: 1,
-      err: expect.stringContaining('The orchestrator commands work only for an agent'),
+    expect(await run(env, 'open-pr')).toMatchObject({ code: 1, err: expect.stringContaining('Only an agent in an agent-board session can open a pull request') });
+    expect(await run(env, 'edge', 'add', ref('agent', webAgent.sessionId), 'fix-tests', '--carries', 'handover', '--trigger', 'manual', '--condition', 'gate:pnpm check:local')).toMatchObject({
+      code: 0,
+      err: '', out: expect.stringContaining('runs nothing until the user approves it'),
     });
   });
 });

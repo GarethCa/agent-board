@@ -8,7 +8,7 @@ import { EditableName, RenameButton, useRenaming } from '../ui';
 import { bySession, type Rect } from './pane-geometry';
 import { Dividers, useDividerDrag } from './use-divider-drag';
 import { TerminalPane, type PaneStatus } from './TerminalPane';
-import { setShellDrag, startDrag as startShellDrag } from './shell-moves';
+import { endDrag, startDrag as startTabDrag, type TabDrag } from './shell-moves';
 
 interface ShellPanesProps {
   shell: Shell;
@@ -103,14 +103,15 @@ function PaneHeader({ shell, sessionId, dragFrom }: { shell: Shell; sessionId: s
   const renaming = useRenaming(label ?? '', (name) => rename({ kind: 'pane', shellId: shell.id, sessionId }, name), true);
   // Dragged by its header, as a tab is, while it isn't being renamed.
   const drags = dragFrom !== undefined && !renaming.editing;
+  const drag: TabDrag | undefined = dragFrom === undefined ? undefined : { kind: 'pane', shellId: shell.id, sessionId, from: dragFrom };
   return (
     <div
       className={drags ? 'shell-pane-head nodrag' : 'shell-pane-head'}
       data-testid="shell-pane-head"
       draggable={drags}
       title={drags ? 'Drag to another window’s tabs, or onto the board' : undefined}
-      onDragStart={drags ? (event) => startShellDrag(event, { kind: 'pane', shellId: shell.id, sessionId, from: dragFrom }, label ?? shell.name) : undefined}
-      onDragEnd={drags ? () => setShellDrag(undefined) : undefined}
+      onDragStart={drags && drag ? (event) => startTabDrag(event, drag, label ?? shell.name) : undefined}
+      onDragEnd={drags && drag ? (event) => endDrag(event, drag) : undefined}
     >
       <EditableName
         className="shell-pane-name"

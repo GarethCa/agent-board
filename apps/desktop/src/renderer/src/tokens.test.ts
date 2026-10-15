@@ -257,6 +257,8 @@ const SAME_IN_EVERY_THEME = new Set([
   '--window-chat-you',
   '--window-chat-you-ink',
   '--window-added',
+  '--window-diff-added',
+  '--window-diff-hunk',
   '--window-chat-subagent',
   '--window-accent-hover',
   ...CODE_COLOURS,

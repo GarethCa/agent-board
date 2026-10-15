@@ -1,5 +1,5 @@
 // Checks for RPC params, which arrive untyped off the wire. Each throws an `invalidParams` error naming the bad field.
-import { MAX_NAME_LENGTH, RPC_ERROR } from './protocol.ts';
+import { MAX_EDGE_POINTS, MAX_NAME_LENGTH, RPC_ERROR, type EdgePoint } from './protocol.ts';
 import { RpcMethodError } from './rpc.ts';
 
 /** Largest terminal dimension accepted, in cells. */
@@ -75,4 +75,15 @@ export function oneOf<T extends string>(fields: Record<string, unknown>, name: s
   const value = fields[name];
   if (!options.includes(value as T)) throw invalidParams(`${name} must be one of ${options.join(', ')}`);
   return value as T;
+}
+
+/** Field `name`: the bends of a line, each a finite board position, at most `MAX_EDGE_POINTS`. */
+export function pointsParam(fields: Record<string, unknown>, name: string): EdgePoint[] {
+  const value = fields[name];
+  if (!Array.isArray(value)) throw invalidParams(`${name} must be a list`);
+  if (value.length > MAX_EDGE_POINTS) throw invalidParams(`a line bends at most ${MAX_EDGE_POINTS} times`);
+  return value.map((point: unknown) => {
+    const at = paramsObject(point);
+    return { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') };
+  });
 }

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import type { Placement, WindowPane } from '@agent-board/daemon/window-layout';
 import { dropZoneAt, type DropZone, type Rect } from './pane-geometry';
-import { SHELL_DRAG_TYPE, setShellDrag, shellDrag, useShellDrag } from './shell-moves';
+import { dropTaken, tabDrag, useTabDrag } from './shell-moves';
 import { TabStrip, type StripTab } from './TabStrip';
 import type { WindowSurface } from './tabs';
+import { OpenWebDialog } from './WebTab';
 import { Dividers, useDividerDrag } from './use-divider-drag';
 import type { PaneView, WindowPanesControl } from './use-window-panes';
 
@@ -40,7 +41,7 @@ interface WindowPanesProps {
 export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inlineStrip }: WindowPanesProps) {
   const container = useRef<HTMLDivElement>(null);
   const { dividers } = useDividerDrag(container, panes.layout, paneId, panes.resize);
-  const dragging = useShellDrag();
+  const dragging = useTabDrag();
   // A frame after the drag starts: covering what is dragged (a pane's header) as it starts would end the drag at once.
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -112,7 +113,9 @@ export function PaneStrip({
   panelId(key: string): string;
   focused: boolean;
 }) {
+  const [askingWeb, setAskingWeb] = useState(false);
   return (
+    <>
     <TabStrip
       tabs={pane.surfaces.map(stripTab)}
       active={pane.active.key}
@@ -126,7 +129,10 @@ export function PaneStrip({
       onRunScript={(script) => panes.newTab(pane.id, { script })}
       scripts={panes.scripts}
       sessions={panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) }))}
+      pullRequests={panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) }))}
+      onOpenWeb={() => setAskingWeb(true)}
       named={panes.surfaces.length === 1}
+      shells={panes.holdsShells}
       onSplit={() => panes.split('horizontal', pane.id)}
       dragOf={(key) => {
         const surface = pane.surfaces.find((each) => each.key === key);
@@ -134,6 +140,8 @@ export function PaneStrip({
       }}
       drop={{ accepts: panes.accepts, onDrop: (drag, index) => panes.drop(drag, { pane: pane.id, index }) }}
     />
+    {askingWeb && <OpenWebDialog suggested={panes.webSuggestion} onOpen={(url) => panes.openWeb(url, pane.id)} onClose={() => setAskingWeb(false)} />}
+    </>
   );
 }
 
@@ -143,7 +151,7 @@ export function PaneStrip({
  */
 function PaneDrop({ panes, pane }: { panes: WindowPanesControl; pane: PaneView }) {
   const [zone, setZone] = useState<DropZone>();
-  const dragging = useShellDrag();
+  const dragging = useTabDrag();
   useEffect(() => {
     if (dragging === undefined) setZone(undefined);
   }, [dragging]);
@@ -160,20 +168,20 @@ function PaneDrop({ panes, pane }: { panes: WindowPanesControl; pane: PaneView }
       data-zone={zone}
       style={surfaceStyle(pane.rect)}
       onDragOver={(event) => {
-        if (!event.dataTransfer.types.includes(SHELL_DRAG_TYPE)) return;
+        if (tabDrag() === undefined) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         setZone(zoneOf(event));
       }}
       onDragLeave={() => setZone(undefined)}
       onDrop={(event) => {
-        const drag = shellDrag();
+        const drag = tabDrag();
         if (drag === undefined || !panes.accepts(drag)) return;
         // The pane's, not the board's under it.
         event.preventDefault();
         event.stopPropagation();
         setZone(undefined);
-        setShellDrag(undefined);
+        dropTaken();
         panes.drop(drag, placement(zoneOf(event)));
       }}
     />

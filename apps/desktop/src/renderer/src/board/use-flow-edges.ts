@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FlowEdge } from '@agent-board/daemon/protocol';
+import { FLOW_EDGE_SHAPE_KEYS, type FlowEdge, type FlowEdgeShape } from '@agent-board/daemon/protocol';
 import type { FlowEdgeChange } from '../../../preload/api';
 import type { FlowEdgeActions } from './FlowEdge';
 import { tokenNumber } from '../theme';
-import { liveHandoffs, withFlowEdgeChange, withRules, withRulesOf } from './flow-edges';
+import { liveHandoffs, withFlowEdgeChange, withChanges, withChangesUndone } from './flow-edges';
 import { historyKey, type Change } from './editing/use-history';
 
 /**
  * The board's flow edges, as the daemon has them and every window hears them change, and what the board can
- * do with them. `report(action)` shows why one failed; `record` puts an edge made or deleted in the undo history.
+ * do with them. `report(action)` shows why one failed; `record` puts an edge made, reshaped or deleted in the undo
+ * history.
  */
 export function useFlowEdges(report: (action: string) => (error: unknown) => void, record: (changes: readonly Change[]) => void) {
   const [edges, setEdges] = useState<FlowEdge[]>([]);
@@ -67,30 +68,42 @@ export function useFlowEdges(report: (action: string) => (error: unknown) => voi
   }, [drawn, selected, edges]);
 
   const actions = useMemo<
-    FlowEdgeActions & { create(from: string, to: string): void; restore(edge: FlowEdge): void; remove(id: string): void }
+    FlowEdgeActions & {
+      /**
+       * Joins `from` to `to`, drawn as `shape` has it; true once the daemon has it. In the same undo step as `replaces`:
+       * the arrow it was made from, say.
+       */
+      create(from: string, to: string, shape?: Partial<FlowEdgeShape>, replaces?: readonly Change[]): Promise<boolean>;
+      restore(edge: FlowEdge): void;
+      remove(id: string): void;
+    }
   >(
     () => ({
       // Its id is picked here, so it is selected, with its Edge rules open, as soon as the daemon has it.
-      create(from, to) {
+      create(from, to, shape = {}, replaces = []) {
         const id = crypto.randomUUID();
         creating.current.add(id);
         setSelected(new Set([id]));
         setDrawn(id);
-        window.agentBoard.flowEdges
-          .create({ id, from, to })
-          .then((edge) => record([[historyKey.flowEdge(id), null, { type: 'flowEdge', edge }]]))
+        return window.agentBoard.flowEdges
+          .create({ id, from, to, ...shape })
+          .then((edge) => {
+            record([...replaces, [historyKey.flowEdge(id), null, { type: 'flowEdge', edge }]]);
+            return true;
+          })
           .catch((error: unknown) => {
             setSelected((current) => new Set([...current].filter((known) => known !== id)));
             report('join the agents')(error);
+            return false;
           })
           .finally(() => creating.current.delete(id));
       },
-      // Made again by undo or redo, as it was, under its own id: its history starts afresh.
+      // Made again by undo or redo, as it was, under its own id and in its own shape: its history starts afresh.
       restore(edge) {
-        const { id, from, to, trigger, payload, conditions, deliverAs, paused } = edge;
+        const { id, from, to, trigger, payload, conditions, deliverAs, paused, fromSide, toSide, style, points } = edge;
         const path = edge.path ?? undefined;
         window.agentBoard.flowEdges
-          .create({ id, from, to, trigger, payload, path, conditions, deliverAs, paused })
+          .create({ id, from, to, trigger, payload, path, conditions, deliverAs, paused, fromSide, toSide, style, points })
           .catch(report('put the flow edge back'));
       },
       remove(id) {
@@ -105,17 +118,24 @@ export function useFlowEdges(report: (action: string) => (error: unknown) => voi
       approve(id, command, fingerprint) {
         window.agentBoard.flowEdges.approve(id, command, fingerprint).catch(report('approve the command'));
       },
+      select(id) {
+        setSelected(new Set([id]));
+      },
       drop(id) {
         window.agentBoard.flowEdges.drop(id).catch(report('drop the held hand-off'));
       },
-      // At once, so the panel's controls take; put back if the daemon refuses it, as it does an auto loop.
+      // At once, so the panel's controls take; put back if the daemon refuses it, as it does an auto loop. A reshape
+      // goes in the undo history; a change of rules, as before, doesn't.
       update(id, changes) {
         const was = edgesRef.current.find((edge) => edge.id === id);
         if (was === undefined) return;
-        setEdges((current) => current.map((edge) => (edge.id === id ? withRules(edge, changes) : edge)));
+        if (FLOW_EDGE_SHAPE_KEYS.some((key) => key in changes)) {
+          record([[historyKey.flowEdge(id), { type: 'flowEdge', edge: was }, { type: 'flowEdge', edge: withChanges(was, changes) }]]);
+        }
+        setEdges((current) => current.map((edge) => (edge.id === id ? withChanges(edge, changes) : edge)));
         window.agentBoard.flowEdges.update({ id, ...changes }).catch((error: unknown) => {
           // Only what it changed: what the daemon said of the edge meanwhile (a check, a delivery) stands.
-          setEdges((current) => current.map((edge) => (edge.id === id ? withRulesOf(edge, was, changes) : edge)));
+          setEdges((current) => current.map((edge) => (edge.id === id ? withChangesUndone(edge, was, changes) : edge)));
           report('change the flow edge')(error);
         });
       },

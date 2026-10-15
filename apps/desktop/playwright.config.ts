@@ -1,13 +1,15 @@
 import { defineConfig } from '@playwright/test';
+import { cpus, loadavg } from 'node:os';
+import { defaultWorkers } from '../../scripts/e2e-lock/workers.ts';
 
 const PERF = /board-perf\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
 const VISUAL = /visual\.spec\.ts/;
 const README = /readme-screenshots\.spec\.ts/;
-/** How many tests run at once: 3, or `AGENT_BOARD_E2E_WORKERS`, a count or a share of the cores such as `50%`. */
+/** How many tests run at once: 3 (2 when the load average is above the core count), or `AGENT_BOARD_E2E_WORKERS`, a count or a share of the cores such as `50%`. */
 function workers(): number | string {
   const value = process.env.AGENT_BOARD_E2E_WORKERS;
-  if (value === undefined) return 3;
+  if (value === undefined) return defaultWorkers(loadavg()[0]!, cpus().length);
   if (/^[1-9]\d*%?$/.test(value)) return value.endsWith('%') ? value : Number(value);
   throw new Error(`AGENT_BOARD_E2E_WORKERS is ${value}: give a count such as 2, or a share of the cores such as 50%`);
 }

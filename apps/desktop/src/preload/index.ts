@@ -1,9 +1,13 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 import {
   AGENT_IPC,
   APPEARANCE_IPC,
   CONNECTOR_IPC,
   FLOW_EDGE_IPC,
+  PULL_REQUEST_IPC,
+  GATE_IPC,
+  ASK_IPC,
+  WEB_TAB_IPC,
   REVIEW_IPC,
   ORCHESTRATOR_IPC,
   DAEMON_IPC,
@@ -12,6 +16,7 @@ import {
   SESSION_IPC,
   SETUP_IPC,
   SHELL_IPC,
+  TAB_DRAG_IPC,
   TRACKER_IPC,
   VIEW_IPC,
   WINDOW_IPC,
@@ -20,12 +25,18 @@ import {
   windowChrome,
   type AgentBoardApi,
   type SessionStreamEvent,
+  type TabDrag,
+  type WebTabKey,
+  type WebTabState,
 } from './api';
 import { appearanceFrom } from '../shared/appearance';
 import { ipcErrorMessage } from '../shared/errors';
 import { ipcCalls } from './ipc';
 
-const { invoke, subscribe } = ipcCalls(ipcRenderer);
+const { invoke, subscribe, keyed } = ipcCalls(ipcRenderer);
+const sessionEvents = keyed<[SessionStreamEvent]>(SESSION_IPC.event);
+const webTabStates = keyed<[WebTabState]>(WEB_TAB_IPC.changed);
+const webTabKeys = keyed<[WebTabKey]>(WEB_TAB_IPC.key);
 
 const api: AgentBoardApi = {
   daemonHealth: () => invoke(DAEMON_IPC.health),
@@ -35,16 +46,13 @@ const api: AgentBoardApi = {
     list: () => invoke(SESSION_IPC.list),
     attach(sessionId, onEvent) {
       const attachId = crypto.randomUUID();
-      const listener = (_event: IpcRendererEvent, id: string, streamEvent: SessionStreamEvent) => {
-        if (id === attachId) onEvent(streamEvent);
-      };
-      ipcRenderer.on(SESSION_IPC.event, listener);
+      const stop = sessionEvents(attachId, onEvent);
       ipcRenderer.invoke(SESSION_IPC.attach, sessionId, attachId).catch((error: unknown) => {
-        ipcRenderer.off(SESSION_IPC.event, listener);
+        stop();
         onEvent({ type: 'session.attachFailed', sessionId, message: ipcErrorMessage(error) });
       });
       return () => {
-        ipcRenderer.off(SESSION_IPC.event, listener);
+        stop();
         void ipcRenderer.invoke(SESSION_IPC.detach, attachId);
       };
     },
@@ -64,14 +72,19 @@ const api: AgentBoardApi = {
     cancelClone: (id) => invoke(ZONE_IPC.cancelClone, id),
     recentFolders: () => invoke(ZONE_IPC.recentFolders),
     githubRepos: () => invoke(ZONE_IPC.githubRepos),
+    checkFolder: (path, repo) => invoke(ZONE_IPC.checkFolder, path, repo),
+    findCopies: () => invoke(ZONE_IPC.findCopies),
     bind: (id, as) => invoke(ZONE_IPC.bind, id, as),
     update: (id, layout) => invoke(ZONE_IPC.update, id, layout),
     configure: (id, settings) => invoke(ZONE_IPC.configure, id, settings),
     setTracker: (id, tracker) => invoke(ZONE_IPC.setTracker, id, tracker),
     unbind: (id) => invoke(ZONE_IPC.unbind, id),
     setDefaultRepo: (id, path) => invoke(ZONE_IPC.setDefaultRepo, id, path),
+    roleTemplates: (id) => invoke(ZONE_IPC.roleTemplates, id),
+    setRoleTemplate: (id, role, body) => invoke(ZONE_IPC.setRoleTemplate, id, role, body),
+    resetRoleTemplate: (id, role) => invoke(ZONE_IPC.resetRoleTemplate, id, role),
     setLook: (id, look) => invoke(ZONE_IPC.setLook, id, look),
-    dissolve: (id) => invoke(ZONE_IPC.dissolve, id),
+    dissolve: (id, options) => invoke(ZONE_IPC.dissolve, id, options),
     restore: (zone) => invoke(ZONE_IPC.restore, zone),
     browseFolder: (title) => invoke(ZONE_IPC.browseFolder, title),
     onChanged: (listener) => subscribe(ZONE_IPC.changed, listener),
@@ -114,6 +127,60 @@ const api: AgentBoardApi = {
     merge: (id) => invoke(REVIEW_IPC.merge, id),
     setCap: (sessionId, cap) => invoke(REVIEW_IPC.setCap, sessionId, cap),
     onChanged: (listener) => subscribe(REVIEW_IPC.changed, listener),
+  },
+  pullRequests: {
+    details: (ref) => invoke(PULL_REQUEST_IPC.details, ref),
+    approve: (ref, headCommit) => invoke(PULL_REQUEST_IPC.approve, ref, headCommit),
+    merge: (ref, headCommit, pastGate) => invoke(PULL_REQUEST_IPC.merge, ref, headCommit, pastGate),
+  },
+  gates: {
+    list: () => invoke(GATE_IPC.list),
+    status: (sessionId) => invoke(GATE_IPC.status, sessionId),
+    run: (sessionId) => invoke(GATE_IPC.run, sessionId),
+    stop: (sessionId) => invoke(GATE_IPC.stop, sessionId),
+    log: (sessionId, step, since) => invoke(GATE_IPC.log, sessionId, step, since),
+    sendFailure: (sessionId, step) => invoke(GATE_IPC.sendFailure, sessionId, step),
+    openPullRequest: (sessionId) => invoke(GATE_IPC.openPullRequest, sessionId),
+    merge: (sessionId, number, headCommit, cleanup) => invoke(GATE_IPC.merge, sessionId, number, headCommit, cleanup),
+    onChanged: (listener) => subscribe(GATE_IPC.changed, listener),
+  },
+  asks: {
+    answer: (sessionId, askId, answer) => invoke(ASK_IPC.answer, sessionId, askId, answer),
+    plans: (sessionId) => invoke(ASK_IPC.plans, sessionId),
+    decide: (sessionId, planId, outcome, comments) => invoke(ASK_IPC.decide, sessionId, planId, outcome, comments),
+  },
+  webTabs: {
+    open(tabId, url, { onState, onKey }) {
+      const stopStates = webTabStates(tabId, onState);
+      const stopKeys = webTabKeys(tabId, onKey);
+      ipcRenderer.invoke(WEB_TAB_IPC.open, tabId, url).catch((error: unknown) => onState({ url, title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
+      return () => {
+        stopStates();
+        stopKeys();
+        void ipcRenderer.invoke(WEB_TAB_IPC.close, tabId);
+      };
+    },
+    openPlan(tabId, html, { onState, onKey }) {
+      const stopStates = webTabStates(tabId, onState);
+      const stopKeys = webTabKeys(tabId, onKey);
+      ipcRenderer.invoke(WEB_TAB_IPC.openPlan, tabId, html).catch((error: unknown) => onState({ url: '', title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
+      return () => {
+        stopStates();
+        stopKeys();
+        void ipcRenderer.invoke(WEB_TAB_IPC.close, tabId);
+      };
+    },
+    setBounds: (tabId, bounds) => ipcRenderer.send(WEB_TAB_IPC.setBounds, tabId, bounds),
+    load: (tabId, url) => invoke(WEB_TAB_IPC.load, tabId, url),
+    back: (tabId) => invoke(WEB_TAB_IPC.back, tabId),
+    forward: (tabId) => invoke(WEB_TAB_IPC.forward, tabId),
+    reload: (tabId) => invoke(WEB_TAB_IPC.reload, tabId),
+    openInBrowser: (tabId) => invoke(WEB_TAB_IPC.openInBrowser, tabId),
+    openOffered: (tabId, shown) => invoke(WEB_TAB_IPC.openOffered, tabId, shown),
+    dismissOffered: (tabId) => invoke(WEB_TAB_IPC.dismissOffered, tabId),
+    forget: (tabId) => invoke(WEB_TAB_IPC.forget, tabId),
+    handOff: (tabId) => invoke(WEB_TAB_IPC.handOff, tabId),
+    cancelHandOff: (tabId) => invoke(WEB_TAB_IPC.cancelHandOff, tabId),
   },
   orchestrators: {
     activity: (orchestratorId, before) => invoke(ORCHESTRATOR_IPC.activity, orchestratorId, before),
@@ -171,9 +238,13 @@ const api: AgentBoardApi = {
     movePane: (shellId, sessionId, to, id) => invoke(SHELL_IPC.movePane, shellId, sessionId, to, id),
     returnPane: (shellId, sessionId, layout) => invoke(SHELL_IPC.returnPane, shellId, sessionId, layout),
     windowLayout: (owner) => invoke(SHELL_IPC.windowLayout, owner),
-    setWindowLayout: (owner, layout) => invoke(SHELL_IPC.setWindowLayout, owner, layout),
+    setWindowLayout: (owner, layout, base) => invoke(SHELL_IPC.setWindowLayout, owner, layout, base),
     unsplitTabs: (owner) => invoke(SHELL_IPC.unsplitTabs, owner),
+    moveSurface: (surface, from, to) => invoke(SHELL_IPC.moveSurface, surface, from, to),
+    forgetWindow: (owner, layout) => invoke(SHELL_IPC.forgetWindow, owner, layout),
+    tabWindows: () => invoke(SHELL_IPC.tabWindows),
     onChanged: (listener) => subscribe(SHELL_IPC.changed, listener),
+    onWindowLayout: (listener) => subscribe(SHELL_IPC.layoutChanged, listener),
   },
   external: {
     list: () => invoke(EXTERNAL_IPC.list),
@@ -220,13 +291,27 @@ const api: AgentBoardApi = {
     },
   },
   windows: {
-    popOut: (target, options) => invoke(WINDOW_IPC.popOut, target, options?.reveal ?? true),
+    popOut: (target, options) => invoke(WINDOW_IPC.popOut, target, options?.reveal ?? true, options?.at),
     popIn: (id) => invoke(WINDOW_IPC.popIn, id),
     close: (id) => invoke(WINDOW_IPC.close, id),
     onReturned: (listener) => subscribe(WINDOW_IPC.returned, listener),
     chrome: windowChrome(process.platform),
     isFullScreen: () => invoke(WINDOW_IPC.isFullScreen),
     onFullScreenChanged: (listener) => subscribe(WINDOW_IPC.fullScreen, listener),
+  },
+  tabDrags: {
+    // Fire and forget: a notice lost with main going away changes nothing.
+    set: (drag) => void invoke(TAB_DRAG_IPC.set, drag ?? null).catch(() => {}),
+    onChanged: (listener) => subscribe(TAB_DRAG_IPC.changed, (drag: TabDrag | null) => listener(drag ?? undefined)),
+    untaken: (drag, at) => invoke(TAB_DRAG_IPC.untaken, drag, at),
+    move: (move) => invoke(TAB_DRAG_IPC.move, move),
+    history: (action) => invoke(TAB_DRAG_IPC.history, action),
+    settled: () => void invoke(TAB_DRAG_IPC.settled).catch(() => {}),
+    onSettled: (listener) => subscribe(TAB_DRAG_IPC.settledAll, listener),
+    ready: () => void invoke(TAB_DRAG_IPC.ready).catch(() => {}),
+    onMakeMove: (listener) => subscribe(TAB_DRAG_IPC.makeMove, listener),
+    onPopOut: (listener) => subscribe(TAB_DRAG_IPC.popOut, listener),
+    onReplay: (listener) => subscribe(TAB_DRAG_IPC.replay, listener),
   },
 };
 
