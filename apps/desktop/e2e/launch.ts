@@ -165,17 +165,18 @@ export async function removeDataDir(dataDir: string): Promise<void> {
 }
 
 /**
- * Adds a zone for the folder `pickFolderNext` set, through Add zone's "Browse…": opened from the board menu, so the
+ * Adds a zone for the folder `pickFolderNext` set, through Add zone's File browser tab: opened from the board menu, so the
  * zone lands in the middle of the view, clear of the others. Resolves once the popover has closed.
  */
 export async function browseForZone(page: Page): Promise<void> {
-  const popover = await openAddZone(page, 'Recent');
-  await popover.getByRole('button', { name: 'Browse…' }).click();
+  const popover = await openAddZone(page, 'File browser');
+  await popover.getByRole('button', { name: 'Choose a folder…' }).click();
+  await popover.getByRole('button', { name: /^Add zone/ }).click();
   await expect(popover).toBeHidden();
 }
 
 /** Opens Add zone from the board menu, on the tab named `tab`; resolves with the popover. */
-export async function openAddZone(page: Page, tab: 'Group' | 'GitHub' | 'Linear' | 'Recent') {
+export async function openAddZone(page: Page, tab: 'Group' | 'GitHub' | 'Linear' | 'Recent' | 'File browser') {
   await page.getByRole('button', { name: 'Board menu' }).click();
   await page.getByRole('button', { name: 'Add a zone' }).click();
   const popover = page.getByRole('dialog', { name: 'Add zone' });

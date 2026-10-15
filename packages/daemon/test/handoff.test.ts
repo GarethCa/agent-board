@@ -20,8 +20,9 @@ const SIZE = { cols: 120, rows: 40 };
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario for every line typed to them, in one zone
  * whose agents may not orchestrate: handing off is every agent's.
  */
-async function handoffDaemon(flowRecheckMs = 0) {
+async function handoffDaemon(flowRecheckMs = 0, dataDir = tempDataDir()) {
   const daemon = await startTestDaemon({
+    dataDir,
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, repeat: true }),
     flowRecheckMs,
@@ -193,16 +194,125 @@ describe('handing off explicitly', () => {
     const byId = new Map((await setup.client.call('flowEdge.list')).map((edge) => [edge.id, edge]));
     for (const id of [toB.id, intoA.id, bToC.id]) expect(byId.get(id)!.deliveries).toBe(0);
 
-    // Not to an agent it has no edge to: it never makes one, nor reaches past its edges.
+    // Never to itself.
     await expect(connection.call('board.handoff', { token, to: a.sessionId, message: 'hi' })).rejects.toMatchObject({
-      code: RPC_ERROR.invalidParams,
-      message: expect.stringMatching(/no edge from you/),
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/that is you/),
     });
     const lone = await agentSide(setup, 'lone');
     await expect(lone.connection.call('board.handoff', { token: lone.token, message: 'hi' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
       message: expect.stringMatching(/no edge leaves your tile/),
     });
+  });
+
+  it('hands off to an agent it names with no edge, as a one-off edge drawn afterwards, and again along it', async () => {
+    const setup = await handoffDaemon();
+    const { agent: a, token, connection } = await agentSide(setup, 'impl');
+    const b = await receiver(setup, 'review');
+
+    const [first] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'Please review the login fix' });
+    expect(first).toMatchObject({ to: b.sessionId, outcome: 'delivered', name: 'message' });
+    await setup.recorder.waitForText(b.sessionId, 'Hand-off from impl (its message): Please review the login fix');
+    const edge = (await setup.client.call('flowEdge.list')).find((each) => each.id === first!.edgeId)!;
+    expect(edge).toMatchObject({ from: a.sessionId, to: b.sessionId, trigger: 'manual', oneOff: true, madeBy: a.sessionId, deliveries: 1 });
+    expect(await setup.client.call('flowEdge.lastPayload', { id: edge.id })).toMatchObject({ text: 'Please review the login fix' });
+
+    // Named again, it goes along the same edge, though it is manual; the user's Send replays what it last carried.
+    await untilAgent(setup.recorder, b.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    const [again] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'And the signup test' });
+    expect(again).toMatchObject({ edgeId: edge.id, outcome: 'delivered' });
+    expect(await historyOf(setup, edge.id)).toEqual(['delivered', 'delivered']);
+    expect((await setup.client.call('flowEdge.list')).filter((each) => each.from === a.sessionId)).toHaveLength(1);
+    await setup.recorder.waitForText(b.sessionId, 'Hand-off from impl (its message): And the signup test');
+    await untilAgent(setup.recorder, b.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    await setup.client.call('flowEdge.send', { id: edge.id });
+    expect(await historyOf(setup, edge.id)).toEqual(['delivered', 'delivered', 'delivered']);
+    expect(await setup.client.call('flowEdge.lastPayload', { id: edge.id })).toMatchObject({ text: 'And the signup test' });
+  });
+
+  it("keeps what a named hand-off carried, so Send replays it after a restart: JSON handed inline is no file", async () => {
+    const dataDir = tempDataDir();
+    const setup = await handoffDaemon(0, dataDir);
+    const { token, connection } = await agentSide(setup, 'impl');
+    const b = await receiver(setup, 'review');
+    const [handed] = await connection.call('board.handoff', { token, to: b.sessionId, json: { pr: 12 } });
+    expect(handed).toMatchObject({ outcome: 'delivered' });
+    connection.close();
+    setup.client.close();
+    await setup.daemon.stop();
+
+    const again = await connectTestClient(await startTestDaemon({ dataDir }));
+    expect(await again.call('flowEdge.preview', { id: handed!.edgeId })).toMatchObject({ text: '{"pr":12}' });
+  });
+
+  it('hands back and forth by name, implementer and reviewer, and leaves the user free to draw the reply', async () => {
+    const setup = await handoffDaemon();
+    const impl = await agentSide(setup, 'impl');
+    const review = await agentSide(setup, 'review');
+    // Each turn on a hand-off writes a handover and ends on STATUS: done.
+    const turnEnded = async (agent: Agent) => {
+      await setup.recorder.waitForText(agent.sessionId, 'STATUS: done');
+      await expect
+        .poll(async () => (await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.state, { timeout: 10_000 })
+        .toMatch(/^(idle|waiting)$/);
+    };
+
+    const [there] = await impl.connection.call('board.handoff', { token: impl.token, to: review.agent.sessionId, message: 'Review this' });
+    expect(there).toMatchObject({ outcome: 'delivered' });
+    // A one-off edge is no auto edge: the user may draw the reply, and a named one back is never refused.
+    const drawn = await setup.client.call('flowEdge.create', { from: review.agent.sessionId, to: impl.agent.sessionId });
+    await setup.client.call('flowEdge.delete', { id: drawn.id });
+    const [back] = await review.connection.call('board.handoff', { token: review.token, to: impl.agent.sessionId, message: 'Fix the null check' });
+    expect(back).toMatchObject({ outcome: 'delivered' });
+    await setup.recorder.waitForText(impl.agent.sessionId, 'Hand-off from review (its message): Fix the null check');
+    await turnEnded(review.agent);
+    const [again] = await impl.connection.call('board.handoff', { token: impl.token, to: review.agent.sessionId, message: 'Fixed' });
+    expect(again).toMatchObject({ edgeId: there!.edgeId, outcome: 'delivered' });
+    const edges = await setup.client.call('flowEdge.list');
+    expect(edges.map((edge) => [edge.from, edge.oneOff])).toEqual([
+      [impl.agent.sessionId, true],
+      [review.agent.sessionId, true],
+    ]);
+  });
+
+  it('never starts an ended agent again by a named hand-off, so two agents can never relaunch each other', async () => {
+    const setup = await handoffDaemon();
+    const impl = await agentSide(setup, 'impl');
+    const review = await agentSide(setup, 'review');
+    const ended = async (agent: Agent) => {
+      await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+      await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null);
+    };
+    const [there] = await impl.connection.call('board.handoff', { token: impl.token, to: review.agent.sessionId, message: 'Review this' });
+
+    // The reviewer ends; the implementer names it again: skipped, and it stays ended.
+    await ended(review.agent);
+    const [skipped] = await impl.connection.call('board.handoff', { token: impl.token, to: review.agent.sessionId, message: 'Wake up' });
+    expect(skipped).toMatchObject({
+      edgeId: there!.edgeId,
+      outcome: 'skipped',
+      reason: "review has ended: a named hand-off never starts it again, the user's Send or an edge the user drew does",
+    });
+    // Both ended, nothing a named hand-off made starts either: only the user's Send along it does.
+    await ended(impl.agent);
+    const isEnded = async (agent: Agent) => (await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.endedAt !== null;
+    expect([await isEnded(impl.agent), await isEnded(review.agent)]).toEqual([true, true]);
+    await setup.client.call('flowEdge.send', { id: there!.edgeId });
+    await untilAgent(setup.recorder, review.agent.sessionId, (seen) => seen.endedAt === null);
+    expect(await isEnded(impl.agent)).toBe(true);
+  });
+
+  it('names a target only in its scope: its zone, unless the user let it orchestrate wider', async () => {
+    const setup = await handoffDaemon();
+    const { token, connection } = await agentSide(setup, 'impl');
+    const elsewhere = await setup.client.call('zone.add', { path: tempRepo('elsewhere'), x: 4000, y: 0, name: 'elsewhere' });
+    const far = await setup.client.call('agent.spawn', { zoneId: elsewhere.id, name: 'far', ...SIZE });
+    await expect(connection.call('board.handoff', { token, to: far.sessionId, message: 'hi' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/far is outside your scope/),
+    });
+    expect(await setup.client.call('flowEdge.list')).toEqual([]);
   });
 
   it("skips a final-message edge it gives no message, since its last final message is from an earlier turn; a manual or paused one too", async () => {

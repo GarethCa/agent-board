@@ -306,4 +306,4 @@ export function holdsTiles(covers: ZoneCovers | undefined, now: ZoneLayout, next
 }
 
 /** A repo's name, as a tile shows it: its folder's. */
-const repoName = (repoRoot: string) => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? repoRoot;
+export const repoName = (repoRoot: string) => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? repoRoot;

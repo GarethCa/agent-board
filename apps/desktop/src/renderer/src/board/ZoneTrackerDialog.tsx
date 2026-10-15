@@ -88,6 +88,16 @@ export function ZoneTrackerDialog({ zone, onSaved, onCancel }: ZoneTrackerDialog
     window.agentBoard.zones.setTracker(zone.id, tracker).then(onSaved, fail);
   };
 
+  /** Forgets the stored key: the next look at the tracker asks for one again. */
+  const disconnect = () => {
+    setBusy(true);
+    setError(undefined);
+    window.agentBoard.trackers.disconnect(provider).then(() => {
+      setScopes(null);
+      setBusy(false);
+    }, fail);
+  };
+
   const providerPicker = (
     <Field label="Tracker">
       <Select value={provider} onChange={(event) => pickProvider(event.target.value as TrackerProvider)}>
@@ -170,11 +180,18 @@ export function ZoneTrackerDialog({ zone, onSaved, onCancel }: ZoneTrackerDialog
         save(trackerToSave(zone.tracker, provider, scope));
       }}
       footerStart={
-        zone.tracker !== null && (
-          <Button variant="danger" disabled={busy} onClick={() => save(null)}>
-            No tracker
-          </Button>
-        )
+        <>
+          {zone.tracker !== null && (
+            <Button variant="danger" disabled={busy} onClick={() => save(null)}>
+              No tracker
+            </Button>
+          )}
+          {auth !== 'gh' && (
+            <Button variant="ghost" disabled={busy} title={`Remove the ${name} API key from your keychain`} onClick={disconnect}>
+              Disconnect
+            </Button>
+          )}
+        </>
       }
       footer={
         <>

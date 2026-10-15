@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
-import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile, zoneNamed, zones } from './agent-helpers.ts';
+import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
 
@@ -210,5 +210,50 @@ test('redoes a shell rename, labels a pane with its pencil, clears the label wit
     await app.close().catch(() => {});
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renames a group from its menu, and undoes and redoes it', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await addEmptyZone(window, 'G1');
+    const name = async () => (await zones(window))[0]!.name;
+    await zoneNamed(window, 'G1').getByRole('button', { name: 'Zone options' }).click();
+    await window.getByRole('menuitem', { name: 'Rename' }).click();
+    await field(window).fill('Renamed');
+    await field(window).press('Enter');
+    await expect.poll(name).toBe('Renamed');
+    await focusBoard(window);
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(name).toBe('G1');
+    await expect(zoneNamed(window, 'G1')).toBeVisible();
+    await window.keyboard.press('ControlOrMeta+Shift+z');
+    await expect.poll(name).toBe('Renamed');
+    await expect(zoneNamed(window, 'Renamed')).toBeVisible();
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});
+
+test('keys typed straight after F2 go to the name, not to the board: no sticky note appears', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await addEmptyZone(window, 'G1');
+    await zoneNamed(window, 'G1').getByRole('button', { name: 'New shell in zone' }).click();
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    const shellTile = window.getByTestId('shell-tile');
+    await shellTile.locator('.hybrid-tile-name').click();
+    // No wait for the field: N is the board's sticky-note key, and it must not land there.
+    await window.keyboard.press('F2');
+    await window.keyboard.type('nnn');
+    await expect(field(window)).toBeVisible();
+    await window.waitForTimeout(300);
+    await expect(window.getByTestId('sticky')).toHaveCount(0);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
   }
 });

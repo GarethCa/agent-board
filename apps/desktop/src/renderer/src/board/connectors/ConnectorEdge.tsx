@@ -1,29 +1,22 @@
 import { memo, useContext, useEffect, useRef, useState, type CSSProperties } from 'react';
-import {
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
-  getSmoothStepPath,
-  getStraightPath,
-  Position,
-  type Edge,
-  type EdgeProps,
-} from '@xyflow/react';
+import { BaseEdge, EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react';
 import {
   CONNECTOR_LINE_ENDS,
-  CONNECTOR_STYLES,
   MAX_CONNECTOR_LABEL,
   TEXT_COLORS,
   type Connector,
   type ConnectorLineEnd,
-  type ConnectorStyle,
 } from '@agent-board/daemon/protocol';
 import { Trash2 } from 'lucide-react';
 import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch } from '../items/ItemStyleBar';
-import { tokenNumber } from '../../theme';
 import { Swatch } from '../../ui';
+import { tokenNumber } from '../../theme';
 import { themedColor } from '../../board-colors';
 import { ConnectorActionsContext } from './actions';
+import { shapeOf } from './endpoints';
+import { useLine } from './line';
+import { LineStyleButtons } from './LineStyleButtons';
+import { upperFirst } from '../../upper-first';
 
 export type ConnectorEdgeType = Edge<{ connector: Connector }, 'connector'>;
 
@@ -83,12 +76,7 @@ export function ConnectorMarkers() {
   );
 }
 
-/** How a bar button names and draws each style, and each end (the start's samples mirror the end's). */
-const STYLE_SAMPLES: Record<ConnectorStyle, string> = {
-  straight: 'M4 19 L20 5',
-  elbow: 'M4 19 H12 V5 H20',
-  curved: 'M4 19 C13 19 11 5 20 5',
-};
+/** How a bar button draws each end (the start's samples mirror the end's). */
 const END_SAMPLES: Record<'start' | 'end', Record<ConnectorLineEnd, string>> = {
   end: {
     none: 'M3 12 H21',
@@ -101,45 +89,27 @@ const END_SAMPLES: Record<'start' | 'end', Record<ConnectorLineEnd, string>> = {
     dot: 'M7 12 H21 M1 12 a3 3 0 1 0 6 0 a3 3 0 1 0 -6 0',
   },
 };
-const upperFirst = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+/** About how wide a character of a connector's label is drawn, for keeping the line's handles off it. */
+const LABEL_CHARACTER_WIDTH = 7;
 
-/** Where an end meets its object. React Flow ends a line at the outer edge of the handle, outside the object. */
-function attachment(x: number, y: number, position: Position, inset: number): { x: number; y: number } {
-  if (position === Position.Left) return { x: x + inset, y };
-  if (position === Position.Right) return { x: x - inset, y };
-  if (position === Position.Top) return { x, y: y + inset };
-  return { x, y: y - inset };
-}
-
-let insetCache: number | undefined;
-/** How far a handle's outer edge is from its object's side: read once, since every line asks on every drag frame. */
-function handleInset(): number {
-  insetCache ??= tokenNumber('--connector-handle-size') / 2 + tokenNumber('--connector-handle-offset');
-  return insetCache;
-}
-
-function pathFor(style: ConnectorStyle, props: EdgeProps): [path: string, labelX: number, labelY: number] {
-  const { sourcePosition, targetPosition } = props;
-  const inset = handleInset();
-  const source = attachment(props.sourceX, props.sourceY, sourcePosition, inset);
-  const target = attachment(props.targetX, props.targetY, targetPosition, inset);
-  const ends = { sourceX: source.x, sourceY: source.y, targetX: target.x, targetY: target.y };
-  const oriented = { ...ends, sourcePosition, targetPosition };
-  const [path, labelX, labelY] =
-    style === 'straight'
-      ? getStraightPath(ends)
-      : style === 'elbow'
-        ? getSmoothStepPath({ ...oriented, borderRadius: 0 })
-        : getBezierPath(oriented);
-  return [path, labelX, labelY];
-}
-
-/** A connector: a thin neutral line between two board objects, with an optional label on its middle. */
+/**
+ * A connector: a thin neutral line between two board objects, with an optional label on its middle. Selected,
+ * it can be bent and its ends moved to other sides of their objects.
+ */
 export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<ConnectorEdgeType>) {
   const { data, selected = false } = props;
   const connector = data!.connector;
   const { editing, edit, update, select } = useContext(ConnectorActionsContext);
-  const [path, labelX, labelY] = pathFor(connector.style, props);
+  const { shape, handles } = useLine(
+    props,
+    connector.style,
+    shapeOf(connector),
+    (geometry) => update({ id: connector.id, ...geometry }),
+    // Roughly, as drawn: the handles keep clear of it, so a press on it reaches it.
+    connector.label === '' ? undefined : { width: connector.label.length * LABEL_CHARACTER_WIDTH + 2 * tokenNumber('--space-2'), height: tokenNumber('--control-row') },
+  );
+  const { path } = shape;
+  const { x: labelX, y: labelY } = shape.label;
   const editingLabel = editing === connector.id;
   const style = connector.color === null ? undefined : ({ '--connector-color': themedColor(connector.color) } as CSSProperties);
 
@@ -193,6 +163,7 @@ export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<Connec
           </div>
         )}
       </EdgeLabelRenderer>
+      {selected && !editingLabel && handles}
     </>
   );
 });
@@ -236,11 +207,7 @@ function ConnectorBar({ connector }: { connector: Connector }) {
   return (
     <div role="toolbar" aria-label="Connector" className="item-bar-rows">
       <BarRow>
-        {CONNECTOR_STYLES.map((style) => (
-          <BarButton key={style} name={upperFirst(style)} pressed={connector.style === style} onClick={() => set({ style })}>
-            <BarSample path={STYLE_SAMPLES[style]} />
-          </BarButton>
-        ))}
+        <LineStyleButtons current={connector.style} onPick={(style) => set({ style })} />
         <BarSeparator />
         {(['start', 'end'] as const).map((which) => (
           <EndButtons

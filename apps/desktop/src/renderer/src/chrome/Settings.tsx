@@ -2,6 +2,7 @@ import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
 import type { ClickOpens } from '../board/click-opens';
 import type { CrewLook } from '../board/crew-view';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
+import { HarnessPathSettings } from './HarnessPathSettings';
 import { daemonStatusText, type DaemonStatusValue } from '../DaemonStatus';
 import { Choice, Choices, Fieldset, Hint, SectionLabel, Tag } from '../ui';
 import { AppearanceSetting } from './AppearanceSetting';
@@ -21,7 +22,7 @@ export interface SettingsProps {
 
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
- * Dark), what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
+ * Dark), the paths of `claude` and `codex`, what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
  * daemon's status.
  */
 export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook }: SettingsProps) {
@@ -29,6 +30,7 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
     <div className="settings">
       <ExternalHooksToggle onError={onError} />
       <HeldPayloadsSetting onError={onError} />
+      <HarnessPathSettings onError={onError} />
       <AppearanceSetting onError={onError} />
       <SectionLabel as="h4">Board</SectionLabel>
       <Fieldset legend="Double-clicking a tile opens">

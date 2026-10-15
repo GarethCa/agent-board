@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { isSafeRepo, shortFailure } from '../src/zone-sources.ts';
+import { gitHubRepoOf, isSafeRepo, scanForCopies, shortFailure } from '../src/zone-sources.ts';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { createGitHubTracker } from '@agent-board/tracker';
 import {
@@ -148,10 +148,218 @@ describe('GitHub repos as zone sources', () => {
     const repos = await client.call('zone.githubRepos');
 
     expect(repos).toEqual([
-      { repo: 'acme/app', name: 'app', description: 'The app', localPath: null, clonePath: join(reposDir, 'acme', 'app'), onBoard: false },
-      { repo: 'acme/ops', name: 'ops', description: null, localPath: local, clonePath: join(reposDir, 'acme', 'ops'), onBoard: true },
+      { repo: 'acme/app', name: 'app', description: 'The app', localPath: null, clonePath: join(reposDir, 'acme', 'app'), foundCopy: false, onBoard: false },
+      { repo: 'acme/ops', name: 'ops', description: null, localPath: local, clonePath: join(reposDir, 'acme', 'ops'), foundCopy: false, onBoard: true },
     ]);
     expect(zone.repoRoot).toBe(local);
+  });
+});
+
+describe('using a local copy of a GitHub repo', () => {
+  /** A repo whose `origin` is on GitHub as `slug`, in a folder named `name`. */
+  const copyOf = (slug: string, name = 'copy') => {
+    const repo = tempRepo(name);
+    git(repo, 'remote', 'add', 'origin', `git@github.com:${slug}.git`);
+    return repo;
+  };
+
+  it('accepts a folder whose origin is the repo, from its top level or from a subfolder, in any case', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = copyOf('Acme/App');
+
+    expect(await client.call('zone.checkFolder', { repo: 'acme/app', path: repo })).toEqual({
+      path: repo,
+      repoRoot: repo,
+      gitHubRepo: 'acme/app',
+      name: 'copy',
+    });
+    expect(await client.call('zone.checkFolder', { repo: 'ACME/app', path: join(repo, 'apps', 'web') })).toEqual({
+      path: join(repo, 'apps', 'web'),
+      repoRoot: repo,
+      gitHubRepo: 'acme/app',
+      name: 'copy/apps/web',
+    });
+  });
+
+  it('names the repo a folder is the copy of when it is another, and binds nothing', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = copyOf('acme/ops');
+
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: repo })).rejects.toThrow(
+      "That folder's origin is acme/ops, not acme/app",
+    );
+    expect(await client.call('zone.list')).toEqual([]);
+  });
+
+  it('refuses a folder that is not a git repo, has no GitHub origin, or is missing', async () => {
+    const { client } = await sourcesDaemon();
+    const plain = join(tempDataDir(), 'plain');
+    mkdirSync(plain);
+    const local = tempRepo('local');
+
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: plain })).rejects.toThrow('not inside a git repository');
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: local })).rejects.toThrow('no GitHub origin');
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: join(plain, 'gone') })).rejects.toThrow('not a folder');
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: 'relative/dir' })).rejects.toThrow('absolute');
+  });
+
+  it('resolves a link to the folder it points at', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = copyOf('acme/app');
+    const link = join(tempDataDir(), 'link');
+    symlinkSync(repo, link);
+
+    expect(await client.call('zone.checkFolder', { repo: 'acme/app', path: link })).toEqual({
+      path: repo,
+      repoRoot: repo,
+      gitHubRepo: 'acme/app',
+      name: 'copy',
+    });
+  });
+
+  it('looks at any folder in a git repo without a repo to match, and says when it has no GitHub origin', async () => {
+    const { client } = await sourcesDaemon();
+    const local = tempRepo('local');
+
+    expect(await client.call('zone.checkFolder', { path: join(local, 'apps') })).toEqual({
+      path: join(local, 'apps'),
+      repoRoot: local,
+      gitHubRepo: null,
+      name: 'local/apps',
+    });
+  });
+
+  it('finds copies one level deep in the folders it is given, only when asked, and offers them as the repos clones', async () => {
+    const roots = join(tempDataDir(), 'roots');
+    const code = join(roots, 'code');
+    mkdirSync(code, { recursive: true });
+    const { client } = await sourcesDaemon({}, { copyRoots: [code, join(roots, 'missing')] });
+    const app = copyOf('acme/app', 'app');
+    renameSync(app, join(code, 'app'));
+    const deeper = copyOf('acme/ops', 'ops');
+    mkdirSync(join(code, 'nested'));
+    renameSync(deeper, join(code, 'nested', 'ops'));
+    const plain = join(code, 'not-a-repo');
+    mkdirSync(plain);
+
+    expect((await client.call('zone.githubRepos')).map((repo) => repo.localPath)).toEqual([null, null]);
+    expect(await client.call('zone.findCopies')).toEqual({ found: 1 });
+
+    const repos = await client.call('zone.githubRepos');
+    expect(repos.map((repo) => [repo.repo, repo.localPath])).toEqual([
+      ['acme/app', realpathSync(join(code, 'app'))],
+      ['acme/ops', null],
+    ]);
+    expect(repos[0]?.onBoard).toBe(false);
+    expect(repos.map((repo) => repo.foundCopy)).toEqual([true, false]);
+  });
+
+  it('skips linked worktrees and submodule-style .git files, and links, and takes the first of two copies by name', async () => {
+    const code = join(tempDataDir(), 'code');
+    mkdirSync(code);
+    const { client } = await sourcesDaemon({}, { copyRoots: [code, join(tempDataDir(), 'unreadable')] });
+    const second = copyOf('acme/app', 'b-app');
+    renameSync(second, join(code, 'b-app'));
+    const first = copyOf('acme/app', 'a-app');
+    renameSync(first, join(code, 'a-app'));
+    // A linked worktree of a-app has a .git file, not a folder; so does anything else that points at a repo elsewhere.
+    git(join(code, 'a-app'), 'worktree', 'add', '-b', 'side', join(code, '0-worktree'));
+    symlinkSync(join(code, 'b-app'), join(code, 'c-link'));
+    const ops = copyOf('acme/ops', 'ops');
+    renameSync(ops, join(code, 'ops'));
+    git(join(code, 'ops'), 'worktree', 'add', '-b', 'side', join(code, '0-ops-worktree'));
+
+    expect(await client.call('zone.findCopies')).toEqual({ found: 2 });
+
+    const repos = await client.call('zone.githubRepos');
+    expect(repos.map((repo) => [repo.repo, repo.localPath])).toEqual([
+      ['acme/app', realpathSync(join(code, 'a-app'))],
+      ['acme/ops', realpathSync(join(code, 'ops'))],
+    ]);
+  });
+
+  it('keeps a clone a zone or the managed folder has over one it found', async () => {
+    const code = join(tempDataDir(), 'code');
+    mkdirSync(code);
+    const { client } = await sourcesDaemon({}, { copyRoots: [code] });
+    const known = copyOf('acme/app', 'known');
+    await client.call('zone.add', { path: known, ...at });
+    const found = copyOf('acme/app', 'found');
+    renameSync(found, join(code, 'found'));
+
+    expect(await client.call('zone.findCopies')).toEqual({ found: 1 });
+
+    const [app] = await client.call('zone.githubRepos');
+    expect(app).toMatchObject({ repo: 'acme/app', localPath: known, foundCopy: false });
+  });
+
+  it('shares one scan between overlapping requests', async () => {
+    const code = join(tempDataDir(), 'code');
+    mkdirSync(code);
+    const { client } = await sourcesDaemon({}, { copyRoots: [code] });
+    renameSync(copyOf('acme/app', 'app'), join(code, 'app'));
+
+    expect(await Promise.all([client.call('zone.findCopies'), client.call('zone.findCopies')])).toEqual([{ found: 1 }, { found: 1 }]);
+  });
+
+  it('skips a folder it cannot read', async () => {
+    const root = join(tempDataDir(), 'closed');
+    mkdirSync(root);
+    chmodSync(root, 0);
+    onTestFinished(() => chmodSync(root, 0o700));
+    const { client } = await sourcesDaemon({}, { copyRoots: [root] });
+
+    expect(await client.call('zone.findCopies')).toEqual({ found: 0 });
+  });
+});
+
+describe('scanForCopies', () => {
+  it('resolves at its deadline with what it found, though a stat or readdir never returns', async () => {
+    const root = join(tempDataDir(), 'code');
+    mkdirSync(root);
+    const repo = tempRepo('app');
+    git(repo, 'remote', 'add', 'origin', 'git@github.com:acme/app.git');
+    renameSync(repo, join(root, 'a-app'));
+    mkdirSync(join(root, 'b-hung'));
+    const never = new Promise<never>(() => {});
+    const fs = {
+      readdir: (path: string) => (path === 'hung-root' ? never : Promise.resolve(readdirSync(path))),
+      isDirectory: (path: string) => (path.includes('b-hung') ? never : Promise.resolve(existsSync(path))),
+    };
+
+    const started = Date.now();
+    const copies = await scanForCopies([root, 'hung-root'], { deadlineMs: 300, fs });
+
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect([...copies.keys()]).toEqual(['acme/app']);
+  });
+});
+
+/** Spelt apart so a remote URL with a user is not mistaken for an email address. */
+const AT = '@';
+
+describe('gitHubRepoOf', () => {
+  it.each([
+    ['git@github.com:Acme/App.git', 'acme/app'],
+    ['https://github.com/acme/app', 'acme/app'],
+    ['https://github.com/acme/app.git', 'acme/app'],
+    ['https://github.com/acme/app/', 'acme/app'],
+    [`https://user${AT}github.com/acme/app.git`, 'acme/app'],
+    [`https://user:token${AT}github.com/acme/app.git`, 'acme/app'],
+    ['ssh://git@github.com/acme/app.git', 'acme/app'],
+    ['ssh://git@github.com:22/acme/app.git', 'acme/app'],
+    ['HTTPS://GitHub.com/Acme/App', 'acme/app'],
+    ['  git@github.com:acme/app.git\n', 'acme/app'],
+    ['https://notgithub.com/acme/app', undefined],
+    [`git${AT}evilgithub.com:acme/app.git`, undefined],
+    ['https://evil.com/github.com/acme/app', undefined],
+    ['https://gitlab.com/x/github.com/acme/app', undefined],
+    ['https://github.com.evil.com/acme/app', undefined],
+    ['https://github.com/acme', undefined],
+    ['/srv/git/github.com/acme/app', undefined],
+    ['', undefined],
+  ])('reads %j as %j', (url, repo) => {
+    expect(gitHubRepoOf(url)).toBe(repo);
   });
 });
 
@@ -341,5 +549,92 @@ describe('isSafeRepo and shortFailure', () => {
   it("keeps a failure's first line, cut short", () => {
     expect(shortFailure('\nfatal: no\nmore detail')).toBe('fatal: no');
     expect(shortFailure('x'.repeat(500))).toHaveLength(240);
+  });
+});
+
+describe('deleting a zone made from a GitHub clone', () => {
+  async function clonedZone() {
+    const world = await sourcesDaemon();
+    const events = recordEvents(world.client);
+    const zone = await world.client.call('zone.clone', { repo: 'acme/app', ...at });
+    const done = await events.waitFor(zoneCloned(zone.id));
+    return { ...world, events, zone: done.zone, path: join(world.reposDir, 'acme', 'app') };
+  }
+
+  it('says the zone is a managed clone, and a zone bound to any other repo is not', async () => {
+    const { client, zone } = await clonedZone();
+    const other = await client.call('zone.add', { path: tempRepo('mine'), ...at });
+    expect(zone.managedClone).toBe(true);
+    expect(other.managedClone).toBe(false);
+  });
+
+  it('takes the zone off the board and keeps the clone on disk', async () => {
+    const { client, zone, path, events } = await clonedZone();
+    await client.call('zone.dissolve', { id: zone.id });
+    await events.waitFor(zoneRemoved(zone.id));
+    expect(await client.call('zone.list')).toEqual([]);
+    expect(existsSync(join(path, 'apps', 'web', 'index.ts'))).toBe(true);
+  });
+
+  it('deletes the clone too when asked, and the owner folder the clones were in once it is empty', async () => {
+    const { client, zone, path, reposDir } = await clonedZone();
+    await client.call('zone.dissolve', { id: zone.id, deleteClone: true });
+    expect(await client.call('zone.list')).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+    expect(existsSync(join(reposDir, 'acme'))).toBe(false);
+    expect(existsSync(reposDir)).toBe(true);
+  });
+
+  it('keeps the clone while a worktree with its own branch is linked to it, as a kept one is, and deletes it once that is gone', async () => {
+    const { client, zone, path } = await clonedZone();
+    const kept = join(tempDataDir(), 'kept-worktree');
+    git(path, 'worktree', 'add', '-q', '-b', 'agent/kept', kept);
+    await expect(client.call('zone.dissolve', { id: zone.id, deleteClone: true })).rejects.toThrow(/still has a worktree/);
+    expect(await client.call('zone.list')).toEqual([zone]);
+    expect(existsSync(path)).toBe(true);
+    git(path, 'worktree', 'remove', '--force', kept);
+    expect(await client.call('zone.dissolve', { id: zone.id, deleteClone: true })).toEqual({ cloneError: null });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('keeps the clone while a kept worktree has gone missing, moved or on a volume that is not mounted, and never prunes it', async () => {
+    const { client, zone, path } = await clonedZone();
+    const kept = join(tempDataDir(), 'kept-worktree');
+    git(path, 'worktree', 'add', '-q', '-b', 'agent/kept', kept);
+    renameSync(kept, `${kept}-moved`);
+    await expect(client.call('zone.dissolve', { id: zone.id, deleteClone: true })).rejects.toThrow(/still has a worktree/);
+    expect(existsSync(path)).toBe(true);
+    // Asking did not forget it: it is still registered, and its branch is still there.
+    expect(git(path, 'worktree', 'list', '--porcelain')).toContain(kept);
+    expect(git(path, 'branch', '--list', 'agent/kept')).toContain('agent/kept');
+  });
+
+  it('keeps the clone when git cannot say what worktrees it has', async () => {
+    const { client, zone, path } = await clonedZone();
+    writeFileSync(join(path, '.git', 'HEAD'), 'garbage\n');
+    await expect(client.call('zone.dissolve', { id: zone.id, deleteClone: true })).rejects.toThrow(/could not list the worktrees|worktree/);
+    expect(existsSync(path)).toBe(true);
+    expect(await client.call('zone.list')).toHaveLength(1);
+  });
+
+  it('keeps the clone while another zone is on it, and says which', async () => {
+    const { client, zone, path } = await clonedZone();
+    const folder = await client.call('zone.add', { path: join(path, 'apps', 'web'), ...at, name: 'Web' });
+    await expect(client.call('zone.dissolve', { id: zone.id, deleteClone: true })).rejects.toThrow(/Web is on .* clone too/);
+    expect(existsSync(path)).toBe(true);
+    await client.call('zone.dissolve', { id: folder.id });
+    await client.call('zone.dissolve', { id: zone.id, deleteClone: true });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("never touches the folder of a zone that is not a managed clone, even when asked to delete the clone", async () => {
+    const { client } = await sourcesDaemon();
+    const repo = tempRepo('mine');
+    const zone = await client.call('zone.add', { path: repo, ...at });
+    await expect(client.call('zone.dissolve', { id: zone.id, deleteClone: true })).rejects.toThrow(/not a clone/);
+    expect(await client.call('zone.list')).toEqual([zone]);
+    await client.call('zone.dissolve', { id: zone.id });
+    expect(await client.call('zone.list')).toEqual([]);
+    expect(existsSync(join(repo, '.git'))).toBe(true);
   });
 });

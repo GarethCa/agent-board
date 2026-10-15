@@ -1,8 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
+import { agents, launch, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startCrowdedAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from './render.ts';
 import { scratch } from './scratch.ts';
 
@@ -116,6 +116,43 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
   }
 });
 
+test('a crowded tile at its narrowest, and New agent with a long model id: nothing runs past its container', async () => {
+  needsBaselines('tile-crowded-narrow', 'new-agent-long-model');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await startCrowdedAgent(window);
+    for (let step = 0; step < 4; step++) await narrowBy(window, tile(window), -60);
+    await expect(tile(window).getByTestId('tile-folded')).toBeVisible();
+    await pinRandomText(window);
+    let restorePointer = await ignorePointer(window);
+    await settle(window);
+    // A follow-up reviewer's branch line names the commit it reviews, which differs run to run.
+    await expect.soft(tile(window)).toHaveScreenshot('tile-crowded-narrow.png', { ...SHOT, mask: [tile(window).locator('.hybrid-tile-branch')] });
+    await restorePointer();
+
+    // The picker's chips beside Start, with a typed model id as long as one gets.
+    await zoneNamed(window, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+    const form = window.getByRole('dialog', { name: 'New agent' });
+    await pickInChip(form, 'Model', 'Other…');
+    await form.getByRole('textbox', { name: 'Model id' }).fill(LONG_MODEL);
+    await pickInChip(form, 'Role', 'Follow-up reviewer');
+    restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(form).toHaveScreenshot('new-agent-long-model.png', SHOT);
+    await restorePointer();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a shell tile's session window with tabs, split into two panes each with its strip", async () => {
   needsBaselines('shell-window-tabs');
   const { dir, repo, env } = scratch('output');
@@ -131,6 +168,8 @@ test("a shell tile's session window with tabs, split into two panes each with it
     await expect(tabs).toHaveCount(1);
     await window.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+t`);
     await expect(tabs).toHaveCount(2);
+    // The window has opened to its size: a split looks at the pane's room.
+    await settle(window);
     await window.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
     await expect(sessionWindow(window).getByTestId('window-pane')).toHaveCount(2);
     await expect(sessionWindow(window).locator('.xterm-rows')).toHaveCount(3);
@@ -146,6 +185,44 @@ test("a shell tile's session window with tabs, split into two panes each with it
     await app.close();
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a session window resized up to the board\'s top edge clears the macOS traffic lights, windowed, and reaches the top in full screen', async () => {
+  needsBaselines('session-window-top-edge', 'session-window-top-edge-full-screen');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await newShell(window);
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    await window.getByRole('button', { name: 'Restore session window' }).click();
+    const dragTopEdgeUp = async () => {
+      const edge = (await sessionWindow(window).locator('[data-edge="n"]').boundingBox())!;
+      await window.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
+      await window.mouse.down();
+      await window.mouse.move(edge.x + edge.width / 2, -200, { steps: 8 });
+      await window.mouse.up();
+    };
+    // The terminal is masked; the lights themselves are the OS's, so the shot shows the room kept for them.
+    const shoot = async (name: string) => {
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(name, { ...SHOT, mask: [screen(window), sessionWindow(window).locator('.session-window-where')] });
+      await restorePointer();
+    };
+    await dragTopEdgeUp();
+    await shoot('session-window-top-edge.png');
+    // What the main process sends when the window goes full screen, which hides the lights.
+    await window.evaluate(() => (document.documentElement.dataset.fullScreen = 'true'));
+    // The page has taken it in: the bounds a drag stays inside follow the flag.
+    await window.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await dragTopEdgeUp();
+    await shoot('session-window-top-edge-full-screen.png');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
   }
 });
 
@@ -274,7 +351,8 @@ test('the dark theme (AN1): a busy board with notes, text, a shape and a flow ed
     await restorePointer();
 
     // The Edge rules panel, on the edge.
-    await window.getByTestId('flow-edge').locator('.flow-edge-pill').click({ force: true });
+    // Its tiles side by side, its label is a marker: clicked, it opens them.
+    await window.getByTestId('flow-edge-marker').locator('.flow-edge-trigger-dot').click();
     const rules = window.getByRole('complementary', { name: 'Edge rules' });
     await expect(rules).toBeVisible();
     await expect(rules.getByTestId('edge-rules-preview')).not.toBeEmpty();
@@ -300,6 +378,67 @@ test('the dark theme (AN1): a busy board with notes, text, a shape and a flow ed
     await ignorePointer(window);
     await settle(window);
     await expect.soft(window.locator('body')).toHaveScreenshot('dark-chat-view.png', SHOT);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a hand-off between agents bent through a point to the top of the other tile, selected with its handles and its Edge rules in four sections', async () => {
+  needsBaselines('edge-rules', 'edge-bent');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Fix checkout flake');
+    await spawnAgent(window, 'monorepo', 'Review checkout fix');
+    await expect(tile(window)).toHaveCount(2);
+    for (const at of [0, 1]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    // Apart, the second lower down, so the edge has room for its label and a bend.
+    const [fixer, reviewer] = await agents(window);
+    const [zone] = await zones(window);
+    await window.evaluate(
+      async ({ zoneId, from, to }) => {
+        await globalThis.window.agentBoard.agents.move(from, { zoneId, x: 20, y: 40 });
+        await globalThis.window.agentBoard.agents.move(to, { zoneId, x: 560, y: 300 });
+        await globalThis.window.agentBoard.flowEdges.create({ from, to, trigger: 'manual', fromSide: 'right', toSide: 'top' });
+      },
+      { zoneId: zone!.id, from: fixer!.sessionId, to: reviewer!.sessionId },
+    );
+    await expect(window.getByTestId('flow-edge')).toHaveCount(1);
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+
+    // Bent through one point (dragging a bend out is the e2e's: here it is put exactly, so it lands the same run to
+    // run), up and to the right of the middle of its ends, where its bends are kept from. Selected, it shows its handles.
+    await window.evaluate(async () => {
+      const { flowEdges } = globalThis.window.agentBoard;
+      const [edge] = await flowEdges.list();
+      await flowEdges.update({ id: edge!.id, points: [{ x: 220, y: -150 }] });
+    });
+    await window.getByTestId('flow-edge').locator('.flow-edge-pill').click({ force: true });
+    const rules = window.getByRole('complementary', { name: 'Edge rules' });
+    await expect(rules).toBeVisible();
+    await expect(window.getByTestId('line-bend')).toHaveCount(1);
+    await expect(rules.getByTestId('edge-rules-preview')).not.toBeEmpty();
+    await pinRandomText(window);
+    let restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('body')).toHaveScreenshot('edge-rules.png', SHOT);
+    await restorePointer();
+
+    // Unselected, the bent line alone.
+    await rules.getByRole('button', { name: 'Close edge rules' }).click();
+    await expect(window.getByTestId('line-bend')).toHaveCount(0);
+    restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('edge-bent.png', SHOT);
+    await restorePointer();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -36,6 +36,8 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
     await pickFolderNext(app, repo);
     await browseForZone(window);
 
+    execFileSync('security', ['add-generic-password', '-s', 'agent-board', '-a', 'other-account', '-w', 'keep-me', keychain.path]);
+
     // Pick the zone's team: the first time, Linear wants an API key.
     const zoneTab = window.getByTestId('zone-tab');
     await zoneTab.getByRole('button', { name: 'Zone tracker' }).click();
@@ -59,6 +61,22 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
     for (const file of readdirSync(dataDir).filter((name) => name.includes('.db'))) {
       expect(readFileSync(join(dataDir, file)).includes(LINEAR_API_KEY)).toBe(false);
     }
+
+    // The key can be taken out again: the dialog asks for one the next time, and the keychain no longer holds it.
+    await zoneTab.getByRole('button', { name: 'Zone tracker' }).click();
+    await trackerDialog.getByRole('button', { name: 'Disconnect' }).click();
+    await expect(trackerDialog.getByLabel('Linear API key')).toBeVisible();
+    // Only Linear's key went: another account's entry in the keychain stays.
+    expect(
+      execFileSync('security', ['find-generic-password', '-s', 'agent-board', '-a', 'other-account', '-w', keychain.path], { encoding: 'utf8' }).trim(),
+    ).toBe('keep-me');
+    expect(() =>
+      execFileSync('security', ['find-generic-password', '-s', 'agent-board', '-a', 'linear', '-w', keychain.path], { stdio: 'pipe' }),
+    ).toThrow();
+    await trackerDialog.getByLabel('Linear API key').fill(LINEAR_API_KEY);
+    await trackerDialog.getByRole('button', { name: 'Connect' }).click();
+    await trackerDialog.getByRole('button', { name: 'Save' }).click();
+    await expect(trackerDialog).toBeHidden();
 
     // Start an agent from an issue.
     await zoneTab.getByRole('button', { name: 'New agent' }).click();
@@ -167,13 +185,16 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
     await expect(pr).toHaveAttribute('data-state', 'open');
     await expect(pr).toHaveAttribute('data-checks', 'failing');
 
-    // Clicking it opens the PR on GitHub (in the browser, stubbed here).
+    // Clicking it opens the PR in a PR tab of the agent's window (pr-tab.spec.ts), whose GitHub button opens it in the
+    // browser (stubbed here). The window stays open over the tile: what follows reads the tile's chips, not clicks them.
     await app.evaluate(({ shell }) => {
       const opened: string[] = [];
       (globalThis as { opened?: string[] }).opened = opened;
       shell.openExternal = async (url: string) => void opened.push(url);
     });
     await pr.click();
+    const prView = window.getByTestId('pr-view');
+    await prView.getByRole('button', { name: 'GitHub' }).click();
     await expect
       .poll(() => app.evaluate(() => (globalThis as { opened?: string[] }).opened))
       .toEqual(['https://github.com/acme/app/pull/41']);

@@ -74,6 +74,8 @@ describe('launching codex', () => {
       'mcp_servers.agent-board.command="/Users/me/.agent-board/bin/agent-board"',
       'mcp_servers.agent-board.args=["mcp"]',
       'mcp_servers.agent-board.env_vars=["AGENT_BOARD_SOCKET","AGENT_BOARD_IDENTITY","AGENT_BOARD_SESSION_ID","AGENT_BOARD_ZONE_ID"]',
+      // A question or plan waits up to 4 hours for the user.
+      'mcp_servers.agent-board.tool_timeout_sec=14460',
     ]);
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { windowPaneKey } from './window-keys';
+import { isRunGateKey, runGateShortcut, windowPaneKey } from './window-keys';
 
 const press = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   code,
@@ -33,5 +33,19 @@ describe("a session window's pane keys", () => {
     expect(other('ArrowLeft', { altKey: true })).toEqual({ kind: 'focus', direction: 'left' });
     expect(windowPaneKey(press('KeyD', { ctrlKey: true }), false)).toBeUndefined();
     expect(windowPaneKey(press('KeyW', { ctrlKey: true }), false)).toBeUndefined();
+  });
+});
+
+describe('Run gate', () => {
+  const key = (fields: Partial<KeyboardEvent>) => ({ metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, code: 'KeyG', ...fields });
+
+  it('is ⌘⇧G on macOS and Ctrl+Shift+G elsewhere, and nothing else', () => {
+    expect(isRunGateKey(key({ metaKey: true, shiftKey: true }), true)).toBe(true);
+    expect(isRunGateKey(key({ metaKey: true }), true)).toBe(false);
+    expect(isRunGateKey(key({ ctrlKey: true, shiftKey: true }), false)).toBe(true);
+    expect(isRunGateKey(key({ ctrlKey: true }), false)).toBe(false);
+    expect(isRunGateKey(key({ metaKey: true, shiftKey: true, code: 'KeyD' }), true)).toBe(false);
+    expect(runGateShortcut(true)).toBe('⌘⇧G');
+    expect(runGateShortcut(false)).toBe('Ctrl+Shift+G');
   });
 });

@@ -5,6 +5,7 @@ import { LINEAR_API_URL, type TrackerIssue } from '@agent-board/tracker';
 import { RECORDED_LINEAR_FIXTURES, serveFixtures, type HttpInteraction } from '@agent-board/tracker/testing';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { drag } from './board-helpers.ts';
 import { connectedDaemonPid, launchApp } from './launch.ts';
 
 /** Launches the app on `dataDir` with `env` and extra switches `args`, and waits for it to reach its daemon. */
@@ -65,7 +66,7 @@ export async function spawnAgent(
 ): Promise<void> {
   await zoneNamed(window, zoneName).getByRole('button', { name: 'New agent' }).click();
   const form = window.getByRole('dialog', { name: 'New agent' });
-  await form.getByRole('radio', { name: harness }).check();
+  await pickInChip(form, 'Harness', harness);
   if (issue !== undefined) await form.getByRole('listbox', { name: 'Issues' }).getByRole('option').filter({ hasText: issue }).click();
   await form.getByLabel('Task').fill(prompt);
   await form.getByRole('button', { name: 'Start' }).click();
@@ -76,6 +77,16 @@ export async function spawnAgent(
     await notice.getByRole('button', { name: 'Start' }).click();
     await expect(notice).toBeHidden();
   }
+}
+
+/**
+ * Picks `choice` from one of a New agent form's footer chips (BJ3): `Harness`, `Model` or `Role`. The chip's
+ * name is "<chip>: <what it is now>".
+ */
+export async function pickInChip(form: Locator, chip: 'Harness' | 'Model' | 'Role', choice: string): Promise<void> {
+  const button = form.getByRole('button', { name: new RegExp(`^${chip}:`) });
+  await button.click();
+  await form.page().getByRole('menuitem', { name: choice, exact: true }).click();
 }
 
 /** Sets the zone named `zoneName`'s tracker from its tab: `connect` fills the dialog in, and the tab then shows `shown`. */
@@ -199,4 +210,37 @@ export async function expectCardBesideTile(window: Page, issueId: string, agentT
   expect(apart, `card ${JSON.stringify(cardBox)} and tile ${JSON.stringify(tileBox)} overlap`).toBe(true);
   // Nothing covers the tile: a trial click checks what is under the pointer without clicking.
   await agentTile.click({ trial: true });
+}
+
+/** A model id of the length a typed one can have ("Other…"). */
+export const LONG_MODEL = 'claude-opus-5-5-20261001-experimental';
+
+/**
+ * Starts an agent in the zone `monorepo` on `LONG_MODEL` and as a follow-up reviewer, then mutes it and gives it a
+ * schedule: its tile's footer has a model badge, a role badge, a clock and a bell, as crowded as the app lets a test make it.
+ */
+export async function startCrowdedAgent(page: Page): Promise<void> {
+  await zoneNamed(page, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+  const form = page.getByRole('dialog', { name: 'New agent' });
+  await pickInChip(form, 'Model', 'Other…');
+  await form.getByRole('textbox', { name: 'Model id' }).fill(LONG_MODEL);
+  await pickInChip(form, 'Role', 'Follow-up reviewer');
+  await form.getByLabel('Task').fill('Build it');
+  await form.getByRole('button', { name: 'Start' }).click();
+  await expect(form).toBeHidden();
+  await expect(tile(page)).toHaveCount(1);
+  const [agent] = await agents(page);
+  await page.evaluate(async (sessionId) => {
+    await window.agentBoard.agents.setMuted(sessionId, true);
+    await window.agentBoard.agents.setSchedule(sessionId, { cron: '0 9 * * 2', prompt: 'Go' });
+  }, agent!.sessionId);
+}
+
+/** Selects the tile `of` with a click on its body and drags its right edge by `dx` screen pixels (negative narrows it). */
+export async function narrowBy(page: Page, of: Locator, dx: number): Promise<void> {
+  const box = await of.boundingBox();
+  await page.mouse.click(box!.x + box!.width - 12, box!.y + box!.height / 2);
+  const handle = (await page.locator('.react-flow__node.selected .tile-resize.bottom.right').boundingBox())!;
+  const [x, y] = [handle.x + handle.width / 2, handle.y + handle.height / 2];
+  await drag(page, { x, y }, { x: x + dx, y });
 }

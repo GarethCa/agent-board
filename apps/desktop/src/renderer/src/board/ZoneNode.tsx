@@ -1,6 +1,6 @@
 import { createContext, memo, useContext, useId, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
-import { CircleDot, Ellipsis, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, Unlink, X } from 'lucide-react';
+import { CircleDot, Ellipsis, FileText, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, ShieldCheck, Unlink, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming, type MenuEntry } from '../ui';
 import { folderLabel } from './folders';
 import { leastZoneSize } from './layout';
@@ -95,7 +95,7 @@ export const BindZoneContext = createContext<(zone: Zone, as: ZoneBinding) => vo
 
 /**
  * What a zone's tab can do to the zone: to its binding, unbind it back into a group or set a group's default
- * repo; Tidy it; rename or recolour it, and dissolve a group; turn the board MCP server off or on
+ * repo; Tidy it; rename or recolour it, and delete it; turn the board MCP server off or on
  * for its agents.
  */
 export interface ZoneBindingActions {
@@ -113,12 +113,16 @@ export interface ZoneBindingActions {
   setFill(zone: Zone, fillOpacity: number): void;
   /** Takes back a preview that is not to be saved: the zone is drawn as it was before the drag. */
   cancelFill(zone: Zone): void;
-  /** Removes a group, leaving its tiles loose on the board where they are, and its notes and cards. */
-  dissolve(zone: Zone): void;
+  /** Deletes a zone of any kind (after asking), leaving its tiles loose on the board where they are, and its notes and cards. */
+  deleteZone(zone: Zone): void;
   /** Whether agents started in it get the board MCP server (ADR-0010). */
   setBoardMcp(zone: Zone, on: boolean): void;
   /** Lets the agents the user starts in the zone orchestrate there, or stops every agent in it orchestrating. */
   setAgentsOrchestrate(zone: Zone, on: boolean): void;
+  /** Asks for the zone's gate command. */
+  editGateCommand(zone: Zone): void;
+  /** Opens the zone's role templates. */
+  editRoleTemplates(zone: Zone): void;
 }
 export const ZoneBindingContext = createContext<ZoneBindingActions>({
   unbind: () => {},
@@ -129,9 +133,11 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   previewFill: () => {},
   setFill: () => {},
   cancelFill: () => {},
-  dissolve: () => {},
+  deleteZone: () => {},
   setBoardMcp: () => {},
   setAgentsOrchestrate: () => {},
+  editGateCommand: () => {},
+  editRoleTemplates: () => {},
 });
 
 /** The fill opacity the theme gives a zone that has none of its own, in percent. */
@@ -472,12 +478,30 @@ export const ZoneNode = memo(function ZoneNode({
                     : 'Agents you start here may start, message and close agents in this zone',
                   onSelect: () => binding.setAgentsOrchestrate(zone, !zone.agentsOrchestrate),
                 },
-                ...(unbound
-                  ? ['separator' as const, { label: 'Dissolve', icon: <X />, danger: true, hint: 'Its tiles stay on the board where they are', onSelect: () => binding.dissolve(zone) }]
-                  : []),
+                {
+                  label: zone.gateCommand === null ? 'Set a gate command…' : 'Change the gate command…',
+                  icon: <ShieldCheck />,
+                  hint: zone.gateCommand ?? "What checks an agent's work before it is merged, run when you ask",
+                  onSelect: () => binding.editGateCommand(zone),
+                },
+                {
+                  label: 'Role templates…',
+                  icon: <FileText />,
+                  hint: 'What agents started here in a role begin with',
+                  onSelect: () => binding.editRoleTemplates(zone),
+                },
+                'separator' as const,
+                {
+                  label: 'Delete zone…',
+                  icon: <X />,
+                  danger: true,
+                  hint: 'Its tiles stay on the board where they are',
+                  disabled: zone.clone !== null,
+                  onSelect: () => binding.deleteZone(zone),
+                },
               ]}
             >
-              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, rename, colour, default repo, unbind, board MCP, orchestrating, dissolve" />
+              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, rename, colour, default repo, unbind, board MCP, orchestrating, gate command, role templates, delete" />
             </Menu>
           )}
         </div>

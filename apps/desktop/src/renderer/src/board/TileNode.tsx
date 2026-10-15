@@ -1,13 +1,11 @@
 import { memo, useContext, useRef } from 'react';
-import { Handle, NodeResizeControl, Position, ResizeControlVariant, type ControlPosition, type NodeProps } from '@xyflow/react';
+import { NodeResizeControl, ResizeControlVariant, type ControlPosition, type NodeProps } from '@xyflow/react';
 import { ExpandedTile } from './ExpandedTile';
 import { parentKindOf, resizeAllowed } from './expanded';
-import { FLOW_PORTS } from './flow-edges';
 import { RepresentationContext, tileComponentFor } from './representations';
 import { useOnlySelected } from './items/items';
 import { TileActionsContext, type TileNodeType } from './tile';
 import { TILE_MAX_SIZE, TILE_MIN_SIZE } from './tile-size';
-import { AGENT_NODE_PREFIX } from './tiles';
 
 /** Where a tile can be resized from: each corner by a handle, each edge along its length (as an expanded tile). */
 const CORNERS: readonly ControlPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
@@ -15,8 +13,8 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
 const RESIZE_HANDLE = '.tile-resize';
 
 /**
- * The board's `tile` node: an expanded tile, or the tile drawn with its own representation, or the board-wide one. An
- * agent's has its two square flow ports, a flow edge leaving from the right one and arriving at the left.
+ * The board's `tile` node: an expanded tile, or the tile drawn with its own representation, or the board-wide one. Its
+ * round connector handles are where an arrow or a hand-off between agents leaves and arrives.
  */
 export const TileNode = memo(function TileNode({ id, data, parentId, selected: picked }: NodeProps<TileNodeType>) {
   const { style, registry } = useContext(RepresentationContext);
@@ -64,12 +62,6 @@ export const TileNode = memo(function TileNode({ id, data, parentId, selected: p
             );
           })}
         </span>
-      )}
-      {id.startsWith(AGENT_NODE_PREFIX) && (
-        <>
-          <Handle id={FLOW_PORTS.in} type="source" position={Position.Left} className="flow-port" data-testid="flow-port-in" />
-          <Handle id={FLOW_PORTS.out} type="source" position={Position.Right} className="flow-port" data-testid="flow-port-out" />
-        </>
       )}
     </>
   );

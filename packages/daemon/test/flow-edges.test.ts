@@ -203,6 +203,46 @@ describe('flow edges over the socket', () => {
     // Back to its final message, it carries no file.
     expect(await second.client.call('flowEdge.update', { id: edge.id, payload: 'final-message' })).toMatchObject({ path: null });
   });
+
+  it('draws from the right side to the left, curved, until reshaped: its shape is kept across a restart, and leaves its rules be', async () => {
+    const dataDir = tempDataDir();
+    const first = await flowDaemon(dataDir);
+    const { a, b } = await twoAgents(first.client, first.recorder);
+    const edge = await first.client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, trigger: 'manual', payload: 'handover' });
+    // An edge made before shapes, or without one, draws as edges always did.
+    expect(edge).toMatchObject({ fromSide: 'right', toSide: 'left', style: 'curved', points: [] });
+    const drawn = await first.client.call('flowEdge.create', { from: b.sessionId, to: a.sessionId, fromSide: 'top', toSide: 'bottom', style: 'elbow', trigger: 'manual' });
+    expect(drawn).toMatchObject({ fromSide: 'top', toSide: 'bottom', style: 'elbow', points: [] });
+
+    const points = [{ x: 120.5, y: -40 }, { x: 300, y: 80 }];
+    const bent = await first.client.call('flowEdge.update', { id: edge.id, fromSide: 'bottom', toSide: 'top', style: 'straight', points });
+    expect(bent).toMatchObject({ fromSide: 'bottom', toSide: 'top', style: 'straight', points, trigger: 'manual', payload: 'handover', path: 'handover.md' });
+    const refused = (params: Record<string, unknown>) =>
+      expect(first.client.call('flowEdge.update', { id: edge.id, ...params } as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await refused({ fromSide: 'middle' });
+    await refused({ style: 'zigzag' });
+    await refused({ points: [{ x: 'a', y: 1 }] });
+    await refused({ points: [{ x: Number.NaN, y: 1 }] });
+    await refused({ points: Array.from({ length: 33 }, () => ({ x: 0, y: 0 })) });
+    // A reshape with a rule refused is refused whole: its shape isn't half saved.
+    const shapeOf = async (id: string) => {
+      const { fromSide, toSide, style, points: bends } = (await first.client.call('flowEdge.list')).find((known) => known.id === id)!;
+      return { fromSide, toSide, style, points: bends };
+    };
+    await refused({ points: [{ x: 1, y: 1 }], trigger: 'sometimes' });
+    expect(await shapeOf(edge.id)).toEqual({ fromSide: 'bottom', toSide: 'top', style: 'straight', points });
+    // Nor when the rule would make a loop of auto edges.
+    await first.client.call('flowEdge.update', { id: edge.id, trigger: 'auto' });
+    await expect(first.client.call('flowEdge.update', { id: drawn.id, style: 'straight', trigger: 'auto' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    expect(await shapeOf(drawn.id)).toEqual({ fromSide: 'top', toSide: 'bottom', style: 'elbow', points: [] });
+    await first.client.call('flowEdge.update', { id: edge.id, trigger: 'manual' });
+    first.client.close();
+    await first.daemon.stop();
+
+    const second = await flowDaemon(dataDir);
+    const kept = (await second.client.call('flowEdge.list')).find((known) => known.id === edge.id);
+    expect(kept).toMatchObject({ fromSide: 'bottom', toSide: 'top', style: 'straight', points });
+  });
 });
 
 describe('delivering along flow edges', () => {
@@ -668,7 +708,7 @@ describe('held payloads', () => {
   /** Two agents, and a handover.md edge out of A held until `ready` is in A's worktree. */
   async function heldPlan(heldPayloads?: 'copy' | 'path') {
     const { client, recorder } = await flowDaemon(tempDataDir(), 0, { flowRecheckMs: 100 });
-    if (heldPayloads !== undefined) expect(await client.call('settings.set', { heldPayloads })).toEqual({ heldPayloads });
+    if (heldPayloads !== undefined) expect(await client.call('settings.set', { heldPayloads })).toMatchObject({ heldPayloads });
     const { a, b } = await twoAgents(client, recorder);
     const edge = await client.call('flowEdge.create', {
       from: a.sessionId,
@@ -686,7 +726,7 @@ describe('held payloads', () => {
 
   it('keeps a copy by default, and delivers the plan as it was when A handed off', async () => {
     const { client, recorder, a, b, edge, held } = await heldPlan();
-    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy' });
+    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '' });
     expect(held.held).toMatchObject({ name: 'plan.md', copy: true });
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');

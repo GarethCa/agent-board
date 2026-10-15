@@ -1,4 +1,4 @@
-import type { Agent } from '@agent-board/daemon/protocol';
+import { planPending, type Agent } from '@agent-board/daemon/protocol';
 import { toolSummary } from '../shared/needs-you';
 import { appStateOf, type AppStatus } from './app-state';
 
@@ -18,7 +18,7 @@ export interface AgentAlertsOptions {
 
 /**
  * Follows every agent's state, as the daemon reports it, and tells the user when one needs them or stops: an OS
- * notification each time an agent starts waiting, needs permission, fails or is done, and the app's state (needs,
+ * notification each time an agent starts waiting, asks a question or presents a plan, needs permission, fails or is done, and the app's state (needs,
  * working or quiet) with the needs-you inbox's size, for the dock and menu bar.
  */
 export interface AgentAlerts {
@@ -34,13 +34,15 @@ export interface AgentAlerts {
 }
 
 /** What the user is told about: the states of an agent a notification is raised for. */
-type Alert = 'waiting' | 'needs-permission' | 'failed' | 'done';
+type Alert = 'waiting' | 'asks' | 'plan' | 'needs-permission' | 'failed' | 'done';
 
 /** What the agent is in that the user is told about, or null. A pending permission prompt counts whatever its state. */
 function alertOf(agent: Agent): Alert | null {
   if (agent.state === 'failed' || agent.state === 'done') return agent.state;
   if (agent.endedAt !== null) return null;
   if (agent.permissions.length > 0 || agent.state === 'needs-permission') return 'needs-permission';
+  if (agent.ask !== null) return 'asks';
+  if (planPending(agent)) return 'plan';
   return agent.state === 'waiting' ? 'waiting' : null;
 }
 
@@ -49,6 +51,12 @@ function notificationFor(agent: Agent, alert: Alert): AgentNotification {
   switch (alert) {
     case 'waiting':
       return { sessionId, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
+    case 'asks': {
+      const { question, options } = agent.ask!;
+      return { sessionId, title: `${name} asks you`, body: options.length === 0 ? question : `${question} (${options.join(' · ')})` };
+    }
+    case 'plan':
+      return { sessionId, title: `${name} has a plan to review`, body: `${agent.plan!.title} · v${agent.plan!.version}` };
     case 'needs-permission': {
       const [prompt] = agent.permissions;
       if (prompt === undefined) return { sessionId, title: `${name} needs your permission`, body: 'It is asking in its terminal.' };

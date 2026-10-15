@@ -11,6 +11,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   harness: 'claude',
   model: null,
   role: null,
+  reviews: null,
   name: `Agent ${sessionId}`,
   description: '',
   branch: sessionId,
@@ -21,6 +22,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   endedAt: null,
   exitCode: null,
   shellSessionId: null,
+  shellHarness: null,
   issue: null,
   notice: null,
   muted: false,
@@ -29,6 +31,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   pullRequests: [],
   lastMessage: null,
   permissions: [],
+  ask: null,
+  plan: null,
   schedule: null,
   reviewOf: null,
   reviewCap: 3,
@@ -124,6 +128,22 @@ describe('agent notifications', () => {
     alerts.updated(agent('a', 'needs-permission'));
 
     expect(notifications).toEqual([{ sessionId: 'a', title: 'Agent a needs your permission', body: 'It is asking in its terminal.' }]);
+  });
+
+  it('notifies as an agent asks you something or has a plan to review, each a new ask', () => {
+    const { alerts, notifications } = recorded();
+    alerts.reset([agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?' })]);
+    const ask = { id: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false, askedAt: '', expiresAt: '' };
+    const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '', decision: null };
+
+    alerts.updated(agent('a', 'waiting', { ask }));
+    alerts.updated(agent('a', 'waiting', { plan }));
+    alerts.updated(agent('a', 'running', { plan: { ...plan, decision: { outcome: 'approved', comments: '', decidedAt: '' } } }));
+
+    expect(notifications).toEqual([
+      { sessionId: 'a', title: 'Agent a asks you', body: 'Which cache should the product pages use? (Redis · CDN only)' },
+      { sessionId: 'a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v2' },
+    ]);
   });
 
   it('stays quiet while it works, idles or is rate-limited', () => {

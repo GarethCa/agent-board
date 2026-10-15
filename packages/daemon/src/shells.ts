@@ -6,8 +6,8 @@ import { keyedQueue } from './keyed-queue.ts';
 import { invalidParams, nameParam, optionalStringParam, paramsObject, requiredNameParam, stringParam } from './params.ts';
 import { paneIds, paneName, parsePaneLayout, removePane, setPaneName, setSplitRatio, splitPane, type PaneLayout, type SplitDirection } from './pane-layout.ts';
 import { packageScripts, scriptCommand } from './package-scripts.ts';
-import { paneOfSurface, paneSplitInto, parseWindowLayout, singlePane, surfaceKey, type Surface, type WindowLayout } from './window-layout.ts';
-import { isOwnedBy, isOwnTab, type DaemonEvent, type DaemonMethods, type SessionInfo, type Shell, type ShellOwner, type ShellPlace, type TileMove } from './protocol.ts';
+import { isLooseSurface, paneOfSurface, paneSplitInto, parseSurface, parseWindowLayout, placeSurface, removeSurface, singlePane, surfaceKey, windowPanes, type Placement, type Surface, type WindowLayout } from './window-layout.ts';
+import { isOwnedBy, isOwnTab, type DaemonEvent, type DaemonMethods, type SessionInfo, type Shell, type ShellOwner, type ShellPlace, type TileMove, type WindowOwner } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 import type { SessionHost } from './sessions.ts';
 import { folderPath } from './repo-zone.ts';
@@ -115,6 +115,7 @@ export function createShellHost(options: {
     'INSERT INTO window_layouts (owner_kind, owner_id, layout) VALUES (?, ?, ?) ON CONFLICT (owner_kind, owner_id) DO UPDATE SET layout = excluded.layout',
   );
   const deleteWindow = db.prepare('DELETE FROM window_layouts WHERE owner_kind = ? AND owner_id = ?');
+  const selectTabWindows = db.prepare("SELECT owner_id, layout FROM window_layouts WHERE owner_kind = 'tabs' ORDER BY rowid");
   const queue = keyedQueue();
   /** The shell tiles being deleted, by `ownerKey`: none takes a new tab meanwhile, which would outlive it. */
   const deleting = new Set<string>();
@@ -330,7 +331,7 @@ export function createShellHost(options: {
   };
 
   /** The owner's window layout as kept, or null for none (or one that can't be read, which is logged). */
-  const readWindow = (owner: ShellOwner): WindowLayout | null => {
+  const readWindow = (owner: WindowOwner): WindowLayout | null => {
     const row = selectWindow.get(owner.kind, owner.id) as { layout: string } | undefined;
     if (row === undefined) return null;
     try {
@@ -340,6 +341,71 @@ export function createShellHost(options: {
       log(`ignoring the window layout of ${owner.kind} ${owner.id}: ${(error as Error).message}`);
       return null;
     }
+  };
+
+  /** Fails for an owner whose window can't be laid out: an unknown one, or one being deleted. A tab window always can. */
+  const windowReady = (owner: WindowOwner): void => {
+    if (owner.kind !== 'tabs') ownerFolder(owner);
+  };
+
+  /** Keeps the owner's layout, or forgets it for null. */
+  const keepWindow = (owner: WindowOwner, layout: WindowLayout | null): void => {
+    if (layout === null) deleteWindow.run(owner.kind, owner.id);
+    else upsertWindow.run(owner.kind, owner.id, JSON.stringify(layout));
+  };
+
+  /**
+   * The owner's layout as kept, else as its window lays out its tabs with none kept: one pane, its own surface and then
+   * its shell tabs in order. Null for a tab window with none.
+   */
+  const windowOrTabs = (owner: WindowOwner): WindowLayout | null => {
+    const kept = readWindow(owner);
+    if (kept !== null || owner.kind === 'tabs') return kept;
+    const strip = ownedBy(owner).filter((each) => !isOwnTab(each));
+    return singlePane([{ kind: 'own' }, ...strip.map((each): Surface => ({ kind: 'shell', shellId: each.id }))]);
+  };
+
+  /** See `shell.moveSurface`: in both windows' turns, taken in one order so two moves the other way round never wait on each other. */
+  const moveSurface = (surface: Surface, from: WindowOwner | null, to: { owner: WindowOwner; placement?: Placement } | null) => {
+    if (!isLooseSurface(surface)) throw invalidParams('only a pull request, a web page, a gate, plans or another session moves between windows this way');
+    const key = surfaceKey(surface);
+    const queues = [...new Set([from, to?.owner].flatMap((owner) => (owner == null ? [] : [windowQueue(owner)])))].sort();
+    const inTurn = (rest: string[], run: () => ReturnType<typeof move>): Promise<ReturnType<typeof move>> =>
+      rest.length === 0 ? Promise.resolve().then(run) : queue(rest[0]!, () => inTurn(rest.slice(1), run));
+    const move = () => {
+      if (to !== null) {
+        windowReady(to.owner);
+        if (surface.kind === 'session' && surface.target.kind === to.owner.kind && surface.target.id === to.owner.id) throw invalidParams(`a session can't be a tab of its own window`);
+      }
+      const source = from === null ? null : windowOrTabs(from);
+      const holder = source === null ? undefined : paneOfSurface(source, key);
+      if (from !== null && holder === undefined) throw invalidParams(`${key} is not in ${from.kind} ${from.id}'s window`);
+      const was: Placement | null = holder === undefined ? null : { pane: holder.id, index: holder.tabs.findIndex((tab) => surfaceKey(tab) === key) };
+      const left = source === null ? null : removeSurface(source, key);
+      // Into the window it leaves: what is left of it, so the move is one change of one layout.
+      const sameWindow = from !== null && to !== null && windowQueue(from) === windowQueue(to.owner);
+      const target = to === null ? null : sameWindow ? left : windowOrTabs(to.owner);
+      if (to !== null && target !== null && paneOfSurface(target, key) !== undefined) throw invalidParams(`${to.owner.kind} ${to.owner.id}'s window already shows ${key}`);
+      let joined: WindowLayout | null = null;
+      if (to !== null) {
+        if (target === null) joined = singlePane([surface]);
+        else {
+          const panes = windowPanes(target);
+          const placement = to.placement !== undefined && panes.some((pane) => pane.id === to.placement!.pane) ? to.placement : { pane: panes.at(-1)!.id };
+          joined = placeSurface(target, surface, placement, randomUUID);
+        }
+      }
+      // Both layouts in one transaction: a write that fails leaves the tab where it was.
+      atomically(() => {
+        if (from !== null && !sameWindow) keepWindow(from, left);
+        if (to !== null) keepWindow(to.owner, joined);
+      });
+      if (from !== null && !sameWindow) broadcast({ type: 'window.layout', owner: from, layout: left });
+      if (to !== null) broadcast({ type: 'window.layout', owner: to.owner, layout: joined });
+      log(`moved ${key} from ${from === null ? 'no window' : `${from.kind} ${from.id}`} to ${to === null ? 'no window' : `${to.owner.kind} ${to.owner.id}`}`);
+      return { from: from === null ? null : sameWindow ? joined : left, to: joined, was };
+    };
+    return inTurn(queues, move);
   };
 
   /** Ends the shell's panes, but an agent's own pane in its own tab, and removes it. */
@@ -672,9 +738,10 @@ export function createShellHost(options: {
           }),
         );
       },
-      'shell.windowLayout': (raw) => readWindow(ownerParam(paramsObject(raw))),
+      'shell.windowLayout': (raw) => readWindow(windowOwnerParam(paramsObject(raw))),
       'shell.unsplitTabs': (raw) => {
-        const owner = ownerParam(paramsObject(raw));
+        const owner = windowOwnerParam(paramsObject(raw));
+        if (owner.kind === 'tabs') return queue(windowQueue(owner), async () => ({ layout: readWindow(owner), tabs: [] }));
         return queue(windowQueue(owner), async () => {
           ownerFolder(owner);
           let layout = readWindow(owner);
@@ -702,20 +769,69 @@ export function createShellHost(options: {
       },
       'shell.setWindowLayout': (raw) => {
         const fields = paramsObject(raw);
-        const owner = ownerParam(fields);
+        const owner = windowOwnerParam(fields);
         let layout: WindowLayout;
         try {
           layout = parseWindowLayout(fields.layout);
         } catch (error) {
           throw invalidParams(`layout: ${(error as Error).message}`);
         }
+        if (owner.kind === 'tabs' && windowPanes(layout).some((pane) => !pane.tabs.every(isLooseSurface))) {
+          throw invalidParams('a tab window holds only pull request, web and session tabs');
+        }
+        let base: WindowLayout | null | undefined;
+        try {
+          base = fields.base === undefined ? undefined : fields.base === null ? null : parseWindowLayout(fields.base);
+        } catch (error) {
+          throw invalidParams(`base: ${(error as Error).message}`);
+        }
         // In the owner's window's turn, and refused for an owner on its way out.
         return queue(windowQueue(owner), async () => {
-          ownerFolder(owner);
+          windowReady(owner);
+          if (base !== undefined) {
+            const kept = readWindow(owner);
+            if (JSON.stringify(kept) !== JSON.stringify(base)) return kept;
+          }
           upsertWindow.run(owner.kind, owner.id, JSON.stringify(layout));
           return layout;
         });
       },
+      'shell.moveSurface': (raw) => {
+        const fields = paramsObject(raw);
+        const surface = surfaceParam(fields.surface);
+        const from = fields.from === null ? null : windowOwnerParam({ owner: fields.from });
+        let to: { owner: WindowOwner; placement?: Placement } | null = null;
+        if (fields.to !== null) {
+          const target = paramsObject(fields.to);
+          to = { owner: windowOwnerParam(target), ...(target.placement === undefined ? {} : { placement: placementParam(target.placement) }) };
+        }
+        return moveSurface(surface, from, to);
+      },
+      'shell.forgetWindow': (raw) => {
+        const fields = paramsObject(raw);
+        const owner = windowOwnerParam(fields);
+        if (owner.kind !== 'tabs') throw invalidParams('only a tab window is forgotten this way: a session keeps its window');
+        let shown: WindowLayout;
+        try {
+          shown = parseWindowLayout(fields.layout);
+        } catch (error) {
+          throw invalidParams(`layout: ${(error as Error).message}`);
+        }
+        // Only as the window last showed it: a tab moved into it since (a redo, as it closed) keeps it.
+        return queue(windowQueue(owner), async () => {
+          const kept = readWindow(owner);
+          if (kept === null || JSON.stringify(kept) !== JSON.stringify(shown)) return false;
+          deleteWindow.run(owner.kind, owner.id);
+          broadcast({ type: 'window.layout', owner, layout: null });
+          return true;
+        });
+      },
+      'shell.tabWindows': () =>
+        (selectTabWindows.all() as { owner_id: string; layout: string }[]).flatMap((row) => {
+          const owner = { kind: 'tabs', id: row.owner_id } as const;
+          const layout = readWindow(owner);
+          return layout === null ? [] : [{ owner, layout }];
+        }),
     }),
 
     adopt(session) {
@@ -758,7 +874,7 @@ export function zoneHasShells(db: DatabaseSync, zoneId: string): boolean {
 }
 
 /** The queue a window's layout is changed in. */
-const windowQueue = (owner: ShellOwner) => `window:${owner.kind}:${owner.id}`;
+const windowQueue = (owner: WindowOwner) => `window:${owner.kind}:${owner.id}`;
 
 /** The key the owner is marked by while it is being deleted. */
 const ownerKey = (owner: ShellOwner) => `${owner.kind}:${owner.id}`;
@@ -790,6 +906,40 @@ function ownerParam(fields: Record<string, unknown>): ShellOwner {
   if (kind !== 'agent' && kind !== 'shell') throw invalidParams('owner.kind must be "agent" or "shell"');
   if (typeof id !== 'string') throw invalidParams('owner.id must be a string');
   return { kind, id };
+}
+
+/** A tab window's id, as the app makes one: a UUID, or anything word-like and short. */
+const TAB_WINDOW_ID = /^[\w-]{1,64}$/;
+
+/** A window's owner: a session's, as `ownerParam` takes it, or a tab window's (`{ kind: 'tabs', id }`). */
+function windowOwnerParam(fields: Record<string, unknown>): WindowOwner {
+  const owner = fields.owner;
+  if (typeof owner === 'object' && owner !== null && (owner as Record<string, unknown>).kind === 'tabs') {
+    const { id } = owner as Record<string, unknown>;
+    if (typeof id !== 'string' || !TAB_WINDOW_ID.test(id)) throw invalidParams("a tab window's id must be a short word");
+    return { kind: 'tabs', id };
+  }
+  return ownerParam(fields);
+}
+
+/** A surface, as a window layout holds one. */
+function surfaceParam(raw: unknown): Surface {
+  const surface = parseSurface(raw);
+  if (surface === undefined) throw invalidParams(`not a tab: ${JSON.stringify(raw)?.slice(0, 200)}`);
+  return surface;
+}
+
+/** Where a tab goes in a window: `{ pane, index? }` or `{ pane, edge }`. */
+function placementParam(raw: unknown): Placement {
+  const fields = paramsObject(raw);
+  const pane = stringParam(fields, 'pane');
+  if (fields.edge !== undefined) {
+    if (fields.edge !== 'left' && fields.edge !== 'right' && fields.edge !== 'top' && fields.edge !== 'bottom') throw invalidParams('placement.edge must be left, right, top or bottom');
+    return { pane, edge: fields.edge };
+  }
+  if (fields.index === undefined) return { pane };
+  if (typeof fields.index !== 'number' || !Number.isSafeInteger(fields.index) || fields.index < 0) throw invalidParams('placement.index must be a whole number, 0 or more');
+  return { pane, index: fields.index };
 }
 
 function directionParam(fields: Record<string, unknown>): SplitDirection {

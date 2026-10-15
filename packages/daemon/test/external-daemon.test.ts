@@ -110,13 +110,14 @@ describe('external sessions through the global hooks', () => {
       expect((await client.call('item.list'))[0]).toMatchObject({ id: note.id, zoneId: null, x: group.x + 5, y: group.y + 6 });
     });
 
-    it('puts a tile that was never given a place loose at its slot, and refuses a zone bound to a repo', async () => {
+    it('puts a tile that was never given a place loose at its slot, and deletes a zone bound to a repo like a group', async () => {
       const { client, group } = await withUnsorted();
       await client.call('zone.dissolve', { id: group.id });
       expect((await client.call('external.list'))[0]).toMatchObject({ zoneId: null, position: { x: group.x + 20, y: group.y + 44 } });
 
       const repo = await client.call('zone.add', { path: tempRepo('app'), x: 0, y: 0 });
-      await expect(client.call('zone.dissolve', { id: repo.id })).rejects.toThrow(/bound to a repo/);
+      await client.call('zone.dissolve', { id: repo.id });
+      expect(await client.call('zone.list')).toEqual([]);
       await expect(client.call('zone.dissolve', { id: 'nope' })).rejects.toThrow(/no zone/);
     });
 

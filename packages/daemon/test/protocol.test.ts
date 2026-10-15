@@ -65,23 +65,21 @@ describe('normalisedAngle', () => {
 
 describe('notOrchestratingReason', () => {
   const caller = { sessionId: 'impl', name: 'impl' };
-  const agent = { sessionId: 'impl', spawnedBy: null, endedAt: null, zoneId: 'z' };
+  const agent = { sessionId: 'impl', endedAt: null, zoneId: 'z', off: false, depth: 0 };
   const zones = (agentsOrchestrate: boolean) => [{ id: 'z', name: 'web', agentsOrchestrate }];
 
-  it("points at the zone's setting when it is off, and says it reaches only agents started after", () => {
+  it("points at the zone's setting when it is off", () => {
     expect(notOrchestratingReason(caller, agent, zones(false))).toBe(
-      "impl may not orchestrate: orchestrating is off in web. The user can turn it on (Let agents orchestrate, in the zone's ⋯ menu) for the agents started there after",
+      "impl may not orchestrate: orchestrating is off in web. The user can turn it on (Let agents orchestrate, in the zone's ⋯ menu)",
     );
   });
 
-  it('says truly why when the zone allows it', () => {
-    expect(notOrchestratingReason(caller, agent, zones(true))).toBe(
-      "impl may not orchestrate: the user didn't start it in web while orchestrating was on there. The agents the user starts there now may",
-    );
+  it('says truly why otherwise', () => {
+    expect(notOrchestratingReason(caller, { ...agent, off: true }, zones(true))).toMatch(/the user turned it off/);
+    expect(notOrchestratingReason(caller, { ...agent, depth: 2 }, zones(true))).toMatch(/3 agents deep in a crew/);
     expect(notOrchestratingReason(caller, { ...agent, zoneId: null }, zones(true))).toMatch(/it is in no zone/);
-    expect(notOrchestratingReason(caller, { ...agent, spawnedBy: 'lead' }, zones(true))).toMatch(/an agent an orchestrator started never does/);
-    expect(notOrchestratingReason(caller, { ...agent, endedAt: '2026-10-13T00:00:00Z' }, zones(true))).toMatch(/it has ended/);
-    expect(notOrchestratingReason({ sessionId: 'pane', name: 'impl' }, agent, zones(true))).toMatch(/it has ended/);
-    expect(notOrchestratingReason({ sessionId: 'sh', name: 'sh' }, undefined, zones(true))).toMatch(/not a shell/);
+    expect(notOrchestratingReason(caller, { ...agent, endedAt: '2026-10-13T00:00:00Z' }, zones(true))).toMatch(/its session has ended/);
+    expect(notOrchestratingReason({ sessionId: 'pane', name: 'impl' }, agent, zones(true))).toMatch(/its session has ended/);
+    expect(notOrchestratingReason({ sessionId: 'sh', name: 'sh' }, undefined, zones(true))).toMatch(/its session has ended/);
   });
 });

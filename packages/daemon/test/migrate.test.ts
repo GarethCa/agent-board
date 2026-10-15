@@ -330,3 +330,37 @@ describe('the shell tile tabs migration', () => {
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });
+
+describe('the edge shapes migration', () => {
+  it('keeps every connector and flow edge as it was, with its rules, approvals, hold and history, drawn as before', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const shapes = MIGRATIONS.findIndex((m) => m.name === 'edge_shapes');
+    expect(shapes).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, shapes));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd) VALUES ('a', 'claude', 'ha', '/a'), ('b', 'claude', 'hb', '/b');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state)
+        VALUES ('a', 'z', '/code/app', 1, 'Ada', 'Do it', 'ada', '/a', 'idle'), ('b', 'z', '/code/app', 1, 'Bo', 'Check it', 'bo', '/b', 'idle');
+      INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side, style, start_end, end_end, label)
+        VALUES ('c', 'agent', 'a', 'left', 'agent', 'b', 'right', 'elbow', 'none', 'arrow', 'see');
+      INSERT INTO flow_edges (id, from_session_id, to_session_id, trigger, payload, path, conditions, approvals, deliver_as, paused,
+          held_name, held_text, held_since, held_reason)
+        VALUES ('e', 'a', 'b', 'auto', 'handover', 'handover.md', '[{"kind":"script","command":"./ready.sh"}]', '{"./ready.sh":"f1"}',
+          'queue', 1, 'handover.md', '# Done', '2026-10-14T10:00:00.000Z', 'exited 1');
+      INSERT INTO flow_edge_events (edge_id, kind, detail) VALUES ('e', 'held', 'exited 1');`);
+    const connectors = db.prepare('SELECT * FROM connectors').all();
+    const edges = db.prepare('SELECT * FROM flow_edges').all();
+    const events = db.prepare('SELECT * FROM flow_edge_events').all();
+
+    migrate(db, MIGRATIONS.slice(0, shapes + 1));
+
+    // Unbent, and a flow edge from its tile's right side to the other's left, curved: as each was drawn before.
+    expect(db.prepare('SELECT * FROM connectors').all()).toEqual(connectors.map((connector) => ({ ...connector, points: '[]' })));
+    expect(db.prepare('SELECT * FROM flow_edges').all()).toEqual(
+      edges.map((edge) => ({ ...edge, from_side: 'right', to_side: 'left', style: 'curved', points: '[]' })),
+    );
+    expect(db.prepare('SELECT * FROM flow_edge_events').all()).toEqual(events);
+  });
+});

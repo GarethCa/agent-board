@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, screen, type Rectangle } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, type Rectangle, type WebContents } from 'electron';
+import type { WindowOwner } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { sendToAllWindows } from './broadcast';
-import { WINDOW_IPC, WINDOW_QUERY, type PopOutEnd, type WindowTarget } from '../preload/api';
+import { WINDOW_IPC, WINDOW_QUERY, type PopOutEnd, type ScreenPoint, type WindowTarget } from '../preload/api';
 import { VIEW_KEYS, viewSaver } from '../shared/view-saver';
 import type { ViewState } from './view';
 
@@ -10,6 +11,9 @@ const SAVE_BOUNDS_DELAY_MS = 300;
 
 /** A popped-out window's size when it has no saved place. */
 const POP_OUT_SIZE = { width: 960, height: 640 };
+
+/** Where in a window popped out by a drag the pointer is let go: on its tab strip, near its start. */
+const DROPPED_GRIP = { x: 120, y: 48 };
 
 export interface WindowIpcOptions {
   /** Opens a renderer window loaded with `query`, at `x`, `y` if given. */
@@ -31,7 +35,7 @@ export interface WindowIpcOptions {
  * back in with the board closed opens the board. A popped-out window reopens where it was (`VIEW_KEYS.popOutBounds`), and
  * the windows the app closes as it quits are not reported as gone: the board reopens them at its next start.
  */
-export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpcOptions): void {
+export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpcOptions): { poppedOwner(contents: WebContents): WindowOwner | undefined } {
   const popped = new Map<string, { window: BrowserWindow; target: WindowTarget; end: PopOutEnd }>();
   let quitting = false;
   app.on('before-quit', () => (quitting = true));
@@ -48,17 +52,21 @@ export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpc
       savePlaces(all);
     });
 
-  ipcMain.handle(WINDOW_IPC.popOut, async (_event, target: WindowTarget, reveal: boolean) => {
+  ipcMain.handle(WINDOW_IPC.popOut, async (_event, target: WindowTarget, reveal: boolean, at: ScreenPoint | undefined) => {
+    /** One already out: moved to where a drag let it go, if one did, and brought forward if asked. */
+    const again = (window: BrowserWindow) => {
+      if (at !== undefined) window.setBounds(placedAt(at, window.getBounds()));
+      if (reveal) revealWindow(window);
+    };
     const existing = popped.get(target.id);
-    if (existing !== undefined) {
-      if (reveal) revealWindow(existing.window);
-      return;
-    }
+    if (existing !== undefined) return again(existing.window);
     const { id, kind, title } = target;
-    const place = onScreen((await loadPlaces())[id]);
+    // Dragged out, it opens where it was let go, at the size it last had.
+    const saved = onScreen((await loadPlaces())[id]);
+    const place = at === undefined ? saved : placedAt(at, saved ?? POP_OUT_SIZE);
     // Asked twice while the places were loading: the first opened it.
     const opened = popped.get(id);
-    if (opened !== undefined) return reveal ? revealWindow(opened.window) : undefined;
+    if (opened !== undefined) return again(opened.window);
     const window = open({ [WINDOW_QUERY.popOut]: id, [WINDOW_QUERY.kind]: kind, [WINDOW_QUERY.title]: title }, { title, ...(place ?? POP_OUT_SIZE) });
     const entry = { window, target, end: 'closed' as PopOutEnd };
     popped.set(id, entry);
@@ -88,6 +96,31 @@ export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpc
   ipcMain.handle(WINDOW_IPC.close, (_event, id: string) => popped.get(id)?.window.close());
 
   ipcMain.handle(WINDOW_IPC.isFullScreen, (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
+
+  return {
+    /** Whose window a popped-out window's page shows, if it is one's: an agent's, a shell tile's or a tab window's. */
+    poppedOwner(contents) {
+      const entry = [...popped.values()].find((each) => !each.window.isDestroyed() && each.window.webContents === contents);
+      if (entry === undefined) return undefined;
+      const { kind, id } = entry.target;
+      return kind === 'session' ? { kind: 'agent', id } : { kind, id };
+    },
+  };
+}
+
+/**
+ * A window of `size` with its tab strip under `at` (where a tab dragged out of a window was let go), kept on the
+ * display there.
+ */
+function placedAt(at: ScreenPoint, size: { width: number; height: number }): Rectangle {
+  const area = screen.getDisplayNearestPoint(at).workArea;
+  return fitPlace(at, size, area);
+}
+
+/** `placedAt` on the display whose work area is `area`. */
+export function fitPlace(at: ScreenPoint, { width, height }: { width: number; height: number }, area: Rectangle): Rectangle {
+  const along = (point: number, grip: number, length: number, from: number, room: number) => Math.round(Math.max(from, Math.min(point - grip, from + room - length)));
+  return { x: along(at.x, DROPPED_GRIP.x, width, area.x, area.width), y: along(at.y, DROPPED_GRIP.y, height, area.y, area.height), width, height };
 }
 
 /** The place if it is still on a display (one may have been unplugged since), else undefined. */

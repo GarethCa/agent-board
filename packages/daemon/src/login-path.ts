@@ -25,27 +25,46 @@ export function loginShellKind(shell: string, shellArgs: string[]): 'posix' | 'f
  * The PATH the user's login shell sets up, profile and all: a daemon started from an app opened in the Dock or
  * Finder has launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`, and the CLIs it runs (git, gh, claude, codex) usually
  * live on the profile's PATH. Undefined when sessions use no login shell of a known kind, or the shell fails or takes
- * longer than `timeoutMs`.
+ * longer than `timeoutMs`. With `interactive` the shell is also interactive (`-i`), so it reads what only an
+ * interactive shell does (zsh's `.zshrc`; bash's `.bashrc` when its profile sources it); it still gets no input and no terminal.
  */
 export function loginShellPath(
   shell: string,
   shellArgs: string[],
-  options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  options: { env?: NodeJS.ProcessEnv; timeoutMs?: number; interactive?: boolean } = {},
 ): Promise<string | undefined> {
   const kind = loginShellKind(shell, shellArgs);
   if (kind === undefined) return Promise.resolve(undefined);
   const path = kind === 'fish' ? '(string join : $PATH)' : '"$PATH"';
   const script = `printf '\\n${MARKER}%s\\n' ${path}`;
   return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    const finish = (path: string | undefined) => {
+      if (done) return;
+      done = true;
+      resolve(path);
+    };
+    const read = (): string | undefined => {
+      const line = out.split('\n').findLast((l) => l.startsWith(MARKER));
+      return line !== undefined && line.length > MARKER.length ? line.slice(MARKER.length) : undefined;
+    };
     const child = execFile(
       shell,
-      [...shellArgs, '-c', script],
-      { env: options.env, timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, killSignal: 'SIGKILL' },
-      (error, stdout) => {
-        const line = stdout.split('\n').findLast((l) => l.startsWith(MARKER));
-        resolve(error === null && line !== undefined && line.length > MARKER.length ? line.slice(MARKER.length) : undefined);
-      },
+      [...shellArgs, ...(options.interactive ? ['-i'] : []), '-c', script],
+      { env: options.interactive ? { ...options.env, TERM: 'dumb' } : options.env, timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, killSignal: 'SIGKILL' },
+      (error) => finish(error === null ? read() : undefined),
     );
+    // The PATH is the answer as soon as its line is whole: a job the profile left running keeps the output open long
+    // after, and would cost the whole timeout. The shell has nothing more to say, so it is stopped.
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      out += chunk;
+      if (done || !out.includes('\n', out.lastIndexOf(MARKER))) return;
+      const path = read();
+      if (path === undefined) return;
+      finish(path);
+      child.kill('SIGKILL');
+    });
     // A profile that reads its input gets none, rather than waiting for it.
     child.stdin?.end();
   });

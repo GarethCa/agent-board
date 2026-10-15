@@ -192,8 +192,9 @@ test('first run: everything missing, then fixed through the fakes, then the tour
     await expect(finish).toBeHidden();
     await pickFolderNext(app, run.repo);
     const addZone = window.getByRole('dialog', { name: 'Add zone' });
-    await addZone.getByRole('tab', { name: 'Recent' }).click();
-    await addZone.getByRole('button', { name: 'Browse…' }).click();
+    await addZone.getByRole('tab', { name: 'File browser' }).click();
+    await addZone.getByRole('button', { name: 'Choose a folder…' }).click();
+    await addZone.getByRole('button', { name: /^Add zone/ }).click();
     await expect(window.getByTestId('zone-tab').getByText('monorepo', { exact: true })).toBeVisible();
     // The N pressed under the welcome made nothing.
     expect(await window.evaluate(() => self.agentBoard.items.list())).toEqual([]);

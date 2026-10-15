@@ -7,7 +7,7 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
 
 ## Amendments
 
-**2026-10-09**:
+**Update**:
 
 - With no linked issue, the branch is the agent's name as a slug (at most 40 characters) plus 6 random hex digits,
   e.g. `fix-the-flaky-tests-3fa2c1`.
@@ -17,7 +17,7 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
   changes, commits on a detached HEAD that no branch has, or commits on its branch that no other branch or
   remote-tracking branch has. The app also asks before deleting an agent that is still running.
 
-**2026-10-09**:
+**Update**:
 
 - An agent started from an issue gets the tracker's branch name for it: the lowercase issue ID plus the title as a slug,
   cut at a word boundary to at most 40 characters, e.g. `acme-12-spawn-agents-in-a-pty`. If that branch already exists
@@ -25,19 +25,19 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
   issue ID that links PRs back to the issue.
 - Linking an existing agent to an issue never renames its branch.
 
-**2026-10-09**:
+**Update**:
 
 - A GitHub issue's branch is `gh-` plus its number plus the title as a slug, with the same cut and `-2` suffixes,
   e.g. `gh-34-fix-the-login-redirect`. The repo is left out: a zone has one repo, and the issue's own ID
   (`owner/repo#34`) is on the agent's tile.
 
-**2026-10-11**:
+**Update**:
 
 - A repo the daemon clones for a zone made from GitHub (a **managed clone**) goes to `~/.agent-board/repos/<owner>/<repo>`,
   beside the worktrees, not in a folder of the user's. `$AGENT_BOARD_REPOS_DIR` overrides the root, for tests. A clone
   that fails or is cancelled leaves nothing there.
 
-**2026-10-11**:
+**Update**:
 
 - An agent can start from a repo it is given rather than its zone's: one picked in the repo picker (a repo, or a folder
   in one, which it then starts in), a group's default repo, or a new **scratch repo** the daemon makes for it, with an
@@ -48,7 +48,7 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
 - A branch name can be given: the repo picker prefills `agent/<agent name>`. It must be a name git accepts and one the
   repo doesn't have yet; the daemon refuses it otherwise rather than adding a suffix. Without one, the rules above hold.
 
-**2026-10-11**:
+**Update**:
 
 - Resuming an external session in agent-board adopts it as an agent. By default it carries on in its own folder: the
   user's checkout (often the repo's main checkout, which the confirmation warns of), a linked worktree, or a folder
@@ -60,3 +60,12 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
   (`-2`, `-3`… if taken) cut from the session's branch, in the same folder of it. A session on a detached HEAD has no
   branch: its new branch is `<its name as a slug>-resumed`, cut from the commit it is on. That agent owns its worktree as a
   spawned one does. Claude's transcript is copied to the new folder's project directory, where `claude --resume` looks.
+
+**Update**:
+
+- A zone made from a GitHub repo can bind to a checkout the user already has instead of a managed clone: one the daemon
+  knows (a zone's, a recent folder's), one the user points at with "Use my copy…" (the daemon checks that the folder is
+  a git repo, or in one, whose `origin` is that repo), or one "Find my local copies" found. That search runs only when
+  the user clicks it, one level deep in `~/code`, `~/src`, `~/Developer`, `~/projects` and `~/GitHub`.
+- Nothing changes for the user's checkout: agents still work in their own worktrees under the worktree root, cut from
+  it, as for any zone bound to a folder.

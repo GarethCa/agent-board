@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import type { FlowEdge } from '@agent-board/daemon/protocol';
-import { agents, launch, recordedStates, recordStates, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, recordedStates, recordStates, spawnAgent, tile, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -10,14 +10,26 @@ const flowEdges = (page: Page): Promise<FlowEdge[]> => page.evaluate(() => windo
 const answer = (page: Page, sessionId: string, text: string): Promise<void> =>
   page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [sessionId, text]);
 const deleteAgent = (page: Page, sessionId: string) => page.evaluate((id) => window.agentBoard.agents.delete(id, true), sessionId);
+const connectors = (page: Page) => page.evaluate(() => window.agentBoard.connectors.list());
 const join = (page: Page, from: string, to: string): Promise<FlowEdge> =>
   page.evaluate(([a, b]) => window.agentBoard.flowEdges.create({ from: a!, to: b! }), [from, to]);
+/** Moves the second agent's tile well clear of the first, so the edge between them has room for its label. */
+async function spaceApart(page: Page, first: string, second: string): Promise<void> {
+  const [zone] = await zones(page);
+  await page.evaluate(
+    async ({ zoneId, first, second }) => {
+      await window.agentBoard.agents.move(first, { zoneId, x: 20, y: 40 });
+      await window.agentBoard.agents.move(second, { zoneId, x: 620, y: 40 });
+    },
+    { zoneId: zone!.id, first, second },
+  );
+}
 const centreOf = async (locator: Locator) => {
   const box = (await locator.boundingBox())!;
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 };
 
-test("an edge drawn from one agent's flow port to another opens its Edge rules, delivers its final message on Stop along the edge, and a manual one waits to be sent", async () => {
+test("a hand-off drawn from one agent's handle to another opens its Edge rules, delivers its final message on Stop along the edge, and a manual one waits to be sent", async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -33,39 +45,69 @@ test("an edge drawn from one agent's flow port to another opens its Edge rules, 
     const all = await agents(window);
     const coderAgent = all.find((agent) => agent.name === 'Write the code')!;
     const reviewerAgent = all.find((agent) => agent.name === 'Review the code')!;
+    await spaceApart(window, coderAgent.sessionId, reviewerAgent.sessionId);
 
-    // The filled square out port shows on hover; dragging it lights only agent tiles as targets, and Esc cancels.
-    const port = window.locator(`.react-flow__node[data-id="agent:${coderAgent.sessionId}"]`).getByTestId('flow-port-out');
+    // Dragged from the coder's round handle over the reviewer, the line says ⌥ makes it a hand-off; with ⌥ held it
+    // says what it carries and who to, only agents' tiles are targets, and Esc calls it off.
+    const handle = window.locator(`.react-flow__node[data-id="agent:${coderAgent.sessionId}"] > .connector-handle[data-side="right"]`);
     await coder.hover();
-    await expect(port).toHaveCSS('opacity', '1');
-    const from = await centreOf(port);
+    await expect(handle).toHaveCSS('opacity', '1');
+    const from = await centreOf(handle);
     const to = await centreOf(reviewer);
     await window.mouse.move(from.x, from.y);
     await window.mouse.down();
     await window.mouse.move(to.x, to.y, { steps: 12 });
-    await expect(window.getByTestId('flow-drop-hint')).toHaveText('Release to connect to Review the code');
+    await expect(window.getByTestId('flow-drop-hint')).toHaveText('Hold ⌥ to hand off');
+    await window.keyboard.down('Alt');
+    await expect(window.getByTestId('flow-drop-hint')).toHaveText('Hand off to Review the code');
+    await expect(window.getByTestId('flow-drag-payload')).toHaveText('▶ final message');
+    await expect(window.locator('.board-drawing-flow')).toHaveCount(1);
+    // Over empty board, ⌥ or not, it would make an arrow and a note, so it looks like an arrow's line.
+    await window.mouse.move(to.x, to.y + 220, { steps: 4 });
+    await expect(window.getByTestId('flow-drag-payload')).toHaveCount(0);
+    await expect(window.locator('.flow-connection-ghost')).toHaveCount(0);
+    await window.mouse.move(to.x, to.y, { steps: 4 });
+    await expect(window.getByTestId('flow-drag-payload')).toHaveCount(1);
     await window.keyboard.press('Escape');
     await window.mouse.up();
+    await window.keyboard.up('Alt');
     await expect(window.locator('.board-drawing-flow')).toHaveCount(0);
     expect(await flowEdges(window)).toEqual([]);
+    expect(await connectors(window)).toEqual([]);
 
-    // Let go on the other tile, it joins them with an auto edge, selected, and the Edge rules panel opens on it.
+    // Let go on the other tile, the chooser asks; H makes it a hand-off, an auto edge, selected, its Edge rules open.
     await coder.hover();
     await window.mouse.move(from.x, from.y);
     await window.mouse.down();
     await window.mouse.move(to.x, to.y, { steps: 12 });
     await window.mouse.up();
+    await expect(window.getByTestId('handoff-chooser')).toBeVisible();
+    await window.keyboard.press('h');
+    await expect(window.getByTestId('handoff-chooser')).toHaveCount(0);
+    // H was the chooser's, not the board's Hand tool.
+    await expect(window.getByRole('toolbar', { name: 'Create' }).getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true');
     const edge = window.getByTestId('flow-edge');
     await expect(edge).toHaveCount(1);
     await expect(edge).toHaveAttribute('data-trigger', 'auto');
     await expect(edge).toContainText('final message');
-    expect(await flowEdges(window)).toEqual([expect.objectContaining({ from: coderAgent.sessionId, to: reviewerAgent.sessionId })]);
+    expect(await flowEdges(window)).toEqual([
+      expect.objectContaining({ from: coderAgent.sessionId, to: reviewerAgent.sessionId, fromSide: 'right', toSide: 'left' }),
+    ]);
+    // The arrow drawn meanwhile became it.
+    await expect.poll(() => connectors(window)).toEqual([]);
     const rules = window.getByRole('complementary', { name: 'Edge rules' });
     await expect(rules).toBeVisible();
     await expect(rules).toContainText('Write the code');
     await expect(rules).toContainText('Review the code');
     await expect(rules.getByText('new', { exact: true })).toBeVisible();
-    await expect(rules.getByRole('radio', { name: 'Auto when Write the code is done' })).toBeChecked();
+    // Its four sections open with what they do (BQ3).
+    await expect(rules.getByRole('group', { name: 'Trigger' }).getByRole('button', { name: 'When it hands off' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(rules.locator('.edge-rules-summary')).toHaveText([
+      'Sends by itself when Write the code hands off',
+      "Sends Write the code's final message",
+      'Nothing to wait for',
+    ]);
+    await expect(rules.locator('.ui-section-label > span:first-child')).toHaveText(['When', 'What', 'Only if', 'History']);
 
     // The coder's next turn ends: its final message goes to the reviewer as its next message, shown along the edge.
     await recordStates(window);
@@ -82,7 +124,8 @@ test("an edge drawn from one agent's flow port to another opens its Edge rules, 
     await expect(rules).toContainText('fired 1 time');
 
     // Made manual in the panel, it waits for Send, which delivers the last final message again.
-    await rules.getByRole('radio', { name: 'Manual, with a Send button' }).check();
+    await rules.getByRole('group', { name: 'Trigger' }).getByRole('button', { name: 'I press Send' }).click();
+    await expect(rules.locator('.edge-rules-summary').first()).toHaveText('Sends when you press Send');
     await expect(edge).toHaveAttribute('data-trigger', 'manual');
     const [sent] = await flowEdges(window);
     await edge.getByRole('button', { name: 'Send' }).click();
@@ -136,6 +179,7 @@ test('the Edge rules carry a file from the agent\'s worktree, hold a hand-off un
     const all = await agents(window);
     const planner = all.find((agent) => agent.name === 'Write the plan')!;
     const builder = all.find((agent) => agent.name === 'Build it')!;
+    await spaceApart(window, planner.sessionId, builder.sessionId);
     await join(window, planner.sessionId, builder.sessionId);
     const edge = window.getByTestId('flow-edge');
     await edge.locator('.flow-edge-pill').click({ force: true });
@@ -145,7 +189,7 @@ test('the Edge rules carry a file from the agent\'s worktree, hold a hand-off un
     await expect(rules.getByTestId('edge-rules-preview')).toHaveText('All tests pass.');
 
     // A handover.md payload, from a file the planner wrote: the label names it, and the preview shows it.
-    await rules.getByRole('group', { name: 'Payload' }).getByRole('button', { name: 'handover.md' }).click();
+    await rules.getByRole('group', { name: 'Payload' }).getByRole('button', { name: 'File' }).click();
     const file = rules.getByRole('textbox', { name: "File in Write the plan's worktree" });
     await expect(file).toHaveValue('handover.md');
     writeFileSync(joinPath(planner.worktree, 'plan.md'), '# Plan\n\n1. Add zoneId.\n');
@@ -160,8 +204,9 @@ test('the Edge rules carry a file from the agent\'s worktree, hold a hand-off un
     await window.getByRole('menuitem', { name: /Custom script/ }).click();
     await rules.getByRole('textbox', { name: 'Script' }).fill('test -f ready');
     await rules.getByRole('button', { name: 'Add', exact: true }).click();
-    // It runs nothing until approved, exactly as shown. The dialog is modal: the panel is reached again once it closes.
-    const approval = window.getByRole('alertdialog', { name: 'Run this command?' });
+    // It runs nothing until approved, exactly as shown, in the panel under its condition.
+    const approval = rules.getByTestId('approve-command');
+    await expect(rules.locator('.edge-rules-condition-check')).toHaveText('needs approval');
     await expect(approval).toContainText('test -f ready');
     await approval.getByRole('button', { name: 'Approve' }).click();
     await expect(approval).toHaveCount(0);
@@ -174,33 +219,30 @@ test('the Edge rules carry a file from the agent\'s worktree, hold a hand-off un
     expect((await flowEdges(window))[0]).toMatchObject({ payload: 'handover', path: 'plan.md', held: { reason: 'exited 1' } });
 
     // Paused, it keeps holding it, even once the script passes; resumed, it releases it by itself.
-    await rules.getByRole('button', { name: 'Pause edge' }).click();
+    await rules.getByRole('button', { name: 'Pause', exact: true }).click();
     await expect(window.getByTestId('flow-edge-note')).toHaveText('paused');
     // The note is the panel's at once; the daemon's pause is what holds it.
     await expect.poll(async () => (await flowEdges(window))[0]?.paused).toBe(true);
     writeFileSync(joinPath(planner.worktree, 'ready'), '');
     await window.waitForTimeout(600);
     expect((await flowEdges(window))[0]).toMatchObject({ paused: true, deliveries: 0 });
-    await rules.getByRole('button', { name: 'Resume edge' }).click();
+    await rules.getByRole('button', { name: 'Resume', exact: true }).click();
     const builderMessage = async () => (await agents(window)).find((agent) => agent.sessionId === builder.sessionId)?.lastMessage;
     await expect.poll(builderMessage).toBe('Done: Hand-off from Write the plan (its plan.md): # Plan 1. Add zoneId..');
     await expect(window.getByTestId('flow-edge-note')).toHaveCount(0);
     await expect(rules).toContainText('Released: every condition passed');
     await expect(rules).toContainText('Sent plan.md (23 B) to Build it');
 
-    // Send now sends whatever the conditions say; Queue after turn is kept with the edge.
+    // Send now sends whatever the conditions say; Wait for its turn is kept with the edge.
     await rules.getByRole('button', { name: 'Remove Script passes: test -f ready condition' }).click();
     await rules.getByRole('button', { name: 'Add condition' }).click();
     await window.getByRole('menuitem', { name: /Custom script/ }).click();
     await rules.getByRole('textbox', { name: 'Script' }).fill('false');
     await rules.getByRole('button', { name: 'Add', exact: true }).click();
-    // Not approved now, it waits with an Approve button.
-    const notNow = window.getByRole('alertdialog', { name: 'Run this command?' });
-    await expect(notNow).toContainText('false');
-    await notNow.getByRole('button', { name: 'Not now' }).click();
-    await expect(notNow).toHaveCount(0);
+    // Not approved, it waits with an Approve button.
+    await expect(rules.getByTestId('approve-command')).toContainText('false');
     await expect(rules.locator('.edge-rules-condition').getByRole('button', { name: 'Approve' })).toBeVisible();
-    await rules.getByRole('radio', { name: 'Queue after turn' }).check();
+    await rules.getByRole('button', { name: 'Wait for its turn' }).click();
     await rules.getByRole('button', { name: 'Send now' }).click();
     await expect(rules).toContainText('fired 2 times');
     expect((await flowEdges(window))[0]).toMatchObject({ deliverAs: 'queue', conditions: [{ kind: 'script', command: 'false' }] });

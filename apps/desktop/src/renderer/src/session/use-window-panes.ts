@@ -10,20 +10,26 @@ import {
   selectSurface,
   singlePane,
   surfaceKey,
+  updateSurface,
   windowPanes,
   type Placement,
   type Surface,
+  type WebSurface,
   type WindowLayout,
 } from '@agent-board/daemon/window-layout';
 import { errorMessage } from '../../../shared/errors';
 import { bySession, nearestInDirection, paneGeometry, type Direction, type Rect } from './pane-geometry';
 import { arrivalPlacement, expectArrival, noteDepartures, settleArrival } from './placements';
-import { dropKey, dropMove, type ShellDrag, type ShellMove } from './shell-moves';
+import { dropKey, dropMove, type TabDrag, type TabMove } from './shell-moves';
+import { noRoomToSplit } from './split-room';
+import { chosenFontSize } from './terminal-size';
 import { useTabRequest } from './tab-request';
 import {
   OWN_TAB,
+  pullRequestChoices,
   sessionChoices,
   shellOwner,
+  windowOwner,
   tabAtDigit,
   tabKey,
   tabLiveShells,
@@ -36,8 +42,8 @@ import {
   type WindowSurface,
 } from './tabs';
 import { useLiveAgents, useLiveShells } from './use-live-board';
-import { draggedWithin, givesUp, surfaceDrag } from './window-drags';
-import { windowPaneKey } from './window-keys';
+import { draggedWithin, givesUp, surfaceDrag, surfaceMoveInto } from './window-drags';
+import { windowPaneKey, type WindowPaneKey } from './window-keys';
 
 /** One pane of the window as it is drawn: where it is, and its strip's surfaces, the one it shows among them. */
 export interface PaneView {
@@ -50,6 +56,8 @@ export interface PaneView {
 
 export interface WindowPanesControl {
   layout: WindowLayout;
+  /** Whether the window has shells of its own to open: not a tab window (slice 4), which holds no shell. */
+  holdsShells: boolean;
   panes: PaneView[];
   /** Every surface of the window, each in one pane. */
   surfaces: WindowSurface[];
@@ -68,7 +76,10 @@ export interface WindowPanesControl {
   select(key: string): void;
   /** Whether the surface's tab has a ×: every one but an agent's own, and a shell tile's own while it is its only tab. */
   closable(surface: WindowSurface): boolean;
-  /** Closes a tab: a shell tab's shells end (once `confirmClose` says so, while one runs); another session's just leaves. */
+  /**
+   * Closes a tab: a shell tab's shells end (once `confirmClose` says so, while one runs); another session's just leaves;
+   * a web tab's page goes, and its partition's data with it.
+   */
   close(key: string): void;
   /** The tab waiting to be closed until the user says so, as its shells still run. */
   closing: WindowSurface | undefined;
@@ -82,6 +93,19 @@ export interface WindowPanesControl {
   sessionChoices: WindowSurface[];
   /** Shows another session as a tab of the pane. */
   showSession(paneId: string, surface: Surface): void;
+  /**
+   * Shows the surface, with the keyboard: where its tab is, or, for a pull request or web page not open here, in a new
+   * tab of the pane (else the focused one).
+   */
+  open(surface: Surface, paneId?: string): void;
+  /** Shows `url` in a web tab (BI2): one of the window's already at it, else a new one in the pane (else the focused one). */
+  openWeb(url: string, paneId?: string): void;
+  /** Keeps where a web tab's page went, to reload it there at the next start. */
+  navigated(web: WebSurface): void;
+  /** The address "Web…" starts at: the first port the window's running shells listen on, on localhost (a dev server). */
+  webSuggestion: string;
+  /** The agent's pull requests the + menu offers to open as a tab (BI1). */
+  pullRequestChoices: { label: string; surface: Surface }[];
   /** Splits the pane (else the focused one), a new shell tab in the new pane, beside it or below it, with the keyboard. */
   split(direction: SplitDirection, paneId?: string): void;
   /**
@@ -92,27 +116,58 @@ export interface WindowPanesControl {
   /** Saves where a divider between panes was left. */
   resize(splitId: string, ratio: number): Promise<void>;
   /** Whether a tab or pane dragged would land in this window, dropped at a pane's strip or body. */
-  accepts(drag: ShellDrag): boolean;
-  /** Lands a dragged tab or pane at `placement`: moved within the window, or into it from another. */
-  drop(drag: ShellDrag, placement: Placement): void;
+  accepts(drag: TabDrag): boolean;
+  /** Lands a dragged tab or pane at `placement`: moved within the window, or into it from another, in any OS window. */
+  drop(drag: TabDrag, placement: Placement): void;
   /** What one of the window's tabs drags as. */
-  dragOf(surface: WindowSurface): ShellDrag;
+  dragOf(surface: WindowSurface): TabDrag;
   /** Takes in a tab as a call returned it. */
   apply(shell: Shell): void;
   /** How each shell tab's shells are doing, by surface key: the worst of them. */
   dots: ReadonlyMap<string, ShellState>;
   /** The window's pane keys (`windowPaneKey`), before the terminal or the board sees them. A held key acts once. */
   onKeyDown(event: KeyboardEvent): void;
+  /**
+   * One of the window's pane keys pressed where the window's page can't hear it, in a web tab's page: it acts on that
+   * tab's pane, which takes the keyboard. Returns whether it was one.
+   */
+  paneKey(paneId: string, key: Parameters<typeof windowPaneKey>[0]): boolean;
 }
 
 const newId = () => crypto.randomUUID();
+
+/** Each window's layout as this page last kept it or heard of it from the daemon, by its owner's drop key. */
+const kept = new Map<string, WindowLayout | null>();
+
+/** The owner's window layout as this page last kept it, or heard of it: what a tab window forgets as it closes. */
+export const keptLayout = (owner: { kind: string; id: string }): WindowLayout | null | undefined => kept.get(dropKey(owner));
+
+/** The port "Web…" suggests on localhost while no shell of the window listens on one. */
+const DEFAULT_DEV_PORT = 3000;
 
 /** How long a window waits to read its layout again after reading it failed. */
 const REREAD_MS = 3000;
 
 /** The sessions a surface shows: its panes, or the agent's session. */
-const sessionsOf = (surface: WindowSurface): string[] =>
-  surface.kind === 'tab' ? paneIds(surface.tab.layout) : surface.kind === 'agent' ? [surface.agent.sessionId] : paneIds(surface.shell.layout);
+function sessionsOf(surface: WindowSurface): string[] {
+  switch (surface.kind) {
+    case 'tab':
+      return paneIds(surface.tab.layout);
+    case 'agent':
+      return [surface.agent.sessionId];
+    case 'tile':
+      return paneIds(surface.shell.layout);
+    case 'pr':
+    case 'web':
+    case 'gate':
+    case 'plan':
+      return [];
+    default: {
+      const unknown: never = surface;
+      throw new Error(`a surface of no known kind: ${JSON.stringify(unknown)}`);
+    }
+  }
+}
 
 /**
  * The layout the daemon keeps for the window `key` names: `layout` (null for none kept yet) once read, or, while it
@@ -120,9 +175,13 @@ const sessionsOf = (surface: WindowSurface): string[] =>
  */
 type Stored = { key: string; layout: WindowLayout | null; unread?: string };
 
+/** The terminal's font size when none is chosen: the body size the terminals take from the theme. */
+const DEFAULT_FONT_SIZE = 13;
+
 /**
- * The panes of an agent's or a shell tile's session window (BH1), cmux-style: each pane has its own strip of
- * tabs, and the window keeps how they are laid out with the daemon, so it outlives a restart. A window with no layout
+ * The panes of an agent's or a shell tile's session window (BH1), or a tab window's (slice 4), cmux-style:
+ * each pane has its own strip of tabs, and the window keeps how they are laid out with the daemon, so it outlives a
+ * restart; a tab moved in or out of it from another window is laid out by the daemon, which the window hears of. A window with no layout
  * kept yet shows one pane holding its tabs, as before panes; a tab split inside itself before panes has its split laid
  * out as panes by the daemon as the window reads its layout (`shell.unsplitTabs`). Tabs gone elsewhere leave their
  * pane (which closes when empty), and tabs arriving go where they were dropped, else where they last were here, else
@@ -131,10 +190,12 @@ type Stored = { key: string; layout: WindowLayout | null; unread?: string };
  */
 export function useWindowPanes(
   owner: TabOwner | undefined,
-  options: { onProblem(problem: string | undefined): void; moves: ((move: ShellMove) => void) | undefined },
+  options: { onProblem(problem: string | undefined): void; moves: ((move: TabMove) => void) | undefined },
 ): WindowPanesControl | undefined {
   const { onProblem, moves } = options;
-  const named = owner === undefined ? undefined : shellOwner(owner);
+  const named = owner === undefined ? undefined : windowOwner(owner);
+  /** Whose shells the window's are: none in a tab window. */
+  const shellsOf = owner === undefined ? undefined : shellOwner(owner);
   const key = named === undefined ? undefined : dropKey(named);
   const { shells, problem: shellsProblem, apply } = useLiveShells();
   const { agents, problem: agentsProblem } = useLiveAgents();
@@ -143,12 +204,12 @@ export function useWindowPanes(
   const [focused, setFocused] = useState<Record<string, string>>({});
   const [closingKey, setClosingKey] = useState<string>();
   /** A tab asked for (a row of the tile's shells chip) before the layout it is in was read. */
-  const [requested, setRequested] = useState<string>();
+  const [requested, setRequested] = useState<Surface>();
   /** The layout last taken, for the window `key` names. */
   const committed = useRef<{ key: string; layout: WindowLayout | null }>(undefined);
   /** The layout as drawn, or as changed since: what a change, even one made as a call answers later, starts from. */
   const working = useRef<WindowLayout>(undefined);
-  const selectRef = useRef<(key: string) => void>(undefined);
+  const openRef = useRef<(surface: Surface) => void>(undefined);
   /** Changes asked for before the layout was read (⌘D as the window opens), made once it is. */
   const early = useRef<((current: WindowLayout) => WindowLayout | null)[]>([]);
 
@@ -163,6 +224,7 @@ export function useWindowPanes(
           // Tabs the daemon just made are taken in first: a layout settled without them would lose them.
           for (const tab of tabs) apply(tab);
           committed.current = { key, layout };
+          kept.set(key, layout);
           setStored({ key, layout });
         },
         // Laid out from its tabs meanwhile, keeping nothing: what the daemon has is kept until it can be read.
@@ -173,9 +235,20 @@ export function useWindowPanes(
         },
       );
     void read();
+    // A tab moved in or out from another window: the daemon laid it out, and this window takes that as it is.
+    const unsubscribe = window.agentBoard.shells.onWindowLayout((change) => {
+      if (!alive || dropKey(change.owner) !== key) return;
+      clearTimeout(retry);
+      committed.current = { key, layout: change.layout };
+      kept.set(key, change.layout);
+      // What a change made before the next render starts from: never the layout the move outdated.
+      if (change.layout !== null) working.current = change.layout;
+      setStored({ key, layout: change.layout });
+    });
     return () => {
       alive = false;
       clearTimeout(retry);
+      unsubscribe();
     };
     // `named` is a new object each render; its key names it.
   }, [key]);
@@ -195,9 +268,13 @@ export function useWindowPanes(
     return () => onProblem(undefined);
   }, [unreadable, onProblem]);
 
-  const owned = shells?.filter((shell) => named !== undefined && isOwnedBy(shell, named)) ?? [];
+  const owned = shells?.filter((shell) => shellsOf !== undefined && isOwnedBy(shell, shellsOf)) ?? [];
+  const read = named !== undefined && stored !== undefined && stored.key === key && shells !== undefined && agents !== undefined;
+  const shownBefore = read && stored.layout !== null ? windowPanes(stored.layout).flatMap((pane) => pane.tabs) : [];
+  /** A tab window with no tab left to show: it goes, and nothing of it is laid out or kept. */
+  const empty = owner?.kind === 'tabs' && (!read || windowSurfaces(owner, [], shownBefore, { agents: agents ?? [], tiles: shells ?? [] }).length === 0);
   // Laid out from the lists only once they are all read: a layout settled against half a list would lose what it holds.
-  const loaded = named !== undefined && stored !== undefined && stored.key === key && shells !== undefined && agents !== undefined;
+  const loaded = read && !empty;
   /** Whether what the window lays out may be kept: not while the layout the daemon has couldn't be read. */
   const keeps = loaded && stored.unread === undefined;
   const saved = loaded ? stored.layout : null;
@@ -213,7 +290,7 @@ export function useWindowPanes(
           into: focusedPaneId,
           placement: (surface) => {
             const shell = surface.kind === 'shell' ? shellsById.get(surface.shellId) : undefined;
-            return shell === undefined ? undefined : arrivalPlacement(named, shell);
+            return shell === undefined || shellsOf === undefined ? undefined : arrivalPlacement(shellsOf, shell);
           },
         },
       )
@@ -226,34 +303,49 @@ export function useWindowPanes(
     if (next === before) return;
     committed.current = { key, layout: next };
     working.current = next;
-    if (before !== null) noteDepartures(named, before, next);
-    for (const pane of windowPanes(next)) {
-      for (const tab of pane.tabs) {
-        const shell = tab.kind === 'shell' ? shellsById.get(tab.shellId) : undefined;
-        if (shell !== undefined && (before === null || paneOfSurface(before, surfaceKey(tab)) === undefined)) settleArrival(named, shell);
+    if (shellsOf !== undefined) {
+      if (before !== null) noteDepartures(shellsOf, before, next);
+      for (const pane of windowPanes(next)) {
+        for (const tab of pane.tabs) {
+          const shell = tab.kind === 'shell' ? shellsById.get(tab.shellId) : undefined;
+          if (shell !== undefined && (before === null || paneOfSurface(before, surfaceKey(tab)) === undefined)) settleArrival(shellsOf, shell);
+        }
       }
     }
     setStored((current) => ({ key, layout: next, ...(current?.unread === undefined ? {} : { unread: current.unread }) }));
-    if (keeps) window.agentBoard.shells.setWindowLayout(named, next).catch((error: unknown) => onProblem(`could not keep the window's layout: ${errorMessage(error)}`));
+    if (!keeps) return;
+    // Kept only over the layout it was made from: one made before a tab moved in or out, the daemon drops, and this
+    // window hears of the move. Dropped otherwise, what the daemon has is what the next change starts from.
+    const base = kept.get(key);
+    kept.set(key, next);
+    window.agentBoard.shells.setWindowLayout(named, next, base).then(
+      (stored) => {
+        if (stored !== next && kept.get(key) === next && JSON.stringify(stored) !== JSON.stringify(next)) kept.set(key, stored);
+      },
+      (error: unknown) => onProblem(`could not keep the window's layout: ${errorMessage(error)}`),
+    );
   };
   working.current = layout;
   // A layout settled afresh (a tab arrived or went) is taken as it is drawn, with any change asked for before it was read.
   useEffect(() => {
     if (!loaded) return;
+    // Drawn from a layout this window has moved on from since (a tab moved in or out, heard of after this render): the
+    // next render settles the one it took; this one, kept, would put back what moved.
+    if (committed.current?.key === key && committed.current.layout !== saved) return;
     const asked = early.current.splice(0);
     const next = asked.reduce<WindowLayout>((current, edit) => edit(current) ?? current, layout);
     if (next !== committed.current?.layout) commit(next);
   });
 
   // A row of the tile's shells chip asks for its tab, shown once the layout it is in is read.
-  useTabRequest(named?.id, (tabId) => setRequested(tabKey(tabId)));
+  useTabRequest(named?.id, setRequested);
   useEffect(() => {
     if (!loaded || requested === undefined) return;
     setRequested(undefined);
-    selectRef.current?.(requested);
+    openRef.current?.(requested);
   }, [loaded, requested]);
 
-  if (owner === undefined || named === undefined) return undefined;
+  if (owner === undefined || named === undefined || empty) return undefined;
 
   /** Changes the layout as it is now, which an answer arriving later may find moved on, and gives the result. */
   const change = (edit: (current: WindowLayout) => WindowLayout | null): WindowLayout => {
@@ -302,8 +394,9 @@ export function useWindowPanes(
   };
   const paneOrFocused = (paneId: string | undefined) => (panes.some((pane) => pane.id === paneId) ? paneId! : focusedPane.id);
   const newTab = (paneId?: string, options?: { cwd?: string; script?: string }) => {
+    if (shellsOf === undefined) return;
     const pane = paneOrFocused(paneId);
-    run('open a shell', async () => showNew(await window.agentBoard.shells.createTab(named, options), { pane }));
+    run('open a shell', async () => showNew(await window.agentBoard.shells.createTab(shellsOf, options), { pane }));
   };
   const tabs = windowTabs(owner, owned);
   /** Ends a shell tab's shells, and with them the tab; or a shell tile's own panes, its next tab taking their place there. */
@@ -341,21 +434,34 @@ export function useWindowPanes(
     if (surface === undefined || !closable(surface)) return;
     if (surface.kind !== 'tab') {
       change((current) => removeSurface(current, closeKey));
+      // A web tab's page goes, and its cookies and storage with it.
+      if (surface.kind === 'web') window.agentBoard.webTabs.forget(surface.web.id).catch(() => {});
       return;
     }
     // Asked first while a shell in it runs, as deleting a shell tile is.
     if (tabLiveShells(surface.tab) > 0) setClosingKey(closeKey);
     else end(surface);
   };
+  /** Says why, and returns true, when the pane drawn by `selector` is too small to split; a pane not drawn, or not showing, is let be. */
+  const noRoom = (selector: string, direction: SplitDirection) => {
+    const box = document.querySelector(selector)?.getBoundingClientRect();
+    // A pane mounted but hidden (a background tab) has no size to judge by.
+    const why = box === undefined || box.width === 0 || box.height === 0 ? undefined : noRoomToSplit(box, direction, chosenFontSize() ?? DEFAULT_FONT_SIZE);
+    if (why !== undefined) onProblem(why);
+    return why !== undefined;
+  };
   const split = (direction: SplitDirection, paneId?: string) => {
+    if (shellsOf === undefined) return;
     const pane = paneOrFocused(paneId);
-    run('split', async () => showNew(await window.agentBoard.shells.createTab(named), { pane, edge: direction === 'horizontal' ? 'right' : 'bottom' }));
+    if (noRoom(`[data-testid="window-pane"][data-pane="${CSS.escape(pane)}"]`, direction)) return;
+    run('split', async () => showNew(await window.agentBoard.shells.createTab(shellsOf), { pane, edge: direction === 'horizontal' ? 'right' : 'bottom' }));
   };
   /** Splits the shell tile's own panes at its focused one, tmux-style, the new shell after it with the keyboard. */
   const splitTile = (surface: WindowSurface & { kind: 'tab' }, direction: SplitDirection) => {
     const shell = surface.tab.shell;
     const pane = focusIn(surface);
     if (shell === undefined || pane === undefined) return;
+    if (noRoom(`[data-testid="shell-pane"][data-session-id="${CSS.escape(pane)}"]`, direction)) return;
     run('split', async () => {
       const before = paneIds(shell.layout);
       const changed = await window.agentBoard.shells.split(shell.id, pane, direction);
@@ -370,10 +476,21 @@ export function useWindowPanes(
       ? undefined
       : (direction: SplitDirection) => (owner.kind === 'shell' && shownNow.key === OWN_SURFACE ? splitTile(shownNow, direction) : split(direction));
   const surfaceOf = (surfaceKeyOf: string) => byKey.get(surfaceKeyOf)?.surface;
-  const accepts = (drag: ShellDrag) => draggedWithin(drag, named, surfaceOf) !== undefined || (moves !== undefined && dropMove(drag, { owner: named }) !== undefined);
+  const shows = (surfaceKeyOf: string) => byKey.has(surfaceKeyOf);
+  /** The move a drag from another window (or a pane of a split from this one) makes, dropped at `placement`; none for a shell into a tab window. */
+  const moveOf = (drag: TabDrag, placement: Placement): TabMove | undefined =>
+    moves === undefined
+      ? undefined
+      : drag.kind === 'surface'
+        ? surfaceMoveInto(drag, named, shows, placement)
+        : shellsOf === undefined
+          ? undefined
+          : dropMove(drag, { owner: shellsOf });
+  const accepts = (drag: TabDrag) => draggedWithin(drag, named, surfaceOf) !== undefined || moveOf(drag, { pane: focusedPane.id }) !== undefined;
 
   const control: WindowPanesControl = {
     layout,
+    holdsShells: shellsOf !== undefined,
     panes,
     surfaces,
     focusedPane,
@@ -401,13 +518,27 @@ export function useWindowPanes(
     newTab,
     newTabAt: (paneId) =>
       run('open a shell', async () => {
+        if (shellsOf === undefined) return;
         const pane = paneOrFocused(paneId);
         const folder = await window.agentBoard.zones.browseFolder('Open a shell in');
-        if (folder !== undefined) showNew(await window.agentBoard.shells.createTab(named, { cwd: folder }), { pane });
+        if (folder !== undefined) showNew(await window.agentBoard.shells.createTab(shellsOf, { cwd: folder }), { pane });
       }),
-    scripts: () => window.agentBoard.shells.scripts(named),
+    scripts: () => (shellsOf === undefined ? Promise.resolve({ runner: 'npm', scripts: [] }) : window.agentBoard.shells.scripts(shellsOf)),
     sessionChoices: sessionChoices(owner, shown, { agents: agents ?? [], tiles: shells ?? [] }),
     showSession: (paneId, surface) => placeAndShow(surface, { pane: paneId }),
+    open(surface, paneId) {
+      const openKey = surfaceKey(surface);
+      if (paneOf(openKey) !== undefined) select(openKey);
+      else if (surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'gate' || surface.kind === 'plan') placeAndShow(surface, { pane: paneOrFocused(paneId) });
+    },
+    openWeb(url, paneId) {
+      const open = surfaces.find((surface) => surface.kind === 'web' && surface.web.url === url);
+      if (open !== undefined) select(open.key);
+      else control.open({ kind: 'web', id: newId(), url }, paneId);
+    },
+    navigated: (web) => void change((current) => updateSurface(current, web)),
+    webSuggestion: `http://localhost:${shellStates.find((shell) => shell.ports !== undefined)?.ports?.[0] ?? DEFAULT_DEV_PORT}/`,
+    pullRequestChoices: pullRequestChoices(agents?.find((each) => owner.kind === 'agent' && each.sessionId === owner.agent.sessionId)?.pullRequests ?? [], shown),
     split,
     splitFromDetails,
     resize: async (splitId, ratio) => {
@@ -422,10 +553,11 @@ export function useWindowPanes(
       }
       const target = panes.find((pane) => pane.id === placement.pane);
       if (target !== undefined && givesUp(drag, placement, sessionsOf(target.active))) return;
-      const move = moves === undefined ? undefined : dropMove(drag, { owner: named });
+      const move = moveOf(drag, placement);
       if (move === undefined) return;
-      // The daemon moves it; this window lays it out where it was dropped once it hears of it.
-      expectArrival(move.kind === 'pane' ? move.sessionId : move.shellId, named, placement);
+      // The daemon moves a shell; this window lays it out where it was dropped once it hears of it. A tab that is only
+      // a place in a window, the daemon lays out there itself.
+      if (move.kind !== 'surface') expectArrival(move.kind === 'pane' ? move.sessionId : move.shellId, shellsOf!, placement);
       moves!(move);
     },
     dragOf: (surface) => surfaceDrag(surface.surface, named, { alone: tabs.length === 1, canMove: moves !== undefined }),
@@ -443,33 +575,46 @@ export function useWindowPanes(
       event.stopPropagation();
       // A held key opens one tab or split, and closes one tab.
       if (event.repeat && (pressed.kind === 'newTab' || pressed.kind === 'close' || pressed.kind === 'split')) return;
-      if (pressed.kind === 'focus') moveFocus(pressed.direction);
-      else if (pressed.kind === 'newTab') newTab();
-      else if (pressed.kind === 'close') close(focusedPane.active.key);
-      else if (pressed.kind === 'split') split(pressed.direction);
-      else {
-        const surface = tabAtDigit(focusedPane.surfaces, pressed.digit);
-        if (surface !== undefined) select(surface.key);
-      }
+      act(pressed, focusedPane);
+    },
+    paneKey(paneId, key) {
+      const pressed = windowPaneKey(key);
+      if (pressed === undefined || closingKey !== undefined) return pressed !== undefined;
+      const pane = panes.find((each) => each.id === paneId) ?? focusedPane;
+      setFocusedPaneId(pane.id);
+      if (pressed.kind !== 'close' || closable(pane.active)) act(pressed, pane);
+      return true;
     },
   };
-  selectRef.current = select;
+  openRef.current = control.open;
+
+  /** Does what one of the window's own keys asks, of `pane`. */
+  function act(pressed: WindowPaneKey, pane: PaneView) {
+    if (pressed.kind === 'focus') moveFocus(pressed.direction, pane);
+    else if (pressed.kind === 'newTab') newTab(pane.id);
+    else if (pressed.kind === 'close') close(pane.active.key);
+    else if (pressed.kind === 'split') split(pressed.direction, pane.id);
+    else {
+      const surface = tabAtDigit(pane.surfaces, pressed.digit);
+      if (surface !== undefined) select(surface.key);
+    }
+  }
 
   /**
    * Gives the keyboard to the nearest terminal that way: another pane's, or another pane of a split shell the focused
    * pane shows.
    */
-  function moveFocus(direction: Direction) {
+  function moveFocus(direction: Direction, from: PaneView) {
     const slots = panes.flatMap((pane) => {
       const surface = pane.active;
       const inside = surface.kind === 'tab' ? surface.tab.layout : surface.kind === 'tile' ? surface.shell.layout : undefined;
       if (inside === undefined) return [{ pane: pane.id, surface, session: focusIn(surface), rect: pane.rect }];
       return paneGeometry(inside, bySession, pane.rect).panes.map(({ id, rect }) => ({ pane: pane.id, surface, session: id, rect }));
     });
-    const from = slots.findIndex((slot) => slot.pane === focusedPane.id && slot.session === control.focusedSession);
+    const at = slots.findIndex((slot) => slot.pane === from.id && (from.id !== focusedPane.id || slot.session === control.focusedSession));
     const to = nearestInDirection(
       slots.map((slot) => slot.rect),
-      from,
+      at,
       direction,
     );
     const slot = to === undefined ? undefined : slots[to];

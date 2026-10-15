@@ -16,6 +16,7 @@ import {
   Copy,
   CopyPlus,
   Grid3x3,
+  Spline,
   LayoutGrid,
   Pencil,
   RotateCcw,
@@ -28,6 +29,7 @@ import { ITEM_KINDS } from '../items/kinds';
 import type { Alignment, Reorder } from './arrange';
 import type { SelectionSummary } from './use-editing';
 import { themedColor } from '../../board-colors';
+import { endOfNode } from '../connectors/endpoints';
 
 /** What the context menu's rows do. */
 export interface ContextActions {
@@ -39,6 +41,8 @@ export interface ContextActions {
   align(how: Alignment): void;
   distribute(axis: 'x' | 'y'): void;
   setColor(patch: (value: string) => Record<string, unknown>, kind: BoardItemKind, value: string): void;
+  /** Joins the two objects selected with a connector, or with one selected, waits for a click on the one to join it to. */
+  connect(): void;
   /** Turns the selected items back straight. */
   resetRotation(): void;
   deleteSelection(): void;
@@ -73,10 +77,20 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
       },
     ];
   });
+  // A connector joins two objects: the pair selected, or the one selected and the one clicked next (the mouse-free way
+  // to what dragging from a handle does).
+  const joinable = selection.nodes.filter((node) => endOfNode(node, 'right') !== undefined);
+  const connect: MenuEntry[] =
+    selection.nodes.length === 2 && joinable.length === 2
+      ? [{ label: 'Connect them', icon: <Spline />, onSelect: actions.connect }]
+      : selection.nodes.length === 1 && joinable.length === 1
+        ? [{ label: 'Connect to…', icon: <Spline />, hint: 'Then click what to join it to', onSelect: actions.connect }]
+        : [];
   return [
     ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: actions.rename }, 'separator' as const] : []),
     { label: 'Duplicate', icon: <CopyPlus />, shortcut: withCommand('D'), disabled: !hasItems, onSelect: actions.duplicate },
     { label: 'Copy', icon: <Copy />, shortcut: withCommand('C'), disabled: !hasItems, onSelect: actions.copy },
+    ...(connect.length > 0 ? ['separator' as const, ...connect] : []),
     'separator',
     { label: 'Bring to front', icon: <ArrowUpToLine />, shortcut: ']', onSelect: () => actions.restack('front') },
     { label: 'Bring forward', icon: <ArrowUp />, shortcut: withCommand(']'), onSelect: () => actions.restack('forward') },
@@ -113,8 +127,8 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
       icon: <Trash2 />,
       shortcut: '⌫',
       danger: true,
-      disabled: !hasItems && selectedConnectors === 0 && !selection.hasSessions,
-      hint: selection.hasSessions ? "Sessions are asked about first, and can't be undone." : undefined,
+      disabled: !hasItems && selectedConnectors === 0 && !selection.hasSessions && !selection.hasZones,
+      hint: selection.hasSessions ? "Sessions are asked about first, and can't be undone." : selection.hasZones ? 'Zones are asked about first; their tiles stay on the board' : undefined,
       onSelect: actions.deleteSelection,
     },
   ];

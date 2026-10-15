@@ -1,15 +1,17 @@
 import { useContext, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@xyflow/react';
-import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type Shell } from '@agent-board/daemon/protocol';
+import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { commandKey } from '../keys';
 import { DetailsHandle } from '../session/DetailsHandle';
+import { GateControls } from '../gate/GateControls';
+import { gated } from '../gate/gate-view';
 import { SessionBody, type WindowContent } from '../session/SessionBody';
 import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
 import { panesLabel } from '../session/panes';
-import { STATE_LABELS } from '../states';
+import { agentPill, STATE_LABELS } from '../states';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, resizeAllowed, type ExpandedParent } from './expanded';
 import { HarnessMark } from './HarnessMark';
@@ -32,7 +34,7 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
  * details. Its corners and edges resize it, what it would cover moving as it goes.
  */
 export function ExpandedTile({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
-  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink } = useContext(TileActionsContext);
+  const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
@@ -80,10 +82,16 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
       <header className="session-window-head expanded-tile-head">
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
-        {agent && <StatusPill state={agent.state} label={STATE_LABELS[agent.state]} />}
+        {agent && <StatusPill {...agentPill(agent)} />}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
-        <HeadFacts agent={agent} shell={shell} external={external} openLink={openLink} />
+        <HeadFacts agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
         <span className="session-window-head-fill" />
+        {/* Its merge gate, as in its session window (BM3); not a drag handle. */}
+        {agent && gated(agent) && (
+          <span className="nodrag">
+            <GateControls agent={agent} visible />
+          </span>
+        )}
         {content && <IconButton icon={<Maximize2 />} size="sm" aria-label="Maximise" tooltip="Maximise into its session window" onClick={() => maximise(tile)} />}
         {popOut && <IconButton icon={<SquareArrowOutUpRight />} size="sm" aria-label="Pop out" tooltip="Into its own window" onClick={popOut} />}
         {remove && <IconButton icon={<Trash2 />} size="sm" variant="danger" aria-label={remove.label} tooltip={remove.label} onClick={remove.run} />}
@@ -123,7 +131,19 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
 }
 
 /** The header's facts after the state: the branch (or a shell's folder), and an agent's issue and pull requests. */
-function HeadFacts({ agent, shell, external, openLink }: { agent?: Agent; shell?: Shell; external?: ExternalSession; openLink(url: string): void }) {
+function HeadFacts({
+  agent,
+  shell,
+  external,
+  openLink,
+  openPullRequest,
+}: {
+  agent?: Agent;
+  shell?: Shell;
+  external?: ExternalSession;
+  openLink(url: string): void;
+  openPullRequest(agent: Agent, pr: PullRequest): void;
+}) {
   const where = agent?.branch ?? external?.branch ?? shell?.cwd ?? external?.cwd;
   const facts: ReactNode[] = [];
   if (where !== undefined) {
@@ -147,7 +167,7 @@ function HeadFacts({ agent, shell, external, openLink }: { agent?: Agent; shell?
       </Chip>,
     );
   }
-  for (const pr of agent?.pullRequests ?? []) facts.push(<PullRequestChip key={pr.number} pr={pr} open={() => openLink(pr.url)} />);
+  if (agent) for (const pr of agent.pullRequests) facts.push(<PullRequestChip key={pr.number} pr={pr} open={() => openPullRequest(agent, pr)} />);
   return <>{facts}</>;
 }
 

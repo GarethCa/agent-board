@@ -2,20 +2,28 @@ import { createContext, useContext, useEffect } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Renaming } from '../ui';
 
-/** Something with a name the user can change: an agent's tile, a shell's tile, or one pane of a shell. */
+/** Something with a name the user can change: an agent's tile, a shell's tile, one pane of a shell, or a zone. */
 export type RenameTarget =
   | { kind: 'agent'; sessionId: string }
   | { kind: 'shell'; shellId: string }
-  | { kind: 'pane'; shellId: string; sessionId: string };
+  | { kind: 'pane'; shellId: string; sessionId: string }
+  | { kind: 'zone'; zoneId: string };
 
 /** The key an undo step files a name under. */
 export const renameKey = (target: RenameTarget): string =>
-  target.kind === 'agent' ? `name:agent:${target.sessionId}` : target.kind === 'shell' ? `name:shell:${target.shellId}` : `name:pane:${target.shellId}:${target.sessionId}`;
+  target.kind === 'agent'
+    ? `name:agent:${target.sessionId}`
+    : target.kind === 'shell'
+      ? `name:shell:${target.shellId}`
+      : target.kind === 'zone'
+        ? `name:zone:${target.zoneId}`
+        : `name:pane:${target.shellId}:${target.sessionId}`;
 
 /** Renames through the daemon. A pane's blank name takes its label off. Resolves with the name as saved. */
 export async function renameDirect(target: RenameTarget, name: string): Promise<string> {
   if (target.kind === 'agent') return (await window.agentBoard.agents.setName(target.sessionId, name)).name;
   if (target.kind === 'shell') return (await window.agentBoard.shells.setName(target.shellId, name)).name;
+  if (target.kind === 'zone') return (await window.agentBoard.zones.setLook(target.zoneId, { name })).name;
   const shell = await window.agentBoard.shells.setPaneName(target.shellId, target.sessionId, name === '' ? null : name);
   return paneLabel(shell, target.sessionId) ?? '';
 }

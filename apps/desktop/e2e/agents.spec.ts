@@ -2,7 +2,7 @@ import { expect, type ElectronApplication } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
+import { agents, launch, pickInChip, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -150,7 +150,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
     const zone = window.getByTestId('zone');
     await zone.getByRole('button', { name: 'New agent' }).click();
     const form = window.getByRole('dialog', { name: 'New agent' });
-    await form.getByRole('radio', { name: 'Codex' }).check();
+    await pickInChip(form, 'Harness', 'Codex');
     await expect(form.getByRole('heading')).toHaveText('New Codex agent in monorepo');
     await expect(form.getByRole('checkbox', { name: "Skip Codex's hook review in this zone" })).toBeChecked();
     await form.getByLabel('Task').fill('Run the tests');
@@ -178,7 +178,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
     // Unticking the bypass and cancelling leaves the zone as it was.
     const skipReview = form.getByRole('checkbox', { name: "Skip Codex's hook review in this zone" });
     await zone.getByRole('button', { name: 'New agent' }).click();
-    await form.getByRole('radio', { name: 'Codex' }).check();
+    await pickInChip(form, 'Harness', 'Codex');
     await skipReview.uncheck();
     await expect(form).toContainText('Until you trust them, the tile stays idle.');
     await form.getByRole('button', { name: 'Cancel' }).click();
@@ -186,7 +186,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
 
     // The notice shows only once. Turning the bypass off is saved for the zone when the agent starts.
     await zone.getByRole('button', { name: 'New agent' }).click();
-    await form.getByRole('radio', { name: 'Codex' }).check();
+    await pickInChip(form, 'Harness', 'Codex');
     await expect(skipReview).toBeChecked();
     await skipReview.uncheck();
     await form.getByLabel('Task').fill('Again');
@@ -224,7 +224,7 @@ test('a Codex agent asks first in a repo with its own Codex config, and one stop
       const zone = window.getByTestId('zone').filter({ has: window.getByTestId('zone-tab').getByText(zoneName, { exact: true }) });
       await zone.getByRole('button', { name: 'New agent' }).click();
       const form = window.getByRole('dialog', { name: 'New agent' });
-      await form.getByRole('radio', { name: 'Codex' }).check();
+      await pickInChip(form, 'Harness', 'Codex');
       await form.getByLabel('Task').fill(task);
       await form.getByRole('button', { name: 'Start' }).click();
     };

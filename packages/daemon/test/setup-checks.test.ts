@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeBinDir } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
+import { createHarnessPaths } from '../src/harness-path.ts';
 import { checkTool, parseVersion } from '../src/setup-checks.ts';
 import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
 
@@ -37,6 +38,33 @@ describe('a CLI check', () => {
     const { env } = bareEnv();
     expect(await checkTool('claude', { env })).toEqual({ tool: 'claude', found: false });
     expect(await checkTool('codex', { env })).toEqual({ tool: 'codex', found: false });
+  });
+
+  it('finds a harness where the launch does (a known install place, off every PATH), as the same absolute path', async () => {
+    const { env } = bareEnv();
+    const local = join(env.HOME!, '.claude', 'local');
+    mkdirSync(local, { recursive: true });
+    symlinkSync(join(fakeBinDir, 'claude'), join(local, 'claude'));
+    const harnessPaths = createHarnessPaths({ shell: '/bin/sh', shellArgs: [], env, homeDir: env.HOME!, knownDirs: [local] });
+    expect(await checkTool('claude', { env })).toEqual({ tool: 'claude', found: false });
+    expect(await checkTool('claude', { env, harnessPaths })).toMatchObject({ found: true, path: join(local, 'claude'), version: '2.1.0' });
+    expect(harnessPaths.path('claude')).toBe(join(local, 'claude'));
+  });
+
+  it('runs a script harness with the interactive shell\'s PATH, so its version is read when node is on .zshrc\'s only', async () => {
+    const dir = tempDataDir();
+    const home = join(dir, 'home');
+    const nodeBin = join(dir, 'node-bin');
+    const local = join(home, '.claude', 'local');
+    mkdirSync(local, { recursive: true });
+    mkdirSync(nodeBin);
+    symlinkSync(process.execPath, join(nodeBin, 'node'));
+    symlinkSync(join(fakeBinDir, 'claude'), join(local, 'claude'));
+    // Starts from the bare PATH, so the harness guard's tripwires (on every child's PATH) are not on it.
+    writeFileSync(join(home, '.zshrc'), `export PATH="${nodeBin}:${BARE_PATH}"\n`);
+    const env: NodeJS.ProcessEnv = { HOME: home, ZDOTDIR: home, PATH: BARE_PATH };
+    const harnessPaths = createHarnessPaths({ shell: '/bin/zsh', shellArgs: ['-l'], env, homeDir: home, knownDirs: [local] });
+    expect(await checkTool('claude', { env, harnessPaths })).toMatchObject({ found: true, path: join(local, 'claude'), version: '2.1.0' });
   });
 
   it('finds an installed harness, its version and whether it is signed in', async () => {

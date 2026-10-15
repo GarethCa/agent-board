@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Shell, ShellOwner } from '@agent-board/daemon/protocol';
-import { dropMove, foreignFolder, placeOf, tabMoveChanges, tilesFirst, type ShellDrag } from './shell-moves';
+import { dropMove, foreignFolder, placeOf, surfaceMoveChanges, tabMoveChanges, tilesFirst, type TabDrag } from './shell-moves';
 
 const agentA: ShellOwner = { kind: 'agent', id: 'agent-a' };
 const agentB: ShellOwner = { kind: 'agent', id: 'agent-b' };
@@ -13,8 +13,8 @@ const shell = (id: string, fields: Partial<Shell> = {}): Shell =>
   ({ id, name: id, layout: pane(`${id}-pane`), owner: agentA, zoneId: null, position: null, tabOrder: 1, paneFolders: {}, ...fields }) as Shell;
 
 describe('dropMove', () => {
-  const tab: ShellDrag = { kind: 'tab', shellId: 'sh', from: agentA };
-  const split: ShellDrag = { kind: 'pane', shellId: 'sh', sessionId: 'p2', from: agentA };
+  const tab: TabDrag = { kind: 'tab', shellId: 'sh', from: agentA };
+  const split: TabDrag = { kind: 'pane', shellId: 'sh', sessionId: 'p2', from: agentA };
 
   it("moves a tab to another owner's tabs or onto the board", () => {
     expect(dropMove(tab, { owner: agentB })).toEqual({ kind: 'tab', shellId: 'sh', to: { owner: agentB } });
@@ -34,6 +34,34 @@ describe('dropMove', () => {
 
   it('leaves a pane let go over itself be, as a drag given up', () => {
     expect(dropMove(split, { owner: agentA }, 'p2')).toBeUndefined();
+  });
+});
+
+describe('surfaceMoveChanges', () => {
+  const pr = { kind: 'pr', repo: 'acme/app', number: 7 } as const;
+  const tabs = { kind: 'tabs', id: 'popped' } as const;
+
+  it('records which window a tab was in and where, and where it went, each with the window it leaves when put back', () => {
+    expect(surfaceMoveChanges({ kind: 'surface', surface: pr, from: agentA, to: { owner: agentB, placement: { pane: 'p', edge: 'left' } } }, { pane: 'main', index: 2 })).toEqual([
+      [
+        'surface:pr:acme/app#7',
+        { type: 'surfacePlace', surface: pr, in: { owner: agentA, placement: { pane: 'main', index: 2 } }, from: agentB },
+        { type: 'surfacePlace', surface: pr, in: { owner: agentB, placement: { pane: 'p', edge: 'left' } }, from: agentA },
+      ],
+    ]);
+  });
+
+  it('records a tab popped out into a tab window of its own, or out of every window', () => {
+    expect(surfaceMoveChanges({ kind: 'surface', surface: pr, from: agentA, to: { owner: tabs } }, { pane: 'main', index: 1 })[0]![2]).toEqual({
+      type: 'surfacePlace',
+      surface: pr,
+      in: { owner: tabs },
+      from: agentA,
+    });
+    expect(surfaceMoveChanges({ kind: 'surface', surface: pr, from: agentA, to: null }, { pane: 'main', index: 1 })[0]!.slice(1)).toEqual([
+      { type: 'surfacePlace', surface: pr, in: { owner: agentA, placement: { pane: 'main', index: 1 } }, from: null },
+      { type: 'surfacePlace', surface: pr, in: null, from: agentA },
+    ]);
   });
 });
 

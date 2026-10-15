@@ -24,7 +24,7 @@ export function copied(items: readonly { item: BoardItem; at: { x: number; y: nu
     items: items.map(({ item: { id, kind, width, height, rotation, data }, at }) => ({ id, kind, x: at.x, y: at.y, width, height, rotation, data })),
     connectors: connectors
       .filter((connector) => joinsCopied(connector.from) && joinsCopied(connector.to))
-      .map(({ id, from, to, style, startEnd, endEnd, color, label }) => ({ id, from, to, style, startEnd, endEnd, color, label })),
+      .map(({ id, from, to, style, startEnd, endEnd, color, label, points }) => ({ id, from, to, style, startEnd, endEnd, color, label, points })),
   };
 }
 
@@ -81,9 +81,10 @@ export function parseCopied(text: string): Copied | undefined {
   const joins = (end: unknown) => typeof end === 'object' && end !== null && ids.has((end as { id?: unknown }).id as string);
   return {
     items: items.map((item) => ({ ...item, rotation: item.rotation ?? 0 })),
-    connectors: (connectors as CopiedConnector[]).filter(
-      (connector) => typeof connector === 'object' && connector !== null && joins(connector.from) && joins(connector.to),
-    ),
+    connectors: (connectors as CopiedConnector[])
+      .filter((connector) => typeof connector === 'object' && connector !== null && joins(connector.from) && joins(connector.to))
+      // One copied before lines bent has none.
+      .map((connector) => ({ ...connector, points: Array.isArray(connector.points) ? connector.points.filter((point) => isNumber(point?.x) && isNumber(point.y)) : [] })),
   };
 }
 

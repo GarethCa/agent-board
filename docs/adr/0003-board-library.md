@@ -15,7 +15,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
 
 ## Amendments
 
-**2026-10-10**:
+**Update**:
 
 - **Board items are nodes too.** A board item (a sticky note, text or shape, and later whiteboard kinds) is a React Flow node with one
   node type per kind, `item:<kind>`, so a kind can't replace the board's own node types. Kinds are registered in
@@ -33,7 +33,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   something on it. React Flow holds a pending fit until the first nodes appear, so on an empty board the first note
   would otherwise jump to the middle of the view.
 
-**2026-10-10**:
+**Update**:
 
 - **Connectors are React Flow edges**, of one type `connector`, drawn from the daemon's connectors. Every node type that a
   connector can join (zones, tiles and every item kind) is wrapped by `withConnectorHandles`, which adds four round
@@ -42,7 +42,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   makes a note. Flow edges (M2) are a second edge type with square ports, so the two never share handles.
 - **A zone is joined by its tab or a handle**, not its body, where a drop makes a note in the zone.
 
-**2026-10-11**:
+**Update**:
 
 - **A live terminal on the board, but only in an expanded tile.** The rule above, "no live terminals on the board", now reads: a
   compact tile attaches no terminal; one expanded in place does, for as long as it is expanded. The expanded tile is the
@@ -73,7 +73,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   by unscaled cells, so `TerminalPane` wraps xterm's mouse service (`session/zoomed-mouse.ts`) to rescale each pointer
   about the terminal's origin by on-screen width ÷ `offsetWidth` first. Selection and mouse reports are right at any zoom.
 
-**2026-10-11**:
+**Update**:
 
 - **Selection is React Flow's, with three changes.** A drag on empty board draws React Flow's marquee
   (`selectionOnDrag`, full containment); the board pans with Space held, the middle button or the wheel, or anywhere
@@ -98,7 +98,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
 - **An image's file outlives its item's delete by the sweep's grace** (`ImageStore.spare`), so undoing the delete can
   make the item again: the daemon refuses an image item whose file is gone.
 
-**2026-10-11**:
+**Update**:
 
 - **Flow edges are a second React Flow edge type, `flow`**, drawn from the daemon's flow edges between two agents'
   tiles, from a square out port (`flow-out`) to a square in port (`flow-in`) that only agents' tiles have. A drag from
@@ -109,7 +109,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
 - **Making and deleting a flow edge are undoable**, as connectors are: the undo history keeps the edge whole, and
   undoing a delete makes it again under its own id, with its rules but a fresh history.
 
-**2026-10-12**:
+**Update**:
 
 - **A click opens the session window; Expand in place is a setting.** What a click on an agent's or shell tile does is
   the click setting (`board/click-opens.ts`, pure), kept in the daemon's view state (`clickOpens`): the session window
@@ -122,7 +122,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   `ROW_TOLERANCE` of its top), wrapping at the ends; sessions popped out into their own windows are left out. The window
   swaps what it shows rather than closing.
 
-**2026-10-12**:
+**Update**:
 
 - **Nothing on the board tilts by itself; items turn only when the user turns them.** Tiles lost their random tilt and
   the drag lift's extra tilt, and have no rotate handle. A board item keeps an angle, `rotation` (degrees clockwise about
@@ -138,7 +138,7 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   (`LiveRotations`) the turned items read. A selection of several is turned by its box's handle, each item about its own
   centre.
 
-**2026-10-13**:
+**Update**:
 
 - **A zone drags from anywhere on it but its buttons: its tab and its bare body.** Zone nodes have no `dragHandle`.
   React Flow draws a zone's tiles and items as nodes of their own beside it, not inside its element, so a press on one

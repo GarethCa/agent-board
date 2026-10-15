@@ -76,8 +76,8 @@ test('adds repo and folder zones from the folder picker, rejects non-git folders
 
     // A folder the daemon refuses keeps Add zone open, saying why.
     await pickFolderNext(app, plain);
-    const popover = await openAddZone(window, 'Recent');
-    await popover.getByRole('button', { name: 'Browse…' }).click();
+    const popover = await openAddZone(window, 'File browser');
+    await popover.getByRole('button', { name: 'Choose a folder…' }).click();
     await expect(popover.getByRole('alert')).toHaveText(`${plain} is not inside a git repository`);
     await window.keyboard.press('Escape');
     await expect(popover).toBeHidden();

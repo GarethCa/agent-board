@@ -59,6 +59,9 @@ test('answering a waiting agent from the inbox delivers the text and it resumes;
     await openInbox(window);
     await expect(waiting).toBeVisible();
     await expect(waiting.getByTestId('inbox-last-message')).toHaveText('Which database should I use, Postgres or SQLite?');
+    // Every control says whose it is, so two waiting agents don't read as "Open, Answer, Send" twice.
+    await expect(waiting.getByRole('button', { name: `Open ${agent.name}`, exact: true })).toBeVisible();
+    await expect(waiting.getByRole('button', { name: `Send to ${agent.name}`, exact: true })).toBeVisible();
     await waiting.getByLabel('Answer').fill('SQLite');
     await waiting.getByRole('button', { name: 'Send' }).click();
 

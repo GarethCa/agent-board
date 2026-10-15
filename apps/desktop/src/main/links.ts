@@ -1,12 +1,18 @@
 import { shell, type BrowserWindow } from 'electron';
+import { isWebTabUrl } from '@agent-board/daemon/web-url';
 
-/** Opens a web link in the OS browser. Only https: `openExternal` would run anything else, such as `file:`. */
-export async function openWebLink(url: string): Promise<void> {
+/** Opens `url` in the OS browser if `allowed` says so of it as parsed, which `openExternal` is given, so it can't read the string differently. */
+async function openChecked(url: string, allowed: (parsed: URL) => boolean, what: string): Promise<void> {
   const parsed = new URL(url);
-  if (parsed.protocol !== 'https:') throw new Error(`not an https link: ${url}`);
-  // The URL as parsed and checked, so openExternal can't read the string differently.
+  if (!allowed(parsed)) throw new Error(`not ${what}: ${url}`);
   await shell.openExternal(parsed.href);
 }
+
+/** Opens a web link in the OS browser. Only https: `openExternal` would run anything else, such as `file:`. */
+export const openWebLink = (url: string): Promise<void> => openChecked(url, (parsed) => parsed.protocol === 'https:', 'an https link');
+
+/** Opens a web tab's page in the OS browser: https, or http on this machine (a dev server), as the tab shows it. */
+export const openWebTabLink = (url: string): Promise<void> => openChecked(url, (parsed) => isWebTabUrl(parsed.href), "a web tab's link");
 
 /**
  * Keeps `window` on the app: it opens no other window and navigates nowhere but `isAppUrl`. An https link it tries to

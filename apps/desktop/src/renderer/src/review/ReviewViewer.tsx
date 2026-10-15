@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Check, ChevronDown, CircleAlert, CircleCheck, FileCode, GitMerge, Play, Send } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleCheck, FileCode, GitMerge, GitPullRequest, Play, Send } from 'lucide-react';
 import type { Agent, ReviewRound } from '@agent-board/daemon/protocol';
 import { mergeBlocked, openFindings, parseReviewDoc, SEVERITIES, startBlocked, type ReviewFinding, type Severity } from '@agent-board/daemon/review-doc';
 import { MAX_REVIEW_CAP } from '@agent-board/daemon/protocol';
 import { renderMarkdown } from '../board/items/StickyNode';
 import { Button, ErrorText, Menu } from '../ui';
+import { requestTab } from '../session/tab-request';
+import { pullRequestSurfaceOf } from '../session/tabs';
 import { useAction } from '../use-action';
 import { shortWhen } from '../when';
 
@@ -182,6 +184,8 @@ function ReviewActions({ implementer, rounds, round, onDismissed }: ReviewAction
   const notStarted = startBlocked(implementer, rounds);
   const notMerged = mergeBlocked(implementer, rounds, round);
   const pr = implementer.pullRequests.find((known) => known.state === 'open');
+  // Its newest pull request, in a PR tab beside its terminal (BI1).
+  const newest = implementer.pullRequests.flatMap((known) => pullRequestSurfaceOf(known) ?? [])[0];
   const merge = (
     <Button
       size="sm"
@@ -224,6 +228,11 @@ function ReviewActions({ implementer, rounds, round, onDismissed }: ReviewAction
             {notMerged}
           </span>
         </>
+      )}
+      {newest !== undefined && (
+        <Button size="sm" variant="ghost" icon={<GitPullRequest />} onClick={() => requestTab(implementer.sessionId, newest)} data-testid="review-open-pr">
+          Open PR #{newest.number}
+        </Button>
       )}
       <Button
         size="sm"

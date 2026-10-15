@@ -69,6 +69,8 @@ export interface TrackerHost {
   linkTarget(ref: LinkTrackerRef): Promise<{ title: string; state: string } | undefined>;
   /** The labels of an issue in its provider's tracker, or undefined if it has no such issue. */
   issueLabels(issue: { provider: TrackerProvider; id: string }): Promise<string[] | undefined>;
+  /** Comments on the issue, through its provider. */
+  comment(issue: { provider: TrackerProvider; id: string }, body: string): Promise<void>;
 }
 
 interface ZoneTrackerRow {
@@ -136,6 +138,7 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
         if (client.issueLabels === undefined) throw invalidParams(`${providerName(issue.provider)} can't say an issue's labels`);
         return client.issueLabels(issue.id);
       }),
+    comment: (issue, body) => call(async () => (await tracker(issue.provider)).comment(issue.id, body)),
     async connected(provider) {
       const make = factory(provider);
       if (usesCredential(provider)) return (await options.credentials.get(provider)) !== undefined;
@@ -212,8 +215,8 @@ export function createTrackerHost(options: TrackerHostOptions): TrackerHost {
   };
 }
 
-/** Runs a tracker call, turning its `TrackerError`s into RPC errors. */
-async function call<T>(run: () => Promise<T>): Promise<T> {
+/** Runs a tracker call, turning its `TrackerError`s into RPC errors: GitHub calls made outside a tracker too. */
+export async function call<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {

@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listeningPorts } from '../src/foreground.ts';
+import { harnessOfProgram, listeningPorts } from '../src/foreground.ts';
 import { lastExitStatus, shellIntegrationEnv } from '../src/shell-integration.ts';
 import { tempDataDir } from './helpers.ts';
 
@@ -86,5 +86,62 @@ describe('listening ports', () => {
   it('reads them from lsof -Fn, in order and once each', () => {
     expect(listeningPorts('p12\nf4\nn*:5173\nf5\nn[::1]:5173\nn127.0.0.1:3000\n')).toEqual([3000, 5173]);
     expect(listeningPorts('')).toEqual([]);
+  });
+
+});
+
+describe('knowing an agent harness in the foreground', () => {
+  const node = process.execPath;
+  const setup = () => {
+    const dir = tempDataDir();
+    const script = join(dir, 'claude');
+    writeFileSync(script, '#!/usr/bin/env node\nconsole.log(1);\n');
+    chmodSync(script, 0o755);
+    const native = join(dir, 'codex');
+    copyFileSync('/bin/sleep', native);
+    const pathOf = (harness: string) => ({ claude: script, codex: native })[harness];
+    return { dir, script, native, pathOf };
+  };
+
+  it('by its executable, or the interpreter running its script by absolute path', () => {
+    const { dir, script, native, pathOf } = setup();
+    expect(harnessOfProgram({ exe: native, args: ['--resume'] }, pathOf)).toBe('codex');
+    expect(harnessOfProgram({ exe: node, args: ['--disable-warning=ExperimentalWarning', script] }, pathOf)).toBe('claude');
+    const link = join(dir, 'via-link');
+    symlinkSync(script, link);
+    expect(harnessOfProgram({ exe: node, args: [link] }, pathOf)).toBe('claude');
+  });
+
+  it('never by a name or a word in the command line', () => {
+    const { script, native, pathOf } = setup();
+    expect(harnessOfProgram({ exe: '/usr/bin/vim', args: [script] }, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: '/usr/bin/less', args: [native] }, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: '/usr/bin/python3', args: [script] }, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: '/usr/bin/vim', args: ['claude'] }, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: node, args: ['claude'] }, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: '/bin/sleep', args: ['30'] }, pathOf)).toBeNull();
+    expect(harnessOfProgram(null, pathOf)).toBeNull();
+    expect(harnessOfProgram({ exe: native, args: [] }, () => undefined)).toBeNull();
+  });
+
+  it('not for node told to run code, whatever script it names after; and a script path with spaces is matched', () => {
+    const { script, pathOf } = setup();
+    for (const flags of [['--eval=setTimeout(()=>{},9)'], ['-e', 'x'], ['--print', '1'], ['-p', '1'], ['-']]) {
+      expect(harnessOfProgram({ exe: node, args: [...flags, script] }, pathOf)).toBeNull();
+    }
+    const spaced = join(tempDataDir(), 'My Tools', 'claude');
+    mkdirSync(join(spaced, '..'), { recursive: true });
+    copyFileSync(script, spaced);
+    expect(harnessOfProgram({ exe: node, args: spaced.split(' ') }, (harness) => (harness === 'claude' ? spaced : undefined))).toBe('claude');
+  });
+
+  it('not for a copy of it, or another file of the same name', () => {
+    const { script, native, pathOf } = setup();
+    const copy = join(tempDataDir(), 'codex');
+    copyFileSync(native, copy);
+    expect(harnessOfProgram({ exe: copy, args: [] }, pathOf)).toBeNull();
+    const imposter = join(tempDataDir(), 'claude');
+    copyFileSync(script, imposter);
+    expect(harnessOfProgram({ exe: node, args: [imposter] }, pathOf)).toBeNull();
   });
 });

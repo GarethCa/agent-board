@@ -5,8 +5,10 @@ import {
   TRACKER_PROVIDERS,
   waitsForYou,
   type Agent,
+  type AgentRole,
   type AgentSchedule,
   type ChecksState,
+  planPending,
   type ExternalSession,
   type PullRequest,
   type RecentFolder,
@@ -14,18 +16,25 @@ import {
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
+import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
+import { planBadge, planStamp } from '../plan/plan-view';
+import { useGateRun } from '../gate/GatesProvider';
+import { gated } from '../gate/gate-view';
+import { runGateShortcut } from '../session/window-keys';
 import { HarnessMark } from './HarnessMark';
+import { agentSetupLine, branchLine, modelLabel, ROLE_LABELS } from './AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { clockBadge } from './schedule';
-import { Bell, BellOff, Check, Clock, Dot, Expand, FileCheck, FileSearch, Folder, GitBranch, Hash, Maximize2, MoreHorizontal, Pencil, Play, RotateCcw, SquareArrowOutUpRight, Trash2, X } from 'lucide-react';
+import { Bell, BellOff, Check, ClipboardList, Clock, Dot, Expand, FileCheck, FileSearch, Folder, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Trash2, X } from 'lucide-react';
 import { toolSummary } from '../../../shared/needs-you';
 import { Chip, EditableName, FlowPill, IconButton, Menu, RenameButton, StatusPill, Tag, useRenaming, type IconButtonProps, type MenuEntry } from '../ui';
 import { Character } from './Character';
 import { HandoffsContext } from './flow-edges';
-import { checksLabel, tileFooter } from './tile-footer';
+import { badgeLine, checksLabel, foldRanking, tileFooter } from './tile-footer';
+import { useFooterFold } from './use-footer-fold';
 import { ResumeButton } from './RestartBanner';
 import { cx } from '../ui/cx';
-import { STATE_LABELS, TILE_STATE_LABELS } from '../states';
+import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { SubagentPerch } from './SubagentPerch';
 import { ShellsChip } from './ShellsChip';
 import { windowShells } from '../session/tabs';
@@ -37,7 +46,7 @@ import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type TileDa
 import { CrewViewContext, lightCrew } from './crew-view';
 import { folderLabel } from './folders';
 import { panesLabel } from '../session/panes';
-import { canRestart, ENDED_SHELL_LABEL, exitText, RestartAgent } from '../session/RestartAgent';
+import { canRestart, endedShellLabel, exitText, RestartAgent } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
@@ -70,8 +79,9 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered (BA3).
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
-  const { expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, resumeAgent, restartAgent, rename, startReview, openReview } =
+  const { expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, restartAgent, rename, startReview, openReview, openGate, openPlan } =
     useContext(TileActionsContext);
+  const gate = useGateRun(agent.sessionId);
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
   const rounds = roundsOf(useReviews(), agent.sessionId);
@@ -96,7 +106,8 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   useRenameRequest(id, renaming);
   const handoffs = useContext(HandoffsContext);
   const shells = windowShells({ kind: 'agent', agent }, tabs ?? []);
-  const { shown, folded } = tileFooter(agent, shells.length);
+  const { shown, folded: overflow } = tileFooter(agent, shells.length);
+  const ranking = foldRanking(shown);
   const fitted = useFittedLines();
   const ask = askOf(agent);
   // A hand-off going along one of its edges shows for as long as the edge shows it, however soon it was over.
@@ -109,8 +120,17 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   const pill = receiving ? (
     <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
   ) : (
-    <StatusPill state={seen && !sending ? 'idle' : state} label={agent.shellSessionId === null ? TILE_STATE_LABELS[state] : ENDED_SHELL_LABEL} title={STATE_LABELS[state]} />
+    <StatusPill {...(sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, TILE_STATE_LABELS))} {...(agent.shellSessionId === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
   );
+  // Badges that don't fit in two lines fold into the "+N", the lowest ranked first, and fold again whenever what the footer
+  // says changes.
+  const footer = useFooterFold({
+    key: JSON.stringify([shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt]),
+    badges: shown.length,
+    ranking,
+    plusShown: overflow.length > 0,
+  });
+  const folded = [...ranking.slice(0, footer.folded).map((index) => badgeLine(shown[index]!, shells.length)), ...overflow];
   return (
     <div
       className="hybrid-tile hybrid-tile-agent"
@@ -136,7 +156,7 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
     >
       <div className="hybrid-tile-head">
         <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />
-        <EditableName className="hybrid-tile-name" value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} label="Agent name" />
+        <EditableName className={nameClass(shownName.name)} value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} label="Agent name" />
         <RenameButton renaming={renaming} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
@@ -159,6 +179,18 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
               },
               'separator',
               ...reviewEntries(),
+              ...(gated(agent)
+                ? [
+                    {
+                      label: 'Run gate',
+                      icon: <ShieldCheck />,
+                      shortcut: runGateShortcut(),
+                      disabled: gate?.status === 'running',
+                      hint: gate?.status === 'running' ? 'It is running: its Gate tab shows it' : "Run its zone's gate command in its worktree",
+                      onSelect: () => openGate(agent, true),
+                    },
+                  ]
+                : []),
               'separator',
               { label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => deleteAgent(agent.sessionId) },
             ]}
@@ -190,10 +222,10 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
           </Tag>
         )}
         <GitBranch aria-hidden />
-        {agent.branch}
+        {branchLine(agent)}
       </span>
       {ask !== undefined ? (
-        <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" title={ask.text}>
+        <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" data-question={ask.question} title={ask.text}>
           <span className="hybrid-tile-text">
             {ask.tool !== undefined && <strong>{ask.tool} </strong>}
             {ask.text}
@@ -221,9 +253,23 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
           {exitText(agent)}
         </span>
       )}
-      <span className="hybrid-tile-footer">
+      <span className="hybrid-tile-footer" ref={footer.ref}>
           {shown.map((badge) => {
             switch (badge.kind) {
+              case 'model':
+                return (
+                  <Tag key="model" className="hybrid-tile-setup" data-testid="tile-model" title={agentSetupLine(agent)}>
+                    <HarnessMark harness={agent.harness} />
+                    <span className="hybrid-tile-badge-text">{modelLabel(badge.model)}</span>
+                  </Tag>
+                );
+              case 'role':
+                return (
+                  <Tag key="role" className="hybrid-tile-setup" data-testid="tile-role" title={agentSetupLine(agent)}>
+                    {ROLE_ICONS[badge.role]}
+                    <span className="hybrid-tile-badge-text">{ROLE_LABELS[badge.role]}</span>
+                  </Tag>
+                );
               case 'issue':
                 return (
                   <Chip
@@ -240,7 +286,7 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
                   </Chip>
                 );
               case 'pr':
-                return <PullRequestChip key={badge.pr.number} pr={badge.pr} open={() => openLink(badge.pr.url)} />;
+                return <PullRequestChip key={badge.pr.number} pr={badge.pr} open={() => openPullRequest(agent, badge.pr)} />;
               case 'schedule':
                 return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => scheduleAgent(agent)} />;
               case 'shells':
@@ -265,18 +311,42 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
               <FileCheck aria-hidden />r{latestRound.round}
             </Chip>
           )}
-          {folded.length > 0 && (
-            // A button, so the keyboard reaches it and its tooltip; it opens nothing.
+          {agent.plan !== null && (
             <Chip
-              className="hybrid-tile-folded nodrag"
-              data-testid="tile-folded"
-              title={folded.join('\n')}
-              aria-label={`${folded.length} more: ${folded.join('; ')}`}
+              className="hybrid-tile-plan nodrag"
+              data-testid="tile-plan"
+              data-pending={planPending(agent) || undefined}
+              title={`${agent.plan.title} · ${planStamp(agent.plan).label}: open its Plan tab`}
+              onClick={() => openPlan(agent)}
               onDoubleClick={stopPropagation}
             >
-              +{folded.length}
+              <ClipboardList aria-hidden />
+              {planBadge(agent.plan)}
             </Chip>
           )}
+          {gate !== undefined && (
+            <Chip
+              className="hybrid-tile-gate nodrag"
+              data-testid="tile-gate"
+              data-status={gate.status}
+              title={`The gate, ${gate.command}, on ${shortCommit(gate.commit)}: open its Gate tab`}
+              onClick={() => openGate(agent, false)}
+              onDoubleClick={stopPropagation}
+            >
+              {gateBadge(gate)}
+            </Chip>
+          )}
+          {/* Always drawn, so the footer can measure it; hidden while nothing is folded. A button, so the keyboard reaches it and its tooltip; it opens nothing. */}
+          <Chip
+            className="hybrid-tile-folded nodrag"
+            data-testid="tile-folded"
+            data-folded-chip=""
+            title={folded.join('\n')}
+            aria-label={`${folded.length} more: ${folded.join('; ')}`}
+            onDoubleClick={stopPropagation}
+          >
+            +{folded.length}
+          </Chip>
           {pill}
         </span>
       <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
@@ -290,10 +360,23 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   );
 }
 
-/** What a tile waiting for you asks, in place of its task: the tool it wants to use, or its last message. */
-function askOf(agent: Agent): { tool?: string; text: string } | undefined {
+/** Each role's mark on its badge. */
+const ROLE_ICONS: Record<AgentRole, ReactNode> = {
+  implementer: <Hammer aria-hidden />,
+  reviewer: <Search aria-hidden />,
+  'follow-up-reviewer': <RefreshCw aria-hidden />,
+  custom: <PenLine aria-hidden />,
+};
+
+/**
+ * What a tile waiting for you asks, in place of its task: the tool it wants to use, the question it asks through the
+ * board with its options, the plan it waits on, or its last message.
+ */
+function askOf(agent: Agent): { tool?: string; text: string; question?: true } | undefined {
   const prompt = agent.permissions[0];
   if (prompt !== undefined) return { tool: prompt.toolName, text: toolSummary(prompt) };
+  if (agent.ask !== null) return { text: agent.ask.options.length === 0 ? agent.ask.question : `${agent.ask.question}\n${agent.ask.options.join(' · ')}`, question: true };
+  if (planPending(agent)) return { text: `Waiting for you to decide on its plan: ${agent.plan.title}` };
   if (agent.state === 'waiting' && agent.lastMessage) return { text: agent.lastMessage };
   return undefined;
 }
@@ -324,7 +407,7 @@ function ShellTile({ id, shell }: { id: string; shell: Shell }) {
     >
       <div className="hybrid-tile-head">
         <HarnessMark className="hybrid-tile-icon" harness="shell" />
-        <EditableName className="hybrid-tile-name" value={shell.name} title={shell.name} renaming={renaming} label="Shell name" />
+        <EditableName className={nameClass(shell.name)} value={shell.name} title={shell.name} renaming={renaming} label="Shell name" />
         <RenameButton renaming={renaming} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
@@ -475,6 +558,10 @@ function ExternalTile({ id, session }: { id: string; session: ExternalSession })
   );
 }
 
+/** A name this long fills both of its lines, so the rename pencil laid over its end would hide letters: it leaves room. */
+const LONG_NAME = 24;
+const nameClass = (name: string) => (name.length > LONG_NAME ? 'hybrid-tile-name hybrid-tile-name-long' : 'hybrid-tile-name');
+
 /** Keeps a double-click on a tile's control from also opening its session. */
 const stopPropagation = (event: MouseEvent) => event.stopPropagation();
 
@@ -544,7 +631,7 @@ export function PullRequestChip({ pr, open }: { pr: PullRequest; open(): void })
       data-state={pr.state}
       data-checks={pr.checks}
       aria-label={`Pull request #${pr.number}, ${pr.state}, ${checks}`}
-      title={`#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it on GitHub.`}
+      title={`#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it in a PR tab.`}
       onClick={open}
       onDoubleClick={stopPropagation}
     >

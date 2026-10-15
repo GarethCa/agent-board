@@ -196,3 +196,60 @@ test('draws a connector to a note React Flow measured just as it took the board 
     await removeDataDir(dataDir);
   }
 });
+
+test('"Connect to…" in the selection menu joins an object to the next one clicked, and "Connect them" joins two selected', async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+    const notes = window.getByTestId('sticky');
+    for (const x of [200, 560, 900]) {
+      await window.mouse.move(pane.x + x, pane.y + 250);
+      await window.keyboard.press('n');
+      await window.keyboard.press('Escape');
+    }
+    await expect(notes).toHaveCount(3);
+    const lines = window.locator('.react-flow__edge-path.connector-line');
+    const joined = async () => (await stored(dataDir)).connectors.map(({ from, to }) => [from.id, to.id]);
+    const items = (await stored(dataDir)).items;
+
+    // One note, then the one clicked next.
+    await notes.nth(0).click({ button: 'right' });
+    await window.getByRole('menuitem', { name: 'Connect to…' }).click();
+    await expect(window.getByText('Click what to connect it to')).toBeVisible();
+    await notes.nth(1).click();
+    await expect(lines).toHaveCount(1);
+    await expect.poll(joined).toEqual([[items[0]!.id, items[1]!.id]]);
+
+    // The mode is announced for as long as it lasts, past the time a plain toast would have gone; dismissing the hint ends it.
+    const hint = window.getByText('Click what to connect it to');
+    await notes.nth(1).click({ button: 'right' });
+    await window.getByRole('menuitem', { name: 'Connect to…' }).click();
+    await window.waitForTimeout(7000);
+    await expect(hint).toBeVisible();
+    await window.getByRole('button', { name: 'Dismiss' }).click();
+    await expect(hint).toBeHidden();
+    await notes.nth(2).click();
+    await expect(lines).toHaveCount(1);
+
+    // Esc calls it off.
+    await notes.nth(1).click({ button: 'right' });
+    await window.getByRole('menuitem', { name: 'Connect to…' }).click();
+    await window.keyboard.press('Escape');
+    await expect(hint).toBeHidden();
+    await notes.nth(2).click();
+    await expect(lines).toHaveCount(1);
+
+    // Two selected join at once.
+    await notes.nth(1).click();
+    await notes.nth(2).click({ modifiers: ['Shift'] });
+    await notes.nth(2).click({ button: 'right' });
+    await window.getByRole('menuitem', { name: 'Connect them' }).click();
+    await expect(lines).toHaveCount(2);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

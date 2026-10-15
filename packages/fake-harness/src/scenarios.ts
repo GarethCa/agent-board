@@ -1,7 +1,7 @@
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'orchestrate', 'crash', 'rate-limit', 'markdown'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -41,6 +41,39 @@ const LATER_REVIEW = [
   '## Minor',
   '- **The e2e waits with sleep(500)** `e2e/move-session.spec.ts:57`: use the fake clock.',
 ].join('\n');
+
+/**
+ * An HTML plan that tries everything a plan's page must not: reach `url` by fetch, an image, a form post and a
+ * navigation, open a window and the print dialog, and find the app's API or Node. It writes what it could into its title, once past `print()`, and its heading
+ * says it ran: `fetch:blocked image:blocked app:none node:none`. The navigation and `window.open` come last.
+ */
+function hostilePlan(url: string): string {
+  const target = JSON.stringify(url);
+  return `<!doctype html>
+<html><head><title>untried</title></head>
+<body>
+<h1 id="plan">A plan in HTML</h1>
+<form id="post" method="post" action=${target}><input name="x" value="1"></form>
+<script>
+const results = [];
+const report = () => { document.title = results.join(' '); };
+const tryFetch = fetch(${target}).then(() => 'fetch:reached', () => 'fetch:blocked');
+const tryImage = new Promise((done) => { const img = new Image(); img.onload = () => done('image:reached'); img.onerror = () => done('image:blocked'); img.src = ${target} + 'pixel.png'; });
+results.push('app:' + (typeof window.agentBoard === 'undefined' ? 'none' : 'reachable'));
+results.push('node:' + (typeof require === 'undefined' && typeof process === 'undefined' ? 'none' : 'reachable'));
+document.getElementById('plan').textContent = 'The script ran';
+Promise.all([tryFetch, tryImage]).then((tried) => {
+  results.unshift(...tried);
+  // The OS print dialog would hold the script here, and could be opened again and again: the title says it got past.
+  window.print();
+  report();
+  window.open(${target});
+  document.getElementById('post').submit();
+  setTimeout(() => { location.href = ${target}; }, 50);
+});
+</script>
+</body></html>`;
+}
 
 const scripts: Record<FakeScenario, Script> = {
   /** Streams output, runs one tool, finishes the turn and exits. */
@@ -224,6 +257,51 @@ const scripts: Record<FakeScenario, Script> = {
   },
 
   /**
+   * Asks the user and presents plans through the board MCP, by prompt, then ends its turn on what it was told.
+   * `Ask: <question> | <option> | …` asks with those options and a reply field (`Ask only: …` without the field);
+   * `Ask in words: <question>` asks with no options; `Ask briefly: <question>` waits a minute at most; `Identify, then
+   * ask: …` prints its board token first; `Ask and give up: <question>` asks and, as a harness whose own tool timeout
+   * passes first, drops the call after half a second with no cancel and ends its turn. `Plan: <title>`
+   * presents a Markdown plan and, if changes are asked for, a v2 with the comments in it, until a decision other than
+   * changes. `Plan HTML: <url>` presents an HTML plan that tries to reach `<url>` (fetch, an image, a form, a navigation,
+   * `window.open`) and the app, and says in its title what it could. `Plan file: <path>` presents the file at `<path>`.
+   */
+  async 'ask-plan'(session, prompt) {
+    await session.submit(prompt);
+    const say = async (result: { text: string } | undefined) => {
+      await session.say(result?.text ?? 'There is no agent-board MCP server here.');
+      await session.stop();
+    };
+    // Its board token on its screen first, for a test to act as the agent with.
+    if (prompt.startsWith('Identify, then ask: ')) await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+    const givenUp = /^Ask and give up: (.*)/.exec(prompt)?.[1];
+    if (givenUp !== undefined) {
+      return say(await session.callMcpTool('agent-board', 'ask', { question: givenUp }, { giveUpMs: 500 }));
+    }
+    const ask = /^(?:Identify, then )?[Aa]sk( only| in words| briefly)?: (.*)/.exec(prompt);
+    if (ask !== null) {
+      const [question, ...options] = ask[2]!.split(' | ');
+      const args = ask[1] === ' in words' ? { question } : { question, options, free_text: ask[1] !== ' only' };
+      return say(await session.callMcpTool('agent-board', 'ask', ask[1] === ' briefly' ? { ...args, timeout_minutes: 1 } : args));
+    }
+    const plan = /^Plan: (.*)/.exec(prompt)?.[1];
+    if (plan !== undefined) {
+      let markdown = `# ${plan}\n\n## Steps\n\n1. Wrap \`getProduct()\` in a Redis cache, 5-minute TTL.\n2. Bust the key on \`product.updated\`.\n\n<script>document.title = 'ran'</script>`;
+      for (;;) {
+        const result = await session.callMcpTool('agent-board', 'present_plan', { title: plan, markdown });
+        if (!/asked for changes/.test(result?.text ?? '')) return say(result);
+        await session.say(result!.text);
+        markdown += `\n3. ${/Their comments:\n([\s\S]*?)\n\nRevise/.exec(result!.text)?.[1] ?? 'As asked.'}`;
+      }
+    }
+    const html = /^Plan HTML: (.*)/.exec(prompt)?.[1];
+    if (html !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'A hostile plan', html: hostilePlan(html) }));
+    const file = /^Plan file: (.*)/.exec(prompt)?.[1];
+    if (file !== undefined) return say(await session.callMcpTool('agent-board', 'present_plan', { title: 'Plan from a file', path: file }));
+    return scripts.output(session, prompt);
+  },
+
+  /**
    * Orchestrators and their workers, by prompt. `Orchestrate: <task>` runs one through the agent-board MCP
    * tools and CLI: starts a worker with the task, waits for it, reads its handover, sends it a follow-up, waits again,
    * reads its reply and closes it. `Lead two: <task>` starts two workers with the task, one through the MCP tool and one
@@ -233,7 +311,7 @@ const scripts: Record<FakeScenario, Script> = {
    * its first turn, joins itself to it with an edge carrying a message (`add_edge`) and hands it `<message>` along it,
    * ending on `Wired.`.
    * `Print your board identity` echoes the board token. `Work slowly` runs `sleep 5`;
-   * `Ask permission` plays `permission`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Ask: …` and `Plan: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
@@ -291,6 +369,7 @@ const scripts: Record<FakeScenario, Script> = {
       return session.stop();
     }
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
+    if (/^(Ask( only| in words| briefly)?|Plan): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
     await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
     await session.say('Handover written.\nSTATUS: done');

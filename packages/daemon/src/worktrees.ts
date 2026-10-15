@@ -81,6 +81,34 @@ export async function addWorktree(repoRoot: string, path: string, branch: string
 }
 
 /**
+ * Checks out the tip of the repo's branch `branch`, detached, in a new worktree at `path` (a reviewer's): no
+ * branch of its own, so it can't push. Resolves to the commit it checked out.
+ */
+export async function addDetachedWorktree(repoRoot: string, path: string, branch: string): Promise<string> {
+  const found = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+  if (!found.ok) throw new Error(`${basename(repoRoot)} has no branch ${branch}`);
+  mkdirSync(dirname(path), { recursive: true });
+  const added = await runGit(repoRoot, ['worktree', 'add', '--detach', path, found.stdout]);
+  if (!added.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${added.stderr}`);
+  return found.stdout;
+}
+
+/** `path`, or the first of `path-2`, `path-3`… that nothing is at yet. */
+export function freeWorktreePath(path: string): string {
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? path : `${path}-${n}`;
+    if (!existsSync(candidate)) return candidate;
+  }
+}
+
+/** The branch the repo's main checkout is on: a reviewer's branch when it is given none. Throws on a detached HEAD. */
+export async function checkedOutBranch(repoRoot: string): Promise<string> {
+  const head = await runGit(repoRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  if (!head.ok || head.stdout === '') throw new Error(`${basename(repoRoot)} is on a detached HEAD: pick the branch to review`);
+  return head.stdout;
+}
+
+/**
  * Why removing the worktree and branch would lose work, or undefined if it wouldn't: uncommitted changes (untracked
  * files included) in the worktree, commits on its HEAD that no branch has (a detached HEAD after a rebase, bisect or
  * checkout of a commit), or commits on the branch that no other branch or remote-tracking branch has.
@@ -113,14 +141,15 @@ function commits(count: number): string {
   return `${count} commit${count === 1 ? '' : 's'}`;
 }
 
-/** Removes the worktree, changes and all, then deletes its branch. Either may already be gone. */
-export async function removeWorktree(repoRoot: string, worktree: string, branch: string): Promise<void> {
+/** Removes the worktree, changes and all, then deletes its branch unless `keepBranch`. Either may already be gone. */
+export async function removeWorktree(repoRoot: string, worktree: string, branch: string, keepBranch = false): Promise<void> {
   if (existsSync(worktree)) {
     const removed = await runGit(repoRoot, ['worktree', 'remove', '--force', worktree]);
     if (!removed.ok) throw new Error(`could not remove the worktree ${worktree}: ${removed.stderr}`);
   }
   // Forget a worktree whose folder was deleted by hand, so its branch is free to delete.
   await runGit(repoRoot, ['worktree', 'prune']);
+  if (keepBranch) return;
   const exists = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
   if (!exists.ok) return;
   const deleted = await runGit(repoRoot, ['branch', '-D', branch]);

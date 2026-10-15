@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { fakeBinDir } from '@agent-board/fake-harness';
 import type { Agent, NewZoneParams, Zone } from '@agent-board/daemon/protocol';
-import { createFakeGitHub, createTempKeychain, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
+import { createFakeGitHub, createTempKeychain, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -54,6 +54,26 @@ async function shoot(page: Page, name: string): Promise<void> {
   const { data } = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { x: 0, y: 0, ...VIEWPORT, scale: 2 } });
   await session.detach();
   await write(name, Buffer.from(data, 'base64'));
+  await restorePointer();
+}
+
+/** Like `shoot`, for a window with a web tab: that page is a view of its own over the window, so it is shot on its own and laid over the window's shot at the tab's area. */
+async function shootWithPage(page: Page, webPage: Page, area: { x: number; y: number; width: number; height: number }, name: string, pin: () => Promise<void>): Promise<void> {
+  const restorePointer = await ignorePointer(page);
+  await settle(page);
+  await stillBoard(page);
+  await pin();
+  const shotOf = async (target: Page, clip: { x: number; y: number; width: number; height: number }) => {
+    const session = await target.context().newCDPSession(target);
+    const { data } = await session.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { ...clip, scale: 2 } });
+    await session.detach();
+    return Buffer.from(data, 'base64');
+  };
+  const board = await shotOf(page, { x: 0, y: 0, ...VIEWPORT });
+  const inner = await webPage.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  const content = await shotOf(webPage, { x: 0, y: 0, width: Math.min(inner.width, Math.round(area.width)), height: Math.min(inner.height, Math.round(area.height)) });
+  const composed = await sharp(board).composite([{ input: content, left: Math.round(area.x * 2), top: Math.round(area.y * 2) }]).png().toBuffer();
+  await write(name, composed);
   await restorePointer();
 }
 
@@ -164,8 +184,8 @@ async function seedBoard(page: Page, dir: string): Promise<void> {
         return result.zone;
       };
       return {
-        web: await added(web, { x: 0, y: 0, width: 740, height: 440, color: '#4c6ef5' }),
-        api: await added(api, { x: 820, y: 0, width: 640, height: 440, color: '#12b886' }),
+        web: await added(web, { x: 0, y: 0, width: 840, height: 440, color: '#4c6ef5' }),
+        api: await added(api, { x: 920, y: 0, width: 640, height: 440, color: '#12b886' }),
       };
     },
     { web: makeRepo(dir, 'web-app'), api: makeRepo(dir, 'api-service') },
@@ -182,9 +202,9 @@ async function seedBoard(page: Page, dir: string): Promise<void> {
   const agents: Agent[] = [];
   // Short tasks: the tile's name, branch and message all come from them, and must fit.
   agents.push(await spawn(zones.web, 'Fix checkout flake', 30, 60));
-  agents.push(await spawn(zones.web, 'Pick a cache', 370, 60));
+  agents.push(await spawn(zones.web, 'Pick a cache', 480, 60));
   agents.push(await spawn(zones.web, 'Clear build output', 30, 240));
-  agents.push(await spawn(zones.web, 'Resize images', 370, 240));
+  agents.push(await spawn(zones.web, 'Resize images', 480, 240));
   agents.push(await spawn(zones.api, 'Prune old jobs', 30, 60));
   agents.push(await spawn(zones.api, 'Trace session store', 340, 60));
 
@@ -210,7 +230,7 @@ async function seedBoard(page: Page, dir: string): Promise<void> {
   const shape = await item({
     kind: 'shape',
     zoneId: null,
-    x: 380,
+    x: 500,
     y: 550,
     width: 220,
     height: 90,
@@ -356,7 +376,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
   try {
     await page.setViewportSize(VIEWPORT);
     const zone = await page.evaluate(async (path) => {
-      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 840, height: 460, color: '#4c6ef5' });
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1260, height: 330, color: '#4c6ef5' });
       if (result.status !== 'added') throw new Error(result.message);
       return result.zone;
     }, makeRepo(dir, 'storefront'));
@@ -369,9 +389,10 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
         },
         { zoneId: zone.id, prompt, position: { x, y }, cols: 100, rows: 30 },
       );
-    const planner = await spawn('Plan the checkout', 20, 60);
-    const coder = await spawn('Write the code', 290, 60);
-    const shipper = await spawn('Ship the release', 560, 60);
+    // A gap between the tiles (~275 for the plan edge, whose pill and Send button are wide, ~185 for the other) leaves a visible line and arrowhead each side of each label; the reviewer sits below.
+    const planner = await spawn('Plan the checkout', 20, 50);
+    const coder = await spawn('Write the code', 550, 50);
+    const shipper = await spawn('Ship the release', 990, 50);
     for (const name of ['Plan the checkout', 'Write the code', 'Ship the release']) {
       await expect(tile(page).filter({ hasText: name })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
     }
@@ -399,6 +420,11 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
     await expect(reviewer).toHaveAttribute('data-state', 'done', { timeout: 60_000 });
     await expect.poll(async () => (await page.evaluate(() => window.agentBoard.reviews.list()))[0]?.status).toBe('ready');
     await expect(tile(page)).toHaveCount(4);
+    // The reviewer lands beside its implementer: move it clear of both edges.
+    await page.evaluate(
+      async ([id, zoneId]) => window.agentBoard.agents.move(id as string, { zoneId: zoneId as string, x: 20, y: 320 }),
+      [await reviewer.getAttribute('data-session-id'), zone.id],
+    );
 
     await page.getByRole('button', { name: 'Fit View' }).click();
     await stillBoard(page);
@@ -408,6 +434,19 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
     await expect(rules).toContainText('Write the code');
     await expect(rules).toContainText('no pull request yet');
     await expect(rules.getByTestId('edge-rules-preview')).toContainText('The checkout validates the cart');
+    // Zoom out two steps and pan the board into the space left of the panel, so the panel covers no tile or edge.
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await page.getByRole('button', { name: 'Zoom out' }).click();
+    await stillBoard(page);
+    await page.keyboard.press('h');
+    const box = await page.getByTestId('zone').boundingBox();
+    if (!box) throw new Error('the zone has no box');
+    await page.mouse.move(600, 150);
+    await page.mouse.down();
+    await page.mouse.move(600 + 20 - box.x, 150, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.press('v');
+    await stillBoard(page);
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'flow-edges');
@@ -443,14 +482,14 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
   }
 });
 
-test('the README screenshots: an orchestrator with its crew frame, and a shell tab beside an agent', async () => {
+test('the README screenshots: an orchestrator with its crew frame', async () => {
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
   try {
     await page.setViewportSize(VIEWPORT);
     const zone = await page.evaluate(async (path) => {
-      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 900, height: 460, color: '#4c6ef5' });
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1180, height: 460, color: '#4c6ef5' });
       if (result.status !== 'added') throw new Error(result.message);
       return result.zone;
     }, makeRepo(dir, 'storefront'));
@@ -465,7 +504,7 @@ test('the README screenshots: an orchestrator with its crew frame, and a shell t
       );
 
     // The orchestrator starts two workers through the board's MCP tool and CLI: each takes a turn's worth of time to start.
-    await spawn('Lead two: Fix checkout flake', 40, 80);
+    const lead = await spawn('Lead two: Fix checkout flake', 40, 80);
     await expect(tile(page)).toHaveCount(3, { timeout: 60_000 });
     const frame = page.getByTestId('crew-frame');
     await expect(frame).toHaveCount(1);
@@ -473,32 +512,178 @@ test('the README screenshots: an orchestrator with its crew frame, and a shell t
     await expect(page.locator('[data-testid="agent-tile"][data-orchestrator]').getByTestId('crew-count')).toHaveText('2');
     await expect(tile(page).filter({ has: page.getByTitle('worker one', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
     await expect(tile(page).filter({ has: page.getByTitle('worker two', { exact: true }) })).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
+    // The workers land beside the orchestrator: move them out so the crew frame has clear space around its tiles.
+    const crew = (await agents(page)).filter((agent) => agent.sessionId !== lead.sessionId);
+    for (const [index, worker] of crew.entries()) {
+      await page.evaluate(([id, zoneId, x]) => window.agentBoard.agents.move(id as string, { zoneId: zoneId as string, x: x as number, y: 80 }), [worker.sessionId, zone.id, 480 + index * 330]);
+    }
     await page.getByRole('button', { name: 'Fit View' }).click();
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'orchestrator-crew');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
-    // A shell tab beside an idle worker, in its worktree: nothing on the open session asks for anything, and the
-    // orchestrator's ask (which the user has looked at) no longer counts.
-    const orchestrator = await agents(page).then((all) => all.find((agent) => agent.name.startsWith('Lead two'))!);
-    await page.evaluate((id) => window.agentBoard.agents.markSeen(id), orchestrator.sessionId);
-    await expect(page.getByTestId('inbox-count')).toHaveAttribute('data-count', '0');
-    await tile(page).filter({ has: page.getByTitle('worker one', { exact: true }) }).dblclick();
+/** What the PR tab carries that differs run to run: the time it read the pull request, and its branch, drawn as the window's header draws it (`pinRandomLooks` pinned that one). */
+async function pinPullRequestLooks(page: Page, branch: string): Promise<void> {
+  await page.evaluate((real) => {
+    const pinned = document.querySelector('.session-window-where')?.textContent?.trim() ?? real;
+    const walker = document.createTreeWalker(document.querySelector("[data-testid='pr-view']") ?? document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      node.data = node.data.replace(/Read \d{1,2}:\d{2} [AP]M/, 'Read 9:41 AM').split(real).join(pinned);
+    }
+  }, branch);
+}
+
+/** A page for the web tab to show: a storefront dev server's home, drawn the way a small app would draw it. */
+const DEV_PAGE = `<!doctype html><meta charset="utf-8"><title>Storefront</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: #f7f5ef; color: #2b2a27; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 18px 48px; background: #fff; border-bottom: 1px solid #e3dfd3; }
+  header b { font-size: 20px; } nav span { margin-left: 24px; color: #6b6860; }
+  main { padding: 48px; max-width: 760px; } h1 { font-size: 36px; margin: 0 0 8px; } p { color: #6b6860; margin: 0 0 28px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: #fff; border: 1px solid #e3dfd3; border-radius: 12px; padding: 16px; } .card i { display: block; height: 90px; border-radius: 8px; margin-bottom: 12px; }
+  .card b { display: block; } .card span { color: #6b6860; }
+  button { margin-top: 28px; padding: 10px 18px; border: 0; border-radius: 8px; background: #3b5bdb; color: #fff; font: inherit; }
+</style>
+<header><b>Storefront</b><nav><span>Shop</span><span>Cart (1)</span></nav></header>
+<main><h1>Checkout, fixed.</h1><p>The cart now validates before it charges the card.</p>
+<div class="grid"><div class="card"><i style="background:#d0ebff"></i><b>Canvas tote</b><span>$24</span></div><div class="card"><i style="background:#ffd8a8"></i><b>Enamel mug</b><span>$14</span></div><div class="card"><i style="background:#c3fae8"></i><b>Sticker pack</b><span>$6</span></div></div>
+<button>Go to checkout</button></main>`;
+
+test('the README screenshots: a session window with two panes, a PR tab and a web tab', async () => {
+  const dev = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(DEV_PAGE);
+  });
+  await new Promise<void>((resolve) => dev.listen(0, '127.0.0.1', resolve));
+  const devUrl = `http://127.0.0.1:${(dev.address() as AddressInfo).port}/`;
+  const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window: page } = await launch(
+    dataDir,
+    { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, AGENT_BOARD_GH: github.gh, SHELL: '/bin/sh' },
+    RENDER_ARGS,
+  );
+  try {
+    await page.setViewportSize(VIEWPORT);
+    // gh finds the agent's pull requests in the repo its worktree's remote names.
+    const repo = makeRepo(dir, 'storefront');
+    execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/storefront.git']);
+    const zone = await page.evaluate(async (path) => {
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 420, height: 400, color: '#4c6ef5' });
+      if (result.status !== 'added') throw new Error(result.message);
+      return result.zone;
+    }, repo);
+    const agent = await page.evaluate(
+      async (params) => {
+        const result = await window.agentBoard.agents.spawn(params);
+        if (result.status !== 'started') throw new Error(result.message);
+        return result.agent;
+      },
+      { zoneId: zone.id, prompt: 'Fix checkout flake', position: { x: 40, y: 80 }, cols: 100, rows: 30 },
+    );
+    await expect(tile(page)).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
+    await page.getByRole('button', { name: 'Fit View' }).click();
+    const pullRequest: FakeGitHubPullRequest = {
+      repo: 'acme/storefront',
+      number: 41,
+      title: 'Validate the cart before charging the card',
+      headRefName: agent.branch,
+      headRefOid: 'b'.repeat(40),
+      state: 'OPEN',
+      isDraft: false,
+      author: 'maria',
+      body: 'Fixes the **flaky checkout**: the cart is validated first, so a bad cart never reaches the card charge.\n\n- validate items and stock\n- charge once, then clear the cart',
+      statusCheckRollup: [
+        { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/storefront/actions/runs/1' },
+        { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/storefront/actions/runs/2' },
+        { __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/storefront/actions/runs/3' },
+      ],
+      files: [
+        { filename: 'src/checkout.ts', status: 'modified', additions: 3, deletions: 1, patch: '@@ -10,4 +10,6 @@ export async function checkout(cart: Cart) {\n-  await charge(cart.total);\n+  validate(cart);\n+  await charge(cart.total);\n+  cart.clear();\n   return receipt(cart);\n }' },
+      ],
+      comments: [{ author: 'sam', body: 'Nice, this was biting us in the demo.', createdAt: '2026-10-01T09:00:00Z' }],
+      reviewComments: [{ id: 9, author: 'sam', path: 'src/checkout.ts', line: 11, body: 'Should this throw on an empty cart?', createdAt: '2026-10-01T10:00:00Z' }],
+    };
+    github.setState({ ...FAKE_GITHUB_STATE, repos: [{ nameWithOwner: 'acme/storefront', description: 'The web storefront', squashMergeAllowed: true }], pullRequests: [pullRequest] });
+    await expect(tile(page).getByTestId('tile-pr')).toHaveText('#41');
+
+    // The agent's chip opens its window on a PR tab.
+    await tile(page).getByTestId('tile-pr').click();
     const win = sessionWindow(page);
-    await expect(win).toBeVisible();
+    const prView = win.getByTestId('pr-view');
+    await expect(prView.getByTestId('pr-title')).toContainText('Validate the cart');
+    await expect(prView.getByTestId('pr-check')).toHaveCount(3);
+    await expect(prView.getByTestId('pr-comment')).toHaveCount(2);
+    await expect(prView.getByTestId('pr-approve')).toBeVisible();
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    await pinPullRequestLooks(page, agent.branch);
+    await shoot(page, 'pr-tab');
+
+    // Two panes, each with its own strip: the agent beside a shell, the PR tab and a second shell.
+    await win.getByRole('tab', { name: 'claude', exact: true }).click();
     await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
-    await expect(win.locator('[data-testid="session-tab-view"]:not([hidden])').getByTestId('shell-pane')).toHaveCount(2);
-    const shell = win.locator('[data-testid="session-tab-view"]:not([hidden]) .shell-pane[data-focused="true"]');
+    const panes = win.getByTestId('window-pane');
+    await expect(panes).toHaveCount(2);
+    const shell = win.locator('[data-testid="session-tab-view"][data-focused] .shell-pane[data-focused="true"]');
     await shell.getByTestId('session-terminal').click();
     await page.keyboard.type('ls');
     await page.keyboard.press('Enter');
     await expect(shell).toContainText('README.md');
+    await panes.nth(0).getByRole('tab', { name: 'claude', exact: true }).click();
     await pinRandomLooks(page);
     await pinPaths(page);
-    await shoot(page, 'shell-tab');
+    await pinPullRequestLooks(page, agent.branch);
+    await shoot(page, 'session-panes');
+
+    // A web tab from + › Web…, showing the agent's dev server.
+    await panes.nth(0).getByRole('button', { name: 'New tab' }).click();
+    await page.getByRole('menuitem', { name: 'Web…' }).click();
+    const ask = page.getByRole('dialog', { name: 'Open a web tab' });
+    await ask.getByRole('textbox', { name: 'Address' }).fill(devUrl);
+    await ask.getByRole('button', { name: 'Open' }).click();
+    await expect(ask).toBeHidden();
+    const webPage = app.windows().find((candidate) => candidate.url().startsWith(devUrl)) ?? (await app.waitForEvent('window', (candidate) => candidate.url().startsWith(devUrl)));
+    await expect(webPage.locator('h1')).toHaveText('Checkout, fixed.');
+    await webPage.evaluate(() => document.fonts.ready);
+    await expect(win.getByTestId('web-view')).toHaveAttribute('aria-busy', 'false');
+    // Nothing hovered or focused: the New tab button gets focus back from the dialog, and its tooltip shows for it.
+    await page.mouse.move(640, 790);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    // The page is drawn by the main process over the tab's area, outside the window's own pixels: shot on its own and laid over the window's.
+    const area = (await win.getByTestId('web-page').boundingBox())!;
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    const port = new URL(devUrl).port;
+    const pinPort = () =>
+      page.evaluate(
+        ({ port }) => {
+          // The dev server's port is the machine's: drawn as the usual one.
+          for (const input of document.querySelectorAll<HTMLInputElement>("[data-testid='web-address']")) input.value = input.value.replace(`127.0.0.1:${port}`, 'localhost:5173');
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode as Text;
+            node.data = node.data.replace(`127.0.0.1:${port}`, 'localhost:5173');
+          }
+        },
+        { port },
+      );
+    await shootWithPage(page, webPage, area, 'web-tab', pinPort);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
+    github.dispose();
+    dev.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

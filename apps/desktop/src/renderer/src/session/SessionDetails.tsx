@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react';
 import { neighbourOf, paneIds } from '@agent-board/daemon/pane-layout';
-import { INTERRUPT_KEY, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
-import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { INTERRUPT_KEY, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
+import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen, RotateCw } from 'lucide-react';
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
+import { agentSetupLine, branchLine } from '../board/AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { errorMessage } from '../../../shared/errors';
 import { withCommand } from '../keys';
 import { STATE_LABELS } from '../states';
-import { Button, Chip, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
+import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
+import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
+import { useGateRun } from '../gate/GatesProvider';
+import { gated } from '../gate/gate-view';
+import { requestTab } from './tab-request';
+import { gateSurfaceOf } from './tabs';
+import { runGateShortcut } from './window-keys';
 import { useAction } from '../use-action';
 import { sessionControls, type Control, type ControlId } from './controls';
 import { useDetailsWidth } from './DetailsHandle';
@@ -35,8 +42,10 @@ export interface SessionDetailsProps {
   /** Whether it is collapsed to an icon rail, and how to change that (⌘I). */
   collapsed: boolean;
   onCollapsed(collapsed: boolean): void;
-  /** Opens a link in the OS browser: an issue or a pull request. */
+  /** Opens a link in the OS browser: an issue, or a pull request with no PR tab to open. */
   onOpenLink(url: string): void;
+  /** Opens one of the agent's pull requests in a PR tab (BI1). */
+  onOpenPullRequest?(pr: PullRequest): void;
 }
 
 /**
@@ -45,7 +54,7 @@ export interface SessionDetailsProps {
  * same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
  */
 export function SessionDetails(props: SessionDetailsProps) {
-  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink } = props;
+  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest } = props;
   // In an agent's window, the agent's own pane, unless a shell pane in one of its tabs has the keyboard.
   const agentFocused = agent !== undefined && (focusedPane === undefined || focusedPane === agent.sessionId);
   const width = useDetailsWidth();
@@ -107,6 +116,7 @@ export function SessionDetails(props: SessionDetailsProps) {
             {fact('issue', agent.issue ? `Issue ${agent.issue.id}` : 'Issue')}
             {fact('worktree', 'Worktree and branch')}
             {fact('pulls', pullsLabel(agent))}
+            {gated(agent) && fact('gate', 'Merge gate')}
             {fact('subagents', subagentsLabel(agent))}
             {fact('schedule', 'Schedule')}
           </>
@@ -166,7 +176,7 @@ export function SessionDetails(props: SessionDetailsProps) {
             onProblem={onProblem}
           />
         )}
-        {agent && <AgentSections agent={agent} sectionProps={sectionProps} onOpenLink={onOpenLink} />}
+        {agent && <AgentSections agent={agent} sectionProps={sectionProps} onOpenLink={onOpenLink} onOpenPullRequest={onOpenPullRequest ?? ((pr) => onOpenLink(pr.url))} />}
         {external && <ExternalSections session={external} sectionProps={sectionProps} />}
       </div>
     </aside>
@@ -174,7 +184,7 @@ export function SessionDetails(props: SessionDetailsProps) {
 }
 
 /** The home folder, for writing paths with `~`; undefined until the daemon says. */
-function useHomeDir(): string | undefined {
+export function useHomeDir(): string | undefined {
   const [home, setHome] = useState<string>();
   useEffect(() => {
     window.agentBoard.daemonHealth().then((health) => setHome(health.homeDir), () => {});
@@ -241,10 +251,12 @@ function AgentSections({
   agent,
   sectionProps,
   onOpenLink,
+  onOpenPullRequest,
 }: {
   agent: Agent;
   sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void };
   onOpenLink(url: string): void;
+  onOpenPullRequest(pr: PullRequest): void;
 }) {
   const { issue, pullRequests, subagents, schedule } = agent;
   const now = useNow(schedule !== null);
@@ -274,9 +286,10 @@ function AgentSections({
         )}
       </Section>
       <Section label="Worktree and branch" icon={<SectionIcon id="worktree" />} meta={worktreeName(agent.worktree)} {...sectionProps('worktree')}>
-        <p className="details-mono details-branch" title={agent.branch}>
-          {agent.branch}
+        <p className="details-mono details-branch" title={branchLine(agent)}>
+          {branchLine(agent)}
         </p>
+        {(agent.model !== null || agent.role !== null) && <p className="details-soft">{agentSetupLine(agent)}</p>}
         <p className="details-mono details-soft" title={agent.worktree}>
           {agent.worktree}
         </p>
@@ -290,8 +303,8 @@ function AgentSections({
               <li key={pr.number}>
                 <PanelRow
                   as="button"
-                  title="Open it on GitHub"
-                  onClick={() => onOpenLink(pr.url)}
+                  title="Open it in a PR tab"
+                  onClick={() => onOpenPullRequest(pr)}
                   mark={<SectionIcon id="pulls" className="details-row-icon" />}
                   name={`#${pr.number} ${pr.title}`}
                   meta={`${pr.state} · ${checksLabel(pr)}`}
@@ -301,6 +314,7 @@ function AgentSections({
           </ul>
         )}
       </Section>
+      {gated(agent) && <GateSection agent={agent} sectionProps={sectionProps} />}
       <Section
         label="Subagents"
         icon={<SectionIcon id="subagents" />}
@@ -336,6 +350,52 @@ function AgentSections({
         )}
       </Section>
     </>
+  );
+}
+
+/**
+ * The agent's merge gate (BL1): its last run in a word, on which commit, and Run gate, which shows the run in a
+ * Gate tab in the focused pane, as the tile's badge and ⌘⇧G do.
+ */
+function GateSection({ agent, sectionProps }: { agent: Agent; sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void } }) {
+  const run = useGateRun(agent.sessionId);
+  const { busy, error, run: act } = useAction();
+  const openTab = () => requestTab(agent.sessionId, gateSurfaceOf(agent.sessionId));
+  return (
+    <Section label="Gate" icon={<SectionIcon id="gate" />} meta={run === undefined ? 'Not run' : gateBadge(run)} {...sectionProps('gate')}>
+      {run === undefined ? (
+        <Hint>Runs its zone&rsquo;s gate command in its worktree, only when you ask.</Hint>
+      ) : (
+        <PanelRow
+          as="button"
+          title="Open its Gate tab"
+          onClick={openTab}
+          mark={<SectionIcon id="gate" className="details-row-icon" />}
+          name={gateBadge(run)}
+          meta={`on ${shortCommit(run.commit)}`}
+          data-testid="details-gate"
+        />
+      )}
+      <div className="session-controls">
+        <Button
+          size="sm"
+          className="session-control"
+          icon={<RotateCw />}
+          disabled={busy || run?.status === 'running'}
+          title={`Run its zone's gate command in its worktree (${runGateShortcut()})`}
+          onClick={() =>
+            act(async () => {
+              openTab();
+              await window.agentBoard.gates.run(agent.sessionId);
+            })
+          }
+          data-testid="details-run-gate"
+        >
+          {run === undefined ? 'Run gate' : 'Run again'}
+        </Button>
+      </div>
+      {error !== undefined && <ErrorText>{error}</ErrorText>}
+    </Section>
   );
 }
 

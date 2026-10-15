@@ -26,6 +26,8 @@ export interface PullRequestWatcherOptions {
 export interface PullRequestWatcher {
   /** The agent's pull requests as last seen; empty until first seen. */
   get(sessionId: string): PullRequest[];
+  /** Whether the agent's pull requests have been read since the watcher started, so `get`'s empty means none. */
+  read(sessionId: string): boolean;
   /** Asks for the agent's pull requests now, as when its turn has ended and it may just have opened one. */
   refresh(sessionId: string): Promise<void>;
   /** Stops asking. Asking in flight finishes without reporting changes. */
@@ -42,6 +44,8 @@ export interface PullRequestWatcher {
 export function watchPullRequests(options: PullRequestWatcherOptions): PullRequestWatcher {
   const seen = new Map<string, { pullRequests: PullRequest[]; json: string }>();
   const failures = new Map<string, string>();
+  /** The agents whose pull requests have been read at least once. */
+  const read = new Set<string>();
   const settled = new Set<string>();
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
@@ -51,6 +55,7 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
     try {
       pullRequests = await options.pullRequests(agent);
       failures.delete(agent.sessionId);
+      read.add(agent.sessionId);
     } catch (error) {
       const message = (error as Error).message;
       if (failures.get(agent.sessionId) !== message) {
@@ -73,6 +78,7 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
     const known = new Set(agents.map((agent) => agent.sessionId));
     for (const sessionId of seen.keys()) if (!known.has(sessionId)) seen.delete(sessionId);
     for (const sessionId of settled) if (!known.has(sessionId)) settled.delete(sessionId);
+    for (const sessionId of read) if (!known.has(sessionId)) read.delete(sessionId);
     for (const agent of agents) {
       if (stopped) return;
       if (!settled.has(agent.sessionId)) await ask(agent);
@@ -91,6 +97,7 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
 
   return {
     get: (sessionId) => seen.get(sessionId)?.pullRequests ?? [],
+    read: (sessionId) => read.has(sessionId),
     async refresh(sessionId) {
       const agent = options.agents().find((a) => a.sessionId === sessionId);
       if (agent !== undefined && !stopped && options.intervalMs > 0) await ask(agent);

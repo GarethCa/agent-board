@@ -67,6 +67,9 @@ export function ghFailure(code: number | null, stderr: string): GhError {
   if (/HTTP 401|Bad credentials/i.test(stderr)) {
     return new GhError('unauthorized', `GitHub refused gh's token: run \`gh auth login\` (${stderr})`, stderr);
   }
+  if (/rate limit/i.test(stderr)) {
+    return new GhError('unavailable', `GitHub's API rate limit was reached: try again in a few minutes (${stderr})`, stderr);
+  }
   if (/error connecting to|could not resolve host|dial tcp|i\/o timeout|connection refused|HTTP 5\d\d/i.test(stderr)) {
     return new GhError('unavailable', `could not reach GitHub: ${stderr}`, stderr);
   }

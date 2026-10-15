@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type KeyboardEvent } from 'react';
 import {
   ArrowRight,
   Bot,
+  Check,
   ChevronDown,
   CircleCheck,
   FileJson,
@@ -28,9 +29,9 @@ import type {
   FlowPayloadPreview,
 } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { Button, Dialog, FlowPill, IconButton, Input, Menu, Radio, SectionLabel, Segmented } from '../ui';
+import { Button, FlowPill, IconButton, Input, Menu, SectionLabel, Segmented } from '../ui';
 import type { FlowEdgeActions } from './FlowEdge';
-import { conditionName, edgeLabel, heldLabel, historyLine } from './flow-edges';
+import { conditionName, edgeLabel, heldLabel, historyLine, madeByText, rulesSummary } from './flow-edges';
 import { whenLabel } from './schedule';
 
 interface EdgeRulesProps {
@@ -54,16 +55,9 @@ interface EdgeRulesProps {
 /** The payloads, as the panel's switch names them. */
 const PAYLOAD_CHOICES: { payload: FlowEdgePayload; name: string; icon?: LucideIcon }[] = [
   { payload: 'final-message', name: 'Final message' },
-  { payload: 'handover', name: 'handover.md', icon: FileText },
+  { payload: 'handover', name: 'File', icon: FileText },
   { payload: 'json', name: 'JSON', icon: FileJson },
 ];
-
-/** What each payload hands on, under the switch. */
-const PAYLOAD_HINTS: Record<FlowEdgePayload, (from: string) => string> = {
-  'final-message': (from) => `${from}'s last message, from the turn it just finished.`,
-  handover: (from) => `A markdown file in ${from}'s worktree, as it is when ${from} is done.`,
-  json: (from) => `A JSON file in ${from}'s worktree, checked and sent on one line.`,
-};
 
 /** The conditions Add condition offers (FlowRules), each with what it needs typed, if anything. */
 const CONDITION_CHOICES: {
@@ -158,39 +152,12 @@ function useCommands(edge: FlowEdge): Map<string, FlowCommandApproval> {
   return commands;
 }
 
-/** Asks you to approve exactly what a gate or script will run in the agent's worktree, before it ever does. */
-function ApproveCommand({ plan, fromName, onApprove, onClose }: { plan: FlowCommandApproval; fromName: string; onApprove(): void; onClose(): void }) {
-  return (
-    <Dialog
-      role="alertdialog"
-      title={plan.approval === 'changed' ? 'This command has changed' : 'Run this command?'}
-      onClose={onClose}
-      data-testid="approve-command"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Not now
-          </Button>
-          <Button variant="primary" icon={<ShieldCheck />} onClick={onApprove}>
-            Approve
-          </Button>
-        </>
-      }
-    >
-      <p className="edge-rules-hint">
-        Before each hand-off along this edge, agent-board runs this in {fromName}'s worktree, as you. {fromName} can edit
-        these files, so this asks again whenever any of them change.
-      </p>
-      <pre className="edge-rules-preview edge-rules-plan">{plan.shown}</pre>
-    </Dialog>
-  );
-}
-
 /**
- * The Edge rules panel (FlowDraw AB2, FlowRules AC): on the right of the board, for the flow edge selected, and opened
- * on one as soon as it is drawn. It sets what the edge carries (its final message, a markdown file or JSON from its
- * agent's worktree), its trigger, how it delivers to a busy agent and its conditions, previews the payload, lists the
- * edge's history, and pauses, sends or deletes it.
+ * The Edge rules panel (FlowDraw AB2, FlowRules AC, BQ3): on the right of the board, for the flow edge selected, and
+ * opened on one as soon as it is drawn. Four sections, each opening with a line saying what it does: When (its trigger,
+ * and what happens if its agent is busy), What (its final message, a markdown file or JSON from its agent's worktree,
+ * previewed), Only if (its conditions, each with how it did and, for a command not yet approved, its approval) and
+ * History (what it holds, what it did, and what it last carried). Its footer pauses, deletes or sends it.
  */
 export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, drawn, live, actions, onDelete, onClose }: EdgeRulesProps) {
   const id = useId();
@@ -200,9 +167,6 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
   const [path, setPath] = useState(edge.path ?? '');
   const [adding, setAdding] = useState<{ kind: FlowCondition['kind']; text: string }>();
   const commands = useCommands(edge);
-  // The command whose approval is being asked for: one just added, or one whose Approve was pressed.
-  const [confirming, setConfirming] = useState<string>();
-  const confirm = confirming === undefined ? undefined : commands.get(confirming);
   const kept = edge.held ?? edge.queued;
   // Its file as the daemon has it, once it says, unless being typed.
   useEffect(() => setPath(edge.path ?? ''), [edge.path]);
@@ -215,10 +179,7 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
   const addCondition = () => {
     if (adding === undefined) return;
     const condition = conditionOf(adding.kind, adding.text.trim());
-    if (adding.text.trim() !== '') {
-      setConditions([...edge.conditions, condition]);
-      if ('command' in condition) setConfirming(condition.command);
-    }
+    if (adding.text.trim() !== '') setConditions([...edge.conditions, condition]);
     setAdding(undefined);
   };
   const pick = (kind: FlowCondition['kind']) => {
@@ -233,6 +194,7 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
     event.stopPropagation();
   };
   const ask = adding === undefined ? undefined : choiceOf(adding.kind).ask;
+  const summary = rulesSummary(edge, { from: fromName });
   const lines = preview !== undefined && 'text' in preview ? preview.text.replace(/\n$/, '').split('\n').length : 0;
 
   return (
@@ -262,86 +224,88 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
         {edge.madeBy !== null && (
           <p className="edge-rules-made-by" data-testid="edge-rules-made-by">
             <Bot aria-hidden />
-            Made by {madeByName ?? 'an orchestrator since deleted'}. You can change or delete it like any other.
+            {madeByText(edge, madeByName)}. You can change or delete it like any other{edge.oneOff ? ', and Send hands on what it last carried' : ''}.
           </p>
         )}
       </header>
       <div className="edge-rules-body">
-        <section className="edge-rules-section" aria-labelledby={`${id}-payload`}>
+        <section className="edge-rules-section" aria-labelledby={`${id}-when`}>
           <SectionLabel>
-            <span id={`${id}-payload`}>Payload</span>
+            <span id={`${id}-when`}>When</span>
           </SectionLabel>
+          <p className="edge-rules-summary">{summary.when}</p>
           <Segmented
-            aria-label="Payload"
-            value={edge.payload}
-            onChange={(payload) => actions.update(edge.id, { payload })}
-            options={PAYLOAD_CHOICES.map(({ payload, name, icon: Icon }) => ({ id: payload, label: name, icon: Icon && <Icon aria-hidden /> }))}
+            aria-label="Trigger"
+            value={edge.trigger}
+            onChange={(trigger) => actions.update(edge.id, { trigger })}
+            options={[
+              { id: 'auto', label: 'When it hands off', icon: <Check aria-hidden /> },
+              { id: 'manual', label: 'I press Send', icon: <Play aria-hidden /> },
+            ]}
           />
-          {edge.payload !== 'final-message' && (
-            <label className="edge-rules-file">
-              <Input
-                size="sm"
-                className="edge-rules-mono"
-                value={path}
-                aria-label={`File in ${fromName}'s worktree`}
-                spellCheck={false}
-                onChange={(event) => setPath(event.target.value)}
-                onBlur={savePath}
-                onKeyDown={keys(savePath, () => setPath(edge.path ?? ''))}
-              />
-              <span className="edge-rules-hint">in {fromName}'s worktree</span>
-            </label>
-          )}
-          <p className="edge-rules-hint">{PAYLOAD_HINTS[edge.payload](fromName)}</p>
-        </section>
-
-        <section className="edge-rules-section edge-rules-pair">
-          <div role="radiogroup" aria-labelledby={`${id}-trigger`}>
-            <SectionLabel>
-              <span id={`${id}-trigger`}>Trigger</span>
-            </SectionLabel>
-            <Radio
-              name={`${id}-trigger`}
-              label={`Auto when ${fromName} is done`}
-              checked={edge.trigger === 'auto'}
-              onChange={() => actions.update(edge.id, { trigger: 'auto' })}
-            />
-            <Radio
-              name={`${id}-trigger`}
-              label="Manual, with a Send button"
-              checked={edge.trigger === 'manual'}
-              onChange={() => actions.update(edge.id, { trigger: 'manual' })}
+          <div className="edge-rules-busy">
+            <span className="edge-rules-hint">If {toName} is busy:</span>
+            <Segmented
+              aria-label={`If ${toName} is busy`}
+              value={edge.deliverAs}
+              onChange={(deliverAs) => actions.update(edge.id, { deliverAs })}
+              options={[
+                { id: 'message', label: 'Skip' },
+                { id: 'queue', label: 'Wait for its turn' },
+              ]}
             />
           </div>
-          <div role="radiogroup" aria-labelledby={`${id}-deliver`}>
-            <SectionLabel>
-              <span id={`${id}-deliver`}>Deliver as</span>
-            </SectionLabel>
-            <Radio
-              name={`${id}-deliver`}
-              label="New message"
-              checked={edge.deliverAs === 'message'}
-              onChange={() => actions.update(edge.id, { deliverAs: 'message' })}
-            />
-            <Radio
-              name={`${id}-deliver`}
-              label="Queue after turn"
-              checked={edge.deliverAs === 'queue'}
-              onChange={() => actions.update(edge.id, { deliverAs: 'queue' })}
-            />
-          </div>
-          <p className="edge-rules-hint">
-            {edge.deliverAs === 'queue'
-              ? `If ${toName} is busy, it waits until ${toName}'s turn ends.`
-              : `If ${toName} is busy, it is skipped.`}
-          </p>
         </section>
 
-        <section className="edge-rules-section" aria-labelledby={`${id}-conditions`}>
+        <section className="edge-rules-section" aria-labelledby={`${id}-what`}>
           <SectionLabel>
-            <span id={`${id}-conditions`}>Conditions</span>
+            <span id={`${id}-what`}>What</span>
+            {preview !== undefined && 'text' in preview && (
+              <span className="edge-rules-aside edge-rules-mono">
+                {preview.name} · {lines} {lines === 1 ? 'line' : 'lines'}
+              </span>
+            )}
+          </SectionLabel>
+          <p className="edge-rules-summary">{summary.what}</p>
+          <div className="edge-rules-payload">
+            <Segmented
+              aria-label="Payload"
+              value={edge.payload}
+              onChange={(payload) => actions.update(edge.id, { payload })}
+              options={PAYLOAD_CHOICES.map(({ payload, name, icon: Icon }) => ({ id: payload, label: name, icon: Icon && <Icon aria-hidden /> }))}
+            />
+            {edge.payload !== 'final-message' && (
+              <span className="edge-rules-file">
+                <Input
+                  size="sm"
+                  className="edge-rules-mono"
+                  value={path}
+                  aria-label={`File in ${fromName}'s worktree`}
+                  spellCheck={false}
+                  onChange={(event) => setPath(event.target.value)}
+                  onBlur={savePath}
+                  onKeyDown={keys(savePath, () => setPath(edge.path ?? ''))}
+                />
+              </span>
+            )}
+          </div>
+          {preview === undefined ? null : 'text' in preview ? (
+            <pre className="edge-rules-preview" data-testid="edge-rules-preview">
+              {preview.text}
+            </pre>
+          ) : (
+            <p className="edge-rules-hint" data-testid="edge-rules-preview">
+              {preview.problem}
+            </p>
+          )}
+        </section>
+
+        <section className="edge-rules-section" aria-labelledby={`${id}-only-if`}>
+          <SectionLabel>
+            <span id={`${id}-only-if`}>Only if</span>
             <span className="edge-rules-aside">all must pass</span>
           </SectionLabel>
+          <p className="edge-rules-summary">{summary.onlyIf}</p>
           {edge.conditions.length > 0 && (
             <ul className="edge-rules-conditions">
               {edge.conditions.map((condition, index) => {
@@ -349,28 +313,35 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
                 const Icon = choiceOf(condition.kind).icon;
                 const name = conditionName(condition);
                 const plan = 'command' in condition ? commands.get(condition.command) : undefined;
+                const unapproved = plan !== undefined && plan.approval !== 'approved';
                 return (
                   <li key={index} className="edge-rules-condition" data-passed={check?.passed}>
-                    {check?.passed ? <CircleCheck aria-hidden /> : <Icon aria-hidden />}
-                    <span className="edge-rules-condition-name" title={name}>
-                      {name}
-                    </span>
-                    {plan !== undefined && plan.approval !== 'approved' ? (
-                      <Button size="sm" variant="ghost" icon={<ShieldCheck />} onClick={() => setConfirming(plan.command)}>
-                        Approve
-                      </Button>
-                    ) : (
-                      <span className="edge-rules-condition-check" title={check?.detail}>
-                        {checkLabel(check, now)}
+                    <div className="edge-rules-condition-row">
+                      {check?.passed ? <CircleCheck aria-hidden /> : <Icon aria-hidden />}
+                      <span className="edge-rules-condition-name" title={name}>
+                        {name}
                       </span>
+                      <span className="edge-rules-condition-check" data-unapproved={unapproved || undefined} title={check?.detail}>
+                        {unapproved ? (plan.approval === 'changed' ? 'changed: approve again' : 'needs approval') : checkLabel(check, now)}
+                      </span>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        icon={<X />}
+                        aria-label={`Remove ${name} condition`}
+                        onClick={() => setConditions(edge.conditions.filter((_, kept) => kept !== index))}
+                      />
+                    </div>
+                    {unapproved && (
+                      // Nothing runs until approved, exactly as shown: it asks again whenever what it runs changes.
+                      <div className="edge-rules-approve" data-testid="approve-command">
+                        <p className="edge-rules-hint">Runs in {fromName}'s worktree, as you:</p>
+                        <pre className="edge-rules-preview edge-rules-plan">{plan.shown}</pre>
+                        <Button size="sm" variant="primary" icon={<ShieldCheck />} onClick={() => actions.approve(edge.id, plan.command, plan.fingerprint)}>
+                          Approve
+                        </Button>
+                      </div>
                     )}
-                    <IconButton
-                      variant="ghost"
-                      size="sm"
-                      icon={<X />}
-                      aria-label={`Remove ${name} condition`}
-                      onClick={() => setConditions(edge.conditions.filter((_, kept) => kept !== index))}
-                    />
                   </li>
                 );
               })}
@@ -409,47 +380,6 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
               <ChevronDown aria-hidden />
             </Button>
           </Menu>
-          <p className="edge-rules-hint">Held until they pass, then sent. Send now sends anyway.</p>
-        </section>
-
-        {edge.lastDelivery?.delivered === true && (
-          <section className="edge-rules-section" aria-labelledby={`${id}-delivered`}>
-            <SectionLabel>
-              <span id={`${id}-delivered`}>Last hand-off</span>
-              <span className="edge-rules-aside edge-rules-mono">
-                {delivered?.name ?? edgeLabel(edge)} · {whenLabel(new Date(edge.lastDelivery.at), now)}
-              </span>
-            </SectionLabel>
-            {delivered === undefined ? null : delivered === null ? (
-              <p className="edge-rules-hint" data-testid="edge-rules-delivered">
-                What it carried isn't kept once agent-board restarts.
-              </p>
-            ) : (
-              <pre className="edge-rules-preview" data-testid="edge-rules-delivered">
-                {delivered.text}
-              </pre>
-            )}
-          </section>
-        )}
-
-        <section className="edge-rules-section" aria-labelledby={`${id}-preview`}>
-          <SectionLabel>
-            <span id={`${id}-preview`}>Preview</span>
-            {preview !== undefined && 'text' in preview && (
-              <span className="edge-rules-aside edge-rules-mono">
-                {preview.name} · {lines} {lines === 1 ? 'line' : 'lines'}
-              </span>
-            )}
-          </SectionLabel>
-          {preview === undefined ? null : 'text' in preview ? (
-            <pre className="edge-rules-preview" data-testid="edge-rules-preview">
-              {preview.text}
-            </pre>
-          ) : (
-            <p className="edge-rules-hint" data-testid="edge-rules-preview">
-              {preview.problem}
-            </p>
-          )}
         </section>
 
         <section className="edge-rules-section" aria-labelledby={`${id}-history`}>
@@ -483,6 +413,22 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
               ))}
             </ol>
           )}
+          {edge.lastDelivery?.delivered === true && (
+            <>
+              <p className="edge-rules-hint">
+                Last carried <span className="edge-rules-mono">{delivered?.name ?? edgeLabel(edge)}</span>, {whenLabel(new Date(edge.lastDelivery.at), now)}
+              </p>
+              {delivered === undefined ? null : delivered === null ? (
+                <p className="edge-rules-hint" data-testid="edge-rules-delivered">
+                  What it carried isn't kept once agent-board restarts.
+                </p>
+              ) : (
+                <pre className="edge-rules-preview" data-testid="edge-rules-delivered">
+                  {delivered.text}
+                </pre>
+              )}
+            </>
+          )}
         </section>
       </div>
       <footer className="edge-rules-foot">
@@ -491,7 +437,7 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
           icon={edge.paused ? <Play /> : <Pause />}
           onClick={() => actions.update(edge.id, { paused: !edge.paused })}
         >
-          {edge.paused ? 'Resume edge' : 'Pause edge'}
+          {edge.paused ? 'Resume' : 'Pause'}
         </Button>
         <Button size="sm" variant="danger" icon={<Trash2 />} onClick={onDelete}>
           Delete
@@ -500,17 +446,6 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
           Send now
         </Button>
       </footer>
-      {confirm !== undefined && confirm.approval !== 'approved' && (
-        <ApproveCommand
-          plan={confirm}
-          fromName={fromName}
-          onApprove={() => {
-            actions.approve(edge.id, confirm.command, confirm.fingerprint);
-            setConfirming(undefined);
-          }}
-          onClose={() => setConfirming(undefined)}
-        />
-      )}
     </aside>
   );
 }

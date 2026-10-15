@@ -18,6 +18,9 @@ import { chromeOptions } from './chrome';
 import { registerExternalIpc } from './external';
 import { registerConnectorIpc } from './connectors';
 import { registerFlowEdgeIpc } from './flow-edges';
+import { registerPullRequestIpc } from './pull-requests';
+import { registerGateIpc } from './gates';
+import { registerAskIpc } from './asks';
 import { registerReviewIpc } from './reviews';
 import { registerOrchestratorIpc } from './orchestrators';
 import { registerImageProtocol, registerImageScheme, registerItemIpc } from './items';
@@ -28,6 +31,8 @@ import { registerSetupIpc, setAppMenu } from './setup';
 import { registerShellIpc } from './shells';
 import { registerTrackerIpc } from './trackers';
 import { daemonViewState, registerViewIpc } from './view';
+import { registerWebTabIpc } from './web-tabs';
+import { registerTabDragIpc } from './tab-drags';
 import { registerWindowIpc } from './windows';
 import { registerZoneIpc } from './zones';
 
@@ -159,6 +164,11 @@ registerItemIpc(daemon, dataDir);
 registerConnectorIpc(daemon);
 registerFlowEdgeIpc(daemon);
 registerReviewIpc(daemon);
+registerPullRequestIpc(daemon);
+registerGateIpc(daemon);
+registerAskIpc(daemon);
+// The board's window may hand off any window's web tab, as it makes every move.
+registerWebTabIpc({ isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents });
 registerOrchestratorIpc(daemon);
 registerAgentIpc(daemon, dataDir);
 registerShellIpc(daemon);
@@ -171,12 +181,13 @@ registerSetupIpc(daemon, notify);
 const appearance = registerAppearance(dataDir, appearanceFrom(process.env.AGENT_BOARD_APPEARANCE));
 const view = daemonViewState(daemon);
 registerViewIpc(view);
-registerWindowIpc({
+const poppedWindows = registerWindowIpc({
   open: openWindow,
   view,
   hasBoard: () => board !== undefined,
   openBoard,
 });
+registerTabDragIpc({ board: () => board, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });
 const openAgent = registerAgentOpening(() => board ?? openBoard());
 
 let stopNotifications: (() => void) | undefined;

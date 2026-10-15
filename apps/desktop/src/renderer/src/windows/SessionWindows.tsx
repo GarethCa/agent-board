@@ -1,8 +1,11 @@
 import { createContext, use, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { needsYouNow, type Agent, type Shell, type Zone } from '@agent-board/daemon/protocol';
-import { WINDOW_QUERY, windowTargetFrom, type WindowTarget } from '../../../preload/api';
+import { needsYouNow, type Agent, type Shell, type WindowOwner, type Zone } from '@agent-board/daemon/protocol';
+import { windowPanes } from '@agent-board/daemon/window-layout';
+import { tabWindowTitle } from '../session/tabs';
+import { WINDOW_QUERY, windowTargetFrom, type ScreenPoint, type WindowTarget } from '../../../preload/api';
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { markSeen } from '../session/mark-seen';
+import { agentPill } from '../states';
 import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SquareArrowOutUpRight, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
@@ -34,7 +37,8 @@ interface SessionWindowsValue {
   show(target: WindowTarget): void;
   minimise(id: string): void;
   close(id: string): void;
-  popOut(target: WindowTarget): void;
+  /** Pops the target's window out into an OS window of its own: at `at` on the screen, if given (a tab dragged out there). */
+  popOut(target: WindowTarget, at?: ScreenPoint): void;
   /** Shows the target in the window `fromId` instead; a popped-out target is left where it is. */
   switchTo(fromId: string, target: WindowTarget): void;
 }
@@ -52,6 +56,19 @@ export function useSessionWindows(): SessionWindowsValue {
 function initialWindows(): Windows {
   const target = windowTargetFrom(new URLSearchParams(location.search), WINDOW_QUERY.show);
   return target === undefined ? [] : showWindow([], target);
+}
+
+/** The owner whose window layout the target's window shows. */
+const windowOwnerOf = ({ kind, id }: WindowTarget): WindowOwner => (kind === 'session' ? { kind: 'agent', id } : { kind, id });
+
+/**
+ * Hands off the web tabs of the target's window (slice 4) as the window moves to another OS window, popped
+ * out or back in: their pages wait for the window to open there and take them as they are, with no reload.
+ */
+export async function handOffWebTabs(target: WindowTarget): Promise<void> {
+  const layout = await window.agentBoard.shells.windowLayout(windowOwnerOf(target)).catch(() => null);
+  const webIds = layout === null ? [] : windowPanes(layout).flatMap((pane) => pane.tabs.flatMap((tab) => (tab.kind === 'web' ? [tab.id] : [])));
+  await Promise.all(webIds.map((id) => window.agentBoard.webTabs.handOff(id).catch(() => {})));
 }
 
 /** Opening or focusing an agent's session counts as seeing what it asks. */
@@ -91,6 +108,20 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
             void window.agentBoard.windows.popOut(entry, { reveal: false });
           }
         }
+        // A tab window the board lost track of still holds its tabs (the app quit as it popped out, say): out again.
+        void window.agentBoard.shells.tabWindows().then(
+          (kept) => {
+            if (cancelled) return;
+            for (const { owner, layout } of kept) {
+              if (windows.some((entry) => entry.id === owner.id)) continue;
+              const first = windowPanes(layout)[0]!.tabs[0]!;
+              const target: WindowTarget = { kind: 'tabs', id: owner.id, title: tabWindowTitle(first) };
+              setWindows((current) => popOutWindow(current, target));
+              void window.agentBoard.windows.popOut(target, { reveal: false });
+            }
+          },
+          () => {},
+        );
         setRestored(true);
       });
     return () => {
@@ -102,6 +133,7 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
   }, [restored, saveWindows, windows]);
   useEffect(
     () =>
+      // A tab window forgets its own tabs as it closes.
       window.agentBoard.windows.onReturned((target, how) =>
         setWindows((current) => (how === 'popIn' ? popInWindow(current, target) : closeWindow(current, target.id))),
       ),
@@ -124,10 +156,19 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
         if (popped) void window.agentBoard.windows.close(id);
         setWindows((current) => closeWindow(current, id));
       },
-      popOut(target) {
+      popOut(target, at) {
         markTargetSeen(target);
-        setWindows((current) => popOutWindow(current, target));
-        void window.agentBoard.windows.popOut(target);
+        const options = at === undefined ? undefined : { at };
+        // Out already: moved to where it was let go, its web tabs where they are.
+        if (windowsRef.current.some((entry) => entry.id === target.id && entry.placement === 'popped')) {
+          void window.agentBoard.windows.popOut(target, options);
+          return;
+        }
+        // Its web tabs' pages go with it, as they are, before its window here goes.
+        void handOffWebTabs(target).then(() => {
+          setWindows((current) => popOutWindow(current, target));
+          void window.agentBoard.windows.popOut(target, options);
+        });
       },
       switchTo(fromId, target) {
         markTargetSeen(target);
@@ -141,7 +182,8 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
 }
 
 /** Which session or shell tile an element is about, for tests and styling. */
-const idAttributes = ({ kind, id }: WindowTarget) => (kind === 'shell' ? { 'data-shell-id': id } : { 'data-session-id': id });
+const idAttributes = ({ kind, id }: WindowTarget) =>
+  kind === 'shell' ? { 'data-shell-id': id } : kind === 'tabs' ? { 'data-tab-window-id': id } : { 'data-session-id': id };
 
 /**
  * The session window shown on the board, and the dock along the board's bottom edge with every other one: minimised
@@ -180,10 +222,12 @@ export function SessionWindowsLayer({
   }, []);
   const shown = shownWindow(windows);
   const docked = windows.filter((entry) => entry.placement !== 'shown');
-  const contentOf = ({ kind, id }: WindowTarget): WindowContent =>
+  const contentOf = ({ kind, id }: WindowTarget): WindowContent | undefined =>
     kind === 'shell'
       ? { kind, shellId: id, shell: shells?.find((shell) => shell.id === id) }
-      : { kind, sessionId: id, agent: agents.find((agent) => agent.sessionId === id) };
+      : kind === 'session'
+        ? { kind, sessionId: id, agent: agents.find((agent) => agent.sessionId === id) }
+        : undefined;
   const content = shown && contentOf(shown);
   const shownAgent = content?.kind === 'session' ? content.agent : undefined;
   const nav = shown && navOf(shown);
@@ -194,8 +238,8 @@ export function SessionWindowsLayer({
     const zone = where.zoneId === null ? undefined : zones.find((known) => known.id === where.zoneId);
     const side = (target: WindowTarget) => {
       const subject = contentOf(target);
-      const agent = subject.kind === 'session' ? subject.agent : undefined;
-      return { name: agent?.name ?? (subject.kind === 'shell' ? subject.shell?.name : undefined) ?? target.title, state: agent?.state };
+      const agent = subject?.kind === 'session' ? subject.agent : undefined;
+      return { name: agent?.name ?? (subject?.kind === 'shell' ? subject.shell?.name : undefined) ?? target.title, state: agent?.state };
     };
     return {
       index: where.index,
@@ -220,7 +264,8 @@ export function SessionWindowsLayer({
     const known = new Set([...agents.map((agent) => agent.sessionId), ...shells.map((shell) => shell.id)]);
     const before = listed.current;
     listed.current = known;
-    for (const entry of windows) if (!known.has(entry.id) && (before === undefined || before.has(entry.id))) close(entry.id);
+    // A tab window is no session's: it goes when its last tab does.
+    for (const entry of windows) if (entry.kind !== 'tabs' && !known.has(entry.id) && (before === undefined || before.has(entry.id))) close(entry.id);
   }, [loaded, restored, agents, shells, windows, close]);
   return (
     <>
@@ -233,7 +278,7 @@ export function SessionWindowsLayer({
             title={shown.title}
             placement="board"
             onClose={() => close(shown.id)}
-            onDelete={() => (content.kind === 'session' ? deleteAgent(content.sessionId) : deleteShell(content.shellId))}
+            onDelete={() => (content.kind === 'session' ? deleteAgent(content.sessionId) : content.kind === 'shell' ? deleteShell(content.shellId) : undefined)}
             onMinimise={() => minimise(shown.id)}
             onPopOut={() => popOut(shown)}
             nav={nav}
@@ -260,9 +305,9 @@ export function SessionWindowsLayer({
           </span>
           {docked.map((entry) => {
             const subject = contentOf(entry);
-            const agent = subject.kind === 'session' ? subject.agent : undefined;
+            const agent = subject?.kind === 'session' ? subject.agent : undefined;
             // The live name, so a rename shows in the dock.
-            const name = agent?.name ?? (subject.kind === 'shell' ? subject.shell?.name : undefined) ?? entry.title;
+            const name = agent?.name ?? (subject?.kind === 'shell' ? subject.shell?.name : undefined) ?? entry.title;
             return (
               <span key={entry.id} className="session-dock-item" data-testid="dock-item" {...idAttributes(entry)} data-placement={entry.placement} data-attention={agent !== undefined && needsYouNow(agent)}>
                 <Button
@@ -275,7 +320,7 @@ export function SessionWindowsLayer({
                 >
                   {name}
                 </Button>
-                {agent && <StatusPill state={agent.state} />}
+                {agent && <StatusPill {...agentPill(agent)} />}
                 {entry.placement === 'docked' && (
                   <IconButton icon={<X />} size="xs" aria-label={`Close ${name}`} tooltip="Close; the session keeps running" onClick={() => close(entry.id)} />
                 )}

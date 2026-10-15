@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState } from '@agent-board/daemon/protocol';
 import { sessionControls, type ControlId } from './controls';
 
-function agent(state: AgentState, endedAt: string | null = null): Agent {
-  return { state, endedAt } as Agent;
+function agent(state: AgentState, endedAt: string | null = null, fields: Partial<Agent> = {}): Agent {
+  return { state, endedAt, ask: null, plan: null, ...fields } as Agent;
 }
 
 const enabled = (controls: ReturnType<typeof sessionControls>) =>
@@ -25,6 +25,11 @@ describe('session window controls', () => {
     const controls = sessionControls({ agent: agent(state), live: true });
     expect(enabled(controls)).toEqual(['stop']);
     expect(controls[0]!.hint).toMatch(/no turn/i);
+  });
+
+  it('interrupts an agent waiting mid-call on a question it asked through the board', () => {
+    const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '' };
+    expect(enabled(sessionControls({ agent: agent('waiting', null, { ask }), live: true }))).toEqual(['interrupt', 'stop']);
   });
 
   it('offers nothing for an agent that has ended, or a session the window lost', () => {

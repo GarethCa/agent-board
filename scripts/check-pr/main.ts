@@ -7,10 +7,12 @@
  *
  * Run `git fetch origin` first so the diff is against the current main. --dry-run prints the plan and runs nothing. Exits non-zero if any step failed.
  */
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { acquireLock } from '../e2e-lock/lock.ts';
+import { reapWorktree } from '../e2e-lock/reap.ts';
 import { selectChecks, type Plan } from './select.ts';
 import { filesNamingTickets } from './ticket-ids.ts';
 
@@ -82,15 +84,46 @@ function stepsFor(plan: Plan): Step[] {
   return steps;
 }
 
+/** Signals a step and everything it started: each step leads its own process group. */
+function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  try { process.kill(-child.pid!, signal); } catch { /* already gone */ }
+}
+
+/** The step processes running now, which a signal to the gate must stop. */
+const running = new Set<ChildProcess>();
+/** The full gate's child (check-local.sh), which is not detached: Ctrl-C reaches it with the terminal, a plain kill needs forwarding. */
+let fullGate: ChildProcess | undefined;
+/** The machine-wide e2e lock, once this gate holds it. */
+let heldLock: { release(): void } | undefined;
+
+// Registered before the first step so Ctrl-C or kill stops every stage (the steps are detached from the terminal's group),
+// and, when the lock is held, reaps what they started before the lock goes, so the next gate never overlaps a live run.
+let stopping = false;
+async function stop(signal: NodeJS.Signals): Promise<void> {
+  if (stopping) return;
+  stopping = true;
+  for (const child of running) killGroup(child, signal);
+  if (fullGate?.pid !== undefined) { try { process.kill(fullGate.pid, signal); } catch { /* already gone */ } }
+  if (heldLock !== undefined) {
+    await reapWorktree(root, process.pid);
+    heldLock.release();
+  }
+  process.exit(130);
+}
+process.once('SIGINT', () => void stop('SIGINT'));
+process.once('SIGTERM', () => void stop('SIGTERM'));
+
 function run(step: Step, logDir: string): Promise<{ name: string; outcome: string; seconds: number }> {
   const started = Date.now();
   const log = createWriteStream(join(logDir, `${step.name}.log`));
   return new Promise((resolve) => {
     const [cmd, ...rest] = step.argv;
-    const child = spawn(cmd, rest, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, rest, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    running.add(child);
     child.stdout.pipe(log, { end: false });
     child.stderr.pipe(log, { end: false });
     child.on('close', (code) => {
+      running.delete(child);
       log.end();
       const outcome = code === 0 ? 'pass' : 'FAIL';
       console.log(`${step.name}: ${outcome} (log: ${join(logDir, `${step.name}.log`)})`);
@@ -114,6 +147,7 @@ if (plan.full) {
   mkdirSync(logDir, { recursive: true });
   const leaks = leakCheck ? (await run(leakCheckStep, logDir)).outcome : 'pass';
   const full = spawn('sh', ['scripts/check-local.sh'], { cwd: root, stdio: 'inherit' });
+  fullGate = full;
   full.on('close', (code) => process.exit(code || leaks !== 'pass' ? 1 : 0));
 } else {
   const steps = stepsFor(plan);
@@ -133,7 +167,27 @@ if (plan.full) {
   await Promise.all(named('build', 'lint', 'typecheck', 'markdownlint', 'release-leaks').map(settle));
   await Promise.all(named('unit').map(settle));
   if (results.get('build')?.outcome !== 'FAIL') {
-    for (const stage of [['visual'], ['e2e']]) await Promise.all(named(...stage).map(settle));
+    // One Electron run at a time across the machine (scripts/e2e-lock): other gates queue, and this one reaps what its run left.
+    const electronSteps = named('visual', 'e2e');
+    if (electronSteps.length > 0) {
+      const lock = await acquireLock({ step: electronSteps.map((s) => s.name).join('+'), worktree: root }).catch((error: Error) => {
+        console.error(error.message);
+        return undefined;
+      });
+      if (lock !== undefined) {
+        heldLock = lock;
+        try {
+          await reapWorktree(root);
+          for (const stage of [['visual'], ['e2e']]) await Promise.all(named(...stage).map(settle));
+        } finally {
+          await reapWorktree(root, process.pid);
+          lock.release();
+          heldLock = undefined;
+        }
+      } else {
+        for (const step of electronSteps) results.set(step.name, { outcome: 'FAIL', seconds: 0 });
+      }
+    }
   }
   let failed = false;
   const rows: string[] = [];

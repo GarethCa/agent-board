@@ -721,6 +721,7 @@
 .ui-dialog-foot {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-1);
@@ -730,6 +731,8 @@
 .ui-dialog-foot-start {
   display: flex;
   gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
   margin-right: auto;
 }
 

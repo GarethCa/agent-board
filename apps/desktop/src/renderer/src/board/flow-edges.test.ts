@@ -15,9 +15,10 @@ import {
   isFlowEdge,
   liveHandoffs,
   panClear,
+  rulesSummary,
   withFlowEdgeChange,
-  withRules,
-  withRulesOf,
+  withChanges,
+  withChangesUndone,
 } from './flow-edges';
 
 const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge> = {}): FlowEdge => ({
@@ -38,6 +39,11 @@ const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge>
   deliveries: 0,
   delivering: false,
   madeBy: null,
+  oneOff: false,
+  fromSide: 'right',
+  toSide: 'left',
+  style: 'curved',
+  points: [],
   createdAt: '',
   updatedAt: '',
   ...overrides,
@@ -45,9 +51,9 @@ const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge>
 const tileId = (sessionId: string) => `${AGENT_NODE_PREFIX}${sessionId}`;
 
 describe('flowEdges', () => {
-  it("draws each flow edge from its agent's out port to the other's in port, selected or not, live or not", () => {
+  it("draws each flow edge from the side of its agent's tile it leaves to the side of the other's it arrives at, selected or not, live or not", () => {
     const drawn = flowEdges(
-      [edge('e1', 'a', 'b'), edge('e2', 'b', 'c')],
+      [edge('e1', 'a', 'b'), edge('e2', 'b', 'c', { fromSide: 'bottom', toSide: 'top' })],
       new Set([tileId('a'), tileId('b'), tileId('c')]),
       new Set(['e2']),
       new Set(['e2']),
@@ -57,13 +63,13 @@ describe('flowEdges', () => {
       expect.objectContaining({
         type: FLOW_EDGE_TYPE,
         source: tileId('a'),
-        sourceHandle: 'flow-out',
+        sourceHandle: 'right',
         target: tileId('b'),
-        targetHandle: 'flow-in',
+        targetHandle: 'left',
         selected: false,
         data: { edge: expect.objectContaining({ id: 'e1' }), live: false },
       }),
-      expect.objectContaining({ selected: true, data: expect.objectContaining({ live: true }) }),
+      expect.objectContaining({ sourceHandle: 'bottom', targetHandle: 'top', selected: true, data: expect.objectContaining({ live: true }) }),
     ]);
     expect(drawn.every(isFlowEdge)).toBe(true);
     expect(drawn.map(flowEdgeIdOf)).toEqual(['e1', 'e2']);
@@ -189,15 +195,22 @@ describe('panClear', () => {
   });
 });
 
-describe('withRules and withRulesOf', () => {
+describe('withChanges and withChangesUndone', () => {
   it('applies a change of payload at once, with its default file, and puts back only what it changed', () => {
     const was = edge('e', 'a', 'b');
-    const changed = withRules(was, { payload: 'handover', paused: true });
+    const changed = withChanges(was, { payload: 'handover', paused: true });
     expect(changed).toMatchObject({ payload: 'handover', path: 'handover.md', paused: true });
 
     // Refused, while a delivery was heard of: that stays.
     const heard = { ...changed, deliveries: 2, history: [{ at: 't', kind: 'delivered' as const, detail: 'x' }] };
-    expect(withRulesOf(heard, was, { payload: 'handover', paused: true })).toEqual({ ...was, deliveries: 2, history: heard.history });
+    expect(withChangesUndone(heard, was, { payload: 'handover', paused: true })).toEqual({ ...was, deliveries: 2, history: heard.history });
+  });
+
+  it('reshapes it at once, its rules as they were', () => {
+    const was = edge('e', 'a', 'b');
+    const shape = { fromSide: 'bottom' as const, toSide: 'top' as const, style: 'elbow' as const, points: [{ x: 10, y: 20 }] };
+    expect(withChanges(was, shape)).toEqual({ ...was, ...shape });
+    expect(withChangesUndone(withChanges(was, shape), was, shape)).toEqual(was);
   });
 });
 
@@ -221,6 +234,32 @@ describe('edgeTitle', () => {
     expect(edgeTitle(edge('e', 'a', 'b'), 'lead')).toBeUndefined();
     expect(edgeTitle(edge('e', 'a', 'b', { madeBy: 'o' }), 'lead')).toBe('Made by lead, an orchestrator');
     expect(edgeTitle(edge('e', 'a', 'b', { madeBy: 'o', ...skipped }), undefined)).toBe('Made by an orchestrator since deleted\nLast delivery skipped: B was busy');
+    // A named hand-off's one-off edge.
+    expect(edgeTitle(edge('e', 'a', 'b', { madeBy: 'a', oneOff: true }), 'impl')).toBe('A one-off hand-off from impl');
     expect(edgeTitle(edge('e', 'a', 'b', skipped), undefined)).toBe('Last delivery skipped: B was busy');
+  });
+});
+
+describe('rulesSummary', () => {
+  const names = { from: 'Fix flake', to: 'Review fix' };
+
+  it("says, in a line each, when the edge sends, what, and what it waits for (BQ3)", () => {
+    expect(rulesSummary(edge('e', 'a', 'b'), names)).toEqual({
+      when: 'Sends by itself when Fix flake hands off',
+      what: "Sends Fix flake's final message",
+      onlyIf: 'Nothing to wait for',
+    });
+  });
+
+  it('names a manual trigger, a file and its conditions, and what a hand-off it holds waits for', () => {
+    const manual = edge('e', 'a', 'b', { trigger: 'manual', payload: 'handover', path: 'notes/handover.md', conditions: [{ kind: 'pr-checks' }] });
+    expect(rulesSummary(manual, names)).toEqual({
+      when: 'Sends when you press Send',
+      what: 'Sends notes/handover.md from its worktree',
+      onlyIf: 'Waits until CI green',
+    });
+    const held = { ...manual, payload: 'json' as const, path: 'out.json', held: { since: 't', reason: 'checks running', name: 'out.json', copy: true } };
+    held.checks = [{ at: 't', passed: false, detail: '2 of 3 running' }];
+    expect(rulesSummary(held, names)).toMatchObject({ what: 'Sends out.json as JSON from its worktree', onlyIf: 'Held until CI green' });
   });
 });

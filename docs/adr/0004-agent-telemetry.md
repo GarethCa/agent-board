@@ -20,7 +20,7 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
   - **Stable launcher.** The command is a shim the daemon (re)writes at `~/.agent-board/bin/agent-board-hook`, which execs whatever app binary is current. The command string never changes across app moves and updates. That matters because Codex's hook trust hash covers the command string (see Trust).
   - **Tile identity.** The tile id and daemon token travel in `AGENT_BOARD_*` env vars on the `codex` process. Hooks inherit them; the `exclude` policy hides the hook URL and token (`AGENT_BOARD_HOOK_*`) from the model's shell commands (both verified). The board env, a separate board token among it, is meant for the model (ADR-0010). Treat the token as readable by the agent anyway (e.g. via the parent process's env): per ADR-0002 it can only forge events for its own tile.
   - **Timeouts.** `T` = 600 for `PermissionRequest` (the forwarder may hold it open for an inbox answer; see State mapping), 3 for `SessionEnd`/`Interrupt` (Codex's cap), and 5 for the rest. The forwarder never blocks on any other event, and exits at once with no output if the daemon is unreachable. The `T` values are part of the trusted hook definition, so changing them means re-trusting.
-- **Trust (decided by the maintainer, 2026-10-08).** Codex runs non-managed hooks only once they're trusted.
+- **Trust (decided by the maintainer).** Codex runs non-managed hooks only once they're trusted.
   - **Default: bypass flag.** The app launches every Codex agent it spawns with `--dangerously-bypass-hook-trust`. Accepted trade-off: for that session the flag also skips review for every *other* enabled hook (user, plugin, project). The first time a Codex agent is spawned, the app shows a one-time notice explaining the flag and the opt-out.
   - **Opt-out: trust once.** A per-zone setting drops the flag. Codex then shows its "Hooks need review" modal in the tile's terminal on the first launch; after "Trust all" our hooks run in every later session with no prompt (verified). That relies on the stable command string above.
   - **Worktree risk.** Hooks run outside the Codex sandbox. Worktrees inherit their repo's trust, and agents and fetched PRs write to branches, so a branch that adds or edits `.codex/hooks.json` or `[hooks]` in `.codex/config.toml` would otherwise run unprompted in the next flagged session in that worktree. Codex has no `-c` switch to turn off project-layer hooks alone.
@@ -50,7 +50,7 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
 
 ## Amendments
 
-**2026-10-09**, the Claude mapping as built (`packages/daemon/src/claude-state.ts`):
+**Update**: the Claude mapping as built (`packages/daemon/src/claude-state.ts`):
 
 - A spawned agent is idle until its `SessionStart`.
 - `SessionStart` and `PreToolUse` → running. `UserPromptSubmit` and `PostToolUse` → thinking.
@@ -65,7 +65,7 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
 - `PermissionRequest` is answered at once with no decision, so Claude's TUI prompts as usual. Answering from the
   inbox is a later amendment.
 
-**2026-10-09**, Claude subagents as built (`packages/daemon/src/subagents.ts`):
+**Update**: Claude subagents as built (`packages/daemon/src/subagents.ts`):
 
 - `SubagentStart` adds a running subagent (`agent_id`, `agent_type`) to its agent; `SubagentStop` marks it `done` with
   `last_assistant_message` as its result. A finished subagent stays on the agent for 10 s so its tile can show it
@@ -79,7 +79,7 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
 - Subagents live in the daemon's memory only, on the `Agent` it sends clients. They can't outlive the daemon, as their
   agent's session can't.
 
-**2026-10-09**, external sessions as built (`packages/daemon/src/external-hooks.ts`, `external-sessions.ts`):
+**Update**: external sessions as built (`packages/daemon/src/external-hooks.ts`, `external-sessions.ts`):
 
 - **One opt-in for both harnesses.** The global `command` hook goes into `~/.claude/settings.json` and also
   `~/.codex/hooks.json` (the rollout scan above is not used). Codex treats it as any user hook: it asks for review
@@ -100,7 +100,7 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
 - **Residual:** several daemons (dev, e2e without `AGENT_BOARD_EXTERNAL_HOOK_FILE`) share the one file; the last to
   start gets the reports until it stops.
 
-**2026-10-09**, Codex as built (`packages/daemon/src/agents.ts` `codexLaunch`, `codex-state.ts`,
+**Update**: Codex as built (`packages/daemon/src/agents.ts` `codexLaunch`, `codex-state.ts`,
 `codex-config-guard.ts`, `hook-forwarder.ts`). Checked against the real `codex-cli 0.162.0-alpha.2`, run on a local fake
 Responses API so no tokens were spent: a throwaway `CODEX_HOME` with a custom `model_provider`, and the TUI driven in a
 PTY.
@@ -169,7 +169,7 @@ PTY.
   zone") before the first Codex agent that would use it. The setting is saved when the agent starts. The notice counts
   as seen once that spawn succeeds, and is remembered per app profile.
 
-**2026-10-09**, the needs-you inbox as built (`packages/daemon/src/permissions.ts`):
+**Update**: the needs-you inbox as built (`packages/daemon/src/permissions.ts`):
 
 - **Holding.** `PermissionRequest` is no longer answered at once. The daemon holds the hook's HTTP response open for
   up to 20 s. Claude's hook `timeout` for that event is the hold plus 10 s, so the daemon always answers first. The
@@ -210,7 +210,7 @@ PTY.
 - **Last message.** The agent keeps what it last said to the user, in memory, as the inbox's context: its own `Stop`'s
   `last_assistant_message`, or the `message` of an `agent_needs_input` notification. A `UserPromptSubmit` clears it.
 
-**2026-10-10**, scheduled agents (`packages/daemon/src/agents.ts`, `schedules.ts`):
+**Update**: scheduled agents (`packages/daemon/src/agents.ts`, `schedules.ts`):
 
 - **`scheduled` is shown, never stored.** The hooks still put a session in one of the states above (`SessionState`).
   An agent with an enabled schedule whose session is live shows `scheduled` while it sits at its prompt: `idle`, or
@@ -235,7 +235,7 @@ PTY.
   conversation; Codex gets a fresh launch (`codexLaunch`, the same as a spawn), so it starts a new one. A Codex
   worktree that now has Codex config of its own, or a worktree that is gone, skips the run saying why.
 
-**2026-10-11**, the chat view as built (`packages/daemon/src/transcript-adapters.ts`, `transcripts.ts`):
+**Update**: the chat view as built (`packages/daemon/src/transcript-adapters.ts`, `transcripts.ts`):
 
 - **Where the transcript is.** The daemon keeps the `transcript_path` the agent's own hooks name (not a subagent's: a
   Codex `SubagentStart` names the child's rollout) on its row. Until its first hook the chat shows "No conversation

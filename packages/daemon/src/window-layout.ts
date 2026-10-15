@@ -1,6 +1,9 @@
 // A session window's panes (BH1), cmux-style: a binary tree of splits whose leaves are panes, each with its
-// own strip of tabs. A tab shows one surface: the window's own session, one of its shell tabs, or another session.
+// own strip of tabs. A tab shows one surface: the window's own session, one of its shell tabs, another session, a pull
+// request or a web page.
 // Pure, with no Node imports, so the daemon (which keeps it) and the app (which draws and changes it) share it.
+import { isGitHubRepo } from '@agent-board/tracker/pull-request-ref';
+import { isWebTabUrl } from './web-url.ts';
 import { parseSplitTree, type PaneLayout, type SplitDirection, type SplitTree } from './pane-layout.ts';
 
 /** A session shown in another's window without moving it: an agent's own session, or a shell tile's panes. */
@@ -11,10 +14,42 @@ export interface SessionTarget {
 
 /**
  * What a tab shows. `own` is the window's own session (an agent's, or a shell tile's own panes), `shell` one of its
- * shell tabs (a row of `shells` it owns), and `session` another agent or shell tile, shown here and still its own.
- * PR and web tabs join this union.
+ * shell tabs (a row of `shells` it owns), `session` another agent or shell tile, shown here and still its own, `pr`
+ * a GitHub pull request (`repo` is its `owner/repo`), read from GitHub by the daemon, and `web` a web page (BI2), kept
+ * by the URL it was last at (`isWebTabUrl`) and named by an `id` of its own, so it stays one tab as its page changes.
+ * `gate` is an agent's merge gate (BL1): its latest run's steps and logs, named by the agent's session. `plan`
+ * is an agent's plans (BO2): their versions, the one picked rendered, and the decision on the latest.
  */
-export type Surface = { kind: 'own' } | { kind: 'shell'; shellId: string } | { kind: 'session'; target: SessionTarget };
+export type Surface =
+  | { kind: 'own' }
+  | { kind: 'shell'; shellId: string }
+  | { kind: 'session'; target: SessionTarget }
+  | { kind: 'pr'; repo: string; number: number }
+  | { kind: 'web'; id: string; url: string }
+  | { kind: 'gate'; sessionId: string }
+  | { kind: 'plan'; sessionId: string };
+
+/** A pull request's surface. */
+export type PullRequestSurface = Extract<Surface, { kind: 'pr' }>;
+
+/** A web page's surface. */
+export type WebSurface = Extract<Surface, { kind: 'web' }>;
+
+/** An agent's merge gate's surface. */
+export type GateSurface = Extract<Surface, { kind: 'gate' }>;
+
+/** An agent's plans' surface. */
+export type PlanSurface = Extract<Surface, { kind: 'plan' }>;
+
+/** A surface that moves between windows by itself (slice 4): a pull request, a web page, a gate, plans or another session. */
+export type LooseSurface = Extract<Surface, { kind: 'pr' | 'web' | 'session' | 'gate' | 'plan' }>;
+
+/**
+ * Whether the surface is only a place in a window, which moves between windows by itself and is all a tab window holds:
+ * not a window's own session, nor a shell tab, which its owner holds.
+ */
+export const isLooseSurface = (surface: Surface): surface is LooseSurface =>
+  surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'session' || surface.kind === 'gate' || surface.kind === 'plan';
 
 /** The key of the window's own surface: an agent's session, or a shell tile's own panes. */
 export const OWN_SURFACE = 'own';
@@ -28,6 +63,15 @@ export function surfaceKey(surface: Surface): string {
       return `shell:${surface.shellId}`;
     case 'session':
       return `session:${surface.target.kind}:${surface.target.id}`;
+    case 'pr':
+      // GitHub's names are the same in any case: one pull request, one tab.
+      return `pr:${surface.repo.toLowerCase()}#${surface.number}`;
+    case 'web':
+      return `web:${surface.id}`;
+    case 'gate':
+      return `gate:${surface.sessionId}`;
+    case 'plan':
+      return `plan:${surface.sessionId}`;
   }
 }
 
@@ -95,6 +139,15 @@ export function selectSurface(layout: WindowLayout, key: string): WindowLayout {
   const holder = paneOfSurface(layout, key);
   if (holder === undefined || holder.active === key) return layout;
   return mapPanes(layout, (pane) => (pane === holder ? { ...pane, active: key } : pane))!;
+}
+
+/** Changes the surface `surface` names (by its key) where it is, its pane still showing it if it did: a web tab's URL as its page moves on. */
+export function updateSurface(layout: WindowLayout, surface: Surface): WindowLayout {
+  const key = surfaceKey(surface);
+  const holder = paneOfSurface(layout, key);
+  const was = holder?.tabs.find((tab) => surfaceKey(tab) === key);
+  if (holder === undefined || JSON.stringify(was) === JSON.stringify(surface)) return layout;
+  return mapPanes(layout, (pane) => (pane === holder ? { ...pane, tabs: pane.tabs.map((tab) => (surfaceKey(tab) === key ? surface : tab)) } : pane))!;
 }
 
 /**
@@ -219,11 +272,23 @@ export function parseWindowLayout(value: unknown): WindowLayout {
   return layout;
 }
 
-function parseSurface(raw: unknown): Surface | undefined {
+/** A surface read back from storage or the wire, if it is one. */
+export function parseSurface(raw: unknown): Surface | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const fields = raw as Record<string, unknown>;
   if (fields.kind === 'own') return { kind: 'own' };
   if (fields.kind === 'shell' && typeof fields.shellId === 'string') return { kind: 'shell', shellId: fields.shellId };
+  if (fields.kind === 'pr') {
+    const { repo, number } = fields;
+    return typeof repo === 'string' && isGitHubRepo(repo) && typeof number === 'number' && Number.isSafeInteger(number) && number >= 1 ? { kind: 'pr', repo, number } : undefined;
+  }
+  if (fields.kind === 'gate' || fields.kind === 'plan') {
+    return typeof fields.sessionId === 'string' && fields.sessionId !== '' ? { kind: fields.kind, sessionId: fields.sessionId } : undefined;
+  }
+  if (fields.kind === 'web') {
+    const { id, url } = fields;
+    return typeof id === 'string' && id !== '' && typeof url === 'string' && isWebTabUrl(url) ? { kind: 'web', id, url } : undefined;
+  }
   if (fields.kind !== 'session' || typeof fields.target !== 'object' || fields.target === null) return undefined;
   const { kind, id } = fields.target as Record<string, unknown>;
   return (kind === 'agent' || kind === 'shell') && typeof id === 'string' ? { kind: 'session', target: { kind, id } } : undefined;

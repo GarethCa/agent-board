@@ -115,6 +115,14 @@ describe('restoring session windows', () => {
     expect(placements(restoreWindows(saved, [{ ...session('p', 'P'), placement: 'docked' }]))).toEqual(['a:docked', 's:shown', 'p:docked']);
   });
 
+  it('takes back a tab window popped out, and only popped out: it has no place on the board', () => {
+    const tabs = [
+      { kind: 'tabs', id: 't1', title: 'localhost:5173', placement: 'popped' },
+      { kind: 'tabs', id: 't2', title: 'acme/app#7', placement: 'docked' },
+    ];
+    expect(placements(restoreWindows(tabs, []))).toEqual(['t1:popped']);
+  });
+
   it('drops what it cannot read, repeats, and every shown window after the first', () => {
     const messy = [
       ...saved,

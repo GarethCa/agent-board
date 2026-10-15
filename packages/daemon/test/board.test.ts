@@ -55,7 +55,8 @@ describe('the board env', () => {
       tileId: shell.id,
       name: shell.name,
       zoneId: shell.zoneId,
-      orchestrate: null,
+      side: 'user',
+      orchestrate: 'board',
     });
 
     await client.call('shell.move', { shellId: shell.id, zoneId: null, x: 2000, y: 0 });
@@ -75,7 +76,8 @@ describe('the board env', () => {
       tileId: shell.id,
       name: shell.name,
       zoneId: zone.id,
-      orchestrate: null,
+      side: 'user',
+      orchestrate: 'board',
     });
   });
 

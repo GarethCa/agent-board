@@ -3,12 +3,17 @@ import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
+import { localWebLinks } from '@agent-board/daemon/web-url';
 import { commandKey } from '../keys';
 import { token, tokenNumber } from '../theme';
 import { chosenFontSize, FONT_STEP, onFontSize, PINCH_RATE, setFontSize, sizeKey } from './terminal-size';
 import { newlineKey } from './newline-keys';
 import { throttled } from './throttle';
 import { compensateForScale } from './zoomed-mouse';
+import { useWebLinkOpener } from './web-links';
+
+/** The click that opens a local address in the output in a web tab, as the platform writes it. */
+const COMMAND_CLICK = navigator.platform.startsWith('Mac') ? '⌘-click' : 'Ctrl-click';
 
 /** How often the terminal refits to its element while that is being resized, e.g. by dragging its window's edge. */
 const REFIT_INTERVAL_MS = 80;
@@ -58,6 +63,10 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   /** Read at each key, so the agent arriving after the pane mounts doesn't re-attach it. */
   const harnessRef = useRef(harness);
   harnessRef.current = harness;
+  /** Opens a local address ⌘-clicked in the output in a web tab, in a window that has tabs; read at the click. */
+  const webOpener = useWebLinkOpener();
+  const openWeb = useRef(webOpener);
+  openWeb.current = webOpener;
 
   useEffect(() => {
     const element = container.current!;
@@ -95,6 +104,26 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     };
     element.addEventListener('keydown', keyDown, true);
     element.addEventListener('wheel', wheel, { passive: false });
+    // A dev server's local address in the output (BI2) opens in a web tab of the window on a ⌘-click (Ctrl off
+    // macOS): a plain click stays the terminal's.
+    const links = terminal.registerLinkProvider({
+      provideLinks(y, callback) {
+        const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true);
+        if (openWeb.current === undefined || line === undefined) return callback(undefined);
+        callback(
+          localWebLinks(line).map(({ url, start, end }) => ({
+            range: { start: { x: start + 1, y }, end: { x: end, y } },
+            text: url,
+            decorations: { underline: true, pointerCursor: true },
+            activate: (event) => {
+              if (commandKey(event)) openWeb.current?.(url);
+            },
+            hover: () => (element.title = `${COMMAND_CLICK} to open in a web tab`),
+            leave: () => element.removeAttribute('title'),
+          })),
+        );
+      },
+    });
     terminalRef.current = terminal;
     terminal.open(element);
     // The board's zoom scales the terminal, which xterm's mouse mapping doesn't know.
@@ -163,6 +192,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       observer.disconnect();
       refit.cancel();
       input.dispose();
+      links.dispose();
       resize.dispose();
       detach?.();
       terminal.dispose();

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   cloneRepo,
@@ -10,6 +10,7 @@ import {
   createLinearTracker,
   listPullRequests,
   mergePullRequest,
+  pullRequestOfUrl,
   type CredentialStore,
 } from '@agent-board/tracker';
 import { agentHandlers, createAgentHost } from './agents.ts';
@@ -24,11 +25,16 @@ import { connectorHandlers } from './connectors.ts';
 import { commandPlan } from './flow-approvals.ts';
 import { createConditionChecker, createShellRunner } from './flow-conditions.ts';
 import { createFlowEdgeHost } from './flow-edges.ts';
+import { gateActionHandlers } from './gate-actions.ts';
+import { gatedOwner, mergeGateBlocked } from './gate-rules.ts';
+import { createGateHost } from './gates.ts';
+import { createAskHost } from './asks.ts';
 import { runGit } from './git.ts';
 import { itemHandlers, itemsLeavingZone } from './items.ts';
 import { startHookIngress, type HookIngress } from './hook-ingress.ts';
 import { hashToken, newToken } from './tokens.ts';
 import { acquireDaemonLock } from './lock.ts';
+import { createHarnessPaths } from './harness-path.ts';
 import { adoptLoginShellPath } from './login-path.ts';
 import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
 import { daemonPaths, prepareSocketDir } from './paths.ts';
@@ -56,6 +62,7 @@ import { createSafeFetch } from './safe-fetch.ts';
 import { createImageStore } from './image-store.ts';
 import { createImageSweeper } from './image-sweeper.ts';
 import { createLinkCards } from './link-cards.ts';
+import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createScheduleHost } from './schedules.ts';
@@ -64,11 +71,12 @@ import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
 import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
 import { watchPullRequests } from './pull-requests.ts';
+import { pullRequestTabHandlers } from './pull-request-tabs.ts';
 import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
 import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
 import { createZoneSources, type ZoneSources } from './zone-sources.ts';
-import { zoneDissolveHandlers } from './zone-dissolve.ts';
+import { linkedWorktrees, removeManagedClone, zoneDissolveHandlers } from './zone-dissolve.ts';
 import { createZoneTable, zoneHandlers } from './zones.ts';
 
 export interface DaemonOptions {
@@ -109,6 +117,8 @@ export interface DaemonOptions {
   scratchDir?: string;
   /** The environment agents' harnesses start from: the daemon's own by default. Tests point it at the fakes. */
   agentEnv?: NodeJS.ProcessEnv;
+  /** Where harnesses are looked for after the shells' PATHs: the installers' places by default. Tests point it at temp dirs. */
+  harnessDirs?: string[];
   /**
    * How long a PermissionRequest hook is held for an answer from the needs-you inbox before the harness's own
    * prompt takes over: `DEFAULT_PERMISSION_HOLD_MS` by default.
@@ -156,6 +166,8 @@ export interface DaemonOptions {
    * `~/.agent-board/repos`.
    */
   reposDir?: string;
+  /** The folders "Find my local copies" looks one level deep in. Default: `~/code`, `~/src`, `~/Developer`, `~/projects`, `~/GitHub`. */
+  copyRoots?: string[];
   /**
    * How often it asks gh for agents' pull requests: `$AGENT_BOARD_PULL_REQUEST_POLL_MS` (for tests), else every
    * `DEFAULT_PULL_REQUEST_POLL_MS`; 0 never asks gh for them at all.
@@ -247,17 +259,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const clients = new Set<Socket>();
     /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
     const listeners: ((event: DaemonEvent) => void)[] = [];
-    /** Each client's connection, as the board methods see it. */
-    const connections = new WeakMap<Socket, BoardConnection>();
-    /** Whether `client` may hear `event`: a session's connection hears only its own tile's activity lines. */
-    const hears = (client: Socket, event: DaemonEvent): boolean => {
-      if (event.type !== 'orchestrator.activity') return true;
-      const session = connections.get(client)?.boardSession;
-      return session === undefined || orchestrators.seesActivity(session, event.entry);
-    };
     const broadcast = (event: DaemonEvent) => {
       const line = eventLine(event);
-      for (const client of clients) if (!client.destroyed && hears(client, event)) client.write(line);
+      for (const client of clients) if (!client.destroyed) client.write(line);
       for (const listener of listeners) listener(event);
     };
 
@@ -299,9 +303,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       broadcast,
       log,
       onCwd: (sessionId) => shells.onPaneChanged(sessionId),
-      onShellState: (sessionId) => shells.onPaneChanged(sessionId),
+      onShellState: (sessionId) => {
+        shells.onPaneChanged(sessionId);
+        agents.onShellChanged(sessionId);
+      },
+      harnessPath: (harness) => harnessPaths.path(harness),
       shellIntegrationDir: join(paths.dataDir, 'shell-integration'),
       onExit: (session) => {
+        asks.drop(session.id);
         agents.onExit(session);
         reviews.onExit(session.id, session.stoppedByRestart);
         shells.onSessionExit(session);
@@ -399,6 +408,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const settings = createSettings(db, (now, was) => {
       if (now.heldPayloads === 'path' && was.heldPayloads !== 'path') flowEdges.dropCopies();
     });
+    // Where `claude` and `codex` are, as absolute paths: what agents launch and onboarding checks. Looked for now, in the
+    // background: a start or a Restart waits for it only if it is still running (and finds nothing yet).
+    const harnessEnv = options.agentEnv ?? process.env;
+    const harnessPaths = createHarnessPaths({
+      shell,
+      shellArgs,
+      env: harnessEnv,
+      homeDir,
+      knownDirs: options.harnessDirs ?? process.env.AGENT_BOARD_HARNESS_DIRS?.split(delimiter).filter(Boolean),
+      override: (harness) => settings.get()[`${harness}Path`],
+    });
+    for (const harness of ['claude', 'codex'] as const) void harnessPaths.refresh(harness);
     // `agents` is created just below; nothing hands off before it exists.
     const flowEdges = createFlowEdgeHost({
       db,
@@ -427,15 +448,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     // Schedules fire on local time, which follows the system's.
     const stopFollowingTimeZone = followSystemTimeZone({ log });
+    const roleTemplates = createRoleTemplates(db);
+    // An agent's questions and plans: it is `waiting` while one waits on the user.
+    const asks = createAskHost({ db, changed: (sessionId, began) => agents.waitChanged(sessionId, began) });
     const agents = createAgentHost({
       db,
+      roleTemplates,
       sessions,
       worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
+      reviewsDir: join(options.dataDir, 'reviews'),
       scratchDir: options.scratchDir ?? (process.env.AGENT_BOARD_SCRATCH_DIR || join(homedir(), '.agent-board', 'scratch')),
       // The zone table is made below; agents remember folders only once they spawn.
       rememberFolder: (path) => zoneTable.rememberFolder(path),
-      claudeCommand: 'claude',
-      codexCommand: 'codex',
+      harnessPaths,
       hookShimPath,
       ensureHookShim,
       boardCliPath: cli === undefined ? undefined : cliPath,
@@ -452,8 +477,17 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         reviews.onHandoff(sessionId);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
-      onTurnBoundary: (sessionId) => flowEdges.turnBoundary(sessionId),
-      onRemoving: (sessionId) => flowEdges.dropAgent(sessionId),
+      onTurnBoundary: (sessionId) => {
+        flowEdges.turnBoundary(sessionId);
+        // Its turn is over, so its call is too: nothing waits on the answer now.
+        asks.drop(sessionId);
+      },
+      onRemoving: (sessionId) => {
+        flowEdges.dropAgent(sessionId);
+        gates.forget(sessionId);
+        asks.forget(sessionId);
+      },
+      asks,
       broadcast,
       log,
     });
@@ -482,12 +516,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const schemaVersion = readSchemaVersion(db);
     const leavingZone = itemsLeavingZone(db, broadcast);
     // Sources is created just below; no clone runs before then.
-    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id));
+    const reposDir = options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos'));
+    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir);
     const sources: ZoneSources = createZoneSources({
       db,
       zones: zoneTable,
       trackers,
-      reposDir: options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos')),
+      reposDir,
+      copyRoots: options.copyRoots ?? ['code', 'src', 'Developer', 'projects', 'GitHub'].map((folder) => join(homedir(), folder)),
       clone: (repo, dir, clone) => cloneRepo(repo, dir, { ...clone, gh }),
       removeZone: async (id, cloneFailed) => {
         await leavingZone(id, () => zoneTable.remove(id, cloneFailed === undefined ? {} : { cloneFailed }));
@@ -497,6 +533,28 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     await sources.reconcile();
+    const gates = createGateHost({
+      db,
+      dir: join(paths.dataDir, 'gates'),
+      agent: (sessionId) => agents.get(sessionId),
+      // The zone of its own repo, wherever its tile sits; else the zone its tile is in.
+      command: (sessionId) => {
+        const zoneId = agents.repoZoneId(sessionId) ?? agents.get(sessionId)?.zoneId ?? undefined;
+        const zone = zoneId === undefined ? undefined : zoneTable.find(zoneId);
+        return { command: zone?.gateCommand ?? null, zone: zone?.name };
+      },
+      // As the composer's Send would: never into a permission prompt, where it would answer it, nor an ended agent.
+      paste: (sessionId, text) => {
+        const agent = agents.get(sessionId);
+        if (agent === undefined || agent.endedAt !== null) throw new Error(`${agent?.name ?? 'the agent'} has ended`);
+        if (agent.state === 'needs-permission') throw new Error(`${agent.name} is waiting on a permission prompt: answer it first`);
+        sessions.write(sessionId, text);
+        agents.onInput(sessionId, text);
+      },
+      env: options.agentEnv ?? process.env,
+      broadcast,
+      log,
+    });
     const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId, on) => agents.zoneOrchestrateChanged(zoneId, on));
     const orchestrators = createOrchestratorHost({
       db,
@@ -560,6 +618,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         externals: externalSessions,
         broadcast,
         removeZone: (id) => leavingZone(id, () => zoneTable.remove(id)),
+        removeClone: removeManagedClone,
+        linkedWorktrees,
       }),
       ...sources.handlers<SessionSubscriber>(),
       ...connectorHandlers(db, broadcast),
@@ -567,17 +627,74 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...itemHandlers(db, broadcast, { images, sweeper, linkCards, log }),
       ...viewStateHandlers<SessionSubscriber>(db),
       ...settings.handlers<SessionSubscriber>(),
+      ...roleTemplates.handlers<SessionSubscriber>(),
       ...agentHandlers(agents),
-      ...boardHandlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells, flowEdges, logActivity: orchestrators.logActivity }),
+      ...boardHandlers<SessionSubscriber & BoardConnection>({
+        sessions,
+        agents,
+        shells,
+        flowEdges,
+        logActivity: orchestrators.logActivity,
+        checkHandoffTarget: (from, to) => orchestrators.checkHandoffTarget(from, to),
+      }),
       ...orchestrators.handlers<SessionSubscriber & BoardConnection>(),
+      ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
         return reviews.deleteAgent(sessionId, async () => agentHandlers(agents)['agent.delete'](params, context));
       },
       ...reviews.handlers<SessionSubscriber>(),
+      ...gates.handlers<SessionSubscriber>(),
+      ...gateActionHandlers<SessionSubscriber & BoardConnection>({
+        gh,
+        callers: { sessions, agents, shells },
+        gates,
+        agent: (sessionId) => agents.get(sessionId),
+        githubRepo: (sessionId) => githubRepo(repoZoneTracker(sessionId)),
+        pullRequests: (sessionId) => pullRequests.get(sessionId),
+        refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
+        // Merged: nothing of its work is lost, so nothing stops it short. Its reviewers go first, as with `agent.delete`.
+        deleteAgent: async (sessionId, keep) => {
+          await reviews.deleteAgent(sessionId, () => agents.delete(sessionId, true, keep.worktree, keep.branch).then(() => null));
+        },
+        comment: (issue, body) => trackers.comment(issue, body),
+        log,
+      }),
+      ...pullRequestTabHandlers<SessionSubscriber>({
+        gh,
+        cwd: homeDir,
+        // The tiles showing it say so at once, not at the watcher's next round.
+        changed: async ({ repo, number }) => {
+          const showing = agents.list().filter((agent) =>
+            pullRequests.get(agent.sessionId).some((pr) => pr.number === number && pullRequestOfUrl(pr.url)?.repo.toLowerCase() === repo.toLowerCase()),
+          );
+          await Promise.all(showing.map((agent) => pullRequests.refresh(agent.sessionId)));
+        },
+        // Failing closed: by the pull requests read, else by branch, and while an agent's aren't read yet, as its.
+        gate: (ref, headRefName, headCommit) => {
+          const owner = gatedOwner({
+            ref,
+            headRefName,
+            agents: agents.list().map((agent) => {
+              const seen = pullRequests.get(agent.sessionId);
+              return {
+                sessionId: agent.sessionId,
+                name: agent.name,
+                branch: agent.branch,
+                gated: agent.branch !== '' && gates.command(agent.sessionId) !== null,
+                read: pullRequests.read(agent.sessionId),
+                repo: githubRepo(repoZoneTracker(agent.sessionId)) ?? seen.map((pr) => pullRequestOfUrl(pr.url)?.repo).find((repo) => repo !== undefined),
+                pullRequests: seen,
+              };
+            }),
+          });
+          if (owner === undefined) return undefined;
+          return { agent: owner.name, blocked: mergeGateBlocked({ run: gates.get(owner.sessionId), pr: { headCommit }, gated: true }) };
+        },
+      }),
       ...trackerHandlers(trackers),
-      ...setupHandlers<SessionSubscriber>({ harnessEnv: options.agentEnv ?? process.env, gh }),
+      ...setupHandlers<SessionSubscriber>({ harnessEnv, harnessPaths, gh }),
       ...externalHandlers(externalSessions),
       ...externalResumeHandlers<SessionSubscriber>({ db, external: externalSessions, agents, broadcast }),
       ...externalHooksHandlers({
@@ -602,7 +719,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           else socket.once('drain', callback);
         },
       };
-      connections.set(socket, subscriber);
       socket.on('close', () => {
         clients.delete(socket);
         sessions.detachAll(subscriber);
@@ -634,6 +750,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         pullRequests.stop();
         flowEdges.stop();
         conditionShell.stop();
+        gates.stop();
         sweeper.stop();
         schedules.close();
         stopFollowingTimeZone();
@@ -646,6 +763,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // Kill the sessions once no client can start more: nothing would own their PTYs once we are gone. The user
         // didn't stop them, so they are stopped by restart, and the app offers to resume them.
         await Promise.all([new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })]);
+        asks.close();
         agents.close();
         db!.close();
         releaseLock();

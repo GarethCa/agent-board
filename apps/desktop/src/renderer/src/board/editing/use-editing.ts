@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
-import { commandKey } from '../../keys';
+import { commandKey, historyStep, inOverlay } from '../../keys';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
 import type { TileData, TileNodeType } from '../tile';
 import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
@@ -51,6 +51,8 @@ export interface SelectionSummary {
   renamable: boolean;
   /** Whether a session tile is in it: deleted with a confirmation, but never copied or duplicated from here. */
   hasSessions: boolean;
+  /** Whether a zone is in it: deleted with a confirmation, its tiles staying on the board. */
+  hasZones: boolean;
   /** The item kinds in it. */
   kinds: Set<BoardItemKind>;
 }
@@ -64,6 +66,7 @@ function summarise(nodes: readonly BoardNode[]): SelectionSummary {
     items,
     renamable: top.length === 1 && isSessionTile(top[0]!) && (top[0].data.agent !== undefined || top[0].data.shell !== undefined),
     hasSessions: selected.some(isSessionTile),
+    hasZones: selected.some(isZone),
     kinds: new Set(items.map((node) => node.data.item.kind)),
   };
 }
@@ -134,18 +137,26 @@ export function useEditing(options: EditingOptions) {
     [optionsRef, putCopies],
   );
 
-  /** Deletes the selected items and connectors; sessions (the board's to ask about) and zones stay. */
-  const deleteSelection = useCallback(() => {
-    const { removeItem, removeConnector, selectedConnectorsRef } = optionsRef.current;
-    const items = selection().items;
-    const going = new Set(items.map((node) => node.data.item.id));
-    for (const node of items) removeItem(node.data.item.id);
-    // One joined to a deleted item goes with it.
-    const connectors = optionsRef.current.connectorsRef.current.filter(
-      (connector) => selectedConnectorsRef.current.has(connector.id) && ![connector.from, connector.to].some((end) => end.type === 'item' && going.has(end.id)),
-    );
-    for (const connector of connectors) removeConnector(connector.id);
-  }, [optionsRef, selection]);
+  /** The ids of the selected items and connectors now, for a delete that is confirmed, or waits, later. */
+  const selectedForDelete = useCallback(
+    () => ({ items: selection().items.map((node) => node.data.item.id), connectors: [...optionsRef.current.selectedConnectorsRef.current] }),
+    [optionsRef, selection],
+  );
+
+  /** Deletes the selected items and connectors, or those of `picked` (`selectedForDelete`); sessions and zones (the board's to ask about) stay. */
+  const deleteSelection = useCallback(
+    (picked = selectedForDelete()) => {
+      const { removeItem, removeConnector } = optionsRef.current;
+      const going = new Set(picked.items);
+      for (const id of picked.items) removeItem(id);
+      // One joined to a deleted item goes with it.
+      const connectors = optionsRef.current.connectorsRef.current.filter(
+        (connector) => picked.connectors.includes(connector.id) && ![connector.from, connector.to].some((end) => end.type === 'item' && going.has(end.id)),
+      );
+      for (const connector of connectors) removeConnector(connector.id);
+    },
+    [optionsRef, selectedForDelete],
+  );
 
   /** Brings the selected items and tiles forward or to the front, or sends them back, each among its own kind. */
   const restack = useCallback(
@@ -246,8 +257,8 @@ export function useEditing(options: EditingOptions) {
         event.preventDefault();
         action();
       };
-      if (command && key === 'z') run(() => (event.shiftKey ? history.redo() : history.undo()));
-      else if (command && key === 'y' && !event.shiftKey) run(() => history.redo());
+      const step = historyStep(event);
+      if (step !== undefined) run(() => history[step]());
       else if (command && key === 'a' && !event.shiftKey) run(selectAll);
       else if (command && key === 'd' && !event.shiftKey) run(duplicate);
       else if (event.key === ']' && !event.shiftKey) run(() => restack(command ? 'forward' : 'front'));
@@ -293,6 +304,7 @@ export function useEditing(options: EditingOptions) {
     duplicate,
     paste,
     deleteSelection,
+    selectedForDelete,
     restack,
     align: alignSelection,
     distribute: distributeSelection,
@@ -308,9 +320,4 @@ export function useEditing(options: EditingOptions) {
       }
     },
   };
-}
-
-/** Whether the focus is in a dialog or a menu, whose keys are their own. */
-function inOverlay(): boolean {
-  return document.activeElement?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') != null;
 }

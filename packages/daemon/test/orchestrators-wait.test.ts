@@ -22,6 +22,8 @@ function host() {
       state: 'idle',
       endedAt: null,
       permissions: [],
+      ask: null,
+      plan: null,
       orchestrate: null,
       spawnedBy: null,
       lastMessage: null,
@@ -44,6 +46,7 @@ function host() {
       },
       stop: () => Promise.reject(new Error('not here')),
       finalMessage: () => undefined,
+      orchestrateFacts: () => ({ off: false, depth: 0 }),
     },
     zones: () => [],
     flowEdges: {

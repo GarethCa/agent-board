@@ -9,6 +9,7 @@ import {
   GitPullRequest,
   OctagonX,
   Rows2,
+  ShieldCheck,
   SquareX,
   Zap,
   type LucideIcon,
@@ -16,7 +17,7 @@ import {
 import type { ControlId } from './controls';
 
 /** The details' sections that have an icon, which the icon rail opens the strip at. */
-export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'subagents' | 'schedule' | 'status';
+export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'gate' | 'subagents' | 'schedule' | 'status';
 
 /**
  * The one place the details' icons are chosen: the icon rail draws them as buttons, and the expanded strip draws the
@@ -26,6 +27,7 @@ const SECTION_COMPONENTS: Partial<Record<SectionId, LucideIcon>> = {
   issue: CircleDot,
   worktree: FolderGit2,
   pulls: GitPullRequest,
+  gate: ShieldCheck,
   subagents: Bot,
   schedule: CalendarClock,
   status: FileText,

@@ -1,4 +1,4 @@
-import type { AgentState } from '@agent-board/daemon/protocol';
+import { planPending, waitsForYou, type Agent, type AgentState } from '@agent-board/daemon/protocol';
 
 /** How the app names each agent state, on tiles and characters. */
 export const STATE_LABELS: Record<AgentState, string> = {
@@ -25,3 +25,16 @@ export const TILE_STATE_LABELS: Record<AgentState, string> = {
   'needs-permission': 'allow?',
   'rate-limited': 'limited',
 };
+
+/**
+ * The state and label an agent's pill draws: once its waiting has been seen it loses the needs-you look but keeps the
+ * name of what it waits for, as on its tile and in the inbox. One rule for every place a pill is drawn.
+ */
+export function agentPill(agent: Agent, labels: Record<AgentState, string> = STATE_LABELS, state: AgentState = agent.state): { state: AgentState; label: string } {
+  return { state: agent.seen && waitsForYou(agent) ? 'idle' : state, label: (state === 'waiting' && askLabel(agent)) || labels[state] };
+}
+
+/** What a waiting agent asks of the user through the board: a question, or a plan to review; '' for neither. */
+function askLabel(agent: Pick<Agent, 'ask' | 'plan'>): string {
+  return agent.ask !== null ? 'asks you' : planPending(agent) ? 'plan to review' : '';
+}

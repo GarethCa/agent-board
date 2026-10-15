@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react';
-import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide } from '@agent-board/daemon/protocol';
+import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide, FlowEdgeShape, UpdateConnectorParams } from '@agent-board/daemon/protocol';
 import type { ConnectorChange } from '../../../../preload/api';
 import { ITEM_NODE_PREFIX } from '../items/items';
 import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../tiles';
@@ -72,6 +72,26 @@ export function connectorEdges(
 export function withConnector(connectors: readonly Connector[], connector: Connector): Connector[] {
   const index = connectors.findIndex((known) => known.id === connector.id);
   return index < 0 ? [...connectors, connector] : connectors.with(index, connector);
+}
+
+/** How `connector` is drawn: the sides of its objects it joins, its style and its bends, as a flow edge has them. */
+export const shapeOf = (connector: Connector): FlowEdgeShape => ({
+  fromSide: connector.from.side,
+  toSide: connector.to.side,
+  style: connector.style,
+  points: connector.points,
+});
+
+/** `connector` as `params` change it: its look, label or bends, or the side of an end. */
+export function withConnectorParams(connector: Connector, params: UpdateConnectorParams): Connector {
+  const { fromSide, toSide, ...rest } = params;
+  return {
+    ...connector,
+    ...rest,
+    id: connector.id,
+    from: fromSide === undefined ? connector.from : { ...connector.from, side: fromSide },
+    to: toSide === undefined ? connector.to : { ...connector.to, side: toSide },
+  };
 }
 
 /** `connectors` with a change applied. */

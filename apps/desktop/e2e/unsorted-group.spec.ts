@@ -103,9 +103,9 @@ test('Unsorted is a group zone that moves, resizes, renames and dissolves like a
     await expect(staying).toHaveCount(1);
     const drawnAt = await settledBox(staying);
     await strays().getByRole('button', { name: 'Zone options' }).click();
-    await page.getByRole('menuitem', { name: 'Dissolve' }).click();
+    await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
     // A group holding a tile asks first.
-    await page.getByRole('alertdialog', { name: /^Dissolve/ }).getByRole('button', { name: 'Dissolve' }).click();
+    await page.getByRole('alertdialog', { name: /^Delete zone/ }).getByRole('button', { name: 'Delete' }).click();
     await expect(strays()).toHaveCount(0);
     await expect(page.getByTestId('external-tile').and(page.locator('[data-zone=""]'))).toHaveCount(2);
     const stayed = await settledBox(page.getByTestId('external-tile').and(page.locator('[data-zone=""]')).filter({ hasText: (await storedExternals(dataDir)).find((session) => session.id !== loose.id)!.name }));
@@ -151,9 +151,9 @@ test('a group dissolved right after it was dragged leaves its tile exactly where
     await dragBy(page, { x: tab.x + 10, y: tab.y + tab.height / 2 }, { x: tab.x + 120, y: tab.y + 140 });
     const drawn = await settledBox(tileIn);
     await group.getByRole('button', { name: 'Zone options' }).click();
-    await page.getByRole('menuitem', { name: 'Dissolve' }).click();
+    await page.getByRole('menuitem', { name: 'Delete zone…' }).click();
     // A group holding a tile asks first.
-    await page.getByRole('alertdialog', { name: /^Dissolve/ }).getByRole('button', { name: 'Dissolve' }).click();
+    await page.getByRole('alertdialog', { name: /^Delete zone/ }).getByRole('button', { name: 'Delete' }).click();
 
     await expect(group).toHaveCount(0);
     await expect(tileIn).toHaveAttribute('data-zone', '');
