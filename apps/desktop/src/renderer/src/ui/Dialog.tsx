@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { IconButton } from './Button';
+import { keyText } from '../keys/registry';
 import { Kbd } from './Label';
 
 /** What a focusable control in a dialog's body is, to focus the first one when the dialog opens. */
@@ -53,7 +54,7 @@ export function Dialog({ title, onClose, footer, footerStart, children, role = '
               tooltip={
                 <>
                   Close
-                  <Kbd>esc</Kbd>
+                  <Kbd>{keyText('dialog.close')}</Kbd>
                 </>
               }
             />

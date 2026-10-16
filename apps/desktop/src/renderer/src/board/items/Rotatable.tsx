@@ -7,6 +7,7 @@ import { Kbd, Tooltip } from '../../ui';
 import { centreOf, type Point } from '../../geometry';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { angleAt, ROTATION_SNAP, rotatedBy } from './rotation';
+import { keyText } from '../../keys/registry';
 
 /** The angles of the items being turned, by item id, while a turn is under way: shown at once, saved as it ends. */
 export interface LiveRotations {
@@ -89,7 +90,7 @@ function RotateHandle({ turn, testId }: { turn: ReturnType<typeof useTurn>; test
       side="bottom"
       content={
         <>
-          Drag to turn it; hold <Kbd>⇧</Kbd> for {ROTATION_SNAP}° steps
+          Drag to turn it; hold <Kbd>{keyText('edit.snapTurn')}</Kbd> for {ROTATION_SNAP}° steps
         </>
       }
     >

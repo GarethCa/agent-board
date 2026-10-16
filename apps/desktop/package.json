@@ -11,7 +11,7 @@
     "test:e2e": "playwright test --project app --project perf",
     "test:visual": "playwright test --project visual",
     "readme:screenshots": "playwright test --project readme",
-    "package": "rm -rf dist && electron-vite build && electron-builder --dir",
+    "package": "rm -rf dist && electron-vite build && electron-builder --dir && node ../../scripts/app-install/main.ts",
     "test:e2e:packaged": "playwright test --project packaged"
   },
   "devDependencies": {

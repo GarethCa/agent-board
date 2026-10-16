@@ -42,6 +42,14 @@ async function dragTo(from: Locator, to: { x: number; y: number }): Promise<void
   await page.mouse.up();
 }
 
+/** Zooms the board out a step, and waits for the view to show it: the board applies it on a later frame. */
+async function zoomOut(page: Page): Promise<void> {
+  const viewport = page.locator('.react-flow__viewport');
+  const before = await viewport.getAttribute('style');
+  await page.getByRole('button', { name: 'Zoom out' }).click();
+  await expect(viewport).not.toHaveAttribute('style', before!);
+}
+
 /** Zooms the board out until `nodes` are all in view: an expanded tile is as big as the window at full size. */
 async function zoomOutTo(page: Page, ...nodes: Locator[]): Promise<void> {
   const inView = async () => {
@@ -51,8 +59,7 @@ async function zoomOutTo(page: Page, ...nodes: Locator[]): Promise<void> {
     return boxes.every((box) => box !== null && box.y > 70 && box.x > 0 && box.y + box.height < size.height - 80 && box.x + box.width < size.width - 220);
   };
   for (let step = 0; step < 6 && !(await inView()); step += 1) {
-    await page.getByRole('button', { name: 'Zoom out' }).click();
-    await page.waitForTimeout(300);
+    await zoomOut(page);
   }
   expect(await inView()).toBe(true);
 }
@@ -87,8 +94,7 @@ async function bareBoard(page: Page): Promise<{ x: number; y: number }> {
   for (let step = 0; step < 6; step += 1) {
     const found = await bareBoardInView(page, { x: 140, y: 80 });
     if (found !== undefined) return found;
-    await page.getByRole('button', { name: 'Zoom out' }).click();
-    await page.waitForTimeout(300);
+    await zoomOut(page);
   }
   throw new Error('no bare board in view');
 }
@@ -397,8 +403,12 @@ test("a tab dropped on the edge of a pane in another agent's window splits it th
     const moved = (await shells(window)).find((shell) => shell.owner?.id === impl!.sessionId && shell.name === 'sh')!;
     const pane = JSON.stringify(moved.layout).match(/"sessionId":"([^"]+)"/)![1]!;
 
+    // The implementer's window pushes the reviewer's tile off the bottom of the screen: zoom out to it first, as a hand
+    // would, rather than have the double-click scroll the board to reach it.
+    await zoomOutTo(window, implWindow, agentTile(window, review!.sessionId));
     await agentTile(window, review!.sessionId).dblclick();
     const reviewWindow = expandedAgent(window, review!.sessionId);
+    await expect(reviewWindow).toBeVisible();
     await settled(window, implWindow, reviewWindow);
 
     // Onto the right edge of the reviewer's pane: a pane of its own there, the same shell running.

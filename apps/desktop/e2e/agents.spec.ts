@@ -28,9 +28,9 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
     expect(existsSync(agent!.worktree)).toBe(true);
     await expect(tile(first.window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await expect(tile(first.window)).toHaveCSS('outline-color', 'rgb(247, 103, 7)');
-    // Spawned idle; running came from its SessionStart hook, before it waited.
+    // Spawned starting, its first prompt queued; running came from its SessionStart hook, before it waited.
     const before = await recordedStates(first.window);
-    expect(before[0]).toBe('idle');
+    expect(before[0]).toBe('starting');
     expect(before.indexOf('running')).toBeGreaterThan(0);
     expect(before.indexOf('running')).toBeLessThan(before.indexOf('waiting'));
 
@@ -166,7 +166,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
     await expect(tile(window)).toHaveAttribute('data-harness', 'codex');
     await expect(tile(window).getByRole('img', { name: 'Codex' })).toBeVisible();
     // The fake codex's turn ran, its hooks went through the forwarder, and the tile followed them.
-    await expect.poll(() => recordedStates(window), { timeout: TURN_MS }).toEqual(['idle', 'running', 'thinking', 'running', 'thinking', 'idle']);
+    await expect.poll(() => recordedStates(window), { timeout: TURN_MS }).toEqual(['starting', 'running', 'thinking', 'running', 'thinking', 'idle']);
 
     await tile(window).dblclick();
     await expect(screen(window)).toContainText('All tests pass.');
@@ -243,7 +243,7 @@ test('a Codex agent asks first in a repo with its own Codex config, and one stop
     await browseForZone(window);
     await startCodex('plain', 'Write config');
     const flagged = tile(window).filter({ hasText: 'Write config' });
-    await expect(flagged).toHaveAttribute('data-state', 'idle');
+    await expect(flagged).toHaveAttribute('data-state', /^(starting|idle)$/);
     const agent = (await agents(window)).find((a) => a.name === 'Write config')!;
     mkdirSync(join(agent.cwd, '.codex'));
     await expect(flagged).toHaveAttribute('data-state', 'failed');

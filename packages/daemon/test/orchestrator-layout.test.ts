@@ -479,9 +479,15 @@ describe('orchestrator.arrange', () => {
     expect(sticky.data.members).toEqual([impl.sessionId, review.sessionId]);
     expect(sticky.data.text).toMatch(/^- \*\*impl\*\*: .+\n- \*\*review\*\*: .+$/);
     expect(sticky.data.text).not.toContain('Reviews');
-    // Arranged again, it stays where it joined.
+    // It is joined to its implementer by edges as it starts, so the next arrange leaves a rail's room between them
+    // (the first column past it), and from then on it stays put.
     await me.connection.call('orchestrator.arrange', { token: me.token });
-    expect((await rectsIn(setup.client, setup.zone.id)).get('review')).toEqual(rects.get('review'));
+    const arranged = await rectsIn(setup.client, setup.zone.id);
+    expect(arranged.get('review')!.y).toBe(rects.get('review')!.y);
+    expect(arranged.get('review')!.x).toBeGreaterThan(rects.get('review')!.x);
+    expectNoOverlap(arranged);
+    const again = await me.connection.call('orchestrator.arrange', { token: me.token });
+    expect(again.moved).toEqual([]);
   });
 
   it("re-anchors an edited sticky when its cluster's key changes, never deleting it", async () => {
@@ -912,8 +918,7 @@ describe('arranging a unit of work with a ticket and a pull request', () => {
     const me = await lead(setup, setup.zone.id);
     const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'menu', role: 'custom', branch: 'acme-199-menu-scroll' });
     const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
-    await me.connection.call('orchestrator.addEdge', { token: me.token, from: impl.sessionId, to: review.sessionId });
-    await me.connection.call('orchestrator.addEdge', { token: me.token, from: review.sessionId, to: impl.sessionId, trigger: 'manual' });
+    // Started on the implementer's branch, the reviewer is joined to it, both ways, already.
     const url = 'https://github.com/acme/app/pull/41';
     github.setState({
       ...FAKE_GITHUB_STATE,

@@ -4,6 +4,7 @@ import { ExternalLink, Play, Trash2 } from 'lucide-react';
 import { issueCardData, shortIssueId, type BoardItem, type IssueCardData } from '@agent-board/daemon/protocol';
 import { Button, IconButton, Kbd, Tag } from '../../ui';
 import { ItemActionsContext, type ItemNodeType } from './items';
+import { keyText } from '../../keys/registry';
 
 export const ISSUE_CARD_SIZE = { width: 240, height: 112 };
 const MIN_ISSUE_CARD_SIZE = { width: 180, height: 84 };
@@ -53,7 +54,7 @@ export const IssueNode = memo(function IssueNode({ data, selected, dragging }: N
           tooltip={
             <>
               Delete issue card
-              <Kbd>⌫</Kbd>
+              <Kbd>{keyText('edit.delete')}</Kbd>
             </>
           }
           onClick={() => remove(item.id)}

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowRight, Bell, Menu as MenuIcon, MousePointerClick, Plus, SquareDashedMousePointer } from 'lucide-react';
-import { withCommand, withWindowShortcut } from '../keys';
+import { keyText } from '../keys/registry';
 import { Button, Kbd } from '../ui';
 import type { Rect } from '../geometry';
 import { placeCallout } from './first-run';
@@ -22,11 +22,11 @@ const STOPS: TourStop[] = [
     target: '[data-tour="board-menu"]',
     icon: <MenuIcon />,
     eyebrow: 'Board menu',
-    keys: withCommand('\\'),
+    keys: keyText('move.boardMenu'),
     title: 'Your zones, agents and settings',
     body: (
       <>
-        Every zone and session is listed here, with the settings. Press <b>{withWindowShortcut('K')}</b> anywhere to jump to one by name.
+        Every zone and session is listed here, with the settings. Press <b>{keyText('move.spotlight')}</b> anywhere to jump to one by name.
       </>
     ),
   },
@@ -35,7 +35,7 @@ const STOPS: TourStop[] = [
     icon: <SquareDashedMousePointer />,
     eyebrow: 'Add zone',
     title: 'Add a zone: a group, or one for a repo',
-    body: 'Press Z and drag out where it goes. It starts as a group; bind it to a GitHub repo, a Linear team or a recent folder now or later, and it can follow its GitHub or Linear issues.',
+    body: `Press ${keyText('make.zone')} and drag out where it goes. It starts as a group; bind it to a GitHub repo, a Linear team or a recent folder now or later, and it can follow its GitHub or Linear issues.`,
   },
   {
     target: '[data-tour="needs-you"]',
@@ -58,9 +58,10 @@ const STOPS: TourStop[] = [
     title: 'Start an agent, and the keys to know',
     body: (
       <>
-        Press <Kbd>A</Kbd> and click to start Claude Code or Codex there, in a zone or anywhere on the board; <Kbd>`</Kbd>{' '}
-        does the same for a shell. On the board: <Kbd>N</Kbd> note, <Kbd>T</Kbd> text, <Kbd>S</Kbd> shape (<Kbd>/</Kbd> finds one by name),{' '}
-        <Kbd>V</Kbd> select, <Kbd>H</Kbd> pan.
+        Press <Kbd>{keyText('make.agent')}</Kbd> and click to start Claude Code or Codex there, in a zone or anywhere on the board;{' '}
+        <Kbd>{keyText('make.shell')}</Kbd> does the same for a shell. On the board: <Kbd>{keyText('make.note')}</Kbd> note,{' '}
+        <Kbd>{keyText('make.text')}</Kbd> text, <Kbd>{keyText('make.shape')}</Kbd> shape (<Kbd>{keyText('make.insert')}</Kbd> finds one by
+        name), <Kbd>{keyText('move.select')}</Kbd> select, <Kbd>{keyText('move.hand')}</Kbd> pan.
       </>
     ),
   },
@@ -150,7 +151,7 @@ export function QuickTour({ progress, onBack, onDone }: { progress: ReactNode; o
         {progress}
         <Button size="sm" variant="ghost" onClick={onDone}>
           Skip tour
-          <Kbd>esc</Kbd>
+          <Kbd>{keyText('dialog.close')}</Kbd>
         </Button>
       </div>
     </div>

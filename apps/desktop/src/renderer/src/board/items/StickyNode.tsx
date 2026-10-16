@@ -8,6 +8,7 @@ import { IconButton, Kbd, Swatch } from '../../ui';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { useDraftText } from './useDraftText';
 import { fitFontSize, parseMarkdown, plainText, type FontFit, type Inline, type MeasureText } from './sticky-text';
+import { keyText } from '../../keys/registry';
 
 const MIN_STICKY_SIZE = 80;
 /** The font sizes a note's text is fitted between, px. */
@@ -131,7 +132,7 @@ export const StickyNode = memo(function StickyNode({ id, data, selected: picked,
           tooltip={
             <>
               Delete note
-              <Kbd>⌫</Kbd>
+              <Kbd>{keyText('edit.delete')}</Kbd>
             </>
           }
           onClick={() => remove(item.id)}

@@ -22,6 +22,21 @@ export function sizeKey(key: string): 'bigger' | 'smaller' | 'reset' | undefined
   return undefined;
 }
 
+type SizeEvent = Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'key' | 'code'>;
+
+/**
+ * What a key press does to the size: ⌘+ ⌘- ⌘0 on macOS. Elsewhere Ctrl+Shift, as plain Ctrl+- is undo in Claude Code
+ * and readline (Ctrl+_), so the keys are read by `code` (Shift changes `key`).
+ */
+export function terminalSizeKey(event: SizeEvent, mac: boolean): 'bigger' | 'smaller' | 'reset' | undefined {
+  if (event.altKey) return undefined;
+  if (mac) return event.metaKey && !event.ctrlKey ? sizeKey(event.key) : undefined;
+  if (!event.ctrlKey || !event.shiftKey || event.metaKey) return undefined;
+  if (event.code === 'Equal' || event.code === 'NumpadAdd') return 'bigger';
+  if (event.code === 'Minus' || event.code === 'NumpadSubtract') return 'smaller';
+  return event.code === 'Digit0' || event.code === 'Numpad0' ? 'reset' : undefined;
+}
+
 let current: number | undefined = load();
 const listeners = new Set<() => void>();
 

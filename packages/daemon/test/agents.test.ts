@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, type FakeScenario } from '@agent-board/fake-harness';
 import { DaemonRpcError, type DaemonClient } from '../src/client.ts';
 import { claudeSettings } from '../src/agent-spawns.ts';
@@ -40,6 +40,8 @@ async function agentDaemon(
     repeat?: boolean;
     /** The fake harnesses' home, where they keep their conversations: a fresh one by default. */
     home?: string;
+    /** Where the daemon's log lines go: nowhere by default. */
+    log?: (message: string) => void;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -57,6 +59,7 @@ async function agentDaemon(
     }),
     permissionHoldMs: options.permissionHoldMs,
     clock: options.clock,
+    ...(options.log === undefined ? {} : { log: options.log }),
   });
   const client = await connectTestClient(daemon);
   return { daemon, client, recorder: recordEvents(client), worktreesDir, dataDir, home };
@@ -147,7 +150,7 @@ describe('Claude agents', () => {
     const done = await untilState(recorder, agent.sessionId, 'done');
 
     expect(statesOf(recorder.events, agent.sessionId)).toEqual([
-      'idle', // spawned, not started yet
+      'starting', // spawned with its first prompt, whose turn has not begun
       'running', // SessionStart
       'thinking',
       'idle',
@@ -925,6 +928,96 @@ async function spawnAttached(client: DaemonClient, zoneId: string, prompt: strin
   return agent;
 }
 
+describe("the daemon's log of how an agent's session ended", () => {
+  /** A daemon whose log is kept, with a fake claude agent sitting at its prompt after its first turn. */
+  async function idleAgent() {
+    const logs: string[] = [];
+    const daemon = await agentDaemon('waiting', { log: (message) => void logs.push(message) });
+    const zone = await addZone(daemon.client, tempRepo());
+    const agent = await daemon.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', ...SIZE });
+    await daemon.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+    const pid = (await daemon.client.call('session.list')).find((session) => session.id === agent.sessionId)!.pid;
+    return { ...daemon, agent, pid, logs };
+  }
+
+  /** The line the daemon logged when the session `sessionId` ended. */
+  async function exitLine(logs: string[], sessionId: string): Promise<string> {
+    let line: string | undefined;
+    await vi.waitFor(() => {
+      line = logs.find((message) => message.startsWith(`claude session ${sessionId} `) && message.includes(' exited '));
+      expect(line).toBeDefined();
+    }, { timeout: 5_000 });
+    return line!;
+  }
+
+  it('names the signal, and that the daemon did not send it, when something outside the daemon ends the agent', async () => {
+    // As a `pkill -f <word>` run anywhere on the machine does to every process whose argv, prompt included, names the word.
+    const { agent, pid, logs } = await idleAgent();
+
+    process.kill(pid, 'SIGTERM');
+
+    expect(await exitLine(logs, agent.sessionId)).toBe(
+      `claude session ${agent.sessionId} (pid ${pid}) exited on SIGTERM, not ended by the daemon`,
+    );
+  });
+
+  it('names the exit code when the agent quits by itself', async () => {
+    const { client, agent, pid, logs } = await idleAgent();
+
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\x04' });
+
+    expect(await exitLine(logs, agent.sessionId)).toBe(
+      `claude session ${agent.sessionId} (pid ${pid}) exited with code 0, not ended by the daemon`,
+    );
+  });
+
+  it('names who had the daemon end it', async () => {
+    const { client, agent, pid, logs } = await idleAgent();
+
+    await client.call('agent.stop', { sessionId: agent.sessionId });
+
+    expect(await exitLine(logs, agent.sessionId)).toMatch(
+      new RegExp(`^claude session ${agent.sessionId} \\(pid ${pid}\\) exited .*, ended by the daemon for the app's agent\\.stop$`),
+    );
+  });
+
+  it('names its shutdown when the daemon stops', async () => {
+    const { daemon, agent, pid, logs } = await idleAgent();
+
+    await daemon.stop();
+
+    expect(await exitLine(logs, agent.sessionId)).toMatch(
+      new RegExp(`^claude session ${agent.sessionId} \\(pid ${pid}\\) exited .*, ended by the daemon for its shutdown$`),
+    );
+  });
+
+  it("names the app's delete, for the session and for the agent", async () => {
+    const { client, agent, pid, logs } = await idleAgent();
+
+    await client.call('agent.delete', { sessionId: agent.sessionId, force: true });
+
+    expect(await exitLine(logs, agent.sessionId)).toMatch(
+      new RegExp(`^claude session ${agent.sessionId} \\(pid ${pid}\\) exited .*, ended by the daemon for its delete for the app's agent\\.delete$`),
+    );
+    expect(logs.find((message) => message.startsWith(`deleted agent ${agent.sessionId} `))).toMatch(/ for the app's agent\.delete$/);
+  });
+
+  it("names the app's restart, and ends the shell its pane dropped into for it", async () => {
+    const { client, recorder, agent, logs } = await idleAgent();
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\x04' });
+    const ended = await untilAgent(recorder, agent.sessionId, (a) => a.shellSessionId !== null);
+
+    await client.call('agent.resume', { sessionId: agent.sessionId });
+
+    await vi.waitFor(() => expect(logs).toContain(`relaunched claude agent ${agent.sessionId} to restart it, for the app's agent.resume`), {
+      timeout: 5_000,
+    });
+    await vi.waitFor(() => expect(logs.find((message) => message.startsWith(`shell session ${ended.shellSessionId} `))).toMatch(
+      /, ended by the daemon for its agent's restart for the app's agent\.resume$/,
+    ), { timeout: 5_000 });
+  });
+});
+
 describe('the needs-you inbox', () => {
   it("answers a waiting agent: its last message is the context, and the answer resumes it", async () => {
     const { client, recorder } = await agentDaemon('waiting');
@@ -1520,7 +1613,7 @@ describe('Codex agents', () => {
 
     const agent = await client.call('agent.spawn', { zoneId: zone.id, harness: 'codex', prompt: 'Run the tests', ...SIZE });
 
-    expect(agent).toMatchObject({ harness: 'codex', name: 'Run the tests', state: 'idle' });
+    expect(agent).toMatchObject({ harness: 'codex', name: 'Run the tests', state: 'starting' });
     expect(agent.notice).toBeNull();
     expect(git(agent.worktree, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(agent.branch);
     expect(await client.call('session.list')).toEqual([expect.objectContaining({ id: agent.sessionId, harness: 'codex' })]);
@@ -1534,7 +1627,7 @@ describe('Codex agents', () => {
     await untilState(recorder, agent.sessionId, 'done');
 
     expect(statesOf(recorder.events, agent.sessionId)).toEqual([
-      'idle', // spawned
+      'starting', // spawned, its first prompt queued
       'running', // SessionStart
       'thinking', // UserPromptSubmit
       'running', // PreToolUse

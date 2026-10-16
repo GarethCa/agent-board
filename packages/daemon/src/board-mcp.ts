@@ -80,7 +80,9 @@ export const BOARD_MCP_INSTRUCTIONS =
 export const ORCHESTRATOR_INSTRUCTIONS =
   'The user lets you orchestrate: you may start, message, watch and close other agents, join them with edges, and keep ' +
   'your zone tidy (move tiles, arrange your crew, notes), with the tools below or the same commands in ' +
-  '`agent-board help orchestrate`.';
+  '`agent-board help orchestrate`. A reviewer started from an agent\'s branch is joined to that agent both ways, as ' +
+  'manual edges; wire only reviewer ↔ implementer (findings back, next round), never an edge to your own tile, and ' +
+  'keep one of the pair manual, as two auto edges in a loop re-trigger each other.';
 
 /** How long the `wait` tool waits by default, in seconds. */
 const MCP_WAIT_SECONDS = DEFAULT_ORCHESTRATOR_WAIT_MS / 1000;

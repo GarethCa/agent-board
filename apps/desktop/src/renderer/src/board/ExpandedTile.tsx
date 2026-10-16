@@ -3,7 +3,7 @@ import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@
 import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
-import { commandKey } from '../keys';
+import { pressed } from '../keys/registry';
 import { DetailsHandle } from '../session/DetailsHandle';
 import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
@@ -56,7 +56,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
 
   // ⌘I shows or hides the details, while the expanded tile has the keyboard.
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!commandKey(event.nativeEvent) || event.altKey || event.shiftKey || event.key !== 'i') return;
+    if (!pressed('window.details', event)) return;
     event.preventDefault();
     setDetailsCollapsed((collapsed) => !collapsed);
   };

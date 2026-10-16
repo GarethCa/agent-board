@@ -6,6 +6,7 @@ import { SHAPE_GROUPS, SHAPES, type ShapeGroup } from './catalogue';
 import { useRecentShapes } from './recents';
 import { searchShapes } from './search';
 import { ShapeIcon } from './ShapeArt';
+import { keyText } from '../../../keys/registry';
 
 type Tab = 'all' | ShapeGroup;
 const TABS: SegmentedOption<Tab>[] = [{ id: 'all', label: 'All' }, ...SHAPE_GROUPS.map(({ id, name }) => ({ id, label: name }))];
@@ -85,7 +86,7 @@ export function ShapePicker({
             onPick(found[0]!);
           }}
         />
-        <Kbd>S</Kbd>
+        <Kbd>{keyText('make.shape')}</Kbd>
       </div>
       <div className="shape-picker-scroll">
         {found === undefined ? (

@@ -19,6 +19,7 @@ import { PopOutWindow } from './windows/PopOutWindow';
 import { ReviewsProvider } from './review/ReviewsProvider';
 import { GatesProvider } from './gate/GatesProvider';
 import { followTheme } from './themes';
+import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { ToastProvider, TooltipProvider } from './ui';
 
 const root = document.getElementById('root');
@@ -34,6 +35,9 @@ if (popOut === undefined) void window.agentBoard.build().then((build) => (docume
 // The theme for the window's light or dark mode, which the Appearance setting drives (themes.ts): set before the first
 // paint, and again whenever macOS or the setting changes it.
 followTheme();
+
+// Whether the keys added since the key registry work: read as the window opens, and again as it comes to the front.
+followExtendedShortcuts();
 
 // How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round
 // them. In full screen the lights hide, and what sat beside them moves into the corner.

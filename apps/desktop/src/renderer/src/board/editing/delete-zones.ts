@@ -1,4 +1,5 @@
 import type { Zone } from '@agent-board/daemon/protocol';
+import { keyText } from '../../keys/registry';
 
 /** A zone to delete, with what is on it. */
 export interface ZoneToDelete {
@@ -39,9 +40,9 @@ export function zoneDeleteText(zones: ZoneToDelete[], home?: string): { title: s
   const lines = [`${listed(names)} come${many ? '' : 's'} off the board.${stay}`];
   if (connectors) lines.push(`The connectors on ${many ? 'them go with them' : 'it go with it'}.`);
   if (bound || tiles > 0) lines.push(`No session, worktree or branch is deleted, and ${bound ? "the repo's folder isn't touched" : 'nothing else is touched'}.`);
-  lines[lines.length - 1] += ` ⌘Z brings ${many ? 'them' : 'it'} back.`;
+  lines[lines.length - 1] += ` ${keyText('edit.undo')} brings ${many ? 'them' : 'it'} back.`;
   const where = clones.map(({ zone }) => `${clones.length > 1 ? `${zone.name}: ` : ''}${shown(zone.repoRoot!, home)}`);
   const cloneLabel =
-    clones.length === 0 ? undefined : `Also delete the clone${clones.length > 1 ? 's' : ''} in ${where.join(', ')} (⌘Z can't bring it back)`;
+    clones.length === 0 ? undefined : `Also delete the clone${clones.length > 1 ? 's' : ''} in ${where.join(', ')} (${keyText('edit.undo')} can't bring it back)`;
   return { title: many ? `Delete ${zones.length} zones?` : `Delete zone ${names[0]}?`, lines, cloneLabel };
 }

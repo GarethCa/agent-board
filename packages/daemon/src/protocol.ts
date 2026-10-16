@@ -1160,12 +1160,20 @@ export interface UpdateFlowEdgeParams extends Partial<FlowEdgeShape> {
 export const HELD_PAYLOAD_STORAGE = ['copy', 'path'] as const;
 export type HeldPayloadStorage = (typeof HELD_PAYLOAD_STORAGE)[number];
 
+/** The smallest and largest compact window Claude Code accepts for `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in tokens. */
+export const COMPACT_WINDOW_RANGE = { min: 100_000, max: 1_000_000 } as const;
+
 /** The settings the daemon keeps and acts on. */
 export interface DaemonSettings {
   heldPayloads: HeldPayloadStorage;
   /** The absolute path of the `claude` and `codex` executables, or empty to look for them. */
   claudePath: string;
   codexPath: string;
+  /**
+   * The context size, in tokens, Claude agents compact at: passed to them as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. 0 (the
+   * default) passes nothing, leaving Claude Code's own choice. Codex has no equivalent.
+   */
+  compactWindow: number;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1280,8 +1288,10 @@ export type SessionState = (typeof SESSION_STATES)[number];
  * because its daemon went away (a crash, a shutdown, the machine restarting), until it is resumed (`agent.resume`).
  * An agent with an enabled schedule is never `stopped-by-restart`: its schedule relaunches it. `handing-off` is a
  * live agent delivering its payload along its flow edges, whatever its hooks say, until every delivery has landed.
+ * `starting` is a live agent started with a first prompt whose session has sent no hook yet: its turn has not begun, so
+ * it is neither `idle` (it would take a message) nor mid-turn.
  */
-export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off'] as const;
+export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off', 'starting'] as const;
 export type AgentState = (typeof AGENT_STATES)[number];
 
 /** States an agent is mid-turn in, which `agent.interrupt` accepts; as does an agent waiting on the user mid-call (`isMidTurn`). */
@@ -1998,11 +2008,11 @@ export const MAX_ORCHESTRATOR_WAIT_MS = 30 * 60_000;
 export const DEFAULT_ORCHESTRATOR_WAIT_MS = 50_000;
 
 /**
- * The states `orchestrator.wait` waits for by default: any but working. A turn has ended (at its prompt, asking, or
+ * The states `orchestrator.wait` waits for by default: any but working (or about to be: `starting`). A turn has ended (at its prompt, asking, or
  * failed), it needs the user, or it has ended.
  */
 export const SETTLED_STATES: readonly AgentState[] = AGENT_STATES.filter(
-  (state) => state !== 'running' && state !== 'thinking' && state !== 'handing-off',
+  (state) => state !== 'running' && state !== 'thinking' && state !== 'handing-off' && state !== 'starting',
 );
 
 /**

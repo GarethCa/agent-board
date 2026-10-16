@@ -19,7 +19,7 @@ We build the desktop app on Electron with TypeScript end to end (React renderer,
 
 **Update**:
 
-- **Packaging.** `pnpm package` builds an unsigned, unpacked (no asar) macOS `.app` with electron-builder `--dir`. node-pty's N-API prebuilds load in Electron as they are, so the package skips the native rebuild (`npmRebuild: false`).
+- **Packaging.** `pnpm package` builds an unsigned, unpacked (no asar) macOS `.app` with electron-builder `--dir`. node-pty's N-API prebuilds load in Electron as they are, so the package skips the native rebuild (`npmRebuild: false`). Once the build has succeeded, `pnpm package` also installs the app as `~/Applications/agent-board.app`: it quits a running app, copies the new one beside the old and swaps them, so a failed build or copy leaves the working app in place, and offers to reopen the app. `pnpm package --no-install` builds only; installing is macOS only. In the dev repo the install is opt-in (`pnpm package --install`), because a build there would quit the developer's running board; the public snapshot's package script installs by default.
 - **E2E tests stay on the built main bundle.** The suite still launches `apps/desktop/out/main/index.js`, so the dev loop needs no packaging step. Packaging takes about 10 s and a 320 MB copy. One more test, `e2e/packaged.spec.ts` (`pnpm test:e2e:packaged`, run in CI after `pnpm package`), launches the packaged executable. It checks that the app starts its own daemon from the package and that node-pty runs a shell session there. This replaces the plan above to switch the whole suite to the packaged executable.
 
 **Update**: every window stays on the app. It opens no other window (`setWindowOpenHandler` denies all)

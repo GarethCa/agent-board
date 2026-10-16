@@ -302,7 +302,8 @@ export function ComponentGallery() {
           </Tag>
         </Row>
         <Row label="Agent state pills">
-          {AGENT_STATES.map((state) => (
+          {/* `starting` is drawn as running, so it has no pill of its own. */}
+          {AGENT_STATES.filter((state) => state !== 'starting').map((state) => (
             <StatusPill key={state} state={state} />
           ))}
         </Row>

@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from 'react';
 import { ArrowUpRight, Waypoints } from 'lucide-react';
 import { AnchoredPopover, Kbd } from '../../ui';
+import { keyText } from '../../keys/registry';
 
 /**
  * Asks what a connector just dropped from one agent's tile on another's is (BP5): an Arrow, as it is drawn
@@ -28,15 +29,15 @@ export function HandOffChooser({ at, payload, onArrow, onHandOff }: { at: { x: n
         <button type="button" role="menuitem" className="ui-menu-item handoff-chooser-option" autoFocus onClick={onArrow}>
           <ArrowUpRight aria-hidden />
           <span className="handoff-chooser-name">Arrow</span>
-          <Kbd aria-hidden>↵</Kbd>
-          <Kbd aria-hidden>Esc</Kbd>
+          <Kbd aria-hidden>{keyText('dialog.pick')}</Kbd>
+          <Kbd aria-hidden>{keyText('dialog.close')}</Kbd>
         </button>
         <button type="button" role="menuitem" className="ui-menu-item handoff-chooser-option" onClick={onHandOff}>
           <Waypoints aria-hidden />
           <span className="handoff-chooser-name">
             Hand off ▸ <span className="handoff-chooser-payload">{payload}</span>
           </span>
-          <Kbd aria-hidden>H</Kbd>
+          <Kbd aria-hidden>{keyText('dialog.handOff')}</Kbd>
         </button>
       </div>
     </AnchoredPopover>

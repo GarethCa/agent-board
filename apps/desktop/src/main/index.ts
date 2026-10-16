@@ -6,7 +6,7 @@ import { daemonPaths } from '@agent-board/daemon/paths';
 import { describeBuild } from '@agent-board/daemon/protocol';
 import { spawnDetachedDaemon } from '@agent-board/daemon/spawn';
 import { stopDaemon } from '@agent-board/daemon/stop';
-import { appearanceFrom, themeFor } from '../shared/appearance';
+import { appearanceFrom, appearanceQuery, themeFor } from '../shared/appearance';
 import { APP_NAME } from '../shared/brand';
 import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
 import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
@@ -116,7 +116,7 @@ function openWindow(
       : target.protocol === 'file:' && target.pathname === pathToFileURL(rendererFile).pathname;
   });
   // The Appearance setting it opens in, for its first paint (renderer/src/themes.ts); later picks reach it as they happen.
-  const withAppearance = { ...query, [WINDOW_QUERY.appearance]: appearance.current() };
+  const withAppearance = { ...query, [WINDOW_QUERY.appearance]: appearanceQuery(appearance.current()) };
   if (devServerUrl) {
     void window.loadURL(`${devServerUrl}?${new URLSearchParams(withAppearance)}`);
   } else {

@@ -24,7 +24,7 @@ import {
   SquareDashedMousePointer,
   Trash2,
 } from 'lucide-react';
-import { withCommand } from '../../keys';
+import { keyText } from '../../keys/registry';
 import type { MenuEntry } from '../../ui';
 import { ITEM_KINDS } from '../items/kinds';
 import type { Alignment, Reorder } from './arrange';
@@ -56,12 +56,6 @@ export interface ContextActions {
   /** Lays the tiles loose on the board out in a grid where they are. */
   tidyLoose(): void;
 }
-
-/** Ask Claude about the selection's shortcut, as the menu and the selection's label write it. */
-export const ASK_CLAUDE_KEY = withCommand('⇧A');
-
-/** The key that turns the selected items back straight, as the menu and the shortcut help write it. */
-export const RESET_ROTATION_KEY = '⇧R';
 
 /**
  * The context menu on a selection (WbTools): Ask Claude (CM), duplicate and copy, z-order, align, reset rotation, each selected kind's
@@ -95,19 +89,19 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
   // Only about objects: a selection of connectors alone has nothing to draw or describe.
   const ask: MenuEntry[] =
     selection.nodes.length > 0
-      ? [{ label: 'Ask Claude…', icon: <Sparkles />, shortcut: ASK_CLAUDE_KEY, hint: 'Sends nothing until you press Ask', onSelect: actions.askClaude }, 'separator']
+      ? [{ label: 'Ask Claude…', icon: <Sparkles />, shortcut: keyText('make.askClaude'), hint: 'Sends nothing until you press Ask', onSelect: actions.askClaude }, 'separator']
       : [];
   return [
     ...ask,
-    ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: actions.rename }, 'separator' as const] : []),
-    { label: 'Duplicate', icon: <CopyPlus />, shortcut: withCommand('D'), disabled: !hasItems, onSelect: actions.duplicate },
-    { label: 'Copy', icon: <Copy />, shortcut: withCommand('C'), disabled: !hasItems, onSelect: actions.copy },
+    ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: actions.rename }, 'separator' as const] : []),
+    { label: 'Duplicate', icon: <CopyPlus />, shortcut: keyText('edit.duplicate'), disabled: !hasItems, onSelect: actions.duplicate },
+    { label: 'Copy', icon: <Copy />, shortcut: keyText('edit.copy'), disabled: !hasItems, onSelect: actions.copy },
     ...(connect.length > 0 ? ['separator' as const, ...connect] : []),
     'separator',
-    { label: 'Bring to front', icon: <ArrowUpToLine />, shortcut: ']', onSelect: () => actions.restack('front') },
-    { label: 'Bring forward', icon: <ArrowUp />, shortcut: withCommand(']'), onSelect: () => actions.restack('forward') },
-    { label: 'Send backward', icon: <ArrowDown />, shortcut: withCommand('['), onSelect: () => actions.restack('backward') },
-    { label: 'Send to back', icon: <ArrowDownToLine />, shortcut: '[', onSelect: () => actions.restack('back') },
+    { label: 'Bring to front', icon: <ArrowUpToLine />, shortcut: keyText('edit.front'), onSelect: () => actions.restack('front') },
+    { label: 'Bring forward', icon: <ArrowUp />, shortcut: keyText('edit.forward'), onSelect: () => actions.restack('forward') },
+    { label: 'Send backward', icon: <ArrowDown />, shortcut: keyText('edit.backward'), onSelect: () => actions.restack('backward') },
+    { label: 'Send to back', icon: <ArrowDownToLine />, shortcut: keyText('edit.back'), onSelect: () => actions.restack('back') },
     {
       label: 'Align',
       icon: <AlignStartVertical />,
@@ -128,7 +122,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
     {
       label: 'Reset rotation',
       icon: <RotateCcw />,
-      shortcut: RESET_ROTATION_KEY,
+      shortcut: keyText('edit.resetRotation'),
       disabled: !selection.items.some((node) => node.data.item.rotation !== 0),
       onSelect: actions.resetRotation,
     },
@@ -137,7 +131,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
     {
       label: 'Delete',
       icon: <Trash2 />,
-      shortcut: '⌫',
+      shortcut: keyText('edit.delete'),
       danger: true,
       disabled: !hasItems && selectedConnectors === 0 && !selection.hasSessions && !selection.hasZones,
       hint: selection.hasSessions ? "Sessions are asked about first, and can't be undone." : selection.hasZones ? 'Zones are asked about first; their tiles stay on the board' : undefined,
@@ -149,7 +143,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
 /** The context menu on empty board: select everything, and snap to the grid. */
 export function boardEntries(actions: ContextActions): MenuEntry[] {
   return [
-    { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: withCommand('A'), onSelect: actions.selectAll },
+    { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },
   ];

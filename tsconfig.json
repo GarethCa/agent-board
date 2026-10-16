@@ -5,5 +5,5 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["vitest.config.ts", "vitest.shared.ts", "packages/*/vitest.config.ts", "apps/*/vitest.config.ts", "eslint.config.js", ]
+  "include": ["vitest.config.ts", "vitest.shared.ts", "packages/*/vitest.config.ts", "apps/*/vitest.config.ts", "eslint.config.js", "scripts/app-install", "scripts/update-app", ]
 }

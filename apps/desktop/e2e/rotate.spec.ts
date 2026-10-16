@@ -63,7 +63,9 @@ test('tiles sit straight; a sticky turned by its handle still drags and joins co
     await turnTo(window, note, 90);
     await expect.poll(() => storedRotation(dataDir)).toBeCloseTo(-90, 0);
     const rotor = window.locator('.item-rotor').filter({ has: note });
-    expect(await drawnAngle(rotor)).toBe(Math.round(await storedRotation(dataDir)));
+    // The daemon has the angle before the note is drawn at it: wait for the drawing.
+    const turnedTo = Math.round(await storedRotation(dataDir));
+    await expect.poll(() => drawnAngle(rotor)).toBe(turnedTo);
 
     // Turned, it still drags by its body (the command key held, so nothing snaps)...
     const storedItem = async () => ((await withDaemon(dataDir, (client) => client.call('item.list'))) as BoardItem[])[0]!;
@@ -116,6 +118,9 @@ test('tiles sit straight; a sticky turned by its handle still drags and joins co
     await expect(restored).toHaveAttribute('data-rotation', '0');
     await window.keyboard.press('ControlOrMeta+z');
     await expect.poll(() => storedRotation(dataDir)).toBe(snapped);
+    // ⇧R acts on the note as the board has it, which can lag the daemon: wait until it shows turned and still selected.
+    await expect(restored).toHaveAttribute('data-rotation', String(snapped));
+    await expect(window.getByTestId('rotate-handle')).toBeVisible();
     await window.keyboard.press('Shift+R');
     await expect.poll(() => storedRotation(dataDir)).toBe(0);
   } finally {

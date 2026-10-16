@@ -47,7 +47,7 @@ export interface ReviewHost {
    * Deletes an agent with `remove`: first the reviewers of its rounds, telling every client, as `remove` would not; and
    * after it, tells them of the rounds it reviewed, which no longer have their reviewer.
    */
-  deleteAgent(sessionId: string, remove: () => Promise<null>): Promise<null>;
+  deleteAgent(sessionId: string, why: string, remove: () => Promise<null>): Promise<null>;
   handlers<Context>(): RpcHandlers<ReviewMethods, Context>;
 }
 
@@ -151,7 +151,7 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
   const deleteReviewers = async (rounds: readonly ReviewRound[]) => {
     for (const round of rounds) {
       if (round.reviewer === null || agents.get(round.reviewer) === undefined) continue;
-      await agents.delete(round.reviewer, true);
+      await agents.delete(round.reviewer, 'a new review round', true);
       announce(round.id);
     }
   };
@@ -200,7 +200,7 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
       setDoc.run(doc, row.id);
       announce(row.id);
       // Ephemeral: its doc is in, so it is done.
-      agents.stop(sessionId).catch((error: Error) => options.log(`could not stop reviewer ${sessionId}: ${error.message}`));
+      agents.stop(sessionId, 'its review being in').catch((error: Error) => options.log(`could not stop reviewer ${sessionId}: ${error.message}`));
     },
 
     onExit(sessionId, stoppedByRestart) {
@@ -210,9 +210,11 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
       announce(row.id);
     },
 
-    async deleteAgent(sessionId, removeAgent) {
+    async deleteAgent(sessionId, why, removeAgent) {
       for (const round of roundsOf(sessionId)) {
-        if (round.reviewer !== null && agents.get(round.reviewer) !== undefined) await agents.delete(round.reviewer, true);
+        if (round.reviewer !== null && agents.get(round.reviewer) !== undefined) {
+          await agents.delete(round.reviewer, `its implementer's delete for ${why}`, true);
+        }
       }
       const reviewed = (selectByReviewer.all(sessionId) as unknown as RoundRow[]).map((row) => row.id);
       const removed = await removeAgent();
@@ -244,7 +246,7 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
 
       'review.dismiss': async (params) => {
         const round = get(stringParam(paramsObject(params), 'id'));
-        if (round.reviewer !== null && agents.get(round.reviewer) !== undefined) await agents.delete(round.reviewer, true);
+        if (round.reviewer !== null && agents.get(round.reviewer) !== undefined) await agents.delete(round.reviewer, "the app's review.dismiss", true);
         setFailed.run('dismissed before its reviewer left a review', round.id);
         setDismissed.run(round.id);
         return announce(round.id);

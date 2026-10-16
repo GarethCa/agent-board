@@ -208,7 +208,7 @@ const LOCAL = [
   '--ghost-y',
   '--chip-x',
   '--chip-y',
-  // A theme pack's colours in its preview in Settings, from its palette, as its tokens aren't the page's until picked.
+  // A theme's colours in its swatch in Settings, from the registry, as its tokens aren't the page's until it shows.
   '--preview-desk',
   '--preview-edge',
   '--preview-accent',
@@ -443,6 +443,11 @@ describe('themes', () => {
     const block = postcss.parse(tokens).nodes.find((node) => node.type === 'rule' && node.selector === scope) as postcss.Rule;
     expect(block.nodes.find((node) => node.type === 'decl' && node.prop === 'color-scheme')).toMatchObject({ value: scheme });
     expect(hexOf('--surface', scope)).toBe(desk);
+  });
+
+  it.each(THEME_SCOPES.filter(({ family }) => family === undefined))("$id's preview in the Theme popover is its tokens", ({ scope, preview }) => {
+    const token = { desk: '--surface', edge: '--border', accent: '--accent', running: '--state-running', waiting: '--state-waiting', failed: '--state-failed' };
+    for (const [role, name] of Object.entries(token)) expect(preview[role as keyof typeof preview], role).toBe(hexOf(name, scope));
   });
 
   it.each(OVERRIDES)('$id sets every colour the light theme writes, but the few that are the same in every theme', ({ scope }) => {

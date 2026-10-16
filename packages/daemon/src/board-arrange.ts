@@ -109,6 +109,7 @@ const STATE_ORDER: readonly AgentState[] = [
   'running',
   'thinking',
   'handing-off',
+  'starting',
   'idle',
   'scheduled',
   'stopped-by-restart',

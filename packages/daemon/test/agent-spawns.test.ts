@@ -17,7 +17,7 @@ const HOOK_URL = 'http://127.0.0.1:4242/hook';
 const MCP_URL = 'http://127.0.0.1:4242/mcp';
 
 /** Agent spawns over a fresh database, harnesses in /bin, recording the sessions they start. */
-function setup(zone: Partial<ZoneRow> = {}) {
+function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   onTestFinished(() => db.close());
@@ -46,6 +46,7 @@ function setup(zone: Partial<ZoneRow> = {}) {
     hookShimPath: '/shim/agent-board-hook',
     ensureHookShim() {},
     boardCliPath: '/bin/agent-board',
+    compactWindow: () => compactWindow,
     env: { PATH: '/bin', CLAUDECODE: '1' },
     shell: '/bin/zsh',
     shellArgs: [],
@@ -62,6 +63,7 @@ function setup(zone: Partial<ZoneRow> = {}) {
     getZone: () => ({ board_mcp: 1, ...zone }) as ZoneRow,
     repoZoneFor: unused,
     announce: unused,
+    promptQueued: () => {},
     watch: unused,
   });
   return { spawns, started };
@@ -108,6 +110,20 @@ describe("launching an agent's harness", () => {
     expect(session!.env.CLAUDECODE).toBeUndefined();
     expect(session!.env[HOOK_URL_ENV]).toBe(HOOK_URL);
     expect(session!.hookTokenSha256).toBe(hashToken(session!.env[HOOK_TOKEN_ENV]!));
+  });
+
+  it("passes claude the compact window only when the setting is on, and never changes codex's env", () => {
+    const off = setup();
+    off.spawns.launch(spec());
+    expect(off.started[0]!.env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+
+    const on = setup({}, 400_000);
+    on.spawns.launch(spec({ harness: 'claude' }));
+    on.spawns.launch(spec({ harness: 'codex' }));
+    expect(on.started[0]!.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('400000');
+    expect(on.started[1]!.env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    // Nothing else about the launch differs.
+    expect(on.started[0]!.args).toEqual(off.started[0]!.args);
   });
 
   it('gives a claude agent the board MCP over HTTP and a codex agent the stdio server', () => {

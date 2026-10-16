@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.1 (2026-10-16)
+
+- quitAndWait lives in its own module the public tree uses; popover-keys waits for focus and retries Escape until the popover closes
+- One key registry, the Extended keyboard shortcuts setting, and the ? / ⌘/ cheat sheet
+- A setting for Claude's context compact window, off by default
+- Give each Vitest project its own groupOrder; board-mcp test waits for the progress update
+- Five load-only flakes wait on the state they act on (rotate, board-scroll, tab-moves, tile-chip-overflow, pull-requests)
+- pnpm package installs the app; pnpm update:app updates a public checkout
+- Keyboard conflict fixes: Ctrl+I and Ctrl+- stay the terminal's off macOS, no app reload or board close by accident, no single keys inside popovers
+- Theme picker behind a Theme… popover; pick a family and the mode picks its light or dark theme
+- daemon.log says how each agent's session ended (two agents killed by another agent's pkill -f)
+- Link a reviewer to the agent whose branch it reviews
+- The status-set e2e expects a waiting tile's last message, not its status line
+- A new agent shows starting, not idle, until its first turn begins
+
 ## v0.5.0 (2026-10-16)
 
 - agent-board restart --fresh starts a new conversation in an ended agent's own tile

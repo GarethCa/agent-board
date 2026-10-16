@@ -17,6 +17,12 @@ describe("a key pressed in a web tab's page", () => {
     expect(webKey(press('ArrowLeft', { meta: true, alt: true }), true)).toBe('window');
   });
 
+  it('hands ⌘I to the window on macOS and Ctrl+Shift+I elsewhere, never plain Ctrl+I or ⇧⌘I', () => {
+    expect(webKey(press('KeyI', { control: true, shift: true }), false)).toBe('window');
+    expect(webKey(press('KeyI', { control: true }), false)).toBeUndefined();
+    expect(webKey(press('KeyI', { meta: true, shift: true }), true)).toBeUndefined();
+  });
+
   it('keeps editing keys, and plain typing, for the page', () => {
     for (const code of ['KeyC', 'KeyV', 'KeyX', 'KeyA', 'KeyZ', 'KeyL', 'KeyF']) expect(webKey(press(code, { meta: true }), true)).toBeUndefined();
     expect(webKey(press('KeyW'), true)).toBeUndefined();

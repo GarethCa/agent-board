@@ -5,15 +5,15 @@ import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
 import { localWebLinks } from '@agent-board/daemon/web-url';
 import { commandKey, isMac } from '../keys';
+import { keyText } from '../keys/registry';
 import { token, tokenNumber } from '../theme';
-import { chosenFontSize, FONT_STEP, onFontSize, PINCH_RATE, setFontSize, sizeKey } from './terminal-size';
+import { chosenFontSize, FONT_STEP, onFontSize, PINCH_RATE, setFontSize, terminalSizeKey } from './terminal-size';
 import { macLineEditKey, newlineKey } from './newline-keys';
 import { throttled } from './throttle';
 import { compensateForScale } from './zoomed-mouse';
 import { useWebLinkOpener } from './web-links';
 
 /** The click that opens a local address in the output in a web tab, as the platform writes it. */
-const COMMAND_CLICK = isMac ? '⌘-click' : 'Ctrl-click';
 
 /** How often the terminal refits to its element while that is being resized, e.g. by dragging its window's edge. */
 const REFIT_INTERVAL_MS = 80;
@@ -90,7 +90,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     });
     const size = () => chosenFontSize() ?? terminal.options.fontSize!;
     const keyDown = (event: KeyboardEvent) => {
-      const action = commandKey(event) ? sizeKey(event.key) : undefined;
+      const action = terminalSizeKey(event, isMac);
       if (action === undefined) return;
       event.preventDefault();
       event.stopPropagation();
@@ -118,7 +118,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
             activate: (event) => {
               if (commandKey(event)) openWeb.current?.(url);
             },
-            hover: () => (element.title = `${COMMAND_CLICK} to open in a web tab`),
+            hover: () => (element.title = `${keyText('window.openLink')} to open in a web tab`),
             leave: () => element.removeAttribute('title'),
           })),
         );

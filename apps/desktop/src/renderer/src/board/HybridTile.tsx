@@ -51,6 +51,7 @@ import { canRestart, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
+import { keyText } from '../keys/registry';
 
 /**
  * Hybrid (v1): a calm white tile with a soft shadow, sitting straight. An agent's tile shows its name, harness,
@@ -175,7 +176,7 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
               ...(canRestart(agent) ? [{ label: 'Restart agent', icon: <RotateCcw />, onSelect: () => restartAgent(agent.sessionId) }] : []),
               ...(agent.state === 'stopped-by-restart' ? [{ label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void resumeAgent(agent.sessionId) }] : []),
               'separator',
-              { label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: renaming.startSoon },
+              { label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: renaming.startSoon },
               { label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => scheduleAgent(agent) },
               { label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => linkIssue(agent) },
               {
@@ -422,7 +423,7 @@ function ShellTile({ id, shell }: { id: string; shell: Shell }) {
             entries={[
               otherOpen(clickOpens, () => expand(id), () => openShell(shell)),
               'separator',
-              { label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: renaming.startSoon },
+              { label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: renaming.startSoon },
               'separator',
               { label: 'Delete shell', icon: <Trash2 />, danger: true, onSelect: () => deleteShell(shell.id) },
             ]}

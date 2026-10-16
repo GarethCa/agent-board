@@ -13,6 +13,7 @@ export const STATE_LABELS: Record<AgentState, string> = {
   scheduled: 'scheduled',
   'stopped-by-restart': 'stopped',
   'handing-off': 'handing off',
+  starting: 'starting',
 };
 
 /**
@@ -33,7 +34,9 @@ export const TILE_STATE_LABELS: Record<AgentState, string> = {
 export function agentPill(agent: Agent, labels: Record<AgentState, string> = STATE_LABELS, state: AgentState = agent.state): { state: AgentState; label: string } {
   const ended = endedPill(agent);
   if (ended !== undefined) return ended;
-  return { state: agent.seen && waitsForYou(agent) ? 'idle' : state, label: (state === 'waiting' && askLabel(agent)) || labels[state] };
+  // Starting looks like running: its first turn is about to begin.
+  const shown = state === 'starting' ? 'running' : state;
+  return { state: agent.seen && waitsForYou(agent) ? 'idle' : shown, label: (state === 'waiting' && askLabel(agent)) || labels[state] };
 }
 
 /**

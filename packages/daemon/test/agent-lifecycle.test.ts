@@ -421,7 +421,7 @@ describe("a Codex agent that couldn't resume its conversation", () => {
     stopped.lifecycle.relaunch(stopped.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     stopped.db.prepare('UPDATE sessions SET ended_at = NULL').run();
     const release = stopped.holdKills();
-    const stopping = stopped.lifecycle.stop('a');
+    const stopping = stopped.lifecycle.stop('a', 'a test');
     expect(stopped.lifecycle.isStopping('a')).toBe(true);
     stopped.db.prepare("UPDATE sessions SET ended_at = '2026-10-15T11:00:00Z'").run();
     stopped.lifecycle.exited('a', false);
@@ -515,9 +515,9 @@ describe('stopping an agent', () => {
     const { lifecycle, addAgent, events } = setup();
     addAgent('a', { ended: false });
     addAgent('b');
-    await expect(lifecycle.stop('a')).resolves.toMatchObject({ sessionId: 'a' });
+    await expect(lifecycle.stop('a', 'a test')).resolves.toMatchObject({ sessionId: 'a' });
     expect(events).toEqual(['kill a', 'killed a']);
-    await expect(lifecycle.stop('b')).rejects.toThrow('agent b has already ended');
+    await expect(lifecycle.stop('b', 'a test')).rejects.toThrow('agent b has already ended');
   });
 });
 
@@ -534,7 +534,7 @@ describe('resuming an agent', () => {
 
   it('ends the shell its pane dropped into, then relaunches it to carry on', async () => {
     const { lifecycle, events, logs, launches } = await withShell();
-    await expect(lifecycle.resume('a', false)).resolves.toMatchObject({ sessionId: 'a', state: 'idle', shellSessionId: null });
+    await expect(lifecycle.resume('a', 'a test', false)).resolves.toMatchObject({ sessionId: 'a', state: 'idle', shellSessionId: null });
     expect(events).toEqual([
       'kill a',
       'killed a',
@@ -548,22 +548,22 @@ describe('resuming an agent', () => {
       'announce a',
     ]);
     expect(launches[0]!.resume).toEqual({ codexSessionId: null, claudeConversation: true });
-    expect(logs.at(-1)).toBe('relaunched claude agent a to restart it');
+    expect(logs.at(-1)).toBe('relaunched claude agent a to restart it, for a test');
     expect(lifecycle.fallbackShellCount()).toBe(0);
   });
 
   it('says it resumes one its daemon stopped', async () => {
     const { lifecycle, logs } = await withShell({}, { stoppedByRestart: true });
-    await lifecycle.resume('a', false);
-    expect(logs.at(-1)).toBe('relaunched claude agent a to resume it after a restart');
+    await lifecycle.resume('a', 'a test', false);
+    expect(logs.at(-1)).toBe('relaunched claude agent a to resume it after a restart, for a test');
   });
 
   it('refuses while its shell runs something, unless forced', async () => {
     const busy = await withShell({ busy: true });
-    await expect(busy.lifecycle.resume('a', false)).rejects.toMatchObject({ code: AGENT_ERROR.shellBusy });
+    await expect(busy.lifecycle.resume('a', 'a test', false)).rejects.toMatchObject({ code: AGENT_ERROR.shellBusy });
     expect(busy.launches).toEqual([]);
     busy.events.length = 0;
-    await expect(busy.lifecycle.resume('a', true)).resolves.toMatchObject({ state: 'idle' });
+    await expect(busy.lifecycle.resume('a', 'a test', true)).resolves.toMatchObject({ state: 'idle' });
     expect(busy.events).not.toContain('isRunningSomething 100');
     expect(busy.launches).toHaveLength(1);
   });
@@ -571,9 +571,9 @@ describe('resuming an agent', () => {
   it('refuses, even forced, while its own harness runs in its shell', async () => {
     const { lifecycle, shellHarnesses, launches } = await withShell();
     shellHarnesses.set('shell-1', 'claude');
-    await expect(lifecycle.resume('a', true)).rejects.toThrow("agent a can't be restarted: claude is running in its shell. Exit it first");
+    await expect(lifecycle.resume('a', 'a test', true)).rejects.toThrow("agent a can't be restarted: claude is running in its shell. Exit it first");
     shellHarnesses.set('shell-1', 'codex');
-    await expect(lifecycle.resume('a', false)).resolves.toMatchObject({ state: 'idle' });
+    await expect(lifecycle.resume('a', 'a test', false)).resolves.toMatchObject({ state: 'idle' });
     expect(launches).toHaveLength(1);
   });
 
@@ -582,18 +582,18 @@ describe('resuming an agent', () => {
     addAgent('live', { ended: false });
     addAgent('reviewer', { reviewOf: 'live' });
     addAgent('gone', { cwd: '/no/such/worktree' });
-    await expect(lifecycle.resume('live', false)).rejects.toThrow('agent live is still running');
-    await expect(lifecycle.resume('reviewer', false)).rejects.toThrow('agent reviewer is a reviewer whose round is over');
-    await expect(lifecycle.resume('gone', false)).rejects.toThrow("agent gone can't be resumed: its worktree is gone");
+    await expect(lifecycle.resume('live', 'a test', false)).rejects.toThrow('agent live is still running');
+    await expect(lifecycle.resume('reviewer', 'a test', false)).rejects.toThrow('agent reviewer is a reviewer whose round is over');
+    await expect(lifecycle.resume('gone', 'a test', false)).rejects.toThrow("agent gone can't be resumed: its worktree is gone");
   });
 
   it('resumes a reviewer its daemon stopped mid-round', async () => {
     const { lifecycle, addAgent, launches, logs } = setup();
     addAgent('author');
     addAgent('reviewer', { reviewOf: 'author', stoppedByRestart: true });
-    await lifecycle.resume('reviewer', false);
+    await lifecycle.resume('reviewer', 'a test', false);
     expect(launches.map((spec) => spec.id)).toEqual(['reviewer']);
-    expect(logs).toEqual(['relaunched claude agent reviewer to resume it after a restart']);
+    expect(logs).toEqual(['relaunched claude agent reviewer to resume it after a restart, for a test']);
   });
 });
 
@@ -607,7 +607,7 @@ describe('deleting an agent', () => {
     const kept = join(home, 'reviews', '1-review.md');
     vi.mocked(removeWorktree).mockImplementation(async (_repoRoot, worktree) => void events.push(`removeWorktree ${worktree} review kept=${existsSync(kept)}`));
     const release = holdKills();
-    const deleted = lifecycle.delete('a', false);
+    const deleted = lifecycle.delete('a', 'a test', false);
     await flush();
     // Nothing else goes until its session has finished exiting.
     expect(events).toEqual(['kill a']);
@@ -632,14 +632,14 @@ describe('deleting an agent', () => {
     expect(getRow('a')).toBeUndefined();
     expect(lifecycle.isDeleting('a')).toBe(false);
     expect(broadcasts).toEqual([{ type: 'agent.removed', sessionId: 'a' }]);
-    expect(logs).toEqual([`deleted agent a and its worktree ${row.worktree}`]);
+    expect(logs).toEqual([`deleted agent a and its worktree ${row.worktree} for a test`]);
   });
 
   it('opens no shell for an agent that exits while it is being deleted', async () => {
     const { lifecycle, addAgent, db, shells, holdKills } = setup();
     addAgent('a', { ended: false });
     const release = holdKills();
-    const deleted = lifecycle.delete('a', false);
+    const deleted = lifecycle.delete('a', 'a test', false);
     await flush();
     db.prepare("UPDATE sessions SET ended_at = '2026-10-15T11:00:00Z'").run();
     lifecycle.exited('a', false);
@@ -653,7 +653,7 @@ describe('deleting an agent', () => {
     const { lifecycle, addAgent, events } = setup({ launch: () => true });
     const row = addAgent('a', { harness: 'codex' });
     lifecycle.relaunch(row, 'run', 'for a run');
-    await lifecycle.delete('a', true);
+    await lifecycle.delete('a', 'a test', true);
     events.length = 0;
     mkdirSync(join(row.cwd, '.codex'));
     lifecycle.checkGuard('a');
@@ -666,7 +666,7 @@ describe('deleting an agent', () => {
     lifecycle.exited('a', false);
     await flush();
     events.length = 0;
-    await lifecycle.delete('a', false);
+    await lifecycle.delete('a', 'a test', false);
     expect(events.slice(0, 4)).toEqual(['kill shell-1', 'killed shell-1', 'forget shell-1', 'endTabs a deleting=true']);
     expect(lifecycle.fallbackShellCount()).toBe(0);
     expect(shells).toHaveLength(1);
@@ -676,12 +676,12 @@ describe('deleting an agent', () => {
     const { lifecycle, addAgent, getRow } = setup();
     addAgent('a');
     vi.mocked(unsavedWork).mockResolvedValue('it has uncommitted changes');
-    await expect(lifecycle.delete('a', false)).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork, message: 'agent a: it has uncommitted changes' });
+    await expect(lifecycle.delete('a', 'a test', false)).rejects.toMatchObject({ code: AGENT_ERROR.unsavedWork, message: 'agent a: it has uncommitted changes' });
     expect(getRow('a')).toBeDefined();
-    await lifecycle.delete('a', false, true);
+    await lifecycle.delete('a', 'a test', false, true);
     expect(removeWorktree).not.toHaveBeenCalled();
     addAgent('b');
-    await lifecycle.delete('b', true, false, true);
+    await lifecycle.delete('b', 'a test', true, false, true);
     expect(removeWorktree).toHaveBeenCalledWith('/repo', expect.any(String), 'branch-b', true);
     expect(unsavedWork).toHaveBeenCalledTimes(1);
   });
@@ -689,17 +689,17 @@ describe('deleting an agent', () => {
   it("leaves the folder of an agent adopted in place alone, and doesn't call it its worktree", async () => {
     const { lifecycle, addAgent, logs } = setup();
     addAgent('a', { ownsWorktree: false });
-    await lifecycle.delete('a', false);
+    await lifecycle.delete('a', 'a test', false);
     expect(unsavedWork).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
-    expect(logs).toEqual(['deleted agent a']);
+    expect(logs).toEqual(['deleted agent a for a test']);
   });
 
   it('is no longer deleting it when removing its worktree fails, and keeps its row', async () => {
     const { lifecycle, addAgent, getRow, broadcasts } = setup();
     addAgent('a');
     vi.mocked(removeWorktree).mockRejectedValue(new Error('locked'));
-    await expect(lifecycle.delete('a', false)).rejects.toThrow('locked');
+    await expect(lifecycle.delete('a', 'a test', false)).rejects.toThrow('locked');
     expect(lifecycle.isDeleting('a')).toBe(false);
     expect(getRow('a')).toBeDefined();
     expect(broadcasts).toEqual([]);
@@ -710,7 +710,7 @@ describe('deleting an agent', () => {
     addAgent('parent');
     addAgent('child', { spawnedBy: 'parent' });
     addAgent('other', { spawnedBy: 'someone' });
-    await lifecycle.delete('parent', false);
+    await lifecycle.delete('parent', 'a test', false);
     expect(getRow('child')!.spawned_by).toBeNull();
     expect(getRow('other')!.spawned_by).toBe('someone');
     expect(events).toContain('announce child');
@@ -724,8 +724,8 @@ describe('deleting an agent', () => {
     db.prepare("INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES ('/repo', 'main', 'abc123', 'a'), ('/repo', 'main', 'abc123', 'b')").run();
     mkdirSync(join(row.worktree, '.agent-board'));
     writeFileSync(join(row.worktree, '.agent-board', 'review.md'), 'looks good');
-    await lifecycle.delete('a', false);
-    await lifecycle.delete('b', false);
+    await lifecycle.delete('a', 'a test', false);
+    await lifecycle.delete('b', 'a test', false);
     const reviews = db.prepare('SELECT id, session_id, review_path FROM branch_reviews ORDER BY id').all();
     const kept = join(home, 'reviews', '1-review.md');
     expect(reviews).toEqual([
@@ -741,7 +741,7 @@ describe('deleting an agent', () => {
     db.prepare("INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES ('/repo', 'main', 'abc123', 'a')").run();
     mkdirSync(join(row.worktree, '.agent-board'));
     writeFileSync(join(row.worktree, '.agent-board', 'review.md'), 'looks good');
-    await lifecycle.delete('a', false);
+    await lifecycle.delete('a', 'a test', false);
     expect(db.prepare('SELECT session_id FROM branch_reviews').get()).toEqual({ session_id: 'a' });
     expect(existsSync(join(home, 'reviews'))).toBe(false);
   });

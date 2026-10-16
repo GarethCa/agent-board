@@ -4,7 +4,7 @@ import type { Node } from '@xyflow/react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { buildMismatch, BuildMismatch, useDaemonStatus } from '../DaemonStatus';
 import { isTyping } from '../board/use-tile-moves';
-import { commandKey } from '../keys';
+import { pressed } from '../keys/registry';
 import { BoardMenu, type BoardMenuState } from './BoardMenu';
 import { CreateToolbar, type CreateToolbarProps } from './CreateToolbar';
 import { EmptyBoard } from './EmptyBoard';
@@ -42,6 +42,8 @@ export interface BoardChromeProps extends CreateToolbarProps {
   /** Opens Add zone in the middle of the view, on the source's tab (GitHub without one). */
   onAddZone(source?: ZoneSource): void;
   onJump(zone: Zone): void;
+  /** Opens the keyboard cheat sheet. */
+  onKeyboardHelp(): void;
   onOpenAgent(agent: Agent): void;
   onOpenShell(shell: Shell): void;
   onError(action: string): (error: unknown) => void;
@@ -70,7 +72,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
@@ -81,12 +83,10 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells,
   // typing: in a field, a note, a dialog or a session window's terminal, the key is the text's.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!commandKey(event) || event.altKey || event.shiftKey || isTyping(event)) return;
+      if (!pressed('move.boardMenu', event) || isTyping(event)) return;
       if ((event.target as Element | null)?.closest?.('.xterm')) return;
-      if (event.key === '\\') {
-        event.preventDefault();
-        setMenu((current) => (current.open ? { open: false } : { open: true, at: 'search', asked: event.timeStamp }));
-      }
+      event.preventDefault();
+      setMenu((current) => (current.open ? { open: false } : { open: true, at: 'search', asked: event.timeStamp }));
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -125,7 +125,7 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells,
         <>
           <CreateToolbar {...toolbar} />
           <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={() => setMenu({ open: true, at: 'settings', asked: performance.now() })} />
-          <ZoneJump zones={zones} onJump={onJump} />
+          <ZoneJump zones={zones} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
           <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} />
           {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} />}
           {onboarding.open && onboarding.state !== undefined && (

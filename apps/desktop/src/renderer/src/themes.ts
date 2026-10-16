@@ -1,7 +1,7 @@
 import { themeFor, type Appearance } from '../../shared/appearance';
 
-// Which theme a window shows (the registry is shared/themes.ts): the Appearance setting's pick, or under System the
-// theme for the window's light or dark mode. The main process points Electron's `nativeTheme.themeSource` at the
+// Which theme a window shows (the registry is shared/themes.ts): the Appearance setting's choice's theme for its mode,
+// under System the window's light or dark mode. The main process points Electron's `nativeTheme.themeSource` at the
 // setting, so `prefers-color-scheme` is the OS's mode under System and the picked theme's otherwise.
 
 /** The query for whether the window is in dark mode. */

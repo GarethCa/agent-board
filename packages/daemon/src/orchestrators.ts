@@ -109,7 +109,29 @@ export interface Orchestrator extends Pick<Agent, 'sessionId' | 'name' | 'zoneId
 }
 
 /** The user with no token, as the log keeps it. */
+/**
+ * The one agent whose branch `reviewer` reviews: in the same repo (two repos may share a branch name), on that branch,
+ * and no reviewer itself. Undefined when none, or several, own it.
+ */
+export function reviewedAgent(all: readonly Agent[], reviewer: Agent): Agent | undefined {
+  if (reviewer.reviews === null) return undefined;
+  const { branch } = reviewer.reviews;
+  const owners = all.filter(
+    (each) => each.sessionId !== reviewer.sessionId && each.repoRoot === reviewer.repoRoot && each.reviews === null && each.reviewOf === null && each.branch === branch,
+  );
+  return owners.length === 1 ? owners[0] : undefined;
+}
+
 const THE_USER: Orchestrator = { sessionId: 'user', name: 'you', zoneId: null, repoRoot: '', orchestrate: 'board', agent: null };
+
+/**
+ * Who had the daemon act, and how, for its log: the orchestrator agent by name and ref, or the user, from the shell
+ * whose token they used if any.
+ */
+const actedBy = (me: Orchestrator, how: string): string => {
+  if (me.agent !== null) return `orchestrator ${me.name}'s ${how} (agent:${me.sessionId})`;
+  return me === THE_USER ? `the user's ${how}` : `the user's ${how} from ${me.name} (${me.sessionId})`;
+};
 
 /** Where each scope reaches: the agents it may act on (besides its own), and the zones it may start agents in. */
 const SCOPES: Record<OrchestrateScope, { agent(me: Orchestrator, target: Agent): boolean; zone(me: Orchestrator, zone: Zone): boolean }> = {
@@ -127,8 +149,8 @@ const SCOPES: Record<OrchestrateScope, { agent(me: Orchestrator, target: Agent):
 /** How far each scope reaches, to compare two: an orchestrator never steers one whose scope is wider than its own. */
 const SCOPE_RANK: Record<OrchestrateScope, number> = { zone: 0, repo: 1, board: 2 };
 
-/** States an agent takes a message in: between turns, at its prompt (after a failed or rate-limited turn too). */
-const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'scheduled', 'failed', 'rate-limited']);
+/** States an agent takes a message in: between turns, at its prompt (after a failed or rate-limited turn too), or `starting`: the message queues behind its first prompt in the terminal. */
+const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['starting', 'idle', 'waiting', 'scheduled', 'failed', 'rate-limited']);
 
 export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
@@ -137,9 +159,9 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
     'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'resume' | 'stop' | 'finalMessage' | 'orchestrateFacts' | 'idlePrompted'
   >;
   zones: () => Zone[];
-  flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'remove'>;
+  flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
   /** Deletes the agent with its worktree and branch, as `agent.delete` without `force` does. */
-  deleteAgent(sessionId: string): Promise<void>;
+  deleteAgent(sessionId: string, why: string): Promise<void>;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
 }
@@ -321,6 +343,31 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     if (end === 'from') checkTarget(me, agent);
     else checkSteerable(me, agent);
     return agent;
+  };
+
+  /**
+   * A reviewer started on a branch is joined to the one agent that owns the branch, both ways, as manual edges (never
+   * to the orchestrator that started it): the findings back, and the next round. Another agent in scope, none, or
+   * several owning the branch, leaves it unlinked, and an edge already there is kept as it is.
+   */
+  const linkReviewer = (me: Orchestrator, reviewer: Agent) => {
+    if (reviewer.reviews === null) return;
+    const owner = reviewedAgent(agents.list(), reviewer);
+    if (owner === undefined || owner.sessionId === me.agent?.sessionId) return;
+    try {
+      edgeEnd(me, reviewer.sessionId, 'from');
+      edgeEnd(me, owner.sessionId, 'to');
+    } catch {
+      return;
+    }
+    // The reviewer is running by now: failing to join it must not fail its start.
+    try {
+      for (const [from, to] of [[reviewer, owner], [owner, reviewer]] as const) {
+        options.flowEdges.link(from.sessionId, to.sessionId, me.agent?.sessionId);
+      }
+    } catch (error) {
+      options.log(`could not link reviewer ${reviewer.name} to ${owner.name}: ${(error as Error).message}`);
+    }
   };
 
   /**
@@ -587,6 +634,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             );
             if (agent.description !== '') awaitingTurn.add(agent.sessionId);
             entry.on = agentTarget(agent);
+            linkReviewer(me, agent);
             return { ...agent, template: used.template };
           });
         },
@@ -735,7 +783,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
-            return agents.interrupt(agent.sessionId);
+            return agents.interrupt(agent.sessionId, actedBy(me, 'interrupt'));
           });
         },
 
@@ -755,7 +803,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               if (prompt !== undefined) checkText(prompt);
             }
             // Never forced: a busy shell is the user's to end.
-            return agents.resume(agent.sessionId, false, fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined);
+            return agents.resume(agent.sessionId, actedBy(me, 'restart'), false, fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined);
           });
         },
 
@@ -769,10 +817,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
-            if (!remove) return agents.stop(agent.sessionId);
+            if (!remove) return agents.stop(agent.sessionId, actedBy(me, 'close'));
             // The user's side removes any agent, as the user does in the app; never forced, so unsaved work stands.
             if (me.agent === null) {
-              await options.deleteAgent(agent.sessionId);
+              await options.deleteAgent(agent.sessionId, actedBy(me, 'remove'));
               return null;
             }
             if (!startedBy(me, agent)) {
@@ -786,7 +834,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                   'removing it would remove that too. Close it instead, and leave removing it to the user.',
               );
             }
-            await options.deleteAgent(agent.sessionId);
+            await options.deleteAgent(agent.sessionId, actedBy(me, 'remove'));
             return null;
           });
         },

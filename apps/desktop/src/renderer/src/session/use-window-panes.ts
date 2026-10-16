@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useToast } from '../ui';
 import { paneIds, setSplitRatio, type SplitDirection } from '@agent-board/daemon/pane-layout';
 import { isOwnedBy, type PackageScripts, type Shell } from '@agent-board/daemon/protocol';
 import {
@@ -43,7 +44,7 @@ import {
 } from './tabs';
 import { useLiveAgents, useLiveShells } from './use-live-board';
 import { draggedWithin, givesUp, surfaceDrag, surfaceMoveInto } from './window-drags';
-import { windowPaneKey, type WindowPaneKey } from './window-keys';
+import { ownTabNotice, windowPaneKey, type WindowPaneKey } from './window-keys';
 
 /** One pane of the window as it is drawn: where it is, and its strip's surfaces, the one it shows among them. */
 export interface PaneView {
@@ -428,6 +429,11 @@ export function useWindowPanes(
     const worst = worstState(shellStates.filter((shell) => shell.tab === tab.id).map((shell) => shell.state));
     if (worst !== undefined) dots.set(tabKey(tab.id), worst);
   }
+  const toasts = useToast();
+  /** ⌘W on an agent's own tab: it can't be closed, and must not close the app's window instead. */
+  const keepOwnTab = (repeat: boolean) => {
+    if (!repeat) toasts.show({ tone: 'info', message: ownTabNotice(owner.kind === 'shell' ? 'shell' : 'agent') });
+  };
   const closable = (surface: WindowSurface) => surface.kind !== 'tab' || surface.tab.id !== OWN_TAB || (owner.kind === 'shell' && tabs.length > 1);
   const close = (closeKey: string) => {
     const surface = byKey.get(closeKey);
@@ -568,11 +574,11 @@ export function useWindowPanes(
       if (closingKey !== undefined) return;
       const pressed = windowPaneKey(event.nativeEvent);
       if (pressed === undefined) return;
-      // A tab with no ×, an agent's own, leaves ⌘W to the app.
-      if (pressed.kind === 'close' && !closable(focusedPane.active)) return;
-      // Before the terminal, and the board, whose ⌘D duplicates its selection.
+      // Before the terminal, and the board, whose ⌘D duplicates its selection, and the app menu, whose ⌘W closes the OS window.
       event.preventDefault();
       event.stopPropagation();
+      // A tab with no ×, an agent's own, is not closed by ⌘W, nor is the window.
+      if (pressed.kind === 'close' && !closable(focusedPane.active)) return keepOwnTab(event.repeat);
       // A held key opens one tab or split, and closes one tab.
       if (event.repeat && (pressed.kind === 'newTab' || pressed.kind === 'close' || pressed.kind === 'split')) return;
       act(pressed, focusedPane);
@@ -583,6 +589,7 @@ export function useWindowPanes(
       const pane = panes.find((each) => each.id === paneId) ?? focusedPane;
       setFocusedPaneId(pane.id);
       if (pressed.kind !== 'close' || closable(pane.active)) act(pressed, pane);
+      else keepOwnTab(false);
       return true;
     },
   };

@@ -36,6 +36,8 @@ export const VIEW_KEYS = {
   connections: 'connections',
   /** How agent notes look: document cards or terminal cards. */
   agentNoteLook: 'agentNoteLook',
+  /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */
+  extendedShortcuts: 'keyboard.extendedShortcuts',
 } as const;
 
 /**

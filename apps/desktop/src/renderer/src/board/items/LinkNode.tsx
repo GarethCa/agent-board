@@ -5,6 +5,7 @@ import { imageUrl } from '../../../../shared/image-url';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { Trash2 } from 'lucide-react';
 import { IconButton, Kbd, Tag } from '../../ui';
+import { keyText } from '../../keys/registry';
 
 export const LINK_CARD_SIZE = { width: 280, height: 96 };
 const MIN_LINK_SIZE = { width: 160, height: 64 };
@@ -63,7 +64,7 @@ export const LinkNode = memo(function LinkNode({ data, selected: picked, draggin
           tooltip={
             <>
               Delete link card
-              <Kbd>⌫</Kbd>
+              <Kbd>{keyText('edit.delete')}</Kbd>
             </>
           }
           onClick={() => remove(item.id)}

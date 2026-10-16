@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyStep, paneFocusShortcut, windowShortcut, withPaneFocusShortcut, withWindowShortcut } from './keys';
+import { historyStep, paneFocusShortcut, windowShortcut, withPaneFocusShortcut, withWindowShortcut } from '.';
 
 const press = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   code,

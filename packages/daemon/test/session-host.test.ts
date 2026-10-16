@@ -135,7 +135,7 @@ describe('session host', () => {
     expect(() => sessions.start({ ...spec, hookTokenSha256: 'second' })).toThrow(/still live/);
 
     fake.exit(session.id, 1);
-    await sessions.kill(session.id);
+    await sessions.kill(session.id, 'a test');
     const again = sessions.start({ ...spec, hookTokenSha256: 'second' });
     expect(again).toMatchObject({ id: session.id, endedAt: null, exitCode: null });
     expect(sessions.list().map((s) => s.id)).toEqual([session.id]);
@@ -148,7 +148,7 @@ describe('session host', () => {
     const { sessions, session, fake, exited } = host();
 
     fake.exit(session.id, 5);
-    const ended = await sessions.kill(session.id);
+    const ended = await sessions.kill(session.id, 'a test');
 
     expect(ended).toMatchObject({ id: session.id, exitCode: 5, endedAt: expect.any(String) });
     expect(exited).toEqual([{ type: 'session.exited', sessionId: session.id, session: ended }]);
@@ -164,7 +164,7 @@ describe('sessions stopped by a restart', () => {
     const { db, sessions, session, fake } = host();
     const second = sessions.createShell({ cols: 80, rows: 24, cwd: '/' });
     fake.exit(second.id, 0);
-    await sessions.kill(second.id);
+    await sessions.kill(second.id, 'a test');
 
     // The daemon died here: the first session's row is still live.
     expect(reconcileLostSessions(db)).toBe(1);
@@ -175,7 +175,7 @@ describe('sessions stopped by a restart', () => {
   it('marks sessions the daemon ends as it shuts down as stopped by restart, but not one the user killed', async () => {
     const { db, sessions, session, fake, exited } = host();
     const second = sessions.createShell({ cols: 80, rows: 24, cwd: '/' });
-    const killed = sessions.kill(second.id);
+    const killed = sessions.kill(second.id, 'a test');
     fake.exit(second.id, 0);
     expect(await killed).toMatchObject({ stoppedByRestart: false });
 
@@ -191,7 +191,7 @@ describe('sessions stopped by a restart', () => {
     const { db, sessions, session, fake } = host();
     const second = sessions.createShell({ cols: 80, rows: 24, cwd: '/' });
     // The user's stop is still in its grace period, waiting for the process to go.
-    const stopping = sessions.kill(second.id);
+    const stopping = sessions.kill(second.id, 'a test');
 
     const shutdown = sessions.killAll({ stoppedByRestart: true });
     fake.exit(second.id, 0);
@@ -256,7 +256,7 @@ describe('saved scrollback', () => {
     const { sessions, session, fake } = host({ scrollbackDir, saveQuietMs: 60_000, saveMaxWaitMs: 60_000 });
     fake.emit(session.id, 'last words');
     fake.exit(session.id, 0);
-    await sessions.kill(session.id);
+    await sessions.kill(session.id, 'a test');
 
     const client = fakeSubscriber();
     sessions.attach(session.id, client.subscriber);
@@ -274,7 +274,7 @@ describe('saved scrollback', () => {
   it('starts a session over the scrollback it is restored from', async () => {
     const { sessions, session, fake } = host();
     fake.exit(session.id, 0);
-    await sessions.kill(session.id);
+    await sessions.kill(session.id, 'a test');
     const spec = { id: session.id, harness: null, command: '/bin/sh', args: [], cwd: '/', env: {}, cols: 80, rows: 24 };
     sessions.start({ ...spec, hookTokenSha256: 'again', restore: 'old output\r\n' });
     fake.emit(session.id, 'new prompt $ ');

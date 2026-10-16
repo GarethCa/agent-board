@@ -109,6 +109,11 @@ export interface FlowEdgeHost {
   turnBoundary(sessionId: string): void;
   /** Makes an edge, as `flowEdge.create` does, marked as made by `madeBy` (an orchestrator) if given. */
   create(params: unknown, madeBy?: string): FlowEdge;
+  /**
+   * Joins `from` to `to` with a manual edge carrying `from`'s final message, marked as made by `madeBy`, unless an edge
+   * already joins them that way, whoever made it. Returns the edge made, or undefined when there was one.
+   */
+  link(from: string, to: string, madeBy?: string): FlowEdge | undefined;
   /** The edge, if there is one. */
   get(id: string): FlowEdge | undefined;
   /** Deletes the edge, telling every client. Throws `invalidParams` for an unknown edge. */
@@ -839,6 +844,11 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     },
 
     create,
+
+    link: (from, to, madeBy) => {
+      if (selectPair.get(from, to) !== undefined) return undefined;
+      return create({ from, to, trigger: 'manual' }, madeBy);
+    },
 
     get: (id) => {
       const row = find(id);

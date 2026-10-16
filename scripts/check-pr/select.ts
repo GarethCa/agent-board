@@ -53,7 +53,9 @@ const FULL_GATE_GLOBS = [
  */
 const CORE_GLOBS = [
   'apps/desktop/src/renderer/src/{App,main}.tsx',
-  'apps/desktop/src/renderer/src/{harness,states,keys,errors,use-action}.ts',
+  'apps/desktop/src/renderer/src/{harness,states,errors,use-action}.ts',
+  // The key registry: every handler on every surface matches its keys through it.
+  'apps/desktop/src/renderer/src/keys/**/*.{ts,tsx}',
   'apps/desktop/src/renderer/src/ui/**/*.{ts,tsx}',
   'apps/desktop/src/renderer/src/chrome/**/*.{ts,tsx}',
   'apps/desktop/src/renderer/src/board/{Board,commands,representations,TileNode,HybridTile}.tsx',

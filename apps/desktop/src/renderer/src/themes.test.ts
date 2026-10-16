@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Appearance } from '../../shared/appearance';
+import type { Appearance, Mode } from '../../shared/appearance';
 import { followTheme } from './themes';
 
 /** A stand-in for `matchMedia('(prefers-color-scheme: dark)')` that the OS (or the Appearance setting) can flip. */
@@ -21,6 +21,8 @@ function scheme(dark: boolean) {
   };
 }
 
+const at = (mode: Mode, theme = 'agent-board'): Appearance => ({ mode, theme });
+
 /** A stand-in for the preload's Appearance API, which main can change from any window. */
 function setting(initial: Appearance) {
   const listeners = new Set<(appearance: Appearance) => void>();
@@ -40,7 +42,7 @@ function setting(initial: Appearance) {
 describe('followTheme', () => {
   it('under System, shows the theme for the window’s light or dark mode, and again whenever it switches', () => {
     const os = scheme(false);
-    const appearance = setting('system');
+    const appearance = setting(at('system'));
     const root = { dataset: {} as DOMStringMap };
     const stop = followTheme(root, os.query, appearance.source);
     expect(root.dataset.theme).toBe('light');
@@ -55,26 +57,28 @@ describe('followTheme', () => {
 
   it('shows a picked theme whatever the mode, and follows a pick made in any window', () => {
     const os = scheme(false);
-    const appearance = setting('dark');
+    const appearance = setting(at('dark'));
     const root = { dataset: {} as DOMStringMap };
     followTheme(root, os.query, appearance.source);
     expect(root.dataset.theme).toBe('dark');
-    appearance.pick('light');
+    appearance.pick(at('light'));
     expect(root.dataset.theme).toBe('light');
-    appearance.pick('system');
+    appearance.pick(at('system'));
     os.flip(true);
     expect(root.dataset.theme).toBe('dark');
   });
 
-  it('shows a theme pack by its id, and its light or dark mode for what follows the mode rather than one theme', () => {
+  it("shows a family's theme for the mode by its id, and its light or dark mode for what follows the mode rather than one theme", () => {
     const os = scheme(false);
-    const appearance = setting('catppuccin-mocha');
+    const appearance = setting(at('dark', 'catppuccin'));
     const root = { dataset: {} as DOMStringMap };
     followTheme(root, os.query, appearance.source);
     expect(root.dataset).toMatchObject({ theme: 'catppuccin-mocha', scheme: 'dark' });
-    appearance.pick('catppuccin-latte');
+    appearance.pick(at('system', 'catppuccin'));
     expect(root.dataset).toMatchObject({ theme: 'catppuccin-latte', scheme: 'light' });
-    appearance.pick('system');
-    expect(root.dataset).toMatchObject({ theme: 'light', scheme: 'light' });
+    os.flip(true);
+    expect(root.dataset).toMatchObject({ theme: 'catppuccin-mocha', scheme: 'dark' });
+    appearance.pick(at('system'));
+    expect(root.dataset).toMatchObject({ theme: 'dark', scheme: 'dark' });
   });
 });

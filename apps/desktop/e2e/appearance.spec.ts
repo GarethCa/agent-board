@@ -1,8 +1,10 @@
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { newShell, test, tempDataDir } from './launch.ts';
 
-// Settings › Appearance (AO1): System, Light, Dark or a theme pack. Tests launch with
+// Settings › Appearance: the mode, System, Light or Dark, and a theme family in the Theme popover. Tests launch with
 // AGENT_BOARD_APPEARANCE=light, the default when nothing was picked, so the developer's own macOS setting never shows
 // through.
 
@@ -62,16 +64,16 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
     expect(await desk(window)).toBe('rgb(246, 244, 239)');
 
     await openSettings(window);
-    const picker = window.getByRole('radiogroup', { name: 'Theme' });
-    await expect(picker.getByRole('radio', { name: 'Light' })).toBeChecked();
-    await picker.getByRole('radio', { name: 'Dark' }).check();
+    const mode = window.getByRole('group', { name: 'Mode' });
+    await expect(mode.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
+    await mode.getByRole('button', { name: 'Dark' }).click();
     await expect.poll(() => theme(window)).toBe('dark');
     expect(await desk(window)).toBe('rgb(27, 26, 25)');
     expect(await themeSource(app)).toBe('dark');
     await expect(window.getByText('Dark whatever macOS is set to.')).toBeVisible();
 
     // System follows macOS, live: here the window's own light or dark mode, emulated.
-    await picker.getByRole('radio', { name: /System/ }).check();
+    await mode.getByRole('button', { name: 'System' }).click();
     await expect.poll(() => themeSource(app)).toBe('system');
     await window.emulateMedia({ colorScheme: 'dark' });
     await expect.poll(() => theme(window)).toBe('dark');
@@ -82,7 +84,7 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
     await window.emulateMedia({ colorScheme: null });
 
     // Dark, kept: the next launch opens in it, before the daemon has answered anything.
-    await picker.getByRole('radio', { name: 'Dark' }).check();
+    await mode.getByRole('button', { name: 'Dark' }).click();
     await expect.poll(() => theme(window)).toBe('dark');
     await app.close();
     ({ app, window } = await launchUnpinned(dataDir));
@@ -90,44 +92,93 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
     // The window itself opened on the dark desk, so it never flashed the light one before the page painted.
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBackgroundColor())).toBe('#1B1A19');
     await openSettings(window);
-    await expect(window.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: 'Dark' })).toBeChecked();
+    await expect(window.getByRole('group', { name: 'Mode' }).getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
   } finally {
     await app.close();
   }
 });
 
-test('picks a theme pack in Settings, under its family and credit, and the window, its mode and its mark follow', async () => {
+test('picks a theme family in the Theme popover, by search and by keys, and the mode picks its light or dark theme', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launchUnpinned(dataDir);
   try {
     await expect.poll(() => theme(window)).toBe('light');
     await openSettings(window);
-    const catppuccin = window.getByRole('radiogroup', { name: 'Catppuccin' });
-    await expect(window.getByText('Catppuccin · MIT · github.com/catppuccin/catppuccin')).toBeVisible();
-    await expect(catppuccin.getByRole('radio')).toHaveCount(4);
-    await catppuccin.getByRole('radio', { name: /Catppuccin Mocha/ }).check();
+    const control = window.getByRole('button', { name: 'Theme: Agent Board' });
+    await control.click();
+    const popover = window.getByRole('dialog', { name: 'Themes' });
+    const themes = popover.getByRole('listbox', { name: 'Themes' });
+    await expect(themes.getByRole('option', { name: 'Agent Board' })).toHaveAttribute('aria-selected', 'true');
+    // Every family's choices are grouped under its name and credit; Catppuccin's extra dark flavours are choices of their own.
+    await expect(popover.getByText('Catppuccin · MIT · github.com/catppuccin/catppuccin')).toBeVisible();
+    await expect(themes.getByRole('group', { name: 'Catppuccin' }).getByRole('option')).toHaveCount(3);
+
+    // Search narrows the cards, accents and all; a click picks the family, and its light theme shows in Light.
+    await popover.getByRole('searchbox', { name: 'Search themes' }).fill('catpp');
+    await expect(themes.getByRole('option')).toHaveCount(3);
+    await themes.getByRole('option', { name: 'Catppuccin', exact: true }).click();
+    await expect.poll(() => theme(window)).toBe('catppuccin-latte');
+    expect(await themeSource(app)).toBe('light');
+    await expect(themes.getByRole('option', { name: 'Catppuccin', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+    // Esc closes it and gives focus back to the control, which now shows the family.
+    await window.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
+    await expect(window.getByRole('button', { name: 'Theme: Catppuccin' })).toBeFocused();
+    await expect(window.getByRole('dialog', { name: 'Board menu' })).toBeVisible();
+
+    // The mode picks the family's theme: Mocha in Dark, and under System whichever macOS is in.
+    const mode = window.getByRole('group', { name: 'Mode' });
+    await mode.getByRole('button', { name: 'Dark' }).click();
     await expect.poll(() => theme(window)).toBe('catppuccin-mocha');
     expect(await desk(window)).toBe('rgb(24, 24, 37)');
-    expect(await themeSource(app)).toBe('dark');
-    await expect(window.getByText('Catppuccin Mocha whatever macOS is set to.')).toBeVisible();
-    await expect(window.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: 'Dark' })).not.toBeChecked();
-    // Every dark theme takes the mark's dark colourway, not only the app's own.
     await expect(window.getByTestId('board-menu').getByTestId('brand-mark').locator('.brand-mark-dark')).toBeVisible();
+    await mode.getByRole('button', { name: 'System' }).click();
+    await window.emulateMedia({ colorScheme: 'light' });
+    await expect.poll(() => theme(window)).toBe('catppuccin-latte');
+    await window.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(() => theme(window)).toBe('catppuccin-mocha');
+    await window.emulateMedia({ colorScheme: null });
 
-    // Each family is a radio group of its own: Tab reaches it, and its arrow keys stay within it.
-    await catppuccin.getByRole('radio', { name: /Catppuccin Mocha/ }).focus();
-    await window.keyboard.press('ArrowUp');
-    await expect(catppuccin.getByRole('radio', { name: /Catppuccin Macchiato/ })).toBeFocused();
-    await expect.poll(() => theme(window)).toBe('catppuccin-macchiato');
-    await window.keyboard.press('Tab');
-    await expect(window.getByRole('radiogroup', { name: 'Rosé Pine' }).getByRole('radio').first()).toBeFocused();
-    await expect.poll(() => theme(window)).toBe('catppuccin-macchiato');
+    // By keys: ↓ from the search field reaches the first card, the arrows move between cards, ↵ picks.
+    await window.getByRole('button', { name: 'Theme: Catppuccin' }).click();
+    await popover.getByRole('searchbox', { name: 'Search themes' }).fill('nord');
+    await window.keyboard.press('ArrowDown');
+    await expect(themes.getByRole('option', { name: 'Nord' })).toBeFocused();
+    await window.keyboard.press('Enter');
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.appearance.get())).toMatchObject({ theme: 'nord' });
+    await popover.getByRole('searchbox', { name: 'Search themes' }).fill('');
+    await themes.getByRole('option', { name: 'Nord' }).focus();
+    await window.keyboard.press('ArrowRight');
+    await expect(themes.getByRole('option', { name: 'Gruvbox' })).toBeFocused();
+    await window.keyboard.press('ArrowLeft');
+    await expect(themes.getByRole('option', { name: 'Nord' })).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('button', { name: 'Theme: Nord' })).toBeFocused();
 
-    // A light pack puts the windows in light mode.
-    await window.getByRole('radiogroup', { name: 'Rosé Pine' }).getByRole('radio', { name: /Rosé Pine Dawn/ }).check();
-    await expect.poll(() => theme(window)).toBe('rose-pine-dawn');
-    expect(await themeSource(app)).toBe('light');
-    await expect(window.getByTestId('board-menu').getByTestId('brand-mark').locator('.brand-mark-light')).toBeVisible();
+    // A dark-only family shows the app's own light theme in Light, and says so.
+    await mode.getByRole('button', { name: 'Light' }).click();
+    await expect.poll(() => theme(window)).toBe('light');
+    await expect(window.getByTestId('theme-fallback')).toHaveText("Nord has no light theme, so light mode shows the app's own.");
+    await mode.getByRole('button', { name: 'Dark' }).click();
+    await expect.poll(() => theme(window)).toBe('nord');
+    await expect(window.getByTestId('theme-fallback')).toBeHidden();
+  } finally {
+    await app.close();
+  }
+});
+
+test('a theme saved on its own before themes were picked by family opens as its family, in its own mode', async () => {
+  const dataDir = tempDataDir();
+  writeFileSync(join(dataDir, 'appearance.json'), JSON.stringify({ appearance: 'gruvbox-light' }));
+  const { app, window } = await launchUnpinned(dataDir);
+  try {
+    await expect.poll(() => theme(window)).toBe('gruvbox-light');
+    await openSettings(window);
+    await expect(window.getByRole('button', { name: 'Theme: Gruvbox' })).toBeVisible();
+    await expect(window.getByRole('group', { name: 'Mode' }).getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
+    await window.getByRole('group', { name: 'Mode' }).getByRole('button', { name: 'Dark' }).click();
+    await expect.poll(() => theme(window)).toBe('gruvbox-dark');
   } finally {
     await app.close();
   }
@@ -136,8 +187,8 @@ test('picks a theme pack in Settings, under its family and credit, and the windo
 test("the terminal takes the theme's well and palette, live, and a popped-out window follows a pick made on the board", async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launchUnpinned(dataDir, SHELL_ENV);
-  const pick = (appearance: 'light' | 'dark' | 'catppuccin-latte') =>
-    window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), appearance);
+  const pick = (mode: 'light' | 'dark', family = 'agent-board') =>
+    window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), { mode, theme: family });
   try {
     await newShell(window);
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
@@ -148,7 +199,7 @@ test("the terminal takes the theme's well and palette, live, and a popped-out wi
     await expect.poll(() => terminalColours(window)).toEqual(DARK_TERMINAL);
 
     // A light theme pack's terminal is still dark: its dark sibling's well and palette.
-    await pick('catppuccin-latte');
+    await pick('light', 'catppuccin');
     await expect.poll(() => terminalColours(window)).toEqual(LATTE_TERMINAL);
     await pick('dark');
 
@@ -170,7 +221,7 @@ test("the terminal takes the theme's well and palette, live, and a popped-out wi
 test("the board menu shows the app's mark, in the dark colourway in the dark theme, and the empty board its plain mark", async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launchUnpinned(dataDir);
-  const pick = (appearance: 'light' | 'dark') => window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), appearance);
+  const pick = (mode: 'light' | 'dark') => window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), { mode, theme: 'agent-board' });
   /** Whether `img` is shown and its file loaded (the page's CSP refuses anything but the app's own files). */
   const loaded = (img: Locator) => img.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0);
   const mark = window.getByTestId('board-menu').getByTestId('brand-mark');

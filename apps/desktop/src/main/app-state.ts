@@ -18,7 +18,7 @@ export type DockIcon = `dock-${Colourway}-${AppState}`;
  * States a live agent counts as working in: mid-turn, a rate-limited one included, as it carries on by itself. An
  * idle or scheduled agent sits at its prompt and is quiet.
  */
-const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off']);
+const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off', 'starting']);
 
 /** The app's state, and how many agents wait for the user (the needs-you inbox's unseen asks). */
 export interface AppStatus {

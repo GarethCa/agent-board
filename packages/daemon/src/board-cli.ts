@@ -72,7 +72,7 @@ CONCEPTS
           it changes nothing about its session.
   tile    One session on the board, in a zone or loose: an agent or a shell.
   agent   A session running claude or codex in its own git worktree and branch. It has a
-          state (running, thinking, waiting, needs-permission, idle, rate-limited, failed,
+          state (starting, running, thinking, waiting, needs-permission, idle, rate-limited, failed,
           done, ...) and a status: one line it sets to say what it is doing now.
   shell   A tile of plain shell panes.
   edge    A flow from one agent to another. When the first hands off (it runs
@@ -331,6 +331,12 @@ reviewer by itself (\`agent-board handoff\`, or as its turn ends), once the gate
   agent-board edge add impl review --carries handover --path .agent-board/handover.md \\
     --condition 'gate:pnpm check:local'
 A gate or script condition runs nothing until the user approves it in the edge's rules.
+
+A reviewer you start from an agent's branch (--base agent:impl, or --base <its branch>) is joined to that
+agent by itself, both ways, as manual edges: findings back, and the next round. Wire them to hand off
+by themselves with edge add, reviewer to impl (findings back) and impl to reviewer (next round), but
+keep one of the two manual: two auto edges in a loop re-trigger each other, and a loop of them is
+refused. Never join them to your own tile: lines from you to every agent you start only clutter the board.
 
 Keep the crew tidy as it grows: arrange lays out your zone, you first, then one cluster per
 issue (or unit of work): its label, an agent note saying where each agent stands,

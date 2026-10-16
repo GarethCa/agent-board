@@ -1,4 +1,5 @@
 // The platform's command key: ⌘ on macOS, Ctrl elsewhere, for the app's own shortcuts and how they are written.
+import { pressed } from './registry';
 
 /** Whether this is macOS. */
 export const isMac = navigator.platform.startsWith('Mac');
@@ -11,20 +12,13 @@ export function commandKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>): b
 
 /** Whether `event` asks to undo (⌘Z) or redo (⇧⌘Z, or ⌘Y): the board's history keys, wherever they are pressed. */
 export function historyStep(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'key'>): 'undo' | 'redo' | undefined {
-  if (event.altKey || !commandKey(event)) return undefined;
-  const key = event.key.toLowerCase();
-  if (key === 'z') return event.shiftKey ? 'redo' : 'undo';
-  return key === 'y' && !event.shiftKey ? 'redo' : undefined;
+  if (pressed('edit.undo', event)) return 'undo';
+  return pressed('edit.redo', event) ? 'redo' : undefined;
 }
 
 /** Whether the focus is in a dialog or a menu, whose keys are their own. */
 export function inOverlay(): boolean {
   return document.activeElement?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') != null;
-}
-
-/** A shortcut with the command key as the platform writes it: `⌘K`, or `Ctrl+K`. */
-export function withCommand(key: string): string {
-  return mac ? `⌘${key}` : `Ctrl+${key}`;
 }
 
 /** The key that turns the wheel into a zoom on the board, as React Flow names it: the command key. */

@@ -1,3 +1,4 @@
+import { systemClock, type Clock } from './clock.ts';
 import { lastMessageAfterHook } from './claude-state.ts';
 import { stateAfterHook } from './harness-state.ts';
 import { stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
@@ -18,6 +19,12 @@ function isStaleAfterInterrupt(payload: Record<string, unknown>): boolean {
   return typeof event === 'string' && TURN_WORK_HOOKS.has(event);
 }
 
+/** How long output may go unaccompanied by a hook before an agent stops `starting`: hooks are late, not lost, up to here. */
+const STARTING_OUTPUT_GRACE_MS = 5_000;
+
+/** The longest an agent shows `starting`, hook or not. */
+const STARTING_MAX_MS = 60_000;
+
 /** What turning hooks into an agent's state reads of its row. */
 export interface HookStateRow {
   session_id: string;
@@ -34,6 +41,9 @@ interface HookStateOptions<Row extends HookStateRow> {
   save(row: Row, state: SessionState, next: readonly Subagent[], always: boolean): void;
   /** Marks the agent's state as not yet seen: a new ask. */
   unsee(sessionId: string): void;
+  clock?: Clock;
+  /** The agent left `starting` without a hook: its output came, or it gave up waiting. */
+  startingEnded(sessionId: string): void;
   /** The agent's own turn ended with `finalMessage`. */
   /** Keeps the final message of the agent's own turn that just ended, before the state that says so is saved. */
   recordFinal(sessionId: string, finalMessage: string): void;
@@ -69,6 +79,23 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
    * `permission_prompt` notification then is the late echo of that prompt, not a new one.
    */
   const permissionSettled = new Set<string>();
+  const clock = options.clock ?? systemClock;
+  /**
+   * Agents started with a first prompt, whose session has sent no hook yet: their first turn hasn't begun. Each leaves
+   * on its first hook, or without one: on output once `STARTING_OUTPUT_GRACE_MS` have passed (the session is up and
+   * drawing but its hooks aren't arriving), or after `STARTING_MAX_MS` whatever happens, so it never sticks.
+   */
+  const starting = new Map<string, { since: number; cancel: () => void }>();
+  const stopStarting = (sessionId: string): boolean => {
+    const entry = starting.get(sessionId);
+    if (entry === undefined) return false;
+    entry.cancel();
+    starting.delete(sessionId);
+    return true;
+  };
+  const giveUpStarting = (sessionId: string) => {
+    if (stopStarting(sessionId)) options.startingEnded(sessionId);
+  };
 
   /**
    * Whether the agent's last message asks the user something: its last paragraph has a question mark. A turn that ends
@@ -90,6 +117,21 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     (row.state === 'idle' || (row.state === 'waiting' && idlePrompted.has(row.session_id)));
 
   return {
+    /** The agent was started with a first prompt: it shows `starting` until its session's first hook. */
+    promptQueued(sessionId: string) {
+      stopStarting(sessionId);
+      starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS) });
+    },
+
+    /** The agent's session printed something: past the grace, an agent still `starting` with no hook stops. */
+    outputSeen(sessionId: string) {
+      const entry = starting.get(sessionId);
+      if (entry !== undefined && clock.now() - entry.since >= STARTING_OUTPUT_GRACE_MS) giveUpStarting(sessionId);
+    },
+
+    /** Whether the agent's session has yet to send its first hook, with a first prompt queued. */
+    isStarting: (sessionId: string) => starting.has(sessionId),
+
     /** What the agent last said to the user, if anything. */
     lastMessage: (sessionId: string) => lastMessages.get(sessionId),
 
@@ -134,6 +176,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
      */
     onHook(row: Row, payload: Record<string, unknown>, signal: AbortSignal): Promise<HookReply> | undefined {
       const sessionId = row.session_id;
+      const prompted = stopStarting(sessionId);
       if (payload.hook_event_name === 'UserPromptSubmit') {
         interrupted.delete(sessionId);
         noMessage.delete(sessionId);
@@ -165,7 +208,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       const next = subagentsAfterHook(subagents.of(sessionId), payload, new Date());
       const pending = permissions.prompts(sessionId).length;
       // An agent started with no task has nothing to run yet: its session starting leaves it idle for its first message.
-      const awaitingTask = payload.hook_event_name === 'SessionStart' && row.state === 'idle' && row.description === '';
+      const awaitingTask = payload.hook_event_name === 'SessionStart' && row.state === 'idle' && row.description === '' && !prompted;
       const state = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
       const idlePrompt = payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt';
       if (idlePrompt && row.state === 'idle' && state === 'waiting') idlePrompted.add(sessionId);
@@ -208,6 +251,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     /** The agent's process exited. Its tile still shows what it last said. */
     ended(sessionId: string) {
+      stopStarting(sessionId);
       permissionSettled.delete(sessionId);
       interrupted.delete(sessionId);
       idlePrompted.delete(sessionId);
@@ -216,6 +260,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     /** The agent was deleted. */
     deleted(sessionId: string) {
+      stopStarting(sessionId);
       noMessage.delete(sessionId);
       idlePrompted.delete(sessionId);
       drafting.delete(sessionId);

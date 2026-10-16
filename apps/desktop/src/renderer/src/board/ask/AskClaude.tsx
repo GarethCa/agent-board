@@ -4,7 +4,8 @@ import { Sparkles } from 'lucide-react';
 import type { Agent, BoardItem, Connector, Zone } from '@agent-board/daemon/protocol';
 import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import { errorMessage } from '../../../../shared/errors';
-import { commandKey, inOverlay } from '../../keys';
+import { inOverlay } from '../../keys';
+import { keyText, pressed } from '../../keys/registry';
 import { AnchoredPopover, Button, Checkbox, ErrorText, Kbd, Segmented, Textarea } from '../../ui';
 import type { Rect } from '../../geometry';
 import { AgentSetupChips, type AgentSetup } from '../AgentSetup';
@@ -110,7 +111,7 @@ export function useAskClaude({ loaded, zones, connectors, zoneLayouts, onStarted
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!commandKey(event) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'a' || isTyping(event) || inOverlay()) return;
+      if (!pressed('make.askClaude', event) || isTyping(event) || inOverlay()) return;
       event.preventDefault();
       open();
     };
@@ -289,7 +290,7 @@ function AskClaudePopover({
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={sending || question.trim() === ''}>
-            {sending ? 'Asking…' : 'Ask'} <Kbd>↵</Kbd>
+            {sending ? 'Asking…' : 'Ask'} <Kbd>{keyText('dialog.pick')}</Kbd>
           </Button>
         </div>
       </form>

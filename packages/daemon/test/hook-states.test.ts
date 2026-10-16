@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createFakeClock } from './fake-clock.ts';
 import { createHookStates, type HookStateRow } from '../src/hook-states.ts';
 import { createPermissionHolds, type PermissionHolds } from '../src/permissions.ts';
 import type { SessionState } from '../src/protocol.ts';
@@ -20,6 +21,8 @@ afterEach(() => holds?.close());
 /** Hook states over the agent `start`, recording what is saved, unseen and finished. */
 function setup(start: HookStateRow) {
   let current = start;
+  const clock = createFakeClock(new Date('2026-01-01T00:00:00Z'));
+  const startingEnded: string[] = [];
   const saved: { state: SessionState; always: boolean }[] = [];
   const unseen: string[] = [];
   const finished: [string, string][] = [];
@@ -34,12 +37,72 @@ function setup(start: HookStateRow) {
       current = { ...saving, state };
     },
     unsee: (sessionId) => void unseen.push(sessionId),
+    clock,
+    startingEnded: (sessionId) => void startingEnded.push(sessionId),
     recordFinal: (_sessionId, finalMessage) => void order.push(`record ${finalMessage}`),
     finished: (sessionId, finalMessage) => void finished.push([sessionId, finalMessage]),
   });
   const hook = (payload: Record<string, unknown>) => states.onHook(current, payload, new AbortController().signal);
-  return { states, hook, saved, unseen, finished, order, row: () => current };
+  return { states, hook, saved, unseen, finished, order, clock, startingEnded, row: () => current };
 }
+
+describe('a starting agent', () => {
+  it('is starting from its first prompt until its first hook', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    states.promptQueued('a');
+    expect(states.isStarting('a')).toBe(true);
+    hook({ hook_event_name: 'SessionStart' });
+    expect(states.isStarting('a')).toBe(false);
+    expect(now().state).toBe('running');
+  });
+
+  it('stops being on output only once hooks have been late for a while', () => {
+    const { states, clock, startingEnded } = setup(row('a'));
+    states.promptQueued('a');
+    states.outputSeen('a'); // the TUI drawing, as every session does at once
+    expect(states.isStarting('a')).toBe(true);
+    clock.advance(5_000);
+    states.outputSeen('a');
+    expect(states.isStarting('a')).toBe(false);
+    expect(startingEnded).toEqual(['a']);
+  });
+
+  it('gives up after a bounded time with no hook and no output, and says so', () => {
+    const { states, clock, startingEnded } = setup(row('a'));
+    states.promptQueued('a');
+    clock.advance(59_999);
+    expect(states.isStarting('a')).toBe(true);
+    clock.advance(1);
+    expect(states.isStarting('a')).toBe(false);
+    expect(startingEnded).toEqual(['a']);
+    expect(clock.pending()).toBe(0);
+  });
+
+  it('leaves no timer behind once a hook, the end or a delete ends it', () => {
+    const { states, hook, clock, startingEnded } = setup(row('a'));
+    states.promptQueued('a');
+    hook({ hook_event_name: 'SessionStart' });
+    states.promptQueued('a');
+    states.ended('a');
+    states.promptQueued('a');
+    states.deleted('a');
+    expect(clock.pending()).toBe(0);
+    expect(startingEnded).toEqual([]);
+  });
+
+  it("is not kept idle by its first hook when only a role template, not a typed task, is its prompt", () => {
+    const { states, hook, row: now } = setup(row('a', { description: '' }));
+    states.promptQueued('a');
+    hook({ hook_event_name: 'SessionStart' });
+    expect(now().state).toBe('running');
+  });
+
+  it('with no prompt at all, stays idle on its first hook', () => {
+    const { hook, row: now } = setup(row('a', { description: '' }));
+    hook({ hook_event_name: 'SessionStart' });
+    expect(now().state).toBe('idle');
+  });
+});
 
 describe('hook states', () => {
   it('keeps the final message before it saves the state that says the turn ended, and announces it then', () => {

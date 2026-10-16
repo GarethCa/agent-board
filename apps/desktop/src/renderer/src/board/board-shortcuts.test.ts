@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { setExtendedShortcuts } from '../keys/extended-shortcuts';
 import { boardKey, boardShortcut, quickInsertAt } from './board-shortcuts';
 
 const press = (key: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'repeat', boolean>> = {}) => ({
@@ -37,7 +38,19 @@ describe("the board's single-key shortcuts", () => {
     expect(boardShortcut(press('/', { shiftKey: true }))).toEqual({ kind: 'insert' });
     expect(boardShortcut(press('/', { metaKey: true }))).toBeUndefined();
     expect(boardShortcut(press('/', { repeat: true }))).toBeUndefined();
-    expect(boardShortcut(press('?', { shiftKey: true }))).toBeUndefined();
+  });
+
+  it('open the cheat sheet with ?, only while the extended keys are on', () => {
+    vi.stubGlobal('window', { agentBoard: { view: { set: async () => {} } } });
+    try {
+      expect(boardShortcut(press('?', { shiftKey: true }))).toEqual({ kind: 'cheatSheet' });
+      setExtendedShortcuts(false);
+      expect(boardShortcut(press('?', { shiftKey: true }))).toBeUndefined();
+      expect(boardShortcut(press('n'))).toEqual({ kind: 'note' });
+    } finally {
+      setExtendedShortcuts(true);
+      vi.unstubAllGlobals();
+    }
   });
 
   it('pick select with V, box select with B and the hand with H', () => {

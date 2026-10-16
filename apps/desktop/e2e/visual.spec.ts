@@ -432,6 +432,85 @@ for (const { theme, suffix } of [
   });
 }
 
+/** Settings › Appearance's Mode switch and Theme control, and the Theme popover open over the board menu (CV2). */
+for (const { theme, suffix } of [
+  { theme: 'light', suffix: '' },
+  { theme: 'dark', suffix: '-dark' },
+] as const) {
+  test(`the Theme control and its popover, ${theme}`, async () => {
+    needsBaselines(`theme-control${suffix}`, `theme-popover${suffix}`);
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await window.getByRole('button', { name: 'Board menu' }).click();
+      const mode = window.getByRole('group', { name: 'Mode' });
+      const control = window.getByRole('button', { name: 'Theme: Agent Board' });
+      await control.scrollIntoViewIfNeeded();
+      await expect(mode.getByRole('button', { name: theme === 'dark' ? 'Dark' : 'Light' })).toHaveAttribute('aria-pressed', 'true');
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      // The fieldsets, the outer of each name (the Mode switch inside its fieldset is a group named Mode too).
+      const top = (await mode.first().boundingBox())!;
+      const bottom = (await window.getByRole('group', { name: 'Theme' }).first().boundingBox())!;
+      const clip = { x: top.x - 8, y: top.y - 8, width: Math.max(top.width, bottom.width) + 16, height: bottom.y + bottom.height - top.y + 16 };
+      await expect.soft(window).toHaveScreenshot(`theme-control${suffix}.png`, { ...SHOT, clip });
+      await restorePointer();
+
+      await control.click();
+      const popover = window.getByRole('dialog', { name: 'Themes' });
+      await expect(popover.getByRole('option', { name: 'Agent Board' })).toHaveAttribute('aria-selected', 'true');
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(popover).toHaveScreenshot(`theme-popover${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close().catch(() => {});
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+for (const { theme, suffix } of [
+  { theme: 'light', suffix: '' },
+  { theme: 'dark', suffix: '-dark' },
+] as const) {
+  test(`the keyboard cheat sheet over the board, opened with ? on a selected tile, ${theme}`, async () => {
+    needsBaselines(`cheat-sheet${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Pick a database');
+      await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+
+      await tile(window).click({ position: { x: 40, y: 70 } });
+      await window.keyboard.press('?');
+      await expect(window.getByRole('dialog', { name: 'Keyboard' })).toBeVisible();
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`cheat-sheet${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close().catch(() => {});
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 /** The board menu with more zones than fit a short window: it stays inside the window, scrolls, and its last control can be reached. */
 test('the board menu with a dozen zones in a short window stays inside it and scrolls to Settings', async () => {
   needsBaselines('board-menu-overflow');
@@ -469,6 +548,41 @@ test('the board menu with a dozen zones in a short window stays inside it and sc
     await last.scrollIntoViewIfNeeded();
     await expect(last).toBeInViewport();
     await last.click({ trial: true });
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the compact window setting: Off by default, then a custom window with its field', async () => {
+  needsBaselines('settings-compact-window', 'settings-compact-window-custom');
+  const { dir, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await window.getByRole('button', { name: 'Board menu' }).click();
+    const menu = window.getByRole('dialog', { name: 'Board menu' });
+    await expect(menu).toBeVisible();
+    const select = menu.getByLabel("Compact agents' context at");
+    await expect(select).toHaveValue('0');
+    await select.selectOption('custom');
+    const custom = menu.getByLabel('Custom window, in tokens');
+    await custom.fill('300000');
+    await custom.press('Enter');
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.flowEdges.settings().then((settings) => settings.compactWindow))).toBe(300_000);
+    // The range comes from one place: a window outside it is refused and the field goes back.
+    await custom.fill('50000');
+    await custom.press('Enter');
+    await expect(custom).toHaveValue('300000');
+    await select.scrollIntoViewIfNeeded();
+    const restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(menu.locator('.ui-field', { hasText: "Compact agents' context at" })).toHaveScreenshot('settings-compact-window.png', SHOT);
+    await expect.soft(menu.locator('.ui-field', { hasText: 'Custom window, in tokens' })).toHaveScreenshot('settings-compact-window-custom.png', SHOT);
+    await restorePointer();
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);

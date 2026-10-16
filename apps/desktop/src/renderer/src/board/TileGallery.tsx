@@ -10,8 +10,12 @@ const AT = '2026-01-01T00:00:00.000Z';
 /** Far enough ahead that the clock badge reads the same date whenever the gallery is shown. */
 const NEXT_RUN = new Date(2099, 0, 1, 9, 0).toISOString();
 
+/** The states the gallery shows: `starting` is drawn as `running`, so it has no tile of its own. */
+type GalleryState = Exclude<AgentState, 'starting'>;
+const GALLERY_STATES = AGENT_STATES.filter((state): state is GalleryState => state !== 'starting');
+
 /** What each state's tile carries besides its state, so the gallery also shows PRs, an issue, schedules and more. */
-const EXTRAS: Record<AgentState, { harness: Harness; name: string } & Partial<Agent>> = {
+const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<Agent>> = {
   running: {
     harness: 'claude',
     name: 'Add the dock',
@@ -110,7 +114,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   spawnedBy: null,
   status: null,
   workFinishedAt: null,
-  ...EXTRAS[state],
+  ...EXTRAS[state === 'starting' ? 'running' : state],
 });
 
 /** A crowded tile: a long name, every badge, and more than fits, which folds into its "+N". */
@@ -220,7 +224,7 @@ export function TileGallery() {
   return (
     <HandoffsContext value={HANDOFFS}>
       <div className="tile-gallery" data-testid="tile-gallery">
-        {AGENT_STATES.map((state) => {
+        {GALLERY_STATES.map((state) => {
           const agent = galleryAgent(state);
           return (
             <div key={state} style={AGENT_TILE_SIZE}>
