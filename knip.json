@@ -36,6 +36,7 @@
     "packages/fake-harness": {
       "entry": [
         "src/cli/*.ts",
+        "src/vitest/watchdog.ts",
         "test/fixtures/**/*.ts"
       ],
       "project": [

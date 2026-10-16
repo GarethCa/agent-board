@@ -1,12 +1,13 @@
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
-import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
+import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type HookEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
-import { newAgent, openBoardSession } from '../src/board-ops.ts';
+import { BoardRefs, identifyView, newAgent, openBoardSession, readBoard, treeView } from '../src/board-ops.ts';
+import { runBoardCommand } from '../src/board-cli.ts';
 import { paneIds } from '../src/pane-layout.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -16,11 +17,8 @@ const SIZE = { cols: 120, rows: 40 };
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with two zones of one repo and one of another.
  * Their agents may not orchestrate unless a test lets them: the zones' setting is off.
  */
-async function orchestrateDaemon() {
-  const daemon = await startTestDaemon({
-    worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200 }),
-  });
+async function orchestrateDaemon(options: { dataDir?: string; home?: string } = {}) {
+  const daemon = await startOrchestrateDaemon(options);
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
   const repo = tempRepo();
@@ -33,6 +31,15 @@ async function orchestrateDaemon() {
 }
 
 type Setup = Awaited<ReturnType<typeof orchestrateDaemon>>;
+
+/** A daemon whose agents play the `orchestrate` scenario, in `dataDir` and with the fakes' `home` (fresh by default). */
+function startOrchestrateDaemon({ dataDir, home = tempDataDir() }: { dataDir?: string; home?: string }) {
+  return startTestDaemon({
+    ...(dataDir === undefined ? {} : { dataDir }),
+    worktreesDir: tempDataDir(),
+    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home, idleNotifyMs: 200 }),
+  });
+}
 
 /** Waits for an update in which the agent matches `match`. */
 async function untilAgent(recorder: Setup['recorder'], sessionId: string, match: (agent: Agent) => boolean): Promise<Agent> {
@@ -69,6 +76,17 @@ async function agentSideOf(setup: Setup, sessionId: string) {
 async function userAgent(client: DaemonClient, zoneId: string, name: string) {
   return client.call('agent.spawn', { zoneId, name, ...SIZE });
 }
+
+/** Starts `agent-board mcp` from source as the agent holding `token`. */
+const mcpAs = (setup: Setup, token: string) =>
+  new McpClient(
+    {
+      command: TEST_CLI_LAUNCHER.command,
+      args: [...TEST_CLI_LAUNCHER.args, 'mcp'],
+      env: { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: token },
+    },
+    tempDataDir(),
+  );
 
 describe('letting an agent orchestrate', () => {
   it('is off by default, and only the user turns it on', async () => {
@@ -661,8 +679,8 @@ describe('steering a turn', () => {
 
     const any = await connection.call('orchestrator.wait', { token, sessionIds: [quick.sessionId, slow.sessionId], any: true });
     expect(any.timedOut).toBe(false);
-    // The slow one's turn hasn't ended: it is still on its way, or hasn't begun.
-    expect(['idle', 'running']).toContain(any.agents.find((agent) => agent.name === 'slow')!.state);
+    // The slow one's turn hasn't ended: it hasn't begun, or is on its way (on a loaded machine it may be thinking already).
+    expect(['idle', 'running', 'thinking']).toContain(any.agents.find((agent) => agent.name === 'slow')!.state);
     await expect(connection.call('orchestrator.read', { token, sessionId: slow.sessionId })).rejects.toMatchObject({
       message: expect.stringMatching(/has not finished a turn yet/),
     });
@@ -877,17 +895,6 @@ describe('an orchestrator agent, over the board MCP and CLI', () => {
 });
 
 describe('agent-board mcp for an orchestrator', () => {
-  /** Starts `agent-board mcp` from source as the agent holding `token`. */
-  const mcpAs = (setup: Setup, token: string) =>
-    new McpClient(
-      {
-        command: TEST_CLI_LAUNCHER.command,
-        args: [...TEST_CLI_LAUNCHER.args, 'mcp'],
-        env: { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: token },
-      },
-      tempDataDir(),
-    );
-
   it('tells an orchestrator so, and lists the control tools to it alone', async () => {
     const setup = await orchestrateDaemon();
     const lead = await agentSide(setup, setup.zone.id, 'zone');
@@ -896,7 +903,8 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'set_status', 'open_pr', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'add_edge', 'list_edges', 'remove_edge', 'close',
+      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'set_status', 'open_pr', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'restart', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'add_note',
+      'edit_note', 'remove_note', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
@@ -925,6 +933,300 @@ describe('agent-board mcp for an orchestrator', () => {
     expect(edge).toMatchObject({ from: impl.sessionId, to: review.sessionId, payload: 'handover', madeBy: lead.agent.sessionId });
     expect(await mcp.callTool('remove_edge', { edge: `edge:${edge!.id}` })).toMatchObject({ isError: false, text: expect.stringMatching(/^Removed edge:/) });
     expect(await setup.client.call('flowEdge.list')).toEqual([]);
+  });
+});
+
+describe('the app’s default roles over the tools', () => {
+  it('an orchestrator sets one, logged as it, and an agent it starts in that role begins with it', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'board');
+    const mcp = mcpAs(setup, lead.token);
+
+    expect(await mcp.callTool('set_role', { name: 'designer', template: 'Draw on {{branch}}.' })).toMatchObject({
+      isError: false,
+      text: expect.stringContaining('Set the default role designer'),
+    });
+    expect(await mcp.callTool('roles', {})).toMatchObject({ isError: false, text: 'designer  Draw on {{branch}}.' });
+    const started = await mcp.callTool('new_agent', { prompt: 'Mock it', name: 'mocks', role: 'designer' });
+    expect(started).toMatchObject({ isError: false, text: expect.stringMatching(/mocks {2}\[\S+\] {2}\(designer\)/) });
+    const [line] = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId, limit: 2 });
+    expect(line).toMatchObject({ action: 'spawn' });
+    const [, set] = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId, limit: 2 });
+    expect(set).toMatchObject({ action: 'set-role', targetName: 'designer', outcome: 'done' });
+
+    expect(await mcp.callTool('remove_role', { name: 'designer' })).toMatchObject({ isError: false });
+    expect(await mcp.callTool('remove_role', { name: 'designer' })).toMatchObject({ isError: true, text: expect.stringContaining('no default role designer') });
+  });
+
+  it('lets only a board-scope orchestrator change the app’s list; a narrower one sets its own zone’s template', async () => {
+    const setup = await orchestrateDaemon();
+    for (const scope of ['zone', 'repo'] as const) {
+      const { token, connection } = await agentSide(setup, setup.zone.id, scope);
+      await expect(connection.call('orchestrator.setRole', { token, name: 'designer', body: 'x' })).rejects.toMatchObject({
+        code: BOARD_ERROR.outOfScope,
+        message: expect.stringContaining('board'),
+      });
+      await expect(connection.call('orchestrator.removeRole', { token, name: 'designer' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+      const [refused] = await setup.client.call('orchestrator.activity', { limit: 1 });
+      expect(refused).toMatchObject({ action: 'remove-role', outcome: 'refused' });
+    }
+    expect(await setup.client.call('orchestrator.roles', {})).toEqual([]);
+
+    const zoneLead = await agentSide(setup, setup.zone.id, 'zone');
+    const set = await zoneLead.connection.call('orchestrator.setRole', { token: zoneLead.token, name: 'designer', body: 'Zone design.', zoneId: setup.zone.id });
+    expect(set).toMatchObject({ name: 'designer', body: 'Zone design.' });
+    expect((await setup.client.call('zone.roleTemplates', { id: setup.zone.id })).find((each) => each.role === 'designer')).toMatchObject({
+      body: 'Zone design.',
+      appDefault: false,
+    });
+    await expect(
+      zoneLead.connection.call('orchestrator.setRole', { token: zoneLead.token, name: 'designer', body: 'x', zoneId: setup.other.id }),
+    ).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await zoneLead.connection.call('orchestrator.removeRole', { token: zoneLead.token, name: 'designer', zoneId: setup.zone.id });
+    expect((await setup.client.call('zone.roleTemplates', { id: setup.zone.id })).find((each) => each.role === 'designer')).toBeUndefined();
+
+    const boardLead = await agentSide(setup, setup.zone.id, 'board');
+    expect(await boardLead.connection.call('orchestrator.setRole', { token: boardLead.token, name: 'designer', body: 'App design.' })).toMatchObject({
+      name: 'designer',
+    });
+  });
+
+  it('refuses an agent that may not orchestrate', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+
+    await expect(connection.call('orchestrator.setRole', { token, name: 'designer', body: 'x' })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await expect(connection.call('orchestrator.roles', { token })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+});
+
+describe('restarting an ended agent', () => {
+  /** Ends the agent, as the user stopping it would, and resolves once its pane has dropped into its shell. */
+  const end = async (setup: Setup, sessionId: string) => {
+    const before = setup.recorder.events.length;
+    await setup.client.call('agent.stop', { sessionId });
+    return untilAgentAfter(setup, before, sessionId, (agent) => agent.endedAt !== null && agent.shellSessionId !== null);
+  };
+
+  /** Waits for an update to the agent, sent after the `before`th event, in which it matches `match`. */
+  const untilAgentAfter = async (setup: Setup, before: number, sessionId: string, match: (agent: Agent) => boolean) => {
+    const event = await setup.recorder.waitFor(
+      (e: DaemonEvent): e is AgentUpdatedEvent =>
+        e.type === 'agent.updated' && e.agent.sessionId === sessionId && match(e.agent) && setup.recorder.events.indexOf(e) >= before,
+    );
+    return event.agent;
+  };
+
+  /** Resolves with the agent's SessionStart, sent after the `before`th event. */
+  const sessionStartAfter = (setup: Setup, before: number, sessionId: string) =>
+    setup.recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent =>
+        e.type === 'hook' && e.sessionId === sessionId && e.event === 'SessionStart' && setup.recorder.events.indexOf(e) >= before,
+    );
+
+  it('restarts an ended agent in its scope in place, carrying on its conversation, over the CLI and the MCP, and logs it', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    const ref = `agent:${worker.sessionId.slice(0, 4)}`;
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+
+    await end(setup, worker.sessionId);
+    let before = setup.recorder.events.length;
+    let out = '';
+    const code = await runBoardCommand('restart', [ref], { out: (text) => (out += text), err: (text) => (out += text), env });
+    expect({ code, out }).toEqual({ code: 0, out: expect.stringMatching(new RegExp(`^Restarted ${ref} `)) });
+    expect((await sessionStartAfter(setup, before, worker.sessionId)).payload).toMatchObject({ source: 'resume', session_id: worker.sessionId });
+
+    await end(setup, worker.sessionId);
+    before = setup.recorder.events.length;
+    const mcp = mcpAs(setup, lead.token);
+    expect(await mcp.callTool('restart', { agent: ref })).toMatchObject({ isError: false, text: expect.stringMatching(/^Restarted agent:/) });
+    expect((await sessionStartAfter(setup, before, worker.sessionId)).payload).toMatchObject({ source: 'resume', session_id: worker.sessionId });
+
+    // The same tile, worktree and branch.
+    const restarted = (await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!;
+    const { zoneId, position, worktree, branch, cwd } = worker;
+    expect(restarted).toMatchObject({ endedAt: null, zoneId, position, worktree, branch, cwd });
+    const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId });
+    expect(log.map(({ action, outcome, targetId }) => `${action} ${outcome} ${targetId}`)).toEqual([
+      `restart done ${worker.sessionId}`,
+      `restart done ${worker.sessionId}`,
+    ]);
+  }, 30_000);
+
+  it('restarts an ended agent fresh over the CLI and the MCP: a new conversation in the same tile, worktree and branch, the old one kept', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    const ref = `agent:${worker.sessionId.slice(0, 4)}`;
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    const listed = async () => (await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!;
+
+    await end(setup, worker.sessionId);
+    let before = setup.recorder.events.length;
+    let out = '';
+    const code = await runBoardCommand('restart', [ref, '--fresh', '--', 'start over'], { out: (text) => (out += text), err: (text) => (out += text), env });
+    expect({ code, out }).toEqual({ code: 0, out: expect.stringMatching(new RegExp(`^Restarted ${ref} `)) });
+    const first = (await sessionStartAfter(setup, before, worker.sessionId)).payload;
+    expect(first).toMatchObject({ source: 'startup' });
+    expect(first.session_id).not.toBe(worker.sessionId);
+    expect((await listed()).earlierConversations).toEqual([{ conversationId: worker.sessionId, transcriptPath: expect.any(String), endedAt: expect.any(String) }]);
+
+    // Once the new conversation has had a turn (its transcript saved), a plain restart carries on it, not the old one.
+    await setup.recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent =>
+        e.type === 'hook' && e.sessionId === worker.sessionId && e.event === 'Stop' && setup.recorder.events.indexOf(e) >= before,
+    );
+    await end(setup, worker.sessionId);
+    before = setup.recorder.events.length;
+    await runBoardCommand('restart', [ref], { out: (text) => (out += text), err: (text) => (out += text), env });
+    expect((await sessionStartAfter(setup, before, worker.sessionId)).payload).toMatchObject({ source: 'resume', session_id: first.session_id });
+
+    await end(setup, worker.sessionId);
+    before = setup.recorder.events.length;
+    const mcp = mcpAs(setup, lead.token);
+    expect(await mcp.callTool('restart', { agent: ref, fresh: true })).toMatchObject({ isError: false, text: expect.stringMatching(/^Restarted agent:/) });
+    const second = (await sessionStartAfter(setup, before, worker.sessionId)).payload;
+    expect(second).toMatchObject({ source: 'startup' });
+    expect([worker.sessionId, first.session_id]).not.toContain(second.session_id);
+
+    const restarted = await listed();
+    expect(restarted.earlierConversations.map((each) => each.conversationId)).toEqual([worker.sessionId, first.session_id]);
+    const { zoneId, position, worktree, branch, cwd } = worker;
+    expect(restarted).toMatchObject({ endedAt: null, zoneId, position, worktree, branch, cwd });
+    const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId });
+    expect(log.map(({ action, outcome, detail }) => `${action} ${outcome} ${detail}`)).toEqual([
+      'restart done fresh',
+      'restart done ',
+      'restart done fresh: start over',
+    ]);
+  }, 45_000);
+
+  it('refuses a fresh prompt an orchestrator may not type, and a prompt without fresh, leaving the agent ended', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    const ref = `agent:${worker.sessionId.slice(0, 4)}`;
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    await end(setup, worker.sessionId);
+
+    let out = '';
+    const io = { out: (text: string) => (out += text), err: (text: string) => (out += text), env };
+    for (const prompt of ['!rm -rf /', '/clear']) {
+      out = '';
+      expect(await runBoardCommand('restart', [ref, '--fresh', '--', prompt], io)).not.toBe(0);
+      expect(out).toContain('may not send this text');
+      expect(await mcpAs(setup, lead.token).callTool('restart', { agent: ref, fresh: true, prompt })).toMatchObject({ isError: true });
+    }
+    out = '';
+    expect(await runBoardCommand('restart', [ref, '--', 'hello'], io)).not.toBe(0);
+    expect(out).toContain('needs --fresh');
+    expect(await mcpAs(setup, lead.token).callTool('restart', { agent: ref, prompt: 'hello' })).toMatchObject({ isError: true });
+
+    const agent = (await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!;
+    expect(agent.endedAt).not.toBeNull();
+    expect(agent.earlierConversations).toEqual([]);
+    const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId });
+    expect(log.filter(({ outcome }) => outcome === 'refused').length).toBeGreaterThanOrEqual(4);
+  }, 30_000);
+
+  it('leaves the conversation as it was when the fresh launch fails, with no earlier conversation recorded', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    await end(setup, worker.sessionId);
+    rmSync(worker.cwd, { recursive: true, force: true });
+
+    await expect(lead.connection.call('orchestrator.restart', { token: lead.token, sessionId: worker.sessionId, fresh: true })).rejects.toMatchObject({
+      message: expect.stringContaining('worktree is gone'),
+    });
+    const agent = (await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!;
+    expect(agent.endedAt).not.toBeNull();
+    expect(agent.earlierConversations).toEqual([]);
+  }, 30_000);
+
+  it('refuses a fresh restart of an agent outside its scope', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
+    await setup.client.call('agent.stop', { sessionId: elsewhere.sessionId });
+    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId, fresh: true })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === elsewhere.sessionId)!.earlierConversations).toEqual([]);
+  });
+
+  it('restarts an agent stopped by a restart of agent-board, carrying on its conversation', async () => {
+    const dataDir = tempDataDir();
+    const home = tempDataDir();
+    const setup = await orchestrateDaemon({ dataDir, home });
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    await setup.daemon.stop();
+    const daemon = await startOrchestrateDaemon({ dataDir, home });
+    const client = await connectTestClient(daemon);
+    const recorder = recordEvents(client);
+    expect((await client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!.state).toBe('stopped-by-restart');
+
+    // The user's side, with no token: every orchestrator agent was stopped by the restart too.
+    const restarted = await client.call('orchestrator.restart', { sessionId: worker.sessionId });
+
+    const { zoneId, position, worktree, branch } = worker;
+    expect(restarted).toMatchObject({ endedAt: null, zoneId, position, worktree, branch });
+    const sessionStart = await recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === worker.sessionId && e.event === 'SessionStart',
+    );
+    expect(sessionStart.payload).toMatchObject({ source: 'resume', session_id: worker.sessionId });
+    const [line] = await client.call('orchestrator.activity', {});
+    expect(line).toMatchObject({ orchestratorName: 'you', action: 'restart', outcome: 'done', targetId: worker.sessionId });
+  }, 30_000);
+
+  it('never forces: while the shell its pane dropped into runs something, the restart is refused and the shell runs on', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const { agent: worker } = await agentSide(setup, setup.zone.id);
+    const shell = (await end(setup, worker.sessionId)).shellSessionId!;
+    await setup.client.call('session.attach', { sessionId: shell });
+    // A subshell: it is in the foreground before it says so. Typed, the word is split, so only its output matches.
+    await setup.client.call('session.write', { sessionId: shell, data: '(echo bu""sy; sleep 30)\r' });
+    await setup.recorder.waitForText(shell, 'busy');
+
+    // Even asked to: the method takes no force.
+    await expect(connection.call('orchestrator.restart', { token, sessionId: worker.sessionId, force: true } as never)).rejects.toMatchObject({
+      code: AGENT_ERROR.shellBusy,
+    });
+
+    expect((await setup.client.call('session.list')).map((session) => session.id)).toContain(shell);
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)!.endedAt).not.toBeNull();
+    const [line] = await setup.client.call('orchestrator.activity', { orchestratorId: me.sessionId });
+    expect(line).toMatchObject({ action: 'restart', outcome: 'refused' });
+  }, 30_000);
+
+  it('refuses an agent outside its scope, a running one and itself, and logs each refusal', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const elsewhere = await userAgent(setup.client, setup.other.id, 'elsewhere');
+    const running = await userAgent(setup.client, setup.zone.id, 'running');
+    await setup.client.call('agent.stop', { sessionId: elsewhere.sessionId });
+
+    await expect(connection.call('orchestrator.restart', { token, sessionId: elsewhere.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    await expect(connection.call('orchestrator.restart', { token, sessionId: running.sessionId })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringContaining('still running'),
+    });
+    await expect(connection.call('orchestrator.restart', { token, sessionId: me.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === elsewhere.sessionId)!.endedAt).not.toBeNull();
+    const log = await setup.client.call('orchestrator.activity', { orchestratorId: me.sessionId });
+    expect(log.map(({ action, outcome, targetName }) => `${action} ${outcome} ${targetName}`)).toEqual([
+      `restart refused ${me.name}`,
+      'restart refused running',
+      'restart refused elsewhere',
+    ]);
   });
 });
 
@@ -1081,6 +1383,96 @@ describe('a reviewer an orchestrator starts', () => {
       // A follow-up based on that reviewer reviews the same branch.
       const followUp = await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review' });
       expect(followUp.json).toMatchObject({ role: 'follow-up-reviewer', reviews: { branch: implementer.branch } });
+    } finally {
+      session.close();
+    }
+  });
+});
+
+describe('an agent an orchestrator starts with or without its role’s template', () => {
+  /** The first message the agent got, as its harness's UserPromptSubmit hook reported it. */
+  const firstMessage = async (setup: Setup, sessionId: string) =>
+    String(
+      (
+        await setup.recorder.waitFor(
+          (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === 'UserPromptSubmit',
+        )
+      ).payload.prompt,
+    );
+
+  it('begins with the template and says which one; --no-template sends the prompt alone', async () => {
+    const setup = await orchestrateDaemon();
+    await setup.client.call('zone.setRoleTemplate', { id: setup.zone.id, role: 'implementer', body: 'Template for {{branch}}.' });
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const templated = await newAgent(session, { prompt: 'Do it', name: 'templated', role: 'implementer' });
+      expect(templated.text).toContain("Its first message begins with the zone's saved implementer template");
+      expect(templated.json).toMatchObject({ template: "the zone's saved implementer template" });
+      const idOf = async (name: string) => (await setup.client.call('agent.list')).find((each) => each.name === name)!.sessionId;
+      expect(await firstMessage(setup, await idOf('templated'))).toMatch(/^Template for \S+\.\n\nDo it$/);
+
+      const bare = await newAgent(session, { prompt: 'Only this', name: 'bare', role: 'implementer', noTemplate: true });
+      expect(bare.text).toContain('No role template: its first message is your prompt alone.');
+      expect(bare.json).toMatchObject({ template: null });
+      expect(await firstMessage(setup, await idOf('bare'))).toBe('Only this');
+
+      const none = await newAgent(session, { prompt: 'No role', name: 'plain' });
+      expect(none.text).not.toContain('template');
+      expect(none.json).toMatchObject({ template: null });
+    } finally {
+      session.close();
+    }
+  });
+
+  it('is `template: false` of new_agent over the tools, which names the template it applied', async () => {
+    const setup = await orchestrateDaemon();
+    await setup.client.call('zone.setRoleTemplate', { id: setup.zone.id, role: 'implementer', body: 'Template.' });
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const mcp = mcpAs(setup, lead.token);
+
+    const templated = await mcp.callTool('new_agent', { prompt: 'Do it', name: 'templated', role: 'implementer' });
+    expect(templated).toMatchObject({ isError: false, text: expect.stringContaining("begins with the zone's saved implementer template") });
+    const bare = await mcp.callTool('new_agent', { prompt: 'Only this', name: 'bare', role: 'implementer', template: false });
+    expect(bare).toMatchObject({ isError: false, text: expect.stringContaining('No role template') });
+    const agent = (await setup.client.call('agent.list')).find((each) => each.name === 'bare')!;
+    expect(await firstMessage(setup, agent.sessionId)).toBe('Only this');
+  });
+});
+
+describe('an agent an orchestrator starts in a named role', () => {
+  it('carries the name, which `new`, `tree` and its own `whoami` show', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Print your board identity', name: 'mocks', role: 'designer' });
+
+      expect(started.text).toMatch(/^Started agent:\S+ {2}mocks {2}\[\S+\] {2}\(designer\)/);
+      expect(started.json).toMatchObject({ role: 'custom', roleName: 'designer' });
+      const refs = new BoardRefs(await readBoard(setup.client));
+      expect(treeView(refs, null).text).toMatch(/mocks {2}\[\S+\] {2}\(designer\)/);
+
+      const designer = refs.board.agents.find((agent) => agent.name === 'mocks')!;
+      const side = await agentSideOf(setup, designer.sessionId);
+      const caller = await side.connection.call('board.identify', { token: side.token });
+      const whoami = identifyView(refs, caller, setup.daemon.socketPath);
+      expect(whoami.text).toContain('\nrole     designer\n');
+      expect(whoami.json).toMatchObject({ you: { role: 'designer' } });
+    } finally {
+      session.close();
+    }
+  });
+
+  it('shows an unnamed custom role as custom', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Go', name: 'odd job', role: 'custom' });
+
+      expect(started.text).toMatch(/odd job {2}\[\S+\] {2}\(custom\)/);
+      expect(started.json).toMatchObject({ role: 'custom', roleName: null });
     } finally {
       session.close();
     }

@@ -411,7 +411,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
 
     // The coder finishes a turn, and its hand-off is held: the pull request's checks can't pass with no pull request.
     await page.evaluate((id) => window.agentBoard.agents.answer(id, 'Now open the pull request'), coder.sessionId);
-    await expect(page.getByTestId('flow-edge-note')).toHaveText('held until CI green', { timeout: 30_000 });
+    await expect(page.getByTestId('rail-token-note').filter({ hasText: 'held' })).toHaveText('held until CI green', { timeout: 30_000 });
 
     // A reviewer: its tile is dashed, and it ends once its review doc is in.
     const coderTile = page.locator(`[data-testid="agent-tile"][data-session-id="${coder.sessionId}"]`);
@@ -429,7 +429,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
     await page.getByRole('button', { name: 'Fit View' }).click();
     await stillBoard(page);
     const rules = page.getByRole('complementary', { name: 'Edge rules' });
-    await page.getByTestId('flow-edge').filter({ hasText: 'handover.md' }).locator('.flow-edge-pill').click({ force: true });
+    await page.getByTestId('rail-token').filter({ hasText: 'handover.md' }).locator('.rail-token-open').click();
     await expect(rules).toBeVisible();
     await expect(rules).toContainText('Write the code');
     await expect(rules).toContainText('no pull request yet');

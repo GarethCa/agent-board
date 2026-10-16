@@ -36,11 +36,27 @@ async function handoffDaemon(flowRecheckMs = 0, dataDir = tempDataDir()) {
 
 type Setup = Awaited<ReturnType<typeof handoffDaemon>>;
 
-async function untilAgent(recorder: Setup['recorder'], sessionId: string, match: (agent: Agent) => boolean): Promise<Agent> {
+/** The first update of the agent, from the `since`th event on, that matches; with its event's index. */
+async function untilAgent(
+  recorder: Setup['recorder'],
+  sessionId: string,
+  match: (agent: Agent) => boolean,
+  since = 0,
+): Promise<Agent & { at: number }> {
   const event = await recorder.waitFor(
-    (e: DaemonEvent): e is AgentUpdatedEvent => e.type === 'agent.updated' && e.agent.sessionId === sessionId && match(e.agent),
+    (e: DaemonEvent): e is AgentUpdatedEvent =>
+      e.type === 'agent.updated' && e.agent.sessionId === sessionId && match(e.agent) && recorder.events.indexOf(e) >= since,
   );
-  return event.agent;
+  return { ...event.agent, at: recorder.events.indexOf(event) };
+}
+
+/**
+ * The end of the agent's next turn from the `since`th event on: its turn starting, then its prompt again. An idle from
+ * before `since` is the last turn's end, and Send while the next one still works would be skipped.
+ */
+async function untilTurnEnds(recorder: Setup['recorder'], sessionId: string, since: number): Promise<Agent & { at: number }> {
+  const working = await untilAgent(recorder, sessionId, (seen) => seen.state === 'thinking', since);
+  return untilAgent(recorder, sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting', working.at);
 }
 
 async function untilEdge(recorder: Setup['recorder'], id: string, match: (edge: FlowEdge) => boolean): Promise<FlowEdge> {
@@ -199,11 +215,31 @@ describe('handing off explicitly', () => {
       code: BOARD_ERROR.outOfScope,
       message: expect.stringMatching(/that is you/),
     });
+    // One with no edge out hands nothing on, but says it is finished.
     const lone = await agentSide(setup, 'lone');
-    await expect(lone.connection.call('board.handoff', { token: lone.token, message: 'hi' })).rejects.toMatchObject({
+    // What it hands over is checked as an edge would: a handover that isn't there finishes nothing.
+    await expect(lone.connection.call('board.handoff', { token: lone.token, handoverPath: '.agent-board/handovr.md' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
-      message: expect.stringMatching(/no edge leaves your tile/),
+      message: expect.stringMatching(/there is no .agent-board\/handovr.md in its worktree/),
     });
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === lone.agent.sessionId)?.workFinishedAt).toBeNull();
+    expect(await lone.connection.call('board.handoff', { token: lone.token, message: 'hi' })).toEqual([]);
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === lone.agent.sessionId)?.workFinishedAt).toEqual(expect.any(String));
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === a.sessionId)?.workFinishedAt).toEqual(expect.any(String));
+  });
+
+  it('says an agent is finished once it sets its status done, until its next prompt', async () => {
+    const setup = await handoffDaemon();
+    const { agent, token, connection } = await agentSide(setup, 'impl');
+    expect(await connection.call('board.setStatus', { token, summary: 'Gate running' })).toMatchObject({ workFinishedAt: null });
+    const done = await connection.call('board.setStatus', { token, summary: 'PR open', done: true });
+    expect(done.workFinishedAt).toEqual(expect.any(String));
+    // Done again keeps when it first said so.
+    expect((await connection.call('board.setStatus', { token, summary: 'PR open, gate green', done: true })).workFinishedAt).toBe(done.workFinishedAt);
+
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also add a test' });
+    expect(await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'thinking', since)).toMatchObject({ workFinishedAt: null });
   });
 
   it('hands off to an agent it names with no edge, as a one-off edge drawn afterwards, and again along it', async () => {
@@ -211,6 +247,7 @@ describe('handing off explicitly', () => {
     const { agent: a, token, connection } = await agentSide(setup, 'impl');
     const b = await receiver(setup, 'review');
 
+    const handedFirst = setup.recorder.events.length;
     const [first] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'Please review the login fix' });
     expect(first).toMatchObject({ to: b.sessionId, outcome: 'delivered', name: 'message' });
     await setup.recorder.waitForText(b.sessionId, 'Hand-off from impl (its message): Please review the login fix');
@@ -219,13 +256,14 @@ describe('handing off explicitly', () => {
     expect(await setup.client.call('flowEdge.lastPayload', { id: edge.id })).toMatchObject({ text: 'Please review the login fix' });
 
     // Named again, it goes along the same edge, though it is manual; the user's Send replays what it last carried.
-    await untilAgent(setup.recorder, b.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    await untilTurnEnds(setup.recorder, b.sessionId, handedFirst);
+    const handed = setup.recorder.events.length;
     const [again] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'And the signup test' });
     expect(again).toMatchObject({ edgeId: edge.id, outcome: 'delivered' });
     expect(await historyOf(setup, edge.id)).toEqual(['delivered', 'delivered']);
     expect((await setup.client.call('flowEdge.list')).filter((each) => each.from === a.sessionId)).toHaveLength(1);
     await setup.recorder.waitForText(b.sessionId, 'Hand-off from impl (its message): And the signup test');
-    await untilAgent(setup.recorder, b.sessionId, (seen) => seen.state === 'idle' || seen.state === 'waiting');
+    await untilTurnEnds(setup.recorder, b.sessionId, handed);
     await setup.client.call('flowEdge.send', { id: edge.id });
     expect(await historyOf(setup, edge.id)).toEqual(['delivered', 'delivered', 'delivered']);
     expect(await setup.client.call('flowEdge.lastPayload', { id: edge.id })).toMatchObject({ text: 'And the signup test' });
@@ -421,5 +459,72 @@ describe('handing off explicitly', () => {
     // And it stays a read-only connection: approving or sending an edge is the user's.
     const [edge] = await setup.client.call('flowEdge.list');
     await expect(connection.call('flowEdge.send', { id: edge!.id })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+
+  it('drops the percentage of an agent whose turn has ended, and of one that has ended, keeping its own summary', async () => {
+    const setup = await handoffDaemon();
+    const { agent, token, connection } = await agentSide(setup, 'impl');
+    // It sits at its prompt: a percentage of a turn that is over says nothing.
+    const set = await connection.call('board.setStatus', { token, summary: 'Look around', progress: 20 });
+    expect(set.status).toMatchObject({ summary: 'Look around', progress: null });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)?.status).toMatchObject({ summary: 'Look around', progress: null });
+
+    // Mid-turn it shows.
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Work slowly' });
+    await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.state === 'running', since);
+    expect((await connection.call('board.setStatus', { token, summary: 'Map the board', progress: 20 })).status).toMatchObject({ progress: 20 });
+    expect((await untilTurnEnds(setup.recorder, agent.sessionId, since)).status).toMatchObject({ summary: 'Map the board', progress: null });
+
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    const ended = await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null);
+    expect(ended.status).toMatchObject({ summary: 'Map the board', progress: null });
+  });
+
+  it('shows the last message of a finished turn on a tile whose agent set no status', async () => {
+    const setup = await handoffDaemon();
+    const worker = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'worker', prompt: 'Write the thing', ...SIZE });
+    const done = await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.status !== null);
+    expect(done.status).toMatchObject({ summary: 'Handover written.', progress: null });
+    expect(done.state).not.toBe('running');
+    // The update that says its turn ended already carries the message: no tile shows the turn before's, or none, first.
+    const started = setup.recorder.events.findIndex((e) => e.type === 'agent.updated' && e.agent.sessionId === worker.sessionId && e.agent.state === 'thinking');
+    const ending = setup.recorder.events.filter(
+      (e, index): e is AgentUpdatedEvent =>
+        index > started && e.type === 'agent.updated' && e.agent.sessionId === worker.sessionId && (e.agent.state === 'idle' || e.agent.state === 'waiting'),
+    );
+    expect(ending.length).toBeGreaterThan(0);
+    expect(ending.every(({ agent }) => agent.status?.summary === 'Handover written.')).toBe(true);
+
+    // An interrupted turn ended on no message: the last one, of the turn before, isn't shown as its.
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: worker.sessionId, text: 'Work slowly' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.state === 'running', since);
+    const interrupted = await setup.client.call('agent.interrupt', { sessionId: worker.sessionId });
+    expect(interrupted.state).toBe('idle');
+    expect(interrupted.status).toBeNull();
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)?.status).toBeNull();
+
+    // What it last said is still kept for its hand-offs: a final-message edge carries it on.
+    const review = await receiver(setup, 'review');
+    const edge = await setup.client.call('flowEdge.create', { from: worker.sessionId, to: review.sessionId });
+    expect(await setup.client.call('flowEdge.preview', { id: edge.id })).toMatchObject({ text: expect.stringContaining('Handover written.') });
+    await setup.client.call('flowEdge.send', { id: edge.id });
+    await setup.recorder.waitForText(review.sessionId, 'Handover written.');
+  });
+
+  it('keeps the percentage of an agent waiting on a question mid-turn, and drops it once the turn is over', async () => {
+    const setup = await handoffDaemon();
+    const { agent, token, connection } = await agentSide(setup, 'impl');
+    const since = setup.recorder.events.length;
+    await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Ask: Which cache? | Redis | CDN only' });
+    const asking = await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.ask !== null, since);
+    expect(asking.state).toBe('waiting');
+    expect((await connection.call('board.setStatus', { token, summary: 'Choosing a cache', progress: 30 })).status).toMatchObject({ progress: 30 });
+    await setup.client.call('ask.answer', { sessionId: agent.sessionId, askId: asking.ask!.id, answer: { option: 0 } });
+    expect((await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.ask === null && (seen.state === 'idle' || seen.state === 'waiting'), asking.at)).status).toMatchObject({
+      summary: 'Choosing a cache',
+      progress: null,
+    });
   });
 });

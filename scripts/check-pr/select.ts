@@ -57,9 +57,9 @@ const CORE_GLOBS = [
   'apps/desktop/src/renderer/src/ui/**/*.{ts,tsx}',
   'apps/desktop/src/renderer/src/chrome/**/*.{ts,tsx}',
   'apps/desktop/src/renderer/src/board/{Board,commands,representations,TileNode,HybridTile}.tsx',
-  'apps/desktop/src/renderer/src/board/{layout,tile,tiles}.ts',
+  'apps/desktop/src/renderer/src/board/{tile,tiles}.ts',
   'apps/desktop/src/main/{index,items,view,setup}.ts',
-  'packages/daemon/src/{rpc,params,index,daemon,sessions,agents,items,view-state,spawn,stop,permissions,subagents,worktrees,client}.ts',
+  'packages/daemon/src/{rpc,params,index,daemon,sessions,agents,agent-spawns,agent-lifecycle,hook-states,deliveries,items,view-state,spawn,stop,permissions,subagents,worktrees,client,board-layout}.ts',
   'packages/daemon/src/{harness-state,claude-state,codex-state,terminal-backend,terminal-input}.ts',
 ];
 
@@ -97,6 +97,11 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/board/*schedule*', ['schedules.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Schedule*', ['schedules.spec.ts']],
   ['apps/desktop/src/renderer/src/board/items/**', ['stickies.spec.ts', 'text-shapes.spec.ts', 'images-and-links.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/items/{AgentNoteNode.tsx,TetherEdge.tsx,agent-note*}', ['agent-notes.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/items/{AgentNoteNode.tsx,agent-note*}', ['ask-claude.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/ask/**', ['ask-claude.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/editing/{SelectionOverlays.tsx,context-menu.tsx}', ['ask-claude.spec.ts', 'selection.spec.ts']],
+  ['packages/daemon/src/{selection-asks,agent-notes}.ts', ['ask-claude.spec.ts']],
   ['apps/desktop/src/renderer/src/board/connectors/**', ['connectors.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Tile*', ['tiles.spec.ts', 'expanded-tile.spec.ts', 'tile-resize.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*tile*', ['tiles.spec.ts', 'expanded-tile.spec.ts', 'tile-resize.spec.ts']],
@@ -139,6 +144,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/connectors.ts', ['connectors.spec.ts']],
   ['packages/daemon/src/{board,board-*,cli,cli-*}.ts', ['board-cli.spec.ts']],
   ['apps/desktop/src/renderer/src/chrome/CliInstallSetting.tsx', ['board-cli.spec.ts']],
+  ['apps/desktop/src/renderer/src/{chrome/*potlight*,board/tile-attention.ts,board/commands.tsx}', ['spotlight.spec.ts']],
   ['apps/desktop/src/main/setup.ts', ['onboarding.spec.ts', 'board-cli.spec.ts']],
   ['packages/daemon/src/{repo-zone,git,pull-requests}.ts', ['zones.spec.ts', 'zoneless-agents.spec.ts']],
   ['packages/daemon/src/{daemon,lock,pid,cli,paths}.ts', ['daemon.spec.ts', 'daemon-reaping.spec.ts', 'reboot.spec.ts']],
@@ -161,7 +167,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/plan/**', ['ask-plan.spec.ts']],
   ['apps/desktop/src/renderer/src/inbox/**', ['ask-plan.spec.ts']],
   ['apps/desktop/src/main/{asks,plan-lockdown,web-lockdown,web-tabs}.ts', ['ask-plan.spec.ts']],
-  ['packages/daemon/src/{asks,board-mcp,board-ops}.ts', ['ask-plan.spec.ts']],
+  ['packages/daemon/src/{asks,board-mcp,board-mcp-http,board-ops,hook-ingress}.ts', ['ask-plan.spec.ts']],
 ];
 
 export interface Plan {

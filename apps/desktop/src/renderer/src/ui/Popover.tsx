@@ -14,13 +14,28 @@ interface PopoverProps {
   align?: 'start' | 'center' | 'end';
   side?: 'top' | 'right' | 'bottom' | 'left';
   className?: string;
+  /** Hears a press outside it, which closes it, before it closes. */
+  onPointerDownOutside?(event: Event): void;
+  /** As it closes and gives focus back to its button: `preventDefault()` keeps focus where it went instead. */
+  onCloseAutoFocus?(event: Event): void;
 }
 
 /**
  * A card that opens from a button, over the page, for a few controls that don't need a dialog. Esc or a click
  * elsewhere closes it and gives focus back to the button.
  */
-export function Popover({ children, content, open, onOpenChange, align = 'start', side = 'bottom', className, ...rest }: PopoverProps) {
+export function Popover({
+  children,
+  content,
+  open,
+  onOpenChange,
+  align = 'start',
+  side = 'bottom',
+  className,
+  onPointerDownOutside,
+  onCloseAutoFocus,
+  ...rest
+}: PopoverProps) {
   return (
     <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
       <RadixPopover.Trigger asChild>{children}</RadixPopover.Trigger>
@@ -33,6 +48,8 @@ export function Popover({ children, content, open, onOpenChange, align = 'start'
           sideOffset={6}
           collisionPadding={8}
           onKeyDown={(event) => event.stopPropagation()}
+          onPointerDownOutside={onPointerDownOutside}
+          onCloseAutoFocus={onCloseAutoFocus}
         >
           {content}
         </RadixPopover.Content>

@@ -4,7 +4,8 @@
 import type { Rect } from '../geometry';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
 import { boundsOnBoard } from './items/items';
-import { clearOf, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
+import { clearOf, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { CREW_PADDING } from './crews';
 import { isSessionTile, isZone, type BoardNode } from './tiles';
 
 /** Something an expanded tile may push: a tile, an item or a zone, by its id and where it is. */
@@ -237,8 +238,16 @@ export function heldFrom(nodes: readonly BoardNode[], shown: readonly BoardNode[
  * or the zone it is in, keeps its place and the rest make way as it grows; what is dragged stays under the pointer and
  * moves nothing out of its way, so it can be dropped onto a tile (only its zone grows to hold it). A zone grown is marked `grown`. Nodes that don't move are the same objects; `nodes` is
  * unchanged.
+ * Each of `crews` (the tiles of a crew frame, by node id) moves as one, its frame with it, by one shift that keeps its
+ * layout, unless one of them is expanded, changing or dropped onto a tile (`overlaps`), when each moves on its own.
  */
-export function displaced(nodes: BoardNode[], expanded: ExpandedTiles, overlaps: OverlapsAllowed = new Map(), held: Held = new Map()): BoardNode[] {
+export function displaced(
+  nodes: BoardNode[],
+  expanded: ExpandedTiles,
+  overlaps: OverlapsAllowed = new Map(),
+  held: Held = new Map(),
+  crews: readonly (readonly string[])[] = [],
+): BoardNode[] {
   if (expanded.length === 0) return nodes;
   const open = new Map(expanded.map((entry) => [entry.id, entry]));
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -264,11 +273,16 @@ export function displaced(nodes: BoardNode[], expanded: ExpandedTiles, overlaps:
     const rect = { ...at(node), ...sizeOf(node) };
     return isSessionTile(node) ? perched(rect) : boundsOnBoard(node, rect);
   };
+  /** The tiles of each block moved as one, by the id it moves by. */
+  const blockTiles = new Map<string, readonly BoardNode[]>();
   const move = (moves: Map<string, { x: number; y: number }>, movables: readonly Movable[]) => {
     for (const { id, rect } of movables) {
       const spot = moves.get(id);
-      const from = at(byId.get(id)!);
-      if (spot !== undefined) positions.set(id, { x: from.x + spot.x - rect.x, y: from.y + spot.y - rect.y });
+      if (spot === undefined) continue;
+      for (const node of blockTiles.get(id) ?? [byId.get(id)!]) {
+        const from = at(node);
+        positions.set(node.id, { x: from.x + spot.x - rect.x, y: from.y + spot.y - rect.y });
+      }
     }
   };
   /** Expanded tiles, with the room above them for their subagents, to keep apart: not one being dragged. */
@@ -298,7 +312,17 @@ export function displaced(nodes: BoardNode[], expanded: ExpandedTiles, overlaps:
     // One being dragged grows it, but moves nothing out of its way until it is dropped: it may be dropped onto a tile.
     const room = holding(size, openChildren.map(rectOf));
     const fixed = openChildren.filter((node) => node.dragging !== true).map((node) => ({ id: node.id, rect: rectOf(node) }));
-    const movables = children.filter(movable).map((node) => ({ id: node.id, rect: rectOf(node) }));
+    // A crew frame's tiles as one, the frame round them, unless one of them is expanded, changing or dropped onto a tile.
+    const together = crews.flatMap((ids, index) => {
+      const tiles = children.filter((node) => ids.includes(node.id));
+      return tiles.length === ids.length && tiles.every((node) => movable(node) && partner(node.id).length === 0) ? [{ id: `\0block ${parent.id} ${index}`, tiles }] : [];
+    });
+    const inBlock = new Set(together.flatMap(({ tiles }) => tiles.map((node) => node.id)));
+    for (const { id, tiles } of together) blockTiles.set(id, tiles);
+    const movables = [
+      ...children.filter((node) => movable(node) && !inBlock.has(node.id)).map((node) => ({ id: node.id, rect: rectOf(node) })),
+      ...together.map(({ id, tiles }) => ({ id, rect: framed(tiles.map(rectOf)) })),
+    ];
     const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - ZONE_PADDING, bottom: room.height - ZONE_PADDING }, partner);
     move(moves, movables);
     // No smaller than it was drawn as a change under way began: what is dragged out of it doesn't shrink it meanwhile.
@@ -352,6 +376,15 @@ export function displaced(nodes: BoardNode[], expanded: ExpandedTiles, overlaps:
     const grown = size !== undefined && isZone(node) ? { data: { ...node.data, grown: true as const } } : {};
     return { ...node, ...(position && { position }), ...size, ...grown } as BoardNode;
   });
+}
+
+/** What a crew frame round `rects` (tiles with the room above them) takes: they and the frame's padding. */
+function framed(rects: readonly Rect[]): Rect {
+  const left = Math.min(...rects.map((rect) => rect.x)) - CREW_PADDING;
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width)) + CREW_PADDING;
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height)) + CREW_PADDING;
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 /** `rect` with the room above it for a tile's subagents. */

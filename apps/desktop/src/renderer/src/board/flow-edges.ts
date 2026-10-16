@@ -4,6 +4,8 @@ import { createContext } from 'react';
 import type { Edge } from '@xyflow/react';
 import { DEFAULT_PAYLOAD_PATHS, type FlowCondition, type FlowEdge, type FlowEdgeEvent, type UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import type { FlowEdgeChange } from '../../../preload/api';
+import type { Rect } from '../geometry';
+import { railsOf, railToken, tokenSlots, type Rail, type RailToken, type TokenSlot } from './rails';
 import { upperFirst } from '../upper-first';
 import { whenLabel } from './schedule';
 import { tileNodeId } from './tiles';
@@ -14,33 +16,72 @@ const FLOW_EDGE_PREFIX = 'flow:';
 const FLOW_Z_INDEX = 3;
 
 export const isFlowEdge = (edge: Pick<Edge, 'id'>): boolean => edge.id.startsWith(FLOW_EDGE_PREFIX);
+/** The first of the flow edges a drawn rail stands for: its id is that edge's. */
 export const flowEdgeIdOf = (edge: Pick<Edge, 'id'>): string => edge.id.slice(FLOW_EDGE_PREFIX.length);
+/** The flow edges a drawn rail stands for: both of a linked pair's, or a one-way edge alone. */
+export const flowEdgeIdsOf = (edge: Pick<Edge<FlowRailData>, 'data'>): string[] => edge.data!.rail.edges.map((each) => each.id);
+
+/** What a rail drawn on the board knows: its edges, the document riding it, and whether a hand-off is going along it. */
+export interface FlowRailData extends Record<string, unknown> {
+  rail: Rail;
+  token: RailToken;
+  live: boolean;
+  /** The name of the agent that made its token's edge, if one did and is still on the board. */
+  madeByName?: string;
+  /** Its token's place among the tokens off the same side of the same tile (`tokenSlots`). */
+  slot: TokenSlot;
+}
+
+/** What the board knows that the edges don't, for drawing them as rails. */
+export interface RailBoard {
+  /** The edges a hand-off is going along. */
+  live?: ReadonlySet<string>;
+  /** The agents' names, by session, for who made an edge an agent made. */
+  names?: ReadonlyMap<string, string>;
+  /** The agents done with their turn, each with when it ended: a manual edge out of one waits for Send if that is after it last delivered. */
+  ready?: ReadonlyMap<string, string | null>;
+  /** Where each agent's tile is on the board, by session, so tokens off one side of a tile are spread. */
+  rectOf?: (sessionId: string) => Rect | undefined;
+  now?: Date;
+}
 
 /**
- * The edges for `edges`, leaving out any whose agent's tile isn't on the board (`nodeIds`): the daemon deletes an edge
- * with its agent, and tells nobody. `names` are the agents' names, by session, for who made an edge an agent made.
+ * One rail for each two agents joined by edges (CD4), leaving out any whose agent's tile isn't on the board
+ * (`nodeIds`): the daemon deletes an edge with its agent, and tells nobody. It is drawn in the shape of the edge made
+ * first, and selected while any of its edges is; its token is the latest document on it (`railToken`), in its slot
+ * off its tile's side (`tokenSlots`).
  */
 export function flowEdges(
   edges: readonly FlowEdge[],
   nodeIds: ReadonlySet<string>,
   selected: ReadonlySet<string>,
-  live: ReadonlySet<string> = new Set(),
-  names: ReadonlyMap<string, string> = new Map(),
-): Edge<{ edge: FlowEdge; live: boolean; madeByName?: string }>[] {
-  return edges
-    .filter((edge) => nodeIds.has(tileNodeId('agent', edge.from)) && nodeIds.has(tileNodeId('agent', edge.to)))
-    .map((edge) => ({
-      id: `${FLOW_EDGE_PREFIX}${edge.id}`,
+  { live = new Set(), names = new Map(), ready = new Map(), rectOf = () => undefined, now = new Date() }: RailBoard = {},
+): Edge<FlowRailData>[] {
+  const shown = edges.filter((edge) => nodeIds.has(tileNodeId('agent', edge.from)) && nodeIds.has(tileNodeId('agent', edge.to)));
+  const rails = railsOf(shown).map((rail) => ({ rail, token: railToken(rail, { live, ready, now }) }));
+  const slots = tokenSlots(rails, rectOf);
+  return rails.map(({ rail, token }) => {
+    const [first] = rail.edges;
+    return {
+      id: `${FLOW_EDGE_PREFIX}${rail.id}`,
       type: FLOW_EDGE_TYPE,
-      source: tileNodeId('agent', edge.from),
-      // On the round handles a connector joins, one on each side.
-      sourceHandle: edge.fromSide,
-      target: tileNodeId('agent', edge.to),
-      targetHandle: edge.toSide,
-      selected: selected.has(edge.id),
+      source: tileNodeId('agent', rail.from),
+      // On the round handles a connector joins, one on each side. An automatic side is picked as the rail is drawn
+      // (`useLine`), the handle only somewhere for React Flow to start from.
+      sourceHandle: first!.fromSide === 'auto' ? 'right' : first!.fromSide,
+      target: tileNodeId('agent', rail.to),
+      targetHandle: first!.toSide === 'auto' ? 'left' : first!.toSide,
+      selected: rail.edges.some((edge) => selected.has(edge.id)),
       zIndex: FLOW_Z_INDEX,
-      data: { edge, live: live.has(edge.id), madeByName: edge.madeBy === null ? undefined : names.get(edge.madeBy) },
-    }));
+      data: {
+        rail,
+        token,
+        live: rail.edges.some((edge) => live.has(edge.id)),
+        madeByName: token.edge.madeBy === null ? undefined : names.get(token.edge.madeBy),
+        slot: slots.get(rail.id) ?? { index: 0, count: 1 },
+      },
+    };
+  });
 }
 
 /**
@@ -125,7 +166,7 @@ export function conditionName(condition: FlowCondition): string {
 }
 
 /** What a condition waits for, as a held edge says it. */
-function waitsFor(condition: FlowCondition): string {
+export function waitsFor(condition: FlowCondition): string {
   switch (condition.kind) {
     case 'gate-green':
       return 'gate green';
@@ -230,7 +271,7 @@ export function panClear(span: { left: number; right: number }, panelLeft: numbe
 }
 
 /**
- * What a change to an edge's rules or shape makes of it at once, before the daemon answers: a new payload takes its
+ * What a change to an edge's rules, shape or ends makes of it at once, before the daemon answers: a new payload takes its
  * default file.
  */
 export function withChanges(edge: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 'id'>): FlowEdge {
@@ -240,6 +281,8 @@ export function withChanges(edge: FlowEdge, changes: Omit<UpdateFlowEdgeParams, 
   const conditions = changes.conditions ?? edge.conditions;
   return {
     ...edge,
+    from: changes.from ?? edge.from,
+    to: changes.to ?? edge.to,
     trigger: changes.trigger ?? edge.trigger,
     payload,
     path,

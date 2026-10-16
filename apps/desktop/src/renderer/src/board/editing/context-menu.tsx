@@ -20,6 +20,7 @@ import {
   LayoutGrid,
   Pencil,
   RotateCcw,
+  Sparkles,
   SquareDashedMousePointer,
   Trash2,
 } from 'lucide-react';
@@ -33,6 +34,8 @@ import { endOfNode } from '../connectors/endpoints';
 
 /** What the context menu's rows do. */
 export interface ContextActions {
+  /** Opens Ask Claude about the selection (CM). */
+  askClaude(): void;
   /** Renames the one agent or shell tile selected. */
   rename(): void;
   duplicate(): void;
@@ -54,11 +57,14 @@ export interface ContextActions {
   tidyLoose(): void;
 }
 
+/** Ask Claude about the selection's shortcut, as the menu and the selection's label write it. */
+export const ASK_CLAUDE_KEY = withCommand('⇧A');
+
 /** The key that turns the selected items back straight, as the menu and the shortcut help write it. */
 export const RESET_ROTATION_KEY = '⇧R';
 
 /**
- * The context menu on a selection (WbTools): duplicate and copy, z-order, align, reset rotation, each selected kind's
+ * The context menu on a selection (WbTools): Ask Claude (CM), duplicate and copy, z-order, align, reset rotation, each selected kind's
  * colour, and delete, which asks before it deletes a session.
  */
 export function selectionEntries(selection: SelectionSummary, selectedConnectors: number, actions: ContextActions): MenuEntry[] {
@@ -86,7 +92,13 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
       : selection.nodes.length === 1 && joinable.length === 1
         ? [{ label: 'Connect to…', icon: <Spline />, hint: 'Then click what to join it to', onSelect: actions.connect }]
         : [];
+  // Only about objects: a selection of connectors alone has nothing to draw or describe.
+  const ask: MenuEntry[] =
+    selection.nodes.length > 0
+      ? [{ label: 'Ask Claude…', icon: <Sparkles />, shortcut: ASK_CLAUDE_KEY, hint: 'Sends nothing until you press Ask', onSelect: actions.askClaude }, 'separator']
+      : [];
   return [
+    ...ask,
     ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: actions.rename }, 'separator' as const] : []),
     { label: 'Duplicate', icon: <CopyPlus />, shortcut: withCommand('D'), disabled: !hasItems, onSelect: actions.duplicate },
     { label: 'Copy', icon: <Copy />, shortcut: withCommand('C'), disabled: !hasItems, onSelect: actions.copy },

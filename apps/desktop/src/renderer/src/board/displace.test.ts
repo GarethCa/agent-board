@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardItem, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
+import type { Agent, BoardItem, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { rotatedBounds, type Rect } from '../geometry';
 import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, type Movable } from './displace';
 import { bringToFront, EXPANDED_SIZE, expandTile, resizeExpanded } from './expanded';
-import { AGENT_TILE_SIZE, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
+import { AGENT_TILE_SIZE, CREW_GAP, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { CREW_PADDING, crewFrames } from './crews';
+import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
-import { tileNodeId, withTiles, type BoardNode } from './tiles';
+import { isSessionTile, tileNodeId, withTiles, type BoardNode } from './tiles';
 import type { ZoneNodeType } from './ZoneNode';
 import { zoneNode } from './ZoneNode';
 
@@ -758,3 +760,87 @@ function randomBoard(random: () => number) {
   }
   return { nodes: withTiles(zones, [], shells, [], new Map(), expanded), expanded, overlaps, ids };
 }
+
+describe('displaced, with a crew in the way', () => {
+  const agent = (sessionId: string, zoneId: string | null, position: TilePosition, spawnedBy: string | null = null) =>
+    ({ sessionId, zoneId, position, spawnedBy, orchestrate: null, repoRoot: '/code/app', name: sessionId, harness: 'claude' }) as Agent;
+  const a = (id: string) => tileNodeId('agent', id);
+  const { width, height } = AGENT_TILE_SIZE;
+  const boss = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+  const column = (n: number) => boss.x + width + CREW_GAP + n * (width + TILE_GAP);
+  const row = (n: number) => boss.y + n * (PERCH_ROOM + height + TILE_GAP);
+  /** A boss with an L of three crew a row down, under a stranger beside it, in a roomy zone. */
+  const board = () => {
+    const agents = [
+      agent('boss', 'z', at(boss.x, boss.y)),
+      agent('stranger', 'z', at(column(0), row(0))),
+      agent('w1', 'z', at(column(0), row(1)), 'boss'),
+      agent('w2', 'z', at(column(1), row(1)), 'boss'),
+      agent('w3', 'z', at(column(0), row(2)), 'boss'),
+    ];
+    return (expanded: ReturnType<typeof expandTile>) => withTiles([zone('z', 0, 0, 2400, 1600)], agents, [], [], new Map(), expanded);
+  };
+  const crew = [a('w1'), a('w2'), a('w3')];
+  const crews = [crew];
+  const shift = (nodes: BoardNode[], shown: BoardNode[], id: string) => {
+    const was = nodes.find((node) => node.id === id)!.position;
+    const now = shown.find((node) => node.id === id)!.position;
+    return { dx: now.x - was.x, dy: now.y - was.y };
+  };
+  const clear = (rect: Rect, of: Rect) =>
+    rect.x >= of.x + of.width || rect.x + rect.width <= of.x || rect.y >= of.y + of.height || rect.y + rect.height <= of.y;
+
+  it('moves a crew a stranger expanded over as one block, by one shift down or right, frame and all', () => {
+    const expanded = expandTile([], a('stranger'));
+    const nodes = board()(expanded);
+    const shown = displaced(nodes, expanded, new Map(), new Map(), crews);
+
+    const [first, ...rest] = crew.map((id) => shift(nodes, shown, id));
+    expect(first!.dx === 0 && first!.dy > 0).toBe(true);
+    for (const each of rest) expect(each).toEqual(first);
+    const open = boardRect(shown, shown.find((node) => node.id === a('stranger'))!);
+    const tiles = (list: BoardNode[]) => list.filter(isSessionTile) as TileNodeType[];
+    const [frame] = crewFrames(tiles(nodes), tiles(shown));
+    expect(frame!.members).toEqual(['w1', 'w2', 'w3']);
+    expect(clear(frame!, open)).toBe(true);
+    // The zone grows to hold the frame.
+    const z = shown.find((node) => node.id === 'z')!;
+    expect(frame!.y + frame!.height).toBeLessThanOrEqual(z.height! - ZONE_PADDING + CREW_PADDING);
+  });
+
+  it('moves the crew as one block clear of its own orchestrator expanded', () => {
+    const expanded = expandTile([], a('boss'));
+    const nodes = board()(expanded);
+    const shown = displaced(nodes, expanded, new Map(), new Map(), crews);
+    const [first, ...rest] = crew.map((id) => shift(nodes, shown, id));
+    expect(first).not.toEqual({ dx: 0, dy: 0 });
+    for (const each of rest) expect(each).toEqual(first);
+  });
+
+  it('moves the rest of a crew on their own when one of them is expanded', () => {
+    const expanded = expandTile([], a('w1'));
+    const nodes = board()(expanded);
+    const shown = displaced(nodes, expanded, new Map(), new Map(), crews);
+    expect(shown.find((node) => node.id === a('w1'))!.position).toEqual(nodes.find((node) => node.id === a('w1'))!.position);
+    const open = boardRect(shown, shown.find((node) => node.id === a('w1'))!);
+    for (const id of [a('w2'), a('w3')]) expect(clear(boardRect(shown, shown.find((node) => node.id === id)!), open), id).toBe(true);
+  });
+
+  it('leaves a crew member dropped onto an expanded stranger there, and moves the rest of its crew on their own', () => {
+    const expanded = expandTile([], a('stranger'));
+    const nodes = board()(expanded);
+    const shown = displaced(nodes, expanded, new Map([[a('w1'), a('stranger')]]), new Map(), crews);
+    expect(shift(nodes, shown, a('w1'))).toEqual({ dx: 0, dy: 0 });
+    const open = boardRect(shown, shown.find((node) => node.id === a('stranger'))!);
+    for (const id of [a('w2'), a('w3')]) expect(clear(boardRect(shown, shown.find((node) => node.id === id)!), open), id).toBe(true);
+  });
+
+  it('pushes a group zone clear of a loose expanded tile as one block, its tiles with it', () => {
+    const shells = [shell('loose', null, at(0, 0)), shell('in', 'g', at(ZONE_PADDING, ZONE_PADDING + PERCH_ROOM))];
+    const expanded = expandTile([], tileNodeId('shell', 'loose'));
+    const nodes = withTiles([zone('g', 400, 300)], [], shells, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    expect(shift(nodes, shown, 'g')).not.toEqual({ dx: 0, dy: 0 });
+    expect(shift(nodes, shown, tileNodeId('shell', 'in'))).toEqual({ dx: 0, dy: 0 });
+  });
+});

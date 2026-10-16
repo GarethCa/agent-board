@@ -442,6 +442,38 @@ describe('Open PR and Merge (BM3)', { timeout: 20_000 }, () => {
     expect(git(repo, 'branch', '--list', agent.branch)).toBe('');
   });
 
+  it("deletes the pull request's own head branch on GitHub after a local rename, and removes the renamed branch here", async () => {
+    const { github, client, repo, agent, passed } = await pullRequestDaemon();
+    const run = await passed();
+    await client.call('gate.openPullRequest', { sessionId: agent.sessionId });
+    setChecks(github, 'COMPLETED', 'SUCCESS');
+    git(agent.worktree, 'branch', '-m', 'renamed-one');
+
+    const merged = await client.call('gate.merge', {
+      sessionId: agent.sessionId,
+      number: PR,
+      headCommit: run.commit,
+      cleanup: { close: true, worktree: true, branch: true, comment: false },
+    });
+
+    expect(merged).toEqual({ done: ['close', 'worktree', 'branch'], failed: [] });
+    const calls = github.calls().map((call) => call.args.join(' '));
+    expect(calls).toContain(`api -X DELETE repos/acme/app/git/refs/heads/${agent.branch}`);
+    expect(calls.some((call) => call.includes('renamed-one') && call.includes('DELETE'))).toBe(false);
+    expect(git(repo, 'branch', '--list', 'renamed-one')).toBe('');
+  });
+
+  it('opens a pull request of the branch it owns only: after a checkout of another it refuses', async () => {
+    const { client, repo, agent, passed } = await pullRequestDaemon();
+    await passed();
+    git(repo, 'branch', 'develop');
+    git(agent.worktree, 'checkout', 'develop');
+
+    await expect(client.call('gate.openPullRequest', { sessionId: agent.sessionId })).rejects.toThrow(
+      `worktree is on develop, not ${agent.branch}: check it out first`,
+    );
+  });
+
   it('closes the agent and keeps its worktree, when only that is asked', async () => {
     const { github, client, repo, agent, passed } = await pullRequestDaemon();
     const run = await passed();

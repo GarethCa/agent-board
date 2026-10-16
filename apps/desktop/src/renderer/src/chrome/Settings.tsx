@@ -1,10 +1,12 @@
 import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
 import type { ClickOpens } from '../board/click-opens';
+import type { ConnectionsView } from '../board/connections-view';
 import type { CrewLook } from '../board/crew-view';
+import type { AgentNoteLook } from '../board/items/agent-note-look';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { daemonStatusText, type DaemonStatusValue } from '../DaemonStatus';
-import { Choice, Choices, Fieldset, Hint, SectionLabel, Tag } from '../ui';
+import { Choice, Choices, Fieldset, Hint, SectionLabel, Segmented, Tag } from '../ui';
 import { AppearanceSetting } from './AppearanceSetting';
 import { CliInstallSetting } from './CliInstallSetting';
 
@@ -18,14 +20,20 @@ export interface SettingsProps {
   /** How the board shows the agents an orchestrator started, and picks it (BA2 or BA3). */
   crewLook: CrewLook;
   onCrewLook(value: CrewLook): void;
+  /** Which connections the board draws, and picks it. */
+  connections: ConnectionsView;
+  onConnections(value: ConnectionsView): void;
+  /** How agent notes look (CO2 or CO1), and picks it. */
+  agentNoteLook: AgentNoteLook;
+  onAgentNoteLook(value: AgentNoteLook): void;
 }
 
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
  * Dark), the paths of `claude` and `codex`, what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
- * daemon's status.
+ * daemon's status, and how agent notes look.
  */
-export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook }: SettingsProps) {
+export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook }: SettingsProps) {
   return (
     <div className="settings">
       <ExternalHooksToggle onError={onError} />
@@ -55,6 +63,31 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
             onChange={() => onClickOpens('expand')}
           />
         </Choices>
+      </Fieldset>
+      <Fieldset legend="Show connections">
+        <Segmented
+          aria-label="Show connections"
+          options={[
+            { id: 'all', label: 'All' },
+            { id: 'handoffs', label: 'Hand-offs only' },
+            { id: 'none', label: 'None' },
+          ]}
+          value={connections}
+          onChange={onConnections}
+        />
+        <Hint>Hiding only changes the view: hand-offs still go. Any object shows how many it has hidden. Its own show while it is selected or hovered, and a moment after, to reach one; a selected one stays. ⇧E cycles them.</Hint>
+      </Fieldset>
+      <Fieldset legend="Agent notes">
+        <Segmented
+          aria-label="Agent notes"
+          options={[
+            { id: 'document', label: 'Document' },
+            { id: 'terminal', label: 'Terminal' },
+          ]}
+          value={agentNoteLook}
+          onChange={onAgentNoteLook}
+        />
+        <Hint>How a note an agent writes looks: a typed card, or a cut of its terminal.</Hint>
       </Fieldset>
       <Fieldset legend="Agents an orchestrator starts">
         <Choices aria-label="Agents an orchestrator starts">

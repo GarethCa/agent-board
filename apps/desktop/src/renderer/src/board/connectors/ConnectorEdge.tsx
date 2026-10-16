@@ -1,5 +1,5 @@
 import { memo, useContext, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { BaseEdge, EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, EdgeLabelRenderer, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react';
 import {
   CONNECTOR_LINE_ENDS,
   MAX_CONNECTOR_LABEL,
@@ -13,7 +13,7 @@ import { Swatch } from '../../ui';
 import { tokenNumber } from '../../theme';
 import { themedColor } from '../../board-colors';
 import { ConnectorActionsContext } from './actions';
-import { shapeOf } from './endpoints';
+import { endOfNode, shapeOf } from './endpoints';
 import { useLine } from './line';
 import { LineStyleButtons } from './LineStyleButtons';
 import { upperFirst } from '../../upper-first';
@@ -60,6 +60,19 @@ export function ConnectorMarkers() {
         >
           <path d="M1 1 L10 5 L1 9 Z" className="flow-arrow" />
         </marker>
+        {/* A one-way rail's (CD4): small and open, at its receiving end. */}
+        <marker
+          id="rail-arrow"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="8"
+          markerHeight="8"
+          markerUnits="userSpaceOnUse"
+          orient="auto-start-reverse"
+        >
+          <path d="M1.5 1.5 L8.5 5 L1.5 8.5" className="rail-arrow" />
+        </marker>
         <marker
           id="connector-dot"
           viewBox="0 0 10 10"
@@ -94,12 +107,17 @@ const LABEL_CHARACTER_WIDTH = 7;
 
 /**
  * A connector: a thin neutral line between two board objects, with an optional label on its middle. Selected,
- * it can be bent and its ends moved to other sides of their objects.
+ * it can be bent (a curve bowed, BU3) and its ends moved to other sides of their objects, or onto other objects (BT1).
  */
 export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<ConnectorEdgeType>) {
   const { data, selected = false } = props;
   const connector = data!.connector;
   const { editing, edit, update, select } = useContext(ConnectorActionsContext);
+  const { getNode } = useReactFlow();
+  const endOn = (nodeId: string) => {
+    const node = getNode(nodeId);
+    return node === undefined ? undefined : endOfNode(node, 'top');
+  };
   const { shape, handles } = useLine(
     props,
     connector.style,
@@ -107,6 +125,17 @@ export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<Connec
     (geometry) => update({ id: connector.id, ...geometry }),
     // Roughly, as drawn: the handles keep clear of it, so a press on it reaches it.
     connector.label === '' ? undefined : { width: connector.label.length * LABEL_CHARACTER_WIDTH + 2 * tokenNumber('--space-2'), height: tokenNumber('--control-row') },
+    {
+      // Either end goes onto any other object a connector can join (BT1).
+      canEndOn: (nodeId) => endOn(nodeId) !== undefined,
+      onDoubleClick: () => edit(connector.id),
+      onMoved: (which, nodeId, { fromSide, toSide, points }) => {
+        const end = endOn(nodeId);
+        // A connector's sides are always picked: its moved end's is the one nearest where it was let go.
+        const side = which === 'from' ? fromSide : toSide;
+        if (end !== undefined && side !== 'auto') update({ id: connector.id, points, [which]: { ...end, side } });
+      },
+    },
   );
   const { path } = shape;
   const { x: labelX, y: labelY } = shape.label;
@@ -130,6 +159,7 @@ export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<Connec
           <div
             className="connector-label nodrag nopan"
             data-testid="connector-label"
+            data-connector={connector.id}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             }}

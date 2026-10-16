@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Zone } from '@agent-board/daemon/protocol';
 import { folderLabel } from './folders';
 import { agentStartIn, dropPlace, issueScope, issueStartIn, trackerZoneFor } from './place-session';
-import { AGENT_TILE_SIZE } from './layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 
 const zone = { id: 'z', x: 1000, y: 1000, width: 800, height: 600 };
 

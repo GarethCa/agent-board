@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
-import { AGENT_TILE_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from './layout';
-import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
+import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
 import type { TileNodeType } from './tile';
 import { itemNode } from './items/items';
@@ -11,7 +11,7 @@ const zone = (id: string, x = 0, repoRoot: string | null = '/code/app'): ZoneNod
   zoneNode({ id, x, y: 0, width: 800, height: 300, repoRoot, folder: '', name: id, color: '#4c6ef5' } as Zone);
 
 const agent = (sessionId: string, zoneId: string | null, position: TilePosition | null = null, repoRoot = '/code/app') =>
-  ({ sessionId, zoneId, position, repoRoot, name: sessionId, harness: 'claude' }) as Agent;
+  ({ sessionId, zoneId, position, repoRoot, name: sessionId, harness: 'claude', endedAt: null }) as Agent;
 const shell = (id: string, zoneId: string | null, position: TilePosition | null = null) =>
   ({ id, zoneId, position, name: id, cwd: '/', layout: { type: 'pane', sessionId: `${id}-pane` }, endedPanes: [], owner: null }) as unknown as Shell;
 const external = (id: string, zoneId: string | null, position: TilePosition | null = null) =>
@@ -253,4 +253,71 @@ describe('holdsTiles', () => {
 // The slot logic itself is layout.ts's; this only pins that withTiles uses it.
 it('uses freeTileSlot for new tiles', () => {
   expect(tile(withTiles([zone('z')], [agent('a', 'z')], [], []), 'agent:a').position).toEqual(freeTileSlot(800, []));
+});
+
+describe('withTiles: folded chips', () => {
+  const ended = (sessionId: string, state: Agent['state'] = 'done') => ({ ...agent(sessionId, 'z', { x: 40, y: 80, z: null }), endedAt: '2026-01-01T00:00:00Z', state, shellSessionId: null, shellHarness: null }) as Agent;
+  const live = (sessionId: string) => ({ ...agent(sessionId, 'z', { x: 340, y: 80, z: null }), endedAt: null, state: 'idle' }) as Agent;
+
+  it('draws a closed agent as a chip where its tile was, and leaves live ones full size', () => {
+    const nodes = withTiles([zone('z')], [ended('a'), live('b')], [], []);
+
+    expect(tile(nodes, 'agent:a')).toMatchObject({ width: CHIP_SIZE.width, height: CHIP_SIZE.height, data: { folded: true } });
+    expect(tile(nodes, 'agent:b')).toMatchObject({ width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height });
+    expect(tile(nodes, 'agent:b').data.folded).toBeUndefined();
+  });
+
+  it("draws a chip centred in its tile's place, as the crew-layout mock has it, so an edge to a tile beside it is straight", () => {
+    const nodes = withTiles([zone('z')], [ended('a'), live('b')], [], []);
+    const [chip, full] = [tile(nodes, 'agent:a'), tile(nodes, 'agent:b')];
+
+    expect(chip.position.y + CHIP_SIZE.height / 2).toBe(full.position.y + AGENT_TILE_SIZE.height / 2);
+    expect(chip.position.x).toBe(40);
+    expect(chip.data.lift).toBe(chip.position.y - 80);
+  });
+
+  it('saves a move of a chip from where its tile is, not where the chip is drawn', () => {
+    const chip = tile(withTiles([zone('z')], [ended('a')], [], []), 'agent:a');
+    expect(savedMove(chip.data, { zoneId: 'z', x: 100, y: 200 })).toEqual({ zoneId: 'z', x: 100, y: 200 - chip.data.lift! });
+    const full = tile(withTiles([zone('z')], [live('b')], [], []), 'agent:b');
+    expect(savedMove(full.data, { zoneId: 'z', x: 100, y: 200 })).toEqual({ zoneId: 'z', x: 100, y: 200 });
+  });
+
+  it('keeps a chip exactly where it was through a zone delete and its undo, however many times: what is recorded is the saved place', () => {
+    const start = withTiles([zone('z')], [ended('a')], [], []);
+    const drawn = tile(start, 'agent:a').position;
+    let nodes = start;
+    for (let round = 0; round < 2; round++) {
+      // The delete records where the tile is saved; the undo saves that again, and the board draws it from there.
+      const at = savedPlace(tile(nodes, 'agent:a'));
+      expect(at).toEqual({ x: 40, y: 80 });
+      const restored = new Map([['agent:a', { zoneId: 'z', ...at }]]);
+      nodes = withTiles([zone('z')], [ended('a')], [], [], restored);
+      expect(tile(nodes, 'agent:a').position).toEqual(drawn);
+    }
+  });
+
+  it('keeps a closed agent the user unfolded, or one expanded in place, a full tile', () => {
+    const unfolded = withTiles([zone('z')], [ended('a')], [], [], new Map(), [], {}, new Set(['agent:a']));
+    expect(tile(unfolded, 'agent:a').data.folded).toBeUndefined();
+    expect(tile(unfolded, 'agent:a').width).toBe(AGENT_TILE_SIZE.width);
+
+    const expanded = withTiles([zone('z')], [ended('a')], [], [], new Map(), expandTile([], 'agent:a'));
+    expect(tile(expanded, 'agent:a').data.folded).toBeUndefined();
+  });
+
+  it('does not fold an ended agent whose pane is a live shell: its tile keeps its Restart', () => {
+    const inShell = { ...ended('a'), shellSessionId: 'shell-1' } as Agent;
+    expect(tile(withTiles([zone('z')], [inShell], [], []), 'agent:a').data.folded).toBeUndefined();
+  });
+
+  it('does not fold an agent a restart stopped, which is resumed', () => {
+    const nodes = withTiles([zone('z')], [ended('a', 'stopped-by-restart')], [], []);
+    expect(tile(nodes, 'agent:a').data.folded).toBeUndefined();
+  });
+
+  it('draws a chip at the chip size whatever size the tile was resized to', () => {
+    const nodes = withTiles([zone('z')], [ended('a')], [], [], new Map(), [], { 'agent:a': { width: 480, height: 320 } });
+    expect(tile(nodes, 'agent:a')).toMatchObject({ width: CHIP_SIZE.width, height: CHIP_SIZE.height });
+  });
 });

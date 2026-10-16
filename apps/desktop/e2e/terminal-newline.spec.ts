@@ -1,6 +1,6 @@
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, screen, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, screen, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { test, browseForZone, newShell, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -20,9 +20,6 @@ async function typeTwoLines(window: Page): Promise<void> {
   await window.keyboard.type('line two');
   await window.keyboard.press('Enter');
 }
-
-/** A session window's own shortcut: ⌘ on macOS, Ctrl+Shift elsewhere, where Ctrl's keys are the terminal's. */
-const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
 
 /** Each view of an agent's terminal: opens it from its tile, and says which page and terminal to type into. */
 const VIEWS: Record<string, (app: ElectronApplication, window: Page) => Promise<{ page: Page; terminal: Locator }>> = {

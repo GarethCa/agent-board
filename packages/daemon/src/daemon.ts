@@ -8,7 +8,6 @@ import {
   createGitHubTracker,
   createKeychainStore,
   createLinearTracker,
-  listPullRequests,
   mergePullRequest,
   pullRequestOfUrl,
   type CredentialStore,
@@ -20,7 +19,11 @@ import { createExternalSessionHost, externalHandlers, type ExternalSessionHost }
 import { externalResumeHandlers } from './resume-external.ts';
 import { removeExternalHookFile, writeCliShim, writeExternalHookFile, writeHookShim, type CliLauncher } from './hook-forwarder.ts';
 import { boardHandlers, guardBoardCallers, type BoardConnection } from './board.ts';
-import { createOrchestratorHost } from './orchestrators.ts';
+import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
+import { boardMcpHandlers } from './board-mcp.ts';
+import { openBoardSession } from './board-ops.ts';
+import { layoutHandlers } from './orchestrator-layout.ts';
+import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
 import { connectorHandlers } from './connectors.ts';
 import { commandPlan } from './flow-approvals.ts';
 import { createConditionChecker, createShellRunner } from './flow-conditions.ts';
@@ -64,6 +67,7 @@ import { createImageSweeper } from './image-sweeper.ts';
 import { createLinkCards } from './link-cards.ts';
 import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
+import { createSelectionAsks } from './selection-asks.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createScheduleHost } from './schedules.ts';
 import { createSettings } from './settings.ts';
@@ -71,6 +75,7 @@ import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
 import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
 import { watchPullRequests } from './pull-requests.ts';
+import { createPullRequestLookup } from './agent-pull-requests.ts';
 import { pullRequestTabHandlers } from './pull-request-tabs.ts';
 import { createTrackerHost, trackerHandlers, type TrackerFactory } from './trackers.ts';
 import { setupHandlers } from './setup-checks.ts';
@@ -231,6 +236,12 @@ const DEFAULT_PULL_REQUEST_POLL_MS = 60_000;
 const DEFAULT_FLOW_RECHECK_MS = 60_000;
 
 /**
+ * The connection the daemon calls its own methods on (the layout commands'): no client's, so it presents no board
+ * token, hears nothing and is never backed up.
+ */
+const DAEMON_ITSELF: SessionSubscriber & BoardConnection = { send: () => {}, backlog: () => 0, whenDrained: (callback) => callback() };
+
+/**
  * Starts the daemon (ADR-0002) on `dataDir`: takes the data dir's lock, opens and migrates the database, starts the
  * hook ingress and serves JSON-RPC on the socket. Throws `DaemonAlreadyRunningError` if another daemon owns the dir.
  * It stays up while a client is connected, a session is live or an agent has an enabled schedule, and exits once none
@@ -319,7 +330,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
 
     // Late-bound: the agent host is made after, with the shells' `deleteOwned`.
     const shells = createShellHost({ db, sessions, homeDir, shell, agentDeleting: (agentId) => agents.isDeleting(agentId), broadcast, log });
-    const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1');
+    const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1 UNION SELECT 1 FROM agent_conversations WHERE harness_session_id = ?1');
     const externalSessions = createExternalSessionHost({
       db,
       isAgentSession: (id) => isAgentSession.get(id) !== undefined,
@@ -339,6 +350,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       externalTokenSha256: hashToken(externalToken),
       onExternalHook: (harness, payload) => {
         externalSessions.onHook(harness, payload).catch((error: Error) => log(`external hook failed: ${error.message}`));
+      },
+      // The board MCP over HTTP (ADR-0010): each call connects to this daemon's own socket as the token's session,
+      // exactly as `agent-board mcp` would, so the board-caller guard and its scope hold unchanged.
+      mcpCallerFor: (token) => {
+        const sessionId = sessions.sessionForBoardToken(token);
+        if (sessionId === undefined) return undefined;
+        const env = { [BOARD_SOCKET_ENV]: paths.socket, [BOARD_TOKEN_ENV]: token };
+        const cwd = () => sessions.list().find((session) => session.id === sessionId)?.cwd ?? homeDir;
+        return { sessionId, handlers: boardMcpHandlers({ openSession: () => openBoardSession(env), cwd }) };
       },
     });
     const hookPort = ingress.port;
@@ -369,6 +389,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       const zoneId = agents.repoZoneId(sessionId);
       return zoneId === undefined ? null : trackers.zoneTracker(zoneId);
     };
+    /** Hears pull requests read, for the crew events: set once the orchestrators are made, below. */
+    const crew: { hearsPullRequests?: OrchestratorHost['onPullRequestsRead'] } = {};
     // `agents` is created just below; the watcher's first round runs from a timer, once it exists.
     const pullRequests = watchPullRequests({
       // Not agents whose worktree is gone (removed by hand): gh can't be asked there. Nor one resumed outside git, or
@@ -384,7 +406,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
             repo: githubRepo(repoZoneTracker(agent.sessionId)),
             ended: agent.endedAt !== null,
           })),
-      pullRequests: (agent) => listPullRequests(agent.branch, { gh, cwd: agent.worktree, repo: agent.repo }),
+      pullRequests: createPullRequestLookup({ gh }),
       intervalMs:
         options.pullRequestPollMs ??
         (Number(process.env.AGENT_BOARD_PULL_REQUEST_POLL_MS) || DEFAULT_PULL_REQUEST_POLL_MS),
@@ -392,6 +414,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         agents.announce(sessionId);
         flowEdges.recheck(sessionId);
       },
+      // Its rounds start once the orchestrators' crew events hear its reads (below): a first read must reach them.
+      startLater: true,
+      onRead: (sessionId, own, first) => crew.hearsPullRequests?.(sessionId, own, first),
       log,
     });
     // `agents` is created just below; a schedule first fires from a timer, once it exists.
@@ -468,15 +493,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shell,
       shellArgs,
       hookUrl: () => `http://127.0.0.1:${hookPort}/hooks`,
+      boardMcpUrl: () => `http://127.0.0.1:${hookPort}/mcp`,
       permissionHoldMs: options.permissionHoldMs ?? DEFAULT_PERMISSION_HOLD_MS,
       trackers,
       pullRequests: (sessionId) => pullRequests.get(sessionId),
+      pushedPullRequests: (sessionId) => pullRequests.pushed(sessionId),
       schedules,
       onHandoff: (sessionId) => {
         flowEdges.handOff(sessionId);
         reviews.onHandoff(sessionId);
+        const finalMessage = agents.finalMessage(sessionId);
+        if (finalMessage !== undefined) void selectionAsks.finished(sessionId, finalMessage);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
+      onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
         flowEdges.turnBoundary(sessionId);
         // Its turn is over, so its call is too: nothing waits on the answer now.
@@ -486,6 +516,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges.dropAgent(sessionId);
         gates.forget(sessionId);
         asks.forget(sessionId);
+        selectionAsks.forget(sessionId);
       },
       asks,
       broadcast,
@@ -533,6 +564,21 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     await sources.reconcile();
+    // Ask Claude about a selection: its answer is made through the daemon's own methods, as the board's are.
+    const selectionAsks = createSelectionAsks({
+      db,
+      dir: join(paths.dataDir, 'selection-asks'),
+      images,
+      spawn: (params, place) => agents.spawn(params, undefined, place),
+      agent: (sessionId) => agents.get(sessionId),
+      finalMessage: (sessionId) => agents.finalMessage(sessionId),
+      zoneRepo: (zoneId) => {
+        const zone = zoneTable.list().find((each) => each.id === zoneId);
+        return zone?.repoRoot ?? zone?.defaultRepo ?? null;
+      },
+      call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+      log,
+    });
     const gates = createGateHost({
       db,
       dir: join(paths.dataDir, 'gates'),
@@ -571,6 +617,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     listeners.push((event) => orchestrators.onEvent(event));
+    crew.hearsPullRequests = (sessionId, own, first) => orchestrators.onPullRequestsRead(sessionId, own, first);
+    pullRequests.start();
+    // An agent started this run has its pull requests read as it starts, not at the next round: what it opens before
+    // then is new, not there at its first read.
+    const readAtStart = new Set<string>();
+    listeners.push((event) => {
+      if (event.type === 'agent.removed') readAtStart.delete(event.sessionId);
+      if (event.type !== 'agent.updated' || event.agent.createdAt < startedAt) return;
+      const { sessionId } = event.agent;
+      if (readAtStart.has(sessionId) || pullRequests.read(sessionId)) return;
+      readAtStart.add(sessionId);
+      void pullRequests.refresh(sessionId);
+    });
+    const orchestratorHandlers = orchestrators.handlers<SessionSubscriber & BoardConnection>();
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
@@ -637,8 +697,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         logActivity: orchestrators.logActivity,
         checkHandoffTarget: (from, to) => orchestrators.checkHandoffTarget(from, to),
       }),
-      ...orchestrators.handlers<SessionSubscriber & BoardConnection>(),
+      ...orchestratorHandlers,
+      // The layout commands act through the daemon's own methods, as the board's drags and menus call them; a reviewer an
+      // orchestrator starts joins its implementer's cluster.
+      ...layoutHandlers<SessionSubscriber & BoardConnection>({
+        db,
+        access: orchestrators.access,
+        call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+        spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection as SessionSubscriber & BoardConnection),
+        warn: log,
+      }),
+      ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
+      ...selectionAsks.handlers<SessionSubscriber & BoardConnection>(),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
@@ -651,6 +722,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         callers: { sessions, agents, shells },
         gates,
         agent: (sessionId) => agents.get(sessionId),
+        refreshBranch: (sessionId) => agents.refreshBranch(sessionId),
         githubRepo: (sessionId) => githubRepo(repoZoneTracker(sessionId)),
         pullRequests: (sessionId) => pullRequests.get(sessionId),
         refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
@@ -667,7 +739,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // The tiles showing it say so at once, not at the watcher's next round.
         changed: async ({ repo, number }) => {
           const showing = agents.list().filter((agent) =>
-            pullRequests.get(agent.sessionId).some((pr) => pr.number === number && pullRequestOfUrl(pr.url)?.repo.toLowerCase() === repo.toLowerCase()),
+            [...pullRequests.get(agent.sessionId), ...pullRequests.pushed(agent.sessionId)].some(
+              (pr) => pr.number === number && pullRequestOfUrl(pr.url)?.repo.toLowerCase() === repo.toLowerCase(),
+            ),
           );
           await Promise.all(showing.map((agent) => pullRequests.refresh(agent.sessionId)));
         },
@@ -681,8 +755,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
               return {
                 sessionId: agent.sessionId,
                 name: agent.name,
-                branch: agent.branch,
-                gated: agent.branch !== '' && gates.command(agent.sessionId) !== null,
+                branch: agent.ownedBranch,
+                gated: agent.ownedBranch !== '' && gates.command(agent.sessionId) !== null,
                 read: pullRequests.read(agent.sessionId),
                 repo: githubRepo(repoZoneTracker(agent.sessionId)) ?? seen.map((pr) => pullRequestOfUrl(pr.url)?.repo).find((repo) => repo !== undefined),
                 pullRequests: seen,

@@ -4,7 +4,7 @@
 export type MeasureText = (text: string, size: number) => number;
 
 export type Inline =
-  | { type: 'text'; text: string }
+  | { type: 'text' | 'code'; text: string }
   | { type: 'bold' | 'italic'; children: Inline[] }
   | { type: 'link'; href: string; children: Inline[] };
 
@@ -21,7 +21,7 @@ const WORD_CHARACTER = /\w/;
 
 /**
  * Reads a note's markdown: paragraphs, bulleted and numbered lists, and inside a line **bold**, *italics* (or
- * _italics_) and [links](https://…), https only. Anything else, an unclosed marker included, is plain text.
+ * _italics_), `code` and [links](https://…), https only. Anything else, an unclosed marker included, is plain text.
  */
 export function parseMarkdown(source: string): Block[] {
   const blocks: Block[] = [];
@@ -62,6 +62,14 @@ function parseInline(text: string): Inline[] {
       out.push({ type: 'link', href: link[2]!, children: parseInline(link[1]!) });
       i += link[0].length;
       continue;
+    }
+    if (rest.startsWith('`')) {
+      const close = text.indexOf('`', i + 1);
+      if (close > i + 1) {
+        out.push({ type: 'code', text: text.slice(i + 1, close) });
+        i = close + 1;
+        continue;
+      }
     }
     if (rest.startsWith('**')) {
       const close = text.indexOf('**', i + 2);
@@ -113,7 +121,7 @@ export function plainText(source: string): string {
 }
 
 function inlineText(inlines: Inline[]): string {
-  return inlines.map((inline) => (inline.type === 'text' ? inline.text : inlineText(inline.children))).join('');
+  return inlines.map((inline) => ('children' in inline ? inlineText(inline.children) : inline.text)).join('');
 }
 
 /**

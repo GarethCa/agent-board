@@ -123,7 +123,8 @@ export function connectorHandlers<Context>(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, color = ?, label = ?, points = ?, from_side = ?, to_side = ?,
+    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, color = ?, label = ?, points = ?,
+     from_type = ?, from_id = ?, from_side = ?, to_type = ?, to_id = ?, to_side = ?,
      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
   );
   const remove = db.prepare('DELETE FROM connectors WHERE id = ?');
@@ -180,6 +181,14 @@ export function connectorHandlers<Context>(
       const fields = paramsObject(params);
       const connector = get(stringParam(fields, 'id'));
       const given = (name: string) => fields[name] !== undefined;
+      // An end moved onto another object (BT1) joins it, on the side given; a side alone moves it round its own.
+      const [from, to] = (['from', 'to'] as const).map((name) => {
+        const end = given(name) ? endParam(fields, name) : connector[name];
+        return given(`${name}Side`) ? { ...end, side: oneOf(fields, `${name}Side`, CONNECTOR_SIDES) } : end;
+      }) as [ConnectorEnd, ConnectorEnd];
+      if (from.type === to.type && from.id === to.id) throw invalidParams('a connector can not join an object to itself');
+      if (given('from')) checkEndExists(from);
+      if (given('to')) checkEndExists(to);
       update.run(
         given('style') ? oneOf(fields, 'style', CONNECTOR_STYLES) : connector.style,
         given('startEnd') ? oneOf(fields, 'startEnd', CONNECTOR_LINE_ENDS) : connector.startEnd,
@@ -187,8 +196,12 @@ export function connectorHandlers<Context>(
         given('color') ? colorParam(fields) : connector.color,
         given('label') ? labelParam(fields) : connector.label,
         JSON.stringify(given('points') ? pointsParam(fields, 'points') : connector.points),
-        given('fromSide') ? oneOf(fields, 'fromSide', CONNECTOR_SIDES) : connector.from.side,
-        given('toSide') ? oneOf(fields, 'toSide', CONNECTOR_SIDES) : connector.to.side,
+        from.type,
+        from.id,
+        from.side,
+        to.type,
+        to.id,
+        to.side,
         connector.id,
       );
       return announce(get(connector.id));

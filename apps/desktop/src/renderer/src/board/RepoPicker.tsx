@@ -3,7 +3,6 @@ import { FolderOpen, GitBranch, Search, Sparkles, X } from 'lucide-react';
 import {
   shortIssueId,
   type AgentRepo,
-  type AgentRole,
   type Harness,
   type IssueCardData,
   type RecentFolder,
@@ -25,7 +24,8 @@ export interface RepoChoice {
   harness: Harness;
   /** The harness's own default without. */
   model?: string;
-  role?: AgentRole;
+  /** A built-in role, or a custom role's name. */
+  role?: string;
   allowProjectCodexConfig?: boolean;
 }
 

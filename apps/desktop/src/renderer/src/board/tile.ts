@@ -21,6 +21,10 @@ export type TileData = {
   shell?: Shell;
   /** Expanded in place: drawn by `ExpandedTile` rather than the representation. */
   expanded?: true;
+  /** A closed agent shrunk to a chip: drawn by `FoldedChip`, at `CHIP_SIZE`. */
+  folded?: true;
+  /** How far a folded chip is drawn below its tile's saved top, px, to sit centred in the tile's place: drawn only, never saved. */
+  lift?: number;
   /** The orchestrator that started the agent, while it is on the board. */
   from?: { sessionId: string; name: string };
   /** How many agents on the board the agent started, as an orchestrator. */
@@ -44,6 +48,8 @@ export interface TileActions {
    * OS window has that window brought forward instead.
    */
   expand(nodeId: string): void;
+  /** Unfolds a closed agent's chip to its full tile (`open`), or folds the tile back to its chip. */
+  setFolded(nodeId: string, folded: boolean): void;
   /** Returns the expanded tile to compact; its session keeps running. */
   collapse(nodeId: string): void;
   /**
@@ -122,6 +128,7 @@ export const ClickOpensContext = createContext<ClickOpens>('window');
 export const TileActionsContext = createContext<TileActions>({
   expand: () => {},
   collapse: () => {},
+  setFolded: () => {},
   resizeTile: () => {},
   resizeExpanded: () => {},
   maximise: () => {},

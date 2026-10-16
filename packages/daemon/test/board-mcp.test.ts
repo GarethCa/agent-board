@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { COMMAND_HELP, COMMAND_OPTIONS } from '../src/board-cli.ts';
@@ -19,6 +20,26 @@ async function boardDaemon() {
   return { daemon, client, recorder, zone };
 }
 
+/** The command lines of every process under `pid`, however deep. */
+function descendants(pid: number): string[] {
+  const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' })
+    .split('\n')
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
+    .filter((match) => match !== null)
+    .map(([, child, parent, command]) => ({ pid: Number(child), ppid: Number(parent), command: command! }));
+  const under = new Set([pid]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const row of rows) {
+      if (under.has(row.ppid) && !under.has(row.pid)) {
+        under.add(row.pid);
+        grew = true;
+      }
+    }
+  }
+  return rows.filter((row) => row.pid !== pid && under.has(row.pid)).map((row) => row.command);
+}
+
 /** Waits for an update in which the agent matches `match`. */
 async function untilAgent(recorder: ReturnType<typeof recordEvents>, sessionId: string, match: (agent: Agent) => boolean): Promise<Agent> {
   const event = await recorder.waitFor(
@@ -38,6 +59,10 @@ describe('the board MCP server in an agent', () => {
       const updated = await untilAgent(recorder, agent.sessionId, (seen) => seen.status?.progress === progress);
       expect(updated.status).toMatchObject({ summary: 'Moving session ids to the daemon', progress });
     }
+    // A Claude agent's MCP calls went to the daemon over HTTP: it started no `agent-board mcp` of its own.
+    // Codex keeps its stdio server until a real Codex has been seen calling the HTTP one.
+    const { pid } = (await client.call('session.list')).find((session) => session.id === agent.sessionId)!;
+    expect(descendants(pid).filter((command) => / mcp$/.test(command))).toHaveLength(harness === 'claude' ? 0 : 1);
 
     await recorder.waitForText(agent.sessionId, 'I know where I am.');
     const screen = recorder.screenText(agent.sessionId).replace(/\r/g, '');
@@ -114,20 +139,38 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
     { tool: 'set_status', command: 'status', positional: ['summary'] },
     { tool: 'open_pr', command: 'open-pr' },
-    { tool: 'new_agent', command: 'new', renamed: { prompt: 'file' } },
+    { tool: 'new_agent', command: 'new', renamed: { prompt: 'file', template: 'no-template' } },
     { tool: 'send', command: 'send', positional: ['agent'], renamed: { text: 'file' } },
-    { tool: 'wait', command: 'wait', positional: ['agents'], renamed: { timeout_seconds: 'timeout' } },
+    // With since, the tool is one round of `watch`, so it takes watch's --since and --only too.
+    {
+      tool: 'wait',
+      command: 'wait',
+      positional: ['agents'],
+      renamed: { timeout_seconds: 'timeout', kinds: 'only' },
+      options: ['until', 'any', 'timeout', 'crew', 'since', 'only'],
+    },
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
+    { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },
     { tool: 'close', command: 'close', positional: ['agent'] },
     { tool: 'add_edge', command: 'edge', positional: ['from', 'to'], renamed: { conditions: 'condition' } },
     { tool: 'list_edges', command: 'edges' },
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
+    { tool: 'move', command: 'move', positional: ['tile'] },
+    { tool: 'arrange', command: 'arrange', positional: ['zone'] },
+    { tool: 'add_note', command: 'note' },
+    { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color'] },
+    { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
+    { tool: 'roles', command: 'roles', options: [] },
+    { tool: 'set_role', command: 'roles', positional: ['name'], renamed: { template: 'file' } },
+    { tool: 'remove_role', command: 'roles', positional: ['name'], options: ['zone'] },
   ];
   /** Tools with no command of their own, and commands with no tool, each for a reason. */
   // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
   const MCP_ONLY = ['connections', 'ask', 'present_plan'];
-  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc'];
+  // Groups are the CLI's alone: making and changing zones is rarer than a tool's worth for every orchestrator.
+  // `watch` prints as things happen, as no tool call can: the wait tool with since is one round of it.
+  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'zone', 'watch'];
 
   const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];
   const toolProperties = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema.properties as object | undefined) ?? {});

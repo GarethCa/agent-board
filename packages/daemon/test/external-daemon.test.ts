@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, type FakeScenario } from '@agent-board/fake-harness';
 import { DaemonRpcError } from '../src/client.ts';
 import type { DaemonEvent, ExternalUpdatedEvent } from '../src/protocol.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, enclosingBoard, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 /** A daemon whose global hooks go into a temp home, and that home. */
 async function externalDaemon() {
@@ -218,5 +218,37 @@ describe('external sessions through the global hooks', () => {
     const result = await runClaude(tempRepo('app'), home);
     expect(result.code).toBe(0);
     expect(result.ms).toBeLessThan(5_000);
+  });
+});
+
+// A test run started by an agent on a live board inherits that board's session variables; left in, the fakes' hooks
+// skip the test's own daemon and these sessions never reach `done`. enclosing-board.test.ts has the tests
+// that a leak to the live board itself would fail.
+describe('external sessions, run from inside an agent on a live board', () => {
+  it('reaches done for a claude session under an enclosing board', async () => {
+    await enclosingBoard();
+    const { client, recorder, home } = await externalDaemon();
+    const repo = tempRepo('app');
+    const zone = await client.call('zone.add', { path: repo, x: 0, y: 0 });
+    await client.call('externalHooks.setEnabled', { enabled: true });
+
+    expect((await runClaude(repo, home)).code).toBe(0);
+
+    await recorder.waitFor((e): e is ExternalUpdatedEvent => isExternalUpdate(e) && e.session.state === 'done');
+    expect((await client.call('external.list'))[0]).toMatchObject({ harness: 'claude', zoneId: zone.id, state: 'done' });
+  });
+
+  it('reaches done for a codex session under an enclosing board', async () => {
+    await enclosingBoard();
+    const { client, recorder, home } = await externalDaemon();
+    const repo = tempRepo('app');
+    const zone = await client.call('zone.add', { path: repo, x: 0, y: 0 });
+    await client.call('externalHooks.setEnabled', { enabled: true });
+
+    const result = await runHarness('codex', ['exec', '--dangerously-bypass-hook-trust', 'Tidy the README'], repo, home);
+    expect(result.code).toBe(0);
+
+    await recorder.waitFor((e): e is ExternalUpdatedEvent => isExternalUpdate(e) && e.session.state === 'done');
+    expect((await client.call('external.list'))[0]).toMatchObject({ harness: 'codex', zoneId: zone.id, state: 'done' });
   });
 });

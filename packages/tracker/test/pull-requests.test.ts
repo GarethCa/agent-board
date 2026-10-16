@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { checksState, listPullRequests, mergePullRequest } from '../src/index.ts';
+import { checksState, findPushedPullRequests, listPullRequests, mergePullRequest } from '../src/index.ts';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '../src/testing.ts';
 
 const checkRun = (status: string, conclusion = '') => ({ __typename: 'CheckRun', name: 'check', status, conclusion });
@@ -109,6 +109,66 @@ describe('listPullRequests', () => {
     await expect(listPullRequests('main', { gh: github.gh, cwd: '/tmp', repo: 'acme/app' })).rejects.toMatchObject({
       kind: 'unauthorized',
     });
+  });
+});
+
+describe('findPushedPullRequests', () => {
+  const sha = 'c'.repeat(40);
+  const fakeWith = (pullRequests: FakeGitHubPullRequest[]) => {
+    const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests });
+    onTestFinished(github.dispose);
+    return github;
+  };
+  const numbers = (found: { number: number }[]) => found.map((p) => p.number);
+  const asked = (github: ReturnType<typeof fakeWith>) => github.calls().map((call) => call.args.slice(4, 6).join(' '));
+
+  it('finds the pull request of a branch the agent pushed to, open and after it merged, with no search', async () => {
+    const github = fakeWith([pr({ number: 174, headRefName: 'fix-the-login' }), pr({ number: 9, headRefName: 'other' })]);
+    const options = { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' };
+
+    expect(await findPushedPullRequests({ pushedTo: ['fix-the-login'], commit: sha }, options)).toEqual([
+      { number: 174, title: 'PR 174', url: 'https://github.com/acme/app/pull/174', state: 'open', checks: 'none' },
+    ]);
+    github.setState({ ...github.state(), pullRequests: [pr({ number: 174, headRefName: 'fix-the-login', state: 'MERGED' })] });
+    expect((await findPushedPullRequests({ pushedTo: ['fix-the-login'], commit: sha }, options))[0]?.state).toBe('merged');
+    expect(asked(github)).toEqual(['--head fix-the-login', '--head fix-the-login']);
+  });
+
+  it('lists the pull requests of every branch it pushed to, each once, asking about each branch once', async () => {
+    const github = fakeWith([pr({ number: 51, headRefName: 'b' }), pr({ number: 50, headRefName: 'a' })]);
+
+    const found = await findPushedPullRequests({ pushedTo: ['a', 'b', 'a'] }, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' });
+
+    expect(numbers(found)).toEqual([50, 51]);
+    expect(asked(github)).toEqual(['--head a', '--head b']);
+  });
+
+  it('asks about the first five branches it pushed to, then searches', async () => {
+    const github = fakeWith([]);
+    const pushedTo = Array.from({ length: 12 }, (_, i) => `pushed-${i}`);
+
+    await findPushedPullRequests({ pushedTo, commit: sha }, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' });
+
+    expect(asked(github)).toEqual([...[0, 1, 2, 3, 4].map((i) => `--head pushed-${i}`), `--search ${sha}`]);
+  });
+
+  it("falls back to the pull requests holding the agent's commit when no branch it pushed to has one", async () => {
+    const github = fakeWith([pr({ number: 174, headRefName: 'gone', state: 'MERGED', commits: ['a'.repeat(40), sha] }), pr({ number: 9, headRefName: 'other' })]);
+
+    const found = await findPushedPullRequests({ pushedTo: ['pruned'], commit: sha }, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' });
+
+    expect(numbers(found)).toEqual([174]);
+    expect(github.calls().at(-1)?.args.slice(0, 8)).toEqual(['pr', 'list', '--repo', 'acme/app', '--search', sha, '--state', 'all']);
+  });
+
+  it('asks nothing with nowhere pushed to and no commit, nor searches for what is not a commit id', async () => {
+    const github = fakeWith([pr({ number: 9, headRefName: 'other' })]);
+    const options = { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' };
+
+    expect(await findPushedPullRequests({ pushedTo: [] }, options)).toEqual([]);
+    expect(await findPushedPullRequests({ pushedTo: [], commit: '' }, options)).toEqual([]);
+    expect(await findPushedPullRequests({ pushedTo: [], commit: 'c0ffee' }, options)).toEqual([]);
+    expect(github.calls()).toEqual([]);
   });
 });
 

@@ -3,7 +3,7 @@ import { HandoffsContext } from './flow-edges';
 import { GitBranch } from 'lucide-react';
 import { HarnessMark } from './HarnessMark';
 import { HybridTile } from './HybridTile';
-import { AGENT_TILE_SIZE } from './layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { StatusPill } from '../ui';
 
 const AT = '2026-01-01T00:00:00.000Z';
@@ -75,17 +75,22 @@ export const galleryAgent = (state: AgentState): Agent => ({
   position: null,
   model: null,
   role: null,
+  roleName: null,
   reviews: null,
   description: 'A task as the agent was given it, long enough to need a second line on the tile.',
   branch: `acme-18-${state}`,
+  ownedBranch: `acme-18-${state}`,
+  detached: false,
   worktree: '/worktrees/gallery',
   cwd: '/worktrees/gallery',
   state,
   notice: null,
+  earlierConversations: [],
   issue: null,
   muted: false,
   seen: false,
   pullRequests: [],
+  pushedPullRequests: [],
   createdAt: AT,
   endedAt: null,
   exitCode: null,
@@ -93,6 +98,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   shellHarness: null,
   subagents: [],
   lastMessage: null,
+  finishedAt: null,
   permissions: [],
   ask: null,
   plan: null,
@@ -103,6 +109,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   orchestrate: null,
   spawnedBy: null,
   status: null,
+  workFinishedAt: null,
   ...EXTRAS[state],
 });
 
@@ -127,6 +134,15 @@ const NAMES: Agent[] = [
   { ...galleryAgent('waiting'), sessionId: 'gallery-name-30', name: 'Move the dock into the island' },
   { ...galleryAgent('done'), sessionId: 'gallery-name-60', name: 'Rework the movable sessions follow-up so the dock keeps up!' },
   { ...galleryAgent('thinking'), sessionId: 'gallery-reviewer', name: 'Write the code · review r1', reviewOf: 'gallery-running' },
+];
+
+/**
+ * Agents that ended (BW1): one that exited cleanly into a shell, one that exited with 1. Each says so in its state
+ * pill, with no Restart row on the tile.
+ */
+const ENDED: Agent[] = [
+  { ...galleryAgent('done'), sessionId: 'gallery-ended-0', name: 'Fix the flaky test', endedAt: AT, exitCode: 0, shellSessionId: 'gallery-ended-0-shell' },
+  { ...galleryAgent('failed'), sessionId: 'gallery-ended-1', name: 'Migrate the schema', notice: null, endedAt: AT, exitCode: 1, pullRequests: [{ number: 47, title: 'Migrate the schema', url: '', state: 'open', checks: 'failing' }] },
 ];
 
 /** An agent receiving a hand-off along a flow edge (FlowRules): its tile reads "receiving…". */
@@ -199,7 +215,7 @@ function HeaderCases() {
   );
 }
 
-/** An agent tile in every agent state, a crowded one, one with a long description, one receiving a hand-off, and a shell tile, for checking how they look. The app shows it at `#gallery`. */
+/** An agent tile in every agent state, a crowded one, two ended ones, one with a long description, one receiving a hand-off, and a shell tile, for checking how they look. The app shows it at `#gallery`. */
 export function TileGallery() {
   return (
     <HandoffsContext value={HANDOFFS}>
@@ -225,6 +241,11 @@ export function TileGallery() {
           <HybridTile id={RECEIVING.sessionId} tile={{ label: RECEIVING.name, harness: RECEIVING.harness, agent: RECEIVING }} />
         </div>
         {NAMES.map((agent) => (
+          <div key={agent.sessionId} style={AGENT_TILE_SIZE}>
+            <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />
+          </div>
+        ))}
+        {ENDED.map((agent) => (
           <div key={agent.sessionId} style={AGENT_TILE_SIZE}>
             <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />
           </div>

@@ -16,7 +16,6 @@ export function registerGateIpc(daemon: DaemonLink): void {
   passthrough(daemon, GATE_IPC.run, 'gate.run', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, GATE_IPC.stop, 'gate.stop', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, GATE_IPC.log, 'gate.log', (sessionId: string, step?: string, since?: number) => ({ sessionId, step, since }));
-  passthrough(daemon, GATE_IPC.openPullRequest, 'gate.openPullRequest', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, GATE_IPC.sendFailure, 'gate.sendFailure', (sessionId: string, step: string) => ({ sessionId, step }));
   passthrough(daemon, GATE_IPC.merge, 'gate.merge', (sessionId: string, number: number, headCommit: string, cleanup: GateCleanup) => ({
     sessionId,

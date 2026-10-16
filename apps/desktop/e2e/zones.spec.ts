@@ -10,7 +10,7 @@ import { settledBox, withDaemon } from './board-helpers.ts';
 import { launch, spawnAgent, tile } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone, addEmptyZone, openAddZone } from './launch.ts';
-import { AGENT_TILE_SIZE, leastZoneSize, ZONE_PADDING } from '../src/renderer/src/board/layout.ts';
+import { AGENT_TILE_SIZE, leastZoneSize, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 
 /** Zones as the daemon has stored them. */
 function storedZones(dataDir: string): Promise<Zone[]> {

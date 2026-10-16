@@ -2,8 +2,8 @@
 // web contents, so they never reach the window's renderer by themselves. Pure, so both platforms are tested.
 import type { Input } from 'electron';
 
-/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I. */
-const WINDOW_CODES = new Set(['KeyT', 'KeyW', 'KeyD', 'BracketLeft', 'BracketRight', ...Array.from({ length: 9 }, (_, at) => `Digit${at + 1}`)]);
+/** The window's shortcuts by `code` (`renderer/src/keys.ts`, `session/window-keys.ts`): tabs, splits, ⌘1–9, ⌘[ ⌘], ⌘I, ⌘K. */
+const WINDOW_CODES = new Set(['KeyT', 'KeyW', 'KeyD', 'KeyK', 'BracketLeft', 'BracketRight', ...Array.from({ length: 9 }, (_, at) => `Digit${at + 1}`)]);
 const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** What a web tab's page does with a key press it would otherwise get: hand it to its window, reload itself, or keep it. */
@@ -11,7 +11,7 @@ export type WebKey = 'window' | 'reload' | 'hardReload' | undefined;
 
 /**
  * What a key press in a web tab's page is for. Its window's own shortcuts go to the window (⌘W closes the tab, not the
- * OS window; ⌘T, ⌘D, ⌘1–9 and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
+ * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
  * page's). ⌘R (Ctrl+R) reloads the page, never the app, and ⇧⌘R (Ctrl+Shift+R) skips its cache. Everything else, ⌘C
  * and ⌘V among them, is the page's.
  */

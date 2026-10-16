@@ -24,25 +24,55 @@ interface GhPullRequest {
   statusCheckRollup: Record<string, unknown>[] | null;
 }
 
-/** At most this many pull requests per branch. */
+/** At most this many pull requests per `gh pr list`. */
 const MAX_PULL_REQUESTS = 20;
 
 /** What gh says in a repo none of whose remotes is on GitHub. */
 const NOT_ON_GITHUB = /no git remotes found|none of the git remotes configured/i;
+
+/** Where gh is asked about pull requests: in `repo` (`owner/repo`), or else the GitHub repo of the git repo at `cwd`. */
+type PullRequestOptions = GhOptions & { cwd: string; repo?: string };
 
 /**
  * The pull requests, open or not, whose head is `branch`, newest first, through the user's own `gh` login: in `repo`
  * (`owner/repo`), or else in the GitHub repo gh infers from the remotes of the git repo at `cwd`. None in a repo with
  * no GitHub remote. Failures are `TrackerError`s.
  */
-export async function listPullRequests(
-  branch: string,
-  options: GhOptions & { cwd: string; repo?: string },
+export function listPullRequests(branch: string, options: PullRequestOptions): Promise<PullRequest[]> {
+  return pullRequestList(['--head', branch], options);
+}
+
+/** At most this many branches an agent pushed to are asked about. */
+const MAX_PUSHED_TO = 5;
+
+/** A commit id as git writes it: SHA-1, or SHA-256. */
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * The pull requests an agent's work went into on branches other than its own: those of the branches it
+ * pushed to (`pushedTo`, its upstream first, the first `MAX_PUSHED_TO`, each asked about once); failing any, those
+ * holding `commit`, found by GitHub's search (which still finds them once their branch is deleted). At most
+ * `MAX_PUSHED_TO + 1` gh calls; none with neither. A `commit` that isn't a full commit id is never searched for.
+ * Otherwise as `listPullRequests`.
+ */
+export async function findPushedPullRequests(
+  where: { pushedTo: readonly string[]; commit?: string },
+  options: PullRequestOptions,
 ): Promise<PullRequest[]> {
+  const found = new Map<number, PullRequest>();
+  for (const head of [...new Set(where.pushedTo)].slice(0, MAX_PUSHED_TO)) {
+    for (const pr of await listPullRequests(head, options)) found.set(pr.number, pr);
+  }
+  if (found.size > 0 || where.commit === undefined || !COMMIT_ID.test(where.commit)) return [...found.values()];
+  return pullRequestList(['--search', where.commit], options);
+}
+
+/** `gh pr list` of every state, narrowed by `filter`, newest first. */
+async function pullRequestList(filter: string[], options: PullRequestOptions): Promise<PullRequest[]> {
   let found: GhPullRequest[];
   try {
     const args = [
-      ...['pr', 'list', ...(options.repo === undefined ? [] : ['--repo', options.repo]), '--head', branch],
+      ...['pr', 'list', ...(options.repo === undefined ? [] : ['--repo', options.repo]), ...filter],
       ...['--state', 'all', '--limit', String(MAX_PULL_REQUESTS)],
     ];
     found = JSON.parse(

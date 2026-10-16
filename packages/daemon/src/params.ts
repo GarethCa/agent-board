@@ -84,6 +84,8 @@ export function pointsParam(fields: Record<string, unknown>, name: string): Edge
   if (value.length > MAX_EDGE_POINTS) throw invalidParams(`a line bends at most ${MAX_EDGE_POINTS} times`);
   return value.map((point: unknown) => {
     const at = paramsObject(point);
-    return { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') };
+    const kept: EdgePoint = { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') };
+    if (at.bow !== undefined && at.bow !== true) throw invalidParams(`a point's bow is true or not given`);
+    return at.bow === true ? { ...kept, bow: true } : kept;
   });
 }

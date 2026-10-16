@@ -6,11 +6,15 @@ import { imagesOf, type ImageSweeper } from './image-sweeper.ts';
 import { isObject } from './json.ts';
 import {
   BOARD_ITEM_KINDS,
+  HARNESSES,
   IMAGE_EXTENSIONS,
   issueCardProblem,
   MAX_ITEM_DATA_BYTES,
   MAX_LINK_URL,
   MAX_STICKY_TEXT,
+  MAX_SUGGESTED_ARROWS,
+  MAX_SUGGESTED_SHAPES,
+  MAX_SUGGESTIONS,
   type ImageRef,
   type LinkData,
   MAX_TEXT_FONT_SIZE,
@@ -80,6 +84,38 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     }
     if (typeof data.color !== 'string' || !HEX_COLOR.test(data.color)) {
       throw invalidParams("a sticky note's color must be #rrggbb");
+    }
+  },
+  'agent-note': (data) => {
+    if (typeof data.text !== 'string') throw invalidParams("an agent note's text must be a string");
+    if (data.text.length > MAX_STICKY_TEXT) throw invalidParams(`an agent note's text is over ${MAX_STICKY_TEXT} characters`);
+    const agent = data.agent as Record<string, unknown> | undefined;
+    const known =
+      isObject(agent) &&
+      typeof agent.sessionId === 'string' &&
+      typeof agent.name === 'string' &&
+      isOneOf(HARNESSES, agent.harness) &&
+      (agent.role === null || typeof agent.role === 'string');
+    if (!known) throw invalidParams("an agent note's agent must be { sessionId, name, harness, role }");
+    if (typeof data.writtenAt !== 'string') throw invalidParams("an agent note's writtenAt must be a time");
+    checkBoolean('an agent note', data, 'editedByUser');
+    if (data.asked !== undefined) checkText('an agent note', data, 'asked');
+    if (data.about !== undefined && typeof data.about !== 'string') throw invalidParams("an agent note's about must be a session id");
+    if (data.suggestions !== undefined) {
+      const ok =
+        Array.isArray(data.suggestions) &&
+        data.suggestions.length <= MAX_SUGGESTIONS &&
+        data.suggestions.every(
+          (each) =>
+            isObject(each) &&
+            typeof each.id === 'string' &&
+            typeof each.title === 'string' &&
+            Array.isArray(each.shapes) &&
+            each.shapes.length <= MAX_SUGGESTED_SHAPES &&
+            Array.isArray(each.arrows) &&
+            each.arrows.length <= MAX_SUGGESTED_ARROWS,
+        );
+      if (!ok) throw invalidParams(`an agent note's suggestions must be at most ${MAX_SUGGESTIONS} of { id, title, shapes, arrows }`);
     }
   },
   image: (data) => {
@@ -297,8 +333,19 @@ export function itemHandlers<Context>(
       }
       if (has('x')) x = finiteNumberParam(fields, 'x');
       if (has('y')) y = finiteNumberParam(fields, 'y');
-      const data = has('data') ? { ...item.data, ...dataParam(fields) } : item.data;
+      const patch = has('data') ? dataParam(fields) : undefined;
+      const data = patch === undefined ? item.data : { ...item.data, ...patch };
+      // A shape of a kind this daemon doesn't know (a newer app's), which the patch leaves be or names again (as undo and
+      // redo send the whole item back), is checked as a rectangle and stored with its own kind, so the newer app finds it
+      // as it was.
+      const keptKind =
+        item.kind === 'shape' && patch !== undefined && (!('shape' in patch) || patch.shape === item.data.shape) && !isOneOf(SHAPE_TYPES, data.shape);
       if (has('data')) checkImagesStored(data);
+      let encoded = JSON.stringify(item.data);
+      if (patch !== undefined && keptKind) {
+        checkedData(item.kind, { ...data, shape: 'rectangle' });
+        encoded = JSON.stringify(data);
+      } else if (patch !== undefined) encoded = checkedData(item.kind, data);
       update.run(
         zoneId,
         x,
@@ -307,7 +354,7 @@ export function itemHandlers<Context>(
         has('height') ? sizeParam(fields, 'height') : item.height,
         has('z') ? finiteNumberParam(fields, 'z') : item.z,
         has('rotation') ? rotationParam(fields) : item.rotation,
-        has('data') ? checkedData(item.kind, data) : JSON.stringify(item.data),
+        encoded,
         item.id,
       );
       const updated = announce(get(item.id));

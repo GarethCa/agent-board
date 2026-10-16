@@ -96,6 +96,35 @@ describe('connectors over the socket', () => {
     expect(again.points).toEqual(points);
   });
 
+  it('moves an end onto another object, its look and bends kept, and refuses one onto nothing or the other end', async () => {
+    const { client, a, b } = await twoStickies();
+    const c = await client.call('item.create', sticky({ x: 800 }));
+    const points = [{ x: 40, y: -20 }];
+    const connector = await client.call('connector.create', between(a.id, b.id, { label: 'see', points }));
+
+    const moved = await client.call('connector.update', { id: connector.id, to: { type: 'item', id: c.id, side: 'top' } });
+
+    expect(moved).toMatchObject({ from: connector.from, to: { type: 'item', id: c.id, side: 'top' }, label: 'see', points });
+    expect(await client.call('connector.list')).toEqual([moved]);
+    await expect(client.call('connector.update', { id: connector.id, to: { type: 'item', id: 'missing', side: 'top' } })).rejects.toThrow('no item missing');
+    await expect(client.call('connector.update', { id: connector.id, to: { type: 'item', id: a.id, side: 'top' } })).rejects.toThrow('to itself');
+    await expect(client.call('connector.update', { id: connector.id, from: { type: 'item', id: c.id, side: 'left' } })).rejects.toThrow('to itself');
+    // Deleting the object it was moved onto deletes it, as with any end.
+    await client.call('item.delete', { id: c.id });
+    expect(await client.call('connector.list')).toEqual([]);
+  });
+
+  it("keeps a curve's bow marked as its bow, a bend kept from before bows unmarked, and refuses any other mark", async () => {
+    const { client, a, b } = await twoStickies();
+    const bowed = await client.call('connector.create', between(a.id, b.id, { points: [{ x: 10, y: 80, bow: true }] }));
+    const bent = await client.call('connector.create', between(b.id, a.id, { points: [{ x: 10, y: 80 }] }));
+
+    expect(bowed.points).toEqual([{ x: 10, y: 80, bow: true }]);
+    expect(bent.points).toEqual([{ x: 10, y: 80 }]);
+    expect((await client.call('connector.list')).map((connector) => connector.points)).toEqual([[{ x: 10, y: 80, bow: true }], [{ x: 10, y: 80 }]]);
+    await expect(client.call('connector.update', { id: bent.id, points: [{ x: 1, y: 2, bow: 'yes' }] as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+  });
+
   it('deletes a connector and tells every client', async () => {
     const { daemon, client, a, b } = await twoStickies();
     const other = recordEvents(await connectTestClient(daemon));

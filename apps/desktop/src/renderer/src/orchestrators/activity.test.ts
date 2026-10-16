@@ -22,6 +22,7 @@ describe('activityText', () => {
     expect(activityText(line({}))).toBe('started web impl');
     expect(activityText(line({ action: 'send' }))).toBe('sent web impl');
     expect(activityText(line({ action: 'interrupt' }))).toBe('interrupted web impl');
+    expect(activityText(line({ action: 'restart' }))).toBe('restarted web impl');
     expect(activityText(line({ action: 'close' }))).toBe('closed web impl');
     expect(activityText(line({ action: 'remove' }))).toBe('removed web impl');
     expect(activityText(line({ action: 'add-edge' }))).toBe('added an edge into web impl');
@@ -29,9 +30,29 @@ describe('activityText', () => {
     expect(activityText(line({ action: 'handoff' }))).toBe('handed off to web impl');
   });
 
+  it('says what it laid out: the tile it moved, the zone it arranged, the group or note it made, changed or removed', () => {
+    expect(activityText(line({ action: 'move' }))).toBe('moved web impl');
+    expect(activityText(line({ action: 'arrange', targetName: 'web' }))).toBe('arranged web');
+    expect(activityText(line({ action: 'add-zone', targetName: 'Review' }))).toBe('made the group Review');
+    expect(activityText(line({ action: 'change-zone', targetName: 'Review' }))).toBe('changed the group Review');
+    expect(activityText(line({ action: 'remove-zone', targetName: 'Review' }))).toBe('removed the group Review');
+    expect(activityText(line({ action: 'add-note', targetName: 'note “Ship it”' }))).toBe('added note “Ship it”');
+    expect(activityText(line({ action: 'edit-note', targetName: 'note “Ship it”' }))).toBe('edited note “Ship it”');
+    expect(activityText(line({ action: 'remove-note', targetName: 'note “Ship it”' }))).toBe('removed note “Ship it”');
+  });
+
+  it('says which of the app’s default roles it set or removed', () => {
+    expect(activityText(line({ action: 'set-role', targetName: 'designer' }))).toBe('set the default role designer');
+    expect(activityText(line({ action: 'remove-role', targetName: 'designer' }))).toBe('removed the default role designer');
+    expect(activityText(line({ action: 'set-role', outcome: 'refused', targetName: null }))).toBe('tried to set a default role');
+  });
+
   it('says what it tried when refused, and names no one when there was no one', () => {
     expect(activityText(line({ outcome: 'refused', reason: 'outside its zone' }))).toBe('tried to start web impl');
     expect(activityText(line({ outcome: 'refused', targetId: null, targetName: null }))).toBe('tried to start an agent');
+    expect(activityText(line({ action: 'move', outcome: 'refused', targetName: null }))).toBe('tried to move a tile');
+    expect(activityText(line({ action: 'add-zone', outcome: 'refused', targetName: null }))).toBe('tried to make a group');
+    expect(activityText(line({ action: 'remove-note', outcome: 'refused', targetName: null }))).toBe('tried to remove a note');
   });
 });
 

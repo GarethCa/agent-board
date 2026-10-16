@@ -184,7 +184,7 @@ describe('zone-less agents', () => {
     expect((await spawn('claude-opus-5-5[1m]')).model).toBe('claude-opus-5-5[1m]');
   });
 
-  it('keep the role they were started in, and refuse one that is not a role', async () => {
+  it('keep the role they were started in, and refuse a role name with control characters', async () => {
     const { client } = await agentDaemon();
     const repo = tempRepo();
 
@@ -192,8 +192,8 @@ describe('zone-less agents', () => {
 
     expect(agent.role).toBe('reviewer');
     await expect(
-      client.call('agent.spawn', { zoneId: null, repo: { path: repo }, prompt: '', role: 'boss' as never, position: at, ...SIZE }),
-    ).rejects.toMatchObject({ message: 'unknown role boss' });
+      client.call('agent.spawn', { zoneId: null, repo: { path: repo }, prompt: '', role: 'bo\u0007ss', position: at, ...SIZE }),
+    ).rejects.toMatchObject({ message: 'a role name has no control characters' });
   });
 
   it('started at once with no task get names of their own, and the next name is offered beforehand', async () => {

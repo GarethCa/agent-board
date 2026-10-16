@@ -3,7 +3,7 @@ import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
 import { CircleDot, Ellipsis, FileText, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, ShieldCheck, Unlink, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming, type MenuEntry } from '../ui';
 import { folderLabel } from './folders';
-import { leastZoneSize } from './layout';
+import { leastZoneSize } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
@@ -167,7 +167,8 @@ export function zoneNode(zone: Zone): ZoneNodeType {
     height: zone.height,
     data: { zone },
     // Moved by its tab or its bare body: its tiles and items are nodes of their own, drawn over it, so a press
-    // on one moves only that, and its tab's buttons are `nodrag`. A marquee inside it starts with Shift held.
+    // on one moves only that, and its tab's buttons are `nodrag`. A marquee inside it starts with Shift held, or in box
+    // select, where its body lets presses through to the board.
     zIndex: 0,
   };
 }

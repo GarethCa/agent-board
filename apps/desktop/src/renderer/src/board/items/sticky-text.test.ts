@@ -120,6 +120,14 @@ describe('parseMarkdown', () => {
     ]);
   });
 
+  it('reads `code` inside a line as it is, markers and all', () => {
+    expect(parseMarkdown('run `pnpm **check**` now')).toEqual([
+      { type: 'paragraph', lines: [[{ type: 'text', text: 'run ' }, { type: 'code', text: 'pnpm **check**' }, { type: 'text', text: ' now' }]] },
+    ]);
+    expect(parseMarkdown('a `b')).toEqual([{ type: 'paragraph', lines: [[{ type: 'text', text: 'a `b' }]] }]);
+    expect(plainText('see `R2`')).toBe('see R2');
+  });
+
   it('does not read underscores inside words as italics', () => {
     expect(parseMarkdown('snake_case_name')).toEqual([
       { type: 'paragraph', lines: [[{ type: 'text', text: 'snake_case_name' }]] },

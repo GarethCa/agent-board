@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Agent, CreateShellTileParams, IssueCardData, Shell, SpawnAgentParams, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { HarnessMark } from './HarnessMark';
-import { AGENT_TILE_SIZE, NEW_AGENT_SIZE } from './layout';
+import { AGENT_TILE_SIZE, NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import { agentStartIn, dropPlace } from './place-session';
 import { RepoPicker, type PickerStart, type RepoChoice } from './RepoPicker';
 import { StatusPill } from '../ui';

@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { launch, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -9,8 +9,6 @@ const tabNamed = (page: Page, name: string) => tabs(page).filter({ has: page.get
 /** The tab showing: its panes, and the terminal of its focused pane. */
 const shown = (page: Page) => sessionWindow(page).locator('[data-testid="session-tab-view"]:not([hidden])');
 const shownScreen = (page: Page) => shown(page).locator('.shell-pane[data-focused="true"] .xterm-rows');
-/** A session window's own shortcut: ⌘ on macOS, Ctrl+Shift elsewhere, where Ctrl's keys are the terminal's. */
-const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
 /** The focused pane's terminal input, in the tab showing. */
 const paneInput = (page: Page) => shown(page).locator('.shell-pane[data-focused="true"] .xterm-helper-textarea');
 const liveSessions = (page: Page) => page.evaluate(() => window.agentBoard.sessions.list());

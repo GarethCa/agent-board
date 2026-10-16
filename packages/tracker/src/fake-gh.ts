@@ -131,9 +131,11 @@ function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
   if (command === 'pr list') {
     const repo = flags.get('--repo') ?? remoteRepo();
     const head = flags.get('--head');
+    const search = flags.get('--search');
     return state.pullRequests
       .filter((pr) => pr.repo.toLowerCase() === repo.toLowerCase())
       .filter((pr) => head === undefined || pr.headRefName === head)
+      .filter((pr) => search === undefined || holdsCommit(pr, search))
       .slice(0, Number(flags.get('--limit') ?? 30))
       .map((pr) => pick(pullRequestJson(pr), fields));
   }
@@ -271,6 +273,12 @@ function issueJson(issue: FakeGitHubIssue) {
     url: `https://github.com/${issue.repo}/issues/${issue.number}`,
     labels: (issue.labels ?? []).map((name) => ({ name })),
   };
+}
+
+/** Whether the pull request holds a commit `sha` names (7 characters or more of it), as GitHub's search finds one. */
+function holdsCommit(pr: FakeGitHubPullRequest, sha: string): boolean {
+  const commits = [...(pr.commits ?? []), ...(pr.headRefOid === undefined ? [] : [pr.headRefOid])];
+  return sha.length >= 7 && commits.some((commit) => commit.startsWith(sha.toLowerCase()));
 }
 
 /** A pull request as `gh pr view --json` and `gh pr list --json` give it. */

@@ -364,3 +364,36 @@ describe('the edge shapes migration', () => {
     expect(db.prepare('SELECT * FROM flow_edge_events').all()).toEqual(events);
   });
 });
+
+describe('the auto edge sides migration', () => {
+  it('gives automatic sides to each edge an agent made still drawn as made, from right to left unbent, and leaves the rest', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const auto = MIGRATIONS.findIndex((m) => m.name === 'auto_edge_sides');
+    expect(auto).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, auto));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd)
+        VALUES ('a', 'claude', 'ha', '/a'), ('b', 'claude', 'hb', '/b'), ('c', 'claude', 'hc', '/c'), ('d', 'claude', 'hd', '/d');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state)
+        VALUES ('a', 'z', '/code/app', 1, 'Ada', '', 'ada', '/a', 'idle'), ('b', 'z', '/code/app', 1, 'Bo', '', 'bo', '/b', 'idle'),
+          ('c', 'z', '/code/app', 1, 'Cy', '', 'cy', '/c', 'idle'), ('d', 'z', '/code/app', 1, 'Di', '', 'di', '/d', 'idle');
+      INSERT INTO flow_edges (id, from_session_id, to_session_id, trigger, payload, made_by, one_off, from_side, to_side, style, points)
+        VALUES ('orchestrated', 'a', 'b', 'auto', 'final-message', 'd', 0, 'right', 'left', 'curved', '[]'),
+          ('one-off', 'b', 'a', 'manual', 'final-message', 'b', 1, 'right', 'left', 'elbow', '[]'),
+          ('drawn', 'a', 'c', 'manual', 'final-message', NULL, 0, 'right', 'left', 'curved', '[]'),
+          ('bent', 'c', 'a', 'manual', 'final-message', 'd', 0, 'right', 'left', 'curved', '[{"x":10,"y":20}]'),
+          ('picked', 'b', 'c', 'manual', 'final-message', 'd', 0, 'bottom', 'top', 'curved', '[]');`);
+    const sides = () => db.prepare('SELECT id, from_side, to_side, style, points FROM flow_edges ORDER BY id').all();
+    const before = sides();
+
+    migrate(db, MIGRATIONS.slice(0, auto + 1));
+
+    // An agent never gives an edge its sides, so one it made from right to left unbent was never given them. One the
+    // user drew may have been dropped on those two handles: it stays as it is. Its style isn't where it attaches.
+    const now = new Map(before.map((row) => [row.id, row]));
+    for (const id of ['orchestrated', 'one-off']) now.set(id, { ...now.get(id)!, from_side: 'auto', to_side: 'auto' });
+    expect(sides()).toEqual([...now.values()]);
+  });
+});

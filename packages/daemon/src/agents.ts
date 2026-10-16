@@ -1,19 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { issuePrompt, shortIssueId, type PullRequest } from '@agent-board/tracker';
+import { existsSync } from 'node:fs';
+import type { PullRequest } from '@agent-board/tracker';
 import { runGit } from './git.ts';
-import { CLAUDE_HOOK_EVENTS, lastMessageAfterHook, stateAfterExit } from './claude-state.ts';
-import { guardCodexConfig, projectCodexConfig, type CodexConfigGuard } from './codex-config-guard.ts';
-import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
-import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
-import { stateAfterHook } from './harness-state.ts';
-import { hashToken, newToken } from './tokens.ts';
-import { isRunningSomething as defaultIsRunningSomething } from './foreground.ts';
-import { keyedQueue } from './keyed-queue.ts';
+import { stateAfterExit } from './claude-state.ts';
+import { createAgentLifecycle } from './agent-lifecycle.ts';
+import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
+import { createDeliveries } from './deliveries.ts';
+import { createHookStates } from './hook-states.ts';
 import { type HarnessPaths } from './harness-path.ts';
-import { loginShellKind } from './login-path.ts';
 import {
   dimensionParam,
   invalidParams,
@@ -29,19 +23,15 @@ import { createPermissionHolds, stateWithPrompts, type HookReply } from './permi
 import {
   AGENT_ERROR,
   DEFAULT_REVIEW_CAP,
-  MAX_ASK_WAIT_MS,
   INTERRUPT_KEY,
   isMidTurn,
   waitsOnUser,
   isStatusProgress,
-  MAX_DESCRIPTION_LENGTH,
   MAX_CREW_DEPTH,
   MAX_STATUS_LENGTH,
   type Agent,
   type AgentRepo,
   type AgentRole,
-  AGENT_ROLES,
-  REVIEWER_ROLES,
   type AgentState,
   type DaemonEvent,
   type Harness,
@@ -61,86 +51,23 @@ import {
   type TranscriptChunk,
   waitsForYou,
 } from './protocol.ts';
-import { folderPath, repoZoneOf } from './repo-zone.ts';
+import { repoZoneOf } from './repo-zone.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { RunStart, ScheduleHost } from './schedules.ts';
-import { sessionEnv, type SessionHost } from './sessions.ts';
-import { RESET_MODES } from './shells.ts';
-import { createSubagentStore, subagentsAfterExit, subagentsAfterHook } from './subagents.ts';
-import { answerInput, draftAfterInput } from './terminal-input.ts';
+import type { SessionHost } from './sessions.ts';
+import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
+import { oneLine } from './terminal-input.ts';
+import { isWorking, statusAfterTurn } from './turn-status.ts';
 import { createTranscriptReader } from './transcripts.ts';
 import type { TrackerHost } from './trackers.ts';
-import {
-  frontZ,
-  moveParams,
-  optionalPlaceParam,
-  saveMove,
-  tilePosition,
-  zoneIdParam,
-  type PositionColumns,
-} from './tile-position.ts';
-import {
-  addDetachedWorktree,
-  addWorktree,
-  agentBranchName,
-  checkedOutBranch,
-  freeWorktreePath,
-  agentWorktreePath,
-  freeBranchName,
-  checkedBranchName,
-  freeTypedBranch,
-  nameSlug,
-  removeWorktree,
-  unsavedWork,
-} from './worktrees.ts';
-import { initProject, resolveZoneFolder } from './zones.ts';
-import { carryClaudeTranscript, hasClaudeTranscript } from './claude-transcript.ts';
-import { recount } from './counts.ts';
-import { handoffLine } from './handoff-text.ts';
-import { fillTemplate, type RoleTemplates, type TemplateValues } from './role-templates.ts';
+import { moveParams, optionalPlaceParam, saveMove, tilePosition, zoneIdParam, type PositionColumns } from './tile-position.ts';
+import type { RoleTemplates } from './role-templates.ts';
 
-/** Codex's flag that runs untrusted hooks without review (ADR-0004). */
-const CODEX_BYPASS_FLAG = '--dangerously-bypass-hook-trust';
-
-/**
- * What a model name may be (`opus`, `claude-opus-5-5[1m]`, `gpt-5-codex`): never an option of the harness's own, nor
- * whitespace, since it is passed as an argument.
- */
-const MODEL_NAME = /^[\w.:@/[\]][\w.:@/[\]-]*$/;
-
-/** The tile's notice for an agent relaunched without a conversation to carry on. */
-const NO_CONVERSATION_NOTICE = 'No earlier conversation: started fresh';
-
-/** Longest default name made from the task. */
-const MAX_DEFAULT_NAME_LENGTH = 40;
-
-/** How long an answer's text gets to land at the prompt before it is submitted, so it isn't taken as a pasted line. */
-const ANSWER_SUBMIT_DELAY_MS = 50;
+/** The agent's hooks after which its branch is read: not the ones before a tool runs or that only notify. */
+const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
 
 /** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
 const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
-
-/**
- * Hooks of a turn's work, which a turn interrupted mid-hook can still deliver after the interrupt. Until the next
- * prompt they are stale: none may move the agent off the `idle` the interrupt left it in.
- */
-const TURN_WORK_HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact']);
-
-/** Whether `payload` is a hook from an interrupted turn's work, landing after the interrupt. */
-function isStaleAfterInterrupt(payload: Record<string, unknown>): boolean {
-  const event = payload.hook_event_name;
-  if (event === 'Notification') return payload.notification_type === 'permission_prompt';
-  return typeof event === 'string' && TURN_WORK_HOOKS.has(event);
-}
-
-/** The terminal a relaunched agent starts in, until a client attaches and sizes it. */
-const RELAUNCH_SIZE: TerminalSize = { cols: 120, rows: 40 };
-
-/** How long claude waits on a hook call, in seconds. Only a held PermissionRequest takes longer. */
-const HOOK_TIMEOUT_S = 5;
-
-/** How much longer claude waits on a held PermissionRequest hook than the daemon holds it, so the daemon answers first. */
-const PERMISSION_HOOK_MARGIN_S = 10;
 
 export interface AgentHostOptions {
   db: DatabaseSync;
@@ -160,8 +87,8 @@ export interface AgentHostOptions {
   /** Makes sure the launcher is there and runs this app; throws if it can't be written. */
   ensureHookShim(): void;
   /**
-   * The `agent-board` CLI launcher (ADR-0010), which agents run as their board MCP server (`agent-board mcp`) unless
-   * their zone turns it off. No agent gets the server without it.
+   * The `agent-board` CLI launcher (ADR-0010), which the board MCP's instructions send agents to. Agents get the board
+   * MCP unless their zone turns it off; no agent gets it without the CLI.
    */
   boardCliPath?: string;
   /** The environment harness sessions start from. */
@@ -171,16 +98,20 @@ export interface AgentHostOptions {
   shellArgs: string[];
   /** The hook ingress's URL. */
   hookUrl(): string;
+  /** The board MCP's URL, on the hook ingress (ADR-0010). */
+  boardMcpUrl(): string;
   /** How long a PermissionRequest hook is held for an inbox answer before the harness's own prompt takes over. */
   permissionHoldMs: number;
   /** The zones' trackers, where agents started from or linked to an issue get it. */
   trackers: Pick<TrackerHost, 'issue'>;
   /** The pull requests made from the agent's branch, as last seen. */
   pullRequests(sessionId: string): readonly PullRequest[];
+  /** The pull requests of branches it pushed to, as last seen: for its tile alone. */
+  pushedPullRequests(sessionId: string): readonly PullRequest[];
   /** Long-lived agents' cron schedules. */
   schedules: Pick<ScheduleHost, 'get' | 'set' | 'remove'>;
   /** The zones' role templates, which an agent started in a role begins with. */
-  roleTemplates: Pick<RoleTemplates, 'body'>;
+  roleTemplates: Pick<RoleTemplates, 'body' | 'describe'>;
   /** Hears an agent hand off: today, its own turn ending with a final message (its Stop hook). */
   onHandoff(sessionId: string): void;
   /**
@@ -188,6 +119,8 @@ export interface AgentHostOptions {
    * `SessionEnd`): what it handed off explicitly belongs to the turn it did it in.
    */
   onTurnBoundary?(sessionId: string): void;
+  /** An agent's branch changed in its worktree: the pull requests of the new one are wanted. */
+  onBranchChanged?(sessionId: string): void;
   /** Hears an agent about to be deleted, so what goes with it can say so first: its flow edges. */
   onRemoving(sessionId: string): void;
   /** The questions and plans agents wait on the user for: while one does, it is `waiting`. */
@@ -225,14 +158,15 @@ export interface AdoptSpec {
   size: TerminalSize;
 }
 
-/** How far a loose implementer's reviewer starts from it, down and right, in board units. */
-const REVIEWER_OFFSET = 48;
-
 export interface AgentHost {
+  /** Re-reads the branch of every agent's worktree, resolving once each is stored: the board lists them fresh. */
+  refreshBranches(): Promise<void>;
+  /** Re-reads one agent's branch from its worktree, as above. */
+  refreshBranch(sessionId: string): Promise<void>;
   /** Whether the agent is being deleted: from the start of `delete` until its row is gone, its worktree too. */
   isDeleting(sessionId: string): boolean;
   /** Starts an agent; `spawnedBy` is the orchestrator starting it, if one is. */
-  spawn(params: SpawnAgentParams, spawnedBy?: string): Promise<Agent>;
+  spawn(params: SpawnAgentParams, spawnedBy?: string, place?: FolderPlace, used?: { template: string | null }): Promise<Agent>;
   /**
    * Spawns a reviewer of agent `of`: in its harness, repo and zone, on a new branch `branch` (or the first free
    * one after it) from the tip of its branch, in the same folder of its worktree, with `prompt` as its task.
@@ -269,7 +203,11 @@ export interface AgentHost {
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
    */
-  setStatus(sessionId: string, summary: string, progress: number | null): Agent;
+  setStatus(sessionId: string, summary: string, progress: number | null, done?: boolean): Agent;
+  /** Whether only its idle prompt left the live agent waiting, asking nothing (`createHookStates`'s). */
+  idlePrompted(sessionId: string): boolean;
+  /** Notes that the agent says its work is finished (`Agent.workFinishedAt`), until its next prompt. */
+  markFinished(sessionId: string): Agent;
   /** Lets the agent orchestrate in `scope`, or stops it with null. */
   setOrchestrate(sessionId: string, scope: OrchestrateScope | null): Agent;
   /**
@@ -302,8 +240,10 @@ export interface AgentHost {
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
    * dropped into, refusing with `shellBusy` while that runs something, unless `force`. Refuses a running agent.
+   * With `fresh` it starts a new conversation under a new harness session id instead (the old one goes to
+   * `Agent.earlierConversations`), on `fresh.prompt` if given.
    */
-  resume(sessionId: string, force: boolean): Promise<Agent>;
+  resume(sessionId: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
   /** Answers one of the agent's held permission prompts. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
@@ -353,7 +293,14 @@ export interface AgentHost {
   close(): void;
 }
 
-interface AgentRow extends PositionColumns {
+/** A row of `agent_conversations`: a conversation left behind by a fresh restart. */
+interface ConversationRow {
+  harness_session_id: string;
+  transcript_path: string | null;
+  ended_at: string;
+}
+
+export interface AgentRow extends PositionColumns {
   session_id: string;
   /** Null for a tile loose on the board. */
   zone_id: string | null;
@@ -363,9 +310,14 @@ interface AgentRow extends PositionColumns {
   harness: Harness;
   model: string | null;
   role: AgentRole | null;
+  role_name: string | null;
   name: string;
   description: string;
   branch: string;
+  /** The other branch its worktree is on after a checkout, null while on `branch`, the one it owns. */
+  current_branch: string | null;
+  /** 1 while its worktree's HEAD is detached: the last branch it was on stays. */
+  detached: number;
   worktree: string;
   cwd: string;
   state: SessionState;
@@ -385,9 +337,13 @@ interface AgentRow extends PositionColumns {
   exit_code: number | null;
   stopped_by_restart: number;
   review_of: string | null;
+  /** When its own turn last ended with a final message (migration 0049). */
+  finished_at: string | null;
   review_cap: number | null;
   /** 0 for an agent adopted in a folder of the user's, whose worktree and branch deleting it leaves alone. */
   owns_worktree: number;
+  /** 1 for an agent that may change nothing where it runs (`FolderPlace.readOnly`). */
+  read_only: number;
   /** A reviewer's: the branch it reviews, and the commit it checked out detached. Null for any other agent. */
   reviews_branch: string | null;
   reviews_head: string | null;
@@ -395,6 +351,8 @@ interface AgentRow extends PositionColumns {
   status_summary: string | null;
   status_progress: number | null;
   status_updated_at: string | null;
+  /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
+  work_finished_at: string | null;
   /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
   orchestrate: OrchestrateScope | null;
   /** 1 once the user turned it off: no zone lets it orchestrate then, until the user turns it on. */
@@ -405,7 +363,7 @@ interface AgentRow extends PositionColumns {
 }
 
 /** A review of a branch (`branch_reviews`): what it reviewed, and its reviewer or the copy kept of its review. */
-interface BranchReviewRow {
+export interface BranchReviewRow {
   id: number;
   repo_root: string;
   branch: string;
@@ -414,7 +372,7 @@ interface BranchReviewRow {
   review_path: string | null;
 }
 
-interface ZoneRow {
+export interface ZoneRow {
   id: string;
   name: string;
   /** Null while the zone is unbound: its agents start in its default repo, or the repo they are given. */
@@ -449,90 +407,39 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
-  const insert = db.prepare(
-    `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, role, name, description, branch,
-       worktree, state, issue_provider, issue_id, issue_title, issue_url, x, y, z, review_of, base_commit, owns_worktree,
-       harness_session_id, orchestrate, spawned_by, reviews_branch, reviews_head)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  const selectNames = db.prepare('SELECT name FROM agents');
-  const selectBranchReviews = db.prepare('SELECT * FROM branch_reviews WHERE repo_root = ? AND branch = ? ORDER BY id');
-  const selectReviewBy = db.prepare('SELECT * FROM branch_reviews WHERE session_id = ?');
-  const insertBranchReview = db.prepare('INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES (?, ?, ?, ?)');
-  const keepBranchReview = db.prepare('UPDATE branch_reviews SET review_path = ?, session_id = NULL WHERE id = ?');
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
-  const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
+  const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
   const updateStatus = db.prepare(
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ? WHERE session_id = ?',
   );
+  const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
   const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_off = ? WHERE session_id = ?');
   /** The agents a zone's setting reaches: those in it. */
   const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ?');
   /** The agents in a zone the user let orchestrate by hand. */
   const clearHandGrantsIn = db.prepare('UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL');
-  /** One deeper than the agent that started it; its crew depth is kept even if that agent is deleted later. */
-  const setCrewDepth = db.prepare(
-    'UPDATE agents SET crew_depth = COALESCE((SELECT crew_depth FROM agents WHERE session_id = ?), 0) + 1 WHERE session_id = ?',
-  );
-  const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
-  const forgetParent = db.prepare('UPDATE agents SET spawned_by = NULL WHERE spawned_by = ?');
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
+  const selectConversations = db.prepare(
+    'SELECT harness_session_id, transcript_path, ended_at FROM agent_conversations WHERE session_id = ? ORDER BY id',
+  );
   const updateTranscript = db.prepare('UPDATE agents SET transcript_path = ? WHERE session_id = ?');
   const transcripts = createTranscriptReader();
-  const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
-  /** Live Codex agents running with the bypass flag, watched for project config appearing. */
-  const guards = new Map<string, CodexConfigGuard>();
   const updateIssue = db.prepare(
     'UPDATE agents SET issue_provider = ?, issue_id = ?, issue_title = ?, issue_url = ? WHERE session_id = ?',
   );
-  const remove = db.prepare('DELETE FROM agents WHERE session_id = ?');
 
   const subagents = createSubagentStore();
   /**
-   * Agents whose `waiting` came from Claude's `idle_prompt` after their turn ended: they sit at their prompt, not on a
-   * question. A scheduled agent like that is waiting for its next run, not for you.
-   */
-  const idlePrompted = new Set<string>();
-  /** What each agent last said to the user (`lastMessageAfterHook`). */
-  const lastMessages = new Map<string, string>();
-  /**
    * The final message of each agent's last finished turn (its Stop's `last_assistant_message`), which a manual edge
-   * sends. Unlike `lastMessages` a new prompt keeps it: it is still the last finished turn's. Kept in its row, so it
-   * outlives the daemon.
+   * sends. Unlike its last message (`hookStates`) a new prompt keeps it: it is still the last finished turn's. Kept in
+   * its row, so it outlives the daemon.
    */
-  const updateFinalMessage = db.prepare('UPDATE agents SET final_message = ? WHERE session_id = ?');
+  const updateFinalMessage = db.prepare("UPDATE agents SET final_message = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE session_id = ?");
   const selectFinalMessage = db.prepare('SELECT final_message FROM agents WHERE session_id = ?');
-  /** Per agent handing off, how many of its deliveries are still landing: it shows `handing-off` until none are. */
-  const handingOff = new Map<string, number>();
-  /** Per agent, the answer being typed into its terminal, so the next waits for it. */
-  const answering = new Map<string, Promise<void>>();
-  /** Agents being stopped by the user, whose exit is `done` however their process ends. */
-  const stopping = new Set<string>();
-  /** Agents interrupted since their last prompt: hooks still landing from that turn's work are ignored. */
-  const interrupted = new Set<string>();
-  /**
-   * Codex agents started with `codex resume` that haven't started yet (no SessionStart): one that exits first couldn't
-   * resume its conversation, and is started afresh.
-   */
-  const codexResuming = new Set<string>();
-  /** Agents with a draft the user typed at their prompt (`draftAfterInput`) and hasn't submitted. */
-  const drafting = new Set<string>();
-  /**
-   * Agents whose latest permission request has been settled (answered in the terminal or the turn moved on): a
-   * `permission_prompt` notification then is the late echo of that prompt, not a new one.
-   */
-  const permissionSettled = new Set<string>();
-  /** Per ended agent, the live login shell its pane dropped into; and per such shell, its agent. */
-  const fallbackShells = new Map<string, string>();
-  const fallbackOwners = new Map<string, string>();
-  /** Agents being deleted, whose pane drops into no shell. */
-  const deleting = new Set<string>();
-  let closed = false;
-  const isRunningSomething = options.isRunningSomething ?? defaultIsRunningSomething;
   const permissions = createPermissionHolds({
     holdMs: options.permissionHoldMs,
     onChange(sessionId) {
@@ -540,54 +447,52 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
     },
   });
-
-  /**
-   * Whether the agent's last message asks the user something: its last paragraph has a question mark. A turn that ends
-   * on a question leaves Claude only `idle_prompt`, as a turn that ends on an answer does.
-   */
-  const asking = (sessionId: string) => {
-    const message = lastMessages.get(sessionId);
-    return message !== undefined && message.trim().split(/\n\s*\n/).at(-1)!.includes('?');
-  };
-
-  /**
-   * Whether the agent sits at its prompt between turns, ready for its next message and, unless `evenAsking`, not asking
-   * you anything.
-   */
-  const atPrompt = (row: AgentRow, evenAsking = false) =>
-    row.ended_at === null &&
-    permissions.prompts(row.session_id).length === 0 &&
-    (evenAsking || !asking(row.session_id)) &&
-    (row.state === 'idle' || (row.state === 'waiting' && idlePrompted.has(row.session_id)));
-
-  /**
-   * The state a live agent with an enabled schedule shows: `scheduled` at its prompt, waiting for its next run, and
-   * `waiting` for you, so in the needs-you inbox, when its turn ended on a question.
-   */
-  const scheduledState = (row: AgentRow): AgentState => {
-    if (atPrompt(row)) return 'scheduled';
-    if (row.ended_at === null && row.state === 'idle' && asking(row.session_id)) return 'waiting';
-    return row.state;
-  };
-
-  /**
-   * Why a scheduled run can't start in the live agent now, or undefined if it can. With `evenAsking`, as for a hand-off,
-   * a last message asking you something doesn't stop it: what's typed is the agent's next input either way.
-   */
-  const whyNotReady = (row: AgentRow, evenAsking = false): string | undefined => {
-    const sessionId = row.session_id;
-    const askingYou = !evenAsking && asking(sessionId);
-    if (row.state === 'rate-limited') return 'it was rate-limited';
-    // A failed turn leaves the agent at its prompt.
-    if (!atPrompt(row, evenAsking) && !(row.state === 'failed' && permissions.prompts(sessionId).length === 0)) {
-      const waiting =
-        row.state === 'waiting' || row.state === 'needs-permission' || permissions.prompts(sessionId).length > 0 || askingYou;
-      return waiting ? 'it was waiting for you' : 'it was still working';
-    }
-    if (askingYou) return 'it was waiting for you';
-    if (drafting.has(sessionId)) return 'you were typing in its terminal';
-    return undefined;
-  };
+  // These are made before anything below: what they are given of it is only reached once the host is built.
+  const hookStates = createHookStates<AgentRow>({
+    permissions,
+    subagents,
+    save: (row, state, next, always) => save(row, state, next, always),
+    unsee: (sessionId) => updateSeen.run(0, sessionId),
+    recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
+    finished(sessionId) {
+      options.onHandoff(sessionId);
+    },
+  });
+  const deliveries = createDeliveries({
+    write: (sessionId, data) => sessions.write(sessionId, data),
+    getRow: (sessionId) => getRow(sessionId),
+    requireAgent: (sessionId) => requireAgent(sessionId),
+    whyNotReady: hookStates.whyNotReady,
+    relaunch: (row, prompt, why, codexSessionId) => lifecycle.relaunch(row, prompt, why, codexSessionId),
+    announce: (sessionId) => announce(sessionId),
+    log: options.log,
+  });
+  const spawns = createAgentSpawns({
+    ...options,
+    getRow: (sessionId) => getRow(sessionId),
+    get: (sessionId) => get(sessionId),
+    rows: () => selectAll.all() as unknown as AgentRow[],
+    getZone: (zoneId) => selectZone.get(zoneId) as ZoneRow | undefined,
+    repoZoneFor: (zoneId, repoRoot) => repoZoneFor(zoneId, repoRoot),
+    announce: (sessionId) => announce(sessionId),
+    watch: (...launched) => lifecycle.watchLaunched(...launched),
+  });
+  const lifecycle = createAgentLifecycle({
+    ...options,
+    getRow: (sessionId) => getRow(sessionId),
+    get: (sessionId) => get(sessionId),
+    requireAgent: (sessionId) => requireAgent(sessionId),
+    repoZone: (row) => repoZone(row),
+    announce: (sessionId) => announce(sessionId),
+    setState: (sessionId, state) => update.run(state, sessionId),
+    unsee: (sessionId) => updateSeen.run(0, sessionId),
+    launch: spawns.launch,
+    subagents,
+    permissions,
+    transcripts,
+    hookStates,
+    deliveries,
+  });
 
   /**
    * The state an agent without an enabled schedule shows: `stopped-by-restart` once its daemon went away under it,
@@ -601,9 +506,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const live = row.ended_at === null;
     const ask = live ? (options.asks?.pendingAsk(row.session_id) ?? null) : null;
     const plan = options.asks?.latestPlan(row.session_id) ?? null;
-    const hooked = schedule?.enabled ? scheduledState(row) : unscheduledState(row);
+    const hooked = schedule?.enabled ? hookStates.scheduledState(row) : unscheduledState(row);
     // Its call waits on the user mid-turn, whatever its hooks say, but for a permission prompt of a subagent's.
     const state = live && waitsOnUser({ ask, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
+    const shownState =
+      deliveries.isHandingOff(row.session_id) && state !== 'waiting' && state !== 'needs-permission' && permissions.prompts(row.session_id).length === 0
+        ? 'handing-off'
+        : state;
     return {
       sessionId: row.session_id,
       zoneId: row.zone_id,
@@ -612,23 +521,36 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       harness: row.harness,
       model: row.model,
       role: row.role,
+      roleName: row.role_name,
       reviews: row.reviews_branch === null || row.reviews_head === null ? null : { branch: row.reviews_branch, head: row.reviews_head },
       name: row.name,
       description: row.description,
-      branch: row.branch,
+      branch: row.current_branch ?? row.branch,
+      ownedBranch: row.branch,
+      detached: row.detached === 1,
       worktree: row.worktree,
       cwd: row.cwd,
       // Handing off shows over what it was doing, but never over its needing you: that would take it out of the inbox,
       // and tell you again that it waits when it came back.
-      state:
-        handingOff.has(row.session_id) && state !== 'waiting' && state !== 'needs-permission' && permissions.prompts(row.session_id).length === 0
-          ? 'handing-off'
-          : state,
+      state: shownState,
       notice: row.notice,
-      status:
+      earlierConversations: (selectConversations.all(row.session_id) as unknown as ConversationRow[]).map((each) => ({
+        conversationId: each.harness_session_id,
+        transcriptPath: each.transcript_path,
+        endedAt: each.ended_at,
+      })),
+      status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
           : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at },
+        isWorking({ state: shownState, ask, plan, endedAt: row.ended_at }),
+        // Kept for hand-offs, but of a turn before an interrupted one: no tile shows it as that turn's.
+        hookStates.endedOnNoMessage(row.session_id)
+          ? undefined
+          : (selectFinalMessage.get(row.session_id) as { final_message: string | null } | undefined)?.final_message,
+        row.finished_at,
+      ),
+      workFinishedAt: row.work_finished_at,
       muted: row.muted === 1,
       // An ended agent asks nothing: what it was last seen at doesn't carry over.
       seen: row.seen === 1 && row.ended_at === null,
@@ -639,11 +561,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       createdAt: row.created_at,
       endedAt: row.ended_at,
       exitCode: row.exit_code,
-      shellSessionId: fallbackShells.get(row.session_id) ?? null,
-      shellHarness: shellHarnessOf(row),
+      shellSessionId: lifecycle.fallbackShell(row.session_id) ?? null,
+      shellHarness: lifecycle.shellHarnessOf(row),
       subagents: [...subagents.of(row.session_id)],
       pullRequests: [...options.pullRequests(row.session_id)],
-      lastMessage: lastMessages.get(row.session_id) ?? null,
+      pushedPullRequests: [...options.pushedPullRequests(row.session_id)],
+      lastMessage: hookStates.lastMessage(row.session_id) ?? null,
+      finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
       plan,
@@ -685,10 +609,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       })),
     );
 
-  /** Whether an agent whose tile is in `zoneId` gets the board MCP server: on unless its zone turned it off. */
-  const boardMcpOn = (zoneId: string | null): boolean =>
-    zoneId === null || (selectZone.get(zoneId) as ZoneRow | undefined)?.board_mcp !== 0;
-
   const get = (sessionId: string): Agent | undefined => {
     const row = getRow(sessionId);
     return row && toAgent(row);
@@ -701,27 +621,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   };
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
-
-  /** Types `text` at the agent's prompt as one line and submits it, as `typeInput` does. */
-  const typeLine = (sessionId: string, text: string) => typeInput(sessionId, oneLine(text));
-
-  /**
-   * Writes `line` at the agent's prompt, after any line still being typed to it (two typed at once would run
-   * together), and submits it once it has landed, so it isn't taken as a pasted line.
-   */
-  const typeInput = async (sessionId: string, line: string) => {
-    const typed = (answering.get(sessionId) ?? Promise.resolve()).then(async () => {
-      sessions.write(sessionId, line);
-      await new Promise((resolve) => setTimeout(resolve, ANSWER_SUBMIT_DELAY_MS));
-      sessions.write(sessionId, '\r');
-    });
-    answering.set(sessionId, typed);
-    try {
-      await typed;
-    } finally {
-      if (answering.get(sessionId) === typed) answering.delete(sessionId);
-    }
-  };
 
   /**
    * Records the agent's new state and subagents and tells every client; unless `always`, only if either changed.
@@ -736,248 +635,73 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     options.broadcast({ type: 'agent.updated', agent: get(row.session_id)! });
   };
 
-  /**
-   * Stops a flagged Codex agent once project config appears where Codex would load it: a new chat in its TUI (`/new`,
-   * `/fork`) would run that config's hooks without review.
-   */
-  const stopForProjectConfig = (sessionId: string, path: string) => {
-    guards.delete(sessionId);
-    updateNotice.run(
-      `agent-board stopped this agent: ${path} appeared in its worktree while it ran with ${CODEX_BYPASS_FLAG}, and a ` +
-        `new chat in it (/new, /fork) would have run that config's hooks without review. Its work is still in its ` +
-        `worktree and branch.`,
-      sessionId,
-    );
-    options.log(`stopping codex agent ${sessionId}: ${path} appeared while it ran with ${CODEX_BYPASS_FLAG}`);
-    const agent = get(sessionId);
-    if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
-    sessions.kill(sessionId).catch((error: Error) => options.log(`could not stop ${sessionId}: ${error.message}`));
+  /** Each agent's branch reads: the last one queued, and whether it has yet to start. */
+  const branchReads = new Map<string, { tail: Promise<void>; waiting: boolean }>();
+
+  /** Longest a git read of an agent's branch may take. */
+  const BRANCH_READ_MS = 5000;
+
+  /** Whether `branch` was made by renaming `from`: its reflog, which `git branch -m` moves with it, says so. */
+  const renamedFrom = async (worktree: string, from: string, branch: string): Promise<boolean> => {
+    const log = await runGit(worktree, ['reflog', 'show', '--format=%gs', `refs/heads/${branch}`], BRANCH_READ_MS);
+    return log.ok && log.stdout.split('\n').some((line) => line.startsWith(`Branch: renamed refs/heads/${from} to `));
   };
 
-  /**
-   * Makes sure the harness is found before anything is made for an agent of it, once any lookup running is done,
-   * and looking again if it was not.
-   */
-  const requireHarness = async (harness: Harness): Promise<void> => {
-    await options.harnessPaths.pending(harness);
-    if (options.harnessPaths.path(harness) === undefined && (await options.harnessPaths.refresh(harness)) === undefined) {
-      throw invalidParams(options.harnessPaths.notFound(harness));
+  const readBranch = async (sessionId: string): Promise<void> => {
+    const row = getRow(sessionId);
+    if (row === undefined || row.branch === '' || row.reviews_branch !== null || !existsSync(row.worktree)) return;
+    const head = await runGit(row.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD'], BRANCH_READ_MS);
+    const detached = !head.ok;
+    // Not a failure to read git, but a HEAD on no branch; any other failure leaves it as it was.
+    if (detached && head.stderr !== '') return;
+    let owned = row.branch;
+    let current: string | null = row.current_branch;
+    if (!detached) {
+      const name = head.stdout;
+      if (name === '') return;
+      if (name === owned) current = null;
+      // Its own ref gone: it is renamed only if git says this branch was renamed from it (`git branch -m` carries the
+      // reflog over). Any other branch it is on is not its own: it stays unowned, so closing deletes none but its own.
+      else if (
+        !(await runGit(row.worktree, ['rev-parse', '--verify', '--quiet', `refs/heads/${owned}`], BRANCH_READ_MS)).ok &&
+        (await renamedFrom(row.worktree, owned, name))
+      ) {
+        owned = name;
+        current = null;
+      } else current = name;
     }
-  };
-
-  /**
-   * Starts the agent's harness in `cwd` as session `id`, with a new hook token, and `task` (if any) as its first
-   * message. With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
-   * is known (else it starts afresh). Returns whether Codex runs with the hook-trust bypass flag. Throws
-   * `AGENT_ERROR.projectCodexConfig` for a Codex agent whose worktree has Codex config, unless allowed.
-   */
-  const launch = (spec: {
-    id: string;
-    harness: Harness;
-    /** Its model, or null for the harness's default. */
-    model: string | null;
-    /** The setting of the zone it starts from: Codex starts with `--dangerously-bypass-hook-trust`. */
-    bypassHookTrust: boolean;
-    /** The zone its tile is in, whose setting says whether it gets the board MCP server; null for loose. */
-    zoneId: string | null;
-    cwd: string;
-    worktree: string;
-    task?: string;
-    /** Claude carries on conversation `id` unless `claudeConversation` is false: it never had one to carry on. */
-    resume?: { codexSessionId: string | null; claudeConversation?: boolean };
-    allowProjectCodexConfig: boolean;
-    size: TerminalSize;
-  }): boolean => {
-    const { id, harness, cwd, worktree, task } = spec;
-    const harnessPath = options.harnessPaths.path(harness);
-    if (harnessPath === undefined) throw invalidParams(options.harnessPaths.notFound(harness));
-    const token = newToken();
-    const boardCli = options.boardCliPath !== undefined && boardMcpOn(spec.zoneId) ? options.boardCliPath : undefined;
-    let harnessCommand: HarnessLaunch;
-    if (harness === 'claude') {
-      const settings = JSON.stringify(claudeSettings(options.hookUrl(), options.permissionHoldMs));
-      harnessCommand = {
-        command: harnessPath,
-        args: [
-          spec.resume && spec.resume.claudeConversation !== false ? '--resume' : '--session-id',
-          id,
-          '--settings',
-          settings,
-          ...(boardCli === undefined ? [] : ['--mcp-config', JSON.stringify(claudeMcpConfig(boardCli))]),
-          ...(spec.model === null ? [] : ['--model', spec.model]),
-          ...(task === undefined ? [] : ['--', task]),
-        ],
-      };
-    } else {
-      const codex = codexLaunch({
-        command: harnessPath,
-        hookShimPath: options.hookShimPath,
-        zoneBypassHookTrust: spec.bypassHookTrust,
-        boardCli,
-        model: spec.model ?? undefined,
-        cwd,
-        worktree,
-        resume: spec.resume?.codexSessionId ?? undefined,
-        prompt: task,
-      });
-      if (codex.projectConfig !== undefined && !spec.allowProjectCodexConfig) {
-        throw new RpcMethodError(AGENT_ERROR.projectCodexConfig, projectConfigWarning(codex.projectConfig, options.hookShimPath));
-      }
-      harnessCommand = codex;
-    }
-    const { command, args } = harnessLaunch(options.shell, options.shellArgs, cwd, harnessCommand.command, harnessCommand.args);
-    // With the PATH of the user's interactive shell, which a script harness may need to find its interpreter.
-    const env = { ...options.harnessPaths.launchEnv(options.env) };
-    // A daemon started from inside Claude Code must not make its agents think they are nested in it.
-    delete env.CLAUDECODE;
-    sessions.start({
-      id,
-      harness,
-      command,
-      args,
-      cwd,
-      env: sessionEnv(id, env, { [HOOK_TOKEN_ENV]: token, [HOOK_URL_ENV]: options.hookUrl() }),
-      zoneId: spec.zoneId,
-      ...spec.size,
-      hookTokenSha256: hashToken(token),
-    });
-    return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
-  };
-
-  /**
-   * Relaunches an ended agent in its worktree as a new session under the same id, back at `idle` until its
-   * SessionStart hook: for a scheduled run with its `prompt` (Codex afresh), or, with no prompt, to resume it where
-   * the restart stopped it. `codexSessionId` is the Codex conversation to carry on, if any.
-   */
-  const relaunch = (
-    row: AgentRow,
-    prompt: string | undefined,
-    why: string,
-    codexSessionId = prompt === undefined ? row.harness_session_id : null,
-  ): RunStart => {
-    const sessionId = row.session_id;
-    if (!existsSync(row.cwd)) return { started: false, reason: 'its worktree is gone' };
-    if (options.harnessPaths.path(row.harness) === undefined) {
-      // Looked for again in the background, so the next try finds a harness installed since.
-      void options.harnessPaths.refresh(row.harness);
-      return { started: false, reason: options.harnessPaths.notFound(row.harness) };
-    }
-    void endFallbackShell(sessionId);
-    if (row.harness === 'codex') {
-      try {
-        options.ensureHookShim();
-      } catch (error) {
-        return { started: false, reason: `the Codex hook launcher can't be written: ${(error as Error).message}` };
-      }
-    }
-    // Its repo's zone's setting, wherever its tile sits; with no zone of its repo left, the one it last started with.
-    const bypassHookTrust = repoZone(row)?.codex_bypass_hook_trust ?? row.codex_bypass_hook_trust;
-    updateBypass.run(bypassHookTrust, sessionId);
-    // An agent that never had a turn has no conversation to resume (Claude saves one with the first message, and
-    // Codex names it then): it starts fresh under the same id, on its task if it had one.
-    const noConversation =
-      row.harness === 'claude' ? !hasClaudeTranscript(row.transcript_path, sessionId, row.cwd, options.env) : row.harness_session_id === null && prompt === undefined;
-    const task = prompt ?? (noConversation && row.description !== '' ? row.description : undefined);
-    let bypassed: boolean;
-    try {
-      bypassed = launch({
-        id: sessionId,
-        harness: row.harness,
-        model: row.model,
-        bypassHookTrust: bypassHookTrust === 1,
-        zoneId: row.zone_id,
-        cwd: row.cwd,
-        worktree: row.worktree,
-        task,
-        resume: { codexSessionId, claudeConversation: !noConversation },
-        allowProjectCodexConfig: false,
-        size: RELAUNCH_SIZE,
-      });
-    } catch (error) {
-      if (error instanceof RpcMethodError && error.code === AGENT_ERROR.projectCodexConfig) {
-        return { started: false, reason: 'its worktree has Codex config of its own, so start it by hand to review its hooks' };
-      }
-      return { started: false, reason: `it could not be relaunched: ${(error as Error).message}` };
-    }
-    subagents.set(sessionId, []);
-    lastMessages.delete(sessionId);
-    drafting.delete(sessionId);
-    updateNotice.run(noConversation && prompt === undefined ? NO_CONVERSATION_NOTICE : null, sessionId);
-    update.run('idle', sessionId);
-    updateSeen.run(0, sessionId);
-    watchResumed(sessionId, row.harness, row.cwd, row.worktree, bypassed, codexSessionId);
-    options.log(`relaunched ${row.harness} agent ${sessionId} ${why}`);
+    const now = getRow(sessionId);
+    if (now === undefined || (owned === now.branch && current === now.current_branch && detached === (now.detached === 1))) return;
+    updateBranch.run(owned, current, detached ? 1 : 0, sessionId);
     announce(sessionId);
-    return { started: true };
+    if ((current ?? owned) !== (now.current_branch ?? now.branch)) options.onBranchChanged?.(sessionId);
   };
 
   /**
-   * After a launch that carries on a conversation: watches a bypassed Codex agent's worktree for project config, and
-   * starts a Codex agent afresh if `codex resume` can't carry on `codexSessionId`.
+   * Follows the branch the agent's worktree is on now: it may have renamed it, checked out another or
+   * detached. Reads of one agent run one at a time; one asked for while another runs waits for it, and every asker
+   * before it starts shares it, so the answer is never older than the asking.
    */
-  const watchResumed = (
-    sessionId: string,
-    harness: Harness,
-    cwd: string,
-    worktree: string,
-    bypassed: boolean,
-    codexSessionId: string | null,
-  ) => {
-    if (bypassed) guards.set(sessionId, guardCodexConfig(cwd, worktree, (path) => stopForProjectConfig(sessionId, path)));
-    if (harness === 'codex' && codexSessionId !== null) codexResuming.add(sessionId);
-  };
-
-  /**
-   * Starts a Codex agent that `codex resume` couldn't carry on (its conversation pruned or deleted) on a new
-   * conversation in its worktree, once its old session has finished exiting, and says why on its tile.
-   */
-  const startAfresh = (sessionId: string) => {
-    void sessions.kill(sessionId).then(() => {
-      const row = getRow(sessionId);
-      if (row === undefined || row.ended_at === null) return;
-      const started = relaunch(row, undefined, "afresh: Codex couldn't resume its conversation", null);
-      if (!started.started) return options.log(`could not start ${sessionId} afresh: ${started.reason}`);
-      updateNotice.run("Codex couldn't resume its conversation, so it started a new conversation in the same worktree.", sessionId);
-      announce(sessionId);
-    }, (error: Error) => options.log(`could not start ${sessionId} afresh: ${error.message}`));
-  };
-
-  /**
-   * Drops the ended agent's pane into the user's login shell in its folder, under its last output, once its session
-   * has finished exiting (and its screen is saved). Not while it is being deleted or relaunched, or the daemon closes,
-   * nor for an ephemeral reviewer, which the daemon itself stops once its review is in.
-   */
-  const startFallbackShell = (sessionId: string) => {
-    void sessions.kill(sessionId).then(() => {
-      const row = getRow(sessionId);
-      if (closed || deleting.has(sessionId) || row === undefined || row.ended_at === null || row.review_of !== null || fallbackShells.has(sessionId)) return;
-      if (!existsSync(row.cwd)) return;
-      const saved = sessions.savedScreen(sessionId);
-      const size = saved === undefined ? RELAUNCH_SIZE : { cols: saved.cols, rows: saved.rows };
-      const restore = saved === undefined ? '' : `${saved.data}${RESET_MODES}\r\n`;
-      const shell = sessions.createShell({ ...size, cwd: row.cwd, restore, zoneId: row.zone_id });
-      fallbackShells.set(sessionId, shell.id);
-      fallbackOwners.set(shell.id, sessionId);
-      announce(sessionId);
-    }).catch((error: Error) => options.log(`could not open a shell for ${sessionId}: ${error.message}`));
-  };
-
-  /** Ends the shell the agent's pane dropped into, if any, and resolves once it has exited. */
-  const endFallbackShell = async (sessionId: string): Promise<void> => {
-    const shellId = fallbackShells.get(sessionId);
-    if (shellId === undefined) return;
-    fallbackShells.delete(sessionId);
-    fallbackOwners.delete(shellId);
-    await sessions.kill(shellId).catch((error: Error) => options.log(`could not end the shell ${shellId}: ${error.message}`));
-    sessions.forget(shellId);
-  };
-
-  /** Its own harness, while it is the foreground process of the shell its ended pane dropped into. */
-  const shellHarnessOf = (row: AgentRow): Harness | null => {
-    const shellId = fallbackShells.get(row.session_id);
-    if (shellId === undefined || row.ended_at === null) return null;
-    const { harness } = sessions.shellState(shellId);
-    return harness === row.harness ? harness : null;
+  const refreshBranch = (sessionId: string): Promise<void> => {
+    let reads = branchReads.get(sessionId);
+    if (reads === undefined) {
+      reads = { tail: Promise.resolve(), waiting: false };
+      branchReads.set(sessionId, reads);
+    }
+    const entry = reads;
+    if (entry.waiting) return entry.tail;
+    entry.waiting = true;
+    const mine: Promise<void> = entry.tail
+      .then(() => {
+        entry.waiting = false;
+        return readBranch(sessionId);
+      })
+      .catch((error: Error) => options.log(`could not read the branch of ${sessionId}: ${error.message}`))
+      .finally(() => {
+        if (!entry.waiting && entry.tail === mine) branchReads.delete(sessionId);
+      });
+    entry.tail = mine;
+    return mine;
   };
 
   const announce = (sessionId: string) => {
@@ -985,417 +709,23 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
   };
 
-  /** Choosing a free branch and creating it run one at a time per repo, so two spawns never pick the same name. */
-  const inRepoQueue = keyedQueue();
-
-  /** Names given to agents still being spawned, so two spawns at once never both take the same `new-agent-N`. */
-  const reservedNames = new Set<string>();
-
-  /** The lowest `new-agent-N` no agent is called, or is being given: what an agent started with no task is named. */
-  const freeAgentName = (): string => {
-    const taken = new Set([...(selectNames.all() as { name: string }[]).map((row) => row.name), ...reservedNames]);
-    let n = 1;
-    while (taken.has(`new-agent-${n}`)) n += 1;
-    return `new-agent-${n}`;
-  };
-
-  /**
-   * The repo a new agent's worktree is cut from, and the folder in it the agent starts in: the repo it was given (a
-   * new scratch repo named after it, or a folder in a repo), else its zone's, else its group's default repo. `undo`
-   * removes a scratch repo made for it, for a spawn that fails after.
-   */
-  const agentRepo = async (
-    params: SpawnAgentParams,
-    zone: ZoneRow | undefined,
-    name: string,
-  ): Promise<{ repoRoot: string; folder: string; undo?: () => Promise<void> }> => {
-    const { repo } = params;
-    if (repo !== undefined && 'scratch' in repo) {
-      mkdirSync(options.scratchDir, { recursive: true });
-      const slug = nameSlug(name);
-      let path = join(options.scratchDir, slug);
-      for (let n = 2; existsSync(path); n++) path = join(options.scratchDir, `${slug}-${n}`);
-      const { repoRoot, undo } = await initProject(path);
-      return { repoRoot, folder: '', undo };
-    }
-    if (repo !== undefined) {
-      if (!isAbsolute(repo.path)) throw invalidParams(`repo path must be absolute, got ${repo.path}`);
-      return resolveZoneFolder(repo.path);
-    }
-    if (zone === undefined) throw invalidParams('pick a repo to start the agent in');
-    if (zone.repo_root !== null) return { repoRoot: zone.repo_root, folder: zone.folder };
-    if (zone.clone_repo !== null) {
-      throw invalidParams(`${zone.name} is still cloning ${zone.clone_repo}: start agents once it has finished`);
-    }
-    if (zone.default_repo !== null) return resolveZoneFolder(zone.default_repo);
-    throw invalidParams(`${zone.name} has no repo: pick one to start the agent in`);
-  };
-
-  /**
-   * What a new agent's role template is filled with. A reviewer's issue, when it starts from none, is that of the agent
-   * whose branch it reviews; its round counts the reviewers of the branch before it, and its previous review is the
-   * last one's review file, if it left one.
-   */
-  const templateValues = (agent: {
-    repoRoot: string;
-    branch: string;
-    worktree: string;
-    reviews: { branch: string } | null;
-    issue: LinkedIssue | null;
-  }): TemplateValues => {
-    const reviewed = agent.reviews?.branch;
-    const implementer =
-      reviewed === undefined
-        ? undefined
-        : (selectAll.all() as unknown as AgentRow[]).findLast((row) => row.repo_root === agent.repoRoot && row.branch === reviewed);
-    // Every earlier review of the branch, its reviewer on the board or not.
-    const earlier = reviewed === undefined ? [] : (selectBranchReviews.all(agent.repoRoot, reviewed) as unknown as BranchReviewRow[]);
-    const previous = earlier.at(-1);
-    const implementerIssue = implementer?.issue_provider != null && implementer.issue_id !== null ? { provider: implementer.issue_provider, id: implementer.issue_id } : null;
-    const issue = agent.issue ?? implementerIssue;
-    return {
-      // With no issue, a word naming the work, which the worker prompts also put in file names.
-      issue: issue === null ? nameSlug(reviewed ?? agent.branch) : shortIssueId(issue),
-      branch: reviewed ?? agent.branch,
-      worktree: agent.worktree,
-      prev_review: (previous && previousReview(previous)) ?? 'none',
-      round: String(earlier.length + 1),
-      impl_worktree: reviewed === undefined ? agent.worktree : (implementer?.worktree ?? 'none'),
-      prev_sha: previous?.head ?? 'none',
-    };
-  };
-
-  /** An earlier review of a branch: the copy kept of it, else the file its reviewer, still on the board, left. */
-  const previousReview = (review: BranchReviewRow): string | undefined => {
-    if (review.review_path !== null) return review.review_path;
-    const reviewer = review.session_id === null ? undefined : getRow(review.session_id);
-    return reviewer === undefined ? undefined : reviewFile(reviewer.worktree);
-  };
-
-  /** Keeps a copy of the review a reviewer about to be deleted left, for the follow-ups of its branch. */
-  const keepReview = (sessionId: string, worktree: string) => {
-    const review = selectReviewBy.get(sessionId) as BranchReviewRow | undefined;
-    if (review === undefined) return;
-    const file = reviewFile(worktree);
-    let kept: string | null = null;
-    if (file !== undefined) {
-      try {
-        mkdirSync(options.reviewsDir, { recursive: true });
-        kept = join(options.reviewsDir, `${review.id}-${basename(file)}`);
-        copyFileSync(file, kept);
-      } catch (error) {
-        options.log(`could not keep the review ${file}: ${(error as Error).message}`);
-        kept = null;
-      }
-    }
-    keepBranchReview.run(kept, review.id);
-  };
-
-  /** The zone a new agent's issue comes from: `issueZoneId`, else its own; it must have a tracker. */
-  const issueZone = (params: SpawnAgentParams, zone: ZoneRow | undefined): string => {
-    const id = params.issueZoneId ?? zone?.id;
-    const from = id === undefined ? undefined : (selectZone.get(id) as ZoneRow | undefined);
-    if (from === undefined || from.tracker_provider === null) throw invalidParams('only a zone with a tracker starts agents from issues');
-    return from.id;
-  };
-
   return {
-    nextName: freeAgentName,
+    nextName: spawns.nextName,
 
-    async spawn(params, spawnedBy) {
-      const { zoneId, harness = 'claude', prompt = '', name, issueId, allowProjectCodexConfig = false, position, cols, rows } = params;
-      const zone = zoneId === null ? undefined : (selectZone.get(zoneId) as ZoneRow | undefined);
-      if (zoneId !== null && zone === undefined) throw invalidParams(`no zone ${zoneId}`);
-      if (zoneId === null && position === undefined) throw invalidParams('an agent loose on the board needs a position');
-      if (harness !== 'claude' && harness !== 'codex') throw invalidParams(`unknown harness ${String(harness)}`);
-      await requireHarness(harness);
-      const model = params.model?.trim() || null;
-      // Passed to the harness as an argument: never an option of its own.
-      if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
-      if (params.role !== undefined && !AGENT_ROLES.includes(params.role)) throw invalidParams(`unknown role ${String(params.role)}`);
-      const role = params.role ?? null;
-      // A reviewer checks out the branch it reviews, detached: it has none of its own.
-      const reviewer = role !== null && REVIEWER_ROLES.includes(role);
-      if (reviewer && params.branch !== undefined) {
-        throw invalidParams('a reviewer works on a detached checkout of the branch it reviews: it takes no branch of its own');
-      }
-      if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
-        throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
-      }
-      // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
-      const orchestrate = spawnedBy === undefined ? (params.orchestrate ?? null) : null;
-      // A typed branch is checked before anything is made for the agent, a scratch repo included.
-      const typedBranch = params.branch === undefined ? undefined : await checkedBranchName(params.branch).catch(wrapInvalid);
-      // Its base reaches git only as `refs/heads/<base>`; checked all the same, so no name is ever read as an option.
-      if (params.baseBranch !== undefined) await checkedBranchName(params.baseBranch).catch(wrapInvalid);
-      const fromZone = issueId === undefined ? undefined : issueZone(params, zone);
-      if (harness === 'codex') {
-        try {
-          options.ensureHookShim();
-        } catch (error) {
-          throw invalidParams(`can't write the Codex hook launcher ${options.hookShimPath}: ${(error as Error).message}`);
-        }
-      }
-      // Started from an issue: the issue comes first in its prompt, and names its branch.
-      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await options.trackers.issue(fromZone, issueId);
-      const task = [fromIssue && issuePrompt(fromIssue.issue), prompt.trim()].filter(Boolean).join('\n\n');
-      // Named after its issue as people write it in its scope (`#34`, not `acme/app#34`), else after its task, else
-      // `new-agent-N` when it starts at its prompt.
-      const agentName =
-        name?.trim() ||
-        (fromIssue ? defaultName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' ? freeAgentName() : defaultName(task));
-      reservedNames.add(agentName);
-      // What was made for it so far, undone if it fails to start: its worktree and branch, then any scratch repo.
-      const undo: (() => Promise<void>)[] = [];
-      try {
-        const { repoRoot, folder, undo: undoRepo } = await agentRepo(params, zone, agentName);
-        if (undoRepo !== undefined) undo.unshift(undoRepo);
-        const { branch, worktree, baseCommit, reviews } = await inRepoQueue(repoRoot, async () => {
-          if (reviewer) {
-            const reviewed = params.baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
-            const worktree = freeWorktreePath(agentWorktreePath(options.worktreesDir, repoRoot, `${reviewed}-review`));
-            const head = await addDetachedWorktree(repoRoot, worktree, reviewed).catch(wrapInvalid);
-            return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head } };
-          }
-          const branch =
-            typedBranch !== undefined
-              ? await freeTypedBranch(repoRoot, typedBranch).catch(wrapInvalid)
-              : fromIssue
-                ? await freeBranchName(repoRoot, fromIssue.branch)
-                : agentBranchName(agentName);
-          const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
-          await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid);
-          // What its work is reviewed against: the commit it started from.
-          const head = await runGit(worktree, ['rev-parse', 'HEAD']);
-          return { branch, worktree, baseCommit: head.ok ? head.stdout : null, reviews: null };
-        });
-        undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
-        // The tile shows the issue already: describe the work by the typed task, else the issue's own description.
-        const description =
-          prompt.trim() || fromIssue?.issue.description.trim() || task || (reviews === null ? '' : `Reviews ${reviews.branch}`);
-        // A role's template comes first, filled in for this agent; then the issue, then what was typed.
-        const template =
-          role === null
-            ? ''
-            : fillTemplate(
-                options.roleTemplates.body(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, role),
-                templateValues({ repoRoot, branch, worktree, reviews, issue: fromIssue?.issue ?? null }),
-              ).trim();
-        const firstMessage = [template, task].filter(Boolean).join('\n\n');
-        // A zone-less agent takes the bypass setting of its repo's zone, else the default (on).
-        const bypassHookTrust =
-          zone?.repo_root === repoRoot ? zone.codex_bypass_hook_trust : (repoZoneFor(zoneId, repoRoot)?.codex_bypass_hook_trust ?? 1);
+    spawn: spawns.spawn,
 
-        const id = randomUUID();
-        // A folder zone's folder may be untracked, so missing from the new worktree.
-        const cwd = folder === '' ? worktree : join(worktree, folder);
-        mkdirSync(cwd, { recursive: true });
-        const bypassed = launch({
-          id,
-          harness,
-          model,
-          bypassHookTrust: bypassHookTrust === 1,
-          zoneId,
-          cwd,
-          worktree,
-          task: firstMessage === '' ? undefined : firstMessage,
-          allowProjectCodexConfig,
-          size: { cols, rows },
-        });
-        // The session already runs, but its hooks can't arrive before this synchronous insert. It is idle until its
-        // SessionStart hook says it runs.
-        insert.run(
-          id,
-          zoneId,
-          repoRoot,
-          bypassHookTrust,
-          model,
-          role,
-          agentName,
-          description.slice(0, MAX_DESCRIPTION_LENGTH),
-          branch,
-          worktree,
-          'idle',
-          ...issueColumns(fromIssue?.issue ?? null),
-          position?.x ?? null,
-          position?.y ?? null,
-          position === undefined ? null : frontZ(db),
-          null,
-          baseCommit,
-          1,
-          null,
-          orchestrate,
-          spawnedBy ?? null,
-          reviews?.branch ?? null,
-          reviews?.head ?? null,
-        );
-        if (spawnedBy !== undefined) setCrewDepth.run(spawnedBy, id);
-        if (reviews !== null) insertBranchReview.run(repoRoot, reviews.branch, reviews.head, id);
-        // A repo it was given is offered again, once it has an agent in it.
-        if (params.repo !== undefined && 'path' in params.repo) options.rememberFolder(folderPath(repoRoot, folder));
-        const agent = get(id)!;
-        options.log(`spawned ${harness} agent ${id} on ${branch} in ${worktree}${bypassed ? ` with ${CODEX_BYPASS_FLAG}` : ''}`);
-        options.broadcast({ type: 'agent.updated', agent });
-        if (bypassed) guards.set(id, guardCodexConfig(cwd, worktree, (path) => stopForProjectConfig(id, path)));
-        return get(id)!;
-      } catch (error) {
-        for (const step of undo) await step().catch(() => {});
-        throw error;
-      } finally {
-        reservedNames.delete(agentName);
-      }
-    },
+    spawnReviewer: spawns.spawnReviewer,
 
-    async spawnReviewer({ of, name, branch: wanted, prompt, cols, rows }) {
-      const implementer = getRow(of);
-      if (implementer === undefined) throw invalidParams(`no agent ${of}`);
-      await requireHarness(implementer.harness);
-      const repoRoot = implementer.repo_root;
-      const { branch, worktree } = await inRepoQueue(repoRoot, async () => {
-        const branch = await freeBranchName(repoRoot, wanted);
-        const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
-        await addWorktree(repoRoot, worktree, branch, implementer.branch).catch((error: Error) => {
-          throw invalidParams(error.message);
-        });
-        return { branch, worktree };
-      });
-      const loose = implementer.zone_id === null && implementer.x !== null && implementer.y !== null;
-      const id = randomUUID();
-      // The folder of its worktree the implementer works in, a folder zone's.
-      const cwd = join(worktree, relative(implementer.worktree, implementer.cwd));
-      try {
-        mkdirSync(cwd, { recursive: true });
-        launch({
-          id,
-          harness: implementer.harness,
-          model: implementer.model,
-          bypassHookTrust: implementer.codex_bypass_hook_trust === 1,
-          zoneId: implementer.zone_id,
-          cwd,
-          worktree,
-          task: prompt,
-          allowProjectCodexConfig: false,
-          size: { cols, rows },
-        });
-      } catch (error) {
-        await removeWorktree(repoRoot, worktree, branch).catch(() => {});
-        throw error;
-      }
-      insert.run(
-        id,
-        implementer.zone_id,
-        repoRoot,
-        implementer.codex_bypass_hook_trust,
-        implementer.model,
-        'reviewer',
-        name,
-        `Reviews ${implementer.name}'s work on ${implementer.branch}`.slice(0, MAX_DESCRIPTION_LENGTH),
-        branch,
-        worktree,
-        'idle',
-        ...issueColumns(null),
-        // Loose on the board with its implementer, it is put just below and right of it; in a zone, the zone lays it out.
-        loose ? implementer.x! + REVIEWER_OFFSET : null,
-        loose ? implementer.y! + REVIEWER_OFFSET : null,
-        loose ? frontZ(db) : null,
-        of,
-        null,
-        1,
-        null,
-        null,
-        null,
-        null,
-        null,
-      );
-      options.log(`spawned ${implementer.harness} reviewer ${id} of ${of} on ${branch} in ${worktree}`);
-      announce(id);
-      return get(id)!;
-    },
-
-    async adopt({ sessionId, harness, name, description, zoneId, position, transcriptPath, place, size }) {
-      if (getRow(sessionId) !== undefined) throw invalidParams(`${name} is already an agent`);
-      await requireHarness(harness);
-      if (harness === 'codex') {
-        try {
-          options.ensureHookShim();
-        } catch (error) {
-          throw invalidParams(`can't write the Codex hook launcher ${options.hookShimPath}: ${(error as Error).message}`);
-        }
-      }
-      let undo: (() => Promise<void>) | undefined;
-      let at: { cwd: string; worktree: string; repoRoot: string; branch: string; ownsWorktree: boolean };
-      if (place.kind === 'in-place') {
-        at = { ...place, ownsWorktree: false };
-      } else {
-        const { repoRoot, base, folder } = place;
-        const { branch, worktree } = await inRepoQueue(repoRoot, async () => {
-          const branch = await freeBranchName(repoRoot, `${'branch' in base ? base.branch : nameSlug(name)}-resumed`);
-          const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
-          await addWorktree(repoRoot, worktree, branch, 'branch' in base ? base.branch : base).catch(wrapInvalid);
-          return { branch, worktree };
-        });
-        undo = () => removeWorktree(repoRoot, worktree, branch);
-        const cwd = folder === '' ? worktree : join(worktree, folder);
-        mkdirSync(cwd, { recursive: true });
-        at = { cwd, worktree, repoRoot, branch, ownsWorktree: true };
-      }
-      const bypassHookTrust = repoZoneFor(zoneId, at.repoRoot)?.codex_bypass_hook_trust ?? 1;
-      // Its work from here on is what a review looks at: the commit it carries on from.
-      const head = at.branch === '' ? undefined : await runGit(at.worktree, ['rev-parse', 'HEAD']).catch(() => undefined);
-      const baseCommit = head?.ok ? head.stdout : null;
-      // Codex's own id for its conversation is the session id its hooks reported.
-      const codexSessionId = harness === 'codex' ? sessionId : null;
-      let bypassed: boolean;
-      try {
-        if (harness === 'claude' && transcriptPath !== null) carryClaudeTranscript(transcriptPath, at.cwd);
-        bypassed = launch({
-          id: sessionId,
-          harness,
-          model: null,
-          bypassHookTrust: bypassHookTrust === 1,
-          zoneId,
-          cwd: at.cwd,
-          worktree: at.worktree,
-          resume: { codexSessionId },
-          allowProjectCodexConfig: false,
-          size,
-        });
-      } catch (error) {
-        await undo?.().catch(() => {});
-        throw error;
-      }
-      insert.run(
-        sessionId,
-        zoneId,
-        at.repoRoot,
-        bypassHookTrust,
-        null,
-        null,
-        name,
-        description.slice(0, MAX_DESCRIPTION_LENGTH),
-        at.branch,
-        at.worktree,
-        'idle',
-        ...issueColumns(null),
-        position?.x ?? null,
-        position?.y ?? null,
-        position?.z ?? null,
-        null,
-        baseCommit,
-        at.ownsWorktree ? 1 : 0,
-        codexSessionId,
-        null,
-        null,
-        null,
-        null,
-      );
-      watchResumed(sessionId, harness, at.cwd, at.worktree, bypassed, codexSessionId);
-      options.log(`adopted ${harness} session ${sessionId} as an agent in ${at.cwd}`);
-      announce(sessionId);
-      return get(sessionId)!;
-    },
+    adopt: spawns.adopt,
 
     list: () => (selectAll.all() as unknown as AgentRow[]).map(toAgent),
+
+    async refreshBranches() {
+      const live = (selectAll.all() as unknown as AgentRow[]).filter((row) => row.ended_at === null);
+      await Promise.all(live.map((row) => refreshBranch(row.session_id)));
+    },
+
+    refreshBranch,
 
     get,
 
@@ -1409,56 +739,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return transcripts.readSubagent(row.harness, row.transcript_path, toolUseId, agentId);
     },
 
-    isDeleting: (sessionId) => deleting.has(sessionId),
+    isDeleting: lifecycle.isDeleting,
 
-    async delete(sessionId, force, keepWorktree = false, keepBranch = false) {
-      const agent = requireAgent(sessionId);
-      // Its own repo, wherever its tile sits.
-      const { repoRoot } = agent;
-      if (!force && !keepWorktree && agent.ownsWorktree) {
-        const reason = await unsavedWork(repoRoot, agent.worktree, agent.branch);
-        if (reason !== undefined) throw new RpcMethodError(AGENT_ERROR.unsavedWork, `${agent.name}: ${reason}`);
-      }
-      guards.get(sessionId)?.stop();
-      guards.delete(sessionId);
-      deleting.add(sessionId);
-      try {
-        if (agent.endedAt === null) await sessions.kill(sessionId);
-        await endFallbackShell(sessionId);
-        await options.endTabs?.(sessionId);
-        if (agent.reviews !== null) keepReview(sessionId, agent.worktree);
-        // An agent adopted in the user's own folder takes nothing of theirs with it.
-        if (agent.ownsWorktree && !keepWorktree) await removeWorktree(repoRoot, agent.worktree, agent.branch, keepBranch);
-      } finally {
-        deleting.delete(sessionId);
-      }
-      options.schedules.remove(sessionId);
-      options.onRemoving(sessionId);
-      remove.run(sessionId);
-      // The agents it started stay, started by no one now; the activity log keeps who did.
-      const children = (selectChildren.all(sessionId) as { session_id: string }[]).map((child) => child.session_id);
-      forgetParent.run(sessionId);
-      for (const child of children) announce(child);
-      sessions.forget(sessionId);
-      subagents.delete(sessionId);
-      idlePrompted.delete(sessionId);
-      drafting.delete(sessionId);
-      lastMessages.delete(sessionId);
-      handingOff.delete(sessionId);
-      permissions.drop(sessionId);
-      transcripts.forget(sessionId);
-      options.log(`deleted agent ${sessionId}${agent.ownsWorktree ? ` and its worktree ${agent.worktree}` : ''}`);
-      options.broadcast({ type: 'agent.removed', sessionId });
+    // Read first: a rename with no hook after it must not hide the branch it owns from the unsaved-work check.
+    async delete(sessionId, force, keepWorktree, keepBranch) {
+      await refreshBranch(sessionId);
+      return lifecycle.delete(sessionId, force, keepWorktree, keepBranch);
     },
 
-    async answer(sessionId, text, paste = false) {
-      const agent = requireAgent(sessionId);
-      if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
-      // Its state says so while any permission prompt, its own or a subagent's, is pending.
-      if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
-      if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
-      await typeInput(sessionId, answerInput(text, paste));
-    },
+    answer: deliveries.answer,
 
     // An ended agent may have one too: its next run relaunches it.
     setSchedule(sessionId, schedule) {
@@ -1469,43 +758,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return get(sessionId)!;
     },
 
-    runScheduled(sessionId, prompt) {
-      const row = getRow(sessionId);
-      if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
-      if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run');
-      const reason = whyNotReady(row);
-      if (reason !== undefined) return { started: false, reason };
-      typeLine(sessionId, prompt).catch((error: Error) => options.log(`could not start a run of ${sessionId}: ${error.message}`));
-      return { started: true };
-    },
+    runScheduled: deliveries.runScheduled,
 
-    async deliver(from, to, name, text) {
-      const row = getRow(to);
-      if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
-      if (oneLine(text) === '') return { started: false, reason: 'there was nothing to send' };
-      const reason = row.ended_at === null ? whyNotReady(row, true) : undefined;
-      if (reason !== undefined) return { started: false, reason, busy: true };
-      const line = handoffLine(getRow(from)?.name ?? 'another agent', name, text);
-      recount(handingOff, from, 1);
-      announce(from);
-      try {
-        if (row.ended_at !== null) return relaunch(row, line, `for a hand-off from ${from}`, row.harness_session_id);
-        await typeLine(to, line);
-        return { started: true };
-      } finally {
-        // Deleting `from` meanwhile forgot its count.
-        recount(handingOff, from, -1);
-        announce(from);
-      }
-    },
+    deliver: deliveries.deliver,
 
     finalMessage: (sessionId) =>
       (selectFinalMessage.get(sessionId) as { final_message: string | null } | undefined)?.final_message ?? undefined,
 
-    onInput(sessionId, data) {
-      if (draftAfterInput(drafting.has(sessionId), data)) drafting.add(sessionId);
-      else drafting.delete(sessionId);
-    },
+    onInput: hookStates.typed,
 
     interrupt(sessionId) {
       const agent = requireAgent(sessionId);
@@ -1516,46 +776,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // and the call it waited on the user in, whether or not its harness cancels it.
       permissions.drop(sessionId);
       options.asks?.drop(sessionId);
-      interrupted.add(sessionId);
+      hookStates.interrupted(sessionId);
       save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
       return get(sessionId)!;
     },
 
-    async stop(sessionId) {
-      const agent = requireAgent(sessionId);
-      if (agent.endedAt !== null) throw invalidParams(`${agent.name} has already ended`);
-      stopping.add(sessionId);
-      try {
-        await sessions.kill(sessionId);
-      } finally {
-        stopping.delete(sessionId);
-      }
-      return get(sessionId)!;
-    },
+    stop: lifecycle.stop,
 
-    async resume(sessionId, force) {
-      const agent = requireAgent(sessionId);
-      if (agent.endedAt === null) throw invalidParams(`${agent.name} is still running`);
-      // The daemon ends a reviewer once its review is in, and its round with it: a restart wouldn't reopen the round.
-      if (agent.reviewOf !== null && agent.state !== 'stopped-by-restart') throw invalidParams(`${agent.name} is a reviewer whose round is over`);
-      // Its session may still be finishing its exit, which a new one under the same id would collide with.
-      await sessions.kill(sessionId).catch(() => {});
-      const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
-      // Two harness instances never share its worktree: not even with `force`. Read now, not as of the last quiet save.
-      if (shell !== undefined && (await sessions.shellHarnessNow(shell.id)) === agent.harness) {
-        throw invalidParams(`${agent.name} can't be restarted: ${agent.harness} is running in its shell. Exit it first`);
-      }
-      if (shell !== undefined && !force && (await isRunningSomething(shell.pid))) {
-        throw new RpcMethodError(AGENT_ERROR.shellBusy, `${agent.name}'s shell is running something`);
-      }
-      await endFallbackShell(sessionId);
-      const row = getRow(sessionId);
-      if (row === undefined || row.ended_at === null) return requireAgent(sessionId);
-      const why = agent.state === 'stopped-by-restart' ? 'to resume it after a restart' : 'to restart it';
-      const resumed = relaunch(row, undefined, why);
-      if (!resumed.started) throw invalidParams(`${agent.name} can't be resumed: ${resumed.reason}`);
-      return get(sessionId)!;
-    },
+    resume: lifecycle.resume,
 
     decidePermission(sessionId, requestId, decision) {
       const agent = requireAgent(sessionId);
@@ -1565,7 +793,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // The harness has its answer and carries on (its next hook says how), unless more prompts are pending.
       const pending = permissions.prompts(sessionId).length;
       const row = getRow(sessionId)!;
-      permissionSettled.add(sessionId);
+      hookStates.permissionDecided(sessionId);
       save(row, stateWithPrompts(row.state, { pending, settled: true }), subagents.of(sessionId), true);
     },
 
@@ -1617,7 +845,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setStatus(sessionId, summary, progress) {
+    setStatus(sessionId, summary, progress, done = false) {
       requireAgent(sessionId);
       const text = oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
@@ -1627,7 +855,18 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (progress !== null && !isStatusProgress(progress)) {
         throw invalidParams('progress must be a whole number from 0 to 100');
       }
-      updateStatus.run(text, progress, new Date().toISOString(), sessionId);
+      const at = new Date().toISOString();
+      updateStatus.run(text, progress, at, sessionId);
+      if (done && requireRow(sessionId).work_finished_at === null) updateFinished.run(at, sessionId);
+      const agent = get(sessionId)!;
+      options.broadcast({ type: 'agent.updated', agent });
+      return agent;
+    },
+
+    idlePrompted: (sessionId) => hookStates.idlePrompted(sessionId),
+
+    markFinished(sessionId) {
+      if (requireRow(sessionId).work_finished_at === null) updateFinished.run(new Date().toISOString(), sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
       return agent;
@@ -1660,8 +899,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // A hook still in flight when the process exited must not revive the ended agent's state.
       if (row === undefined || row.ended_at !== null) return undefined;
       // Hooks follow the agent's tool calls, so look for config it may have just written, in case a watch missed it.
-      guards.get(sessionId)?.check();
-      if (payload.hook_event_name === 'SessionStart') codexResuming.delete(sessionId);
+      lifecycle.checkGuard(sessionId);
+      if (payload.hook_event_name === 'SessionStart') lifecycle.started(sessionId);
       // Codex names its conversation itself: `codex resume` needs that name.
       const conversation = payload.session_id;
       if (payload.hook_event_name === 'SessionStart' && typeof conversation === 'string' && conversation !== row.harness_session_id) {
@@ -1672,79 +911,30 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (payload.agent_id === undefined && typeof transcript === 'string' && transcript !== row.transcript_path) {
         updateTranscript.run(transcript, sessionId);
       }
+      // The agent may have just run `git branch -m` or checked out another branch.
+      if (payload.agent_id === undefined && BRANCH_HOOKS.has(payload.hook_event_name as string)) void refreshBranch(sessionId);
       if (payload.agent_id === undefined && TURN_BOUNDARIES.has(payload.hook_event_name)) options.onTurnBoundary?.(sessionId);
+      // A new prompt is new work: it is no longer finished.
+      if (payload.agent_id === undefined && payload.hook_event_name === 'UserPromptSubmit' && row.work_finished_at !== null) {
+        updateFinished.run(null, sessionId);
+        announce(sessionId);
+      }
       // Its own turn ended, so no call of it still waits on the user: one its harness gave up on (timed out) goes too.
       if (payload.agent_id === undefined && payload.hook_event_name === 'Stop') options.asks?.drop(sessionId);
-      if (payload.hook_event_name === 'UserPromptSubmit') {
-        interrupted.delete(sessionId);
-        drafting.delete(sessionId);
-      } else if (interrupted.has(sessionId) && isStaleAfterInterrupt(payload)) return undefined;
-      const settled = permissions.afterHook(sessionId, payload);
-      const reply = payload.hook_event_name === 'PermissionRequest' ? permissions.hold(sessionId, payload, signal) : undefined;
-      if (payload.hook_event_name === 'PermissionRequest') {
-        permissionSettled.delete(sessionId);
-        // Another prompt is a new ask, even when the state was already needs-permission.
-        updateSeen.run(0, sessionId);
-      } else if (settled) permissionSettled.add(sessionId);
-      // A permission notification landing after its prompt was settled would put the agent back to needs-permission with
-      // nothing to answer, until some later hook.
-      // The cost: if a later prompt's PermissionRequest never reaches the daemon (a failed hook), its notification is
-      // dropped too, and the agent shows its hooks' state until the next hook.
-      if (
-        payload.hook_event_name === 'Notification' &&
-        payload.notification_type === 'permission_prompt' &&
-        permissionSettled.has(sessionId) &&
-        permissions.prompts(sessionId).length === 0
-      ) {
-        return undefined;
-      }
-      const previousMessage = lastMessages.get(sessionId) ?? null;
-      const lastMessage = lastMessageAfterHook(previousMessage, payload);
-      if (lastMessage === null) lastMessages.delete(sessionId);
-      else lastMessages.set(sessionId, lastMessage);
-      const next = subagentsAfterHook(subagents.of(sessionId), payload, new Date());
-      const pending = permissions.prompts(sessionId).length;
-      // An agent started with no task has nothing to run yet: its session starting leaves it idle for its first message.
-      const awaitingTask = payload.hook_event_name === 'SessionStart' && row.state === 'idle' && row.description === '';
-      const state = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
-      const idlePrompt = payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt';
-      if (idlePrompt && row.state === 'idle' && state === 'waiting') idlePrompted.add(sessionId);
-      else if (state !== row.state) idlePrompted.delete(sessionId);
-      save(row, state, next, settled || reply !== undefined || lastMessage !== previousMessage);
-      // Its own turn ended with a final message (a subagent's Stop is SubagentStop): it hands that off.
-      const finalMessage = payload.last_assistant_message;
-      if (payload.hook_event_name === 'Stop' && payload.agent_id === undefined && typeof finalMessage === 'string') {
-        updateFinalMessage.run(finalMessage, sessionId);
-        options.onHandoff(sessionId);
-      }
-      return reply;
+      return hookStates.onHook(row, payload, signal);
     },
 
     onExit(session) {
-      const owner = fallbackOwners.get(session.id);
-      if (owner !== undefined) {
-        // The shell its pane dropped into has exited: the pane shows the agent's own ended session again.
-        fallbackOwners.delete(session.id);
-        fallbackShells.delete(owner);
-        // Forgotten once its exit has finished: its screen is saved then, and would be written back after a forget now.
-        void sessions.kill(session.id).catch(() => {}).then(() => sessions.forget(session.id));
-        return announce(owner);
-      }
+      if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
-      permissionSettled.delete(session.id);
-      interrupted.delete(session.id);
-      guards.get(session.id)?.stop();
-      guards.delete(session.id);
-      idlePrompted.delete(session.id);
-      drafting.delete(session.id);
+      hookStates.ended(session.id);
+      lifecycle.stopGuard(session.id);
       const row = getRow(session.id);
       if (row === undefined) return;
       // Always tell clients: the agent has ended even if its state already said so. Stopped by the user is not a failure.
-      const state = stopping.has(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
+      const state = lifecycle.isStopping(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
       save(row, state, subagentsAfterExit(subagents.of(session.id), state, new Date()), true);
-      if (session.stoppedByRestart) codexResuming.delete(session.id);
-      else if (codexResuming.delete(session.id) && !stopping.has(session.id)) startAfresh(session.id);
-      else startFallbackShell(session.id);
+      lifecycle.exited(session.id, session.stoppedByRestart);
     },
 
     repoZoneId(sessionId) {
@@ -1759,17 +949,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       announce(sessionId);
     },
 
-    fallbackShellCount: () => fallbackShells.size,
+    fallbackShellCount: lifecycle.fallbackShellCount,
 
-    fallbackOwner: (sessionId) => fallbackOwners.get(sessionId),
+    fallbackOwner: lifecycle.fallbackOwner,
 
-    onShellChanged(shellId) {
-      const owner = fallbackOwners.get(shellId);
-      if (owner !== undefined) announce(owner);
-    },
+    onShellChanged: lifecycle.onShellChanged,
 
     close: () => {
-      closed = true;
+      lifecycle.close();
       permissions.close();
     },
   };
@@ -1789,7 +976,7 @@ export function agentHandlers<Context>(
         branch: optionalStringParam(p, 'branch'),
         harness: optionalStringParam(p, 'harness') as Harness | undefined,
         model: optionalStringParam(p, 'model'),
-        role: optionalStringParam(p, 'role') as AgentRole | undefined,
+        role: optionalStringParam(p, 'role'),
         issueZoneId: optionalStringParam(p, 'issueZoneId'),
         allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
         prompt: optionalStringParam(p, 'prompt'),
@@ -1802,6 +989,10 @@ export function agentHandlers<Context>(
       });
     },
     'agent.list': () => agents.list(),
+    'agent.refreshBranches': async () => {
+      await agents.refreshBranches();
+      return null;
+    },
     'agent.transcript': (params) => {
       const p = paramsObject(params);
       return agents.transcript(stringParam(p, 'sessionId'), optionalCountParam(p, 'since') ?? 0, optionalCountParam(p, 'generation'));
@@ -1873,183 +1064,10 @@ export function agentHandlers<Context>(
   };
 }
 
-/**
- * The `claude --settings` that sends every hook event to the daemon as an `http` hook (ADR-0004). The token is
- * interpolated from the session's environment by Claude, so it never appears on the command line. Claude waits on a
- * PermissionRequest hook a little longer than the daemon holds it (`permissionHoldMs`), so the daemon's no-decision
- * answer, not a timeout, is what hands the prompt back to the terminal.
- */
-export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
-  const handler = (timeout: number) => ({
-    type: 'http',
-    url: hookUrl,
-    headers: { Authorization: `Bearer $${HOOK_TOKEN_ENV}` },
-    allowedEnvVars: [HOOK_TOKEN_ENV],
-    timeout,
-  });
-  const permissionTimeout = Math.ceil(permissionHoldMs / 1000) + PERMISSION_HOOK_MARGIN_S;
-  return {
-    hooks: Object.fromEntries(
-      CLAUDE_HOOK_EVENTS.map((event) => [
-        event,
-        [{ hooks: [handler(event === 'PermissionRequest' ? permissionTimeout : HOOK_TIMEOUT_S)] }],
-      ]),
-    ),
-  };
-}
-
-/** What the board MCP server is called in a harness's MCP config. */
-const BOARD_MCP_SERVER = 'agent-board';
-
-/** The board env the MCP server needs (ADR-0010). */
-const BOARD_MCP_ENV = [BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_SESSION_ENV, BOARD_ZONE_ENV];
-
-/** How long Codex lets a board MCP tool call run: past the longest a question or plan waits (`MAX_ASK_WAIT_MS`). */
-const BOARD_MCP_TOOL_TIMEOUT_SEC = MAX_ASK_WAIT_MS / 1000 + 60;
-
-/**
- * The `claude --mcp-config` that runs the board MCP server, `agent-board mcp` (ADR-0010). Claude starts it with its own
- * env, which has the board env.
- */
-function claudeMcpConfig(boardCli: string) {
-  return { mcpServers: { [BOARD_MCP_SERVER]: { type: 'stdio', command: boardCli, args: ['mcp'] } } };
-}
-
-/** A harness executable and its arguments. */
-interface HarnessLaunch {
-  command: string;
-  args: string[];
-}
-
-export interface CodexLaunchOptions {
-  command: string;
-  hookShimPath: string;
-  /** The zone's setting: start with `--dangerously-bypass-hook-trust`. */
-  zoneBypassHookTrust: boolean;
-  /** The `agent-board` CLI launcher, to run as the board MCP server (ADR-0010); none without. */
-  boardCli?: string;
-  /** Where Codex starts, and the worktree it is in. */
-  cwd: string;
-  worktree: string;
-  /** Codex's id for a conversation to carry on (`codex resume <id>`); a new one without. */
-  resume?: string;
-  /** Its model (`-m`); Codex's default without. */
-  model?: string;
-  /** The first message; none leaves Codex at its prompt. */
-  prompt?: string;
-}
-
-/**
- * How to start `codex` for an agent (ADR-0004): every hook event as a `-c` override running the forwarder, the
- * `AGENT_BOARD_HOOK_*` env (hook URL and token) hidden from the model's shell commands, the board MCP server
- * (ADR-0010) when it has `boardCli`, and the hook-trust bypass flag when the zone has it on. Use it for every launch of a Codex agent, a resume included.
- *
- * The flag skips review for every hook in the session, not just ours, and hooks run outside Codex's sandbox. So when
- * the worktree has Codex config of its own where Codex loads it from (the start folder up to the worktree root),
- * Codex is started without the flag, to review that config's hooks itself, and `projectConfig` names it.
- */
-export function codexLaunch(options: CodexLaunchOptions): HarnessLaunch & { projectConfig?: string } {
-  const hookCommand = codexHookCommand(options.hookShimPath);
-  const args = options.resume === undefined ? [] : ['resume', options.resume];
-  args.push(...Object.entries(CODEX_HOOK_TIMEOUTS).flatMap(([event, timeout]) => [
-    '-c',
-    `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(hookCommand)},timeout=${timeout}}]}]`,
-  ]));
-  // The hook URL and token stay out of the model's shell commands; the board env (ADR-0010) is for them.
-  args.push('-c', `shell_environment_policy.exclude=[${JSON.stringify(`${HOOK_ENV_PREFIX}*`)}]`);
-  if (options.boardCli !== undefined) {
-    // Codex gives an MCP server only a few env vars of its own unless told which others to pass.
-    args.push(
-      '-c',
-      `mcp_servers.${BOARD_MCP_SERVER}.command=${JSON.stringify(options.boardCli)}`,
-      '-c',
-      `mcp_servers.${BOARD_MCP_SERVER}.args=["mcp"]`,
-      '-c',
-      `mcp_servers.${BOARD_MCP_SERVER}.env_vars=${JSON.stringify(BOARD_MCP_ENV)}`,
-      // A question or plan blocks its call until the user answers: longer than Codex's 60 s by default.
-      '-c',
-      `mcp_servers.${BOARD_MCP_SERVER}.tool_timeout_sec=${BOARD_MCP_TOOL_TIMEOUT_SEC}`,
-    );
-  }
-  const projectConfig = projectCodexConfig(options.cwd, options.worktree);
-  if (options.zoneBypassHookTrust && projectConfig === undefined) args.push(CODEX_BYPASS_FLAG);
-  if (options.model !== undefined) args.push('-m', options.model);
-  if (options.prompt !== undefined) args.push('--', options.prompt);
-  return projectConfig === undefined ? { command: options.command, args } : { command: options.command, args, projectConfig };
-}
-
-/** What the user confirms before a Codex agent starts in a worktree with Codex config of its own. */
-function projectConfigWarning(path: string, hookShimPath: string): string {
-  return (
-    `This worktree has Codex config of its own (${path}). The agent will start without ${CODEX_BYPASS_FLAG}, and ` +
-    `Codex will ask you to review hooks in its terminal: that config's hooks are listed with agent-board's, and ` +
-    `trusting all of them trusts both. Codex shows each hook's source and command; agent-board's run ` +
-    `${codexHookCommand(hookShimPath)}. Read the repo's hooks before you trust them.`
-  );
-}
-
-/**
- * How to start a harness in `cwd`: through the user's login shell when sessions use one (a daemon started from the
- * Dock has launchd's bare PATH, and the harness usually lives on the profile's), otherwise directly. The script
- * changes back to `cwd`, in case the profile changed directory. A login shell that is neither POSIX nor fish (nu,
- * xonsh, tcsh…) is skipped, and the harness is started directly. `command` is the harness's absolute path
- * (`harness-path.ts`), so the shell looks nothing up: it is there for its environment, not its PATH.
- */
-export function harnessLaunch(
-  shell: string,
-  shellArgs: string[],
-  cwd: string,
-  command: string,
-  args: string[],
-): { command: string; args: string[] } {
-  const kind = loginShellKind(shell, shellArgs);
-  if (kind === undefined) return { command, args };
-  // The directory, harness and arguments travel as the script's own arguments, so nothing is quoted into it.
-  const script = kind === 'fish' ? 'cd $argv[1]; and exec $argv[2..-1]' : 'cd "$0" && exec "$@"';
-  return { command: shell, args: [...shellArgs, '-c', script, cwd, command, ...args] };
-}
-
-/** A tile name from a prompt: its first line, cut at a word boundary to at most `MAX_DEFAULT_NAME_LENGTH`. */
-export function defaultName(prompt: string): string {
-  const line = prompt.split('\n', 1)[0]!.replace(/\s+/g, ' ').trim();
-  if (line.length <= MAX_DEFAULT_NAME_LENGTH) return line;
-  const cut = line.slice(0, MAX_DEFAULT_NAME_LENGTH);
-  const space = cut.lastIndexOf(' ');
-  return `${(space > 20 ? cut.slice(0, space) : cut).trimEnd()}…`;
-}
-
-/** Text as one line at a prompt: a line break would submit what came before it on its own. */
-function oneLine(text: string): string {
-  return text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
-}
-
-/** The `issue_provider`, `issue_id`, `issue_title` and `issue_url` columns for an agent's issue, all null for none. */
-function issueColumns(issue: LinkedIssue | null): [string | null, string | null, string | null, string | null] {
-  return issue === null ? [null, null, null, null] : [issue.provider, issue.id, issue.title, issue.url];
-}
-
 /** A spawn's optional `repo`: `{ path }` or `{ scratch: true }`. */
 function agentRepoParam(fields: Record<string, unknown>): AgentRepo | undefined {
   if (fields.repo === undefined) return undefined;
   const repo = paramsObject(fields.repo);
   if (repo.scratch === true) return { scratch: true };
   return { path: stringParam(repo, 'path') };
-}
-
-/** A failure of git's, or of a check, as the spawn's refusal. */
-function wrapInvalid(error: Error): never {
-  throw invalidParams(error.message);
-}
-
-/** The review a reviewer left in its worktree: the newest `.agent-board/review*.md`, or undefined for none. */
-function reviewFile(worktree: string): string | undefined {
-  const dir = join(worktree, '.agent-board');
-  try {
-    return readdirSync(dir)
-      .filter((name) => /^review.*\.md$/.test(name))
-      .map((name) => ({ path: join(dir, name), at: statSync(join(dir, name)).mtimeMs }))
-      .sort((a, b) => b.at - a.at)[0]?.path;
-  } catch {
-    return undefined;
-  }
 }

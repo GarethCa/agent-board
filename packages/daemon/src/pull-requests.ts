@@ -11,28 +11,48 @@ export interface WatchedAgent {
   ended: boolean;
 }
 
+/** An agent's pull requests: its own branch's, and, for its tile alone, those of the branches it pushed to. */
+export interface AgentPullRequests {
+  own: PullRequest[];
+  pushed: PullRequest[];
+}
+
 export interface PullRequestWatcherOptions {
   /** Every agent to watch. */
   agents(): WatchedAgent[];
-  /** The pull requests made from the agent's branch. */
-  pullRequests(agent: WatchedAgent): Promise<PullRequest[]>;
+  /** The agent's pull requests. */
+  pullRequests(agent: WatchedAgent): Promise<AgentPullRequests>;
   /** How long it waits after one round of asking before the next; 0 never asks, not even on `refresh`. */
   intervalMs: number;
+  /** Whether its first round waits for `start`, so whoever hears `onRead` is there for it; else it starts at once. */
+  startLater?: boolean;
   /** The agent's pull requests changed. */
   onChange(sessionId: string): void;
+  /**
+   * The agent's pull requests were read, changed or not: its own branch's, and whether it was their first read since the
+   * watcher started: what is there at the first is no news.
+   */
+  onRead?(sessionId: string, own: readonly PullRequest[], first: boolean): void;
   log(message: string): void;
 }
 
 export interface PullRequestWatcher {
-  /** The agent's pull requests as last seen; empty until first seen. */
+  /** The pull requests made from the agent's branch, as last seen; empty until first seen. */
   get(sessionId: string): PullRequest[];
+  /** The pull requests of the branches it pushed to, as last seen: for its tile alone. Empty until first seen. */
+  pushed(sessionId: string): PullRequest[];
   /** Whether the agent's pull requests have been read since the watcher started, so `get`'s empty means none. */
   read(sessionId: string): boolean;
   /** Asks for the agent's pull requests now, as when its turn has ended and it may just have opened one. */
   refresh(sessionId: string): Promise<void>;
+  /** Starts its rounds, when made with `startLater`; once only. */
+  start(): void;
   /** Stops asking. Asking in flight finishes without reporting changes. */
   stop(): void;
 }
+
+/** What an agent has before its pull requests are first seen. */
+const NONE = JSON.stringify({ own: [], pushed: [] } satisfies AgentPullRequests);
 
 /**
  * Keeps every agent's pull requests, asking for them one agent at a time, one round every `intervalMs`, the first
@@ -42,20 +62,28 @@ export interface PullRequestWatcher {
  * it changes.
  */
 export function watchPullRequests(options: PullRequestWatcherOptions): PullRequestWatcher {
-  const seen = new Map<string, { pullRequests: PullRequest[]; json: string }>();
+  const seen = new Map<string, { pullRequests: AgentPullRequests; json: string }>();
   const failures = new Map<string, string>();
   /** The agents whose pull requests have been read at least once. */
   const read = new Set<string>();
   const settled = new Set<string>();
+  /** Each agent's newest ask whose answer was taken: an older one answering later is stale (a round's, across a refresh). */
+  const answered = new Map<string, number>();
+  let asks = 0;
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
 
   const ask = async (agent: WatchedAgent) => {
-    let pullRequests: PullRequest[];
+    const ticket = ++asks;
+    let pullRequests: AgentPullRequests;
     try {
       pullRequests = await options.pullRequests(agent);
+      if ((answered.get(agent.sessionId) ?? 0) > ticket) return;
+      answered.set(agent.sessionId, ticket);
       failures.delete(agent.sessionId);
+      const first = !read.has(agent.sessionId);
       read.add(agent.sessionId);
+      if (!stopped) options.onRead?.(agent.sessionId, pullRequests.own, first);
     } catch (error) {
       const message = (error as Error).message;
       if (failures.get(agent.sessionId) !== message) {
@@ -64,11 +92,11 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
       }
       return;
     }
-    if (agent.ended && pullRequests.every((pr) => pr.state === 'merged' || pr.state === 'closed')) {
+    if (agent.ended && [...pullRequests.own, ...pullRequests.pushed].every((pr) => pr.state === 'merged' || pr.state === 'closed')) {
       settled.add(agent.sessionId);
     }
     const json = JSON.stringify(pullRequests);
-    if (stopped || (seen.get(agent.sessionId)?.json ?? '[]') === json) return;
+    if (stopped || (seen.get(agent.sessionId)?.json ?? NONE) === json) return;
     seen.set(agent.sessionId, { pullRequests, json });
     options.onChange(agent.sessionId);
   };
@@ -79,6 +107,7 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
     for (const sessionId of seen.keys()) if (!known.has(sessionId)) seen.delete(sessionId);
     for (const sessionId of settled) if (!known.has(sessionId)) settled.delete(sessionId);
     for (const sessionId of read) if (!known.has(sessionId)) read.delete(sessionId);
+    for (const sessionId of answered.keys()) if (!known.has(sessionId)) answered.delete(sessionId);
     for (const agent of agents) {
       if (stopped) return;
       if (!settled.has(agent.sessionId)) await ask(agent);
@@ -93,14 +122,22 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
     }, delayMs);
     timer.unref();
   };
-  if (options.intervalMs > 0) schedule(0);
+  let started = false;
+  const start = () => {
+    if (started || stopped) return;
+    started = true;
+    if (options.intervalMs > 0) schedule(0);
+  };
+  if (options.startLater !== true) start();
 
   return {
-    get: (sessionId) => seen.get(sessionId)?.pullRequests ?? [],
+    get: (sessionId) => seen.get(sessionId)?.pullRequests.own ?? [],
+    pushed: (sessionId) => seen.get(sessionId)?.pullRequests.pushed ?? [],
     read: (sessionId) => read.has(sessionId),
+    start,
     async refresh(sessionId) {
       const agent = options.agents().find((a) => a.sessionId === sessionId);
-      if (agent !== undefined && !stopped && options.intervalMs > 0) await ask(agent);
+      if (agent !== undefined && started && !stopped && options.intervalMs > 0) await ask(agent);
     },
     stop() {
       stopped = true;

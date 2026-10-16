@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { overlaps } from '../geometry';
-import { AGENT_TILE_SIZE, PERCH_ROOM, TILE_GAP, tileSlot, ZONE_PADDING, zoneHeightFor } from './layout';
-import { tidyLoose, tidyZone } from './tidy';
+import { AGENT_TILE_SIZE, overlaps, PERCH_ROOM, TILE_GAP, tileSlot, ZONE_PADDING, zoneHeightFor } from '../src/board-layout.ts';
+import { tidyLoose, tidyZone } from '../src/board-tidy.ts';
 
 const STEP = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
 

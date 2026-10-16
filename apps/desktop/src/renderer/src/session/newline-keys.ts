@@ -1,4 +1,5 @@
 import type { Harness } from '@agent-board/daemon/protocol';
+import { isMac } from '../keys';
 
 /**
  * What each harness's TUI reads as "a new line in the message" rather than "send it". xterm sends a plain CR
@@ -18,4 +19,22 @@ export function newlineKey(
 ): string | undefined {
   if (harness === null || event.key !== 'Enter' || event.ctrlKey || event.metaKey) return undefined;
   return event.shiftKey || event.altKey ? NEWLINE_SEQUENCES[harness] : undefined;
+}
+
+const MAC_LINE_EDIT: Record<'meta' | 'alt', Partial<Record<string, string>>> = {
+  meta: { Backspace: '\x15', ArrowLeft: '\x01', ArrowRight: '\x05' },
+  alt: { ArrowLeft: '\x1bb', ArrowRight: '\x1bf' },
+};
+
+/**
+ * The sequence for a macOS line-editing key, as Terminal.app, iTerm2 and Ghostty send it: ⌘⌫ deletes to the
+ * line start (Ctrl-U), ⌘← and ⌘→ go to its start and end (Ctrl-A, Ctrl-E), ⌥← and ⌥→ move by word (ESC b, ESC f).
+ * Undefined for any other key, which xterm handles: ⌥⌫ is ESC DEL there already. Undefined for every key off macOS.
+ */
+export function macLineEditKey(
+  event: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>,
+  onMac = isMac,
+): string | undefined {
+  if (!onMac || event.shiftKey || event.ctrlKey || event.metaKey === event.altKey) return undefined;
+  return MAC_LINE_EDIT[event.metaKey ? 'meta' : 'alt'][event.key];
 }

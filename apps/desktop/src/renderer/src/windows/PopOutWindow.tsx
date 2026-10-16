@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
-import type { WindowTarget } from '../../../preload/api';
+import { WINDOW_QUERY, type WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SessionWindow } from '../session/SessionWindow';
 import { keptLayout } from '../session/use-window-panes';
+import { PopOutSpotlight } from './PopOutSpotlight';
 import { handOffWebTabs } from './SessionWindows';
 import { usePopOutMoves } from './use-pop-out-moves';
 
@@ -12,15 +13,36 @@ import { usePopOutMoves } from './use-pop-out-moves';
  * A session window popped out into its own OS window: the whole window, with a button to pop it back in; or a tab
  * window (slice 4). Tabs drag to and from it, the board making the moves.
  */
-export function PopOutWindow({ target }: { target: WindowTarget }) {
+export function PopOutWindow({ target: opened }: { target: WindowTarget }) {
+  // Its ⌘K switcher may show another session in it.
+  const [target, setTarget] = useState(opened);
   useEffect(() => {
     document.title = target.title;
   }, [target.title]);
   const [moveProblem, setMoveProblem] = useState<string>();
   usePopOutMoves(setMoveProblem);
   const notice = <Notice problem={moveProblem} />;
-  if (target.kind === 'tabs') return <PoppedTabs target={target} notice={notice} />;
-  return target.kind === 'shell' ? <PoppedShell target={target} notice={notice} /> : <PoppedSession target={target} notice={notice} />;
+  const switched = (to: WindowTarget) => {
+    // A reload shows what it shows now.
+    const query = new URLSearchParams(location.search);
+    query.set(WINDOW_QUERY.popOut, to.id);
+    query.set(WINDOW_QUERY.kind, to.kind);
+    query.set(WINDOW_QUERY.title, to.title);
+    history.replaceState(null, '', `${location.pathname}?${query}${location.hash}`);
+    setTarget(to);
+  };
+  return (
+    <>
+      {target.kind === 'tabs' ? (
+        <PoppedTabs target={target} notice={notice} />
+      ) : target.kind === 'shell' ? (
+        <PoppedShell key={target.id} target={target} notice={notice} />
+      ) : (
+        <PoppedSession key={target.id} target={target} notice={notice} />
+      )}
+      <PopOutSpotlight target={target} onSwitched={switched} />
+    </>
+  );
 }
 
 /** Why something in the window went wrong, over its tabs; nothing while all is well. */

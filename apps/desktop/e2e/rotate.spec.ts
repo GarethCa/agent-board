@@ -143,7 +143,7 @@ test('the handle under a selection of several turns each item in it about its ow
     await notes.first().click({ position: { x: 100, y: 40 } });
     await notes.last().click({ position: { x: 100, y: 40 }, modifiers: ['Shift'] });
     const box = window.getByTestId('selection-box');
-    await expect(box).toHaveText('2 selected · 2 notes');
+    await expect(window.getByTestId('selection-label')).toHaveText('2 selected · 2 notes');
     // One handle, the box's: the notes' own are hidden while several are selected.
     await expect(window.getByTestId('rotate-handle')).toHaveCount(0);
     const handle = window.getByTestId('selection-rotate-handle');
@@ -157,7 +157,7 @@ test('the handle under a selection of several turns each item in it about its ow
     const turned = async () => ((await withDaemon(dataDir, (client) => client.call('item.list'))) as BoardItem[]).map(({ rotation, x, y }) => ({ rotation, x, y }));
     await expect.poll(turned).toEqual(before.map(({ x, y }) => ({ rotation: 90, x, y })));
     // Still selected: letting go of the handle is no click on the board.
-    await expect(box).toHaveText('2 selected · 2 notes');
+    await expect(window.getByTestId('selection-label')).toHaveText('2 selected · 2 notes');
 
     // One undo puts both back.
     await window.keyboard.press('ControlOrMeta+z');

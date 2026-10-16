@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +10,8 @@ import { onTestFinished } from 'vitest';
 import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { startDaemon, type Daemon, type DaemonOptions } from '../src/daemon.ts';
 import { connectDaemon, type DaemonClient } from '../src/client.ts';
-import type { CliLauncher } from '../src/hook-forwarder.ts';
+import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from '../src/board-env.ts';
+import { HOOK_TOKEN_ENV, HOOK_URL_ENV, type CliLauncher } from '../src/hook-forwarder.ts';
 import { hashToken } from '../src/tokens.ts';
 import { migrate } from '../src/migrate.ts';
 import type { DaemonEvent } from '../src/protocol.ts';
@@ -35,6 +38,46 @@ export const TEST_CLI_LAUNCHER: CliLauncher = {
   command: process.execPath,
   args: ['--disable-warning=ExperimentalWarning', fileURLToPath(new URL('../src/cli-main.ts', import.meta.url))],
 };
+
+/**
+ * Makes this test run as if inside an agent of a live board: `process.env` gets the session variables a board hands
+ * its agents, pointing at a sentinel hook ingress and socket that record every call they get. Restored, and
+ * the sentinels closed, when the test ends. A hermetic test leaves `hits` empty.
+ */
+export async function enclosingBoard(): Promise<{ hits: string[] }> {
+  const hits: string[] = [];
+  const http = createHttpServer((request, response) => {
+    hits.push(`hook ${request.method} ${request.url}`);
+    response.writeHead(500).end();
+  });
+  await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
+  const { port } = http.address() as { port: number };
+  const socket = join(tempDataDir(), 'enclosing.sock');
+  const net = createNetServer((connection) => {
+    hits.push('socket connection');
+    connection.destroy();
+  });
+  await new Promise<void>((resolve) => net.listen(socket, resolve));
+
+  const vars: Record<string, string> = {
+    [HOOK_URL_ENV]: `http://127.0.0.1:${port}/hooks`,
+    [HOOK_TOKEN_ENV]: 'enclosing-hook-token',
+    [BOARD_SOCKET_ENV]: socket,
+    [BOARD_TOKEN_ENV]: 'enclosing-board-token',
+    [BOARD_ZONE_ENV]: 'enclosing-zone',
+    [BOARD_SESSION_ENV]: 'enclosing-session',
+  };
+  const before = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, vars);
+  onTestFinished(async () => {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await Promise.all([new Promise((resolve) => http.close(resolve)), new Promise((resolve) => net.close(resolve))]);
+  });
+  return { hits };
+}
 
 /** A fresh git repo with one commit and an `apps/web` folder, removed when the test ends. */
 export function tempRepo(name = 'monorepo'): string {

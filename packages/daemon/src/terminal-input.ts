@@ -42,3 +42,8 @@ export function answerInput(text: string, paste = false): string {
   if (!paste && !message.includes('\n')) return message;
   return `\x1b[200~${message.replaceAll('\n', '\r')}\x1b[201~`;
 }
+
+/** Text as one line at a prompt: a line break would submit what came before it on its own. */
+export function oneLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+}

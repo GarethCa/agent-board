@@ -8,9 +8,12 @@ import {
   restoreWindows,
   showWindow,
   shownWindow,
+  switchPoppedWindow,
   switchWindow,
+  windowsClosedBy,
   type SessionWindows,
 } from './session-windows';
+import type { Shell } from '@agent-board/daemon/protocol';
 import type { WindowTarget } from '../../../preload/api';
 
 const session = (id: string, title: string): WindowTarget => ({ kind: 'session', id, title });
@@ -157,5 +160,37 @@ describe('restoring session windows', () => {
 
   it('just shows the session if the window to switch from is gone', () => {
     expect(placements(switchWindow([], 'a', session('b', 'B')))).toEqual(['b:shown']);
+  });
+});
+
+describe('windows closed by a shell change', () => {
+  const shell = (id: string, owner: Shell['owner']) => ({ id, owner }) as Shell;
+  const windows = showWindow(showWindow([], { kind: 'shell', id: 'a', title: 'A' }), { kind: 'shell', id: 'b', title: 'B' });
+  const owner = { kind: 'shell', id: 'b' } as Shell['owner'];
+
+  it("closes a removed shell's window", () => {
+    expect(windowsClosedBy(windows, { type: 'shell.removed', shellId: 'a' })).toEqual(['a']);
+  });
+
+  it("closes the window of a shell tile moved into another's tabs: it shows in its owner's", () => {
+    expect(windowsClosedBy(windows, { type: 'shell.updated', shell: shell('a', owner) })).toEqual(['a']);
+  });
+
+  it('leaves a shell with no window, or one still on its own, alone', () => {
+    expect(windowsClosedBy(windows, { type: 'shell.updated', shell: shell('c', owner) })).toEqual([]);
+    expect(windowsClosedBy(windows, { type: 'shell.updated', shell: shell('a', null) })).toEqual([]);
+  });
+});
+
+describe('switchPoppedWindow', () => {
+  it('has the popped-out window show the target instead, taking it off the board and out of the dock', () => {
+    const windows = popOutWindow(showWindow(showWindow([], session('a', 'A')), session('b', 'B')), session('a', 'A'));
+    expect(placements(windows)).toEqual(['a:popped', 'b:shown']);
+    expect(placements(switchPoppedWindow(windows, 'a', session('b', 'B')))).toEqual(['b:popped']);
+    expect(placements(switchPoppedWindow(windows, 'a', session('c', 'C')))).toEqual(['c:popped', 'b:shown']);
+  });
+
+  it('adds the target as out when the board never had the window that switched', () => {
+    expect(placements(switchPoppedWindow([], 'a', session('c', 'C')))).toEqual(['c:popped']);
   });
 });

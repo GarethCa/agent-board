@@ -107,7 +107,7 @@
   pointer-events: none;
 }
 
-/* The app's mark (BrandMark): the desk-blue one, or the dark colourway in the dark theme. */
+/* The app's mark (BrandMark): the desk-blue one, or the dark colourway in any dark theme. */
 .brand-mark {
   display: inline-block;
   flex: none;
@@ -120,11 +120,11 @@
 }
 
 .brand-mark .brand-mark-dark,
-:root[data-theme='dark'] .brand-mark .brand-mark-light {
+:root[data-scheme='dark'] .brand-mark .brand-mark-light {
   display: none;
 }
 
-:root[data-theme='dark'] .brand-mark .brand-mark-dark {
+:root[data-scheme='dark'] .brand-mark .brand-mark-dark {
   display: block;
 }
 
@@ -171,6 +171,13 @@
   overflow: hidden;
 }
 
+.board-menu-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .board-menu-search {
   flex: none;
   padding: var(--space-2-5);
@@ -178,6 +185,7 @@
 }
 
 .board-menu-sections {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
@@ -227,6 +235,77 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* Settings › Appearance's theme packs: each family under its name and credit, its themes two to a row. */
+.theme-packs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.theme-pack-name {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.theme-pack-credit {
+  margin: 0 0 var(--space-1-5);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.theme-picks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1-5);
+}
+
+.theme-pick {
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-lg);
+}
+
+.theme-pick .ui-choice-label {
+  font-size: var(--font-size-sm);
+}
+
+/* A pack's look in small: its desk, with its accent and its running, waiting and failed colours on it. */
+.theme-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-0-5);
+  width: calc(var(--size-swatch) * 2);
+  height: var(--size-swatch);
+  border: 1px solid var(--preview-edge);
+  border-radius: var(--radius-sm);
+  background: var(--preview-desk);
+}
+
+.theme-preview-dot {
+  width: calc(var(--size-swatch) / 3);
+  height: calc(var(--size-swatch) / 3);
+  border-radius: var(--radius-pill);
+}
+
+.theme-preview-accent {
+  background: var(--preview-accent);
+}
+
+.theme-preview-running {
+  background: var(--preview-running);
+}
+
+.theme-preview-waiting {
+  background: var(--preview-waiting);
+}
+
+.theme-preview-failed {
+  background: var(--preview-failed);
 }
 
 /* Something the daemon said went wrong, under the toolbar. */
@@ -373,4 +452,199 @@
   .needs-you-pill {
     transition: none;
   }
+}
+
+/* ⌘K, the Spotlight-style switcher (CR2): a frosted card near the top of the window, over a light scrim. */
+.spotlight-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-dialog);
+  background: var(--scrim-spotlight);
+}
+
+.spotlight {
+  position: fixed;
+  top: var(--spotlight-top);
+  left: 50%;
+  z-index: var(--layer-dialog);
+  width: min(var(--size-spotlight), calc(100vw - var(--space-8)));
+  overflow: hidden;
+  transform: translateX(-50%);
+  border: var(--space-px) solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: var(--spotlight-fill);
+  box-shadow: var(--shadow-spotlight);
+  backdrop-filter: blur(var(--blur-spotlight));
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.spotlight:focus {
+  outline: none;
+}
+
+.spotlight-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-3) var(--space-3-5);
+  border-bottom: var(--space-px) solid var(--separator);
+}
+
+.spotlight-field > svg {
+  flex: none;
+  width: var(--space-4-5);
+  height: var(--space-4-5);
+  color: var(--muted);
+}
+
+.spotlight-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-spotlight);
+  font-weight: var(--weight-semibold);
+}
+
+.spotlight-input::placeholder {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+
+.spotlight-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* What ↵ does here: show the tile on the board, or switch the view to it. */
+.spotlight-where {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-none);
+  white-space: nowrap;
+}
+
+.spotlight-list {
+  display: grid;
+  gap: var(--space-px);
+  max-height: var(--size-spotlight-list);
+  overflow-y: auto;
+  padding: var(--space-1-5);
+}
+
+.spotlight-group {
+  padding: var(--space-2) var(--space-2-5) var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.spotlight-row {
+  display: grid;
+  grid-template-columns: var(--size-spotlight-mark) minmax(0, 1fr) auto;
+  gap: var(--space-2-5);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-2) var(--space-2-5);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+
+.spotlight-row[data-active] {
+  background: var(--accent-soft);
+}
+
+.spotlight-mark {
+  display: grid;
+  place-items: center;
+  width: var(--size-spotlight-mark);
+  height: var(--size-spotlight-mark);
+  color: var(--muted);
+}
+
+.spotlight-mark > svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+/* A zone's mark: a ring in its colour. */
+.spotlight-zone-ring {
+  width: var(--space-4);
+  height: var(--space-4);
+  border: var(--space-0-5) solid var(--zone-color);
+  border-radius: var(--radius-sm);
+}
+
+.spotlight-main {
+  display: grid;
+  min-width: 0;
+}
+
+.spotlight-name {
+  overflow: hidden;
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotlight-name mark {
+  background: none;
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: var(--space-0-5);
+}
+
+.spotlight-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotlight-act {
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.spotlight-empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-2-5);
+  color: var(--muted);
+  font-size: var(--font-size-md);
+}
+
+.spotlight-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3-5);
+  padding: var(--space-2-25) var(--space-3-5);
+  border-top: var(--space-px) solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.spotlight-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-25);
 }

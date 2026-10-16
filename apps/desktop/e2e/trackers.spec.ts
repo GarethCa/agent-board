@@ -199,14 +199,32 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
       .poll(() => app.evaluate(() => (globalThis as { opened?: string[] }).opened))
       .toEqual(['https://github.com/acme/app/pull/41']);
 
-    // Two PRs fit on the tile; more fold into its +N.
+    // The footer is one line: the first PR fits on the tile with its issue; the others fold into its +N.
     github.setState({
       ...FAKE_GITHUB_STATE,
       pullRequests: [pullRequest(44, { isDraft: true }), pullRequest(43, { state: 'MERGED' }), pullRequest(41)],
     });
     await expect(agentTile.getByTestId('tile-pr')).toHaveText(['#44', '#43']);
-    await expect(agentTile.getByTestId('tile-folded')).toHaveText('+1');
-    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('title', /^#41 /);
+    await expect(agentTile.getByTestId('tile-folded')).toHaveText('+2');
+    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('title', /^#43 .*\n#41 /s);
+
+    // The agent commits and pushes onto another branch's PR, as a fix agent cut from it does: its tile shows
+    // that PR, marked as pushed to, open and once merged. It is only shown: the agent has no PR of its own to merge.
+    const inWorktree = (...args: string[]) => execFileSync('git', ['-C', agent!.worktree, ...args]);
+    const mirror = join(dir, 'mirror.git');
+    inWorktree('init', '--quiet', '--bare', mirror);
+    inWorktree('remote', 'add', 'mirror', mirror);
+    inWorktree('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'fix');
+    inWorktree('push', '--quiet', 'mirror', 'HEAD:gh-30-the-original-fix');
+    const pushedTo = pullRequest(30, { headRefName: 'gh-30-the-original-fix', statusCheckRollup: [] });
+    github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [pushedTo] });
+    await expect(agentTile.getByTestId('tile-pr')).toHaveText(['#30']);
+    await expect(agentTile.getByTestId('tile-pr')).toHaveAttribute('data-state', 'open');
+    await expect(agentTile.getByTestId('tile-pr')).toHaveAttribute('data-pushed', 'true');
+    await expect(agentTile.getByTestId('tile-pr')).toHaveAttribute('aria-label', 'Pushed to pull request #30, open, no checks');
+    expect((await agents(window))[0]!.pullRequests).toEqual([]);
+    github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [{ ...pushedTo, state: 'MERGED' }] });
+    await expect(agentTile.getByTestId('tile-pr')).toHaveAttribute('data-state', 'merged');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

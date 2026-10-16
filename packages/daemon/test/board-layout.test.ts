@@ -1,23 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_ZONE_SIZE, TILE_SLOT, UNSORTED_GROUP_WIDTH, unsortedGroupHeight } from '@agent-board/daemon/protocol';
-import type { Rect } from '../geometry';
+import { MIN_ZONE_SIZE, TILE_SLOT, UNSORTED_GROUP_WIDTH, unsortedGroupHeight } from '../src/protocol.ts';
 import {
   AGENT_TILE_SIZE,
+  besideSpot,
+  clearOf,
+  CREW_GAP,
+  crewSpot,
+  footprint,
   freeItemSpot,
   freeSpotFor,
   ITEM_GAP,
   ITEM_INSET,
   freeTileSlot,
+  isFolded,
+  unfoldedFrom,
   leastZoneSize,
+  nearestFreeSpot,
   packTiles,
   PERCH_ROOM,
+  ROW_STEP,
+  sizedFootprint,
+  slotUnplaced,
+  tileSizeKey,
   tileSlot,
   TILE_GAP,
   ZONE_PADDING,
   zoneHeightFor,
   zoneMinSize,
   type ZoneTile,
-} from './layout';
+  type Rect,
+} from '../src/board-layout.ts';
 
 const size = { width: 100, height: 50 };
 
@@ -113,6 +125,11 @@ describe('freeTileSlot', () => {
     expect(freeTileSlot(threeAcross, [nudged])).toEqual(tileSlot(2, threeAcross));
     const movedAway = at({ x: 2000, y: 2000 });
     expect(freeTileSlot(threeAcross, [movedAway, at(tileSlot(1, threeAcross))])).toEqual(tileSlot(0, threeAcross));
+  });
+
+  it('skips the slots a resized tile would cover at its own size', () => {
+    const big = { width: 2 * AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height };
+    expect(freeTileSlot(threeAcross, [at(tileSlot(1, threeAcross))], big)).toEqual(tileSlot(3, threeAcross));
   });
 });
 
@@ -332,5 +349,174 @@ describe('the daemon\'s copy of the tile slots', () => {
     for (const count of [0, 1, 2, 3, 4, 7]) expect(unsortedGroupHeight(count)).toBe(zoneHeightFor(count, UNSORTED_GROUP_WIDTH));
     expect(tileSlot(1, UNSORTED_GROUP_WIDTH).y).toBe(tileSlot(0, UNSORTED_GROUP_WIDTH).y);
     expect(tileSlot(2, UNSORTED_GROUP_WIDTH).y).toBeGreaterThan(tileSlot(0, UNSORTED_GROUP_WIDTH).y);
+  });
+});
+
+describe('besideSpot', () => {
+  const of = { x: 100, y: 200, width: 300, height: 150 };
+
+  it('puts a tile a gap to the right or left of another, level with it', () => {
+    expect(besideSpot(of, 'right', AGENT_TILE_SIZE)).toEqual({ x: 100 + 300 + TILE_GAP, y: 200 });
+    expect(besideSpot(of, 'left', AGENT_TILE_SIZE)).toEqual({ x: 100 - TILE_GAP - AGENT_TILE_SIZE.width, y: 200 });
+  });
+
+  it('puts a tile below or above another with room for its characters, lined up on its left', () => {
+    expect(besideSpot(of, 'below', AGENT_TILE_SIZE)).toEqual({ x: 100, y: 200 + 150 + TILE_GAP + PERCH_ROOM });
+    expect(besideSpot(of, 'above', AGENT_TILE_SIZE)).toEqual({ x: 100, y: 200 - PERCH_ROOM - TILE_GAP - AGENT_TILE_SIZE.height });
+  });
+
+  it('leaves the tile clear of the one it is beside, on every side', () => {
+    for (const side of ['below', 'right', 'left', 'above'] as const) {
+      expect(clearOf(sizedFootprint(besideSpot(of, side, AGENT_TILE_SIZE), AGENT_TILE_SIZE), [sizedFootprint(of, of)])).toBe(true);
+    }
+  });
+});
+
+describe('nearestFreeSpot', () => {
+  const open = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+
+  it('keeps the wanted spot when it is clear', () => {
+    expect(nearestFreeSpot({ x: 40, y: 60 }, [], open)).toEqual({ x: 40, y: 60 });
+  });
+
+  it('moves the least distance clear of what is in the way, at the size given', () => {
+    const big = { width: 400, height: 300 };
+    const blocking = [sizedFootprint({ x: 0, y: 100 }, AGENT_TILE_SIZE)];
+    const spot = nearestFreeSpot({ x: 0, y: 120 }, blocking, open, big)!;
+    expect(clearOf(sizedFootprint(spot, big), blocking)).toBe(true);
+    expect(spot).toEqual({ x: 0, y: 100 + AGENT_TILE_SIZE.height + TILE_GAP + PERCH_ROOM });
+  });
+
+  it('stays inside the region it is given', () => {
+    const region = { left: ZONE_PADDING, top: ZONE_PADDING + PERCH_ROOM, right: Infinity, bottom: Infinity };
+    expect(nearestFreeSpot({ x: -500, y: -500 }, [], region)).toEqual({ x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM });
+  });
+});
+
+describe('tileSizeKey', () => {
+  it("is the board's node id of a tile, which its resized size is kept under in the view state", () => {
+    expect(tileSizeKey('agent', 'abc')).toBe('agent:abc');
+    expect(tileSizeKey('shell', 'abc')).toBe('shell:abc');
+  });
+});
+
+describe('crewSpot', () => {
+  const { width } = AGENT_TILE_SIZE;
+  const at = { x: 20, y: 44 };
+  const beside = { x: at.x + width + CREW_GAP, y: at.y };
+
+  it('puts the first of a crew beside its orchestrator, and the next beside that', () => {
+    expect(crewSpot(at, [footprint(at)])).toEqual(beside);
+    expect(crewSpot(at, [footprint(at), footprint(beside)])).toEqual({ x: beside.x + width + TILE_GAP, y: at.y });
+  });
+
+  it('goes round a tile in the way, a row down once a row is full', () => {
+    const row = [0, 1, 2].map((col) => ({ x: beside.x + col * (width + TILE_GAP), y: at.y }));
+    expect(crewSpot(at, [footprint(at), ...row.map(footprint)])).toEqual({ x: beside.x, y: at.y + ROW_STEP });
+  });
+});
+
+describe('slotUnplaced', () => {
+  interface Tile {
+    id: string;
+    zoneId?: string;
+    at?: { x: number; y: number };
+    from?: string;
+  }
+  const slot = (tiles: Tile[], items: Record<string, Rect[]> = {}) => {
+    slotUnplaced(tiles, {
+      zoneOf: (tile) => tile.zoneId,
+      placeOf: (tile) => tile.at,
+      place: (tile, spot) => (tile.at = spot),
+      agentOf: (tile) => tile.id,
+      orchestratorOf: (tile) => tile.from,
+      rect: (tile) => ({ ...tile.at!, ...AGENT_TILE_SIZE }),
+      footprint: (tile) => footprint(tile.at!),
+      zoneWidth: () => 900,
+      zones: [{ x: 0, y: 0, width: 900, height: 600 }],
+      items: (zoneId) => items[zoneId ?? ''] ?? [],
+    });
+    return Object.fromEntries(tiles.map((tile) => [tile.id, tile.at]));
+  };
+
+  it('leaves a placed tile be, and slots the rest of its zone into the free slots after it', () => {
+    expect(slot([{ id: 'a', zoneId: 'z', at: tileSlot(0, 900) }, { id: 'b', zoneId: 'z' }, { id: 'c', zoneId: 'z' }])).toEqual({
+      a: tileSlot(0, 900),
+      b: tileSlot(1, 900),
+      c: tileSlot(2, 900),
+    });
+  });
+
+  it("puts an orchestrator's new agent beside it, in its crew's rows", () => {
+    const lead = tileSlot(0, 900);
+    expect(slot([{ id: 'lead', zoneId: 'z', at: lead }, { id: 'w', zoneId: 'z', from: 'lead' }]).w).toEqual({ x: lead.x + AGENT_TILE_SIZE.width + CREW_GAP, y: lead.y });
+  });
+
+  it('keeps a slotted tile off the zone items, and a loose one clear of the zones', () => {
+    const note = { ...tileSlot(0, 900), width: 200, height: 100 };
+    expect(slot([{ id: 'a', zoneId: 'z' }], { z: [note] }).a).toEqual(tileSlot(1, 900));
+    expect(slot([{ id: 'loose' }]).loose).toEqual(freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [{ x: 0, y: 0, width: 900, height: 600 }]));
+  });
+});
+
+describe('a full or crowded zone', () => {
+  // A zone whose every slot the search tries is covered: the searches stop at their cap, and take a spot below it all.
+  const wall: Rect = { x: -1e9, y: -1e9, width: 2e9, height: 2e9 };
+
+  it('still gives a new tile a spot, below everything, once every slot is taken', () => {
+    expect(freeTileSlot(900, [wall])).toEqual({ x: ZONE_PADDING, y: wall.y + wall.height + TILE_GAP + PERCH_ROOM });
+  });
+
+  it('still gives a new item a spot, below everything', () => {
+    expect(freeItemSpot(900, size, [wall])).toEqual({ x: ITEM_INSET, y: wall.y + wall.height + ITEM_GAP });
+  });
+
+  it('steps a new zone past any number of zones in a row, and stops', () => {
+    const row = Array.from({ length: 500 }, (_, index) => ({ x: index * 100, y: 0, width: 120, height: 100 }));
+    const spot = freeSpotFor({ x: 0, y: 0 }, size, row);
+    for (const zone of row) expect(spot.x >= zone.x + zone.width).toBe(true);
+  });
+
+  it('slots unplaced tiles into a crowded zone without hanging', () => {
+    const tiles = Array.from({ length: 50 }, (_, index) => ({ id: `t${index}`, at: undefined as { x: number; y: number } | undefined }));
+    slotUnplaced(tiles, {
+      zoneOf: () => 'z',
+      placeOf: (tile) => tile.at,
+      place: (tile, spot) => (tile.at = spot),
+      agentOf: () => undefined,
+      orchestratorOf: () => undefined,
+      rect: (tile) => ({ ...tile.at!, ...AGENT_TILE_SIZE }),
+      footprint: (tile) => footprint(tile.at!),
+      zoneWidth: () => 300,
+      zones: [],
+      items: () => [wall],
+    });
+    expect(tiles.every((tile) => tile.at !== undefined)).toBe(true);
+  });
+});
+
+describe('isFolded', () => {
+  const closed = { sessionId: 'a', endedAt: '2026-01-01T00:00:00Z', state: 'done', shellSessionId: null, shellHarness: null } as const;
+
+  it('folds a closed agent unless the user unfolded it', () => {
+    expect(isFolded(closed, new Set())).toBe(true);
+    expect(isFolded(closed, new Set(['agent:a']))).toBe(false);
+  });
+
+  it('never folds a live agent, nor one a restart stopped', () => {
+    expect(isFolded({ ...closed, endedAt: null, state: 'idle' }, new Set())).toBe(false);
+    expect(isFolded({ ...closed, state: 'stopped-by-restart' }, new Set())).toBe(false);
+  });
+
+  it('never folds an ended agent whose pane is a live shell, or whose harness the user runs by hand in it: it keeps its Restart', () => {
+    expect(isFolded({ ...closed, shellSessionId: 'shell-1' }, new Set())).toBe(false);
+    expect(isFolded({ ...closed, shellSessionId: 'shell-1', shellHarness: 'claude' }, new Set())).toBe(false);
+  });
+});
+
+describe('unfoldedFrom', () => {
+  it('takes only strings, once each', () => {
+    expect(unfoldedFrom(['agent:a', 3, 'agent:a', null, 'agent:b'])).toEqual(['agent:a', 'agent:b']);
+    expect(unfoldedFrom({ a: 1 })).toEqual([]);
   });
 });

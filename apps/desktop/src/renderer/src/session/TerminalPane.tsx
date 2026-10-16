@@ -4,16 +4,16 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
 import { localWebLinks } from '@agent-board/daemon/web-url';
-import { commandKey } from '../keys';
+import { commandKey, isMac } from '../keys';
 import { token, tokenNumber } from '../theme';
 import { chosenFontSize, FONT_STEP, onFontSize, PINCH_RATE, setFontSize, sizeKey } from './terminal-size';
-import { newlineKey } from './newline-keys';
+import { macLineEditKey, newlineKey } from './newline-keys';
 import { throttled } from './throttle';
 import { compensateForScale } from './zoomed-mouse';
 import { useWebLinkOpener } from './web-links';
 
 /** The click that opens a local address in the output in a web tab, as the platform writes it. */
-const COMMAND_CLICK = navigator.platform.startsWith('Mac') ? '⌘-click' : 'Ctrl-click';
+const COMMAND_CLICK = isMac ? '⌘-click' : 'Ctrl-click';
 
 /** How often the terminal refits to its element while that is being resized, e.g. by dragging its window's edge. */
 const REFIT_INTERVAL_MS = 80;
@@ -167,11 +167,12 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     // Shift+Enter and Option+Enter put a line break in an agent's message rather than sending it. Every event of the
     // key is kept from xterm, which would send its own CR; the sequence goes once, on keydown.
     terminal.attachCustomKeyEventHandler((event) => {
-      const newline = newlineKey(harnessRef.current, event);
-      if (newline === undefined) return true;
+      const sequence = newlineKey(harnessRef.current, event) ?? macLineEditKey(event);
+      if (sequence === undefined) return true;
       if (event.type === 'keydown') {
+        // The board's delete key ignores keys typed into xterm's textarea, so ⌘⌫ here can't also delete a selection.
         event.preventDefault();
-        api.write(sessionId, newline);
+        api.write(sessionId, sequence);
       }
       return false;
     });

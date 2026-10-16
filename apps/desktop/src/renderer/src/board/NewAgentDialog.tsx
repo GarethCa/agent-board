@@ -5,7 +5,7 @@ import { HARNESSES } from '../harness';
 import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Select, Textarea } from '../ui';
 import { AgentSetupChips, DEFAULT_SETUP, reviews, roleNote, type AgentSetup } from './AgentSetup';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from './codex-notice';
-import { NEW_AGENT_SIZE } from './layout';
+import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import { IssuePicker, type PickedIssue } from './IssuePicker';
 import { reviewable, reviewSpawn } from './review-target';
 import { repoName } from './tiles';
@@ -16,6 +16,8 @@ interface NewAgentDialogProps {
   agents: readonly Agent[];
   /** The issue to start from, picked already (from an issue card). */
   issue?: PickedIssue;
+  /** Its name, filled in already (from ⌘K). */
+  name?: string;
   onStarted(agent: Agent): void;
   onCancel(): void;
   /** The zone's settings changed. */
@@ -34,7 +36,7 @@ type Step = { kind: 'form' } | { kind: 'bypass-notice' } | { kind: 'project-conf
  * tracker it can start from an issue instead: the issue becomes its prompt (the task, if any, follows it) and names
  * its branch. The zone's Codex setting is saved only when a Codex agent starts, so Cancel leaves it as it was.
  */
-export function NewAgentDialog({ zone, agents, issue: initialIssue, onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
+export function NewAgentDialog({ zone, agents, issue: initialIssue, name: initialName = '', onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
   const [setup, setSetup] = useState<AgentSetup>(DEFAULT_SETUP);
   const { harness, model, role } = setup;
   const candidates = reviewable(zone, agents);
@@ -43,7 +45,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, onStarted, o
   /** A group with no default repo has no checked-out branch of its own to review. */
   const ownBranch = zone.repoRoot !== null || zone.defaultRepo !== null;
   const [prompt, setPrompt] = useState('');
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName);
   const [issue, setIssue] = useState<PickedIssue | undefined>(initialIssue);
   const [bypass, setBypass] = useState(zone.codexBypassHookTrust);
   const [starting, setStarting] = useState(false);

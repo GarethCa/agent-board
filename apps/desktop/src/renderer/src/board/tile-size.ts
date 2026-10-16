@@ -1,7 +1,7 @@
 // How big each compact session tile is once the user has resized it, by node id. Pure, so every rule is
 // unit-tested. The board holds the sizes in one state, saved in the daemon's view state so the tiles are the same size
 // after a restart. A tile never resized is `AGENT_TILE_SIZE` and has no entry.
-import { AGENT_TILE_SIZE } from './layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 
 export type TileSize = { width: number; height: number };
 

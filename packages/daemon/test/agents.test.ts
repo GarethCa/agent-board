@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, type FakeScenario } from '@agent-board/fake-harness';
 import { DaemonRpcError, type DaemonClient } from '../src/client.ts';
-import { claudeSettings } from '../src/agents.ts';
+import { claudeSettings } from '../src/agent-spawns.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { isProcessAlive } from '../src/pid.ts';
@@ -944,6 +944,21 @@ describe('the needs-you inbox', () => {
     // While it worked on the answer, the old question was not its last word.
     const working = recorder.events.slice(answered).filter(isAgentUpdate).find((e) => e.agent.state === 'running')!;
     expect(working.agent.lastMessage).toBeNull();
+  });
+
+  it('says when its own turn last ended, each time it ends, and keeps it through its next turn', async () => {
+    const { client, recorder } = await agentDaemon('waiting');
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Pick a database');
+    expect(agent.finishedAt).toBeNull();
+
+    const first = await untilAgent(recorder, agent.sessionId, (a) => a.finishedAt !== null);
+    const answered = recorder.events.length;
+    await client.call('agent.answer', { sessionId: agent.sessionId, text: 'SQLite' });
+    const working = await untilAgent(recorder, agent.sessionId, (a) => a.state === 'running', answered);
+    expect(working.finishedAt).toBe(first.finishedAt);
+    const second = await untilAgent(recorder, agent.sessionId, (a) => a.finishedAt !== first.finishedAt, answered);
+    expect(second.finishedAt! > first.finishedAt!).toBe(true);
   });
 
   it('types answers sent at once one after the other, never run together', async () => {

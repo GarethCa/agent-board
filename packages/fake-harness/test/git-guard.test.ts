@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { assertCoreConfigUnchanged, coreConfigOf, leakedGitVars, scrubGitEnv } from '../src/index.ts';
 import { removeTempDirs, tempDir } from './run-fake.ts';
@@ -52,5 +52,22 @@ describe('git guard', () => {
     execFileSync('git', ['-C', repo, 'config', 'branch.x.remote', 'origin'], { env: scrubGitEnv({ ...process.env }) });
 
     expect(() => assertCoreConfigUnchanged(repo, before)).not.toThrow();
+  });
+
+  it('marks a config git could not read in time as unreadable, not as empty', () => {
+    expect(coreConfigOf(newRepo(), 1)).toEqual({ unreadable: expect.stringMatching(/ETIMEDOUT/) });
+  });
+
+  it('skips the check, with a warning, when either snapshot could not be read, instead of reporting a leak', () => {
+    const repo = newRepo();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(() => assertCoreConfigUnchanged(repo, { unreadable: 'ETIMEDOUT' })).not.toThrow();
+      expect(() => assertCoreConfigUnchanged(repo, coreConfigOf(repo), 1)).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[0]![0]).toMatch(/could not read the dev repo's core git config .*ETIMEDOUT.*skipped/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

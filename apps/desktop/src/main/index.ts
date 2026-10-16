@@ -184,7 +184,7 @@ registerViewIpc(view);
 const poppedWindows = registerWindowIpc({
   open: openWindow,
   view,
-  hasBoard: () => board !== undefined,
+  board: () => board,
   openBoard,
 });
 registerTabDragIpc({ board: () => board, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });

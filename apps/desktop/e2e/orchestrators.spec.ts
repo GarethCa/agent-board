@@ -36,7 +36,7 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
 
-    // Its MCP call and CLI command each start the app's executable as Node: a turn's worth of time each.
+    // Its worker starts, and its CLI command starts the app's executable as Node: a turn's worth of time each.
     await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
     const lead = window.locator('[data-testid="agent-tile"][data-orchestrator]');
     await expect(lead).toHaveCount(1);
@@ -68,7 +68,7 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
   }
 });
 
-test('an orchestrator wires itself to its worker and hands off along the edge: dashed as agent-made, with when it delivered, and what it carried a click away', async () => {
+test('an orchestrator wires itself to its worker and hands off along the edge: its token says an agent made it and when it delivered, and what it carried is a click away', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -79,18 +79,15 @@ test('an orchestrator wires itself to its worker and hands off along the edge: d
     await spawnAgent(window, 'monorepo', lead);
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
 
-    // Its MCP calls each start the app's executable as Node: a turn's worth of time each.
+    // It starts its workers and waits on their turns: a turn's worth of time each.
     const edge = window.getByTestId('flow-edge');
     await expect(edge).toHaveCount(1, { timeout: 4 * TURN_MS });
-    await expect(edge).toHaveAttribute('data-agent-made', 'true');
-    await expect(edge.locator('title')).toHaveText(`Made by ${lead}, an orchestrator`);
-    // Between tiles this close its label is a marker: hovered, it shows the label and when it delivered.
-    await expect(edge).toHaveAttribute('data-collapsed', 'true');
-    await edge.locator('.flow-edge-trigger-dot').hover();
-    const delivered = window.getByTestId('flow-edge-delivered');
-    await expect(delivered.locator('text')).toHaveText(/^delivered \d\d:\d\d$/, { timeout: 2 * TURN_MS });
+    // Its token says who made it, and, at the worker's end, when it delivered.
+    const token = window.getByTestId('rail-token');
+    await expect(token.locator('.rail-token-body')).toHaveAttribute('title', `Made by ${lead}, an orchestrator`);
+    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d$/, { timeout: 2 * TURN_MS });
 
-    await delivered.click();
+    await token.locator('.rail-token-open').click();
     const rules = window.getByRole('complementary', { name: 'Edge rules' });
     await expect(rules.getByTestId('edge-rules-made-by')).toHaveText(`Made by ${lead}, an orchestrator. You can change or delete it like any other.`);
     await expect(rules.getByTestId('edge-rules-delivered')).toHaveText('Review it');
@@ -103,6 +100,56 @@ test('an orchestrator wires itself to its worker and hands off along the edge: d
     await expect(lines.nth(0)).toContainText('handed off to worker');
     await expect(lines.nth(1)).toContainText('added an edge into worker');
     await expect(lines.nth(2)).toContainText('started worker');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an orchestrator scatters its crew about its zone, then arranges it: itself first, then a cluster with an agent note, the implementer and its reviewer side by side', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const lead = 'Arrange a messy crew';
+    await spawnAgent(window, 'monorepo', lead);
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+
+    // Each CLI command starts the app's executable as Node: a turn's worth of time each.
+    await expect(tile(window)).toHaveCount(3, { timeout: 4 * TURN_MS });
+    await expect(window.getByTestId('flow-edge')).toHaveCount(1, { timeout: 4 * TURN_MS });
+    const box = async (name: string) => (await agentTile(window, name).boundingBox())!;
+    // Arranged: the reviewer level with its implementer and to its right, both in a row below the lead, none overlapping.
+    await expect
+      .poll(
+        async () => {
+          const [me, impl, review] = await Promise.all([box(lead), box('impl'), box('review')]);
+          return {
+            row: Math.round(review.y - impl.y),
+            reviewRight: review.x > impl.x + impl.width,
+            implBelowLead: impl.y > me.y + me.height,
+            // The lead lines up with its units' stickies; the implementer comes after the sticky.
+            implAfterSticky: impl.x > me.x,
+          };
+        },
+        { timeout: 4 * TURN_MS },
+      )
+      .toEqual({ row: 0, reviewRight: true, implBelowLead: true, implAfterSticky: true });
+    // The unit starts with an agent note by the lead, saying where each of its agents stands.
+    const sticky = window.getByTestId('agent-note').filter({ hasText: /impl.*review/s });
+    await expect(sticky).toHaveCount(1);
+    expect((await sticky.boundingBox())!.x + (await sticky.boundingBox())!.width).toBeLessThan((await box('impl')).x);
+
+    // Its Activity tab lists the moves and the arrange, newest first.
+    await agentTile(window, lead).dblclick();
+    await sessionWindow(window).getByRole('tab', { name: 'Activity' }).click();
+    const lines = sessionWindow(window).getByTestId('activity-line');
+    await expect(lines.nth(0)).toContainText('arranged monorepo');
+    await expect(lines.filter({ hasText: /^.*moved impl/ })).toHaveCount(1);
+    await expect(lines.filter({ hasText: /^.*moved review/ })).toHaveCount(1);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

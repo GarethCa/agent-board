@@ -12,7 +12,7 @@ const press = (code: string, held: { meta?: boolean; control?: boolean; shift?: 
 
 describe("a key pressed in a web tab's page", () => {
   it("hands the window's own shortcuts to the window on macOS", () => {
-    for (const code of ['KeyW', 'KeyT', 'KeyD', 'Digit1', 'Digit9', 'BracketLeft', 'BracketRight', 'KeyI']) expect(webKey(press(code, { meta: true }), true)).toBe('window');
+    for (const code of ['KeyW', 'KeyT', 'KeyD', 'KeyK', 'Digit1', 'Digit9', 'BracketLeft', 'BracketRight', 'KeyI']) expect(webKey(press(code, { meta: true }), true)).toBe('window');
     expect(webKey(press('KeyD', { meta: true, shift: true }), true)).toBe('window');
     expect(webKey(press('ArrowLeft', { meta: true, alt: true }), true)).toBe('window');
   });
@@ -34,6 +34,8 @@ describe("a key pressed in a web tab's page", () => {
   it("off macOS, hands over Ctrl+Shift chords and leaves Ctrl's own keys to the page", () => {
     expect(webKey(press('KeyW', { control: true, shift: true }), false)).toBe('window');
     expect(webKey(press('Digit2', { control: true, shift: true }), false)).toBe('window');
+    expect(webKey(press('KeyK', { control: true, shift: true }), false)).toBe('window');
+    expect(webKey(press('KeyK', { control: true }), false)).toBeUndefined();
     expect(webKey(press('KeyD', { control: true, shift: true, alt: true }), false)).toBe('window');
     expect(webKey(press('ArrowUp', { control: true, shift: true, alt: true }), false)).toBe('window');
     expect(webKey(press('KeyW', { control: true }), false)).toBeUndefined();

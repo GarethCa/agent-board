@@ -1,6 +1,6 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { clickClosing } from './windows.ts';
 import { scratch } from './scratch.ts';
@@ -197,21 +197,27 @@ for (const harness of ['Claude', 'Codex'] as const) {
   });
 }
 
-test('⌘K and ⌘\\ belong to the text while typing: in a terminal they leave the board menu shut, on the board they open it', async () => {
+test('⌘\\ belongs to the text while typing, in a terminal leaving the board menu shut, but ⌘K opens the switcher there', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
     const menu = window.getByRole('dialog', { name: 'Board menu' });
+    const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
     await newShell(window);
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await window.getByTestId('session-terminal').click();
-    await window.keyboard.press('ControlOrMeta+k');
     await window.keyboard.press('ControlOrMeta+Backslash');
     await expect(menu).toHaveCount(0);
+    await window.keyboard.press(windowKey('k'));
+    await expect(switcher).toBeVisible();
+    await expect(menu).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(switcher).toHaveCount(0);
 
     await window.getByRole('button', { name: 'Close session window' }).click();
-    await window.keyboard.press('ControlOrMeta+k');
+    await window.keyboard.press('ControlOrMeta+Backslash');
     await expect(menu).toBeVisible();
+    // It opens on its search field.
     await expect(menu.getByRole('searchbox', { name: 'Find a zone or agent' })).toBeFocused();
     // Typed into the search field, ⌘\ is the field's too.
     await window.keyboard.press('ControlOrMeta+Backslash');
@@ -277,6 +283,134 @@ test('splitting stops when a pane would be left too small to use, and says why',
     expect(await panes.count()).toBeGreaterThan(1);
     // Every pane kept room for a usable terminal.
     for (const box of await panes.evaluateAll((all) => all.map((pane) => pane.getBoundingClientRect().width))) expect(box).toBeGreaterThan(100);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('fifteen docked sessions in a narrow window scroll sideways inside the dock, fade at its edges, keep the newest pill in view, and move nothing else, and never reach the zones pill or the zoom bar', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await window.setViewportSize({ width: 900, height: 700 });
+    for (let count = 0; count < 15; count++) {
+      await newShell(window);
+      await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+      await window.getByRole('button', { name: 'Minimise session window' }).click();
+      await expect(dockItem(window)).toHaveCount(count + 1);
+    }
+    const dock = window.getByTestId('session-dock');
+    const track = window.getByTestId('session-dock-track');
+    const box = async (locator: Locator) => (await locator.boundingBox())!;
+    // Inside the window and never over the zones pill (bottom left), the zoom bar (bottom right) or the minimap, in a narrow
+    // window, as it widens, and when the zones pill mounts late and then grows wide; one pill tall however many there are.
+    const overlaps = async () => {
+      const dockNow = await box(dock);
+      const { width } = window.viewportSize()!;
+      const problems: string[] = [];
+      if (dockNow.x < 0 || dockNow.x + dockNow.width > width) problems.push(`the dock leaves the window: ${JSON.stringify(dockNow)}`);
+      if (dockNow.width < 239 && (await dock.getAttribute('data-compact')) === null) problems.push(`the dock is only ${dockNow.width}px wide`);
+      for (const [name, selector] of [['the zones pill', '.island-bottom-left'], ['the zoom bar', '.island-bottom-right'], ['the minimap', '.board-minimap']] as const) {
+        const other = window.locator(selector);
+        if ((await other.count()) === 0 || !(await other.first().isVisible())) continue;
+        const near = (await other.first().boundingBox())!;
+        const apart = near.x + near.width <= dockNow.x + 0.5 || dockNow.x + dockNow.width <= near.x + 0.5 || near.y + near.height <= dockNow.y + 0.5 || dockNow.y + dockNow.height <= near.y + 0.5;
+        if (!apart) problems.push(`the dock overlaps ${name}: dock ${JSON.stringify(dockNow)}, ${name} ${JSON.stringify(near)}`);
+      }
+      return problems.join('; ') || 'apart';
+    };
+    await expect.poll(overlaps).toBe('apart');
+    const dockBox = await box(dock);
+    const heights = await dockItem(window).evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().height)));
+    expect(new Set(heights).size).toBe(1);
+
+    // It overflows and scrolls, and the newest pill, docked last, is in view.
+    const scrolls = () => track.evaluate((element) => ({ left: element.scrollLeft, max: element.scrollWidth - element.clientWidth }));
+    expect((await scrolls()).max).toBeGreaterThan(0);
+    const inView = async (item: Locator) => {
+      const [i, t] = [await box(item), await box(track)];
+      return i.x >= t.x - 1 && i.x + i.width <= t.x + t.width + 1;
+    };
+    await expect.poll(() => inView(dockItem(window).last())).toBe(true);
+    await expect(dock).toHaveAttribute('data-more', 'start');
+    expect(await inView(dockItem(window).first())).toBe(false);
+
+    // Wheel (vertical, as a mouse's), trackpad (horizontal) and shift-wheel all scroll it, and the dock itself stays put.
+    await window.mouse.move(dockBox.x + dockBox.width / 2, dockBox.y + dockBox.height / 2);
+    await window.mouse.wheel(0, -300);
+    await expect.poll(async () => (await scrolls()).left).toBeLessThan((await scrolls()).max);
+    const afterWheel = (await scrolls()).left;
+    await window.mouse.wheel(-200, 0);
+    await expect.poll(async () => (await scrolls()).left).toBeLessThan(afterWheel);
+    const afterTrackpad = (await scrolls()).left;
+    await window.keyboard.down('Shift');
+    await window.mouse.wheel(0, -200);
+    await window.keyboard.up('Shift');
+    await expect.poll(async () => (await scrolls()).left).toBeLessThan(afterTrackpad);
+    await expect(dock).toHaveAttribute('data-more', /^(end|both)$/);
+    expect(await box(dock)).toEqual(dockBox);
+
+    // A long name is cut short, its tooltip whole.
+    const first = dockItem(window).first().getByRole('button', { name: /^Shell/ });
+    await first.hover();
+    await expect(window.getByRole('tooltip')).toContainText('Shell');
+
+    // The list is not left open when the dock widens back to its pills, nor opens again when it narrows (no zones yet: the zoom
+    // bar alone leaves room for the pills at 900px and not at 520px).
+    const compactButton = window.getByTestId('session-dock-compact');
+    await window.setViewportSize({ width: 520, height: 700 });
+    await expect(compactButton).toBeVisible();
+    await compactButton.click();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(15);
+    await window.setViewportSize({ width: 900, height: 700 });
+    await expect(compactButton).toBeHidden();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
+    await window.setViewportSize({ width: 520, height: 700 });
+    await expect(compactButton).toBeVisible();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
+    await window.setViewportSize({ width: 900, height: 700 });
+    await expect(compactButton).toBeHidden();
+
+    // The zones pill mounts with the first zone, and grows wide with each one after it.
+    await window.evaluate(async () => {
+      const { zones } = globalThis.window.agentBoard;
+      for (let index = 0; index < 10; index++) {
+        await zones.addUnbound({ name: `A zone with a rather long name ${index + 1}`, x: (index % 4) * 320, y: Math.floor(index / 4) * 220, width: 300, height: 200 });
+      }
+    });
+    await expect(window.locator('.island-bottom-left')).toBeVisible();
+    // However narrow it gets, it never reaches them: with less than a pill's room it is one button with the count, which opens
+    // the list, and with less than that again, a row up.
+    for (const width of [1400, 900, 640, 520, 380, 1400]) {
+      await window.setViewportSize({ width, height: 700 });
+      await expect.poll(overlaps, { message: `${width}px wide` }).toBe('apart');
+      const compactButton = window.getByTestId('session-dock-compact');
+      await expect
+        .poll(async () => {
+          const compact = (await dock.getAttribute('data-compact')) !== null;
+          const shown = [await compactButton.isVisible(), await track.isVisible()];
+          if (shown[0] !== compact || shown[1] === compact) return `compact ${compact}, but the button shows ${shown[0]} and the pills ${shown[1]}`;
+          return compact ? await compactButton.innerText() : 'pills';
+        }, { message: `${width}px wide` })
+        .toMatch(/^(pills|15 sessions)$/);
+    }
+    // Collapsed, the button opens every docked session, and restoring one closes the list.
+    await window.setViewportSize({ width: 520, height: 700 });
+    await expect(window.getByTestId('session-dock-compact')).toBeVisible();
+    await window.getByTestId('session-dock-compact').click();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(15);
+    await window.getByTestId('dock-list-item').first().getByRole('button', { name: /^Shell/ }).click();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
+    await expect(sessionWindow(window)).toBeVisible();
+
+    // Clicking inside the list, off its buttons, leaves the window that is shown showing, and the list open.
+    await compactButton.click();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(14);
+    const card = (await window.locator('.session-dock-popover').boundingBox())!;
+    await window.mouse.click(card.x + 2, card.y + 2);
+    await expect(sessionWindow(window)).toBeVisible();
+    await expect(window.getByTestId('dock-list-item')).toHaveCount(14);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

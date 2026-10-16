@@ -2,7 +2,7 @@ import { useEffect, type CSSProperties } from 'react';
 import { Eye, X } from 'lucide-react';
 import type { AgentState } from '@agent-board/daemon/protocol';
 import { HybridTile } from '../board/HybridTile';
-import { AGENT_TILE_SIZE } from '../board/layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { galleryAgent } from '../board/TileGallery';
 import { Button, Island } from '../ui';
 

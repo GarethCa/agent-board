@@ -12,6 +12,22 @@ export interface DeleteTargets {
   agentShells?: ReadonlyMap<string, number>;
 }
 
+/**
+ * A delete waiting for the user to confirm it: of a live agent, or one that would lose work; of a shell tile with live
+ * panes; of an external session still running; or of a selection of several things at once. Asked one at a time, in
+ * order: an agent that turns out to hold unsaved work while a selection is deleted asks again after the rest.
+ */
+export interface PendingDelete {
+  title: string;
+  lines: string[];
+  confirm: string;
+  /** Offered beside `confirm` where an agent's worktree and branch could be kept: runs with `keep`. */
+  keepLabel?: string;
+  /** An unticked box under the lines (deleting a managed clone with its zone): `run` has whether it was ticked. */
+  cloneLabel?: string;
+  run(keep: boolean, deleteClone: boolean): void;
+}
+
 /** Whether an external session has ended (its hooks said `done`); it is forgotten rather than just taken off the board. */
 export const externalEnded = (session: Pick<ExternalSession, 'state'>) => session.state === 'done';
 

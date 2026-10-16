@@ -3,6 +3,7 @@ import { accessSync, chmodSync, constants, existsSync, mkdtempSync, readFileSync
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { scrubBoardSessionEnv } from './board-guard.ts';
 import { leakedGitVars, scrubGitEnv } from './git-guard.ts';
 import { fakeBinDir, HARNESS_NAMES } from './paths.ts';
 
@@ -262,6 +263,24 @@ function execStyle(args: unknown[]): { launch: Launch; rebuild: (options: Record
   };
 }
 
+/**
+ * How long a sync launch (`execFileSync`, `spawnSync`, `execSync`) in a test may block its worker. Nothing else runs
+ * while it waits, not even the test's own timeout, so with no bound a launch that never returns holds the run for good.
+ * Longer than any test's timeout: it ends only a launch that would never have passed.
+ */
+const SYNC_LAUNCH_TIMEOUT_MS = 120_000;
+
+/** Overrides `SYNC_LAUNCH_TIMEOUT_MS`, in ms, for the guard's own test. A run's global setup strips it, as every AGENT_BOARD_* but the run knobs. */
+export const SYNC_LAUNCH_TIMEOUT_ENV = 'AGENT_BOARD_SYNC_LAUNCH_TIMEOUT_MS';
+
+/** A sync launch's options, with `timeoutMs` (killing the child with SIGKILL) unless it has a timeout of its own. */
+export function boundSync(options: Record<string, unknown>, timeoutMs: number): Record<string, unknown> {
+  if (options.timeout !== undefined) return options;
+  return { ...options, timeout: timeoutMs, killSignal: options.killSignal ?? 'SIGKILL' };
+}
+
+const SYNC_LAUNCHERS = new Set(['spawnSync', 'execFileSync', 'execSync']);
+
 let patched = false;
 
 /**
@@ -269,13 +288,17 @@ let patched = false;
  * - throws if it would start a real `claude`/`codex`: by name on PATH, by absolute path, through a PATH given in the
  *   spawn's own `env`, or named in a `sh -c` script, `shell: true` command or exec string;
  * - throws if it would start `git` with GIT_DIR, GIT_WORK_TREE or the like in its environment (and strips them from this worker's);
- * - re-inserts the tripwire into a caller-built `env.PATH`, so whatever that child runs later still hits it.
+ * - re-inserts the tripwire into a caller-built `env.PATH`, so whatever that child runs later still hits it;
+ * - bounds every sync launch with no timeout of its own (`boundSync`).
+ * It also strips an enclosing board's session variables from this worker's environment (board-guard.ts).
  * Covers both `import { spawn }` and `childProcess.spawn` call styles.
  */
 export function guardChildProcess(): void {
   if (patched) return;
   patched = true;
   scrubGitEnv();
+  scrubBoardSessionEnv();
+  const syncTimeoutMs = Number(process.env[SYNC_LAUNCH_TIMEOUT_ENV]) || SYNC_LAUNCH_TIMEOUT_MS;
   const cp = childProcess as unknown as Record<string, (...args: unknown[]) => unknown>;
   const wrap = (name: string, split: typeof spawnStyle) => {
     const original = cp[name]!;
@@ -285,7 +308,8 @@ export function guardChildProcess(): void {
       const baseEnv = (launch.options.env as NodeJS.ProcessEnv | undefined) ?? process.env;
       const env = { ...baseEnv, PATH: guardedPath(baseEnv.PATH) };
       check({ ...launch, options: { ...launch.options, env } });
-      return original.apply(this, rebuild({ ...launch.options, env }));
+      const options = { ...launch.options, env };
+      return original.apply(this, rebuild(SYNC_LAUNCHERS.has(name) ? boundSync(options, syncTimeoutMs) : options));
     };
   };
   for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork']) wrap(name, spawnStyle);

@@ -13,8 +13,7 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
-import { AGENT_TILE_SIZE, freeSpotFor, freeTileSlot, PERCH_ROOM, ZONE_PADDING, zoneMinSize } from './layout';
-import { crewSpot } from './crews';
+import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, slotUnplaced, tileSizeKey, ZONE_PADDING, zoneMinSize } from '@agent-board/daemon/board-layout';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
 
@@ -29,8 +28,11 @@ export type TileKind = 'agent' | 'shell' | 'external';
 
 const TILE_PREFIXES: Record<TileKind, string> = { agent: AGENT_NODE_PREFIX, shell: SHELL_NODE_PREFIX, external: EXTERNAL_NODE_PREFIX };
 
-/** The node id of the tile for an agent (by its session id), a shell tile or an external session. */
-export const tileNodeId = (kind: TileKind, id: string): string => `${TILE_PREFIXES[kind]}${id}`;
+/**
+ * The node id of the tile for an agent (by its session id), a shell tile or an external session: the daemon's
+ * `tileSizeKey`, as its resized size is kept by it.
+ */
+export const tileNodeId = (kind: TileKind, id: string): string => tileSizeKey(kind, id);
 
 /** Which session a tile's node stands for, read from its id; undefined for any other node. */
 export function tileSubject(nodeId: string): { kind: TileKind; id: string } | undefined {
@@ -128,6 +130,8 @@ export function withTiles(
   expanded: ExpandedTiles = [],
   /** The sizes tiles were resized to, by node id: a tile not here is `AGENT_TILE_SIZE`. */
   sizes: TileSizes = {},
+  /** The closed agents the user unfolded, by node id: the other closed agents are folded to chips. */
+  unfolded: ReadonlySet<string> = new Set(),
 ): BoardNode[] {
   const known = new Map(nodes.filter(isSessionTile).map((node) => [node.id, node]));
   const zones = new Map(nodes.filter(isZone).map((zone) => [zone.id, zone]));
@@ -138,6 +142,7 @@ export function withTiles(
   };
   const byId = new Map(agents.map((agent) => [agent.sessionId, agent]));
   const crews = new Map<string, number>();
+  const folded = new Set<string>();
   for (const agent of agents) {
     if (agent.spawnedBy !== null && byId.has(agent.spawnedBy)) crews.set(agent.spawnedBy, (crews.get(agent.spawnedBy) ?? 0) + 1);
   }
@@ -151,6 +156,8 @@ export function withTiles(
     const home = agent.zoneId !== null && zones.get(agent.zoneId)?.data.zone.repoRoot === agent.repoRoot;
     const orchestrator = agent.spawnedBy === null ? undefined : byId.get(agent.spawnedBy);
     const crew = crews.get(agent.sessionId);
+    // A closed agent is a chip, unless the user unfolded it or it is expanded in place.
+    if (isFolded(agent, unfolded) && expandedRank(expanded, id) === undefined) folded.add(id);
     add(id, agent.zoneId, {
       label: agent.name,
       harness: agent.harness,
@@ -159,6 +166,7 @@ export function withTiles(
       ...(orchestrator === undefined ? {} : { from: { sessionId: orchestrator.sessionId, name: orchestrator.name } }),
       ...(crew === undefined ? {} : { crew }),
       ...(tabs.has(agent.sessionId) ? { tabs: tabs.get(agent.sessionId) } : {}),
+      ...(folded.has(id) ? { folded: true as const, lift: chipLift(tileSizeOf(sizes, id).height) } : {}),
     });
   }
   for (const listed of shells) {
@@ -174,6 +182,8 @@ export function withTiles(
     add(id, session.zoneId, data);
   }
 
+  // A chip sits centred in its tile's place, as drawn in the crew-layout mock, so an edge to a full tile beside it is straight.
+  const lifted = new Set<string>();
   // Where each is: under the pointer while dragged, or where React Flow keeps it while it (expanded) or its zone is
   // resized from the left or top; else where it was put. Then the rest in free spots.
   for (const entry of entries) {
@@ -182,16 +192,18 @@ export function withTiles(
     if (dragged !== undefined && (dragged.dragging === true || resizing)) {
       entry.parentId = dragged.parentId;
       entry.position = dragged.position;
+      lifted.add(entry.id);
     } else {
       const position = subjectOf(entry.data).position;
       if (position !== null) entry.position = { x: position.x, y: position.y };
     }
   }
   /**
-   * A compact tile's size as drawn: what it is being resized to until it is let go, else what it was last let go at.
+   * A compact tile's size as drawn: a chip's, else what it is being resized to until it is let go, else what it was last let go at.
    * An expanded tile counts as its compact size here: its zone keeps to that, so it floats over it.
    */
   const sizeOf = (id: string) => {
+    if (folded.has(id)) return CHIP_SIZE;
     const before = known.get(id);
     const saved = tileSizeOf(sizes, id);
     return before?.resizing === true && expandedRank(expanded, id) === undefined ? { width: before.width ?? saved.width, height: before.height ?? saved.height } : saved;
@@ -203,25 +215,27 @@ export function withTiles(
     const size = rank === undefined ? sizeOf(entry.id) : expanded[rank]!;
     return { x: entry.position!.x, y: entry.position!.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
   };
+  // After a tile with no place is slotted: a dragged chip is already where it is drawn.
+  for (const entry of entries) {
+    if (entry.data.lift !== undefined && !lifted.has(entry.id)) entry.position = { x: entry.position!.x, y: entry.position!.y + entry.data.lift };
+  }
   const zoneRects = [...zones.values()].map(layoutOf);
   // Board items in each zone (an issue card, a sticky), and loose on the board, are in the way too.
   const items = new Map<string | undefined, ZoneLayout[]>();
   for (const node of nodes.filter(isItemNode)) items.set(node.parentId, [...(items.get(node.parentId) ?? []), node.data.item]);
-  for (const entry of entries) {
-    if (entry.position !== undefined) continue;
-    const siblings = entries.filter((other) => other.parentId === entry.parentId && other.position !== undefined);
-    const inTheWay = items.get(entry.parentId) ?? [];
-    // An orchestrator's new agent goes beside it, in its crew (BA2), when it starts where its orchestrator is.
-    const orchestrator = entry.data.from && siblings.find((other) => other.data.agent?.sessionId === entry.data.from!.sessionId);
-    const besideIt =
-      orchestrator && crewSpot(orchestrator.position!, [...siblings.map(footprintOf), ...inTheWay, ...(entry.parentId === undefined ? zoneRects : [])]);
-    if (besideIt !== undefined) entry.position = besideIt;
-    else if (entry.parentId === undefined) {
-      entry.position = freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...zoneRects, ...siblings.map(rect)]);
-    } else {
-      entry.position = freeTileSlot(layoutOf(zones.get(entry.parentId)!).width, [...siblings.map(rect), ...inTheWay]);
-    }
-  }
+  // An orchestrator's new agent goes beside it, in its crew (BA2), when it starts where its orchestrator is.
+  slotUnplaced(entries, {
+    zoneOf: (entry) => entry.parentId,
+    placeOf: (entry) => entry.position,
+    place: (entry, spot) => (entry.position = spot),
+    agentOf: (entry) => entry.data.agent?.sessionId,
+    orchestratorOf: (entry) => entry.data.from?.sessionId,
+    rect,
+    footprint: footprintOf,
+    zoneWidth: (zoneId) => layoutOf(zones.get(zoneId)!).width,
+    zones: zoneRects,
+    items: (zoneId) => items.get(zoneId) ?? [],
+  });
 
   const sized = nodes
     .filter((node) => !isSessionTile(node))
@@ -307,3 +321,12 @@ export function holdsTiles(covers: ZoneCovers | undefined, now: ZoneLayout, next
 
 /** A repo's name, as a tile shows it: its folder's. */
 export const repoName = (repoRoot: string) => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? repoRoot;
+
+/** How far below its tile's top a chip is drawn to sit centred in the tile's place, for a tile `tileHeight` high. */
+const chipLift = (tileHeight: number): number => Math.max(0, Math.floor((tileHeight - CHIP_SIZE.height) / 2));
+
+/** Where a tile's place is saved: its drawn position, less how far a folded chip is drawn below it. */
+export const savedPlace = (node: TileNodeType): { x: number; y: number } => ({ x: node.position.x, y: node.position.y - (node.data.lift ?? 0) });
+
+/** `move` as it is saved for `tile`: a folded chip is drawn `lift` below the place it was saved at, so a move of it is as well. */
+export const savedMove = (tile: TileData, move: TileMove): TileMove => (tile.lift === undefined ? move : { ...move, y: move.y - tile.lift });

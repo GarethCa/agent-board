@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { AGENT_STATES, STICKY_COLORS, ZONE_COLOR_NAMES, ZONE_COLORS } from '@agent-board/daemon/protocol';
+import { AGENT_STATES, SHAPE_TYPES, STICKY_COLORS, ZONE_COLOR_NAMES, ZONE_COLORS, type ShapeType } from '@agent-board/daemon/protocol';
 import {
   AlignStartVertical,
   BellOff,
@@ -7,7 +7,7 @@ import {
   CalendarClock,
   Hand,
   MousePointer2,
-  Shapes,
+  ChevronDown,
   StickyNote,
   Check,
   CircleDot,
@@ -27,6 +27,11 @@ import {
 import { themedColor } from '../board-colors';
 import { HarnessMark } from '../board/HarnessMark';
 import { RotateGrip } from '../board/items/Rotatable';
+import { ShapeBody, shapePaint } from '../board/items/ShapeNode';
+import { SHAPE_GROUPS, SHAPES } from '../board/items/shapes/catalogue';
+import { iconSize, ShapeIcon } from '../board/items/shapes/ShapeArt';
+import { ShapePicker } from '../board/items/shapes/ShapePicker';
+import { newShapeData } from '../board/items/text-style';
 import { Button, Chip, IconButton, Spinner, type ButtonVariant } from './Button';
 import { Dialog } from './Dialog';
 import { EditableName, RenameButton, type Renaming } from './EditableName';
@@ -383,6 +388,23 @@ export function ComponentGallery() {
         </div>
       </Section>
 
+      <Section id="shapes" title="Shapes">
+        {SHAPE_GROUPS.map(({ id, name }) => (
+          <Row key={id} label={name}>
+            <div className="component-gallery-shapes">
+              {SHAPE_TYPES.filter((shape) => SHAPES[shape].group === id).map((shape) => (
+                <GalleryShape key={shape} shape={shape} />
+              ))}
+            </div>
+          </Row>
+        ))}
+        <Row label="Picker (CL1)">
+          <PopoverPreview aria-label="Shapes" className="shape-picker-popover">
+            <ShapePicker current="database" autoFocus={false} hint={<span>Click, then drag on the board</span>} onPick={() => {}} />
+          </PopoverPreview>
+        </Row>
+      </Section>
+
       <Section id="chrome" title="Chrome">
         <StateGrid label="Tools" rows={['tool'] as const} states={['rest', 'hover', 'active', 'focus', 'pressed'] as const}>
           {(_row, state) => (
@@ -404,7 +426,17 @@ export function ComponentGallery() {
             <ToolButton label="Hand" icon={<Hand />} shortcut="H" />
             <IslandSeparator />
             <ToolButton label="Text" icon={<Type />} shortcut="T" />
-            <ToolButton label="Shape" icon={<Shapes />} shortcut="S" />
+            <ToolButton
+              label="Shape"
+              className="create-toolbar-shape"
+              icon={
+                <>
+                  <ShapeIcon shape="rectangle" room={{ width: 20, height: 16 }} />
+                  <ChevronDown className="create-toolbar-shape-more" aria-hidden />
+                </>
+              }
+              shortcut="S"
+            />
             <IslandSeparator />
             <Button variant="primary" icon={<Plus />}>
               New agent
@@ -423,6 +455,23 @@ export function ComponentGallery() {
           </div>
         </Row>
       </Section>
+    </div>
+  );
+}
+
+/** A shape as the board draws it, at its own proportions and a gallery cell's size, named inside. */
+function GalleryShape({ shape }: { shape: ShapeType }) {
+  const style = newShapeData(shape);
+  const { width, height } = iconSize(shape, { width: 132, height: 96 });
+  return (
+    <div className="component-gallery-shape">
+      <div style={{ width, height }}>
+        <div className="shape" data-shape={shape} data-text-size="body" data-bold="false" style={shapePaint(style)}>
+          <ShapeBody style={style} width={width} height={height}>
+            <div className="shape-text">{SHAPES[shape].name}</div>
+          </ShapeBody>
+        </div>
+      </div>
     </div>
   );
 }

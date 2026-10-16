@@ -75,6 +75,30 @@ kbd {
   cursor: grab;
 }
 
+/*
+ * Box select: a press on a zone's bare body falls through to the board, where it draws a marquee; the zone
+ * moves only by its tab, and resizes from its edges. What is in it is a node of its own, and still takes the press.
+ * A zone's connector handles, which show on hover, are hidden there: its body is never hovered, and a marquee started
+ * on one would draw a line instead. A zone is joined from Select.
+ */
+.board[data-mode='box'] .react-flow__node-zone {
+  /* Over React Flow's own inline style. */
+  pointer-events: none !important;
+}
+
+.board[data-mode='box'] .react-flow__node-zone :is(.zone-tab, .react-flow__resize-control) {
+  pointer-events: auto;
+}
+
+.board[data-mode='box'] .react-flow__node-zone .react-flow__handle {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.board[data-mode='box'] .react-flow__pane {
+  cursor: crosshair;
+}
+
 /* Zones */
 
 .zone {
@@ -245,6 +269,24 @@ kbd {
   box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--crew-halo);
 }
 
+/* At the bottom-left of any node: the crew count is at a tile's top-right and a zone's tab at its top-left. */
+.connections-badge {
+  position: absolute;
+  z-index: 1;
+  bottom: calc(-1 * var(--space-2));
+  left: calc(-1 * var(--space-1-5));
+  padding: 0 var(--space-1-5);
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  line-height: var(--space-4);
+  text-align: center;
+}
+
 .hybrid-tile-crew-count {
   position: absolute;
   top: calc(-1 * var(--space-2));
@@ -254,7 +296,7 @@ kbd {
   box-sizing: border-box;
   border-radius: var(--radius-pill);
   background: var(--accent);
-  color: var(--raised);
+  color: var(--on-accent);
   font-size: var(--font-size-2xs);
   font-weight: var(--weight-bold);
   line-height: var(--space-4);
@@ -301,7 +343,8 @@ kbd {
   white-space: nowrap;
 }
 
-/* Stopped by a restart, waiting to be resumed: a quiet dashed outline, and a Resume button. */
+/* Stopped by a restart, waiting to be resumed: a quiet dashed outline (Resume is in its hover corner and ⋯ menu). A
+   shell tile's stopped panes keep a Resume row. */
 .hybrid-tile-agent[data-state='stopped-by-restart'] {
   outline: 1.5px dashed var(--state-stopped-by-restart);
   outline-offset: -1px;
@@ -315,11 +358,6 @@ kbd {
   margin-top: auto;
   color: var(--state-stopped-by-restart-ink);
   font-size: var(--font-size-xs);
-}
-
-/* An agent that ended on its own or was stopped: how it exited, beside its Restart. */
-.hybrid-tile-restart {
-  color: var(--muted);
 }
 
 .restart-agent {
@@ -886,6 +924,24 @@ kbd {
 
 .component-gallery-columns[data-wide] {
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+}
+
+.component-gallery-shapes {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fill, var(--size-gallery-shape));
+  gap: var(--space-3);
+}
+
+/* One shape on the board's dots, as it is drawn there. */
+.component-gallery-shape {
+  display: grid;
+  place-items: center;
+  height: var(--size-gallery-shape-height);
+  border-radius: var(--radius-md);
+  background-color: var(--surface);
+  background-image: radial-gradient(var(--surface-dot) 1px, transparent 1.2px);
+  background-size: var(--space-4) var(--space-4);
 }
 
 .component-gallery-stack {
@@ -1502,11 +1558,14 @@ kbd {
   animation: session-window-in var(--motion-base) var(--ease-out);
 }
 
-/* Moved clear of an expanded tile, or going back once it collapses: eased there, unless held. */
+/*
+ * Moved clear of an expanded tile, or going back once it collapses: its size eased, unless held. Never its
+ * place: React Flow draws a node's place in its `transform`, and a node easing there trails the board as it pans
+ *.
+ */
 @media (prefers-reduced-motion: no-preference) {
   .react-flow__node.displaced:not(.dragging) {
     transition:
-      transform var(--motion-base) var(--ease-out),
       width var(--motion-base) var(--ease-out),
       height var(--motion-base) var(--ease-out);
   }
@@ -2551,13 +2610,94 @@ kbd {
   left: 50%;
   z-index: var(--layer-dock);
   gap: var(--space-1-5);
-  max-width: calc(100% - 2 * var(--size-dock-clear));
+  /* Between the zones pill and the zoom bar, which `useDockScroll` measures (--dock-clear); the token is the first paint's. */
+  min-width: min(var(--size-dock-min), calc(100% - 2 * var(--space-3)));
+  max-width: calc(100% - 2 * var(--dock-clear, var(--size-dock-clear)));
   padding: var(--space-1-25) var(--space-1-5) var(--space-1-25) var(--space-3);
-  overflow-x: auto;
   translate: -50% 0;
 }
 
+/* Not even room for the count beside the zones pill and the zoom bar: a row up, above everything at the bottom. */
+.session-dock[data-lifted] {
+  bottom: calc(var(--space-3) + var(--dock-lift, 0px));
+}
+
+/* Too little room for the pills (`useDockScroll`): the dock is one button with their count, which opens the list. */
+.session-dock[data-compact] {
+  min-width: 0;
+}
+
+.session-dock-compact {
+  display: none;
+}
+
+.session-dock[data-compact] :is(.session-dock-track, .session-dock-label) {
+  display: none;
+}
+
+.session-dock[data-compact] .session-dock-compact {
+  display: inline-flex;
+}
+
+.session-dock-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  max-height: 50vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/* The pills scroll sideways inside the dock (wheel, trackpad, shift-wheel) and never widen it past its max-width, so it
+   pushes and clips nothing; the fades at its edges (`data-more`, from `useDockScroll`) show there is more. */
+.session-dock-track {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.session-dock-track::-webkit-scrollbar {
+  display: none;
+}
+
+.session-dock::before,
+.session-dock::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  z-index: 1;
+  width: var(--space-6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.session-dock::before {
+  left: 1px;
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
+  background: linear-gradient(to right, var(--island), transparent);
+}
+
+.session-dock::after {
+  right: 1px;
+  border-radius: 0 var(--radius-card) var(--radius-card) 0;
+  background: linear-gradient(to left, var(--island), transparent);
+}
+
+.session-dock:is([data-more='start'], [data-more='both'])::before,
+.session-dock:is([data-more='end'], [data-more='both'])::after {
+  opacity: 1;
+}
+
 .session-dock-label {
+  flex: none;
   margin-right: var(--space-1);
   color: var(--muted);
   font-size: var(--font-size-2xs);
@@ -2589,6 +2729,13 @@ kbd {
 }
 
 .session-dock-open {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* A long name is cut short with an ellipsis; its tooltip has it whole. */
+.session-dock-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2702,6 +2849,289 @@ kbd {
   border-radius: var(--radius-lg);
   background: var(--raised);
   box-shadow: var(--shadow-overlay);
+}
+
+/* Agent notes: a document card (CO2) or a terminal card (CO1), as the Agent notes setting says */
+
+.agent-note {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--agent-note-bar);
+  border-radius: var(--agent-note-radius);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-roomy);
+  overflow-wrap: anywhere;
+}
+
+.agent-note-head,
+.agent-note-foot {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: var(--space-1-5) var(--space-2-25);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.agent-note-head {
+  border-bottom: 1px solid var(--separator);
+}
+
+.agent-note-foot {
+  min-height: var(--size-chip);
+  border-top: 1px solid var(--separator);
+}
+
+.agent-note-badge {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-px) var(--space-2) var(--space-px) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--agent-note-badge);
+  color: var(--agent-note-badge-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-note-badge:hover:enabled .agent-note-name {
+  text-decoration: underline;
+}
+
+.agent-note-badge:disabled {
+  cursor: default;
+}
+
+.agent-note-mark {
+  flex: none;
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.agent-note-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-note-role {
+  font-weight: var(--weight-medium);
+  opacity: 0.8;
+}
+
+.agent-note-time {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.agent-note-asked {
+  padding: var(--space-1-5) var(--space-3) 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.agent-note-body {
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--space-1-75) var(--space-3) var(--space-2);
+  overflow: auto;
+}
+
+.agent-note-body p,
+.agent-note-body ul,
+.agent-note-body ol {
+  margin: 0 0 var(--space-1);
+}
+
+.agent-note-body ul,
+.agent-note-body ol {
+  padding-left: var(--space-4);
+}
+
+.agent-note-body code {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  background: var(--agent-note-code);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.agent-note-editor {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+}
+
+.agent-note-edited {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--agent-note-edited-soft);
+  color: var(--agent-note-edited);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.agent-note-show {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* An answer's suggested edits, offered all at once (CPb). */
+.agent-note-edits {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1-5) var(--space-2-25);
+  border-top: 1px solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.agent-note-accept,
+.agent-note-dismiss {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agent-note-accept {
+  margin-left: auto;
+  color: var(--accent-ink);
+}
+
+.agent-note-dismiss {
+  color: var(--muted);
+}
+
+/* CPa: the tether from a note to its agent's tile. */
+.react-flow__edge-path.agent-note-tether {
+  stroke: var(--agent-note-tether);
+  stroke-width: var(--connector-width);
+  stroke-dasharray: var(--agent-note-tether-dash);
+}
+
+/* CO1: the agent's terminal, cut out and pinned. */
+.agent-note[data-look='terminal'] {
+  border: 1px solid var(--window-edge);
+  border-radius: var(--radius-lg);
+  background: var(--window-bg);
+  color: var(--window-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-badge);
+}
+
+.agent-note[data-look='terminal'] .agent-note-head {
+  border-bottom-color: var(--window-line);
+  background: var(--window-chrome);
+  color: var(--window-ink-soft);
+}
+
+.agent-note[data-look='terminal'] .agent-note-badge {
+  padding: 0;
+  background: none;
+  color: var(--window-ink);
+  font-weight: var(--weight-regular);
+}
+
+.agent-note[data-look='terminal'] .agent-note-name {
+  font-weight: var(--weight-semibold);
+}
+
+.agent-note[data-look='terminal'] .agent-note-role {
+  color: var(--window-ink-soft);
+  opacity: 1;
+}
+
+.agent-note[data-look='terminal'] .agent-note-foot,
+.agent-note[data-look='terminal'] .agent-note-edits,
+.agent-note[data-look='terminal'] .agent-note-dismiss {
+  border-top-color: var(--window-line);
+  color: var(--window-ink-soft);
+}
+
+.agent-note[data-look='terminal'] .agent-note-accept {
+  color: var(--agent-note-term-link);
+}
+
+.agent-note[data-look='terminal'] .agent-note-asked {
+  color: var(--window-ink-soft);
+}
+
+.agent-note[data-look='terminal'] strong {
+  color: var(--agent-note-term-strong);
+  font-weight: var(--weight-semibold);
+}
+
+.agent-note[data-look='terminal'] code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--agent-note-term-code);
+  font: inherit;
+}
+
+.agent-note[data-look='terminal'] .sticky-link,
+.agent-note[data-look='terminal'] .agent-note-show {
+  color: var(--agent-note-term-link);
+}
+
+.agent-note[data-look='terminal'] .agent-note-edited {
+  padding: 0;
+  background: none;
+  color: var(--agent-note-term-edited);
+  font-weight: var(--weight-regular);
+}
+
+.agent-note-line {
+  display: flex;
+  gap: var(--space-1-75);
+}
+
+.agent-note-line::before {
+  flex: none;
+  color: var(--agent-note-term-prompt);
+  content: '❯';
+}
+
+.agent-note-line.agent-note-item::before {
+  color: var(--window-ink-soft);
+  white-space: pre;
+  content: '  –';
 }
 
 /* Images and link cards */
@@ -2923,14 +3353,13 @@ kbd {
   text-align: center;
 }
 
-/* Text stays inside the shape: an ellipse and a diamond are smaller than their box. */
-.shape[data-shape="ellipse"] .shape-label {
-  inset: 14.6%;
+/* Where the text goes is the shape's own (shapes/catalogue.ts): inside its outline, or under a figure. */
+.shape-label[data-tight] {
+  padding: 0;
 }
 
-.shape[data-shape="diamond"] .shape-label {
-  inset: 25%;
-  padding: 0;
+.shape-label[data-at-top] {
+  place-items: start center;
 }
 
 .shape-text {
@@ -3486,8 +3915,9 @@ kbd {
   white-space: nowrap;
 }
 
-/* The handles of a selected line: a round one on each end, dragged to another side of its object; a square
-   one on each bend; and a smaller, fainter one halfway along each stretch, pulled out into a new bend. */
+/* The handles of a selected line: a round one on each end, dragged to another side of its object or onto
+   another object (BT1); on a straight or elbow line, a square one on each bend and a smaller, fainter one halfway along
+   each stretch, pulled out into a new bend; on a curve, one bow handle on its middle (BU3). */
 .line-handle {
   position: absolute;
   width: var(--line-handle-size);
@@ -3509,6 +3939,14 @@ kbd {
 
 .line-handle-bend {
   border-radius: var(--radius-xs);
+}
+
+.line-handle-bow {
+  width: var(--line-bow-size);
+  height: var(--line-bow-size);
+  border-width: var(--line-bow-edge-width);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
 }
 
 .line-handle-insert {
@@ -3636,15 +4074,35 @@ kbd {
 }
 
 .react-flow__node:hover > .connector-handle,
-.react-flow__node.selected > .connector-handle,
-.board-connecting .connector-handle {
+.react-flow__node.selected > .connector-handle {
   opacity: 1;
 }
 
-.react-flow__handle.connector-handle:hover {
+/* While an arrow is drawn or an end dragged, only the object near the pointer shows its handles, grown so a side is
+   easy to drop on (BS4); a drop on its body lands on the side facing the other end. */
+.board-connecting .react-flow__node > .connector-handle:not([data-near]),
+.board-connecting .react-flow__node > .item-rotor > .connector-handle:not([data-near]) {
+  opacity: 0;
+}
+
+.react-flow__handle.connector-handle[data-near] {
+  width: var(--connector-handle-near-size);
+  height: var(--connector-handle-near-size);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.react-flow__handle.connector-handle:is(:hover, .connectingto) {
   width: var(--connector-handle-hover-size);
   height: var(--connector-handle-hover-size);
   border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The handle an arrow would land on if let go now: filled, at its grown size. */
+.react-flow__handle.connector-handle[data-near]:is(:hover, .connectingto, [data-target]) {
+  width: var(--connector-handle-near-size);
+  height: var(--connector-handle-near-size);
   background: var(--accent);
 }
 
@@ -4075,34 +4533,8 @@ kbd {
   pointer-events: none;
 }
 
-/* A label too long for its line: a marker, its trigger in a dot, showing the label while the pointer is on
-   it or it has focus; a click on it selects the edge, as one on its line does. */
-.flow-edge-label[data-collapsed] {
-  cursor: pointer;
-  pointer-events: all;
-}
-
-.flow-edge-reveal {
-  fill: transparent;
-}
-
-.flow-edge-marker:focus-visible {
-  outline: none;
-}
-
-.flow-edge-marker:focus-visible > .flow-edge-trigger-dot {
-  stroke: var(--focus);
-  stroke-width: var(--focus-ring-width);
-}
-
 .flow-edge-pill {
   fill: var(--flow-label);
-}
-
-/* Selected, or with a hand-off going along it, its label is ringed in the flow colour (FlowDraw, FlowRules). */
-.flow-edge-label:is([data-selected='true'], [data-live='true']) .flow-edge-pill {
-  stroke: var(--flow-edge);
-  stroke-width: var(--connector-width);
 }
 
 .flow-edge-trigger-dot {
@@ -4115,31 +4547,6 @@ kbd {
 
 .flow-edge-text {
   fill: var(--flow-label-ink);
-  font-size: var(--font-size-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.flow-edge-trigger[role='button'],
-.flow-edge-send {
-  cursor: pointer;
-  pointer-events: all;
-}
-
-.flow-edge-send-fill {
-  fill: var(--flow-trigger);
-}
-
-.flow-edge-send:hover .flow-edge-send-fill,
-.flow-edge-trigger[role='button']:hover .flow-edge-trigger-dot {
-  fill: var(--accent-strong);
-}
-
-.flow-edge-send-icon {
-  color: var(--flow-trigger-ink);
-}
-
-.flow-edge-send-text {
-  fill: var(--flow-trigger-ink);
   font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
 }
@@ -4227,7 +4634,7 @@ kbd {
 }
 
 .handoff-chooser-payload {
-  color: var(--flow-edge);
+  color: var(--flow-label-ink);
   font-family: var(--font-mono);
 }
 
@@ -4236,64 +4643,215 @@ kbd {
   stroke: none;
 }
 
-/* A hand-off going along an edge (FlowRules): dashes run along it, and its payload travels from one end to the other. */
-.flow-edge-flowing {
+/*
+ * Linked sessions as one rail (CD4): the edges between two agents as one faint dashed line, no arrowheads on
+ * a pair, a small open arrow at the receiving end of a one-way one; the latest document rides it as a token at the end
+ * of whoever has it, and slides along when sent.
+ */
+.flow-edge.flow-rail {
+  stroke: var(--rail);
+  stroke-width: var(--rail-width);
+  stroke-dasharray: var(--rail-dash);
+}
+
+.flow-edge.flow-rail-faint {
+  stroke: var(--rail-faint);
+}
+
+.flow-rail-cap {
+  fill: var(--surface);
+  stroke: var(--rail-cap);
+  stroke-width: 1.5px;
+  pointer-events: none;
+}
+
+.rail-arrow {
   fill: none;
-  stroke: var(--flow-flowing);
-  stroke-width: var(--connector-width);
-  stroke-dasharray: var(--flow-flowing-dash);
+  stroke: var(--rail-arrow);
+  stroke-width: 1.6px;
   stroke-linecap: round;
-  animation: flow-dashes var(--motion-flowing) var(--ease-linear) infinite;
+  stroke-linejoin: round;
+}
+
+/* Placed at its end of the rail; the body sits off that side of the tile, away from it. */
+.rail-token {
+  position: absolute;
+  top: 0;
+  left: 0;
   pointer-events: none;
 }
 
-@keyframes flow-dashes {
-  to {
-    stroke-dashoffset: var(--flow-flowing-run);
-  }
+/* Only while it slides from one end to the other: else it moves with its tiles at once, or it would trail them. */
+.rail-token[data-sliding] {
+  transition: transform var(--motion-handoff) var(--ease-in-out);
 }
 
-.flow-payload {
-  offset-rotate: 0deg;
-  animation: flow-travel var(--motion-handoff) var(--ease-in-out) infinite;
-  pointer-events: none;
+.rail-token[data-sliding] .rail-token-body {
+  transition: translate var(--motion-handoff) var(--ease-in-out);
 }
 
-@keyframes flow-travel {
-  from {
-    offset-distance: var(--flow-payload-from);
-  }
-
-  to {
-    offset-distance: var(--flow-payload-to);
-  }
+.rail-token-body {
+  position: absolute;
+  translate: 0 -50%;
+  pointer-events: all;
 }
 
-.flow-payload-fill {
-  fill: var(--flow-trigger);
-  stroke: var(--flow-ring);
-  stroke-width: var(--space-1);
-  paint-order: stroke;
+.rail-token[data-side='left'] .rail-token-body {
+  right: 0;
+  translate: 0 -50%;
 }
 
-.flow-payload-icon {
-  color: var(--flow-trigger-ink);
+.rail-token[data-side='top'] .rail-token-body {
+  bottom: 0;
+  translate: -50% 0;
 }
 
-.flow-payload-text {
-  fill: var(--flow-trigger-ink);
+.rail-token[data-side='bottom'] .rail-token-body {
+  translate: -50% 0;
+}
+
+.rail-token-chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--size-rail-token-height);
+  border: 1.5px solid var(--rail-token-edge);
+  border-radius: var(--radius-md);
+  background: var(--rail-token);
+  color: var(--rail-token-ink);
+  box-shadow: var(--shadow-control);
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.rail-token[data-selected] .rail-token-chip {
+  box-shadow: var(--shadow-rail-token-selected);
+}
+
+.rail-token-open,
+.rail-token-send {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 100%;
+  padding: 0 var(--space-1-5);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rail-token-open {
+  padding-left: var(--space-2);
+}
+
+.rail-token-open:focus-visible,
+.rail-token-send:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+.rail-token-icon,
+.rail-token-send svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  flex: none;
+}
+
+.rail-token-count {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentcolor 12%, transparent);
   font-weight: var(--weight-semibold);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .flow-edge-flowing {
-    animation: none;
-  }
+.rail-token-send {
+  margin: var(--space-0-5) var(--space-0-5) var(--space-0-5) 0;
+  height: calc(100% - 2 * var(--space-0-5));
+  border-radius: var(--radius-sm);
+  background: var(--rail-token-send);
+  color: var(--on-accent);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+}
 
-  .flow-payload {
-    display: none;
+.rail-token-note {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
+.rail-token[data-side='left'] .rail-token-note {
+  right: 0;
+  left: auto;
+}
+
+.rail-token[data-side='top'] .rail-token-note,
+.rail-token[data-side='bottom'] .rail-token-note {
+  left: 50%;
+  translate: -50% 0;
+}
+
+/* On a rail too short for it, its mark alone (and its round and Send), the rest while hovered or focused. */
+.rail-token[data-compact]:not(:hover, :focus-within) :is(.rail-token-name, .rail-token-note) {
+  display: none;
+}
+
+.rail-token[data-compact]:is(:hover, :focus-within) {
+  z-index: 1;
+}
+
+.rail-token[data-state='waiting'] .rail-token-chip {
+  border-color: var(--rail-token-wait);
+  color: var(--rail-token-wait);
+}
+
+.rail-token[data-state='held'] .rail-token-chip {
+  border-color: var(--flow-held-ink);
+  background: var(--flow-held);
+  color: var(--flow-held-ink);
+}
+
+.rail-token[data-state='held'] .rail-token-note {
+  color: var(--flow-held-ink);
+}
+
+.rail-token[data-state='queued'] .rail-token-chip {
+  border-color: var(--control-edge);
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.rail-token[data-state='failed'] .rail-token-chip {
+  border-color: var(--rail-token-fail);
+  color: var(--rail-token-fail);
+}
+
+.rail-token[data-state='failed'] .rail-token-note {
+  color: var(--rail-token-fail);
+}
+
+/* What comes next, before it has carried anything: a dashed ghost. */
+.rail-token[data-state='next'] .rail-token-chip {
+  border-style: dashed;
+  border-color: var(--control-edge);
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-token[data-sliding],
+  .rail-token[data-sliding] .rail-token-body {
+    transition: none;
   }
 }
 
@@ -4312,10 +4870,20 @@ kbd {
   pointer-events: none;
 }
 
-.selection-box-label {
+/* The label, and Ask Claude… beside it (CM). */
+.selection-box-head {
   position: absolute;
   bottom: 100%;
   left: 0;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  scale: calc(1 / var(--zoom));
+  transform-origin: bottom left;
+  translate: 0 calc(-1 * var(--space-1) / var(--zoom));
+}
+
+.selection-box-label {
   padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-item);
   background: var(--selection-edge);
@@ -4323,9 +4891,267 @@ kbd {
   font-size: var(--font-size-xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
+}
+
+.selection-box-ask {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-1-5);
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--radius-item);
+  background: var(--raised);
+  box-shadow: var(--shadow-control);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.selection-box-ask:hover {
+  background: var(--accent-soft);
+}
+
+.selection-box-ask svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.selection-box-ask .ui-kbd {
+  font-size: var(--font-size-3xs);
+}
+
+/* Ask Claude's popover (CM): it points at the right of the selection's top, where the answer will go. */
+.ask-claude-anchor {
+  position: absolute;
+  top: var(--anchor-y);
+  left: var(--anchor-x);
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.ask-claude {
+  width: var(--size-ask-claude);
+}
+
+.ask-claude-form {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.ask-claude-head {
+  display: flex;
+  gap: var(--space-1-75);
+  align-items: center;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.ask-claude-head small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.ask-claude-spark {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  color: var(--accent-ink);
+}
+
+.ask-claude-goes {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.ask-claude-label {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+.ask-claude-sends {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.ask-claude-file {
+  padding: 0 var(--space-1-25);
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+}
+
+.ask-claude-actions {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.ask-claude-where {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+/*
+ * While the selection is drawn for its picture, only its objects, the connectors between them and their labels show,
+ * on the page's own background: every other node, edge, zone, the board's chrome and the popover are hidden, and so is
+ * the selection's own look (its box, handles, halos and bars).
+ */
+.capturing-selection body {
+  visibility: hidden;
+}
+
+.capturing-selection .captured,
+.capturing-selection marker,
+.capturing-selection marker * {
+  visibility: visible;
+}
+
+/* React Flow shows each measured node with an inline `visibility: visible`, which only this outweighs. */
+.capturing-selection .react-flow__node:not(.captured) {
+  visibility: hidden !important;
+}
+
+.capturing-selection .react-flow__resize-control,
+.capturing-selection .connector-handle,
+.capturing-selection .rotate-handle,
+.capturing-selection .connector-halo,
+.capturing-selection .line-handle {
+  visibility: hidden;
+}
+
+.capturing-selection .text-item {
+  outline: none;
+}
+
+/*
+ * An answer's suggested edits (CM3, CPb): each shape and arrow dashed in the accent where it would go, under a chip with
+ * its number, its title, ✓ and ✕. Drawn on the board, under its zoom; the chip keeps its size on screen.
+ */
+.suggestion-ghosts {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.suggestion-ghost {
+  --shape-fill: var(--suggestion-ghost-fill);
+  --shape-stroke: var(--suggestion-ghost);
+
+  position: absolute;
+  top: var(--ghost-y);
+  left: var(--ghost-x);
+  display: grid;
+  place-items: center;
+  color: var(--suggestion-ghost);
+  opacity: 0.85;
+}
+
+.suggestion-ghost svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.suggestion-ghost-text {
+  position: relative;
+  padding: var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  text-align: center;
+}
+
+.suggestion-ghost-lines {
+  position: absolute;
+  overflow: visible;
+  width: 1px;
+  height: 1px;
+}
+
+.suggestion-ghost-lines path {
+  fill: none;
+  stroke: var(--suggestion-ghost);
+  stroke-width: var(--connector-width);
+  stroke-dasharray: var(--suggestion-ghost-dash);
+}
+
+.suggestion-ghost-lines marker path {
+  fill: var(--suggestion-ghost);
+  stroke: none;
+}
+
+.suggestion-chip {
+  position: absolute;
+  top: var(--chip-y);
+  left: var(--chip-x);
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-0-5) var(--space-0-5) var(--space-0-5) var(--space-1);
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-control);
+  color: var(--text);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  pointer-events: auto;
   scale: calc(1 / var(--zoom));
-  transform-origin: bottom left;
-  translate: 0 calc(-1 * var(--space-1) / var(--zoom));
+  transform-origin: left center;
+  translate: 0 -50%;
+}
+
+.suggestion-chip-num {
+  display: grid;
+  place-items: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.suggestion-chip button {
+  display: grid;
+  place-items: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.suggestion-chip button svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.suggestion-chip-ok:hover {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.suggestion-chip-no:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .snap-guides {
@@ -4528,6 +5354,11 @@ kbd {
   margin: var(--space-1-5) 0 0;
   font-size: var(--font-size-md);
   font-weight: var(--weight-semibold);
+}
+
+/* A rail's two edges: which direction's rules show. */
+.edge-rules-directions {
+  margin-top: var(--space-2);
 }
 
 .edge-rules-ends svg {
@@ -4800,37 +5631,6 @@ kbd {
 
 .edge-rules-send {
   margin-left: auto;
-}
-
-/* A flow edge's note under its label: "held until CI green", "paused", "queued". */
-.flow-edge-note-fill {
-  fill: var(--flow-held);
-}
-
-.flow-edge-note-text {
-  fill: var(--flow-held-ink);
-  font-size: var(--font-size-xs);
-  font-weight: var(--weight-semibold);
-}
-
-/* Else when it last delivered, in the flow colour, ringed: a click on it opens the edge's rules and payload. */
-.flow-edge-delivered {
-  cursor: pointer;
-}
-
-.flow-edge-delivered .flow-edge-note-fill {
-  fill: var(--flow-delivered);
-  stroke: var(--flow-edge);
-  stroke-width: var(--connector-width);
-}
-
-.flow-edge-delivered .flow-edge-note-text {
-  fill: var(--flow-delivered-ink);
-}
-
-/* An edge an orchestrator made: dashed, so it reads as the agents' wiring, not the user's. */
-.flow-edge-agent-made {
-  stroke-dasharray: var(--flow-agent-made-dash);
 }
 
 /* An agent's tile in a hand-off (FlowRules): the sender tinted in the flow colour, its robot perched at its top left
@@ -5365,8 +6165,8 @@ kbd {
 }
 
 .review-actions .review-approve:not(:disabled) {
-  border-color: var(--success);
-  background: var(--success);
+  border-color: var(--success-fill);
+  background: var(--success-fill);
   color: var(--on-primary);
 }
 
@@ -5572,8 +6372,8 @@ kbd {
 }
 
 .pr-actions .pr-merge:not(:disabled) {
-  border-color: var(--success);
-  background: var(--success);
+  border-color: var(--success-fill);
+  background: var(--success-fill);
   color: var(--on-primary);
 }
 
@@ -5760,7 +6560,7 @@ kbd {
 /*
  * The merge gate. BL1: a Gate tab in the dark window column, like a PR tab:
  * its headline and command, its steps as a table, and the picked step's log under it. A run on an older commit, or with
- * uncommitted changes, is greyed. BM3: Run gate or the gate's badge, Open PR and Merge in the window's header.
+ * uncommitted changes, is greyed. BM3: Run gate or the gate's badge and Merge in the window's header.
  */
 .gate-view {
   font-size: var(--font-size-sm);
@@ -5939,16 +6739,6 @@ tr[data-status='running'] .gate-step-icon {
   align-items: center;
 }
 
-.gate-why {
-  display: inline-flex;
-  border-radius: var(--radius-md);
-}
-
-.gate-why:focus-visible {
-  box-shadow: var(--shadow-focus);
-  outline: none;
-}
-
 .gate-header-badge,
 .hybrid-tile-gate {
   --chip: var(--state-thinking-soft);
@@ -6121,4 +6911,319 @@ tr[data-status='running'] .gate-step-icon {
 .web-page-under svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
+}
+
+/* A tile ⌘K showed (CS2): ringed in the accent, pulsing twice; held still with reduced motion. */
+.react-flow__node[data-pulse] {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-pulse);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .react-flow__node[data-pulse] {
+    animation: tile-pulse var(--motion-pulse) var(--ease-in-out) var(--pulse-count);
+  }
+}
+
+@keyframes tile-pulse {
+  0%,
+  100% {
+    box-shadow: var(--shadow-pulse);
+  }
+
+  50% {
+    box-shadow: none;
+  }
+}
+
+/* The diagram shapes' picker (CL1) and the / palette (CL3) */
+.shape-icon {
+  --shape-fill: var(--raised);
+  --shape-stroke: var(--text-soft);
+
+  flex: none;
+  overflow: visible;
+}
+
+.ui-tool.create-toolbar-shape {
+  gap: var(--space-0-5);
+  width: auto;
+  padding: 0 var(--space-2);
+}
+
+.create-toolbar-shape .shape-icon {
+  --shape-fill: transparent;
+  --shape-stroke: currentcolor;
+
+  width: auto;
+  height: auto;
+}
+
+.ui-tool svg.create-toolbar-shape-more,
+.item-bar-shape svg:not(.shape-icon) {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.item-bar-shape .shape-icon {
+  --shape-fill: transparent;
+  --shape-stroke: currentcolor;
+}
+
+.shape-picker-popover.ui-popover {
+  width: var(--size-shape-picker);
+  max-width: calc(100vw - var(--space-8));
+  max-height: var(--radix-popover-content-available-height);
+  padding: var(--space-2-5);
+  overflow: hidden;
+}
+
+.shape-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 100%;
+}
+
+.shape-picker-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.shape-picker-search .ui-input-wrap {
+  flex: 1;
+}
+
+.shape-picker-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: var(--size-shape-picker-list);
+  overflow-y: auto;
+}
+
+.shape-picker-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.shape-picker-heading {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.shape-picker-heading small {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.shape-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, var(--size-shape-cell));
+  gap: var(--space-1);
+}
+
+.shape-picker-cell {
+  display: grid;
+  place-items: center;
+  width: var(--size-shape-cell);
+  height: var(--size-shape-cell-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+}
+
+.shape-picker-cell:hover {
+  background: var(--hover);
+}
+
+.shape-picker-cell:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.shape-picker-cell[aria-pressed='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--accent);
+}
+
+.shape-picker-cell[aria-pressed='true'] .shape-icon {
+  --shape-fill: var(--accent-soft);
+  --shape-stroke: var(--accent);
+}
+
+.shape-picker-tabs {
+  width: 100%;
+}
+
+.shape-picker-tabs > button {
+  flex: 1;
+}
+
+.shape-picker-none,
+.quick-insert-none {
+  margin: 0;
+  padding: var(--space-2) var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.shape-picker-foot,
+.quick-insert-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding-top: var(--space-1-75);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.quick-insert-anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.quick-insert.ui-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: var(--size-quick-insert);
+  padding: var(--space-1-5);
+}
+
+.quick-insert-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-focus);
+}
+
+.quick-insert-slash {
+  color: var(--accent-ink);
+  font-weight: var(--weight-bold);
+}
+
+.quick-insert-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.quick-insert-results {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--size-quick-insert-list);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.quick-insert-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-25);
+  padding: var(--space-1-25) var(--space-1-5);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.quick-insert-result[aria-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.quick-insert-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--size-shape-cell);
+}
+
+.quick-insert-result b {
+  font-weight: var(--weight-semibold);
+}
+
+.quick-insert-result mark {
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+}
+
+.quick-insert-result i {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+/* A closed agent folded to a chip: one 34px row of mark, name and final state, in the tile's raised look but quieter. */
+.folded-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  font-size: var(--font-size-sm);
+  opacity: 0.85;
+  cursor: pointer;
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+
+.folded-chip:hover,
+.folded-chip:focus-visible {
+  opacity: 1;
+}
+
+.folded-chip-mark {
+  flex: none;
+}
+
+.folded-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folded-chip .ui-pill {
+  flex: none;
+  margin-left: auto;
 }

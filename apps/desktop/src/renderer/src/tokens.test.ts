@@ -3,12 +3,15 @@ import { join } from 'node:path';
 import postcss from 'postcss';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { RAIL_TOKEN_ROOM } from '@agent-board/daemon/board-layout';
 import { SHAPE_FILLS, STICKY_COLORS, TEXT_COLORS } from '@agent-board/daemon/protocol';
 import { boardPaint } from './board-colors';
+import { contrast } from '../../shared/colour';
+import { themePacksCss } from '../../shared/theme-pack-tokens';
 import { THEMES } from '../../shared/themes';
 
 /*
- * Enforces docs/theme-tokens.md: tokens.css is the only place a colour, spacing, radius, font, shadow or motion value
+ * Enforces docs/theme-tokens.md: tokens.css (and theme-packs.css, made from the packs' palettes) is the only place a colour, spacing, radius, font, shadow or motion value
  * is written, and every token is defined and read. Stylesheets are parsed with postcss; TypeScript with the compiler,
  * so comments and prose are never mistaken for values. Each offence is reported as file:line.
  */
@@ -16,11 +19,14 @@ import { THEMES } from '../../shared/themes';
 const here = import.meta.dirname;
 const read = (file: string) => readFileSync(join(here, file), 'utf8');
 
+/** Where tokens are written: the app's own themes, and the theme packs' (generated). */
+const TOKEN_FILES = ['tokens.css', 'theme-packs.css'];
+
 const sourceFiles = (dir = ''): string[] =>
   readdirSync(join(here, dir), { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) return sourceFiles(path);
-    return /\.(css|tsx?)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && entry.name !== 'tokens.css' ? [path] : [];
+    return /\.(css|tsx?)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && !TOKEN_FILES.includes(entry.name) ? [path] : [];
   });
 
 // Every CSS named colour (CSS Color 4), plus the system colours most likely to be reached for.
@@ -143,7 +149,7 @@ export function scriptOffences(file: string, source: string): string[] {
   return offences;
 }
 
-const tokens = read('tokens.css');
+const tokens = TOKEN_FILES.map(read).join('\n');
 const defined = new Set<string>();
 postcss.parse(tokens).walkDecls((decl) => {
   if (decl.prop.startsWith('--')) defined.add(decl.prop);
@@ -159,6 +165,9 @@ const readsIn = (source: string) =>
  * those a library sets on its own elements, such as how much room Radix leaves a popover.
  */
 const LOCAL = [
+  // The dock sets how much room it leaves each side, and how far it lifts, from script (`useDockScroll`).
+  '--dock-clear',
+  '--dock-lift',
   '--radix-popover-content-available-height',
   '--pane-top',
   '--pane-height',
@@ -191,9 +200,21 @@ const LOCAL = [
   '--box-width',
   '--box-height',
   '--zoom',
-  // Where a context menu opens.
+  // Where a context menu opens, or Ask Claude's popover points.
   '--anchor-x',
   '--anchor-y',
+  // Where a suggested edit's ghost shape and its chip sit on the board.
+  '--ghost-x',
+  '--ghost-y',
+  '--chip-x',
+  '--chip-y',
+  // A theme pack's colours in its preview in Settings, from its palette, as its tokens aren't the page's until picked.
+  '--preview-desk',
+  '--preview-edge',
+  '--preview-accent',
+  '--preview-running',
+  '--preview-waiting',
+  '--preview-failed',
 ];
 
 describe('theme tokens', () => {
@@ -211,12 +232,18 @@ describe('theme tokens', () => {
   });
 
   it('only uses tokens that exist', () => {
-    const used = new Set([...sourceFiles(), 'tokens.css'].flatMap((file) => readsIn(read(file))));
+    const used = new Set([...sourceFiles(), ...TOKEN_FILES].flatMap((file) => readsIn(read(file))));
     expect([...used].filter((name) => !defined.has(name) && !LOCAL.includes(name))).toEqual([]);
   });
 
+  it("gives a rail's token the room the daemon's arrange leaves between linked tiles", () => {
+    let room: string | undefined;
+    postcss.parse(tokens).walkDecls('--rail-token-room', (decl) => void (room = decl.value));
+    expect(room).toBe(`${RAIL_TOKEN_ROOM}px`);
+  });
+
   it('only defines tokens something reads', () => {
-    const used = new Set([...sourceFiles(), 'tokens.css'].flatMap((file) => readsIn(read(file))));
+    const used = new Set([...sourceFiles(), ...TOKEN_FILES].flatMap((file) => readsIn(read(file))));
     expect([...defined].filter((name) => !used.has(name))).toEqual([]);
   });
 });
@@ -229,8 +256,24 @@ const CODE_COLOURS = ['keyword', 'string', 'number', 'comment', 'title', 'type',
 const ANSI_COLOURS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'].flatMap((colour) => [`--ansi-${colour}`, `--ansi-bright-${colour}`]);
 
 /**
- * Colour tokens the dark theme keeps as they are in the light one: brand marks, a colour on a saturated fill or the
- * session window's own palette, which is dark in every theme.
+ * The session window's own palette that a theme may bring with its terminal, or keep as the light theme has it: its
+ * text and lines over the well, and a chat code block's and a diff's highlighting. The dark theme keeps them; a theme
+ * pack brings its own.
+ */
+const WINDOW_PALETTE = new Set([
+  '--window-ink',
+  '--window-ink-soft',
+  '--window-line',
+  '--window-edge',
+  '--window-raised',
+  '--window-added',
+  '--window-warning',
+  ...CODE_COLOURS,
+]);
+
+/**
+ * Colour tokens every theme keeps as they are in the light one: brand marks, a colour on a saturated fill or the rest
+ * of the session window's own palette, which is dark in every theme.
  */
 const SAME_IN_EVERY_THEME = new Set([
   '--on-accent',
@@ -240,11 +283,6 @@ const SAME_IN_EVERY_THEME = new Set([
   '--harness-claude',
   '--linear-mark',
   '--switch-knob',
-  '--window-ink',
-  '--window-ink-soft',
-  '--window-line',
-  '--window-edge',
-  '--window-raised',
   '--window-live',
   '--window-focus',
   '--window-selection',
@@ -256,12 +294,13 @@ const SAME_IN_EVERY_THEME = new Set([
   '--window-notice',
   '--window-chat-you',
   '--window-chat-you-ink',
-  '--window-added',
+  '--agent-note-term-strong',
+  '--agent-note-term-edited',
+  '--agent-note-term-link',
   '--window-diff-added',
   '--window-diff-hunk',
   '--window-chat-subagent',
   '--window-accent-hover',
-  ...CODE_COLOURS,
   '--connector-line',
   '--reviewer-edge',
   '--step-done',
@@ -298,19 +337,6 @@ function hexOf(name: string, scope: string | string[] = ':root'): string {
   return hex[0];
 }
 
-/** WCAG 2 contrast ratio of two hex colours. */
-export function contrast(a: string, b: string): number {
-  const luminance = (hex: string) => {
-    const [r, g, b] = [1, 3, 5].map((at) => {
-      const c = parseInt(hex.slice(at, at + 2), 16) / 255;
-      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-  };
-  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (light! + 0.05) / (dark! + 0.05);
-}
-
 /**
  * Text, and the background it is drawn on, for every pairing the components make (ui/ui.css and app.css). All are
  * small text, so each must reach WCAG AA's 4.5:1. Disabled controls are exempt, as WCAG has it.
@@ -345,6 +371,11 @@ const TEXT_PAIRS: [text: string, background: string][] = [
   ['--accent-ink', '--accent-soft'],
   ['--accent-strong', '--accent-soft'],
   ['--toggle-on-ink', '--toggle-on'],
+  // A review doc's severity groups: each head in its colour, and its count on it (ReviewViewer, outside the window).
+  ...['blocker', 'major', 'minor'].flatMap((severity): [string, string][] => [
+    [`--severity-${severity}`, '--raised'],
+    ['--on-severity', `--severity-${severity}`],
+  ]),
   ['--success', '--success-soft'],
   ['--neutral', '--neutral-soft'],
   ['--pr-open', '--pr-open-soft'],
@@ -363,7 +394,45 @@ const TEXT_PAIRS: [text: string, background: string][] = [
 const WINDOW_BACKGROUNDS = ['--surface', '--raised', '--hover', '--pressed', '--warning-soft', '--primary', '--danger-soft'];
 const WINDOW_TEXTS = ['--text', '--text-soft', '--muted', '--placeholder', '--on-primary', '--danger'];
 
-const WINDOW_PAIRS = TEXT_PAIRS.filter(([text, background]) => WINDOW_BACKGROUNDS.includes(background) && WINDOW_TEXTS.includes(text));
+const WINDOW_PAIRS = [
+  ...TEXT_PAIRS.filter(([text, background]) => WINDOW_BACKGROUNDS.includes(background) && WINDOW_TEXTS.includes(text)),
+  // A banner over a terminal: an agent that exited, a pane that ended.
+  ['--window-ink-soft', '--window-raised'],
+  // A PR tab's diff: the Open chip, and the line numbers on an added, deleted or hunk row.
+  ['--window-added', '--window-diff-added'],
+  ['--muted', '--window-diff-added'],
+  ['--muted', '--window-diff-hunk'],
+  ['--muted', '--danger-soft'],
+  // A shell astray in another agent's worktree: its warning tag.
+  ['--warning-ink', '--warning-soft'],
+];
+
+/** A rule's text colour and its own background, each a token, as a stylesheet draws them together. */
+function drawnPairs(): Map<string, string[]> {
+  const pairs = new Map<string, string[]>();
+  for (const file of sourceFiles().filter((name) => name.endsWith('.css'))) {
+    postcss.parse(read(file)).walkRules((rule) => {
+      let text: string | undefined;
+      let background: string | undefined;
+      rule.each((node) => {
+        const token = node.type === 'decl' ? /^var\((--[a-z0-9-]+)\)$/.exec(node.value.trim())?.[1] : undefined;
+        if (node.type !== 'decl' || token === undefined) return;
+        if (node.prop === 'color') text = token;
+        if (node.prop === 'background' || node.prop === 'background-color') background = token;
+      });
+      if (text === undefined || background === undefined) return;
+      const key = `${text} on ${background}`;
+      pairs.set(key, [...(pairs.get(key) ?? []), `${file}:${rule.source?.start?.line}`]);
+    });
+  }
+  return pairs;
+}
+
+/** Pairs a rule draws that aren't text WCAG holds to 4.5:1, and why. */
+const NOT_TEXT = new Map([
+  ['--disabled-ink on --disabled', 'a disabled control: WCAG exempts its text'],
+  ['--on-accent on --state-running', "onboarding's ready badge: a tick icon, not text"],
+]);
 
 describe('themes', () => {
   /** The light theme's colour tokens written as a literal: a theme sets each, or the aliases would mix two looks. */
@@ -378,12 +447,20 @@ describe('themes', () => {
 
   it.each(OVERRIDES)('$id sets every colour the light theme writes, but the few that are the same in every theme', ({ scope }) => {
     const theme = scopes.get(scope)!;
-    expect(literalColours().filter((name) => !theme.has(name) && !SAME_IN_EVERY_THEME.has(name))).toEqual([]);
+    const optional = (name: string) => SAME_IN_EVERY_THEME.has(name) || WINDOW_PALETTE.has(name);
+    expect(literalColours().filter((name) => !theme.has(name) && !optional(name))).toEqual([]);
     expect([...SAME_IN_EVERY_THEME].filter((name) => theme.has(name))).toEqual([]);
   });
 
   it.each(OVERRIDES)('$id only sets tokens the light theme defines', ({ scope }) => {
     expect([...scopes.get(scope)!.keys()].filter((name) => !scopes.get(':root')!.has(name))).toEqual([]);
+  });
+
+  it("makes theme-packs.css from the packs' palettes, each setting every colour but those the same in every theme", async () => {
+    const declarations = (scope: string) => new Map([...scopes.get(scope)!]);
+    const required = literalColours().filter((name) => !SAME_IN_EVERY_THEME.has(name));
+    const css = themePacksCss({ light: declarations(':root'), dark: declarations(":root[data-theme='dark']") }, required);
+    await expect(css).toMatchFileSnapshot('./theme-packs.css');
   });
 
   it("the light theme draws each stored colour (a note's, a text item's, a shape's) as it was stored", () => {
@@ -402,6 +479,21 @@ const SHAPE_TEXT_PAIRS = TEXT_COLORS.flatMap(({ name: ink }) =>
 describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ scope }) => {
   it.each(TEXT_PAIRS)('%s on %s meets WCAG AA', (text, background) => {
     expect(contrast(hexOf(text, scope), hexOf(background, scope))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each([...drawnPairs()].filter(([pair]) => !NOT_TEXT.has(pair)))('%s, as a rule draws it (%j), meets WCAG AA', (pair) => {
+    const [text, background] = pair.split(' on ') as [string, string];
+    // A pair drawn only in the session window is read there, with its tokens.
+    const inWindow = WINDOW_PAIRS.some(([t, b]) => t === text && b === background);
+    const resolve = (name: string) => {
+      try {
+        return hexOf(name, inWindow ? [WINDOW, scope] : scope);
+      } catch {
+        return undefined; // a mix or a keyword, not a flat colour
+      }
+    };
+    const [fg, bg] = [resolve(text), resolve(background)];
+    if (fg !== undefined && bg !== undefined) expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(WINDOW_PAIRS)('in the session window, %s on %s meets WCAG AA', (text, background) => {

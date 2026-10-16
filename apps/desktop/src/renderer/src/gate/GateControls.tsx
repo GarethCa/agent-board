@@ -1,5 +1,5 @@
-import { useState, type ChangeEvent, type ReactElement } from 'react';
-import { Check, ChevronDown, CircleDashed, GitMerge, GitPullRequestArrow, Info, Play, X } from 'lucide-react';
+import { useState, type ChangeEvent } from 'react';
+import { Check, ChevronDown, CircleDashed, GitMerge, Info, Play, X } from 'lucide-react';
 import type { Agent, GateCleanup, PullRequestDetails, PullRequestRef } from '@agent-board/daemon/protocol';
 import {
   ALL_CLEANUP,
@@ -8,17 +8,16 @@ import {
   isOpenPullRequest,
   mergeGateBlocked,
   NO_GATE,
-  openPullRequestBlocked,
   shortCommit,
   withCleanup,
 } from '@agent-board/daemon/gate-rules';
 import { pullRequestOfUrl, shortIssueId } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { requestTab } from '../session/tab-request';
-import { gateSurfaceOf, pullRequestSurfaceOf } from '../session/tabs';
+import { gateSurfaceOf } from '../session/tabs';
 import { usePullRequest } from '../session/use-pull-request';
 import { runGateShortcut } from '../session/window-keys';
-import { Button, Checkbox, Chip, Popover, Tooltip, useToast } from '../ui';
+import { Button, Checkbox, Chip, Popover, useToast } from '../ui';
 import { mergedText } from './gate-view';
 import { useGateRun } from './GatesProvider';
 import { useGateStatus } from './use-gate-status';
@@ -42,25 +41,11 @@ function keepCleanup(zoneId: string | null, cleanup: GateCleanup): void {
 }
 
 /**
- * A control that may be disabled, and then says why on hover and focus: a disabled button hears neither, so the hint
- * is on a wrapper that does.
- */
-function Why({ why, children }: { why: string | undefined; children: ReactElement }) {
-  if (why === undefined) return children;
-  return (
-    <Tooltip content={why}>
-      <span className="gate-why" tabIndex={0} aria-label={why}>
-        {children}
-      </span>
-    </Tooltip>
-  );
-}
-
-/**
  * The merge gate in an agent's session window or expanded tile header (BM3), in every zone, whatever its tabs
- * show: the gate's badge, or Run gate in a zone with a gate command; then Open PR until it has an open pull request; then
+ * show: the gate's badge, or Run gate in a zone with a gate command; then, once it has an open pull request,
  * Merge, whose popover lists its conditions and the clean-up, or Approve when the pull request isn't the user's own. In a
- * zone with no gate, Merge waits for GitHub's checks alone. Each acts only on the user's click, and a disabled one says why.
+ * zone with no gate, Merge waits for GitHub's checks alone. Each acts only on the user's click, and a disabled one says
+ * why. There is no Open PR here: agents open their own pull requests.
  */
 export function GateControls({ agent, visible }: { agent: Agent; visible: boolean }) {
   const run = useGateRun(agent.sessionId);
@@ -84,8 +69,6 @@ export function GateControls({ agent, visible }: { agent: Agent; visible: boolea
 
   if (status === undefined) return null;
   const gatedZone = status.command !== null;
-  const openBlocked =
-    status.head === null ? 'Its worktree has no commit.' : openPullRequestBlocked({ run, head: status.head, uncommitted: status.uncommitted, gated: gatedZone });
   return (
     <span className="gate-controls" role="group" aria-label="Merge gate">
       {run !== undefined && run.status !== 'stopped' ? (
@@ -107,30 +90,7 @@ export function GateControls({ agent, visible }: { agent: Agent; visible: boolea
           </Button>
         )
       )}
-      {pr === undefined ? (
-        <Why why={openBlocked}>
-          <Button
-            size="sm"
-            icon={<GitPullRequestArrow />}
-            disabled={busy || openBlocked !== undefined}
-            tooltip={openBlocked === undefined ? `Push ${agent.branch} and open a pull request from its handover${gatedZone ? ', with the gate table' : ''}` : undefined}
-            data-why={openBlocked}
-            onClick={() =>
-              act('open the pull request', async () => {
-                const made = await window.agentBoard.gates.openPullRequest(agent.sessionId);
-                toast.show({ tone: 'success', message: `Opened #${made.number}.` });
-                const surface = pullRequestSurfaceOf(made);
-                if (surface !== undefined) requestTab(agent.sessionId, surface);
-              })
-            }
-            data-testid="header-open-pr"
-          >
-            Open PR
-          </Button>
-        </Why>
-      ) : (
-        pullRef !== undefined && <PullRequestControls agent={agent} number={pr.number} title={pr.title} pullRef={pullRef} visible={visible} gatedZone={gatedZone} />
-      )}
+      {pr !== undefined && pullRef !== undefined && <PullRequestControls agent={agent} number={pr.number} title={pr.title} pullRef={pullRef} visible={visible} gatedZone={gatedZone} />}
     </span>
   );
 }

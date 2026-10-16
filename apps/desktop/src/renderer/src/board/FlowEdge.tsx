@@ -1,37 +1,44 @@
-import { createContext, memo, useContext, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { createContext, memo, useContext, useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type Edge, type EdgeProps } from '@xyflow/react';
-import type { FlowEdge as FlowEdgeData, FlowEdgeTrigger, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
-import { Check, FileText, Play, Send, Zap, type LucideIcon } from 'lucide-react';
+import type { ConnectorSide, EdgePoint, FlowEdgeShape, FlowEdgeTrigger, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
+import { FileText, Send, Zap, type LucideIcon } from 'lucide-react';
 import { tokenNumber } from '../theme';
 import { BarRow } from './items/ItemStyleBar';
 import { LineStyleButtons } from './connectors/LineStyleButtons';
-import { labelFits, type LabelSize, type LineRun } from './connectors/geometry';
 import { useLine } from './connectors/line';
-import { deliveredLabel, edgeLabel, edgeTitle, heldLabel } from './flow-edges';
+import { edgeLabel, edgeTitle, type FlowRailData } from './flow-edges';
+import { isLinkedPair, type Rail, type RailToken, type TokenSlot } from './rails';
+import { tileSubject } from './tiles';
 
-/** What a flow edge's label, or its Edge rules, can ask the board to do. */
+/** What a rail's token, or an edge's Edge rules, can ask the board to do. */
 export interface FlowEdgeActions {
   /** Delivers the edge's payload now. */
   send(id: string): void;
   /** Changes the edge's rules: its trigger, payload, file or conditions. */
   update(id: string, changes: Omit<UpdateFlowEdgeParams, 'id'>): void;
-  /** Approves what one of its gates or scripts runs, as shown: its fingerprint. */
-  approve(id: string, command: string, fingerprint: string): void;
+  /** Whether `rail`'s `which` end can move onto `agent`'s tile: every edge on it can (`railMoveRefused`). */
+  canMoveRail(rail: Rail, which: 'from' | 'to', agent: string): boolean;
+  /** Moves `rail`'s `which` end onto `agent`, every edge on it, in `shape`: one undo step, once the daemon has them all. */
+  moveRail(rail: Rail, which: 'from' | 'to', agent: string, shape: Pick<FlowEdgeShape, 'fromSide' | 'toSide' | 'points'>): void;
+  /** Approves what one of its gates or scripts runs, as shown: its fingerprint, read in sender `from`'s worktree. */
+  approve(id: string, command: string, fingerprint: string, from: string): void;
   /** Drops the hand-off it holds and the delivery it queued. */
   drop(id: string): void;
   /** Selects the edge alone, which opens its Edge rules. */
   select(id: string): void;
 }
 
-export const FlowEdgeActionsContext = createContext<FlowEdgeActions>({ send: () => {}, update: () => {}, approve: () => {}, drop: () => {}, select: () => {} });
+export const FlowEdgeActionsContext = createContext<FlowEdgeActions>({
+  send: () => {},
+  update: () => {},
+  canMoveRail: () => false,
+  moveRail: () => {},
+  approve: () => {},
+  drop: () => {},
+  select: () => {},
+});
 
-/** An agent edge's trigger mark (FlowDraw, FlowRules): a tick for "when it's done", a play for "when sent". */
-const TRIGGER_MARKS: Record<FlowEdgeTrigger, { icon: LucideIcon; name: string }> = {
-  auto: { icon: Check, name: 'Delivers by itself when its agent is done' },
-  manual: { icon: Play, name: 'Delivers when sent' },
-};
-
-/** Runs `act` for a click or Enter on one of a label's buttons, without selecting the edge under it. */
+/** Runs `act` for a click or Enter on one of a token's buttons, without selecting the rail under it. */
 const pressed = (act: () => void) => ({
   onClick: (event: MouseEvent) => {
     event.stopPropagation();
@@ -40,263 +47,224 @@ const pressed = (act: () => void) => ({
   onKeyDown: (event: KeyboardEvent) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
+    event.stopPropagation();
     act();
   },
 });
 
-/** The size of a flow edge's label: its pill, ending in a Send button when it has one. */
-function labelSize(withSend: boolean): LabelSize {
-  return {
-    width: tokenNumber('--size-flow-label') + (withSend ? tokenNumber('--size-flow-send') : 0),
-    height: tokenNumber('--size-flow-label-height'),
-  };
-}
-
 /**
- * A flow edge's line and its label: coloured, labelled with what it carries and marked with its trigger (DecR R1), so
- * it reads as automation, unlike a neutral connector. The label is drawn in the edge's own SVG, after its line, so the
- * line never crosses it, and scales with the board. With `onTrigger` its trigger is a button, and with `onSend` the
- * label ends in a Send button.
+ * R1's "issue brief" flow edge, from an issue card to an agent working on its issue: coloured, labelled with
+ * what it carries and marked with its trigger (DecR R1), so it reads as automation, unlike a neutral connector. The
+ * label is drawn in the edge's own SVG, after its line, so the line never crosses it, and scales with the board. It
+ * only shows the link: it can't be selected, moved or deleted.
  */
-function FlowLine(props: {
-  id: string;
-  /** Its line, and where its label sits on it. */
-  path: string;
-  at: { x: number; y: number };
-  label: string;
-  trigger: FlowEdgeTrigger;
-  /** The trigger's mark, and what it says. */
-  mark: { icon: LucideIcon; name: string };
-  selected?: boolean;
-  /** A hand-off is going along it: it shows its payload travelling to the other end. */
-  live?: boolean;
-  /** What a hover over the label says, such as why its last delivery was skipped. */
-  title?: string;
-  /** A word under its label: what a hand-off it holds waits for (`held until CI green`), `paused` or `queued`. */
-  note?: string;
-  /**
-   * With no note, a chip under its label saying when it last delivered (`delivered 14:02`). Clicking it, as anywhere on
-   * the edge, selects it: its Edge rules show what it carried.
-   */
-  delivered?: string;
-  /** An agent made it (an orchestrator): its line is dashed. */
-  agentMade?: boolean;
-  /**
-   * How long its line is, and the way it runs at its label: too short for the label to sit between its ends, measured
-   * along it, the label collapses to a marker, its trigger in a dot, and shows on hover or focus. Without it,
-   * the label always shows.
-   */
-  run?: LineRun;
-  testId: string;
-  onSend?: () => void;
-  /** Opens its rules, from its collapsed marker by the keyboard (a click on it reaches the edge as one on its line does). */
-  onOpen?: () => void;
-}) {
-  const { id, path } = props;
-  const { x, y } = props.at;
-  const { width, height } = labelSize(props.onSend !== undefined);
-  const textWidth = tokenNumber('--size-flow-label');
-  const sendWidth = width - textWidth;
-  const Icon = props.mark.icon;
-  const live = props.live === true;
-  const collapsed = props.run !== undefined && !labelFits(props.run, labelSize(props.onSend !== undefined));
-  // Collapsed, its label shows while the pointer is on its marker or the marker has focus.
-  const [revealed, setRevealed] = useState(false);
-  const markerRadius = height / 2 - 2;
-  // Revealed, the label sits on top of its marker, touching it: the pointer reaches its Send button without leaving.
-  const labelY = collapsed ? y - markerRadius - height / 2 : y;
-  const shown = !collapsed || revealed;
-  const note = props.note ?? props.delivered;
-  const noteY = collapsed ? labelY - height / 2 - (height - 4) - tokenNumber('--space-1') : labelY + height / 2 + tokenNumber('--space-1');
-  const revealTop = note === undefined ? labelY - height / 2 : noteY;
-  return (
-    <>
-      {(props.selected === true || live) && <path d={path} className="connector-halo" />}
-      <BaseEdge id={id} path={path} className={props.agentMade === true ? 'flow-edge flow-edge-agent-made' : 'flow-edge'} markerEnd="url(#flow-arrow)" />
-      {live && <path d={path} className="flow-edge-flowing" />}
-      <g
-        className="flow-edge-label"
-        data-testid={props.testId}
-        data-trigger={props.trigger}
-        data-live={live || undefined}
-        data-selected={props.selected === true || undefined}
-        data-agent-made={props.agentMade || undefined}
-        data-collapsed={collapsed || undefined}
-        {...(collapsed && {
-          onMouseEnter: () => setRevealed(true),
-          onMouseLeave: () => setRevealed(false),
-          onFocus: () => setRevealed(true),
-          onBlur: () => setRevealed(false),
-        })}
-      >
-        {props.title !== undefined && <title>{props.title}</title>}
-        {collapsed && revealed && (
-          // Under the label and note it shows, down to the marker, so the pointer moving between them keeps them shown.
-          <rect
-            className="flow-edge-reveal"
-            x={x - width / 2}
-            y={revealTop}
-            width={width}
-            height={y - revealTop}
-          />
-        )}
-        {collapsed && (
-          <g
-            className="flow-edge-marker"
-            data-testid="flow-edge-marker"
-            role="button"
-            tabIndex={0}
-            aria-label={`${props.label}: ${props.mark.name}`}
-            transform={`translate(${x} ${y})`}
-            {...(props.onOpen && pressed(props.onOpen))}
-          >
-            <circle className="flow-edge-trigger-dot" r={markerRadius} />
-            <Icon className="flow-edge-trigger-icon" x={-6} y={-6} width={12} height={12} aria-hidden="true" />
-          </g>
-        )}
-        {collapsed && props.onSend !== undefined && (
-          <g
-            className="flow-edge-send flow-edge-marker-send"
-            data-testid="flow-edge-marker-send"
-            role="button"
-            tabIndex={0}
-            aria-label="Send"
-            transform={`translate(${x + markerRadius * 2 + 2} ${y})`}
-            {...pressed(props.onSend)}
-          >
-            <circle className="flow-edge-send-fill" r={markerRadius} />
-            <Send className="flow-edge-send-icon" x={-6} y={-6} width={12} height={12} aria-hidden="true" />
-          </g>
-        )}
-        {shown && (
-          <g className="flow-edge-pill-group" transform={`translate(${x - width / 2} ${labelY - height / 2})`}>
-            <rect className="flow-edge-pill" width={width} height={height} rx={height / 2} />
-            <g className="flow-edge-trigger" role="img" aria-label={props.mark.name}>
-              <circle className="flow-edge-trigger-dot" cx={height / 2} cy={height / 2} r={markerRadius} />
-              <Icon className="flow-edge-trigger-icon" x={height / 2 - 6} y={height / 2 - 6} width={12} height={12} aria-hidden="true" />
-            </g>
-            <text className="flow-edge-text" x={height + 6} y={height / 2} dominantBaseline="central">
-              {props.label}
-            </text>
-            {props.onSend !== undefined && (
-              // Collapsed, the marker's own Send is the one the keyboard reaches.
-              <g className="flow-edge-send" role="button" tabIndex={collapsed ? -1 : 0} aria-hidden={collapsed || undefined} aria-label="Send" transform={`translate(${textWidth} 0)`} {...pressed(props.onSend)}>
-                <rect className="flow-edge-send-fill" width={sendWidth - 2} height={height - 4} y={2} rx={(height - 4) / 2} />
-                <Send className="flow-edge-send-icon" x={8} y={height / 2 - 6} width={12} height={12} aria-hidden="true" />
-                <text className="flow-edge-send-text" x={24} y={height / 2} dominantBaseline="central">
-                  send
-                </text>
-              </g>
-            )}
-          </g>
-        )}
-        {shown && note !== undefined && (
-          // Collapsed, over the label: under it would cover the marker.
-          <g
-            className={props.note === undefined ? 'flow-edge-note flow-edge-delivered' : 'flow-edge-note'}
-            data-testid={props.note === undefined ? 'flow-edge-delivered' : 'flow-edge-note'}
-            transform={`translate(${x} ${noteY})`}
-          >
-            {props.note === undefined && <title>Click to see what it carried</title>}
-            <rect className="flow-edge-note-fill" x={-tokenNumber('--size-flow-note') / 2} width={tokenNumber('--size-flow-note')} height={height - 4} rx={(height - 4) / 2} />
-            <text className="flow-edge-note-text" y={(height - 4) / 2} textAnchor="middle" dominantBaseline="central">
-              {note}
-            </text>
-          </g>
-        )}
-      </g>
-      {/* Over the label, which it passes on its way. */}
-      {live && <FlowPayload path={path} label={props.label} />}
-    </>
-  );
-}
-
-/**
- * A hand-off on its way (FlowRules): the payload, as a chip, travelling along the edge's `path` from its start to its
- * end, over and over while it lasts. Still, it isn't drawn: the halo and the pills say it all.
- */
-function FlowPayload({ path, label }: { path: string; label: string }) {
-  const height = tokenNumber('--size-flow-payload-height');
-  const width = tokenNumber('--size-flow-payload');
-  return (
-    <g className="flow-payload" data-testid="flow-payload" style={{ offsetPath: `path('${path}')` }} aria-hidden="true">
-      <g transform={`translate(${-width / 2} ${-height / 2})`}>
-        <rect className="flow-payload-fill" width={width} height={height} rx={tokenNumber('--radius-lg')} />
-        <FileText className="flow-payload-icon" x={6} y={height / 2 - 7} width={14} height={14} />
-        <text className="flow-payload-text" x={24} y={height / 2} dominantBaseline="central">
-          {label}
-        </text>
-      </g>
-    </g>
-  );
-}
-
-/**
- * R1's "issue brief" flow edge, from an issue card to an agent working on its issue. It only shows the link:
- * it can't be selected, moved or deleted.
- */
-const BRIEF_MARK = { icon: Zap, name: 'Briefs the agent when it starts' };
+const BRIEF_MARK: { icon: LucideIcon; name: string; trigger: FlowEdgeTrigger } = { icon: Zap, name: 'Briefs the agent when it starts', trigger: 'auto' };
 
 export const BriefEdge = memo(function BriefEdge(props: EdgeProps) {
   const [path, x, y] = getBezierPath(props);
-  return <FlowLine id={props.id} path={path} at={{ x, y }} label="issue brief" trigger="auto" mark={BRIEF_MARK} testId="brief-edge" />;
+  const width = tokenNumber('--size-flow-label');
+  const height = tokenNumber('--size-flow-label-height');
+  const Icon = BRIEF_MARK.icon;
+  return (
+    <>
+      <BaseEdge id={props.id} path={path} className="flow-edge" markerEnd="url(#flow-arrow)" />
+      <g className="flow-edge-label" data-testid="brief-edge" data-trigger={BRIEF_MARK.trigger}>
+        <g className="flow-edge-pill-group" transform={`translate(${x - width / 2} ${y - height / 2})`}>
+          <rect className="flow-edge-pill" width={width} height={height} rx={height / 2} />
+          <g className="flow-edge-trigger" role="img" aria-label={BRIEF_MARK.name}>
+            <circle className="flow-edge-trigger-dot" cx={height / 2} cy={height / 2} r={height / 2 - 2} />
+            <Icon className="flow-edge-trigger-icon" x={height / 2 - 6} y={height / 2 - 6} width={12} height={12} aria-hidden="true" />
+          </g>
+          <text className="flow-edge-text" x={height + 6} y={height / 2} dominantBaseline="central">
+            issue brief
+          </text>
+        </g>
+      </g>
+    </>
+  );
 });
 
-export type AgentFlowEdgeType = Edge<{ edge: FlowEdgeData; live: boolean; madeByName?: string }, 'flow'>;
+export type AgentFlowEdgeType = Edge<FlowRailData, 'flow'>;
+
+/** The agent whose tile is node `nodeId`, if it is an agent's. */
+function agentOf(nodeId: string): string | undefined {
+  const subject = tileSubject(nodeId);
+  return subject?.kind === 'agent' ? subject.id : undefined;
+}
+
+/** Which way from an end of a rail its token lies: away from the tile, along the side's outward normal. */
+const OUTWARD: Record<ConnectorSide, EdgePoint> = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, top: { x: 0, y: -1 }, bottom: { x: 0, y: 1 } };
 
 /**
- * A flow edge between two agents, labelled with what it carries (`plan.md`). Selected, its Edge rules
- * open, where its rules are set; a manual one has a Send button on its label too. Under its label it says when it is
- * paused, what a hand-off it holds waits for, that it has queued one, or else when it last delivered. One an agent
- * made is dashed. A hover over its label says who made it, and why its last delivery was skipped, if it was.
- * Selected, it can be bent, its ends moved to other sides of their tiles, and its style picked over its label
- *, as a connector's can.
+ * The edges between two agents as one rail (CD4): a faint line with no arrowheads when they hand work both
+ * ways, or with a small arrow at the receiving end when only one way, and the latest document riding it as a token at
+ * the end of whoever has it (`railToken`). A click on the rail or its token selects the edge the token is from (or the
+ * one of its edges already selected), which opens its Edge rules; a token waiting for Send has Send on it, and slides
+ * to the other end as it goes. Selected, the rail can be bent, its ends moved to other sides of their tiles or onto
+ * other agents' (every edge on it moving with them), and its style picked, as a connector's can: the edge made first
+ * keeps its shape. An end on no side the user picked faces
+ * the other tile.
  */
 export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentFlowEdgeType>) {
   const actions = useContext(FlowEdgeActionsContext);
-  const { edge, madeByName } = props.data!;
+  const { rail, token, live, madeByName, slot } = props.data!;
+  const shaped = rail.edges[0]!;
   const selected = props.selected === true;
-  const manual = edge.trigger === 'manual';
-  const label = labelSize(manual);
-  // The handles keep clear of its label, or of its marker (and the marker's Send) once the label is too long for it.
-  const { shape, handles } = useLine(props, edge.style, edge, (geometry) => actions.update(edge.id, geometry), (run) =>
-    labelFits(run, label) ? label : { width: manual ? label.height * 2 : label.height, height: label.height },
-  );
+  const pair = isLinkedPair(rail);
+  const { shape, ends, handles } = useLine(props, shaped.style, shaped, (geometry) => actions.update(shaped.id, geometry), undefined, {
+    // Either end goes onto another agent's tile (BT1), where every edge on it can go: it hands off there instead.
+    canEndOn: (nodeId, which) => {
+      const agent = agentOf(nodeId);
+      return agent !== undefined && actions.canMoveRail(rail, which, agent);
+    },
+    onMoved: (which, nodeId, geometry) => {
+      const agent = agentOf(nodeId);
+      if (agent !== undefined) actions.moveRail(rail, which, agent, geometry);
+    },
+  });
+  // The token's end is its edge's sender or receiver, which is the rail's start or end as its edge runs with it or back.
+  const atStart = (token.end === 'from') === (token.edge.from === rail.from);
+  const [end, side] = atStart ? [ends.source, ends.sourceSide] : [ends.target, ends.targetSide];
+  const gap = tokenNumber('--rail-token-gap');
+  const apart = slotOffset(slot, side, tokenNumber('--rail-token-step'));
+  const at = { x: end.x + OUTWARD[side].x * gap, y: end.y + OUTWARD[side].y * gap + apart };
+  const sliding = useSlide(atStart, token.state === 'sending');
+  const capRadius = tokenNumber('--rail-cap-radius');
+  // Too short a rail for its token to lie along: it shows only its mark (and Send), the rest on hover or focus.
+  const compact = shape.length < tokenNumber('--rail-token-room');
   return (
     <>
-      <FlowLine
+      {(selected || live) && <path d={shape.path} className="connector-halo" />}
+      <BaseEdge
         id={props.id}
         path={shape.path}
-        at={shape.label}
-        run={shape}
-        label={edgeLabel(edge)}
-        note={edge.paused ? 'paused' : (heldLabel(edge) ?? (edge.queued === null ? undefined : 'queued'))}
-        delivered={deliveredLabel(edge, new Date())}
-        agentMade={edge.madeBy !== null}
-        trigger={edge.trigger}
-        mark={TRIGGER_MARKS[edge.trigger]}
-        selected={props.selected}
-        live={props.data!.live}
-        title={edgeTitle(edge, madeByName)}
-        testId="flow-edge"
-        onSend={edge.trigger === 'manual' ? () => actions.send(edge.id) : undefined}
-        onOpen={() => actions.select(edge.id)}
+        className={token.state === 'next' ? 'flow-edge flow-rail flow-rail-faint' : 'flow-edge flow-rail'}
+        markerEnd={pair ? undefined : 'url(#rail-arrow)'}
+        data-testid="flow-edge"
+        data-pair={pair || undefined}
       />
-      {selected && (
-        <EdgeLabelRenderer>
+      <circle className="flow-rail-cap" cx={ends.source.x} cy={ends.source.y} r={capRadius} />
+      {pair && <circle className="flow-rail-cap" cx={ends.target.x} cy={ends.target.y} r={capRadius} />}
+      <EdgeLabelRenderer>
+        <RailTokenChip
+          token={token}
+          at={at}
+          side={side}
+          sliding={sliding}
+          compact={compact}
+          selected={selected}
+          title={edgeTitle(token.edge, madeByName)}
+          onOpen={() => actions.select(token.edge.id)}
+          onSend={() => actions.send(token.edge.id)}
+        />
+        {selected && (
           <div
             className="connector-bar nodrag nopan"
-            style={{ transform: `translate(-50%, -100%) translate(${shape.label.x}px, ${shape.label.y - tokenNumber('--size-flow-label-height') / 2}px)` }}
+            style={{ transform: `translate(-50%, -100%) translate(${shape.label.x}px, ${shape.label.y - tokenNumber('--space-2')}px)` }}
           >
             <div role="toolbar" aria-label="Edge style" className="item-bar-rows">
               <BarRow>
-                <LineStyleButtons current={edge.style} onPick={(style) => actions.update(edge.id, { style })} />
+                <LineStyleButtons current={shaped.style} onPick={(style) => actions.update(shaped.id, { style })} />
               </BarRow>
             </div>
           </div>
-        </EdgeLabelRenderer>
-      )}
+        )}
+      </EdgeLabelRenderer>
       {selected && handles}
     </>
   );
 });
+
+/**
+ * How far down a token is moved from its end of the rail by its slot among those off the same side of its tile: those
+ * off a left or right side are spread along it, centred on the end; those off the top or bottom stack away from it.
+ */
+function slotOffset({ index, count }: TokenSlot, side: ConnectorSide, step: number): number {
+  if (side === 'left' || side === 'right') return (index - (count - 1) / 2) * step;
+  return (side === 'bottom' ? index : -index) * step;
+}
+
+/**
+ * Whether a rail's token is sliding to its other end: from when it moves there on its way (`going`), for one trip.
+ * Otherwise it moves with its tiles at once, as a dragged tile does: an ease there would trail behind them.
+ */
+function useSlide(atStart: boolean, going: boolean): boolean {
+  const [slide, setSlide] = useState({ atStart, sliding: false });
+  if (slide.atStart !== atStart) setSlide({ atStart, sliding: going });
+  useEffect(() => {
+    if (!slide.sliding) return;
+    const timer = setTimeout(() => setSlide((current) => ({ ...current, sliding: false })), tokenNumber('--motion-handoff'));
+    return () => clearTimeout(timer);
+  }, [slide]);
+  return slide.sliding;
+}
+
+/** What a token's state says to a screen reader, after the document's name. */
+const STATE_NAMES: Record<RailToken['state'], string> = {
+  sending: 'on its way',
+  held: 'held',
+  queued: 'queued',
+  waiting: 'waiting for Send',
+  delivered: 'delivered',
+  failed: 'skipped',
+  next: 'next',
+};
+
+/**
+ * The document on a rail (CD4): its name, its round on a linked pair (R2) or a held one's passing conditions (1/2),
+ * Send while it waits for it, and the line under it (`delivered 14:31`, `held until CI green`). It sits `at` the end
+ * of whoever has it, off the `side` of that tile, and slides there while `sliding` (not under reduced motion). On a
+ * rail too short for it (`compact`), only its mark, round and Send show until it is hovered or focused.
+ */
+function RailTokenChip(props: {
+  token: RailToken;
+  at: EdgePoint;
+  side: ConnectorSide;
+  sliding: boolean;
+  compact: boolean;
+  selected: boolean;
+  title?: string;
+  onOpen(): void;
+  onSend(): void;
+}) {
+  const { token, at } = props;
+  const name = edgeLabel(token.edge);
+  return (
+    <div
+      className="rail-token nodrag nopan"
+      data-testid="rail-token"
+      data-state={token.state}
+      data-side={props.side}
+      data-sliding={props.sliding || undefined}
+      data-compact={props.compact || undefined}
+      data-selected={props.selected || undefined}
+      style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
+    >
+      <div className="rail-token-body" title={props.title}>
+        <span className="rail-token-chip">
+          <button type="button" className="rail-token-open" aria-label={`${name}: ${STATE_NAMES[token.state]}`} {...pressed(props.onOpen)}>
+            <FileText className="rail-token-icon" aria-hidden="true" />
+            <span className="rail-token-name">{name}</span>
+            {token.round !== undefined && <span className="rail-token-count">R{token.round}</span>}
+            {token.passing !== undefined && (
+              <span className="rail-token-count" title={`${token.passing} of its conditions pass`}>
+                {token.passing}
+              </span>
+            )}
+          </button>
+          {token.state === 'waiting' && (
+            <button type="button" className="rail-token-send" data-testid="rail-token-send" {...pressed(props.onSend)}>
+              <Send aria-hidden="true" />
+              send
+            </button>
+          )}
+        </span>
+        {token.note !== undefined && (
+          <span className="rail-token-note" data-testid="rail-token-note">
+            {token.note}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}

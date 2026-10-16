@@ -2,6 +2,7 @@ import { _electron as electron, expect, test as base, type ElectronApplication, 
 import { connectDaemon } from '@agent-board/daemon/client';
 import { daemonPaths } from '@agent-board/daemon/paths';
 import { isProcessAlive } from '@agent-board/daemon/pid';
+import { scrubBoardSessionEnv } from '@agent-board/fake-harness';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -113,7 +114,8 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
   const launched = electron.launch({
     args: [...args, appEntry],
     env: {
-      ...process.env,
+      // global-setup.ts scrubbed the run's env; this keeps a board's session variables out even if a spec set them.
+      ...scrubBoardSessionEnv({ ...process.env }),
       AGENT_BOARD_DATA_DIR: dataDir,
       AGENT_BOARD_HOOK_SHIM: join(dataDir, 'bin', 'agent-board-hook'),
       // Notifications are recorded in the main process (see notifications.spec.ts), never shown by the OS.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lineSplitter, normalisedAngle, notOrchestratingReason, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
+import { lineSplitter, normalisedAngle, notOrchestratingReason, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
 
 function split(chunks: string[], maxLength?: number) {
   const lines: string[] = [];
@@ -81,5 +81,42 @@ describe('notOrchestratingReason', () => {
     expect(notOrchestratingReason(caller, { ...agent, endedAt: '2026-10-13T00:00:00Z' }, zones(true))).toMatch(/its session has ended/);
     expect(notOrchestratingReason({ sessionId: 'pane', name: 'impl' }, agent, zones(true))).toMatch(/its session has ended/);
     expect(notOrchestratingReason({ sessionId: 'sh', name: 'sh' }, undefined, zones(true))).toMatch(/its session has ended/);
+  });
+});
+
+describe('parseRole', () => {
+  it('reads a built-in role by its name, in any case, with no name of its own', () => {
+    expect(parseRole('reviewer')).toEqual({ role: 'reviewer', name: null });
+    expect(parseRole(' Follow-Up-Reviewer ')).toEqual({ role: 'follow-up-reviewer', name: null });
+    expect(parseRole('custom')).toEqual({ role: 'custom', name: null });
+  });
+
+  it('reads any other name as a custom role with that name, trimmed and with its spaces kept single', () => {
+    expect(parseRole('designer')).toEqual({ role: 'custom', name: 'designer' });
+    expect(parseRole('  release   prep ')).toEqual({ role: 'custom', name: 'release prep' });
+  });
+
+  it('refuses an empty name, one over 24 characters, or one with control characters', () => {
+    expect(parseRole('   ')).toEqual({ error: 'a role needs a name' });
+    expect(parseRole('a'.repeat(24))).toEqual({ role: 'custom', name: 'a'.repeat(24) });
+    expect(parseRole('a'.repeat(25))).toEqual({ error: 'a role name is at most 24 characters' });
+    expect(parseRole('design\u001b[31mer')).toEqual({ error: 'a role name has no control characters' });
+    expect(parseRole('two\nlines')).toEqual({ error: 'a role name has no control characters' });
+  });
+
+  it('refuses format and bidi characters, which could hide or reorder what a badge shows', () => {
+    for (const hidden of ['\u202e', '\u200b', '\u2028', '\u2029', '\ufeff', '\u2066', '\t']) {
+      expect(parseRole(`design${hidden}er`)).toEqual({ error: 'a role name has no control characters' });
+    }
+    expect(parseRole('Élan')).toEqual({ role: 'custom', name: 'Élan' });
+  });
+});
+
+describe('roleLabel', () => {
+  it('names a custom role by its name, else by the role', () => {
+    expect(roleLabel({ role: 'custom', roleName: 'designer' })).toBe('designer');
+    expect(roleLabel({ role: 'custom', roleName: null })).toBe('custom');
+    expect(roleLabel({ role: 'reviewer', roleName: null })).toBe('reviewer');
+    expect(roleLabel({ role: null, roleName: null })).toBeNull();
   });
 });

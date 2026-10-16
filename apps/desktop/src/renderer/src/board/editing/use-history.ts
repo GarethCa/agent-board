@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, WindowOwner, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
+import type { BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { Placement, Surface } from '@agent-board/daemon/window-layout';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
 
 /**
  * What one board object was or became, for the undo history: an item, a connector or a flow edge whole, a zone's
- * layout or look, a zone as it was before it was deleted, a tile's place or size, a tile's or pane's name, or where a shell or a pane of one is: a tab of
+ * layout or look, a zone as it was before it was deleted, a tile's place or size or whether it is unfolded from its chip, a tile's or pane's name, or where a shell or a pane of one is: a tab of
  * whose, at what order, or a tile on the board; a pane in a split as laid out, or alone in a shell; a pull request,
  * web or session tab in which window and where, or in none, with the window it is in at the other end of the
  * step, which it leaves when put back (`from`). Sessions
@@ -21,6 +21,7 @@ export type BoardState =
   | { type: 'zoneGroup'; group: DissolvedGroup }
   | { type: 'tile'; move: TileMove }
   | { type: 'tileSize'; size: { width: number; height: number } }
+  | { type: 'unfolded'; open: boolean }
   | { type: 'name'; target: RenameTarget; name: string }
   | { type: 'shellPlace'; to: ShellPlace; order: number | null }
   | { type: 'panePlace'; in: { shellId: string; layout: PaneLayout } }
@@ -53,6 +54,7 @@ export const historyKey = {
   zoneGroup: (id: string) => `zone-group:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,
   tileSize: (nodeId: string) => `tile-size:${nodeId}`,
+  unfolded: (nodeId: string) => `unfolded:${nodeId}`,
   shell: (id: string) => `shell:${id}`,
   pane: (sessionId: string) => `pane:${sessionId}`,
   surface: (key: string) => `surface:${key}`,
@@ -60,6 +62,18 @@ export const historyKey = {
 
 /** One object's change: its key, and what it was and became. */
 export type Change = [key: string, before: BoardState | null, after: BoardState | null];
+
+/** `item` with the change in `patch` made, as the daemon will make it: its data merged, not replaced. */
+export function patched(item: BoardItem, patch: UpdateItemParams): BoardItem {
+  return { ...item, ...patch, data: patch.data === undefined ? item.data : { ...item.data, ...patch.data } };
+}
+
+/** An item's change by `patch`, such as a restyle or a new kind of shape, for the undo history. */
+export const itemChange = (item: BoardItem, patch: UpdateItemParams): Change => [
+  historyKey.item(item.id),
+  { type: 'item', item },
+  { type: 'item', item: patched(item, patch) },
+];
 
 export interface BoardHistory {
   /**

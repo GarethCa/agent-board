@@ -1,5 +1,5 @@
-// Open PR and Merge from an agent's session window (BM3), each only when the rules allow it (`gate-rules.ts`),
-// checked here again whatever the app showed. GitHub is asked through the user's own gh login, as every GitHub call is
+// Opening a pull request and Merge from an agent's session window (BM3), each only when the rules allow it
+// (`gate-rules.ts`), checked here again whatever the app showed. GitHub is asked through the user's own gh login, as every GitHub call is
 // (ADR-0002); merging and approving reuse the PR tab's calls. Only the user's app calls these (`BOARD_CALLER_METHODS`),
 // but for an agent opening its own pull request as a draft (`board.openPullRequest`).
 import { readFile } from 'node:fs/promises';
@@ -19,6 +19,8 @@ export interface GateActionOptions {
   gh: string;
   gates: Pick<GateHost, 'get' | 'command' | 'worktreeState'>;
   agent(sessionId: string): Agent | undefined;
+  /** Re-reads the agent's branch from its worktree: it may have renamed it since the board last looked. */
+  refreshBranch(sessionId: string): Promise<void>;
   /** The GitHub repo (`owner/repo`) of the zone of the agent's repo, when its tracker is one; else gh infers it. */
   githubRepo(sessionId: string): string | undefined;
   /** The agent's pull requests as last seen, and asking for them again now. */
@@ -37,7 +39,7 @@ type Methods = Pick<DaemonMethods, 'gate.openPullRequest' | 'gate.merge' | 'boar
 /** Where a repo keeps its pull request template, as GitHub looks for it. */
 const TEMPLATES = ['.github/pull_request_template.md', '.github/PULL_REQUEST_TEMPLATE.md', 'pull_request_template.md', 'docs/pull_request_template.md'];
 
-/** The agent's handover, from which Open PR fills the template. */
+/** The agent's handover, from which the pull request's description fills the template. */
 const HANDOVER_PATH = '.agent-board/handover.md';
 
 const readText = (path: string): Promise<string | undefined> => readFile(path, 'utf8').catch(() => undefined);
@@ -73,14 +75,15 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
 
   /** Opens a pull request of the agent's branch, as `gate.openPullRequest` says; with `draft`, as a draft. */
   const openPullRequest = async (sessionId: string, { draft }: { draft: boolean }): Promise<PullRequest> => {
+    await options.refreshBranch(sessionId);
     const agent = requireAgent(sessionId);
-    if (agent.branch === '') throw invalidParams(`${agent.name} has no branch to open a pull request of.`);
+    if (agent.ownedBranch === '') throw invalidParams(`${agent.name} has no branch to open a pull request of.`);
     const open = options.pullRequests(sessionId).find(isOpenPullRequest);
     if (open !== undefined) throw invalidParams(`${agent.name} has #${open.number} open already.`);
     const { head, branch, uncommitted } = await options.gates.worktreeState(sessionId);
     if (head === null) throw invalidParams(`${agent.name}'s worktree has no commit.`);
     // What is pushed is its branch's: a worktree on another branch, or none, would open a pull request of something else.
-    if (branch !== agent.branch) throw invalidParams(`${agent.name}'s worktree is on ${branch ?? 'no branch'}, not ${agent.branch}: check it out first.`);
+    if (branch !== agent.ownedBranch) throw invalidParams(`${agent.name}'s worktree is on ${branch ?? 'no branch'}, not ${agent.ownedBranch}: check it out first.`);
     const gated = options.gates.command(sessionId) !== null;
     const run = options.gates.get(sessionId);
     const blocked = openPullRequestBlocked({ run, head, uncommitted, gated });
@@ -91,13 +94,13 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
     const title = agent.issue === null ? agent.name : `${shortIssueId(agent.issue)}: ${agent.issue.title}`;
     // The commit checked, whatever the branch has moved on to since; never forced, so a branch that has moved on
     // elsewhere is the user's to sort out.
-    const pushed = await runGit(agent.worktree, ['push', 'origin', `${head}:refs/heads/${agent.branch}`]);
-    if (!pushed.ok) throw invalidParams(`Could not push ${agent.branch}: ${pushed.stderr}`);
+    const pushed = await runGit(agent.worktree, ['push', 'origin', `${head}:refs/heads/${agent.ownedBranch}`]);
+    if (!pushed.ok) throw invalidParams(`Could not push ${agent.ownedBranch}: ${pushed.stderr}`);
     // A commit pushed by its hash sets no upstream: set it, so the agent's own `git push` goes on to the same branch.
-    const upstream = await runGit(agent.worktree, ['branch', `--set-upstream-to=origin/${agent.branch}`, agent.branch]);
-    if (!upstream.ok) options.log(`could not set ${agent.branch}'s upstream: ${upstream.stderr}`);
+    const upstream = await runGit(agent.worktree, ['branch', `--set-upstream-to=origin/${agent.ownedBranch}`, agent.ownedBranch]);
+    if (!upstream.ok) options.log(`could not set ${agent.ownedBranch}'s upstream: ${upstream.stderr}`);
     const url = await trackerCall(() =>
-      createPullRequest({ ...gh, cwd: agent.worktree, repo: options.githubRepo(sessionId), head: agent.branch, title, body, draft }),
+      createPullRequest({ ...gh, cwd: agent.worktree, repo: options.githubRepo(sessionId), head: agent.ownedBranch, title, body, draft }),
     );
     options.log(`opened ${url}${draft ? ' as a draft' : ''} for ${sessionId} on ${shortCommit(head)}`);
     await options.refreshPullRequests(sessionId);
@@ -123,6 +126,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
       const headCommit = stringParam(fields, 'headCommit');
       if (!/^[0-9a-f]{40}$/.test(headCommit)) throw invalidParams('headCommit must be a full commit hash');
       const cleanup = cleanupParam(fields);
+      await options.refreshBranch(sessionId);
       const agent = requireAgent(sessionId);
       const pr = options.pullRequests(sessionId).find((each) => each.number === number);
       const ref = pr === undefined ? undefined : pullRequestOfUrl(pr.url);
@@ -173,7 +177,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
       // On GitHub last, and only once it has gone here: a branch is never deleted while its worktree stays.
       if (cleanup.branch) {
         if (!removeBranch || !closed) fail('branch', kept ?? `${agent.name} could not be closed`);
-        else await step('branch', () => trackerCall(() => deleteRemoteBranch(ref.repo, agent.branch, gh)));
+        else await step('branch', () => trackerCall(() => deleteRemoteBranch(ref.repo, details.headRefName, gh)));
       }
       return merged;
     },
@@ -190,7 +194,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
     }
     if (now.head !== headCommit) return `its worktree has moved on to ${now.head === null ? 'no commit' : shortCommit(now.head)} since the merged ${shortCommit(headCommit)}, so it is kept, with its branch`;
     if (now.uncommitted > 0) return `its worktree has ${now.uncommitted} uncommitted file${now.uncommitted === 1 ? '' : 's'}, so it is kept, with its branch`;
-    if (now.branch !== agent.branch) return `its worktree is on ${now.branch ?? 'no branch'}, not ${agent.branch}, so it is kept`;
+    if (now.branch !== agent.ownedBranch) return `its worktree is on ${now.branch ?? 'no branch'}, not ${agent.ownedBranch}, so it is kept`;
     return undefined;
   }
 }
