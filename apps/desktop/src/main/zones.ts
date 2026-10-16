@@ -4,7 +4,6 @@ import {
   RPC_ERROR,
   zoneSnapshot,
   TRACKER_ERROR,
-  type AgentRole,
   type NewZoneParams,
   type Zone,
   type ZoneBinding,
@@ -111,10 +110,10 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.setDefaultRepo', { id, path }),
   );
   ipcMain.handle(ZONE_IPC.roleTemplates, (_event, id: string) => daemon.call('zone.roleTemplates', { id }));
-  ipcMain.handle(ZONE_IPC.setRoleTemplate, (_event, id: string, role: AgentRole, body: string) =>
+  ipcMain.handle(ZONE_IPC.setRoleTemplate, (_event, id: string, role: string, body: string) =>
     daemon.call('zone.setRoleTemplate', { id, role, body }),
   );
-  ipcMain.handle(ZONE_IPC.resetRoleTemplate, (_event, id: string, role: AgentRole) =>
+  ipcMain.handle(ZONE_IPC.resetRoleTemplate, (_event, id: string, role: string) =>
     daemon.call('zone.resetRoleTemplate', { id, role }),
   );
   ipcMain.handle(ZONE_IPC.setLook, (_event, id: string, look: { name?: string; color?: string; fillOpacity?: number | null }) =>

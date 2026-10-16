@@ -18,6 +18,7 @@ export {
   checksState,
   createPullRequest,
   deleteRemoteBranch,
+  findPushedPullRequests,
   listPullRequests,
   mergePullRequest,
   type ChecksState,

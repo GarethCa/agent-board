@@ -71,13 +71,14 @@ test('an arrow dropped from one agent on another asks Arrow or Hand off: Enter a
       await expect.poll(() => connectors(window)).toEqual([]);
     }
 
-    // Hand off (clicked, here) makes the arrow a hand-off from the same sides, its Edge rules open.
+    // Hand off (clicked, here) makes the arrow a hand-off from the same side, arriving on an automatic one (it was let go
+    // on the tile, not a handle), its Edge rules open.
     await dragFromHandle(window, left, 'right', target);
     await chooser(window).getByRole('menuitem', { name: /Hand off/ }).click();
     await expect(window.getByTestId('flow-edge')).toHaveCount(1);
     await expect(window.getByRole('complementary', { name: 'Edge rules' })).toBeVisible();
     await expect.poll(() => connectors(window)).toEqual([]);
-    expect(await flowEdges(window)).toEqual([expect.objectContaining({ from: left, to: right, fromSide: 'right', toSide: 'left' })]);
+    expect(await flowEdges(window)).toEqual([expect.objectContaining({ from: left, to: right, fromSide: 'right', toSide: 'auto' })]);
 
     // One undo makes it the arrow again; redo, the hand-off.
     await window.keyboard.press('Escape');
@@ -129,13 +130,15 @@ test('a hand-off bent through a point and with an end moved to another side keep
     await expect.poll(async () => (await flowEdges(window)).length).toBe(1);
     const edgePath = window.locator('.react-flow__edge-path.flow-edge');
 
-    // Selected (it is, once drawn), it shows a handle on each end and one halfway along: pulled out, it is a bend.
-    const insert = window.getByTestId('line-insert');
-    await expect(insert).toHaveCount(1);
-    const middle = centreOf(await settledBox(insert));
+    // Selected (it is, once drawn), a curve shows a handle on each end and one bow handle on its middle, and nothing to
+    // pull bends out of: pulled up, the bow bows the whole curve through where it was let go.
+    const bow = window.getByTestId('line-bow');
+    await expect(bow).toHaveCount(1);
+    await expect(window.getByTestId('line-insert')).toHaveCount(0);
+    const middle = centreOf(await settledBox(bow));
     await drag(window, middle, { x: middle.x, y: middle.y - 120 });
-    await expect(window.getByTestId('line-bend')).toHaveCount(1);
     await expect.poll(async () => (await flowEdges(window))[0]!.points).toHaveLength(1);
+    await expect.poll(async () => centreOf(await settledBox(bow)).y).toBeLessThan(middle.y - 100);
 
     // Its far end, dragged over the top of the other tile, moves to that side.
     const end = window.locator('[data-testid="line-end"][data-end="to"]');
@@ -145,9 +148,9 @@ test('a hand-off bent through a point and with an end moved to another side keep
     const shaped = (await flowEdges(window))[0]!;
     const drawn = await edgePath.getAttribute('d');
 
-    // Undo takes the side back, then the bend; redo does both again.
+    // Undo takes the side back, then the bow; redo does both again.
     await window.keyboard.press('ControlOrMeta+z');
-    await expect.poll(async () => (await flowEdges(window))[0]!.toSide).toBe('left');
+    await expect.poll(async () => (await flowEdges(window))[0]!.toSide).toBe('auto');
     await window.keyboard.press('ControlOrMeta+z');
     await expect.poll(async () => (await flowEdges(window))[0]!.points).toEqual([]);
     await window.keyboard.press('ControlOrMeta+Shift+z');
@@ -188,7 +191,7 @@ test('a hand-off bent through a point and with an end moved to another side keep
   }
 });
 
-test("a hand-off between tiles too close for its label shows a marker, the label on hover or focus, its rules on a click, and a manual one's Send; apart, the label comes back", async () => {
+test("a one-way hand-off is a rail with a small arrow at the receiving end, its document a token at the sender's end with Send while it waits, all reached by the keyboard", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -198,43 +201,55 @@ test("a hand-off between tiles too close for its label shows a marker, the label
     const { left, right } = await twoAgents(window);
     await window.evaluate(([from, to]) => globalThis.window.agentBoard.flowEdges.create({ from: from!, to: to!, trigger: 'manual' }), [left, right]);
     const edge = window.getByTestId('flow-edge');
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(1);
-    await expect(edge).not.toHaveAttribute('data-collapsed');
+    await expect(edge).toHaveAttribute('marker-end', 'url(#rail-arrow)');
+    await expect(edge).not.toHaveAttribute('data-pair');
 
-    // Side by side, the line between them is too short: a marker, its trigger in a dot, with Send beside it.
+    // Its agent done with its turn, its final message waits for Send at its end, however close the tiles.
     await placeAt(window, [left, right], [20, 300]);
-    await expect(edge).toHaveAttribute('data-collapsed', 'true');
-    const marker = window.getByTestId('flow-edge-marker');
-    await expect(marker).toHaveAttribute('aria-label', 'final message: Delivers when sent');
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(0);
+    const token = window.getByTestId('rail-token');
+    await expect(token).toHaveAttribute('data-state', 'waiting');
+    await expect(token).toHaveAttribute('data-side', 'right');
+    // Too close for its name to lie along the rail: its mark and Send alone, its name while hovered.
+    await expect(token).toHaveAttribute('data-compact', 'true');
+    await expect(token.locator('.rail-token-name')).toBeHidden();
+    await token.locator('.rail-token-open').hover();
+    await expect(token.locator('.rail-token-name')).toBeVisible();
+    const send = token.getByTestId('rail-token-send');
+    await send.focus();
+    await window.keyboard.press('Enter');
+    await expect.poll(async () => (await flowEdges(window))[0]!.lastDelivery).toMatchObject({ delivered: true });
+    // Delivered, it sits at the other end, saying when, with nothing to send.
+    await expect(token).toHaveAttribute('data-state', 'delivered');
+    await expect(token).toHaveAttribute('data-side', 'left');
+    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d$/);
+    await expect(send).toHaveCount(0);
 
-    // Hovered, or focused, the label shows over it.
-    const dot = marker.locator('.flow-edge-trigger-dot');
-    await dot.hover();
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(1);
-    await expect(edge).toContainText('final message');
-    await window.mouse.move(5, 400);
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(0);
-    await marker.focus();
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(1);
-    await marker.blur();
-
-    // Its Send, beside it, sends; Enter on it, or a click, opens its rules.
-    await window.getByTestId('flow-edge-marker-send').click();
-    await expect.poll(async () => (await flowEdges(window))[0]!.lastDelivery).not.toBeNull();
+    // Enter on it opens its rules.
     const rules = window.getByRole('complementary', { name: 'Edge rules' });
-    await marker.focus();
+    await token.getByRole('button', { name: 'final message: delivered' }).focus();
     await window.keyboard.press('Enter');
     await expect(rules).toBeVisible();
-    await rules.getByRole('button', { name: 'Close edge rules' }).click();
-    await expect(rules).toHaveCount(0);
-    await dot.click();
-    await expect(rules).toBeVisible();
+    await expect(rules.getByRole('group', { name: 'Direction' })).toHaveCount(0);
 
-    // Apart again, the label is back on the line.
+    // Apart, it lies along the rail in full.
     await placeAt(window, [left, right], [20, 620]);
-    await expect(edge).not.toHaveAttribute('data-collapsed');
-    await expect(edge.locator('.flow-edge-pill')).toHaveCount(1);
+    await expect(token).not.toHaveAttribute('data-compact');
+    await expect(token.locator('.rail-token-name')).toBeVisible();
+
+    // Its agent's next turn ends: what it left waits for Send again, at its end.
+    await window.evaluate((id) => globalThis.window.agentBoard.agents.answer(id, 'SQLite'), left);
+    await expect(token).toHaveAttribute('data-state', 'waiting', { timeout: 15_000 });
+    await expect(token).toHaveAttribute('data-side', 'right');
+    await expect(send).toBeVisible();
+
+    // Dragged by its tile, the token goes with it at once, motion on: it never trails behind.
+    const sender = nodeOf(window, left);
+    const before = await settledBox(sender);
+    await drag(window, { x: before.x + 60, y: before.y + 14 }, { x: before.x + 60, y: before.y + 214 });
+    const [after, chip] = await Promise.all([sender.boundingBox(), token.locator('.rail-token-chip').boundingBox()]);
+    expect(after!.y).toBeGreaterThan(before.y + 150);
+    expect(Math.abs(chip!.y + chip!.height / 2 - (after!.y + after!.height / 2))).toBeLessThan(6);
+    expect(chip!.x).toBeGreaterThan(after!.x + after!.width);
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);
@@ -261,14 +276,14 @@ test('an arrow between notes bent through a point, its end moved to another side
     await drag(window, centreOf(await settledBox(handle)), centreOf(await settledBox(notes.nth(1))));
     await expect.poll(async () => (await connectors(window)).length).toBe(1);
 
-    // Selected by a click on its line, it shows its handles: pulled out, the middle one bends it; its far end, dragged
-    // over the other note's bottom, moves there.
+    // Selected by a click on its line, it shows its handles: pulled down, the bow bows it; its far end, dragged over
+    // the other note's bottom, moves there.
     const line = window.locator('.react-flow__edge-path.connector-line');
     const box = await settledBox(line);
     await window.mouse.click(box.x + box.width / 4, box.y + box.height / 2);
-    const insert = window.getByTestId('line-insert');
-    await expect(insert).toHaveCount(1);
-    const middle = centreOf(await settledBox(insert));
+    const bow = window.getByTestId('line-bow');
+    await expect(bow).toHaveCount(1);
+    const middle = centreOf(await settledBox(bow));
     await drag(window, middle, { x: middle.x, y: middle.y + 140 });
     await expect.poll(async () => (await connectors(window))[0]!.points).toHaveLength(1);
     const other = await settledBox(notes.nth(1));
@@ -285,5 +300,152 @@ test('an arrow between notes bent through a point, its end moved to another side
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);
+  }
+});
+
+/** Makes a sticky note centred on each point of the pane, and returns their board nodes, in the same order. */
+async function notesAt(page: Page, points: { x: number; y: number }[]): Promise<{ id: string; node: Locator }[]> {
+  const pane = (await page.locator('.react-flow__pane').boundingBox())!;
+  for (const { x, y } of points) {
+    await page.mouse.move(pane.x + x, pane.y + y);
+    await page.keyboard.press('n');
+    await page.keyboard.press('Escape');
+  }
+  await expect(page.getByTestId('sticky')).toHaveCount(points.length);
+  const items = await page.evaluate(() => window.agentBoard.items.list());
+  const notes = await Promise.all(
+    items.map(async (item) => ({ id: item.id, box: await settledBox(page.locator(`.react-flow__node[data-id="item:${item.id}"]`)) })),
+  );
+  // Each point is inside the note made there.
+  return points.map(({ x, y }) => {
+    const { id } = notes.find(({ box }) => pane.x + x >= box.x && pane.x + x <= box.x + box.width && pane.y + y >= box.y && pane.y + y <= box.y + box.height)!;
+    return { id, node: page.locator(`.react-flow__node[data-id="item:${id}"]`) };
+  });
+}
+
+test('while an arrow is drawn only the object near the pointer shows its handles, grown, and one let go on a handle lands on that side', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, {});
+  try {
+    const [a, b, c] = await notesAt(window, [{ x: 200, y: 200 }, { x: 600, y: 200 }, { x: 400, y: 520 }]);
+    await a!.node.hover();
+    const from = a!.node.locator('.connector-handle[data-side="right"]');
+    await expect(from).toHaveCSS('opacity', '1');
+    const start = centreOf(await settledBox(from));
+    const target = await settledBox(b!.node);
+    await window.mouse.move(start.x, start.y);
+    await window.mouse.down();
+
+    // Just left of the other note, not over it: its four handles show, grown; the far note's show none.
+    await window.mouse.move(target.x - 24, target.y + target.height / 2, { steps: 10 });
+    await expect(b!.node.locator('.connector-handle[data-near]')).toHaveCount(4);
+    await expect(c!.node.locator('.connector-handle').first()).toHaveCSS('opacity', '0');
+    const bottom = b!.node.locator('.connector-handle[data-side="bottom"]');
+    await expect.poll(async () => (await bottom.boundingBox())!.width).toBeGreaterThan(15);
+
+    // Let go on its bottom handle, the arrow lands there.
+    const handle = centreOf(await settledBox(bottom));
+    await window.mouse.move(handle.x, handle.y, { steps: 6 });
+    await window.mouse.up();
+    await expect.poll(() => connectors(window)).toEqual([
+      expect.objectContaining({ from: expect.objectContaining({ id: a!.id, side: 'right' }), to: expect.objectContaining({ id: b!.id, side: 'bottom' }) }),
+    ]);
+    await expect(window.locator('.connector-handle[data-near]')).toHaveCount(0);
+
+    // Let go just off the far note, clear of its body and handles, as its handles show: it joins that note, as lit,
+    // and makes no new one.
+    await a!.node.hover();
+    const again = centreOf(await settledBox(a!.node.locator('.connector-handle[data-side="bottom"]')));
+    const far = await settledBox(c!.node);
+    await window.mouse.move(again.x, again.y);
+    await window.mouse.down();
+    await window.mouse.move(far.x + 20, far.y + far.height + 24, { steps: 10 });
+    await expect(c!.node.locator('.connector-handle[data-near]')).toHaveCount(4);
+    await window.mouse.up();
+    await expect.poll(async () => (await connectors(window)).map((connector) => connector.to.id)).toEqual([b!.id, c!.id]);
+    await expect(window.getByTestId('sticky')).toHaveCount(3);
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});
+
+test("a selected arrow's end dragged onto another object joins it on the side nearest the pointer, goes back when let go on nothing, and undo puts it back", async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, {});
+  try {
+    const [a, b, c] = await notesAt(window, [{ x: 200, y: 200 }, { x: 600, y: 200 }, { x: 400, y: 520 }]);
+    await window.evaluate(
+      ([from, to]) => globalThis.window.agentBoard.connectors.create({ from: { type: 'item', id: from!, side: 'right' }, to: { type: 'item', id: to!, side: 'left' } }),
+      [a!.id, b!.id],
+    );
+    const line = window.locator('.react-flow__edge-path.connector-line');
+    const box = await settledBox(line);
+    await window.mouse.click(box.x + box.width / 4, box.y + box.height / 2);
+    const end = window.locator('[data-testid="line-end"][data-end="to"]');
+    await expect(end).toHaveCount(1);
+
+    // Over the top of the third note, its top handle is the one lit; let go, the end joins it there.
+    const third = await settledBox(c!.node);
+    const grabbed = centreOf(await settledBox(end));
+    await window.mouse.move(grabbed.x, grabbed.y);
+    await window.mouse.down();
+    await window.mouse.move(third.x + third.width / 2, third.y + 8, { steps: 12 });
+    await expect(c!.node.locator('.connector-handle[data-target]')).toHaveAttribute('data-side', 'top');
+    await window.mouse.up();
+    await expect.poll(async () => (await connectors(window))[0]).toMatchObject({ from: { id: a!.id, side: 'right' }, to: { type: 'item', id: c!.id, side: 'top' } });
+
+    // Let go on empty board, it goes back to where it was.
+    const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+    await drag(window, centreOf(await settledBox(end)), { x: pane.x + pane.width - 60, y: pane.y + pane.height - 60 });
+    await expect.poll(async () => (await connectors(window))[0]!.to).toMatchObject({ id: c!.id, side: 'top' });
+
+    // One undo puts it back on the note it left.
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await connectors(window))[0]!.to).toMatchObject({ id: b!.id, side: 'left' });
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+  }
+});
+
+test("a hand-off's end dragged onto a third agent hands off there instead, a note won't take it, and undo puts it back", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const { left, right } = await twoAgents(window);
+    await spawnAgent(window, 'monorepo', 'Check the code');
+    await expect(tile(window).filter({ hasText: 'Check the code' })).toHaveAttribute('data-state', 'waiting');
+    const third = (await agents(window)).find((agent) => agent.name === 'Check the code')!.sessionId;
+    const [zone] = await zones(window);
+    await window.evaluate(({ zoneId, id }) => globalThis.window.agentBoard.agents.move(id, { zoneId, x: 320, y: 420 }), { zoneId: zone!.id, id: third });
+    await window.evaluate(([from, to]) => globalThis.window.agentBoard.flowEdges.create({ from: from!, to: to!, trigger: 'manual' }), [left, right]);
+    await window.getByTestId('rail-token').locator('.rail-token-open').click();
+    const end = window.locator('[data-testid="line-end"][data-end="to"]');
+    await expect(end).toHaveCount(1);
+
+    // Dropped on the third agent's tile, it hands off to that agent, from the same agent, its rules as they were.
+    const checker = await settledBox(nodeOf(window, third));
+    await drag(window, centreOf(await settledBox(end)), { x: checker.x + checker.width / 2, y: checker.y + 10 });
+    await expect.poll(async () => (await flowEdges(window))[0]).toMatchObject({ from: left, to: third, toSide: 'top', trigger: 'manual' });
+
+    // A note isn't an agent: let go on one, the end goes back.
+    const [note] = await notesAt(window, [{ x: 120, y: 560 }]);
+    await window.getByTestId('rail-token').locator('.rail-token-open').click();
+    await drag(window, centreOf(await settledBox(end)), centreOf(await settledBox(note!.node)));
+    await expect.poll(async () => (await flowEdges(window))[0]!.to).toBe(third);
+
+    // Undo hands off to the agent it left again.
+    await window.keyboard.press('Escape');
+    await window.keyboard.press('ControlOrMeta+z');
+    await window.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await flowEdges(window))[0]).toMatchObject({ from: left, to: right });
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

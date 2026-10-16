@@ -1,7 +1,7 @@
 // Placing a new agent or shell with the Agent and Shell tools (AG2), and what a dropped agent needs next.
 import type { IssueCardData, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { placeOnBoard } from './items/items';
-import { AGENT_TILE_SIZE } from './layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { whyNoAgents } from './ZoneNode';
 
 /** The grid a dropped tile's corner snaps to, px. */

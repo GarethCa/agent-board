@@ -1,7 +1,8 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
+import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilEvents, untilStdout } from './run-fake.ts';
 
 afterAll(removeTempDirs);
@@ -538,5 +539,21 @@ describe('claude MCP servers', () => {
     expect(result.stdout).toContain('The board says: You are on the echo board.');
     expect(result.stdout).toContain('whoami {} env:yes|set-by-config');
     expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} env:yes|set-by-config');
+  });
+
+  it('posts to an http --mcp-config server, its headers filled in from its own env, and starts nothing', async () => {
+    const server = await startEchoHttpServer();
+    onTestFinished(server.close);
+    const config = { mcpServers: { 'agent-board': { type: 'http', url: server.url, headers: { Authorization: 'Bearer ${BOARD_SECRET}' } } } };
+    const result = await runFake('claude', {
+      scenario: 'board',
+      args: ['--mcp-config', JSON.stringify(config), 'Map the board'],
+      env: { BOARD_SECRET: 'from-env' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('The board says: You are on the echo board.');
+    expect(result.stdout).toContain('whoami {} auth:Bearer from-env');
+    expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} auth:Bearer from-env');
   });
 });

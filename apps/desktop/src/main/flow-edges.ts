@@ -14,7 +14,7 @@ export function registerFlowEdgeIpc(daemon: DaemonLink): void {
   passthrough(daemon, FLOW_EDGE_IPC.preview, 'flowEdge.preview', (id: string) => ({ id }));
   passthrough(daemon, FLOW_EDGE_IPC.lastPayload, 'flowEdge.lastPayload', (id: string) => ({ id }));
   passthrough(daemon, FLOW_EDGE_IPC.commands, 'flowEdge.commands', (id: string) => ({ id }));
-  passthrough(daemon, FLOW_EDGE_IPC.approve, 'flowEdge.approve', (id: string, command: string, fingerprint: string) => ({ id, command, fingerprint }));
+  passthrough(daemon, FLOW_EDGE_IPC.approve, 'flowEdge.approve', (id: string, command: string, fingerprint: string, from: string) => ({ id, command, fingerprint, from }));
   passthrough(daemon, FLOW_EDGE_IPC.drop, 'flowEdge.drop', (id: string) => ({ id }));
   passthrough(daemon, FLOW_EDGE_IPC.settings, 'settings.get');
   passthrough(daemon, FLOW_EDGE_IPC.setSettings, 'settings.set', (settings: Partial<DaemonSettings>) => settings);

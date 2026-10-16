@@ -1,9 +1,9 @@
 import type { CSSProperties } from 'react';
 import type { Zone } from '@agent-board/daemon/protocol';
 import { CircleHelp } from 'lucide-react';
-import { RESET_ROTATION_KEY } from '../board/editing/context-menu';
+import { ASK_CLAUDE_KEY, RESET_ROTATION_KEY } from '../board/editing/context-menu';
 import { ROTATION_SNAP } from '../board/items/rotation';
-import { withCommand } from '../keys';
+import { withCommand, withWindowShortcut } from '../keys';
 import { Button, Island, IslandSeparator, Popover, Shortcut, ToolButton } from '../ui';
 
 /** The keys the board answers to, for the help popover. */
@@ -15,7 +15,8 @@ const SHORTCUTS: { keys: string[]; does: string }[] = [
   { keys: ['S'], does: 'Shape: then drag' },
   { keys: ['⇧'], does: `Turning with the rotate handle: ${ROTATION_SNAP}° steps` },
   { keys: [RESET_ROTATION_KEY], does: 'Reset the rotation of what is selected' },
-  { keys: [withCommand('K')], does: 'Find a zone or session' },
+  { keys: [ASK_CLAUDE_KEY], does: 'Ask Claude about what is selected' },
+  { keys: [withWindowShortcut('K')], does: 'Jump to a session or zone, from anywhere' },
   { keys: [withCommand('\\')], does: 'Open or close the board menu' },
   { keys: [withCommand('I')], does: "A session window's details" },
   { keys: ['Esc'], does: 'Put the armed tool down' },

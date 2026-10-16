@@ -1,6 +1,8 @@
 // The platform's command key: ⌘ on macOS, Ctrl elsewhere, for the app's own shortcuts and how they are written.
 
-const mac = navigator.platform.startsWith('Mac');
+/** Whether this is macOS. */
+export const isMac = navigator.platform.startsWith('Mac');
+const mac = isMac;
 
 /** Whether the platform's command key is held in `event`. */
 export function commandKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>): boolean {

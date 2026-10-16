@@ -1,5 +1,5 @@
-// What the Gate tab (BL1) and the header's Merge show of an agent's gate. Pure, so it is unit-tested; when Open PR
-// and Merge may be pressed, the clean-up's rules and what Send failure pastes are `@agent-board/daemon/gate-rules`, which
+// What the Gate tab (BL1) and the header's Merge show of an agent's gate. Pure, so it is unit-tested; when Merge
+// may be pressed, the clean-up's rules and what Send failure pastes are `@agent-board/daemon/gate-rules`, which
 // the daemon follows too.
 import type { Agent, GateCleanup, GateMerged, GateRun, GateUpdatedEvent } from '@agent-board/daemon/protocol';
 import { ALL_CLEANUP, duration, shortCommit } from '@agent-board/daemon/gate-rules';

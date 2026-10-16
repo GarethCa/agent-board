@@ -1,39 +1,30 @@
-import { memo, useContext, type CSSProperties } from 'react';
+import { memo, useContext, useState, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, type NodeProps } from '@xyflow/react';
 import {
   MAX_TEXT_LENGTH,
   SHAPE_FILLS,
   SHAPE_STROKES,
   SHAPE_STROKE_WIDTHS,
-  SHAPE_TYPES,
   type ShapeData,
   type ShapeType,
   type TextSize,
 } from '@agent-board/daemon/protocol';
-import { Bold } from 'lucide-react';
+import { Bold, ChevronDown } from 'lucide-react';
+import { Button, Popover } from '../../ui';
 import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, ItemStyleBar } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { shapeData } from './text-style';
 import { DeleteButton } from './TextNode';
 import { shapeInk, themedColor } from '../../board-colors';
 import { useDraftText } from './useDraftText';
+import { DEFAULT_SHAPE_SIZE, SHAPES, type LabelBox } from './shapes/catalogue';
+import { ShapeIcon, ShapeParts } from './shapes/ShapeArt';
+import { noteShapeUsed } from './shapes/recents';
+import { ShapePicker } from './shapes/ShapePicker';
 
-export const SHAPE_SIZE = { width: 240, height: 140 };
+export const SHAPE_SIZE = DEFAULT_SHAPE_SIZE;
 export const MIN_SHAPE_SIZE = 40;
 
-/** Each shape's outline, drawn on its button. */
-const SHAPE_SAMPLES: Record<ShapeType, string> = {
-  rectangle: 'M4 5h16v14H4z',
-  rounded: 'M7 5h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3z',
-  ellipse: 'M12 5c4.4 0 8 3 8 7s-3.6 7-8 7-8-3-8-7 3.6-7 8-7z',
-  diamond: 'M12 2 22 12 12 22 2 12z',
-};
-const SHAPE_NAMES: Record<ShapeType, string> = {
-  rectangle: 'Rectangle',
-  rounded: 'Rounded rectangle',
-  ellipse: 'Ellipse',
-  diamond: 'Diamond',
-};
 const WIDTH_NAMES = ['Thin', 'Medium', 'Thick'] as const;
 const TEXT_SIZE_BUTTONS: { size: TextSize; label: string }[] = [
   { size: 'body', label: 'S' },
@@ -41,50 +32,70 @@ const TEXT_SIZE_BUTTONS: { size: TextSize; label: string }[] = [
   { size: 'h1', label: 'L' },
 ];
 
-/** The outline of `shape` in a box `width` by `height`, drawn inside a line `stroke` px wide. */
-function Outline({
-  shape,
-  width,
-  height,
-  stroke,
-}: {
-  shape: ShapeType;
-  width: number;
-  height: number;
-  stroke: number;
-}) {
-  const inset = stroke / 2;
-  switch (shape) {
-    case 'ellipse':
-      return (
-        <ellipse
-          cx={width / 2}
-          cy={height / 2}
-          rx={Math.max(0, width / 2 - inset)}
-          ry={Math.max(0, height / 2 - inset)}
+/** The bar's button that changes the kind of shape, drawn as the shape it is, opening the shape picker (CL1). */
+function ChangeShape({ current, onPick }: { current: ShapeType; onPick(shape: ShapeType): void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover
+      aria-label="Shapes"
+      className="shape-picker-popover"
+      open={open}
+      onOpenChange={setOpen}
+      side="bottom"
+      content={
+        <ShapePicker
+          current={current}
+          hint={<span>Changes this shape, keeping its text and colours</span>}
+          onEscape={() => setOpen(false)}
+          onPick={(shape) => {
+            setOpen(false);
+            noteShapeUsed(shape);
+            onPick(shape);
+          }}
         />
-      );
-    case 'diamond':
-      return (
-        <polygon
-          points={`${width / 2},${inset} ${width - inset},${height / 2} ${width / 2},${height - inset} ${inset},${height / 2}`}
-        />
-      );
-    default:
-      return (
-        <rect
-          className={shape === 'rounded' ? 'shape-rounded' : undefined}
-          x={inset}
-          y={inset}
-          width={Math.max(0, width - stroke)}
-          height={Math.max(0, height - stroke)}
-        />
-      );
-  }
+      }
+    >
+      <Button variant="ghost" size="sm" className="item-bar-button item-bar-shape" aria-label={`Change shape: ${SHAPES[current].name}`} tooltip="Change shape">
+        <ShapeIcon shape={current} room={{ width: 18, height: 14 }} />
+        <ChevronDown aria-hidden />
+      </Button>
+    </Popover>
+  );
+}
+
+/** A shape's colours, for its outline and text, in the theme. */
+export function shapePaint(style: ShapeData): CSSProperties {
+  const onFill = style.fill !== null && SHAPES[style.shape].label.outside !== true;
+  return {
+    '--shape-fill': style.fill === null ? 'none' : themedColor(style.fill),
+    '--shape-stroke': themedColor(style.stroke),
+    // On a fill, the text is drawn for paper: a fill is light in every theme, as a note is.
+    '--item-color': onFill ? shapeInk(style.textColor) : themedColor(style.textColor),
+  } as CSSProperties;
+}
+
+/** Where a shape's text sits, in from its box's sides (row CK): inside its outline, or under a figure. */
+function labelStyle({ top, right, bottom, left }: LabelBox): CSSProperties {
+  return { inset: `${top * 100}% ${right * 100}% ${bottom * 100}% ${left * 100}%` };
+}
+
+/** A shape's drawing and its text (`children`) where its kind puts it, inside a `.shape` `width` by `height`. */
+export function ShapeBody({ style, width, height, children }: { style: ShapeData; width: number; height: number; children: ReactNode }) {
+  const label = SHAPES[style.shape].label;
+  return (
+    <>
+      <svg className="shape-art" width={width} height={height} aria-hidden="true">
+        <ShapeParts shape={style.shape} width={width} height={height} strokeWidth={style.strokeWidth} dashed={style.dashed} />
+      </svg>
+      <div className="shape-label" data-tight={label.tight || undefined} data-at-top={label.atTop || undefined} style={labelStyle(label)}>
+        {children}
+      </div>
+    </>
+  );
 }
 
 /**
- * A rectangle, rounded rectangle, ellipse or diamond, with centred text. Double-click it to type. Once selected it can
+ * One of the diagram shapes, with its text inside it. Double-click it to type. Once selected it can
  * be resized from its edges, and its fill, stroke, text and kind of shape set from the bar above it. It draws below
  * tiles, so one can frame a group of agents.
  */
@@ -118,14 +129,7 @@ export const ShapeNode = memo(function ShapeNode({
       data-text-size={style.textSize}
       data-bold={style.bold}
       data-zone={item.zoneId ?? ''}
-      style={
-        {
-          '--shape-fill': style.fill === null ? 'none' : themedColor(style.fill),
-          '--shape-stroke': themedColor(style.stroke),
-          // On a fill, the text is drawn for paper: a fill is light in every theme, as a note is.
-          '--item-color': style.fill === null ? themedColor(style.textColor) : shapeInk(style.textColor),
-        } as CSSProperties
-      }
+      style={shapePaint(style)}
       onDoubleClick={(event) => {
         event.stopPropagation();
         if (!editing) startEditing();
@@ -202,32 +206,12 @@ export const ShapeNode = memo(function ShapeNode({
             <Bold />
           </BarButton>
           <BarSeparator />
-          {SHAPE_TYPES.map((shape) => (
-            <BarButton
-              key={shape}
-              name={SHAPE_NAMES[shape]}
-              pressed={style.shape === shape}
-              onClick={() => restyle({ shape })}
-            >
-              <BarSample path={SHAPE_SAMPLES[shape]} />
-            </BarButton>
-          ))}
+          <ChangeShape current={style.shape} onPick={(shape) => restyle({ shape })} />
           <BarSeparator />
           <DeleteButton onClick={() => remove(item.id)} />
         </BarRow>
       </ItemStyleBar>
-      <svg className="shape-art" width={w} height={h} aria-hidden="true">
-        <g
-          fill="var(--shape-fill)"
-          stroke="var(--shape-stroke)"
-          strokeWidth={style.strokeWidth}
-          strokeDasharray={style.dashed ? `${style.strokeWidth * 3} ${style.strokeWidth * 2}` : undefined}
-          strokeLinejoin="round"
-        >
-          <Outline shape={style.shape} width={w} height={h} stroke={style.strokeWidth} />
-        </g>
-      </svg>
-      <div className="shape-label">
+      <ShapeBody style={style} width={w} height={h}>
         {editing ? (
           <textarea
             className="shape-editor nodrag nowheel nopan"
@@ -245,7 +229,7 @@ export const ShapeNode = memo(function ShapeNode({
         ) : (
           <div className="shape-text">{style.text}</div>
         )}
-      </div>
+      </ShapeBody>
     </div>
   );
 });

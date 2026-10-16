@@ -1,7 +1,7 @@
 import type { AgentHost } from './agents.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { paneIds } from './pane-layout.ts';
-import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_CALLER_METHODS,
   BOARD_ERROR,
@@ -133,11 +133,15 @@ export function sessionCaller(sources: Omit<BoardCallerSources, 'sessions'>, ses
   return undefined;
 }
 
+/** An agent as what a line of the activity log acted on. */
+export const agentTarget = (agent: Pick<Agent, 'sessionId' | 'name'> | undefined): { id: string; name: string } | undefined =>
+  agent === undefined ? undefined : { id: agent.sessionId, name: agent.name };
+
 /** Writes a line of the activity log (`orchestrator.activity`): who did, or tried (`refused` why), what to whom. */
 export type ActivityLogger = (
   actor: Pick<Agent, 'sessionId' | 'name'>,
   action: OrchestratorAction,
-  entry: { on?: Pick<Agent, 'sessionId' | 'name'>; detail: string },
+  entry: { on?: { id: string; name: string }; detail: string },
   refused?: string,
 ) => void;
 
@@ -149,7 +153,7 @@ export type ActivityLogger = (
  */
 export function boardHandlers<Context extends BoardConnection>(
   options: BoardCallerSources & {
-    agents: Pick<AgentHost, 'setStatus' | 'get'>;
+    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get'>;
     flowEdges: Pick<FlowEdgeHost, 'handOffExplicitly'>;
     logActivity: ActivityLogger;
     /** Throws unless the agent may name `to` in a hand-off with no edge to it (`OrchestratorHost.checkHandoffTarget`). */
@@ -166,7 +170,12 @@ export function boardHandlers<Context extends BoardConnection>(
       const p = paramsObject(params);
       const who = caller(p, connection);
       if (who.kind !== 'agent') throw invalidParams('only an agent has a status; this is a shell tile');
-      return agents.setStatus(who.tileId, stringParam(p, 'summary'), p.progress === undefined ? null : (p.progress as number));
+      return agents.setStatus(
+        who.tileId,
+        stringParam(p, 'summary'),
+        p.progress === undefined ? null : (p.progress as number),
+        optionalBooleanParam(p, 'done') ?? false,
+      );
     },
     'board.handoff': async (params, connection) => {
       const p = paramsObject(params);
@@ -176,7 +185,7 @@ export function boardHandlers<Context extends BoardConnection>(
       const target = to === undefined ? undefined : agents.get(to);
       const logOutcome = (outcome: HandoffOutcome) => {
         const reason = outcome.reason === null ? '' : ` (${outcome.reason})`;
-        options.logActivity(actor, 'handoff', { on: agents.get(outcome.to), detail: `${outcome.name}: ${outcome.outcome}${reason}` });
+        options.logActivity(actor, 'handoff', { on: agentTarget(agents.get(outcome.to)), detail: `${outcome.name}: ${outcome.outcome}${reason}` });
       };
       let outcomes;
       try {
@@ -199,10 +208,12 @@ export function boardHandlers<Context extends BoardConnection>(
           (target) => options.checkHandoffTarget(me.sessionId, target),
         );
       } catch (error) {
-        options.logActivity(actor, 'handoff', { on: target, detail: '' }, (error as Error).message);
+        options.logActivity(actor, 'handoff', { on: agentTarget(target), detail: '' }, (error as Error).message);
         throw error;
       }
       for (const outcome of outcomes) logOutcome(outcome);
+      // Handing off says its work is finished, however each edge took it.
+      agents.markFinished(who.tileId);
       return outcomes;
     },
   };

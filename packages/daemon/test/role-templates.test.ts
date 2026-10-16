@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fillTemplate, roleSeed, type TemplateValues } from '../src/role-templates.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { createRoleTemplates, fillTemplate, roleSeed, type TemplateValues } from '../src/role-templates.ts';
 import { tempDataDir } from './helpers.ts';
 
 const VALUES: TemplateValues = {
@@ -79,5 +80,49 @@ describe('roleSeed', () => {
 
   it('starts a custom role empty', () => {
     expect(roleSeed(repoWithPrompts({}), 'custom')).toEqual({ body: '', source: null });
+  });
+});
+
+describe('RoleTemplates.describe', () => {
+  const templates = () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE role_templates (zone_id TEXT, role TEXT, body TEXT, edited_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
+      CREATE TABLE zones (id TEXT, repo_root TEXT, default_repo TEXT);
+      CREATE TABLE agents (zone_id TEXT, role_name TEXT);
+      CREATE TABLE default_roles (name TEXT PRIMARY KEY, body TEXT, edited_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))`);
+    return { db, roles: createRoleTemplates(db) };
+  };
+  const repoWithSeed = () => {
+    const repo = tempDataDir();
+    mkdirSync(join(repo, '.claude', 'skills', 'cmux-workers'), { recursive: true });
+    writeFileSync(join(repo, '.claude', 'skills', 'cmux-workers', 'impl-prompt.md'), 'Implement.');
+    return repo;
+  };
+  const implementer = { role: 'implementer', name: null } as const;
+
+  it('names a repo seed with its file, not as the zone’s', () => {
+    expect(templates().roles.describe('z1', repoWithSeed(), implementer)).toBe("the repo's implementer seed (impl-prompt.md)");
+  });
+
+  it('names the app’s own template for a repo with no worker prompts', () => {
+    expect(templates().roles.describe('z1', tempDataDir(), implementer)).toBe("the app's own implementer template");
+  });
+
+  it('names a zone’s saved template, over the seed', () => {
+    const { db, roles } = templates();
+    db.prepare('INSERT INTO role_templates (zone_id, role, body) VALUES (?, ?, ?)').run('z1', 'implementer', 'Ours.');
+
+    expect(roles.describe('z1', repoWithSeed(), implementer)).toBe("the zone's saved implementer template");
+    expect(roles.describe('z2', repoWithSeed(), implementer)).toBe("the repo's implementer seed (impl-prompt.md)");
+  });
+
+  it('names a named role’s source: the zone’s saved one, else the app’s default', () => {
+    const { db, roles } = templates();
+    const designer = { role: 'custom', name: 'designer' } as const;
+    db.prepare('INSERT INTO default_roles (name, body) VALUES (?, ?)').run('designer', 'Draw.');
+
+    expect(roles.describe('z1', tempDataDir(), designer)).toBe("the app's default designer role");
+    db.prepare('INSERT INTO role_templates (zone_id, role, body) VALUES (?, ?, ?)').run('z1', 'designer', 'Draw ours.');
+    expect(roles.describe('z1', tempDataDir(), designer)).toBe("the zone's saved designer template");
   });
 });

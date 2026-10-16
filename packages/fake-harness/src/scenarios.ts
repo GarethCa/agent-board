@@ -1,7 +1,9 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -309,8 +311,11 @@ const scripts: Record<FakeScenario, Script> = {
    * it over its edges with the MCP `handoff` tool, `Hand off to <name>: <text>` over its edge to that agent
    * alone, and `Hand off by CLI: <text>` the same with `agent-board handoff`, each then ending its turn on `Handed off.`. `Wire a worker: <message>` starts a worker, waits for
    * its first turn, joins itself to it with an edge carrying a message (`add_edge`) and hands it `<message>` along it,
-   * ending on `Wired.`.
-   * `Print your board identity` echoes the board token. `Work slowly` runs `sleep 5`;
+   * ending on `Wired.`. `Arrange a messy crew` starts workers `impl` and `review` with the CLI, scatters itself and them
+   * about its zone (`agent-board move`), joins them with an edge and runs `agent-board arrange`, ending on `Arranged.`.
+   * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
+   * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
+   * `Work slowly` runs `sleep 5`;
    * `Ask permission` plays `permission`; `Ask: …` and `Plan: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
@@ -359,8 +364,31 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Wired.');
       return session.stop();
     }
+    if (prompt === 'Arrange a messy crew') {
+      await session.runShell("agent-board new --name impl -- 'Stand by' && agent-board new --name review -- 'Stand by'");
+      await session.runShell('agent-board move impl --at 620,420 && agent-board move review --at 40,420 && agent-board move me --at 900,60');
+      await session.runShell('agent-board edge add impl review --carries message && agent-board arrange');
+      await session.say('Arranged.');
+      return session.stop();
+    }
     if (prompt === 'Print your board identity') {
       await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return session.stop();
+    }
+    if (prompt === 'Gate in the background') {
+      // Ends two turns while its gate runs, each followed by its idle prompt, then hands off: finished once.
+      await session.say('The gate is running in the background.');
+      await session.stop();
+      await session.idlePrompt();
+      session.resume();
+      await session.runShell('true');
+      await session.say('Still running.');
+      await session.stop();
+      await session.idlePrompt();
+      session.resume();
+      await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe gate is green.\\n' > .agent-board/handover.md");
+      await session.runShell('agent-board handoff --handover .agent-board/handover.md');
+      await session.say('Handed off.');
       return session.stop();
     }
     if (prompt === 'Work slowly') {
@@ -405,12 +433,56 @@ const scripts: Record<FakeScenario, Script> = {
     await session.stop();
   },
 
+  /**
+   * Answers an Ask Claude about a selection: reads the picture and the diagram its prompt names, and says what it was
+   * given (the picture's size, the nodes' text, the arrows), so a test can check what was sent. With the prompt asking
+   * for suggestions, it suggests one: an outbox beside the last node, joined to it. Follow-ups get a plain answer.
+   */
+  async 'ask-selection'(session, prompt) {
+    await session.submit(prompt);
+    await session.say(selectionAnswer(prompt, session.permissionMode));
+    await session.stop();
+    for (;;) {
+      const reply = await session.waitForInput();
+      if (reply === undefined) await session.end('prompt_input_exit');
+      await session.submit(reply!);
+      await session.say(`On "${reply!.trim()}": keep the outbox.`);
+      await session.stop();
+    }
+  },
+
   /** The turn fails on a rate limit (Claude's StopFailure; Codex prints the error only). */
   async 'rate-limit'(session, prompt) {
     await session.submit(prompt);
     await session.failTurn('rate_limit', '429 Too Many Requests');
   },
 };
+
+/** What the `ask-selection` scenario says of the picture and the diagram its prompt names. */
+function selectionAnswer(prompt: string, mode: string): string {
+  const picture = /The picture: `([^`]+\.png)`/.exec(prompt)?.[1];
+  const bytes = picture === undefined ? undefined : readFileSync(picture);
+  // A PNG's width and height are the first two numbers of its IHDR chunk, after its 8-byte signature.
+  const png = bytes !== undefined && bytes.subarray(1, 4).toString('latin1') === 'PNG';
+  const size = png ? `${bytes!.readUInt32BE(16)}×${bytes!.readUInt32BE(20)}` : 'unreadable';
+  const json = /```json\n([\s\S]*?)\n```/.exec(prompt)?.[1];
+  const diagram = JSON.parse(json ?? '{"nodes":[],"edges":[]}') as { nodes: { id: string; kind: string; text?: string; x: number; y: number; width: number; height: number }[]; edges: { from: string; to: string }[] };
+  const shapes = diagram.nodes.filter((node) => node.kind === 'shape');
+  const lines = [
+    `**Saw ${shapes.length} shapes and ${diagram.edges.length} arrows**`,
+    '',
+    `1. The picture is a ${png ? 'PNG' : 'file'}, ${size} px.`,
+    `2. Its nodes: ${diagram.nodes.map((node) => node.text || node.kind).join(', ')}.`,
+    '3. Orders writes Postgres, then the queue: one can fail. Use an *outbox*.',
+    `4. Ran in ${process.cwd()}, ${existsSync(join(process.cwd(), '.git')) ? 'a git checkout' : 'outside git'}, in ${mode} mode.`,
+  ];
+  const last = diagram.nodes.at(-1);
+  if (prompt.includes('agent-board-suggestions') && last !== undefined) {
+    const outbox = { id: 's1', shape: 'database', text: 'outbox', x: last.x, y: last.y + last.height + 60, width: 90, height: 70 };
+    lines.push('', '```agent-board-suggestions', JSON.stringify([{ title: 'Outbox', shapes: [outbox], arrows: [{ from: last.id, to: 's1', label: 'writes' }] }]), '```');
+  }
+  return lines.join('\n');
+}
 
 /**
  * Starts the session and runs the scenario's script (not for a conversation resumed without a prompt). Then, like the real CLIs: print/exec mode exits; an

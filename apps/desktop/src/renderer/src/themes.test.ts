@@ -65,4 +65,16 @@ describe('followTheme', () => {
     os.flip(true);
     expect(root.dataset.theme).toBe('dark');
   });
+
+  it('shows a theme pack by its id, and its light or dark mode for what follows the mode rather than one theme', () => {
+    const os = scheme(false);
+    const appearance = setting('catppuccin-mocha');
+    const root = { dataset: {} as DOMStringMap };
+    followTheme(root, os.query, appearance.source);
+    expect(root.dataset).toMatchObject({ theme: 'catppuccin-mocha', scheme: 'dark' });
+    appearance.pick('catppuccin-latte');
+    expect(root.dataset).toMatchObject({ theme: 'catppuccin-latte', scheme: 'light' });
+    appearance.pick('system');
+    expect(root.dataset).toMatchObject({ theme: 'light', scheme: 'light' });
+  });
 });

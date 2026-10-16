@@ -1,7 +1,6 @@
 import type {
   Agent,
   AgentRemovedEvent,
-  AgentRole,
   AgentUpdatedEvent,
   BoardItem,
   BuildInfo,
@@ -56,6 +55,7 @@ import type {
   ShellRemovedEvent,
   ShellUpdatedEvent,
   SpawnAgentParams,
+  AskSelectionParams,
   SplitDirection,
   TerminalSize,
   TrackerIssue,
@@ -80,7 +80,6 @@ import type {
   OrchestratorActivity,
   OrchestratorActivityEvent,
   GateCleanup,
-  PullRequest,
   GateLog,
   GateMerged,
   GateRun,
@@ -265,9 +264,9 @@ export interface ZonesApi {
   /** The zone's prompt template for each role. */
   roleTemplates(id: string): Promise<RoleTemplate[]>;
   /** Saves the zone's template for a role. */
-  setRoleTemplate(id: string, role: AgentRole, body: string): Promise<RoleTemplate>;
+  setRoleTemplate(id: string, role: string, body: string): Promise<RoleTemplate>;
   /** Puts the zone's template for a role back to its seed, the repo's worker prompt or the app's own. */
-  resetRoleTemplate(id: string, role: AgentRole): Promise<RoleTemplate>;
+  resetRoleTemplate(id: string, role: string): Promise<RoleTemplate>;
   /** Renames the zone, recolours it (`#rrggbb`) and/or sets its fill opacity (a percent, or null for the theme's own). */
   setLook(id: string, look: { name?: string; color?: string; fillOpacity?: number | null }): Promise<Zone>;
   /**
@@ -345,8 +344,11 @@ export interface FlowEdgesApi {
   lastPayload(id: string): Promise<FlowDeliveredPayload | null>;
   /** What each of the edge's gates and scripts runs now, and whether you approved it. */
   commands(id: string): Promise<FlowCommandApproval[]>;
-  /** Approves what `command` runs, as `commands` showed it (its `fingerprint`); refused if it has changed since. */
-  approve(id: string, command: string, fingerprint: string): Promise<FlowEdge>;
+  /**
+   * Approves what `command` runs, as `commands` showed it (its `fingerprint`), for the sender it was read for (`from`);
+   * refused if it has changed since, or the edge's sender has.
+   */
+  approve(id: string, command: string, fingerprint: string, from: string): Promise<FlowEdge>;
   /** Drops the hand-off the edge holds and the delivery it queued, and their copies. */
   drop(id: string): Promise<FlowEdge>;
   /** The daemon's settings: where held hand-offs are kept. */
@@ -426,14 +428,13 @@ export const GATE_IPC = {
   stop: 'gate:stop',
   log: 'gate:log',
   sendFailure: 'gate:sendFailure',
-  openPullRequest: 'gate:openPullRequest',
   merge: 'gate:merge',
   changed: 'gate:changed',
 } as const;
 
 /**
- * An agent's merge gate: its zone's gate command run in its worktree, then Open PR and Merge behind it. Each
- * runs only when the user clicks; the app never runs the gate, opens a pull request or merges by itself.
+ * An agent's merge gate: its zone's gate command run in its worktree, then Merge behind it once the agent has
+ * opened a pull request. Each runs only when the user clicks; the app never runs the gate or merges by itself.
  */
 export interface GatesApi {
   /** Every agent's latest run. */
@@ -447,8 +448,6 @@ export interface GatesApi {
   log(sessionId: string, step?: string, since?: number): Promise<GateLog>;
   /** Pastes the failing step's last lines at the agent's prompt, sending nothing; refused while it waits on a permission prompt. */
   sendFailure(sessionId: string, step: string): Promise<null>;
-  /** Pushes its branch and opens a pull request from the template, its handover and (in a zone with a gate) the gate table. */
-  openPullRequest(sessionId: string): Promise<PullRequest>;
   /**
    * Squash-merges its pull request at `headCommit`, the commit shown, once GitHub (and in a zone with one, the gate)
    * allows, then cleans up as `cleanup` says, keeping a worktree that holds anything that wasn't merged.
@@ -497,6 +496,7 @@ export const WEB_TAB_IPC = {
   changed: 'web-tab:changed',
   /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
   key: 'web-tab:key',
+  focus: 'web-tab:focus',
 } as const;
 
 /** Where a web tab's page is drawn in its window, in CSS pixels from the top left of the page. */
@@ -567,6 +567,8 @@ export interface WebTabsApi {
   handOff(tabId: string): Promise<void>;
   /** The move fell through: a page still waiting goes back to the window it left. */
   cancelHandOff(tabId: string): Promise<void>;
+  /** Gives the tab's page the keyboard again, as the ⌘K switcher closes over it. */
+  focus(tabId: string): Promise<void>;
 }
 
 /** The orchestrator IPC channels between the preload and main. */
@@ -641,6 +643,8 @@ export const AGENT_IPC = {
   delete: 'agent:delete',
   answer: 'agent:answer',
   pasteImage: 'agent:pasteImage',
+  captureSelection: 'agent:captureSelection',
+  askSelection: 'agent:askSelection',
   transcript: 'agent:transcript',
   subagentTranscript: 'agent:subagentTranscript',
   interrupt: 'agent:interrupt',
@@ -681,6 +685,13 @@ export interface AgentsApi {
    * with its path. Rejects for anything else.
    */
   pasteImage(bytes: ArrayBuffer): Promise<string>;
+  /**
+   * Draws what the window shows in `rect` (CSS px, in the window) as a PNG `width` px wide, for Ask Claude, and leaves
+   * it where the daemon takes pictures from; resolves with where.
+   */
+  captureSelection(rect: { x: number; y: number; width: number; height: number }, width: number): Promise<string>;
+  /** Ask Claude about a selection: starts an agent with its picture and diagram (`selection.ask`). */
+  askSelection(params: AskSelectionParams): Promise<Agent>;
   /** Its conversation from its transcript, from entry `since` of `generation` on. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;
   /** A Claude subagent's conversation, started by the agent's call `toolUseId`. */
@@ -970,7 +981,31 @@ export const WINDOW_IPC = {
   isFullScreen: 'window:isFullScreen',
   /** main → renderer: `(boolean)` when the window enters or leaves full screen. */
   fullScreen: 'window:fullScreen',
+  /** From a popped-out window: shows another session in it instead (the ⌘K switcher). */
+  switchPopOut: 'window:switchPopOut',
+  /** main → renderer: `(from: WindowTarget, to: WindowTarget)` when a popped-out window switched sessions. */
+  switched: 'window:switched',
+  /** From a popped-out window: asks the board's window to do something, bringing it forward (or opening it). */
+  boardRequest: 'window:boardRequest',
+  /** main → the board: a `BoardRequest` waits; take it with `takeBoardRequest`. */
+  boardRequested: 'window:boardRequested',
+  takeBoardRequest: 'window:takeBoardRequest',
 } as const;
+
+/**
+ * What a popped-out window asks the board's window to do, from its ⌘K switcher: bring a zone into view, open New agent
+ * with a name, or show a session's window there (from a tab window, which has no session of its own to switch).
+ */
+export type BoardRequest =
+  | { kind: 'zone'; zoneId: string }
+  | { kind: 'newAgent'; name: string; zoneId: string | null }
+  | { kind: 'open'; target: WindowTarget };
+
+/**
+ * What switching a popped-out window did: it shows the session now, the session was out in another OS window already
+ * (brought forward instead), or this window is no longer out.
+ */
+export type PopOutSwitch = 'switched' | 'forward' | 'gone';
 
 /** A point on the screen, in the units of a window's bounds. */
 export interface ScreenPoint {
@@ -1073,6 +1108,14 @@ export interface WindowsApi {
   close(id: string): Promise<void>;
   /** Calls `listener` when a popped-out window goes away. Returns the unsubscribe function. */
   onReturned(listener: (target: WindowTarget, how: PopOutEnd) => void): () => void;
+  /** From a popped-out window: shows `target` in this window instead, unless `target` is out in its own already. */
+  switchPopOut(target: WindowTarget): Promise<PopOutSwitch>;
+  /** Calls `listener` when a popped-out window switched sessions. Returns the unsubscribe function. */
+  onSwitched(listener: (from: WindowTarget, to: WindowTarget) => void): () => void;
+  /** From a popped-out window: asks the board's window to do `request`, bringing it forward. */
+  requestBoard(request: BoardRequest): Promise<void>;
+  /** In the board: calls `listener` with each request a popped-out window made of it. Returns the unsubscribe function. */
+  onBoardRequested(listener: (request: BoardRequest) => void): () => void;
   /** How this window is framed. */
   chrome: WindowChrome;
   /** Whether this window is in full screen, where macOS hides its traffic lights. */

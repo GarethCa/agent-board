@@ -265,7 +265,7 @@ const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
 
 /**
  * A pointer-down on the board outside the window minimises it, and carries on to do its normal job there. Not
- * outside: the window itself, the dock, the onboarding "Back to setup" pill (that click closes the sign-in window and
+ * outside: the window itself, the dock and its list of sessions, the onboarding "Back to setup" pill (that click closes the sign-in window and
  * needs the click to land), and anything portalled out of the board's DOM (menus, dialogs, popovers and toasts opened
  * from the window), which a click on is never inside the board. The listener is on the capture phase and never
  * stops the event, so the board still sees it. A drag that starts inside and ends outside has no pointer-down outside.
@@ -281,7 +281,7 @@ function useMinimiseOnClickOutside(root: React.RefObject<HTMLDivElement | null>,
       const target = event.target;
       if (element === null || !(target instanceof Node) || element.contains(target)) return;
       if (!element.offsetParent?.contains(target)) return;
-      if (target instanceof Element && target.closest('.session-dock, .onboarding-away') !== null) return;
+      if (target instanceof Element && target.closest('.session-dock, .session-dock-popover, .onboarding-away') !== null) return;
       latest.current?.();
     };
     document.addEventListener('pointerdown', onPointerDown, true);

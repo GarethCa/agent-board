@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agents, launch, sessionWindow, spawnAgent, tile, tileAction, TURN_MS, zoneNamed } from './agent-helpers.ts';
@@ -32,14 +32,11 @@ const configureGate = (page: Page, zoneId: string, command: string) =>
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
-test("an agent's merge gate: run in its worktree into a Gate tab, its failure sent to it, then Open PR from its handover, and Merge once the gate and GitHub are green", async () => {
+test("an agent's merge gate: run in its worktree into a Gate tab, its failure sent to it, then its pull request, and Merge once the gate and GitHub are green", async () => {
   const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
   const { dir, repo, env } = scratch('waiting');
-  // gh names acme/app from origin; pushes go to a bare repo here, never GitHub.
-  const bare = join(dir, 'origin.git');
-  execFileSync('git', ['init', '--quiet', '--bare', bare]);
+  // gh names acme/app from origin.
   git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
-  git(repo, 'remote', 'set-url', '--push', 'origin', bare);
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, TMPDIR: dir, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
   try {
@@ -63,14 +60,12 @@ test("an agent's merge gate: run in its worktree into a Gate tab, its failure se
     git(agent!.worktree, 'add', '.');
     git(agent!.worktree, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'Validate the cart');
     const head = git(agent!.worktree, 'rev-parse', 'HEAD');
-    mkdirSync(join(agent!.worktree, '.agent-board'));
-    writeFileSync(join(agent!.worktree, '.agent-board', 'handover.md'), '## Problem\n\nCheckout was flaky.\n\n## Change\n\nThe cart is validated first.\n');
 
-    // Nothing runs by itself: its window offers Run gate, and Open PR waits for it, saying why.
+    // Nothing runs by itself: its window offers Run gate, and, with no pull request yet, nothing else (no Open PR: agents open their own).
     await tile(window).dblclick();
     await expect(header(window).getByTestId('header-run-gate')).toBeVisible();
-    await expect(header(window).getByTestId('header-open-pr')).toBeDisabled();
-    await expect(header(window).getByTestId('header-open-pr')).toHaveAttribute('data-why', 'Run the gate first: the PR carries its table for the head commit.');
+    await expect(header(window).getByTestId('header-open-pr')).toHaveCount(0);
+    await expect(header(window).getByTestId('header-merge')).toHaveCount(0);
 
     // ⌘⇧G runs it into a Gate tab in the focused pane: its steps, e2e failing, with its last lines.
     await window.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+KeyG' : 'Control+Shift+KeyG');
@@ -89,24 +84,23 @@ test("an agent's merge gate: run in its worktree into a Gate tab, its failure se
     await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
     await expect(sessionWindow(window).getByTestId('session-terminal')).toContainText('failed on', { timeout: TURN_MS });
 
-    // Passing now (the zone's command changed behind the window), run from the tile's More menu: Open PR is enabled.
+    // Passing now (the zone's command changed behind the window), run from the tile's More menu.
     await configureGate(window, agent!.zoneId!, gateCommand('pass'));
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     await tileAction(tile(window), 'Run gate');
     await expect(gateView(window).getByTestId('gate-headline')).toContainText('Passed: 3 of 3');
     await expect(tile(window).getByTestId('tile-gate')).toHaveText('✓ gate 3/3');
-    const openPr = header(window).getByTestId('header-open-pr');
-    await expect(openPr).toBeEnabled();
+    await expect(header(window).getByTestId('header-open-pr')).toHaveCount(0);
 
-    // Open PR pushes the branch and opens one from the template and the handover, with the gate table; then Merge.
-    await openPr.click();
+    // The agent opens its pull request (here, the fake GitHub has one for its branch, as the user's own): Merge appears.
+    github.setState({
+      ...FAKE_GITHUB_STATE,
+      pullRequests: [{ repo: 'acme/app', number: 35, title: 'Validate the cart', headRefName: agent!.branch, headRefOid: head, state: 'OPEN', isDraft: false, statusCheckRollup: [], author: 'octocat' }],
+    });
     await expect(header(window).getByTestId('header-merge')).toBeVisible({ timeout: TURN_MS });
-    expect(git(bare, 'rev-parse', `refs/heads/${agent!.branch}`)).toBe(head);
-    const create = github.calls().find((call) => call.args[0] === 'pr' && call.args[1] === 'create')!;
-    expect(create.stdin).toContain('The cart is validated first.');
-    expect(create.stdin).toContain(`on \`${head.slice(0, 7)}\``);
 
-    // The PR tab it opens on merges too, the gate having passed on its head.
+    // Its PR tab, opened from the number beside Merge, merges too, the gate having passed on its head.
+    await header(window).locator('.gate-header-pr').click();
     const prView = sessionWindow(window).getByTestId('pr-view');
     await expect(prView.getByTestId('pr-merge')).toBeEnabled({ timeout: TURN_MS });
     await expect(prView).not.toContainText("gate hasn't passed");
@@ -198,13 +192,10 @@ test("someone else's pull request: the header offers Approve, at the commit show
   }
 });
 
-test("a zone with no gate: Open PR and Merge in the window's and the expanded tile's header, Merge waiting for GitHub alone", async () => {
+test("a zone with no gate: Merge in the window's and the expanded tile's header, with no Open PR, Merge waiting for GitHub alone", async () => {
   const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
   const { dir, repo, env } = scratch('waiting');
-  const bare = join(dir, 'origin.git');
-  execFileSync('git', ['init', '--quiet', '--bare', bare]);
   git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
-  git(repo, 'remote', 'set-url', '--push', 'origin', bare);
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
   try {
@@ -218,19 +209,25 @@ test("a zone with no gate: Open PR and Merge in the window's and the expanded ti
     git(agent!.worktree, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'Tidy the docs');
     const head = git(agent!.worktree, 'rev-parse', 'HEAD');
 
-    // Its expanded tile's header has them too.
+    // Neither header offers Open PR, nor Run gate: there is no gate and no pull request yet.
     await tile(window).getByRole('button', { name: 'Expand' }).click();
     const expanded = window.getByTestId('expanded-tile').getByRole('group', { name: 'Merge gate' });
-    await expect(expanded.getByTestId('header-open-pr')).toBeEnabled({ timeout: TURN_MS });
     await expect(expanded.getByTestId('header-run-gate')).toHaveCount(0);
-    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse' }).click();
+    await expect(expanded.getByTestId('header-open-pr')).toHaveCount(0);
+    await expect(expanded.getByTestId('header-merge')).toHaveCount(0);
 
-    // No gate to run first: Open PR opens it at once, with no gate table.
+    // The agent opens its pull request: Merge shows in the expanded tile's header and in the window's.
+    github.setState({
+      ...FAKE_GITHUB_STATE,
+      pullRequests: [{ repo: 'acme/app', number: 35, title: 'Tidy the docs', headRefName: agent!.branch, headRefOid: head, state: 'OPEN', isDraft: false, statusCheckRollup: [], author: 'octocat' }],
+    });
+    await expect(expanded.getByTestId('header-merge')).toBeVisible({ timeout: TURN_MS });
+    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse' }).click();
     await tile(window).dblclick();
-    await header(window).getByTestId('header-open-pr').click();
     await expect(header(window).getByTestId('header-merge')).toBeVisible({ timeout: TURN_MS });
-    expect(github.calls().find((call) => call.args[0] === 'pr' && call.args[1] === 'create')!.stdin).not.toContain('Gate `');
+    await expect(header(window).getByTestId('header-open-pr')).toHaveCount(0);
     // Its own PR tab still merges: no gate guards it.
+    await header(window).locator('.gate-header-pr').click();
     await expect(sessionWindow(window).getByTestId('pr-view').getByTestId('pr-merge')).toBeEnabled({ timeout: TURN_MS });
 
     // Merge says there is no gate, and waits for GitHub's checks alone.

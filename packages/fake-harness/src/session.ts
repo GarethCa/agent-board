@@ -134,6 +134,11 @@ export class FakeSession {
   /** The MCP servers started so far. */
   private readonly mcpClients: Record<string, McpClient> = {};
 
+  /** The permission mode it was started in (`--permission-mode`), `default` without. */
+  get permissionMode(): string {
+    return this.dialect.permissionMode;
+  }
+
   constructor(dialect: Dialect) {
     this.dialect = dialect;
     this.lines = createInterface({ input: process.stdin, terminal: false })[Symbol.asyncIterator]();
@@ -170,6 +175,23 @@ export class FakeSession {
     this.print(`> ${prompt}\n`);
     this.dialect.transcript.userPrompt(prompt, this.turnId);
     await this.fire('UserPromptSubmit', { prompt });
+  }
+
+  /**
+   * Takes up a turn of its own, with no prompt: as Claude does when a command it left running in the background
+   * reports back. No `UserPromptSubmit` fires.
+   */
+  resume(): void {
+    this.inTurn = true;
+    this.interrupted = false;
+    this.turnId = randomUUID();
+  }
+
+  /** Fires the `idle_prompt` notification that a session sitting at its prompt raises (Claude only). */
+  async idlePrompt(): Promise<void> {
+    if (this.dialect.notificationEvents) {
+      await this.fire('Notification', { message: `${this.dialect.displayName} is waiting for your input`, notification_type: 'idle_prompt' });
+    }
   }
 
   /** Streams text to the terminal word by word, then records it as one assistant message. */

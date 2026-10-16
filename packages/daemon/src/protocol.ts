@@ -353,7 +353,7 @@ export function issueCardData(data: Record<string, unknown>): IssueCardData | un
 export const DEFAULT_ZONE_SIZE = { width: 720, height: 480 };
 
 /**
- * How the board slots session tiles in a zone (`board/layout.ts` is the one that does it; its tests pin these): a
+ * How the board slots session tiles in a zone (`board-layout.ts` is the one that does it; its tests pin these): a
  * tile, the padding round a zone's tiles, the gap between them, and the room above a row for subagent characters.
  */
 export const TILE_SLOT = { width: 256, height: 136, padding: 20, gap: 16, perchRoom: 24 };
@@ -377,8 +377,11 @@ export interface ZoneLayout {
   height: number;
 }
 
-/** The kinds of board item. Each is drawn by its own node type on the board. */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue'] as const;
+/**
+ * The kinds of board item. Each is drawn by its own node type on the board. An `agent-note` is a note an agent wrote
+ * never one of the user's stickies.
+ */
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -433,12 +436,166 @@ export const MAX_STICKY_TEXT = 20_000;
 /** The most an item's `data` may take, encoded as JSON, in bytes. */
 export const MAX_ITEM_DATA_BYTES = 64 * 1024;
 
+/** A new sticky note's size. */
+export const STICKY_SIZE = { width: 200, height: 200 };
+
 /** A sticky note's `data`. */
 export interface StickyData {
   /** Markdown: bold, italics, lists and links. */
   text: string;
   /** `#rrggbb`, one of the presets. */
   color: string;
+}
+
+/** A new agent note's width, and the least height it starts at. */
+export const AGENT_NOTE_SIZE = { width: 272, height: 120 };
+
+/** The agent that wrote an agent note, as it was then: the note still says who wrote it once its tile has gone. */
+export interface AgentNoteAuthor {
+  sessionId: string;
+  name: string;
+  harness: Harness;
+  /** What its badge calls it, as `orchestrator` or `reviewer`; null for nothing. */
+  role: string | null;
+}
+
+/** An agent note's `data`. Keys a later use adds, such as the question an answer answers, are kept. */
+export interface AgentNoteData {
+  /** Markdown: bold, italics, inline code, lists and links. */
+  text: string;
+  agent: AgentNoteAuthor;
+  /** When its agent last wrote it, ISO 8601. */
+  writtenAt: string;
+  /** Whether the user has changed its text since its agent last wrote it. */
+  editedByUser: boolean;
+  /** For an answer: what the user asked. */
+  asked?: string;
+  /**
+   * The session of the agent a note an orchestrator wrote is about (its cluster's implementer, or the tile it was put
+   * beside): the board tethers the note to that tile, not to its author's. Absent, it tethers to its author.
+   */
+  about?: string;
+  /** For an Ask Claude answer: the changes to the diagram it suggests, drawn as ghosts until accepted or dismissed. */
+  suggestions?: SuggestedEdit[];
+}
+
+/**
+ * One change an Ask Claude answer suggests to the diagram it was asked about: new shapes and arrows, drawn dashed on the
+ * board until the user accepts it (they become real, as one undo step) or dismisses it.
+ */
+export interface SuggestedEdit {
+  /** Its number on the board, from 1. */
+  id: string;
+  /** A few words: "Outbox". */
+  title: string;
+  shapes: SuggestedShape[];
+  arrows: SuggestedArrow[];
+}
+
+/** A shape a suggestion adds, on the board: its top-left and size in board px. */
+export interface SuggestedShape {
+  /** What its suggestion's arrows call it. */
+  key: string;
+  shape: ShapeType;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** An end of a suggested arrow: an object already on the board, or one of its suggestion's shapes, by key. */
+export type SuggestedEnd = { object: { type: ConnectorEndType; id: string } } | { shape: string };
+
+export interface SuggestedArrow {
+  from: SuggestedEnd;
+  to: SuggestedEnd;
+  label: string;
+}
+
+/** The most suggestions one answer keeps, and shapes and arrows one suggestion keeps; the rest are dropped. */
+export const MAX_SUGGESTIONS = 6;
+export const MAX_SUGGESTED_SHAPES = 6;
+export const MAX_SUGGESTED_ARROWS = 8;
+
+/**
+ * A selection as an Ask Claude agent reads it: its objects (`nodes`, each with a short id such as `n1`, its kind, text
+ * and box in board px from the selection's top-left), the arrows between them (`edges`), and the zones they are in.
+ */
+export interface SelectionDiagram {
+  nodes: SelectionNode[];
+  edges: SelectionEdge[];
+  groups: SelectionGroup[];
+}
+
+export interface SelectionNode {
+  id: string;
+  /** A board item's kind (`shape`, `sticky`, `text`…), or `agent`, `shell` or `zone`. */
+  kind: string;
+  /** For a shape, which. */
+  shape?: string;
+  text?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SelectionEdge {
+  from: string;
+  to: string;
+  label?: string;
+}
+
+export interface SelectionGroup {
+  name: string;
+  /** The ids of the nodes in it. */
+  nodes: string[];
+}
+
+/** A place on the board: in a zone (relative to it) or loose (null). */
+export interface BoardPlace {
+  zoneId: string | null;
+  x: number;
+  y: number;
+}
+
+/**
+ * Ask Claude about a selection: what the user asked, the agent to start, the selection as a picture and a diagram, and
+ * where the answer goes.
+ */
+export interface AskSelectionParams extends TerminalSize {
+  /** What to look at: "Review this architecture: risks, gaps, alternatives." */
+  question: string;
+  /** `claude` by default. */
+  harness?: Harness;
+  model?: string;
+  /** Its role, as `SpawnAgentParams.role`: `architect` by default. */
+  role?: string;
+  /** The zone the selection is in, whose repo it may read; null for none. */
+  zoneId: string | null;
+  /**
+   * Start it in its zone's repo, the user's checkout, read-only (Claude in plan mode, Codex in its read-only sandbox);
+   * else, or with no repo there, in the ask's own folder, outside git. Either way it has no worktree or branch.
+   */
+  readRepo: boolean;
+  /** Ask it to suggest edits, drawn on the diagram as ghosts. */
+  suggest: boolean;
+  diagram: SelectionDiagram;
+  /** The board object each node in `diagram` is, by its id there. */
+  objects: Record<string, { type: ConnectorEndType; id: string }>;
+  /** The selection's top-left on the board: `diagram`'s (0, 0). */
+  origin: { x: number; y: number };
+  /** The selected objects alone, drawn as a PNG the app left in `images/incoming`; it is moved away. */
+  picturePath: string;
+  /** How many of the picture's pixels to a board px: 2 unless the selection was too large to draw that big. */
+  pictureScale?: number;
+  /** The node the answer's arrow leaves, by its id in `diagram`: the one nearest the note. */
+  anchor: string;
+  /** Where the answer note goes, its top-left. */
+  note: BoardPlace;
+  /** Where the agent's tile goes, under the note. */
+  tile: BoardPlace;
 }
 
 /** The largest image the board takes, in bytes. */
@@ -551,7 +708,55 @@ export interface TextData {
   wrap: boolean;
 }
 
-export const SHAPE_TYPES = ['rectangle', 'rounded', 'ellipse', 'diamond'] as const;
+/**
+ * The kinds of shape, in the picker's order: flowchart, architecture and UML. The first four are the shapes
+ * from before, under their old names. One stored with a kind this list lacks (a newer app's) draws as a rectangle, and
+ * keeps its kind through edits that don't change it.
+ */
+export const SHAPE_TYPES = [
+  'rectangle',
+  'rounded',
+  'ellipse',
+  'diamond',
+  'terminator',
+  'input-output',
+  'predefined-process',
+  'document',
+  'multi-document',
+  'manual-input',
+  'delay',
+  'preparation',
+  'loop-limit',
+  'off-page',
+  'circle-connector',
+  'database',
+  'queue',
+  'storage',
+  'cloud',
+  'server',
+  'browser',
+  'mobile',
+  'user',
+  'service',
+  'external-system',
+  'load-balancer',
+  'cache',
+  'lock',
+  'container',
+  'note',
+  'class',
+  'component',
+  'package',
+  'interface',
+  'actor',
+  'use-case',
+  'lifeline',
+  'state',
+  'start',
+  'end',
+  'choice',
+  'fork-join',
+] as const;
 export type ShapeType = (typeof SHAPE_TYPES)[number];
 
 /** The fills a shape can have, the first by default. A shape may also have none (`fill` null). */
@@ -636,6 +841,11 @@ export const MAX_CONNECTOR_LABEL = 500;
 export interface EdgePoint {
   x: number;
   y: number;
+  /**
+   * Set on a curve's one point when it is its bow (BU3): the curve is drawn bowed through it. A curve's one point kept
+   * without it is a bend from before bows, drawn through it as it always was.
+   */
+  bow?: true;
 }
 /** The most bends a line may have. */
 export const MAX_EDGE_POINTS = 32;
@@ -695,26 +905,34 @@ export interface CreateConnectorParams {
 }
 
 /**
- * A change to a connector's look, label or shape: only the fields given change. Its objects are fixed (delete and draw
- * anew), but either end can move to another side of its object.
+ * A change to a connector's look, label or shape: only the fields given change. Either end can move to another side
+ * of its object (`fromSide`, `toSide`), or onto another object (`from`, `to`), whose side a `fromSide` or `toSide`
+ * given with it overrides.
  */
 export type UpdateConnectorParams = { id: string } & Partial<
-  Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label' | 'points'> & { fromSide: ConnectorSide; toSide: ConnectorSide }
+  Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label' | 'points' | 'from' | 'to'> & { fromSide: ConnectorSide; toSide: ConnectorSide }
 >;
 
 /**
+ * The side of its tile a flow edge's end is on: one the user picked, or `auto`, picked by the board from where its two
+ * tiles are each time it is drawn.
+ */
+export const FLOW_EDGE_SIDES = [...CONNECTOR_SIDES, 'auto'] as const;
+export type FlowEdgeSide = (typeof FLOW_EDGE_SIDES)[number];
+
+/**
  * How a flow edge's line is drawn: the side of each tile it leaves and arrives at, its style, and its bends.
- * An edge given none leaves the right side and arrives at the left, curved, as edges always did.
+ * An edge given no sides has automatic ones, and is curved.
  */
 export interface FlowEdgeShape {
-  fromSide: ConnectorSide;
-  toSide: ConnectorSide;
+  fromSide: FlowEdgeSide;
+  toSide: FlowEdgeSide;
   style: ConnectorStyle;
   points: EdgePoint[];
 }
 /** The fields of an edge that make up its shape: a change to any of them reshapes it, and leaves its rules be. */
 export const FLOW_EDGE_SHAPE_KEYS = ['fromSide', 'toSide', 'style', 'points'] as const satisfies readonly (keyof FlowEdgeShape)[];
-export const DEFAULT_FLOW_EDGE_SHAPE = { fromSide: 'right', toSide: 'left', style: 'curved', points: [] } as const satisfies FlowEdgeShape;
+export const DEFAULT_FLOW_EDGE_SHAPE = { fromSide: 'auto', toSide: 'auto', style: 'curved', points: [] } as const satisfies FlowEdgeShape;
 
 /**
  * When a flow edge delivers: `auto` as soon as its `from` agent hands off (its turn ends with a final message), or
@@ -767,6 +985,8 @@ export interface FlowCommandPlan {
 /** A gate's or script's command on an edge, and whether you approved it as it is now, or before it changed. */
 export interface FlowCommandApproval extends FlowCommandPlan {
   approval: 'approved' | 'unapproved' | 'changed';
+  /** The sender session whose worktree it was read in: the one an approval of it is for (`flowEdge.approve`'s `from`). */
+  from: string;
 }
 
 /**
@@ -918,6 +1138,13 @@ export interface ReviewRound {
  */
 export interface UpdateFlowEdgeParams extends Partial<FlowEdgeShape> {
   id: string;
+  /**
+   * An end moved onto another agent, checked as a new edge between them would be. What it held or queued is dropped:
+   * it was handed off by, or to, the agent it left. A new sender drops every approval: its gates and scripts run in the
+   * sender's worktree, and nothing approved for one agent applies to another.
+   */
+  from?: string;
+  to?: string;
   trigger?: FlowEdgeTrigger;
   payload?: FlowEdgePayload;
   path?: string;
@@ -1105,6 +1332,8 @@ export interface Agent {
   model: string | null;
   /** The role it was started in, or null for none. */
   role: AgentRole | null;
+  /** A custom role's name, as `parseRole` read it: `designer`. Null for any other role, or a custom one unnamed. */
+  roleName: string | null;
   /**
    * For an agent started as a reviewer or follow-up reviewer: the branch it reviews and the commit it checked
    * out, detached, in a worktree of its own (its `branch` is then ''). Null for any other agent.
@@ -1116,8 +1345,16 @@ export interface Agent {
    * issue's description.
    */
   description: string;
-  /** Its branch; '' for an external session resumed outside git, or on a detached HEAD, in its own folder. */
+  /**
+   * The branch its worktree is on now, for its tile, pull request lookup and `--base`: '' for an external
+   * session resumed outside git, or on a detached HEAD, in its own folder. After a checkout of another branch it is that
+   * one; while HEAD is detached, the last branch it was on (see `detached`).
+   */
   branch: string;
+  /** The branch it owns: what closing it checks for unsaved work and deletes, and a pull request is opened from. A rename moves it; a checkout does not. */
+  ownedBranch: string;
+  /** Its worktree's HEAD is detached: `branch` is the last branch it was on. */
+  detached: boolean;
   /**
    * Absolute path of its git worktree (ADR-0007); for an external session resumed in its own folder, that folder's
    * worktree, or the folder itself outside git (`ownsWorktree` false).
@@ -1128,6 +1365,8 @@ export interface Agent {
   state: AgentState;
   /** What the user should know about how it ran, e.g. why agent-board stopped it; null when there is nothing. */
   notice: string | null;
+  /** The conversations it had before a fresh restart started a new one in its tile, oldest first; their transcripts stay on disk. */
+  earlierConversations: EarlierConversation[];
   /** The tracker issue it works on, or null. */
   issue: LinkedIssue | null;
   /**
@@ -1135,6 +1374,12 @@ export interface Agent {
    * one, when its tile shows its `description`.
    */
   status: AgentStatus | null;
+  /**
+   * When it said its work is finished: it handed off (`board.handoff`) or set its status as done
+   * (`board.setStatus` with `done`). A turn ending is not finishing: an agent may end turns while its background work
+   * runs. Null until then, and again from its next prompt.
+   */
+  workFinishedAt: string | null;
   /** Whether the user muted its OS notifications. It still counts in the needs-you inbox. */
   muted: boolean;
   /**
@@ -1148,6 +1393,12 @@ export interface Agent {
    * daemon, which asks gh every minute or so. Empty when the repo is not on GitHub.
    */
   pullRequests: PullRequest[];
+  /**
+   * When none of `pullRequests`, the pull requests its work went into on other branches: those of the
+   * branches it pushed its own commits to (its upstream among them), else the one holding its newest pushed commit. For
+   * its tile alone: they are not its own, so nothing merges, gates or cleans them up from it.
+   */
+  pushedPullRequests: PullRequest[];
   createdAt: string;
   /** Set once its process has ended. */
   endedAt: string | null;
@@ -1167,6 +1418,11 @@ export interface Agent {
    * (`Stop`), or the message of a mid-turn request for input. Null before then, and from each new prompt until then.
    */
   lastMessage: string | null;
+  /**
+   * When its own turn last ended with a final message (`Stop`), kept across a new prompt and a daemon restart; null
+   * before its first. A manual edge out of it has something new to send once this is after its last delivery.
+   */
+  finishedAt: string | null;
   /**
    * The tool calls, its own or its subagents', waiting for the user's permission, oldest first. While any is, the
    * agent is `needs-permission`.
@@ -1598,12 +1854,45 @@ export function notOrchestratingReason(
   return `${name} may not orchestrate: orchestrating is off in ${zone.name}. The user can turn it on (${ORCHESTRATE_SETTING})`;
 }
 
+/** A conversation an agent left behind when a fresh restart started a new one in its tile. */
+export interface EarlierConversation {
+  /** The id its harness knew it by (Claude's session id, Codex's conversation id). */
+  conversationId: string;
+  /** Its transcript file, when its harness's hooks named one. */
+  transcriptPath: string | null;
+  /** When it was left behind, ISO 8601. */
+  endedAt: string;
+}
+
 /**
  * What an orchestrator did, or tried: the control verbs, each logged (`OrchestratorActivity`). An edge it made or
  * removed is `add-edge` or `remove-edge`, its target the edge's `to` agent. A `handoff` is any agent's, an orchestrator's
- * or not: one line per edge it handed off along, its target that edge's `to` agent.
+ * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
+ * (`move`, `arrange`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
+ * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
+ * the role's name their detail.
  */
-export const ORCHESTRATOR_ACTIONS = ['spawn', 'send', 'interrupt', 'close', 'remove', 'add-edge', 'remove-edge', 'handoff'] as const;
+export const ORCHESTRATOR_ACTIONS = [
+  'spawn',
+  'send',
+  'interrupt',
+  'restart',
+  'close',
+  'remove',
+  'add-edge',
+  'remove-edge',
+  'handoff',
+  'move',
+  'arrange',
+  'add-zone',
+  'change-zone',
+  'remove-zone',
+  'add-note',
+  'edit-note',
+  'remove-note',
+  'set-role',
+  'remove-role',
+] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
 
 /** One line of the orchestrators' activity log: who did, or tried, what to whom, and when. Append-only. */
@@ -1632,13 +1921,73 @@ export interface OrchestratorSpawnParams {
   zoneId?: string;
   harness?: Harness;
   model?: string;
-  role?: AgentRole;
+  /** A built-in role, or a custom role's name, as `parseRole` reads it. */
+  role?: string;
+  /** Without its role's template: its first message is the issue and `prompt` alone. */
+  noTemplate?: boolean;
   name?: string;
   branch?: string;
   baseBranch?: string;
   issueId?: string;
   prompt?: string;
 }
+
+/** What `orchestrator.spawn` answers: the agent, and which role template its first message began with, if one. */
+export type OrchestratorSpawned = Agent & {
+  /** The template applied, in words (`the zone's saved implementer template`, `the repo's implementer seed (impl-prompt.md)`); null when none was (none, empty or `noTemplate`). */
+  template: string | null;
+};
+
+/** The sides of a tile or note another is put beside (`orchestrator.move`'s and `addNote`'s `near`). */
+export const TILE_SIDES = ['below', 'right', 'left', 'above'] as const;
+export type TileSide = (typeof TILE_SIDES)[number];
+
+/** What a layout command moves or puts a note beside: an agent's, a shell's tile, or a board item. */
+export interface LayoutTarget {
+  kind: 'agent' | 'shell' | 'item';
+  /** An agent's session id, a shell tile's or an item's id. */
+  id: string;
+}
+
+/**
+ * Where `orchestrator.move` puts a tile, or `orchestrator.addNote` a note: in the zone `zoneId` (null, loose on the
+ * board), at `at` (relative to that zone), or a gap beside `near` on its `side` (`below` without), in `near`'s zone.
+ * Each is a wish: what lands there would overlap something is moved the least distance clear of it. Without any, a
+ * tile stays in its zone (a note goes in the caller's), at the first free slot.
+ */
+export interface LayoutPlace {
+  zoneId?: string | null;
+  at?: { x: number; y: number };
+  near?: LayoutTarget;
+  side?: TileSide;
+}
+
+/** Where a layout command left a tile or note: its zone (null for none) and its place, relative to it. */
+export interface LayoutMoved {
+  target: LayoutTarget;
+  zoneId: string | null;
+  x: number;
+  y: number;
+}
+
+/** What `orchestrator.arrange` groups a row by: an issue (the default), a role or a state. */
+export const ARRANGE_BYS = ['issue', 'role', 'state'] as const;
+export type ArrangeBy = (typeof ARRANGE_BYS)[number];
+/** How it lays the rows out: one each (the default), or filling the zone's width as Tidy does. */
+export const ARRANGE_LAYOUTS = ['rows', 'grid'] as const;
+export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
+
+/** What `orchestrator.arrange` did: the zone, its size now, and where each tile it moved went. */
+export interface ArrangeResult {
+  zoneId: string;
+  width: number;
+  height: number;
+  moved: LayoutMoved[];
+}
+
+/** The kinds of note an orchestrator makes (`orchestrator.addNote`): a sticky note (the default) or a text item. */
+export const NOTE_KINDS = ['sticky', 'text'] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
 
 /**
  * How long `orchestrator.wait` waits at most, and by default: under the 60 s Codex gives an MCP tool call
@@ -1656,10 +2005,71 @@ export const SETTLED_STATES: readonly AgentState[] = AGENT_STATES.filter(
   (state) => state !== 'running' && state !== 'thinking' && state !== 'handing-off',
 );
 
+/**
+ * What `orchestrator.wait` can wait for: an agent's state, or `finished`, an agent that said its work is finished
+ * (`Agent.workFinishedAt`), which a turn ending is not.
+ */
+export const WAIT_STATES = [...AGENT_STATES, 'finished'] as const;
+export type WaitState = (typeof WAIT_STATES)[number];
+
+export function isWaitState(value: unknown): value is WaitState {
+  return WAIT_STATES.includes(value as WaitState);
+}
+
+/**
+ * What happened to an agent of a crew, once each: its turn ended, it finished (`Agent.workFinishedAt`), it needs
+ * the user (a permission prompt, a question or a plan), its turn failed, it was rate-limited, its session ended, or a
+ * pull request was opened from its branch. Its idle prompt (Claude's `idle_prompt`, idle to waiting a minute after a
+ * turn) is none, and a turn that ends finished is only `finished`.
+ */
+export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'failed', 'rate-limited', 'ended', 'pr-opened'] as const;
+export type CrewEventKind = (typeof CREW_EVENT_KINDS)[number];
+
+export interface CrewEvent {
+  /**
+   * Its place: the daemon's run and its number in it (`<run>.<n>`), as `orchestrator.wait`'s `since` and `cursor` take
+   * it. A cursor of another run is from before the daemon restarted.
+   */
+  cursor: string;
+  at: string;
+  sessionId: string;
+  /** The agent's name then. */
+  name: string;
+  kind: CrewEventKind;
+  /**
+   * What more there is to say, or null: a status summary, what it asks, how its session ended (`closed`, `exited 1`,
+   * `removed`), a pull request's number and URL.
+   */
+  detail: string | null;
+}
+
+/** What `orchestrator.wait`'s `since` takes: a crew event's cursor (`<run>.<n>`), `now` or `all`. */
+export function isCrewSince(value: string): boolean {
+  return value === 'now' || value === 'all' || CREW_CURSOR.test(value);
+}
+
+/** A crew event's cursor: the daemon's run and the event's number in it. */
+export const CREW_CURSOR = /^([0-9a-z]+)\.(\d+)$/;
+
+/** Most crew events the daemon keeps, in memory: a `since` older than these gets what is left, with `missed` set. */
+export const MAX_CREW_EVENTS = 1000;
+
 /** What `orchestrator.wait` saw: the agents as they are, and whether it gave up before they were all (or any) there. */
 export interface OrchestratorWaitResult {
   agents: Agent[];
   timedOut: boolean;
+  /**
+   * With `since`, the crew events after it of the agents waited on, oldest first, at most 100: the wait answers as soon
+   * as there is one. Empty without.
+   */
+  events: CrewEvent[];
+  /** Where it read up to: wait again with it as `since` to hear only what came next. */
+  cursor: string;
+  /**
+   * Whether events after `since` were lost before this wait read them: the daemon keeps only the latest, and a `since`
+   * from before it restarted gets every event of its new run, but none of what came between.
+   */
+  missed: boolean;
 }
 
 /** What `orchestrator.read` read: the agent's final message, or a file of its worktree. */
@@ -1812,11 +2222,50 @@ export type AgentRepo = { path: string } | { scratch: true };
 export const AGENT_ROLES = ['implementer', 'reviewer', 'follow-up-reviewer', 'custom'] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
+/** The longest name a custom role takes: a word or two, as its tile's badge shows it. */
+export const MAX_ROLE_NAME_LENGTH = 24;
+
+// Control, format (bidi, zero-width), private-use and unassigned characters, and the line and paragraph separators:
+// anything that could hide or reorder what a badge shows.
+const CONTROL_CHARACTERS = /[\p{C}\u2028\u2029]/u;
+
+/**
+ * A role as typed (`agent-board new --role`, `new_agent`, New agent's role chip): a built-in role by its name, in any
+ * case, else a custom role with that name (`designer`, `release prep`), trimmed with its spaces kept single. One field,
+ * not a role and a name beside it, so the two can never disagree. Names match in ASCII case only (`Designer` is
+ * `designer`; `Élan` is not `élan`), as the database's NOCASE does.
+ */
+export function parseRole(text: string): { role: AgentRole; name: string | null } | { error: string } {
+  if (CONTROL_CHARACTERS.test(text)) return { error: 'a role name has no control characters' };
+  const name = text.trim().replace(/ +/g, ' ');
+  if (name === '') return { error: 'a role needs a name' };
+  const builtIn = AGENT_ROLES.find((role) => role === name.toLowerCase());
+  if (builtIn !== undefined) return { role: builtIn, name: null };
+  if (name.length > MAX_ROLE_NAME_LENGTH) return { error: `a role name is at most ${MAX_ROLE_NAME_LENGTH} characters` };
+  return { role: 'custom', name };
+}
+
+/** An agent's role as the board names it: a custom role's own name, else the role; null for none. */
+export function roleLabel(agent: Pick<Agent, 'role' | 'roleName'>): string | null {
+  return agent.roleName ?? agent.role;
+}
+
 /** The variables a role template's editor offers to insert, in its order. */
 export const TEMPLATE_VARIABLES = ['issue', 'branch', 'worktree', 'prev_review'] as const;
 
 /** The longest role template a zone keeps. */
 export const MAX_ROLE_TEMPLATE_LENGTH = 50_000;
+
+/**
+ * One of the app's default roles: a custom role's name and the template an agent in it starts with, in any
+ * zone that has saved none of its own for the name. Kept by the daemon; a session reads and edits the list with
+ * `agent-board roles`.
+ */
+export interface DefaultRole {
+  name: string;
+  body: string;
+  editedAt: string;
+}
 
 /** The roles that review a branch: they start on a detached checkout of it, with no branch of their own. */
 export const REVIEWER_ROLES: readonly AgentRole[] = ['reviewer', 'follow-up-reviewer'];
@@ -1827,10 +2276,13 @@ export const REVIEWER_ROLES: readonly AgentRole[] = ['reviewer', 'follow-up-revi
  * `{{impl_worktree}}` and `{{prev_sha}}`) are filled in as plain text when the agent starts.
  */
 export interface RoleTemplate {
-  role: AgentRole;
+  /** A built-in role, or a custom role's name. */
+  role: string;
   body: string;
   /** The repo's worker prompt it is seeded from (`review-prompt.md`), or null for the app's own. */
   seed: string | null;
+  /** Whether its body is the app's default role of its name (`DefaultRole`), the zone having saved none. */
+  appDefault: boolean;
   /** When the user last saved it for the zone; null while it is its seed. */
   editedAt: string | null;
 }
@@ -1853,11 +2305,14 @@ export type SpawnAgentParams = TerminalSize & {
   /** The harness's model (`--model` for Claude, `-m` for Codex): its own default without. A name, never an option. */
   model?: string;
   /**
-   * Its role, none without: it starts with its zone's template for the role, filled in, before the issue and `prompt`.
+   * Its role, none without: a built-in role, or any other name for a custom role of that name (`designer`), as
+   * `parseRole` reads it. It starts with its zone's template for the role, filled in, before the issue and `prompt`.
    * A reviewer or follow-up reviewer starts on a detached checkout of `baseBranch` (the repo's checked-out branch
    * without), the branch it reviews, and takes no `branch` of its own.
    */
-  role?: AgentRole;
+  role?: string;
+  /** Start it without its role's template: its first message is the issue and `prompt` alone. */
+  noTemplate?: boolean;
   /** Its first message. Empty or missing starts it at its prompt, named `new-agent-N`; no message is sent. */
   prompt?: string;
   /** Start a Codex agent even though its worktree has Codex config of its own (see `AGENT_ERROR.projectCodexConfig`). */
@@ -2169,9 +2624,12 @@ export interface DaemonMethods {
    * Saves the zone's template for a role. Fails with `invalidParams` for an unknown zone or role, or a body over
    * `MAX_ROLE_TEMPLATE_LENGTH`.
    */
-  'zone.setRoleTemplate': { params: { id: string; role: AgentRole; body: string }; result: RoleTemplate };
-  /** Puts the zone's template for a role back to its seed. Fails with `invalidParams` for an unknown zone or role. */
-  'zone.resetRoleTemplate': { params: { id: string; role: AgentRole }; result: RoleTemplate };
+  'zone.setRoleTemplate': { params: { id: string; role: string; body: string }; result: RoleTemplate };
+  /**
+   * Puts the zone's template for a role back to its seed, or a named role's to the app's default for it (else empty).
+   * Fails with `invalidParams` for an unknown zone or a bad role.
+   */
+  'zone.resetRoleTemplate': { params: { id: string; role: string }; result: RoleTemplate };
   /** Changes the zone's settings given. Fails with `invalidParams` for an unknown id, or none given. */
   'zone.configure': { params: { id: string } & Partial<ZoneSettings>; result: Zone };
   /**
@@ -2192,6 +2650,8 @@ export interface DaemonMethods {
   'agent.nextName': { params: undefined; result: { name: string } };
   /** Every agent, running or ended, oldest first, with its current state. */
   'agent.list': { params: undefined; result: Agent[] };
+  /** Re-reads the branch of every live agent's worktree, so the next `agent.list` shows renames and checkouts. */
+  'agent.refreshBranches': { params: undefined; result: null };
   /**
    * Ends the agent's session and removes its worktree and branch. Fails with `AGENT_ERROR.unsavedWork` when the
    * worktree has uncommitted changes or the branch has commits no other branch has, unless `force`. With
@@ -2275,14 +2735,14 @@ export interface DaemonMethods {
    * with `orchestrate` on, else `BOARD_ERROR.notAllowed`; or a user-side one (`BoardCaller.side`), at board scope. With
    * no token, on a connection that never presented one, it acts as the user, at board scope. A target
    * outside its scope (`OrchestrateScope`), or an agent itself, is `BOARD_ERROR.outOfScope`. Each spawn, send,
-   * interrupt and close is logged, done or refused (`orchestrator.activity`).
+   * interrupt, restart and close is logged, done or refused (`orchestrator.activity`).
    *
    * `spawn` starts an agent as `agent.spawn` does, in a zone of its scope (its own zone by default), with
    * `spawnedBy` the orchestrator agent (none for the user's side, whose agents are the user's). A prompt (and a `send`'s text) is refused with `invalidParams` when
    * `orchestratorTextRefusal` says why. With `baseBranch`, also when the base's project config (`.claude`, `.mcp.json`,
    * `.codex`) differs from the repo's HEAD: the agent would start under settings the orchestrator chose.
    */
-  'orchestrator.spawn': { params: { token?: string } & OrchestratorSpawnParams; result: Agent };
+  'orchestrator.spawn': { params: { token?: string } & OrchestratorSpawnParams; result: OrchestratorSpawned };
   /**
    * Sends `text` as the agent's next message (`agent.answer`). Only to a live agent at its prompt, between turns: one
    * that is working, needs permission or has ended is refused with `invalidParams`.
@@ -2292,10 +2752,26 @@ export interface DaemonMethods {
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
    * with a prompt by an orchestrator counts only once that turn has begun, so a wait straight after a send isn't
-   * answered by the idle before it. An agent deleted meanwhile fails it with `invalidParams`.
+   * answered by the idle before it. An agent deleted meanwhile fails it with `invalidParams`. `finished` waits for
+   * `Agent.workFinishedAt`; an agent its idle prompt moved from idle to waiting still counts as idle.
+   *
+   * With `crew`, it waits on the caller's crew too (the agents it started, and theirs; every agent for the user's side),
+   * as it is at each check, and `sessionIds` may be left out. With `since` (a `cursor` from before, `now`, or `all` for
+   * every one kept), it waits instead for the crew events after it of those agents (of `kinds`, or every kind) and
+   * answers with them as soon as there is one. An event reaches the crew its agent was in as it happened, so a
+   * removed agent's end still does. Each agent named is scope-checked as for `orchestrator.read`.
    */
   'orchestrator.wait': {
-    params: { token?: string; sessionIds: string[]; states?: AgentState[]; any?: boolean; timeoutMs?: number };
+    params: {
+      token?: string;
+      sessionIds?: string[];
+      crew?: boolean;
+      states?: WaitState[];
+      any?: boolean;
+      since?: string;
+      kinds?: CrewEventKind[];
+      timeoutMs?: number;
+    };
     result: OrchestratorWaitResult;
   };
   /**
@@ -2306,6 +2782,14 @@ export interface DaemonMethods {
   'orchestrator.read': { params: { token?: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
   /** Interrupts the agent's turn (`agent.interrupt`). */
   'orchestrator.interrupt': { params: { token?: string; sessionId: string }; result: Agent };
+  /**
+   * Starts an ended agent again in place, as the tile's Restart does (`agent.resume`): the same tile, worktree and
+   * branch, carrying on its conversation (Claude `--resume`, `codex resume`). Never forced: while the shell its pane
+   * dropped into runs something it fails with `AGENT_ERROR.shellBusy`, for the user to end. With `fresh` it starts a
+   * new conversation instead (a new harness session id in the same tile, worktree and branch; the old one is kept in
+   * `Agent.earlierConversations`), on `prompt` if given, which an orchestrator may type like a `send`. `prompt` needs `fresh`.
+   */
+  'orchestrator.restart': { params: { token?: string; sessionId: string; fresh?: boolean; prompt?: string }; result: Agent };
   /**
    * Ends the agent's session, keeping its tile, worktree and branch (`agent.stop`); with `remove`, deletes it with its
    * worktree and branch (`agent.delete`, never forced, so `AGENT_ERROR.unsavedWork` stands), which only an agent the
@@ -2322,6 +2806,65 @@ export interface DaemonMethods {
   /** Deletes a flow edge it, or an agent in its crew, made; a user-side caller any. The user's are the user's. */
   'orchestrator.removeEdge': { params: { token?: string; id: string }; result: null };
   /**
+   * Moves a tile (an agent's, a shell's, or a board item) in its scope to `place` (`LayoutPlace`), as the board's drag
+   * does (`agent.move`, `shell.move`, `item.update`): clear of every other tile and item, by the board's placing rules,
+   * its zone growing to hold it. Into a zone in its scope, or one it made; loose on the board only at board scope. An
+   * agent may move itself: where a tile sits changes nothing about its session. It never moves an agent into a zone
+   * that would let it orchestrate where it can't now.
+   */
+  'orchestrator.move': { params: { token?: string; target: LayoutTarget } & LayoutPlace; result: LayoutMoved };
+  /**
+   * Lays out the tiles in a zone in its scope (its own by default) that it may move: itself first, then a row per
+   * issue (or role, or state), each agent beside the ones its edges join it to (`board-arrange.ts`). What it may not
+   * move (other tiles, notes, cards) stays put, and the rows keep clear of it; the zone grows to hold them, never
+   * shrinking. The same board arranges the same way.
+   */
+  'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout }; result: ArrangeResult };
+  /**
+   * Makes a group (an unbound zone) marked as made by it, as `zone.addUnbound` does: at `x`, `y` if given (stepped right
+   * past any zone or loose tile there, as a new zone is), else beside its own zone; at `DEFAULT_ZONE_SIZE` without a
+   * size. No zone in a zone: it never lands inside another.
+   */
+  'orchestrator.addZone': {
+    params: { token?: string; name: string; color?: string; x?: number; y?: number; width?: number; height?: number };
+    result: Zone;
+  };
+  /**
+   * Renames, recolours, moves or resizes a group it (or its crew) made; a user-side caller any group. Shrinking past its
+   * tiles moves only the ones its edge cuts through, as the board's resize does (`packTiles`), and is refused when they
+   * have nowhere to go; it never moves onto another zone.
+   */
+  'orchestrator.changeZone': {
+    params: { token?: string; id: string; name?: string; color?: string; x?: number; y?: number; width?: number; height?: number };
+    result: Zone;
+  };
+  /** Deletes a group it (or its crew) made, as the board's Delete does (`zone.dissolve`): its tiles and notes stay, loose. */
+  'orchestrator.removeZone': { params: { token?: string; id: string }; result: null };
+  /**
+   * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
+   * own zone by default), clear of the tiles and items there, in a zone in its scope or one it made.
+   */
+  'orchestrator.addNote': { params: { token?: string; text: string; kind?: NoteKind; color?: string } & LayoutPlace; result: BoardItem };
+  /** Changes the text or colour of a note it (or its crew) made; a user-side caller any sticky note or text item. */
+  'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string }; result: BoardItem };
+  /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
+  'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
+  /** The app's default roles, by name. */
+  'orchestrator.roles': { params: { token?: string }; result: DefaultRole[] };
+  /**
+   * Sets the app's default role `name` (a custom role's name, as `parseRole` reads it), replacing one of the same name
+   * in any case; with `zoneId`, that zone's template for the name instead. The app's list is a board-scope
+   * orchestrator's (or the user's side's) alone, and a zone must be in the caller's scope: else `outOfScope`. Fails
+   * with `invalidParams` for a built-in role, a bad name, a body over `MAX_ROLE_TEMPLATE_LENGTH`, or one
+   * `orchestratorTextRefusal` refuses: it starts other agents' first messages.
+   */
+  'orchestrator.setRole': { params: { token?: string; name: string; body: string; zoneId?: string }; result: DefaultRole };
+  /**
+   * Removes the app's default role `name` (read as `setRole` reads it), or with `zoneId` that zone's template for it,
+   * scoped as `setRole`. Fails with `invalidParams` when there is none.
+   */
+  'orchestrator.removeRole': { params: { token?: string; name: string; zoneId?: string }; result: null };
+  /**
    * The orchestrators' activity log, newest first: `orchestratorId`'s alone if given, at most `limit`
    * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. Every
    * connection reads every line.
@@ -2337,16 +2880,18 @@ export interface DaemonMethods {
    * Sets the status of the agent holding `token`: only its own. `summary` is trimmed and at most `MAX_STATUS_LENGTH`;
    * `progress` a whole number 0-100, or absent. Fails with `BOARD_ERROR.unknownToken` for an unknown token, and
    * `invalidParams` for a shell's, a blank summary or a bad progress. Makes the connection the session's, as
-   * `board.identify` does.
+   * `board.identify` does. With `done`, it also says its work is finished (`Agent.workFinishedAt`).
    */
-  'board.setStatus': { params: { token: string; summary: string; progress?: number }; result: Agent };
+  'board.setStatus': { params: { token: string; summary: string; progress?: number; done?: boolean }; result: Agent };
   /**
    * The agent holding `token` hands `payload` over its own outgoing edges, or with `to` over its edge to that
    * agent alone, each as its auto hand-off would go: its conditions checked first, held while any fails, skipped while
    * paused. A manual edge is left for the user to send. Resolves with how it went along each edge, once each is
    * delivered, held, queued or skipped, or after a few seconds of checking. Fails with `invalidParams` for a caller that
-   * isn't a live agent's own session, no edge out of it (to `to`), or a bad payload. Each edge handed off along is
-   * logged (`orchestrator.activity`). Its turn's end then hands off along the others alone.
+   * isn't a live agent's own session, no edge out of it to `to`, or a bad payload. Each edge handed off along is
+   * logged (`orchestrator.activity`). Its turn's end then hands off along the others alone. Handing off says its work is
+   * finished (`Agent.workFinishedAt`): with no edge out of it and no `to`, that is all it does, and it resolves
+   * with none.
    */
   'board.handoff': { params: { token: string; to?: string } & HandoffPayload; result: HandoffOutcome[] };
   /**
@@ -2456,7 +3001,8 @@ export interface DaemonMethods {
    */
   'flowEdge.create': { params: CreateFlowEdgeParams; result: FlowEdge };
   /**
-   * Changes its rules. Fails as `flowEdge.create` does for an auto edge that would close a loop, and with
+   * Changes its rules, its shape, or the agent at an end. Fails as `flowEdge.create` does for an end moved onto
+   * itself, an unknown agent or a pair already joined that way, or an auto edge that would close a loop, and with
    * `invalidParams` for a path outside the worktree or a condition missing its command or label. A held hand-off is
    * checked again at once.
    */
@@ -2476,8 +3022,10 @@ export interface DaemonMethods {
   /**
    * Approves what one of the edge's commands runs, as `flowEdge.commands` showed it, checking its held hand-off again.
    * Fails with `invalidParams` for a command not on the edge, or one that has changed since (its fingerprint differs).
+   * The approval is bound to the edge's sender session and its worktree: it fails if the sender is not `from` (the one
+   * the user looked at it for, if given), or changes while it is checked, and holds only while the edge has that sender.
    */
-  'flowEdge.approve': { params: { id: string; command: string; fingerprint: string }; result: FlowEdge };
+  'flowEdge.approve': { params: { id: string; command: string; fingerprint: string; from?: string }; result: FlowEdge };
   /** Drops the hand-off the edge holds and the delivery it queued, and any copy of them. */
   'flowEdge.drop': { params: { id: string }; result: FlowEdge };
   /** What the edge last delivered, while the daemon remembers it; null before its first delivery, or since a restart. */
@@ -2591,6 +3139,13 @@ export interface DaemonMethods {
    * agent to read; resolves with where.
    */
   'image.paste': { params: { path: string }; result: { path: string } };
+  /**
+   * Ask Claude about a selection: keeps its picture and diagram in a folder of their own, starts an agent with them in
+   * its first message, and once its first turn finishes puts its final message on the board as an agent note at
+   * `note`, joined to the selection by an arrow, with any suggested edits on it. Never sent unless the user asks. Fails
+   * with `invalidParams` for a picture that isn't a PNG in `images/incoming`, or a diagram too large to send.
+   */
+  'selection.ask': { params: AskSelectionParams; result: Agent };
   'tracker.status': { params: { provider: TrackerProvider }; result: TrackerStatus };
   /**
    * Checks the credential (an API key or OAuth token) with the tracker, then keeps it in the OS keychain, never in
@@ -2656,6 +3211,7 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'daemon.health',
   'zone.list',
   'agent.list',
+  'agent.refreshBranches',
   'shell.list',
   'flowEdge.list',
   'item.list',
@@ -2679,9 +3235,21 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.wait',
   'orchestrator.read',
   'orchestrator.interrupt',
+  'orchestrator.restart',
   'orchestrator.close',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',
+  'orchestrator.move',
+  'orchestrator.arrange',
+  'orchestrator.addZone',
+  'orchestrator.changeZone',
+  'orchestrator.removeZone',
+  'orchestrator.addNote',
+  'orchestrator.editNote',
+  'orchestrator.removeNote',
+  'orchestrator.roles',
+  'orchestrator.setRole',
+  'orchestrator.removeRole',
 ]);
 
 /**

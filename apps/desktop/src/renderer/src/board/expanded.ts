@@ -1,7 +1,7 @@
 // Which session tiles are expanded in place, how big each one is, and which is in front. Pure, so every
 // change is unit-tested. The board holds the set in one state, saved in the daemon's view state so the tiles
 // open again after a restart.
-import { PERCH_ROOM, ZONE_PADDING } from './layout';
+import { PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 
 /** An expanded tile: its node id and its size on the board. */
 export interface ExpandedTile {

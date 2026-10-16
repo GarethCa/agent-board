@@ -3,7 +3,6 @@
 import { getBezierPath, getSmoothStepPath, getStraightPath, Position } from '@xyflow/react';
 import type { ConnectorSide, ConnectorStyle, EdgePoint } from '@agent-board/daemon/protocol';
 
-
 /** Where a line leaves and arrives: each end's point on its object, and the side of the object it is on. */
 export interface LineEnds {
   source: EdgePoint;
@@ -24,12 +23,14 @@ export interface LineShape {
   inserts: EdgePoint[];
   /** How long it is, on the board. */
   length: number;
-  /** The way it runs where its label sits, as a unit vector. */
-  along: EdgePoint;
+  /**
+   * The point a curve's bow goes through: the one point it was pulled to, else halfway along it (a curve bent through
+   * several points before it had a bow, too).
+   */
+  bow: EdgePoint;
+  /** Where its bow handle sits: on `bow`, or as near it along the line as is clear of the label. */
+  bowHandle: EdgePoint;
 }
-
-/** How long a line is, and the way it runs at its middle: what says whether a label fits on it. */
-export type LineRun = Pick<LineShape, 'length' | 'along'>;
 
 const POSITIONS: Record<ConnectorSide, Position> = { top: Position.Top, right: Position.Right, bottom: Position.Bottom, left: Position.Left };
 /** The way out of each side. */
@@ -50,24 +51,49 @@ const INSERT_SHARES = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82, 0.1,
 /** The room kept round a label, past its box, that a place to pull out a bend stays out of. */
 const INSERT_CLEARANCE = 8;
 
+/** Whether `point` is out of the `label` box centred on `at`, and the room kept round it. */
+const clearOf = (point: EdgePoint, at: EdgePoint, label: LabelSize | undefined) =>
+  label === undefined ||
+  Math.abs(point.x - at.x) > label.width / 2 + INSERT_CLEARANCE ||
+  Math.abs(point.y - at.y) > label.height / 2 + INSERT_CLEARANCE;
+
 /** Along `samples` as near halfway as is out of the `label` box centred on `at`, or halfway if nowhere is. */
 function insertOn(samples: readonly EdgePoint[], at: EdgePoint, label: LabelSize | undefined): EdgePoint {
-  const clear = (point: EdgePoint) =>
-    label === undefined ||
-    Math.abs(point.x - at.x) > label.width / 2 + INSERT_CLEARANCE ||
-    Math.abs(point.y - at.y) > label.height / 2 + INSERT_CLEARANCE;
-  return INSERT_SHARES.map((share) => pointAlong(samples, share)).find(clear) ?? pointAlong(samples, 0.5);
+  return INSERT_SHARES.map((share) => pointAlong(samples, share)).find((point) => clearOf(point, at, label)) ?? pointAlong(samples, 0.5);
+}
+
+/**
+ * A curve's bow, and where its handle sits: on it, or along the line clear of the label on it. A curve kept with one
+ * bend from before bows has its bow on that bend, which it passes through; one with several, halfway along it.
+ */
+function bowOf(samples: readonly EdgePoint[], points: readonly EdgePoint[], labelAt: EdgePoint, label: LabelSize | undefined) {
+  const bow = points.length === 1 ? points[0]! : pointAlong(samples, 0.5);
+  return { bow, bowHandle: clearOf(bow, labelAt, label) ? bow : insertOn(samples, labelAt, label) };
+}
+
+/**
+ * React Flow's curve `path` (one cubic, `middle` halfway along it) bowed through `bow` (BU3): both its controls moved
+ * by the same step, which moves its middle by three quarters of it, so it passes through `bow` there. A bow on its own
+ * middle is the same curve, so grabbing the handle moves nothing; bowed, it leans out of its sides as it bows.
+ */
+function bowed(path: string, middle: EdgePoint, bow: EdgePoint): string {
+  const [source, c1, c2, target] = (path.match(/-?\d*\.?\d+(?:e[-+]?\d+)?/gi) ?? []).map(Number).reduce<EdgePoint[]>(
+    (pairs, value, index) => (index % 2 === 0 ? [...pairs, { x: value, y: 0 }] : pairs.with(-1, { ...pairs.at(-1)!, y: value })),
+    [],
+  );
+  const step = { x: ((bow.x - middle.x) * 4) / 3, y: ((bow.y - middle.y) * 4) / 3 };
+  const moved = (control: EdgePoint) => ({ x: control.x + step.x, y: control.y + step.y });
+  return `M${at(source!)} C${at(moved(c1!))} ${at(moved(c2!))} ${at(target!)}`;
 }
 
 /**
  * The line drawn in `style` from `ends.source` to `ends.target` through `points`. With no bends it is React Flow's own
- * path, so a line never bent draws exactly as it always has. `label` is the size of what sits on its middle, if
- * anything (or that for how the line runs, for a label that shrinks on a short line), kept clear of the places to
- * pull out a bend.
+ * path, so a line never bent draws exactly as it always has; a curve through one point is that path bowed through it
+ * (`bowed`). `label` is the size of what sits halfway along it, if anything, kept clear of the places to pull out a
+ * bend and of the bow handle.
  */
-export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonly EdgePoint[], label?: LabelSize | ((run: LineRun) => LabelSize | undefined)): LineShape {
-  const sized = (run: LineRun) => (typeof label === 'function' ? label(run) : label);
-  if (points.length === 0) {
+export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonly EdgePoint[], label?: LabelSize): LineShape {
+  if (points.length === 0 || (style === 'curved' && points.length === 1 && points[0]!.bow === true)) {
     const flow = {
       sourceX: ends.source.x,
       sourceY: ends.source.y,
@@ -76,24 +102,27 @@ export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonl
       sourcePosition: POSITIONS[ends.sourceSide],
       targetPosition: POSITIONS[ends.targetSide],
     };
-    const [path, labelX, labelY] =
+    const [flowPath, labelX, labelY] =
       style === 'straight' ? getStraightPath(flow) : style === 'elbow' ? getSmoothStepPath({ ...flow, borderRadius: 0 }) : getBezierPath(flow);
+    // React Flow's curve is halfway along itself, by its own measure, where it puts its label: its bow, unless bowed.
+    const middle = { x: labelX, y: labelY };
+    const bow = points[0] ?? middle;
+    const path = points.length === 0 ? flowPath : bowed(flowPath, middle, bow);
     const samples = samplePath(path);
-    const at = { x: labelX, y: labelY };
-    const run = { length: lengthOf(samples), along: alongAt(samples) };
-    return { path, label: at, inserts: [insertOn(samples, at, sized(run))], ...run };
+    // Its label is on its bow: its handle sits clear of it.
+    const bowHandle = label === undefined ? bow : insertOn(samples, bow, label);
+    return { path, label: bow, inserts: [insertOn(samples, bow, label)], length: lengthOf(samples), bow, bowHandle };
   }
   const stops = [ends.source, ...points, ends.target];
   const legs = style === 'elbow' ? elbowLegs(stops, ends) : stops.slice(1).map((_, index) => (style === 'straight' ? `L${at(stops[index + 1]!)}` : curveLeg(stops, index, ends)));
   const path = `M${at(ends.source)} ${legs.join(' ')}`;
   const samples = samplePath(path);
   const middle = pointAlong(samples, 0.5);
-  const run = { length: lengthOf(samples), along: alongAt(samples) };
-  const size = sized(run);
+  const run = { length: lengthOf(samples), ...bowOf(samples, points, middle, label) };
   return {
     path,
     label: middle,
-    inserts: legs.map((leg, index) => insertOn(samplePath(`M${at(stops[index]!)} ${leg}`), middle, size)),
+    inserts: legs.map((leg, index) => insertOn(samplePath(`M${at(stops[index]!)} ${leg}`), middle, label)),
     ...run,
   };
 }
@@ -234,13 +263,13 @@ const middleOf = ({ source, target }: Pick<LineEnds, 'source' | 'target'>): Edge
  */
 export const bendsOnBoard = (kept: readonly EdgePoint[], ends: Pick<LineEnds, 'source' | 'target'>): EdgePoint[] => {
   const middle = middleOf(ends);
-  return kept.map(({ x, y }) => ({ x: x + middle.x, y: y + middle.y }));
+  return kept.map((point) => ({ ...point, x: point.x + middle.x, y: point.y + middle.y }));
 };
 
 /** Bends on the board, as they are kept for a line with these ends. */
 export const bendsFromBoard = (onBoard: readonly EdgePoint[], ends: Pick<LineEnds, 'source' | 'target'>): EdgePoint[] => {
   const middle = middleOf(ends);
-  return onBoard.map(({ x, y }) => ({ x: x - middle.x, y: y - middle.y }));
+  return onBoard.map((point) => ({ ...point, x: point.x - middle.x, y: point.y - middle.y }));
 };
 
 /** `points` with a new bend on stretch `leg` (0 from the source to the first bend), so it comes in order. */
@@ -248,22 +277,3 @@ export const withPointOn = (points: readonly EdgePoint[], leg: number, point: Ed
 
 /** `points` without the bend at `index`. */
 export const withoutPoint = (points: readonly EdgePoint[], index: number): EdgePoint[] => points.toSpliced(index, 1);
-
-/** The room a label leaves either side of itself on its line, for the arrowhead at one end and the line's start. */
-const LABEL_CLEARANCE = 20;
-
-/**
- * Whether a label of `size` sits on a line, centred on its middle, without reaching the objects at its ends: measured
- * along the line, so a label on a line that runs up and down takes only its height of it.
- */
-export function labelFits(run: LineRun, size: LabelSize): boolean {
-  const extent = Math.abs(run.along.x) * size.width + Math.abs(run.along.y) * size.height;
-  return run.length >= extent + 2 * LABEL_CLEARANCE;
-}
-
-/** The way a sampled line runs at its middle, as a unit vector: across, for one with no length. */
-function alongAt(samples: readonly EdgePoint[]): EdgePoint {
-  const [before, after] = [pointAlong(samples, 0.49), pointAlong(samples, 0.51)];
-  const length = Math.hypot(after.x - before.x, after.y - before.y);
-  return length === 0 ? { x: 1, y: 0 } : { x: (after.x - before.x) / length, y: (after.y - before.y) / length };
-}

@@ -314,6 +314,8 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       else if (action === 'hardReload') contents.reloadIgnoringCache();
       else if (!tab.owner.isDestroyed()) {
         const pressed: WebTabKey = { key: key.key, code: key.code, metaKey: key.meta, ctrlKey: key.control, shiftKey: key.shift, altKey: key.alt };
+        // ⌘K opens the switcher over the window, whose field takes the keyboard from the page.
+        if (key.code === 'KeyK') tab.owner.focus();
         tab.owner.send(WEB_TAB_IPC.key, tabId, pressed);
       }
     });
@@ -352,6 +354,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     tab.problem = undefined;
     void tab.view.webContents.loadURL(url).catch(() => {});
   });
+  ipcMain.handle(WEB_TAB_IPC.focus, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.focus());
   ipcMain.handle(WEB_TAB_IPC.back, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.navigationHistory.goBack());
   ipcMain.handle(WEB_TAB_IPC.forward, (event, tabId: unknown) => tabOf(event, tabId)?.view.webContents.navigationHistory.goForward());
   ipcMain.handle(WEB_TAB_IPC.reload, (event, tabId: unknown) => {

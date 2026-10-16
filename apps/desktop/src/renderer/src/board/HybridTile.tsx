@@ -15,6 +15,7 @@ import {
   type Shell,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
+import { isClosed } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
 import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
 import { planBadge, planStamp } from '../plan/plan-view';
@@ -22,10 +23,10 @@ import { useGateRun } from '../gate/GatesProvider';
 import { gated } from '../gate/gate-view';
 import { runGateShortcut } from '../session/window-keys';
 import { HarnessMark } from './HarnessMark';
-import { agentSetupLine, branchLine, modelLabel, ROLE_LABELS } from './AgentSetup';
+import { agentSetupLine, branchLine, modelLabel, roleText } from './AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { clockBadge } from './schedule';
-import { Bell, BellOff, Check, ClipboardList, Clock, Dot, Expand, FileCheck, FileSearch, Folder, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Trash2, X } from 'lucide-react';
+import { FoldVertical, ArrowUpRight, Bell, BellOff, Check, ClipboardList, Clock, Dot, Expand, FileCheck, FileSearch, Folder, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Trash2, X } from 'lucide-react';
 import { toolSummary } from '../../../shared/needs-you';
 import { Chip, EditableName, FlowPill, IconButton, Menu, RenameButton, StatusPill, Tag, useRenaming, type IconButtonProps, type MenuEntry } from '../ui';
 import { Character } from './Character';
@@ -46,7 +47,7 @@ import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type TileDa
 import { CrewViewContext, lightCrew } from './crew-view';
 import { folderLabel } from './folders';
 import { panesLabel } from '../session/panes';
-import { canRestart, endedShellLabel, exitText, RestartAgent } from '../session/RestartAgent';
+import { canRestart, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
@@ -79,7 +80,7 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered (BA3).
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
-  const { expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, restartAgent, rename, startReview, openReview, openGate, openPlan } =
+  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, restartAgent, rename, startReview, openReview, openGate, openPlan } =
     useContext(TileActionsContext);
   const gate = useGateRun(agent.sessionId);
   const clickOpens = useContext(ClickOpensContext);
@@ -120,9 +121,9 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
   const pill = receiving ? (
     <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
   ) : (
-    <StatusPill {...(sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, TILE_STATE_LABELS))} {...(agent.shellSessionId === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
+    <StatusPill {...(sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, TILE_STATE_LABELS))} {...(agent.shellHarness === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
   );
-  // Badges that don't fit in two lines fold into the "+N", the lowest ranked first, and fold again whenever what the footer
+  // Badges that don't fit in its one line fold into the "+N", the lowest ranked first, and fold again whenever what the footer
   // says changes.
   const footer = useFooterFold({
     key: JSON.stringify([shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt]),
@@ -164,10 +165,15 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
           {canRestart(agent) && (
             <TileButton icon={<RotateCcw />} aria-label="Restart" title="Restart it, carrying on its conversation" onClick={() => restartAgent(agent.sessionId)} />
           )}
+          {agent.state === 'stopped-by-restart' && (
+            <TileButton icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
+          )}
           <TileMenu
             entries={[
               otherOpen(clickOpens, () => expand(id), () => openAgent(agent)),
+              ...(isClosed(agent) ? [{ label: 'Fold to a chip', icon: <FoldVertical />, onSelect: () => setFolded(id, true) }] : []),
               ...(canRestart(agent) ? [{ label: 'Restart agent', icon: <RotateCcw />, onSelect: () => restartAgent(agent.sessionId) }] : []),
+              ...(agent.state === 'stopped-by-restart' ? [{ label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void resumeAgent(agent.sessionId) }] : []),
               'separator',
               { label: 'Rename', icon: <Pencil />, shortcut: 'F2', onSelect: renaming.startSoon },
               { label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => scheduleAgent(agent) },
@@ -246,13 +252,6 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
           {agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}
         </span>
       )}
-      {agent.state === 'stopped-by-restart' && <ResumeRow onResume={() => resumeAgent(agent.sessionId)} />}
-      {canRestart(agent) && (
-        <span className="hybrid-tile-resume hybrid-tile-restart" onDoubleClick={stopPropagation}>
-          <RestartAgent agent={agent} className="nodrag" />
-          {exitText(agent)}
-        </span>
-      )}
       <span className="hybrid-tile-footer" ref={footer.ref}>
           {shown.map((badge) => {
             switch (badge.kind) {
@@ -267,7 +266,7 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
                 return (
                   <Tag key="role" className="hybrid-tile-setup" data-testid="tile-role" title={agentSetupLine(agent)}>
                     {ROLE_ICONS[badge.role]}
-                    <span className="hybrid-tile-badge-text">{ROLE_LABELS[badge.role]}</span>
+                    <span className="hybrid-tile-badge-text">{roleText(badge.role, badge.name)}</span>
                   </Tag>
                 );
               case 'issue':
@@ -285,8 +284,15 @@ function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: A
                     {shortIssueId(badge.issue)}
                   </Chip>
                 );
+              case 'finished':
+                return (
+                  <Tag key="finished" className="hybrid-tile-setup" data-testid="tile-finished" title={`${badgeLine(badge, shells.length)} (${new Date(badge.at).toLocaleString()})`}>
+                    <Check aria-hidden />
+                    <span className="hybrid-tile-badge-text">Finished</span>
+                  </Tag>
+                );
               case 'pr':
-                return <PullRequestChip key={badge.pr.number} pr={badge.pr} open={() => openPullRequest(agent, badge.pr)} />;
+                return <PullRequestChip key={badge.pr.number} pr={badge.pr} pushed={badge.pushed} open={() => openPullRequest(agent, badge.pr)} />;
               case 'schedule':
                 return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => scheduleAgent(agent)} />;
               case 'shells':
@@ -620,18 +626,23 @@ const CHECK_MARKS: Record<ChecksState, ReactNode> = {
   none: null,
 };
 
-/** A pull request made from the agent's branch: its number in its state's colour, and a mark for its checks. */
-export function PullRequestChip({ pr, open }: { pr: PullRequest; open(): void }) {
+/**
+ * A pull request made from the agent's branch: its number in its state's colour, and a mark for its checks. One of a
+ * branch it `pushed` to leads with an arrow and says so; it is only shown, as it isn't the agent's own.
+ */
+export function PullRequestChip({ pr, pushed = false, open }: { pr: PullRequest; pushed?: boolean; open(): void }) {
   const checks = checksLabel(pr);
   return (
     <Chip
       mono
+      icon={pushed ? <ArrowUpRight aria-hidden /> : undefined}
       className="hybrid-tile-pr nodrag"
       data-testid="tile-pr"
       data-state={pr.state}
       data-checks={pr.checks}
-      aria-label={`Pull request #${pr.number}, ${pr.state}, ${checks}`}
-      title={`#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it in a PR tab.`}
+      data-pushed={pushed || undefined}
+      aria-label={`${pushed ? 'Pushed to pull request' : 'Pull request'} #${pr.number}, ${pr.state}, ${checks}`}
+      title={`${pushed ? 'Pushed to ' : ''}#${pr.number} ${pr.title}\n${pr.state}, ${checks}. Open it in a PR tab.`}
       onClick={open}
       onDoubleClick={stopPropagation}
     >

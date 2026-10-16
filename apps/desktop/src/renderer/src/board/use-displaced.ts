@@ -12,14 +12,22 @@ const SETTLE_MS = 400;
 /** Nothing held: no drag or resize under way. */
 const AT_REST: Held = new Map();
 
+/** No crew to move as one. */
+const NO_CREWS: readonly (readonly string[])[] = [];
+
 /**
- * `nodes` as the board draws them with `expanded` open and each pair in `overlapsAllowed` free to overlap
- * (`displaced`), the ones moved, and for a moment the ones going back, marked to ease there. While a drag or resize
+ * `nodes` as the board draws them with `expanded` open, each pair in `overlapsAllowed` free to overlap and each of
+ * `crews` moved as one (`displaced`), the ones moved, and for a moment the ones going back, marked to ease there. While a drag or resize
  * is under way, everything starts from where it was drawn as it began (`held`), so starting one moves nothing. The
  * board's own nodes keep their places, so nothing moved is saved: a drag starts from where a node is drawn and ends
  * where it was dropped, as the board saves any drag.
  */
-export function useDisplaced(nodes: BoardNode[], expanded: ExpandedTiles, overlapsAllowed: OverlapsAllowed): BoardNode[] {
+export function useDisplaced(
+  nodes: BoardNode[],
+  expanded: ExpandedTiles,
+  overlapsAllowed: OverlapsAllowed,
+  crews: readonly (readonly string[])[] = NO_CREWS,
+): BoardNode[] {
   const changing = nodes.some((node) => node.dragging === true || node.resizing === true);
   /** The nodes, and where they were drawn, as last rendered with nothing changing: what a change starts from. */
   const rest = useRef<{ nodes: BoardNode[]; shown: BoardNode[] }>(undefined);
@@ -33,7 +41,10 @@ export function useDisplaced(nodes: BoardNode[], expanded: ExpandedTiles, overla
     holding = undefined;
     setHeld(undefined);
   }
-  const shown = useMemo(() => displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST), [nodes, expanded, overlapsAllowed, holding]);
+  const shown = useMemo(
+    () => displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST, crews),
+    [nodes, expanded, overlapsAllowed, holding, crews],
+  );
   // Kept as it renders, not after an effect: a change in the very next render starts from this one.
   if (!changing) rest.current = { nodes, shown };
   // `displaced` keeps the nodes in order, and the ones it doesn't move as they were.

@@ -5,19 +5,19 @@ import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AgentHost } from './agents.ts';
-import { boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
+import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
 import { checkedBranchName } from './worktrees.ts';
+import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { invalidParams, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
-  AGENT_ROLES,
-  AGENT_STATES,
   BOARD_ERROR,
+  CREW_EVENT_KINDS,
   DEFAULT_ACTIVITY_LIMIT,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   HARNESSES,
-  isAgentState,
+  isWaitState,
   MAX_ACTIVITY_LIMIT,
   MAX_CREW_DEPTH,
   MAX_ORCHESTRATOR_READ_BYTES,
@@ -27,9 +27,11 @@ import {
   orchestratorTextRefusal,
   waitsOnUser,
   SETTLED_STATES,
+  WAIT_STATES,
   type Agent,
-  type AgentRole,
   type AgentState,
+  type CrewEvent,
+  type CrewEventKind,
   type DaemonEvent,
   type DaemonMethod,
   type DaemonMethods,
@@ -37,11 +39,18 @@ import {
   type OrchestrateScope,
   type OrchestratorAction,
   type OrchestratorActivity,
+  type PullRequest,
+  type WaitState,
   type Zone,
 } from './protocol.ts';
+import type { LayoutMethods } from './orchestrator-layout.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 
-type OrchestratorMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `orchestrator.${string}`>>;
+/** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
+type OrchestratorMethods = Omit<
+  Pick<DaemonMethods, Extract<keyof DaemonMethods, `orchestrator.${string}`>>,
+  keyof LayoutMethods | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole'
+>;
 
 /** The terminal an orchestrator's agent starts in, before any client attaches and resizes it. */
 const SPAWN_SIZE = { cols: 120, rows: 40 };
@@ -73,16 +82,27 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.spawn': 'spawn',
   'orchestrator.send': 'send',
   'orchestrator.interrupt': 'interrupt',
+  'orchestrator.restart': 'restart',
   'orchestrator.close': 'close',
   'orchestrator.addEdge': 'add-edge',
   'orchestrator.removeEdge': 'remove-edge',
+  'orchestrator.move': 'move',
+  'orchestrator.arrange': 'arrange',
+  'orchestrator.addZone': 'add-zone',
+  'orchestrator.changeZone': 'change-zone',
+  'orchestrator.removeZone': 'remove-zone',
+  'orchestrator.addNote': 'add-note',
+  'orchestrator.editNote': 'edit-note',
+  'orchestrator.removeNote': 'remove-note',
+  'orchestrator.setRole': 'set-role',
+  'orchestrator.removeRole': 'remove-role',
 };
 
 /**
  * Who acts through an orchestrator method: an orchestrator agent, or the user's side, a shell or the user
  * with no token, at board scope.
  */
-interface Orchestrator extends Pick<Agent, 'sessionId' | 'name' | 'zoneId' | 'repoRoot'> {
+export interface Orchestrator extends Pick<Agent, 'sessionId' | 'name' | 'zoneId' | 'repoRoot'> {
   orchestrate: OrchestrateScope;
   /** The orchestrator agent; null on the user's side, whose agents and edges are the user's own. */
   agent: Agent | null;
@@ -112,7 +132,10 @@ const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'w
 
 export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
-  agents: Pick<AgentHost, 'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'stop' | 'finalMessage' | 'orchestrateFacts'>;
+  agents: Pick<
+    AgentHost,
+    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'resume' | 'stop' | 'finalMessage' | 'orchestrateFacts' | 'idlePrompted'
+  >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'remove'>;
   /** Deletes the agent with its worktree and branch, as `agent.delete` without `force` does. */
@@ -121,7 +144,37 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   log(message: string): void;
 }
 
+/** What a log line says beyond who and what: what it acted on (an agent, or a tile, zone or note), and what was asked. */
+export interface ActivityEntry {
+  /** An agent's session id, or a tile's, zone's or note's id; its name as it is now. */
+  on?: { id: string; name: string };
+  detail: string;
+}
+
+/**
+ * What the layout commands (`orchestrator-layout.ts`) act through: who calls, what its scope reaches, and the log, as
+ * every orchestrator method has them.
+ */
+export interface OrchestratorAccess {
+  /** Who calls `method`: as every orchestrator method finds it, refusing (and logging) a session that may not. */
+  caller(method: DaemonMethod, params: Record<string, unknown>, connection: BoardConnection): Orchestrator;
+  /** Runs `act` as `me` doing `action`, logging it done or refused with what `entry` holds by then. */
+  logged<T>(me: Orchestrator, action: OrchestratorAction, entry: ActivityEntry, act: () => Promise<T> | T): Promise<T>;
+  /** Whether `me` may act on `agent`: itself, one it started, or one in its scope. */
+  reachesAgent(me: Orchestrator, agent: Agent): boolean;
+  /** Whether `zone` is in `me`'s scope: its own zone, a zone of its repo, or any, as its scope says. */
+  reachesZone(me: Orchestrator, zone: Zone): boolean;
+  /** Whether `me` made what `madeBy` names, or an agent of its crew did; the user's side made everything. */
+  madeByCrew(me: Orchestrator, madeBy: string | null): boolean;
+  /** Whether `agent`, in `zone`, would orchestrate where it can't now: by the zone's switch, as no hand-made scope does. */
+  wouldGainOrchestrating(agent: Agent, zone: Zone | undefined): boolean;
+  /** `me`'s scope in words, for a refusal. */
+  scopeText(me: Orchestrator): string;
+}
+
 export interface OrchestratorHost {
+  /** What the layout commands act through. */
+  access: OrchestratorAccess;
   /** Writes a line of the activity log as `actor`, done or refused: a hand-off is any agent's. */
   logActivity: ActivityLogger;
   /** Whether the session may orchestrate: an agent's own, live, with `orchestrate` on, or one on the user's side. */
@@ -138,6 +191,8 @@ export interface OrchestratorHost {
   notOrchestrating(sessionId: string): string;
   /** Logs a control method the guard refused the session (`guardBoardCallers`), as the tile it speaks for. */
   refused(sessionId: string, method: DaemonMethod, params: unknown, reason: string): void;
+  /** Hears an agent's own pull requests read (`PullRequestWatcherOptions.onRead`): a new open one is a crew event. */
+  onPullRequestsRead(sessionId: string, own: readonly PullRequest[], first: boolean): void;
   /** Hears every event the daemon broadcasts: agents' updates move waits on. */
   onEvent(event: DaemonEvent): void;
   handlers<Context extends BoardConnection>(): RpcHandlers<OrchestratorMethods, Context>;
@@ -187,6 +242,17 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
    * doesn't take their state until it has.
    */
   const awaitingTurn = new Set<string>();
+  /** What happened to each agent, once each: what a wait with `since` answers with. */
+  const crewEvents = createCrewEventLog({
+    seed: agents.list(),
+    idlePrompted: (sessionId) => agents.idlePrompted(sessionId),
+    agent: (sessionId) => agents.get(sessionId),
+    leads(agent) {
+      const leads: string[] = [];
+      for (let at = agent.spawnedBy; at !== null && leads.length < MAX_CREW_DEPTH; at = agents.get(at)?.spawnedBy ?? null) leads.push(at);
+      return leads;
+    },
+  });
   /** Each wait's check, run on every agent update. */
   const waiters = new Set<{ check(): void; finish(timedOut: boolean): void }>();
 
@@ -196,11 +262,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /** Who acted, as the log keeps it: an orchestrator, or a tile that tried to be one. */
   type Actor = Pick<Agent, 'sessionId' | 'name'>;
 
-  /** What a log line says beyond who and what: the agent acted on, and what was asked. Filled in as it is known. */
-  interface Entry {
-    on?: Pick<Agent, 'sessionId' | 'name'>;
-    detail: string;
-  }
+  /** What a log line says, filled in as it is known. */
+  type Entry = ActivityEntry;
 
   /** Per tile, how many refused lines it has logged in the current window, and when that window began. */
   const refusals = new Map<string, { since: number; count: number }>();
@@ -231,7 +294,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         actor.sessionId,
         actor.name,
         action,
-        entry.on?.sessionId ?? null,
+        entry.on?.id ?? null,
         entry.on?.name ?? null,
         entry.detail.slice(0, MAX_DETAIL_LENGTH),
         refused === undefined ? 'done' : 'refused',
@@ -303,6 +366,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     return false;
   };
 
+  /** `me`'s crew: the agents it started, and theirs; for the user's side, every agent. */
+  const crewOf = (me: Orchestrator): Agent[] =>
+    agents.list().filter((agent) => agent.sessionId !== me.agent?.sessionId && (me.agent === null || inCrewOf(me.agent, agent.spawnedBy)));
+
   const scopeText = (me: Orchestrator): string => orchestrateScopeWords(me.orchestrate, 'your');
 
   const agentNamed = (sessionId: string): Agent => {
@@ -320,7 +387,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   /**
-   * Throws unless `me` may steer `agent` (send to it, interrupt or close it, or wire an edge into it): as
+   * Throws unless `me` may steer `agent` (send to it, interrupt, restart or close it, or wire an edge into it): as
    * `checkTarget`, and not an orchestrator whose scope is wider than `me`'s (`SCOPE_RANK`), so no orchestrator reaches
    * past its own scope through another's.
    */
@@ -419,6 +486,19 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   return {
+    access: {
+      caller: orchestrator,
+      logged,
+      reachesAgent: (me, agent) => agent.sessionId === me.agent?.sessionId || startedBy(me, agent) || SCOPES[me.orchestrate].agent(me, agent),
+      reachesZone: (me, zone) => SCOPES[me.orchestrate].zone(me, zone),
+      madeByCrew: (me, madeBy) => me.agent === null || inCrewOf(me.agent, madeBy),
+      wouldGainOrchestrating(agent, zone) {
+        if (agent.orchestrate !== null || agent.endedAt !== null || zone === undefined || !zone.agentsOrchestrate) return false;
+        const facts = agents.orchestrateFacts(agent.sessionId);
+        return !facts.off && facts.depth < MAX_CREW_DEPTH - 1;
+      },
+      scopeText,
+    },
     logActivity: record,
     mayOrchestrate,
     actsForUser,
@@ -437,14 +517,21 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
       record({ sessionId: caller.tileId, name: caller.name }, action, { detail: askedText(params) }, reason);
     },
 
+    onPullRequestsRead(sessionId, own, first) {
+      crewEvents.pullRequestsRead(sessionId, own, first);
+      notifyWaiters();
+    },
+
     onEvent(event) {
       if (event.type === 'agent.updated') {
         if (awaitingTurn.has(event.agent.sessionId) && (event.agent.endedAt !== null || TURN_STATES.has(event.agent.state))) {
           awaitingTurn.delete(event.agent.sessionId);
         }
+        crewEvents.observe(event.agent);
         notifyWaiters();
       } else if (event.type === 'agent.removed') {
         awaitingTurn.delete(event.sessionId);
+        crewEvents.forget(event.sessionId);
         notifyWaiters();
       }
     },
@@ -463,8 +550,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const prompt = optionalStringParam(p, 'prompt') ?? '';
             const harness = optionalStringParam(p, 'harness') ?? 'claude';
             if (!HARNESSES.includes(harness as Harness)) throw invalidParams(`harness must be ${HARNESSES.join(' or ')}`);
-            const role = optionalStringParam(p, 'role');
-            if (role !== undefined && !AGENT_ROLES.includes(role as AgentRole)) throw invalidParams(`role must be ${AGENT_ROLES.join(', ')}`);
             const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
             if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to start the agent in`);
             const zone = options.zones().find((each) => each.id === zoneId);
@@ -481,12 +566,14 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               if (repoRoot === null) throw invalidParams(`${zone.name} has no repo to cut a branch from`);
               await checkBaseConfig(repoRoot, baseBranch);
             }
+            const used: { template: string | null } = { template: null };
             const agent = await agents.spawn(
               {
                 zoneId,
                 harness: harness as Harness,
                 model: optionalStringParam(p, 'model'),
-                role: role as AgentRole | undefined,
+                role: optionalStringParam(p, 'role'),
+                noTemplate: optionalBooleanParam(p, 'noTemplate'),
                 name: optionalStringParam(p, 'name'),
                 branch: optionalStringParam(p, 'branch'),
                 baseBranch,
@@ -495,10 +582,12 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 ...SPAWN_SIZE,
               },
               me.agent?.sessionId,
+              undefined,
+              used,
             );
             if (agent.description !== '') awaitingTurn.add(agent.sessionId);
-            entry.on = agent;
-            return agent;
+            entry.on = agentTarget(agent);
+            return { ...agent, template: used.template };
           });
         },
 
@@ -509,7 +598,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           return logged(me, 'send', entry, async () => {
             const text = stringParam(p, 'text');
             const to = agentNamed(stringParam(p, 'sessionId'));
-            entry.on = to;
+            entry.on = agentTarget(to);
             checkSteerable(me, to);
             checkText(text);
             if (to.endedAt !== null) throw invalidParams(`${to.name} has ended`);
@@ -535,28 +624,72 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         'orchestrator.wait': async (params, connection) => {
           const p = paramsObject(params);
           const me = orchestrator('orchestrator.wait', p, connection);
-          const ids = p.sessionIds;
-          if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_WAIT_AGENTS || !ids.every((id) => typeof id === 'string')) {
-            throw invalidParams(`sessionIds must be 1 to ${MAX_WAIT_AGENTS} agent ids`);
+          const ids = p.sessionIds ?? [];
+          if (!Array.isArray(ids) || ids.length > MAX_WAIT_AGENTS || !ids.every((id) => typeof id === 'string')) {
+            throw invalidParams(`sessionIds must be up to ${MAX_WAIT_AGENTS} agent ids`);
           }
+          const crew = optionalBooleanParam(p, 'crew') ?? false;
+          if (ids.length === 0 && !crew) throw invalidParams('name the agents to wait on, or wait on your crew');
           for (const id of ids) target(me, id);
           const states = p.states === undefined ? SETTLED_STATES : p.states;
-          if (!Array.isArray(states) || states.length === 0 || !states.every(isAgentState)) {
-            throw invalidParams(`states must be some of ${AGENT_STATES.join(', ')}`);
+          if (!Array.isArray(states) || states.length === 0 || !states.every(isWaitState)) {
+            throw invalidParams(`states must be some of ${WAIT_STATES.join(', ')}`);
+          }
+          const asked = optionalStringParam(p, 'since');
+          const kinds = p.kinds ?? CREW_EVENT_KINDS;
+          if (!Array.isArray(kinds) || kinds.length === 0 || !kinds.every((kind) => CREW_EVENT_KINDS.includes(kind as CrewEventKind))) {
+            throw invalidParams(`kinds must be some of ${CREW_EVENT_KINDS.join(', ')}`);
+          }
+          if (asked === undefined && crew && ids.length === 0 && crewOf(me).length === 0) throw invalidParams('you have no crew to wait on yet');
+          // `now` is as the wait began: what comes while it waits is news.
+          const since = asked === 'now' ? crewEvents.cursor() : asked;
+          /** The events it hears: its named agents', and its crew's as it was when each happened. */
+          const keep = (event: LoggedEvent) =>
+            kinds.includes(event.kind) &&
+            (ids.includes(event.sessionId) || (crew && (me.agent === null || event.leads.includes(me.agent.sessionId))));
+          if (since !== undefined) {
+            try {
+              crewEvents.after(since, keep);
+            } catch (error) {
+              throw invalidParams((error as Error).message);
+            }
           }
           const any = optionalBooleanParam(p, 'any') ?? false;
           const timeoutMs = Math.min(optionalCountParam(p, 'timeoutMs') ?? DEFAULT_ORCHESTRATOR_WAIT_MS, MAX_ORCHESTRATOR_WAIT_MS);
           return new Promise((resolveWait, rejectWait) => {
-            const current = (): Agent[] =>
-              (ids as string[]).map((id) => {
+            const current = (): Agent[] => {
+              const named = (ids as string[]).flatMap((id) => {
                 const agent = agents.get(id);
+                // Listening for events, a deleted agent's end is the news: it is no failure.
+                if (agent === undefined && since !== undefined) return [];
                 if (agent === undefined) throw invalidParams(`agent ${id} was deleted`);
-                return agent;
+                return [agent];
               });
-            const there = (agent: Agent) => !awaitingTurn.has(agent.sessionId) && (states as AgentState[]).includes(agent.state);
+              return crew ? [...named, ...crewOf(me).filter((agent) => !ids.includes(agent.sessionId))] : named;
+            };
+            const there = (agent: Agent) => {
+              if (awaitingTurn.has(agent.sessionId)) return false;
+              const wanted = states as WaitState[];
+              return wanted.includes(crewEvents.waitState(agent)) || (wanted.includes('finished') && agent.workFinishedAt !== null);
+            };
+            /** The events after `since` it hears. */
+            const news = () => {
+              const read = crewEvents.after(since!, keep);
+              // As clients see them: without the crew each was heard in.
+              const events = read.events.map(({ cursor, at, sessionId, name, kind, detail }): CrewEvent => ({ cursor, at, sessionId, name, kind, detail }));
+              return { events, cursor: read.cursor, missed: read.missed };
+            };
+            const answer = (timedOut: boolean) => {
+              const heard = since === undefined ? { events: [], cursor: crewEvents.cursor(), missed: false } : news();
+              return { agents: current(), timedOut, ...heard };
+            };
             const waiter = {
               check() {
                 try {
+                  if (since !== undefined) {
+                    if (news().events.length > 0) waiter.finish(false);
+                    return;
+                  }
                   const list = current();
                   if (any ? list.some(there) : list.every(there)) waiter.finish(false);
                 } catch (error) {
@@ -569,7 +702,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 if (!waiters.delete(waiter)) return;
                 clearTimeout(timer);
                 try {
-                  resolveWait({ agents: current(), timedOut });
+                  resolveWait(answer(timedOut));
                 } catch (error) {
                   rejectWait(error);
                 }
@@ -600,9 +733,29 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           const entry: Entry = { detail: '' };
           return logged(me, 'interrupt', entry, () => {
             const agent = agentNamed(stringParam(p, 'sessionId'));
-            entry.on = agent;
+            entry.on = agentTarget(agent);
             checkSteerable(me, agent);
             return agents.interrupt(agent.sessionId);
+          });
+        },
+
+        'orchestrator.restart': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.restart', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'restart', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            const fresh = optionalBooleanParam(p, 'fresh') === true;
+            const prompt = optionalStringParam(p, 'prompt');
+            if (prompt !== undefined && !fresh) throw invalidParams('a prompt needs fresh: a restart that carries on its conversation takes none');
+            if (fresh) {
+              entry.detail = `fresh${prompt === undefined || prompt.trim() === '' ? '' : `: ${prompt.trim()}`}`;
+              if (prompt !== undefined) checkText(prompt);
+            }
+            // Never forced: a busy shell is the user's to end.
+            return agents.resume(agent.sessionId, false, fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined);
           });
         },
 
@@ -614,7 +767,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           return logged(me, remove ? 'remove' : 'close', entry, async () => {
             optionalBooleanParam(p, 'remove');
             const agent = agentNamed(stringParam(p, 'sessionId'));
-            entry.on = agent;
+            entry.on = agentTarget(agent);
             checkSteerable(me, agent);
             if (!remove) return agents.stop(agent.sessionId);
             // The user's side removes any agent, as the user does in the app; never forced, so unsaved work stands.
@@ -645,7 +798,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           return logged(me, 'add-edge', entry, () => {
             const from = edgeEnd(me, stringParam(p, 'from'), 'from');
             const to = agentNamed(stringParam(p, 'to'));
-            entry.on = to;
+            entry.on = agentTarget(to);
             entry.detail = `from ${from.name}, carrying ${typeof p.payload === 'string' ? p.payload : 'final-message'}`;
             edgeEnd(me, to.sessionId, 'to');
             // Made as the user makes one, but never paused, and never approved: a gate or script waits for the user.
@@ -668,7 +821,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const edge = options.flowEdges.get(id);
             if (edge === undefined) throw invalidParams(`no flow edge ${id}`);
             const to = agents.get(edge.to);
-            entry.on = to;
+            entry.on = agentTarget(to);
             entry.detail = `from ${agents.get(edge.from)?.name ?? 'an agent'} (edge ${edge.id})`;
             if (me.agent !== null && !inCrewOf(me.agent, edge.madeBy)) {
               throw outOfScope('neither you nor an agent you started made that edge: an orchestrator removes only edges its crew made');

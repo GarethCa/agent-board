@@ -1,35 +1,46 @@
-// `agent-board mcp`: the board as a stdio MCP server (ADR-0010). A few tools over the same board-ops the CLI uses, and
-// instructions that say once where the agent is and to read `agent-board --help` for the rest.
+// The board as an MCP server (ADR-0010): a few tools over the same board-ops the CLI uses, and instructions that say
+// once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
+// here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
 import {
   addEdge,
   BoardError,
   askUser,
   BoardRefs,
   closeAgent,
+  defaultRolesView,
   presentPlan,
   readPlanSource,
   EDGE_CARRIES,
   edgesView,
   handOff,
+  removeDefaultRole,
   removeEdge,
   connectionsView,
   identifyView,
   interruptAgent,
+  restartAgent,
   newAgent,
   openBoardSession,
   readAgent,
   readBoard,
   sendToAgent,
+  setDefaultRole,
   setOwnStatus,
   openOwnPullRequest,
   treeView,
   waitForAgents,
+  watchCrew,
   type BoardSession,
 } from './board-ops.ts';
 import { DaemonRpcError } from './client.ts';
+import { addNote, arrangeZone, editNote, moveTile, removeNote, type PlaceOptions } from './layout-ops.ts';
 import {
   AGENT_ROLES,
-  AGENT_STATES,
+  ARRANGE_BYS,
+  CREW_EVENT_KINDS,
+  ARRANGE_LAYOUTS,
+  NOTE_KINDS,
+  TILE_SIDES,
   DAEMON_VERSION,
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
@@ -37,18 +48,22 @@ import {
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
+  MAX_ROLE_NAME_LENGTH,
   MAX_QUESTION_LENGTH,
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   HARNESSES,
-  isAgentState,
+  isCrewSince,
+  isWaitState,
   lineSplitter,
   MAX_STATUS_LENGTH,
   RPC_ERROR,
   statusLine,
-  type AgentState,
   type BoardCaller,
+  type CrewEventKind,
+  type WaitState,
+  WAIT_STATES,
 } from './protocol.ts';
 import { handleRpcLine, RpcMethodError, type RpcHandlers } from './rpc.ts';
 
@@ -63,8 +78,9 @@ export const BOARD_MCP_INSTRUCTIONS =
 
 /** What the server adds to its instructions for an agent that may orchestrate as it starts. */
 export const ORCHESTRATOR_INSTRUCTIONS =
-  'The user lets you orchestrate: you may start, message, watch and close other agents, and join them with edges, with ' +
-  'the tools below or the same commands in `agent-board help orchestrate`.';
+  'The user lets you orchestrate: you may start, message, watch and close other agents, join them with edges, and keep ' +
+  'your zone tidy (move tiles, arrange your crew, notes), with the tools below or the same commands in ' +
+  '`agent-board help orchestrate`.';
 
 /** How long the `wait` tool waits by default, in seconds. */
 const MCP_WAIT_SECONDS = DEFAULT_ORCHESTRATOR_WAIT_MS / 1000;
@@ -166,12 +182,14 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     name: 'set_status',
     description:
       'Set the one line your tile shows: the change you are making now, not the task you were given. Call it once you ' +
-      'understand the work, and again when its direction changes. As `agent-board status set`.',
+      'understand the work, and again when its direction changes. With done, your work is finished, not only this ' +
+      'turn: the agent that started you hears it once. As `agent-board status set`.',
     inputSchema: {
       type: 'object',
       properties: {
         summary: { type: 'string', maxLength: MAX_STATUS_LENGTH, description: 'What you are doing now, in a line.' },
         progress: { type: 'integer', minimum: 0, maximum: 100, description: 'How far through you are, if you know.' },
+        done: { type: 'boolean', description: 'Your work is finished (handoff says so too). Your next prompt clears it.' },
       },
       required: ['summary'],
       additionalProperties: false,
@@ -188,6 +206,14 @@ export const BOARD_MCP_TOOLS: Tool[] = [
 ];
 
 const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e) or unique name.' };
+
+/** Where the layout tools put something, as `agent-board move` takes it. */
+const PLACE_PROPERTIES = {
+  to: { type: 'string', description: 'The zone or group to put it in, by ref; `board` for loose on the board. Its own zone without.' },
+  at: { type: 'string', description: 'x,y relative to the zone, such as 40,120.' },
+  near: { type: 'string', description: 'A tile or note to put it a gap beside, by ref.' },
+  side: { type: 'string', enum: [...TILE_SIDES], description: 'Which side of near: below by default.' },
+};
 
 /** The orchestrator's tools (ADR-0011), listed only to a session that may orchestrate (a shell's too). As the CLI's commands. */
 export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
@@ -207,10 +233,18 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         model: { type: 'string', description: "The harness's model (opus, sonnet, haiku; gpt-5-codex, gpt-5); its default without." },
         role: {
           type: 'string',
-          enum: [...AGENT_ROLES],
+          maxLength: MAX_ROLE_NAME_LENGTH,
           description:
-            "Its role: it starts with its zone's template for the role, then the prompt. A reviewer or follow-up-reviewer " +
-            'works on a detached checkout of base (the branch it reviews), with no branch of its own.',
+            `Its role: ${AGENT_ROLES.join(', ')}, or any other name (designer, release prep) for a custom role of that ` +
+            "name, which its tile shows. It starts with its zone's template for the role (for a name, else the app's " +
+            'default role of that name: see the roles tool), then the prompt; a name with neither starts with the prompt ' +
+            'alone. A reviewer or follow-up-reviewer works on a detached checkout of base (the branch it reviews), with no ' +
+            'branch of its own.',
+        },
+        template: {
+          type: 'boolean',
+          description:
+            "false starts it without its role's template: its first message is exactly your prompt (and the issue). For when you write the whole prompt. The result says which template was applied. As --no-template.",
         },
         branch: { type: 'string', description: 'Its new branch; made from its name by default. Not for a reviewer.' },
         base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch." },
@@ -236,17 +270,24 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'wait',
     description:
       'Wait until each agent\'s turn has ended (at its prompt, needing the user, failed or stopped), and say where each ' +
-      `is. A turn you started counts only once it began, so call it straight after new_agent or send. Gives up after ` +
-      `${MCP_WAIT_SECONDS} s by default, saying so: then call it again. As \`agent-board wait\`.`,
+      `is. A turn you started counts only once it began, so call it straight after new_agent or send. until finished ` +
+      `waits until it says its work is finished (it handed off, or set its status done), which a turn ending while its ` +
+      `background work runs is not. With no agents, it waits on your crew (the agents you started, and theirs). With ` +
+      `since, it waits instead for what happens to them next, each once: ${CREW_EVENT_KINDS.join(', ')}; it answers ` +
+      `with each as a line (at most 100) and a cursor to pass as since next time: "now" the first time. Gives up ` +
+      `after ${MCP_WAIT_SECONDS} s by default, saying so: then call it again. As \`agent-board wait\` and ` +
+      `\`agent-board watch\`.`,
     inputSchema: {
       type: 'object',
       properties: {
-        agents: { type: 'array', items: AGENT_REF, minItems: 1 },
-        until: { type: 'array', items: { type: 'string', enum: [...AGENT_STATES] }, description: 'Wait for these states instead.' },
+        agents: { type: 'array', items: AGENT_REF },
+        crew: { type: 'boolean', description: 'Your crew too, besides the agents named: the agents you started, and theirs.' },
+        until: { type: 'array', items: { type: 'string', enum: [...WAIT_STATES] }, description: 'Wait for these states instead.' },
         any: { type: 'boolean', description: 'Until one of them is there, not all.' },
+        since: { type: 'string', description: 'Wait for what happens after this cursor instead: "now", a cursor it answered with, or "all".' },
+        kinds: { type: 'array', items: { type: 'string', enum: [...CREW_EVENT_KINDS] }, description: 'With since, only these.' },
         timeout_seconds: { type: 'integer', minimum: 0, description: `How long to wait; ${MCP_WAIT_SECONDS} by default.` },
       },
-      required: ['agents'],
       additionalProperties: false,
     },
   },
@@ -266,6 +307,23 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'interrupt',
     description: "Interrupt an agent's turn, as Ctrl-C would: it waits at its prompt. As `agent-board interrupt`.",
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
+  },
+  {
+    name: 'restart',
+    description:
+      "Start an ended agent again in its tile, worktree and branch, carrying on its conversation, as its tile's Restart " +
+      'does. With `fresh` it starts a new conversation instead, under a new session id (the old one is kept in the ' +
+      "agent's earlierConversations), on `prompt` as its first message. As `agent-board restart`.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent: AGENT_REF,
+        fresh: { type: 'boolean', description: 'Start a new conversation instead of carrying on the old one.' },
+        prompt: { type: 'string', description: 'With fresh: its first message.' },
+      },
+      required: ['agent'],
+      additionalProperties: false,
+    },
   },
   {
     name: 'add_edge',
@@ -315,6 +373,112 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'move',
+    description:
+      'Move a tile (an agent, a shell, or you) or a note in your scope, as dragging it would: into a zone in your scope ' +
+      "or a group you made, exactly at a place (on the zone's grid) or beside another, what is in the way moving aside. " +
+      'As `agent-board move`.',
+    inputSchema: {
+      type: 'object',
+      properties: { tile: { type: 'string', description: 'The tile or note, by ref (agent:9c1e, shell:07bd, item:31f0) or name.' }, ...PLACE_PROPERTIES },
+      required: ['tile'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'arrange',
+    description:
+      "Lay out your zone's tiles that you may move, on its grid: you first, then a cluster per issue or branch ticket (a " +
+      'label and a sticky you sign saying what each agent is doing, then its implementer and its reviewer, a rail apart ' +
+      'where an edge joins them), or a row per role or state. Arranging again moves the stickies with their clusters, ' +
+      'keeping any edited text. As ' +
+      '`agent-board arrange`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+        by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue by default.' },
+        layout: { type: 'string', enum: [...ARRANGE_LAYOUTS], description: 'A row per group (rows, the default), or filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'add_note',
+    description:
+      'Put a note of short markdown on the board, marked as made by you, in your zone or beside a tile, what is there moving ' +
+      'aside: an agent note (a card with your badge and the time, never a sticky) by default, or a signed sticky or text with kind. Near an agent with no ' +
+      "side, it is added to its cluster's note, else goes in the slot before it. As `agent-board note add`.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        kind: { type: 'string', enum: [...NOTE_KINDS], description: 'Left out, an agent note from you; sticky makes a signed sticky; or text.' },
+        color: { type: 'string', description: 'Text only (an agent note has none, and ignores one): yellow, orange, pink, violet, blue, green, grey or white (text: ink, grey, red, …), or #rrggbb.' },
+        ...PLACE_PROPERTIES,
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'edit_note',
+    description: 'Change the text (or text item\'s colour) of a note you, or an agent you started, made. As `agent-board note edit`.',
+    inputSchema: {
+      type: 'object',
+      properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' }, text: { type: 'string' }, color: { type: 'string' } },
+      required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remove_note',
+    description: 'Remove a note or link card you, or an agent you started, made. As `agent-board note remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' } },
+      required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'roles',
+    description:
+      "The app's default roles: a custom role's name and the template an agent started in it begins with, in any zone " +
+      'with no template of its own for the name. As `agent-board roles`.',
+    inputSchema: NO_INPUT,
+  },
+  {
+    name: 'set_role',
+    description:
+      "Add one of the app's default roles, or replace the one of the same name, logged for the user: an orchestrator of " +
+      "the whole board's alone. With zone, that zone's own template for the name instead. Not for a built-in role. The " +
+      'template may not start with ! or a /command, nor hold a control character. As `agent-board roles set`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', maxLength: MAX_ROLE_NAME_LENGTH, description: 'The role\'s name: designer, release prep.' },
+        zone: { type: 'string', description: "A zone ref in your scope: set its own template for the name, not the app's." },
+        template: {
+          type: 'string',
+          description: 'What an agent in the role starts with, before its prompt: {{issue}}, {{branch}}, {{worktree}} and {{prev_review}} are filled in.',
+        },
+      },
+      required: ['name', 'template'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remove_role',
+    description: "Remove one of the app's default roles, or with zone that zone's template for the name, logged for the user. As `agent-board roles remove`.",
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, zone: { type: 'string', description: 'A zone ref in your scope.' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'close',
     description:
       "End an agent's session, keeping its tile, worktree and branch; with remove, delete them too (only an agent you " +
@@ -329,11 +493,11 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
 ];
 
 /** What a call is handled with: a signal that aborts once the client cancels it (`notifications/cancelled`). */
-interface McpCall {
+export interface McpCall {
   signal: AbortSignal;
 }
 
-interface McpMethods {
+export interface McpMethods {
   initialize: { params: { protocolVersion?: string }; result: unknown };
   'notifications/initialized': { params: unknown; result: null };
   ping: { params: unknown; result: Record<string, never> };
@@ -364,17 +528,26 @@ function timeoutArg(args: Record<string, unknown>): { timeoutMs?: number } {
   return { timeoutMs: (minutes as number) * 60_000 };
 }
 
-/** What each tool does with a board session and its arguments: the text the model reads. */
-const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>) => Promise<string>> = {
+/**
+ * Where the board MCP's calls go: a board session opened afresh for each, as the client's token (ADR-0010), and the
+ * folder a relative path is read from, where its agent started.
+ */
+export interface BoardMcpContext {
+  openSession(): Promise<BoardSession>;
+  cwd(): string;
+}
+
+/** What each tool does with a board session, its arguments and the caller's folder: the text the model reads. */
+const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<string>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
-  set_status: async (session, { summary, progress }) => {
+  set_status: async (session, { summary, progress, done }) => {
     if (typeof summary !== 'string') throw new BoardError('summary must be a string');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
-    const agent = await setOwnStatus(session, summary, progress);
-    return `Your tile now says: ${statusLine(agent.status!)}`;
+    const agent = await setOwnStatus(session, summary, progress, done === true);
+    return `Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`;
   },
   new_agent: async (session, args) =>
     (
@@ -385,24 +558,44 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         harness: stringArg(args, 'harness', true),
         model: stringArg(args, 'model', true),
         role: stringArg(args, 'role', true),
+        noTemplate: args.template === false,
         branch: stringArg(args, 'branch', true),
         base: stringArg(args, 'base', true),
         issue: stringArg(args, 'issue', true),
       })
     ).text,
   send: async (session, args) => (await sendToAgent(session, stringArg(args, 'agent'), stringArg(args, 'text'))).text,
-  wait: async (session, { agents, until, any, timeout_seconds: seconds = MCP_WAIT_SECONDS }) => {
-    if (!Array.isArray(agents) || agents.length === 0 || !agents.every((ref) => typeof ref === 'string')) {
-      throw new BoardError('agents must be a list of agent refs');
+  wait: async (session, { agents = [], crew, until, any, since, kinds, timeout_seconds: seconds = MCP_WAIT_SECONDS }) => {
+    if (!Array.isArray(agents) || !agents.every((ref) => typeof ref === 'string')) throw new BoardError('agents must be a list of agent refs');
+    // As `agent-board watch`: no agents named is your crew.
+    const wholeCrew = crew === true || agents.length === 0;
+    if (until !== undefined && (!Array.isArray(until) || !until.every(isWaitState))) {
+      throw new BoardError(`until must be a list of states: ${WAIT_STATES.join(', ')}`);
     }
-    if (until !== undefined && (!Array.isArray(until) || !until.every(isAgentState))) {
-      throw new BoardError(`until must be a list of states: ${AGENT_STATES.join(', ')}`);
+    if (kinds !== undefined && (!Array.isArray(kinds) || !kinds.every((kind) => CREW_EVENT_KINDS.includes(kind)))) {
+      throw new BoardError(`kinds must be a list of: ${CREW_EVENT_KINDS.join(', ')}`);
     }
+    if (since !== undefined && (typeof since !== 'string' || !isCrewSince(since))) throw new BoardError('since must be a cursor it answered with, "now" or "all"');
     if (!Number.isInteger(seconds) || (seconds as number) < 0) throw new BoardError('timeout_seconds must be a whole number');
-    return (await waitForAgents(session, agents as string[], { until: until as AgentState[] | undefined, any: any === true, timeoutMs: (seconds as number) * 1000 })).text;
+    const timeoutMs = (seconds as number) * 1000;
+    if (since === undefined) {
+      return (await waitForAgents(session, agents as string[], { until: until as WaitState[] | undefined, any: any === true, crew: wholeCrew, timeoutMs })).text;
+    }
+    const news = await watchCrew(session, agents as string[], { crew: wholeCrew, since, kinds: kinds as CrewEventKind[] | undefined, timeoutMs });
+    return [
+      ...(news.missed ? ['Some were missed: the daemon keeps only the latest, or it restarted.'] : []),
+      ...(news.timedOut ? ['Nothing yet.'] : news.lines),
+      `Cursor ${news.cursor}: pass it as since next time to hear only what comes after.`,
+    ].join('\n');
   },
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
+  restart: async (session, args) => {
+    const prompt = stringArg(args, 'prompt', true);
+    if (args.fresh !== true && prompt !== undefined && prompt.trim() !== '') throw new BoardError('prompt needs fresh');
+    const anew = args.fresh === true ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined;
+    return (await restartAgent(session, stringArg(args, 'agent'), anew)).text;
+  },
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
   handoff: async (session, args) =>
     (
@@ -442,18 +635,46 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
       })
     ).text;
   },
-  present_plan: async (session, args) => {
+  present_plan: async (session, args, cwd) => {
     const source = { markdown: stringArg(args, 'markdown', true), html: stringArg(args, 'html', true), path: stringArg(args, 'path', true) };
-    return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, process.cwd()), ...timeoutArg(args) })).text;
+    return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, cwd), ...timeoutArg(args) })).text;
   },
   list_edges: async (session) => edgesView(new BoardRefs(await readBoard(session.client))).text,
   remove_edge: async (session, args) => (await removeEdge(session, stringArg(args, 'edge'))).text,
+  move: async (session, args) => (await moveTile(session, stringArg(args, 'tile'), placeArgs(args))).text,
+  arrange: async (session, args) =>
+    (await arrangeZone(session, stringArg(args, 'zone', true), { by: stringArg(args, 'by', true), layout: stringArg(args, 'layout', true) })).text,
+  add_note: async (session, args) =>
+    (
+      await addNote(session, {
+        text: stringArg(args, 'text'),
+        kind: stringArg(args, 'kind', true),
+        color: stringArg(args, 'color', true),
+        ...placeArgs(args),
+      })
+    ).text,
+  edit_note: async (session, args) => {
+    const text = stringArg(args, 'text', true);
+    const color = stringArg(args, 'color', true);
+    if (text === undefined && color === undefined) throw new BoardError('give the text or the color');
+    return (await editNote(session, stringArg(args, 'note'), { text, color })).text;
+  },
+  remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
+  roles: async (session) => (await defaultRolesView(session)).text,
+  set_role: async (session, args) =>
+    (await setDefaultRole(session, stringArg(args, 'name'), stringArg(args, 'template'), stringArg(args, 'zone', true))).text,
+  remove_role: async (session, args) => (await removeDefaultRole(session, stringArg(args, 'name'), stringArg(args, 'zone', true))).text,
 };
 
-/** Who the env's board token is, or null when there is none or the daemon can't say. Never throws. */
-async function whoIs(env: NodeJS.ProcessEnv | undefined): Promise<BoardCaller | null> {
+/** A layout tool's place, as `agent-board move` takes it. */
+function placeArgs(args: Record<string, unknown>): PlaceOptions {
+  return { to: stringArg(args, 'to', true), at: stringArg(args, 'at', true), near: stringArg(args, 'near', true), side: stringArg(args, 'side', true) };
+}
+
+/** Who the context's board token is, or null when there is none or the daemon can't say. Never throws. */
+async function whoIs(context: BoardMcpContext): Promise<BoardCaller | null> {
   try {
-    const session = await openBoardSession(env);
+    const session = await context.openSession();
     session.close();
     return session.caller;
   } catch {
@@ -468,25 +689,25 @@ async function whoIs(env: NodeJS.ProcessEnv | undefined): Promise<BoardCaller | 
 async function callTool(
   call: (typeof TOOL_CALLS)[string],
   args: Record<string, unknown>,
-  env: NodeJS.ProcessEnv | undefined,
+  context: BoardMcpContext,
   signal: AbortSignal,
 ): Promise<string> {
-  const session = await openBoardSession(env);
+  const session = await context.openSession();
   if (signal.aborted) session.close();
   else signal.addEventListener('abort', () => session.close(), { once: true });
   try {
-    return await call(session, args);
+    return await call(session, args, context.cwd());
   } finally {
     session.close();
   }
 }
 
-/** The MCP methods, over `env`'s board session. */
-function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods, McpCall> {
+/** The MCP methods, over the context's board sessions: the same for either transport. */
+export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMethods, McpCall> {
   return {
     initialize: async (params) => {
       const asked = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
-      const orchestrating = (await whoIs(env))?.orchestrate != null;
+      const orchestrating = (await whoIs(context))?.orchestrate != null;
       return {
         protocolVersion: typeof asked === 'string' && MCP_VERSIONS.includes(asked) ? asked : MCP_VERSIONS[0],
         capabilities: { tools: {} },
@@ -498,14 +719,14 @@ function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods, McpC
     ping: () => ({}),
     // The control tools only for an orchestrator, as it lists them: a harness lists them once, as it starts.
     'tools/list': async () => ({
-      tools: (await whoIs(env))?.orchestrate != null ? [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS] : BOARD_MCP_TOOLS,
+      tools: (await whoIs(context))?.orchestrate != null ? [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS] : BOARD_MCP_TOOLS,
     }),
     'tools/call': async (params, { signal }) => {
       const { name, arguments: args = {} } = (params ?? {}) as McpMethods['tools/call']['params'];
       const call = typeof name === 'string' && Object.hasOwn(TOOL_CALLS, name) ? TOOL_CALLS[name]! : undefined;
       if (call === undefined) throw new RpcMethodError(RPC_ERROR.invalidParams, `no tool ${String(name)}`);
       try {
-        return { content: [{ type: 'text', text: await callTool(call, args, env, signal) }] };
+        return { content: [{ type: 'text', text: await callTool(call, args, context, signal) }] };
       } catch (error) {
         // A refusal is the tool's answer, for the model to read; anything else is the server's failure.
         if (error instanceof BoardError || error instanceof DaemonRpcError) {
@@ -519,7 +740,7 @@ function boardMcpHandlers(env?: NodeJS.ProcessEnv): RpcHandlers<McpMethods, McpC
 
 /** Serves MCP on stdin and stdout until stdin ends. Resolves to the exit code. */
 export async function serveBoardMcp(options: { env?: NodeJS.ProcessEnv } = {}): Promise<number> {
-  const handlers = boardMcpHandlers(options.env);
+  const handlers = boardMcpHandlers({ openSession: () => openBoardSession(options.env), cwd: () => process.cwd() });
   const pending = new Set<Promise<void>>();
   /** The calls under way, by request id, so the client can cancel one. */
   const calls = new Map<unknown, AbortController>();

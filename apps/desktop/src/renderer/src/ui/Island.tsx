@@ -29,6 +29,7 @@ interface ToolButtonProps {
   /** More of the tooltip, after the label: how to use it. */
   hint?: string;
   size?: 'sm' | 'md';
+  className?: string;
   onClick?(): void;
   ref?: Ref<HTMLButtonElement>;
   /** Holds it in its hover, active or focus look, for the component gallery. */
@@ -36,7 +37,7 @@ interface ToolButtonProps {
 }
 
 /** A square tool on an island: an icon, its key in the corner, and a tooltip with both. */
-export function ToolButton({ label, icon, shortcut, pressed, hint, size = 'md', onClick, ref, ...rest }: ToolButtonProps) {
+export function ToolButton({ label, icon, shortcut, pressed, hint, size = 'md', className, onClick, ref, ...rest }: ToolButtonProps) {
   return (
     <Tooltip
       side="bottom"
@@ -50,7 +51,7 @@ export function ToolButton({ label, icon, shortcut, pressed, hint, size = 'md', 
       <button
         ref={ref}
         type="button"
-        className="ui-tool"
+        className={cx('ui-tool', className)}
         data-size={size}
         aria-label={label}
         aria-pressed={pressed}

@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -411,19 +411,17 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
     await addZone(app, window, repo);
     await spawnAgent(window, 'monorepo', 'Pick a database');
 
-    // ⌘K finds the agent by name in the board menu, with its state; picking it shows its tile.
-    await window.keyboard.press('ControlOrMeta+k');
+    // ⌘K finds the agent by name, with its state; picking it shows its tile.
+    const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+    await window.keyboard.press(windowKey('k'));
     await window.keyboard.type('database');
-    const found = window.getByRole('dialog', { name: 'Board menu' }).getByTestId('agent-item');
+    const found = switcher.getByTestId('spotlight-row');
     await expect(found).toHaveCount(1);
     await expect(found).toContainText('Pick a database');
-    await expect(found).toContainText(/thinking|waiting|running|idle/);
-    await found.getByRole('button', { name: /Pick a database/ }).click();
-    await expect(window.getByRole('dialog', { name: 'Board menu' })).toHaveCount(0);
+    await expect(found).toContainText(/thinking|waiting|running|idle|asks you/);
+    await found.click();
+    await expect(switcher).toHaveCount(0);
     await expect(window.locator('.react-flow__node.selected').getByTestId('agent-tile')).toHaveCount(1);
-    // The closed menu gives the focus back to its button a moment after it goes; on a busy machine that could land
-    // after the focus below, closing the tile's menu.
-    await expect(window.getByRole('button', { name: 'Board menu' })).toBeFocused();
 
     const more = tile(window).getByRole('button', { name: 'More' });
     await more.focus();

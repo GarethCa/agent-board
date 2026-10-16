@@ -130,6 +130,31 @@ describe('flow edges over the socket', () => {
     });
   });
 
+  it('moves an end onto another agent, its rules and shape kept, and refuses one onto itself, nobody, a pair already joined or an auto loop', async () => {
+    const { client, recorder } = await flowDaemon();
+    const { zone, a, b } = await twoAgents(client, recorder);
+    const c = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Check the code', name: 'Checker', ...SIZE });
+    await untilAgent(recorder, c.sessionId, (seen) => seen.state === 'waiting');
+    const refused = (params: Record<string, unknown>) =>
+      expect(client.call('flowEdge.update', params as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, payload: 'handover', style: 'elbow' });
+
+    const moved = await client.call('flowEdge.update', { id: edge.id, to: c.sessionId, toSide: 'top' });
+
+    expect(moved).toMatchObject({ id: edge.id, from: a.sessionId, to: c.sessionId, toSide: 'top', style: 'elbow', payload: 'handover', trigger: 'auto' });
+    expect(await client.call('flowEdge.list')).toEqual([moved]);
+    await refused({ id: edge.id, to: a.sessionId });
+    await refused({ id: edge.id, from: c.sessionId });
+    await refused({ id: edge.id, to: 'nobody' });
+    const other = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, trigger: 'manual' });
+    await refused({ id: other.id, to: c.sessionId });
+    // C answering A by itself, with A's edge to C an auto one, would have them answer each other for ever.
+    const back = await client.call('flowEdge.create', { from: c.sessionId, to: b.sessionId });
+    await refused({ id: back.id, to: a.sessionId });
+    // Moved and made manual at once, it closes no loop.
+    expect(await client.call('flowEdge.update', { id: back.id, to: a.sessionId, trigger: 'manual' })).toMatchObject({ from: c.sessionId, to: a.sessionId });
+  });
+
   it('switches an edge between auto and manual, and deletes it', async () => {
     const { client, recorder } = await flowDaemon();
     const { a, b } = await twoAgents(client, recorder);
@@ -204,13 +229,13 @@ describe('flow edges over the socket', () => {
     expect(await second.client.call('flowEdge.update', { id: edge.id, payload: 'final-message' })).toMatchObject({ path: null });
   });
 
-  it('draws from the right side to the left, curved, until reshaped: its shape is kept across a restart, and leaves its rules be', async () => {
+  it('picks its sides from where its tiles are, curved, until reshaped: its shape is kept across a restart, and leaves its rules be', async () => {
     const dataDir = tempDataDir();
     const first = await flowDaemon(dataDir);
     const { a, b } = await twoAgents(first.client, first.recorder);
     const edge = await first.client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, trigger: 'manual', payload: 'handover' });
-    // An edge made before shapes, or without one, draws as edges always did.
-    expect(edge).toMatchObject({ fromSide: 'right', toSide: 'left', style: 'curved', points: [] });
+    // An edge made without sides (by the CLI or an orchestrator) has automatic ones: the board picks them as it draws.
+    expect(edge).toMatchObject({ fromSide: 'auto', toSide: 'auto', style: 'curved', points: [] });
     const drawn = await first.client.call('flowEdge.create', { from: b.sessionId, to: a.sessionId, fromSide: 'top', toSide: 'bottom', style: 'elbow', trigger: 'manual' });
     expect(drawn).toMatchObject({ fromSide: 'top', toSide: 'bottom', style: 'elbow', points: [] });
 
@@ -220,6 +245,9 @@ describe('flow edges over the socket', () => {
     const refused = (params: Record<string, unknown>) =>
       expect(first.client.call('flowEdge.update', { id: edge.id, ...params } as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
     await refused({ fromSide: 'middle' });
+    // A side can be made automatic again, the other end left as it is.
+    expect(await first.client.call('flowEdge.update', { id: drawn.id, toSide: 'auto' })).toMatchObject({ fromSide: 'top', toSide: 'auto' });
+    await first.client.call('flowEdge.update', { id: drawn.id, toSide: 'bottom' });
     await refused({ style: 'zigzag' });
     await refused({ points: [{ x: 'a', y: 1 }] });
     await refused({ points: [{ x: Number.NaN, y: 1 }] });
@@ -506,6 +534,67 @@ describe('pausing, manual edges and queueing', () => {
     expect((await client.call('flowEdge.list'))[0]).toMatchObject({ deliveries: 0, held: null });
   });
 
+  it("drops every approval when its sender moves to another agent: a command approved in one agent's worktree never runs in another's", async () => {
+    const { client, recorder } = await flowDaemon();
+    const { zone, a, b } = await twoAgents(client, recorder);
+    const c = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Check the code', name: 'Checker', ...SIZE });
+    await untilAgent(recorder, c.sessionId, (seen) => seen.state === 'waiting');
+    const gate = { conditions: [{ kind: 'script' as const, command: 'test -f ready' }] };
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, ...gate });
+    const approvals = async (id: string) => (await client.call('flowEdge.commands', { id })).map((command) => command.approval);
+    await approveAll(client, edge.id);
+    expect(await approvals(edge.id)).toEqual(['approved']);
+
+    // Moving only its receiver keeps them: the commands still run in the same worktree.
+    await client.call('flowEdge.update', { id: edge.id, to: c.sessionId });
+    expect(await approvals(edge.id)).toEqual(['approved']);
+    // Moving its sender, alone or with a change of rules, drops them.
+    await client.call('flowEdge.update', { id: edge.id, from: b.sessionId });
+    expect(await approvals(edge.id)).toEqual(['unapproved']);
+    await approveAll(client, edge.id);
+    await client.call('flowEdge.update', { id: edge.id, from: a.sessionId, paused: true });
+    expect(await approvals(edge.id)).toEqual(['unapproved']);
+  });
+
+  it("never keeps an approval sent for one sender once the edge has moved to another while it was being checked", async () => {
+    const { client, recorder } = await flowDaemon();
+    const { zone, a, b } = await twoAgents(client, recorder);
+    const c = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Check the code', name: 'Checker', ...SIZE });
+    await untilAgent(recorder, c.sessionId, (seen) => seen.state === 'waiting');
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, conditions: [{ kind: 'script', command: 'test -f ready' }] });
+    const [plan] = await client.call('flowEdge.commands', { id: edge.id });
+    const { command, fingerprint } = plan!;
+
+    // The approval, read for A, is sent; the edge moves to C while the daemon reads what it runs in A's worktree.
+    const approving = client.call('flowEdge.approve', { id: edge.id, command, fingerprint, from: a.sessionId });
+    const moving = client.call('flowEdge.update', { id: edge.id, from: c.sessionId });
+    const [approved, moved] = await Promise.allSettled([approving, moving]);
+
+    expect(moved.status).toBe('fulfilled');
+    expect(approved).toMatchObject({ status: 'rejected', reason: { code: RPC_ERROR.invalidParams } });
+    expect((await client.call('flowEdge.commands', { id: edge.id })).map((each) => each.approval)).toEqual(['unapproved']);
+    // An approval named for a sender the edge no longer has is refused outright.
+    await expect(client.call('flowEdge.approve', { id: edge.id, command, fingerprint, from: a.sessionId })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+  });
+
+  it('drops a held hand-off when its edge is moved onto another agent: it was meant for the one it left', async () => {
+    const { client, recorder } = await flowDaemon(tempDataDir(), 0, { flowRecheckMs: 100 });
+    const { zone, a, b } = await twoAgents(client, recorder);
+    const c = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Check the code', name: 'Checker', ...SIZE });
+    await untilAgent(recorder, c.sessionId, (seen) => seen.state === 'waiting');
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, conditions: [{ kind: 'script', command: 'test -f ready' }] });
+    await approveAll(client, edge.id);
+    await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
+    await untilEdge(recorder, edge.id, (e) => e.held !== null);
+
+    const moved = await client.call('flowEdge.update', { id: edge.id, to: c.sessionId });
+
+    expect(moved.held).toBeNull();
+    expect(moved.history[0]).toMatchObject({ kind: 'skipped', detail: 'it was moved to another agent while it was held' });
+  });
+
   it('skips hand-offs while paused, keeps a held one waiting, and releases it once resumed', async () => {
     const { client, recorder } = await flowDaemon(tempDataDir(), 0, { flowRecheckMs: 100 });
     const { a, b } = await twoAgents(client, recorder);
@@ -663,6 +752,7 @@ describe('approving what gates and scripts run', () => {
       shown: expect.stringMatching(/^sh gate\.sh\ngate\.sh: sha256 [0-9a-f]{12}$/),
       fingerprint: expect.any(String),
       approval: 'unapproved',
+      from: a.sessionId,
     });
     await expect(client.call('flowEdge.approve', { id: edge.id, command, fingerprint: 'stale' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,

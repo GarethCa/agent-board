@@ -25,6 +25,7 @@ import {
   windowChrome,
   type AgentBoardApi,
   type SessionStreamEvent,
+  type BoardRequest,
   type TabDrag,
   type WebTabKey,
   type WebTabState,
@@ -111,7 +112,7 @@ const api: AgentBoardApi = {
     preview: (id) => invoke(FLOW_EDGE_IPC.preview, id),
     lastPayload: (id) => invoke(FLOW_EDGE_IPC.lastPayload, id),
     commands: (id) => invoke(FLOW_EDGE_IPC.commands, id),
-    approve: (id, command, fingerprint) => invoke(FLOW_EDGE_IPC.approve, id, command, fingerprint),
+    approve: (id, command, fingerprint, from) => invoke(FLOW_EDGE_IPC.approve, id, command, fingerprint, from),
     drop: (id) => invoke(FLOW_EDGE_IPC.drop, id),
     settings: () => invoke(FLOW_EDGE_IPC.settings),
     setSettings: (settings) => invoke(FLOW_EDGE_IPC.setSettings, settings),
@@ -140,7 +141,6 @@ const api: AgentBoardApi = {
     stop: (sessionId) => invoke(GATE_IPC.stop, sessionId),
     log: (sessionId, step, since) => invoke(GATE_IPC.log, sessionId, step, since),
     sendFailure: (sessionId, step) => invoke(GATE_IPC.sendFailure, sessionId, step),
-    openPullRequest: (sessionId) => invoke(GATE_IPC.openPullRequest, sessionId),
     merge: (sessionId, number, headCommit, cleanup) => invoke(GATE_IPC.merge, sessionId, number, headCommit, cleanup),
     onChanged: (listener) => subscribe(GATE_IPC.changed, listener),
   },
@@ -180,6 +180,7 @@ const api: AgentBoardApi = {
     dismissOffered: (tabId) => invoke(WEB_TAB_IPC.dismissOffered, tabId),
     forget: (tabId) => invoke(WEB_TAB_IPC.forget, tabId),
     handOff: (tabId) => invoke(WEB_TAB_IPC.handOff, tabId),
+    focus: (tabId) => invoke(WEB_TAB_IPC.focus, tabId),
     cancelHandOff: (tabId) => invoke(WEB_TAB_IPC.cancelHandOff, tabId),
   },
   orchestrators: {
@@ -193,6 +194,8 @@ const api: AgentBoardApi = {
     delete: (sessionId, force = false, keepWorktree = false) => invoke(AGENT_IPC.delete, sessionId, force, keepWorktree),
     answer: (sessionId, text, paste = false) => invoke(AGENT_IPC.answer, sessionId, text, paste),
     pasteImage: (bytes) => invoke(AGENT_IPC.pasteImage, bytes),
+    captureSelection: (rect, width) => invoke(AGENT_IPC.captureSelection, rect, width),
+    askSelection: (params) => invoke(AGENT_IPC.askSelection, params),
     transcript: (sessionId, since, generation) => invoke(AGENT_IPC.transcript, sessionId, since, generation),
     subagentTranscript: (sessionId, toolUseId, agentId) => invoke(AGENT_IPC.subagentTranscript, sessionId, toolUseId, agentId),
     interrupt: (sessionId) => invoke(AGENT_IPC.interrupt, sessionId),
@@ -295,6 +298,19 @@ const api: AgentBoardApi = {
     popIn: (id) => invoke(WINDOW_IPC.popIn, id),
     close: (id) => invoke(WINDOW_IPC.close, id),
     onReturned: (listener) => subscribe(WINDOW_IPC.returned, listener),
+    switchPopOut: (target) => invoke(WINDOW_IPC.switchPopOut, target),
+    onSwitched: (listener) => subscribe(WINDOW_IPC.switched, listener),
+    requestBoard: (request) => invoke(WINDOW_IPC.boardRequest, request),
+    onBoardRequested(listener) {
+      // As agents' open requests: taken on every poke and once on subscribing, for one made while the board was opening.
+      const take = () =>
+        void ipcRenderer.invoke(WINDOW_IPC.takeBoardRequest).then((request: BoardRequest | null) => {
+          if (request !== null) listener(request);
+        });
+      const unsubscribe = subscribe(WINDOW_IPC.boardRequested, take);
+      take();
+      return unsubscribe;
+    },
     chrome: windowChrome(process.platform),
     isFullScreen: () => invoke(WINDOW_IPC.isFullScreen),
     onFullScreenChanged: (listener) => subscribe(WINDOW_IPC.fullScreen, listener),

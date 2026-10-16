@@ -1,4 +1,6 @@
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import { daemonPaths } from '../src/paths.ts';
 import { RPC_ERROR, type CreateItemParams, type ShapeData, type TextData } from '../src/protocol.ts';
 import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
 
@@ -112,5 +114,38 @@ describe('text and shape board items', () => {
     expect((await client.call('item.update', { id: item.id, data: { fill: null } })).data).toMatchObject({
       fill: null,
     });
+  });
+
+  it('takes the diagram shapes, today\'s four under their old names', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    for (const type of ['rectangle', 'rounded', 'ellipse', 'diamond', 'database', 'cloud', 'actor', 'fork-join', 'circle-connector']) {
+      expect((await client.call('item.create', shape({ ...shapeData, shape: type }))).data.shape).toBe(type);
+    }
+  });
+
+  it('keeps a shape of a kind it doesn\'t know through edits that leave the kind be, so a newer app finds it as it was', async () => {
+    const dataDir = tempDataDir();
+    const first = await startTestDaemon({ dataDir });
+    const box = await (await connectTestClient(first)).call('item.create', shape());
+    await first.stop();
+    // As a newer app may have left it.
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare('UPDATE board_items SET data = ? WHERE id = ?').run(JSON.stringify({ ...shapeData, shape: 'hologram' }), box.id);
+    db.close();
+
+    const client = await connectTestClient(await startTestDaemon({ dataDir }));
+    expect((await client.call('item.list'))[0]?.data.shape).toBe('hologram');
+    const edited = await client.call('item.update', { id: box.id, data: { text: 'Still here' } });
+    expect(edited.data).toMatchObject({ shape: 'hologram', text: 'Still here' });
+    // Still checked as a shape: a bad patch is refused.
+    await expect(client.call('item.update', { id: box.id, data: { strokeWidth: -1 } })).rejects.toThrow('strokeWidth');
+    // Undo and redo send the whole item back, its kind with it: the stored kind round-trips, another unknown one doesn't.
+    const undone = await client.call('item.update', { id: box.id, data: { ...edited.data, text: 'CI green?' } });
+    expect(undone.data).toMatchObject({ shape: 'hologram', text: 'CI green?' });
+    const redone = await client.call('item.update', { id: box.id, data: { ...undone.data, text: 'Still here' } });
+    expect(redone.data).toMatchObject({ shape: 'hologram', text: 'Still here' });
+    await expect(client.call('item.update', { id: box.id, data: { shape: 'teleporter' } })).rejects.toThrow('shape must be one of');
+    expect((await client.call('item.update', { id: box.id, data: { shape: 'cloud' } })).data.shape).toBe('cloud');
+    await expect(client.call('item.update', { id: box.id, data: { shape: 'hologram' } })).rejects.toThrow('shape must be one of');
   });
 });

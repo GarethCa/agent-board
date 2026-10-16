@@ -1,7 +1,16 @@
 {
   "name": "agent-board",
   "private": true,
+  "description": "An infinite board for your Claude Code and Codex sessions",
   "license": "MIT",
+  "homepage": "https://github.com/GarethCa/agent-board#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GarethCa/agent-board.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GarethCa/agent-board/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@11.4.0",
   "engines": {

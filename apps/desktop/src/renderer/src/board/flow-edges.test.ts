@@ -7,6 +7,7 @@ import {
   edgeTitle,
   FLOW_EDGE_TYPE,
   flowEdgeIdOf,
+  flowEdgeIdsOf,
   flowEdges,
   handoffEnds,
   deliveredLabel,
@@ -48,15 +49,16 @@ const edge = (id: string, from: string, to: string, overrides: Partial<FlowEdge>
   updatedAt: '',
   ...overrides,
 });
+const AUTO = { fromSide: 'auto', toSide: 'auto' } as const;
 const tileId = (sessionId: string) => `${AGENT_NODE_PREFIX}${sessionId}`;
 
 describe('flowEdges', () => {
-  it("draws each flow edge from the side of its agent's tile it leaves to the side of the other's it arrives at, selected or not, live or not", () => {
+  it("draws each rail from the side of its first edge's agent's tile it leaves to the side of the other's it arrives at, selected or not, live or not", () => {
     const drawn = flowEdges(
       [edge('e1', 'a', 'b'), edge('e2', 'b', 'c', { fromSide: 'bottom', toSide: 'top' })],
       new Set([tileId('a'), tileId('b'), tileId('c')]),
       new Set(['e2']),
-      new Set(['e2']),
+      { live: new Set(['e2']) },
     );
 
     expect(drawn).toEqual([
@@ -67,12 +69,40 @@ describe('flowEdges', () => {
         target: tileId('b'),
         targetHandle: 'left',
         selected: false,
-        data: { edge: expect.objectContaining({ id: 'e1' }), live: false },
+        data: expect.objectContaining({ rail: expect.objectContaining({ id: 'e1' }), token: expect.objectContaining({ state: 'next' }), live: false }),
       }),
       expect.objectContaining({ sourceHandle: 'bottom', targetHandle: 'top', selected: true, data: expect.objectContaining({ live: true }) }),
     ]);
     expect(drawn.every(isFlowEdge)).toBe(true);
-    expect(drawn.map(flowEdgeIdOf)).toEqual(['e1', 'e2']);
+    expect(drawn.map(flowEdgeIdsOf)).toEqual([['e1'], ['e2']]);
+  });
+
+  it('draws two agents joined both ways as one rail, selected while either of its edges is, its token the latest document', () => {
+    const drawn = flowEdges(
+      [edge('e1', 'a', 'b', AUTO), edge('e2', 'b', 'a', { ...AUTO, lastDelivery: { at: '2026-10-15T14:31:00.000Z', delivered: true, reason: null }, deliveries: 1 })],
+      new Set([tileId('a'), tileId('b')]),
+      new Set(['e2']),
+    );
+
+    expect(drawn).toEqual([
+      expect.objectContaining({ source: tileId('a'), target: tileId('b'), selected: true, data: expect.objectContaining({ token: expect.objectContaining({ state: 'delivered', end: 'to' }) }) }),
+    ]);
+    expect(drawn.map(flowEdgeIdsOf)).toEqual([['e1', 'e2']]);
+    expect(drawn.map(flowEdgeIdOf)).toEqual(['e1']);
+    expect(drawn[0]!.data!.token.edge.id).toBe('e2');
+  });
+
+  it("keeps edge ids whole, whatever they hold: a rail is drawn under its first edge's id, and knows its edges by its data", () => {
+    const drawn = flowEdges([edge('a,1', 'a', 'b'), edge('b,2', 'b', 'a')], new Set([tileId('a'), tileId('b')]), new Set());
+
+    expect(drawn.map(flowEdgeIdOf)).toEqual(['a,1']);
+    expect(drawn.map(flowEdgeIdsOf)).toEqual([['a,1', 'b,2']]);
+  });
+
+  it("shows a manual edge that has never delivered waiting for Send once its agent is done with its turn", () => {
+    const [drawn] = flowEdges([edge('e1', 'a', 'b', { trigger: 'manual' })], new Set([tileId('a'), tileId('b')]), new Set(), { ready: new Map([['a', null]]) });
+
+    expect(drawn!.data!.token).toMatchObject({ state: 'waiting', end: 'from' });
   });
 
   it('leaves out an edge whose agent is not on the board, as when it was deleted', () => {

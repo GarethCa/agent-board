@@ -51,6 +51,11 @@ export interface FakeGitHubPullRequest {
   statusCheckRollup: Record<string, unknown>[];
   /** The commit its head branch is at, which `gh pr merge --match-head-commit` must name; any commit when unset. */
   headRefOid?: string;
+  /**
+   * The commits it holds, which `gh pr list --search <sha>` finds it by, as GitHub's search does; its `headRefOid` is
+   * one too.
+   */
+  commits?: string[];
   /** Its description: empty unless set. */
   body?: string;
   /** Its author's login: `hubot` unless set (the fake's user is `octocat`). */

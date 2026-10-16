@@ -1,7 +1,7 @@
 // The board as the agent-facing CLI and MCP see it (ADR-0010): one module both call, over the daemon methods the app
 // uses (plus `board.identify` and `board.setStatus`). Refs, resolving them, and each view as text and as JSON.
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 import { BOARD_DATA_DIR_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import type { AskSpec, PlanSpec } from './asks.ts';
@@ -15,13 +15,15 @@ import {
   type Agent,
   type PlanDecision,
   type PlanFormat,
-  type AgentRole,
-  type AgentState,
+  roleLabel,
   type BoardCaller,
+  type CrewEvent,
+  type CrewEventKind,
   type Harness,
   type OrchestrateScope,
   type OrchestratorActivity,
   orchestrateScopeWords,
+  type AgentNoteData,
   type BoardItem,
   FLOW_CONDITION_KINDS,
   type FlowCondition,
@@ -32,8 +34,10 @@ import {
   type HandoffPayload,
   type Shell,
   statusLine,
+  type WaitState,
   type Zone,
 } from './protocol.ts';
+import { cutText } from './text-cut.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
 export class BoardError extends Error {}
@@ -49,12 +53,30 @@ export interface BoardSession {
 }
 
 /**
+ * Under a test (`VITEST` set, which every child of a test inherits), throws `BoardError` for the app's own daemon, the
+ * live board: a test that reached it would act on the user's own agents. Its socket comes from the
+ * real home dir, not `$HOME`, which test helpers swap.
+ */
+export function refuseLiveDaemon(
+  socketPath: string,
+  processEnv: NodeJS.ProcessEnv = process.env,
+  liveSocket: string = daemonPaths(defaultDataDir({ HOME: userInfo().homedir })).socket,
+): void {
+  if (processEnv.VITEST && socketPath === liveSocket) {
+    throw new BoardError(
+      `refusing the app's own daemon at ${socketPath} under a test: point the test at its own daemon with AGENT_BOARD_SOCKET or AGENT_BOARD_DATA_DIR.`,
+    );
+  }
+}
+
+/**
  * Connects to the daemon of the session's env (`AGENT_BOARD_SOCKET`), else of `$AGENT_BOARD_DATA_DIR`, else of the
  * app's own data dir, and finds out who holds the env's board token. Never starts a daemon. Throws `BoardError` when
  * none answers, or the token is one no live session holds.
  */
 export async function openBoardSession(env: NodeJS.ProcessEnv = process.env): Promise<BoardSession> {
   const socketPath = env[BOARD_SOCKET_ENV] || daemonPaths(env[BOARD_DATA_DIR_ENV] || defaultDataDir(env)).socket;
+  refuseLiveDaemon(socketPath);
   let client: DaemonClient;
   try {
     client = await connectDaemon(socketPath);
@@ -92,6 +114,8 @@ export interface Board {
 }
 
 export async function readBoard(client: DaemonClient): Promise<Board> {
+  // The board shows where each agent's worktree is now: it may have renamed its branch since a hook last said so.
+  await client.call('agent.refreshBranches');
   const [zones, agents, shells, edges, items] = await Promise.all([
     client.call('zone.list'),
     client.call('agent.list'),
@@ -249,8 +273,7 @@ function tilde(path: string): string {
 }
 
 function cut(text: string, length: number): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  return line.length <= length ? line : `${line.slice(0, length - 1).trimEnd()}…`;
+  return cutText(text.replace(/\s+/g, ' ').trim(), length);
 }
 
 function itemText(item: BoardItem): string {
@@ -258,6 +281,13 @@ function itemText(item: BoardItem): string {
   if (item.kind === 'link') return String(data.title ?? data.url ?? '');
   if (item.kind === 'issue') return `${String(data.id ?? '')} ${String(data.title ?? '')}`.trim();
   return typeof data.text === 'string' ? data.text : '';
+}
+
+/** The agent that wrote an agent note, by ref and name; undefined for any other item. */
+function writtenBy(refs: BoardRefs, item: BoardItem): string | undefined {
+  if (item.kind !== 'agent-note') return undefined;
+  const agent = (item.data as Partial<AgentNoteData>).agent;
+  return agent === undefined ? undefined : `${refs.of('agent', agent.sessionId)} ${agent.name}`;
 }
 
 /** Where a zone points: its repo, its folder in one, or nothing for a group (with its default repo, if any). */
@@ -306,9 +336,11 @@ function agentJson(refs: BoardRefs, agent: Agent, caller: BoardCaller | null) {
     harness: agent.harness,
     model: agent.model,
     role: agent.role,
+    roleName: agent.roleName,
     reviews: agent.reviews,
     state: agent.state,
     status: agent.status,
+    workFinishedAt: agent.workFinishedAt,
     task: agent.description,
     repoRoot: agent.repoRoot,
     branch: agent.branch,
@@ -341,6 +373,7 @@ function itemJson(refs: BoardRefs, item: BoardItem) {
     zone: item.zoneId === null ? null : refs.of('zone', item.zoneId),
     text: itemText(item),
     ...(item.kind === 'link' || item.kind === 'issue' ? { url: (item.data as { url?: string }).url ?? null } : {}),
+    ...(item.kind === 'agent-note' ? { by: refs.of('agent', (item.data as unknown as AgentNoteData).agent.sessionId) } : {}),
   };
 }
 
@@ -372,7 +405,9 @@ const YOU = '  ← you';
 
 function agentLine(refs: BoardRefs, agent: Agent, caller: BoardCaller | null): string {
   const you = isCaller(caller, 'agent', agent.sessionId) ? YOU : '';
-  return `${refs.of('agent', agent.sessionId)}  ${agent.name}  [${agent.state}]  ${agentDoing(agent)}${you}`;
+  const finished = agent.workFinishedAt === null ? '' : ', finished';
+  const role = roleLabel(agent);
+  return `${refs.of('agent', agent.sessionId)}  ${agent.name}  [${agent.state}${finished}]${role === null ? '' : `  (${role})`}  ${agentDoing(agent)}${you}`;
 }
 
 function shellLine(refs: BoardRefs, shell: Shell, caller: BoardCaller | null): string {
@@ -380,12 +415,13 @@ function shellLine(refs: BoardRefs, shell: Shell, caller: BoardCaller | null): s
   return `${refs.of('shell', shell.id)}  ${shell.name}  [shell]  in ${shellFolder(shell)}${you}`;
 }
 
-function itemLine(refs: BoardRefs, item: BoardItem): string {
+export function itemLine(refs: BoardRefs, item: BoardItem): string {
   const text = itemText(item);
-  return `${refs.of('item', item.id)}  ${item.kind}${text === '' ? '' : `  ${JSON.stringify(cut(text, 60))}`}`;
+  const by = writtenBy(refs, item);
+  return `${refs.of('item', item.id)}  ${item.kind}${text === '' ? '' : `  ${JSON.stringify(cut(text, 60))}`}${by === undefined ? '' : `  by ${by}`}`;
 }
 
-function zoneLine(refs: BoardRefs, zone: Zone): string {
+export function zoneLine(refs: BoardRefs, zone: Zone): string {
   return `${refs.of('zone', zone.id)}  ${zone.name}  (${zoneWhere(zone)})`;
 }
 
@@ -411,7 +447,9 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   if (caller.side === 'agent' && tile !== undefined) {
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
-    lines.push(`branch   ${agent.branch || '(none)'} in ${tilde(agent.worktree)}`);
+    lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
+    const role = roleLabel(agent);
+    if (role !== null) lines.push(`role     ${role}`);
     if (caller.orchestrate !== null) {
       lines.push(`you may  orchestrate in ${orchestrateScopeWords(caller.orchestrate, 'your')}: start, message and close agents (\`agent-board help orchestrate\`)`);
     }
@@ -428,6 +466,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
         name: caller.name,
         session: caller.sessionId,
         orchestrate: caller.orchestrate,
+        role: caller.side === 'agent' && tile !== undefined ? roleLabel(tile as Agent) : null,
         zone: zone === undefined ? null : zoneJson(refs, zone),
       },
       socket: socketPath,
@@ -501,7 +540,7 @@ export function shellsView(refs: BoardRefs, caller: BoardCaller | null): BoardVi
   };
 }
 
-function inZone(refs: BoardRefs, zoneId: string | null): string {
+export function inZone(refs: BoardRefs, zoneId: string | null): string {
   const zone = zoneId === null ? undefined : refs.board.zones.find((each) => each.id === zoneId);
   return zone === undefined ? '(loose)' : `(in ${refs.of('zone', zone.id)} ${zone.name})`;
 }
@@ -639,10 +678,10 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['status', agent.status === null ? 'not set' : agentDoing(agent)],
             ['task', agent.description === '' ? '(none)' : cut(agent.description, 200)],
             ['harness', `${agent.harness}${agent.model === null ? '' : ` (${agent.model})`}`],
-            ['role', agent.role],
+            ['role', roleLabel(agent)],
             ['zone', inZone(refs, agent.zoneId)],
             ['repo', tilde(agent.repoRoot)],
-            ['branch', agent.reviews === null ? agent.branch || '(none)' : `(none): reviews ${agent.reviews.branch} at ${shortCommit(agent.reviews.head)}, detached`],
+            ['branch', agent.reviews === null ? branchWords(agent) : `(none): reviews ${agent.reviews.branch} at ${shortCommit(agent.reviews.head)}, detached`],
             ['worktree', tilde(agent.worktree)],
             ['issue', agent.issue === null ? undefined : `${agent.issue.id} ${agent.issue.title} ${agent.issue.url}`],
             ['pr', agent.pullRequests.length === 0 ? undefined : agent.pullRequests.map((pr) => `#${pr.number} ${pr.state} ${pr.url}`).join(', ')],
@@ -674,7 +713,7 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
     case 'item': {
       const { item } = object;
       return {
-        text: [`${ref}  ${item.kind}`, ...rows([['zone', inZone(refs, item.zoneId)]]), ...itemText(item).split('\n').map((line) => `  ${line}`)].join('\n'),
+        text: [`${ref}  ${item.kind}`, ...rows([['zone', inZone(refs, item.zoneId)], ['by', writtenBy(refs, item)]]), ...itemText(item).split('\n').map((line) => `  ${line}`)].join('\n'),
         json: itemJson(refs, item),
       };
     }
@@ -682,11 +721,16 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
 }
 
 /** Sets the caller's own status. Throws `BoardError` outside an agent-board session. */
-export async function setOwnStatus(session: BoardSession, summary: string, progress: number | undefined): Promise<Agent> {
+export async function setOwnStatus(session: BoardSession, summary: string, progress: number | undefined, done = false): Promise<Agent> {
   if (session.token === undefined || session.caller === null) {
     throw new BoardError(`Only an agent in an agent-board session can set its status: there is no ${BOARD_TOKEN_ENV} here.`);
   }
-  return session.client.call('board.setStatus', { token: session.token, summary, ...(progress === undefined ? {} : { progress }) });
+  return session.client.call('board.setStatus', {
+    token: session.token,
+    summary,
+    ...(progress === undefined ? {} : { progress }),
+    ...(done ? { done } : {}),
+  });
 }
 
 /** The orchestrator commands' options for a new agent, as typed: refs and names, not ids. */
@@ -697,6 +741,8 @@ export interface NewAgentOptions {
   harness?: string;
   model?: string;
   role?: string;
+  /** Start it without its role's template: its first message is exactly `prompt`. */
+  noTemplate?: boolean;
   name?: string;
   branch?: string;
   /** The branch to cut it from, or an agent ref for that agent's branch. */
@@ -735,6 +781,12 @@ async function freshAgentLine(session: BoardSession, sessionId: string): Promise
   return { refs, agent, line: agentLine(refs, agent, session.caller) };
 }
 
+/** An agent's branch for a line of text: a detached HEAD says so, with the last branch it was on. */
+function branchWords(agent: Agent): string {
+  if (agent.detached) return `(detached, last on ${agent.branch})`;
+  return agent.branch || '(none)';
+}
+
 /** Where a new agent works: on its branch, or, a reviewer, detached at the tip of the branch it reviews. */
 function checkout(agent: Agent): string {
   return agent.reviews === null ? `on ${agent.branch}` : `detached at ${shortCommit(agent.reviews.head)} of ${agent.reviews.branch}`;
@@ -754,6 +806,9 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
   let baseBranch = options.base;
   if (baseBranch !== undefined && /^agent:|^me$/.test(baseBranch)) {
     const agent = resolveAgent(refs, baseBranch, caller);
+    if (agent.detached) {
+      throw new BoardError(`${options.base} is on a detached HEAD (last on ${agent.branch}): check a branch out there to start from, or name a branch with --base`);
+    }
     baseBranch = agent.reviews?.branch ?? agent.branch;
     if (baseBranch === '') throw new BoardError(`${options.base} has no branch to start from: it works outside git, or on a detached HEAD`);
   }
@@ -763,17 +818,70 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     ...(zoneId === undefined ? {} : { zoneId }),
     ...(options.harness === undefined ? {} : { harness: options.harness as Harness }),
     ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.role === undefined ? {} : { role: options.role as AgentRole }),
+    ...(options.role === undefined ? {} : { role: options.role }),
+    ...(options.noTemplate === true ? { noTemplate: true } : {}),
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(options.branch === undefined ? {} : { branch: options.branch }),
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
   });
   const fresh = await freshAgentLine(session, started.sessionId);
+  // Which template its first message began with, so an orchestrator that wrote the whole prompt sees it was prefixed.
+  const templateLine =
+    started.template !== null
+      ? `\n  Its first message begins with ${started.template}; start with --no-template to send your prompt alone.`
+      : options.noTemplate === true && options.role !== undefined
+        ? '\n  No role template: its first message is your prompt alone.'
+        : '';
   return {
-    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`,
-    json: agentJson(fresh.refs, fresh.agent, session.caller),
+    text: `Started ${fresh.line}\n  ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}${templateLine}`,
+    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), template: started.template },
   };
+}
+
+/** `roles`: the app's default roles, each with the first line of its template. */
+export async function defaultRolesView(session: BoardSession): Promise<BoardView> {
+  const roles = await session.client.call('orchestrator.roles', { token: session.token });
+  const width = Math.max(0, ...roles.map((role) => role.name.length));
+  return {
+    text:
+      roles.length === 0
+        ? 'The app has no default roles. `agent-board roles set <name> -- <template>` adds one.'
+        : roles.map((role) => `${role.name.padEnd(width)}  ${cut(role.body.split('\n')[0] ?? '', 80) || '(empty)'}`).join('\n'),
+    json: roles,
+  };
+}
+
+/** The zone a `roles` command's `--zone` names, if it names one. */
+async function rolesZone(session: BoardSession, ref: string | undefined): Promise<Zone | undefined> {
+  if (ref === undefined) return undefined;
+  const object = new BoardRefs(await readBoard(session.client)).resolve(ref, session.caller);
+  if (object.kind !== 'zone') throw new BoardError(`${ref} is a ${object.kind}, not a zone`);
+  return object.zone;
+}
+
+/**
+ * `roles set`: sets the app's default role `name`, used in any zone that saved no template of its own for it; with
+ * `zone`, that zone's template for the name.
+ */
+export async function setDefaultRole(session: BoardSession, name: string, body: string, zoneRef?: string): Promise<BoardView> {
+  const zone = await rolesZone(session, zoneRef);
+  const role = await session.client.call('orchestrator.setRole', { token: session.token, name, body, ...(zone === undefined ? {} : { zoneId: zone.id }) });
+  return {
+    text:
+      zone === undefined
+        ? `Set the default role ${role.name}: a zone with no template of its own for ${role.name} starts its agents with it.`
+        : `Set ${zone.name}'s template for ${role.name}: its agents in that role start with it.`,
+    json: role,
+  };
+}
+
+/** `roles remove`: removes the app's default role `name`, or with `zone` that zone's template for it. */
+export async function removeDefaultRole(session: BoardSession, name: string, zoneRef?: string): Promise<BoardView> {
+  const zone = await rolesZone(session, zoneRef);
+  await session.client.call('orchestrator.removeRole', { token: session.token, name, ...(zone === undefined ? {} : { zoneId: zone.id }) });
+  const shown = name.trim();
+  return { text: zone === undefined ? `Removed the default role ${shown}.` : `Removed ${zone.name}'s template for ${shown}.`, json: { removed: shown } };
 }
 
 /** `send`: the agent's next message. */
@@ -784,17 +892,18 @@ export async function sendToAgent(session: BoardSession, ref: string, text: stri
   return { text: `Sent to ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
-/** `wait`: until the agents' turns end (or `until`'s states), or the timeout. */
+/** `wait`: until the agents' turns end (or `until`'s states), or the timeout. With `crew`, its crew's too. */
 export async function waitForAgents(
   session: BoardSession,
   agentRefs: string[],
-  options: { until?: AgentState[]; any?: boolean; timeoutMs?: number },
+  options: { until?: WaitState[]; any?: boolean; timeoutMs?: number; crew?: boolean },
 ): Promise<BoardView & { timedOut: boolean }> {
   const { caller, token, refs } = await orchestratingCaller(session);
   const ids = agentRefs.map((ref) => resolveAgent(refs, ref, caller).sessionId);
   const result = await session.client.call('orchestrator.wait', {
     token,
     sessionIds: ids,
+    ...(options.crew ? { crew: true } : {}),
     ...(options.until === undefined ? {} : { states: options.until }),
     ...(options.any ? { any: true } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
@@ -810,6 +919,52 @@ export async function waitForAgents(
   };
 }
 
+/** What `watchCrew` heard: its events' lines, the cursor to hear on from, and whether it heard none in time. */
+export interface CrewNews {
+  lines: string[];
+  json: unknown[];
+  cursor: string;
+  missed: boolean;
+  timedOut: boolean;
+}
+
+/**
+ * `watch` and the MCP `wait` with `since`: the crew events after `since` of the agents named and, with `crew`, its
+ * crew's, as soon as there is one, or none once `timeoutMs` passes.
+ */
+export async function watchCrew(
+  session: BoardSession,
+  agentRefs: string[],
+  options: { crew?: boolean; since: string; kinds?: CrewEventKind[]; timeoutMs?: number },
+): Promise<CrewNews> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const ids = agentRefs.map((ref) => resolveAgent(refs, ref, caller).sessionId);
+  const result = await session.client.call('orchestrator.wait', {
+    token,
+    sessionIds: ids,
+    ...(options.crew || ids.length === 0 ? { crew: true } : {}),
+    since: options.since,
+    ...(options.kinds === undefined ? {} : { kinds: options.kinds }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  });
+  // An agent started since the board was read has no ref yet: read it again.
+  const fresh = result.events.some((event) => !refs.board.agents.some((agent) => agent.sessionId === event.sessionId))
+    ? new BoardRefs(await readBoard(session.client))
+    : refs;
+  return {
+    lines: result.events.map((event) => crewEventLine(fresh, event)),
+    json: result.events.map((event) => ({ ...event, agent: fresh.of('agent', event.sessionId) })),
+    cursor: result.cursor,
+    missed: result.missed,
+    timedOut: result.timedOut,
+  };
+}
+
+/** A crew event as a line: `[<cursor>] <ref> <name>  <kind>: <detail>`. */
+function crewEventLine(refs: BoardRefs, event: CrewEvent): string {
+  return `[${event.cursor}] ${refs.of('agent', event.sessionId)} ${event.name}  ${event.kind}${event.detail === null ? '' : `: ${event.detail}`}`;
+}
+
 /** `read`: the agent's final message, or a file of its worktree. */
 export async function readAgent(session: BoardSession, ref: string, path: string | undefined): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
@@ -823,6 +978,21 @@ export async function interruptAgent(session: BoardSession, ref: string): Promis
   await session.client.call('orchestrator.interrupt', { token, sessionId: agent.sessionId });
   const fresh = await freshAgentLine(session, agent.sessionId);
   return { text: `Interrupted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
+/**
+ * `restart`: starts an ended agent again in place, carrying on its conversation; with `fresh`, a new conversation
+ * (on `prompt`, if any) in the same tile, worktree and branch.
+ */
+export async function restartAgent(session: BoardSession, ref: string, anew?: { prompt?: string }): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.restart', {
+    token,
+    sessionId: agent.sessionId,
+    ...(anew === undefined ? {} : { fresh: true, ...(anew.prompt === undefined ? {} : { prompt: anew.prompt }) }),
+  });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Restarted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
 /** `close`: ends the agent's session, or with `remove` deletes it with its worktree and branch. */
@@ -882,7 +1052,10 @@ export async function handOff(session: BoardSession, options: HandoffPayload & {
     return `  ${refs.of('agent', id)}${agent === undefined ? '' : ` ${agent.name}`}: ${outcome} ${name}${reason === null ? '' : `: ${reason}`}`;
   };
   return {
-    text: [`Handed off along ${plural(outcomes.length, 'edge')}:`, ...outcomes.map(line)].join('\n'),
+    text:
+      outcomes.length === 0
+        ? 'No edge leaves your tile, so nothing was handed on. Your tile shows your work finished.'
+        : [`Handed off along ${plural(outcomes.length, 'edge')}:`, ...outcomes.map(line)].join('\n'),
     json: outcomes.map((outcome) => ({ ...outcome, edge: refs.of('edge', outcome.edgeId), to: refs.of('agent', outcome.to) })),
   };
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getBezierPath, getSmoothStepPath, getStraightPath, Position } from '@xyflow/react';
 import type { ConnectorSide } from '@agent-board/daemon/protocol';
-import { bendsFromBoard, bendsOnBoard, labelFits, lineShape, pointAlong, samplePath, withoutPoint, withPointOn } from './geometry';
+import { bendsFromBoard, bendsOnBoard, lineShape, pointAlong, samplePath, withoutPoint, withPointOn } from './geometry';
 
 const ends = { source: { x: 0, y: 0 }, sourceSide: 'right', target: { x: 200, y: 100 }, targetSide: 'left' } as const;
 
@@ -105,24 +105,6 @@ describe('the path', () => {
   });
 });
 
-describe('whether a label fits', () => {
-  const label = { width: 120, height: 24 };
-  it('fits only with room for the arrowheads either side of it, along the line', () => {
-    expect(labelFits({ length: 200, along: { x: 1, y: 0 } }, label)).toBe(true);
-    expect(labelFits({ length: 130, along: { x: 1, y: 0 } }, label)).toBe(false);
-    // Up and down, it takes only its height of the line.
-    expect(labelFits({ length: 130, along: { x: 0, y: 1 } }, label)).toBe(true);
-    expect(labelFits({ length: 60, along: { x: 0, y: 1 } }, label)).toBe(false);
-  });
-
-  it("goes by the way the line runs at its middle, where the label sits", () => {
-    const run = lineShape('straight', { source: { x: 0, y: 0 }, sourceSide: 'bottom', target: { x: 0, y: 130 }, targetSide: 'top' }, []);
-    expect(run.along.x).toBeCloseTo(0);
-    expect(run.along.y).toBeCloseTo(1);
-    expect(labelFits(run, label)).toBe(true);
-  });
-});
-
 describe('a bent line, for every pair of sides', () => {
   const SIDES: ConnectorSide[] = ['top', 'right', 'bottom', 'left'];
   const OUT: Record<ConnectorSide, { x: number; y: number }> = { top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 } };
@@ -175,4 +157,88 @@ describe('a bent line, for every pair of sides', () => {
       }
     });
   }
+});
+
+describe("a curve's bow", () => {
+  const across = { source: { x: 0, y: 0 }, sourceSide: 'right', target: { x: 300, y: 0 }, targetSide: 'left' } as const;
+
+  it('sits halfway along a curve never bowed, where its label is', () => {
+    const shape = lineShape('curved', across, []);
+    expect(shape.bow.x).toBeCloseTo(150);
+    expect(shape.bow.y).toBeCloseTo(0);
+    expect(shape.bow).toEqual(shape.label);
+  });
+
+  const SIDES: ConnectorSide[] = ['top', 'right', 'bottom', 'left'];
+  it('draws the same curve bowed through its own middle as never bowed, for every pair of sides: grabbing the bow moves nothing', () => {
+    for (const sourceSide of SIDES) {
+      for (const targetSide of SIDES) {
+        const ends = { source: { x: 0, y: 0 }, sourceSide, target: { x: 300, y: 150 }, targetSide };
+        const unbowed = lineShape('curved', ends, []);
+        const bowed = lineShape('curved', ends, [{ ...unbowed.bow, bow: true }]);
+        const [before, after] = [samplePath(unbowed.path), samplePath(bowed.path)];
+        expect(after).toHaveLength(before.length);
+        for (const [index, at] of after.entries()) expect(Math.hypot(at.x - before[index]!.x, at.y - before[index]!.y), `${sourceSide}→${targetSide}`).toBeLessThan(1);
+      }
+    }
+  });
+
+  it('passes through the bow halfway along its curve, for every pair of sides', () => {
+    for (const sourceSide of SIDES) {
+      for (const targetSide of SIDES) {
+        const bow = { x: 120, y: 200, bow: true as const };
+        const shape = lineShape('curved', { source: { x: 0, y: 0 }, sourceSide, target: { x: 300, y: 150 }, targetSide }, [bow]);
+        expect(samplePath(shape.path).some((at) => Math.hypot(at.x - bow.x, at.y - bow.y) < 0.01), `${sourceSide}→${targetSide}`).toBe(true);
+      }
+    }
+  });
+
+  it('sits on the point it was pulled to, which the curve passes through', () => {
+    const shape = lineShape('curved', across, [{ x: 150, y: 80, bow: true }]);
+    expect(shape.bow).toEqual({ x: 150, y: 80, bow: true });
+    expect(samplePath(shape.path).some((at) => Math.hypot(at.x - 150, at.y - 80) < 0.01)).toBe(true);
+  });
+
+  it('has its handle on the bow, or along the curve clear of a label on it', () => {
+    expect(lineShape('curved', across, [{ x: 150, y: 80, bow: true }]).bowHandle).toEqual({ x: 150, y: 80, bow: true });
+    const { bow, bowHandle } = lineShape('curved', across, [], { width: 80, height: 20 });
+    expect(Math.abs(bowHandle.x - bow.x)).toBeGreaterThan(40);
+  });
+
+  it('sits halfway along a curve bent through several points before it had a bow', () => {
+    const shape = lineShape('curved', across, [{ x: 100, y: 50 }, { x: 200, y: -50 }]);
+    const halfway = pointAlong(samplePath(shape.path), 0.5);
+    expect(shape.bow.x).toBeCloseTo(halfway.x);
+    expect(shape.bow.y).toBeCloseTo(halfway.y);
+  });
+});
+
+describe('a curve kept with one bend, from before it could be bowed', () => {
+  // As the board drew them before bows (a Catmull-Rom curve through the bend, square out of and into its sides), from
+  // the code it drew them with: a board kept then must look the same now.
+  const KEPT = [
+    {
+      ends: { source: { x: 0, y: 0 }, sourceSide: 'right', target: { x: 300, y: 150 }, targetSide: 'left' },
+      bend: { x: 150, y: 200 },
+      drawn: 'M0,0 C83.333,0 100,175 150,200 C200,225 247.295,150 300,150',
+    },
+    {
+      ends: { source: { x: 0, y: 0 }, sourceSide: 'bottom', target: { x: 400, y: 0 }, targetSide: 'bottom' },
+      bend: { x: 200, y: 160 },
+      drawn: 'M0,0 C0,85.375 133.333,160 200,160 C266.667,160 400,85.375 400,0',
+    },
+    {
+      ends: { source: { x: 0, y: 0 }, sourceSide: 'right', target: { x: 300, y: 0 }, targetSide: 'right' },
+      bend: { x: 360, y: -80 },
+      drawn: 'M0,0 C90,0 310,-80 360,-80 C410,-80 333.333,0 300,0',
+    },
+  ] as const;
+
+  it('draws exactly as it was drawn then, through its bend', () => {
+    for (const { ends, bend, drawn } of KEPT) expect(lineShape('curved', ends, [bend]).path).toBe(drawn);
+  });
+
+  it('has its bow handle on its bend', () => {
+    for (const { ends, bend } of KEPT) expect(lineShape('curved', ends, [bend]).bow).toEqual(bend);
+  });
 });

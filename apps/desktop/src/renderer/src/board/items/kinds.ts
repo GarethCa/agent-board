@@ -1,13 +1,14 @@
 import type { ComponentType } from 'react';
 import type { NodeProps } from '@xyflow/react';
-import { SHAPE_FILLS, STICKY_COLORS, TEXT_COLORS, type BoardItemKind } from '@agent-board/daemon/protocol';
+import { AGENT_NOTE_SIZE, SHAPE_FILLS, STICKY_COLORS, STICKY_SIZE, TEXT_COLORS, type BoardItemKind } from '@agent-board/daemon/protocol';
 import { themedColor } from '../../board-colors';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
+import { AgentNoteNode } from './AgentNoteNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
 import { LINK_CARD_SIZE, LinkNode } from './LinkNode';
 import { ShapeNode, SHAPE_SIZE } from './ShapeNode';
-import { newStickyData, STICKY_SIZE, StickyNode, stickyData } from './StickyNode';
+import { newStickyData, StickyNode, stickyData } from './StickyNode';
 import { newShapeData, newTextData, shapeData, textData } from './text-style';
 import { TextNode } from './TextNode';
 
@@ -88,6 +89,14 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: ISSUE_CARD_SIZE,
     editOnCreate: false,
     minimapColor: () => 'var(--raised)',
+  },
+  // Made by agents only (`note add`), never from the toolbar.
+  'agent-note': {
+    label: 'agent note',
+    node: AgentNoteNode,
+    size: AGENT_NOTE_SIZE,
+    editOnCreate: false,
+    minimapColor: () => 'var(--agent-note-bar)',
   },
 };
 

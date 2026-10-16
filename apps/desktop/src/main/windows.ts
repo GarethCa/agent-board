@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, screen, type Rectangle, type WebContents }
 import type { WindowOwner } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { sendToAllWindows } from './broadcast';
-import { WINDOW_IPC, WINDOW_QUERY, type PopOutEnd, type ScreenPoint, type WindowTarget } from '../preload/api';
+import { WINDOW_IPC, WINDOW_QUERY, type BoardRequest, type PopOutEnd, type PopOutSwitch, type ScreenPoint, type WindowTarget } from '../preload/api';
 import { VIEW_KEYS, viewSaver } from '../shared/view-saver';
 import type { ViewState } from './view';
 
@@ -23,20 +23,23 @@ export interface WindowIpcOptions {
   ): BrowserWindow;
   /** The daemon's view state, where popped-out windows' places are kept (`VIEW_KEYS.popOutBounds`), by window ID. */
   view: ViewState;
-  /** Whether the board's window is open. */
-  hasBoard(): boolean;
-  /** Opens the board's window, with `showing`'s window shown on it. */
-  openBoard(showing: WindowTarget): void;
+  /** The board's window, while it is open. */
+  board(): BrowserWindow | undefined;
+  /** Opens the board's window, with `showing`'s window shown on it, if given. */
+  openBoard(showing?: WindowTarget): BrowserWindow;
 }
 
 /**
  * The session window IPC: popping a session window out into its own OS window, one per session or shell tile, and
  * back in. Every window hears when a popped-out one goes away, so the board can show it again or forget it. Popping
  * back in with the board closed opens the board. A popped-out window reopens where it was (`VIEW_KEYS.popOutBounds`), and
- * the windows the app closes as it quits are not reported as gone: the board reopens them at its next start.
+ * the windows the app closes as it quits are not reported as gone: the board reopens them at its next start. From its
+ * ⌘K switcher, a popped-out window shows another session in its place, or asks the board to do what it can't.
  */
-export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpcOptions): { poppedOwner(contents: WebContents): WindowOwner | undefined } {
+export function registerWindowIpc({ open, view, board, openBoard }: WindowIpcOptions): { poppedOwner(contents: WebContents): WindowOwner | undefined } {
   const popped = new Map<string, { window: BrowserWindow; target: WindowTarget; end: PopOutEnd }>();
+  /** The popped-out window whose page is `contents`, if it is one. */
+  const entryOf = (contents: WebContents) => [...popped.values()].find((each) => !each.window.isDestroyed() && each.window.webContents === contents);
   let quitting = false;
   app.on('before-quit', () => (quitting = true));
 
@@ -70,26 +73,63 @@ export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpc
     const window = open({ [WINDOW_QUERY.popOut]: id, [WINDOW_QUERY.kind]: kind, [WINDOW_QUERY.title]: title }, { title, ...(place ?? POP_OUT_SIZE) });
     const entry = { window, target, end: 'closed' as PopOutEnd };
     popped.set(id, entry);
+    // By the session it shows now: the switcher may have changed it.
     const remember = () => {
-      if (!window.isDestroyed()) setPlace(id, window.getBounds());
+      if (!window.isDestroyed()) setPlace(entry.target.id, window.getBounds());
     };
     window.on('move', remember);
     window.on('resize', remember);
     window.on('closed', () => {
-      if (popped.get(id) !== entry) return;
-      popped.delete(id);
+      const shown = entry.target;
+      if (popped.get(shown.id) !== entry) return;
+      popped.delete(shown.id);
       // Closed by the quit, not the user: the board still has it out, to reopen there next time.
       if (quitting) return;
-      setPlace(id, undefined);
-      sendToAllWindows(WINDOW_IPC.returned, target, entry.end);
+      setPlace(shown.id, undefined);
+      sendToAllWindows(WINDOW_IPC.returned, shown, entry.end);
     });
+  });
+
+  // The window switched is the one that asked: no window re-targets another.
+  ipcMain.handle(WINDOW_IPC.switchPopOut, (event, target: WindowTarget): PopOutSwitch => {
+    // Out in its own window already: that one comes forward, and this one stays as it is.
+    const out = popped.get(target.id);
+    if (out !== undefined) {
+      revealWindow(out.window);
+      return 'forward';
+    }
+    const entry = entryOf(event.sender);
+    if (entry === undefined) return 'gone';
+    const from = entry.target;
+    popped.delete(from.id);
+    entry.target = target;
+    popped.set(target.id, entry);
+    entry.window.setTitle(target.title);
+    setPlace(from.id, undefined);
+    setPlace(target.id, entry.window.getBounds());
+    sendToAllWindows(WINDOW_IPC.switched, from, target);
+    return 'switched';
+  });
+
+  // One request waits at a time, taken by the board once it listens: it may be opening for it.
+  let request: BoardRequest | null = null;
+  ipcMain.handle(WINDOW_IPC.boardRequest, (_event, asked: BoardRequest) => {
+    const window = board() ?? openBoard();
+    revealWindow(window);
+    request = asked;
+    window.webContents.send(WINDOW_IPC.boardRequested);
+  });
+  ipcMain.handle(WINDOW_IPC.takeBoardRequest, () => {
+    const taken = request;
+    request = null;
+    return taken;
   });
 
   ipcMain.handle(WINDOW_IPC.popIn, (_event, id: string) => {
     const entry = popped.get(id);
     if (entry === undefined) return;
     entry.end = 'popIn';
-    if (!hasBoard()) openBoard(entry.target);
+    if (board() === undefined) openBoard(entry.target);
     entry.window.close();
   });
 
@@ -100,7 +140,7 @@ export function registerWindowIpc({ open, view, hasBoard, openBoard }: WindowIpc
   return {
     /** Whose window a popped-out window's page shows, if it is one's: an agent's, a shell tile's or a tab window's. */
     poppedOwner(contents) {
-      const entry = [...popped.values()].find((each) => !each.window.isDestroyed() && each.window.webContents === contents);
+      const entry = entryOf(contents);
       if (entry === undefined) return undefined;
       const { kind, id } = entry.target;
       return kind === 'session' ? { kind: 'agent', id } : { kind, id };

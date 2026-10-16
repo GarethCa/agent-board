@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowRight, Bell, Menu as MenuIcon, MousePointerClick, Plus, SquareDashedMousePointer } from 'lucide-react';
-import { withCommand } from '../keys';
+import { withCommand, withWindowShortcut } from '../keys';
 import { Button, Kbd } from '../ui';
 import type { Rect } from '../geometry';
 import { placeCallout } from './first-run';
@@ -26,7 +26,7 @@ const STOPS: TourStop[] = [
     title: 'Your zones, agents and settings',
     body: (
       <>
-        Every zone and session is listed here, with the settings. Press <b>{withCommand('K')}</b> to find one by name.
+        Every zone and session is listed here, with the settings. Press <b>{withWindowShortcut('K')}</b> anywhere to jump to one by name.
       </>
     ),
   },
@@ -59,8 +59,8 @@ const STOPS: TourStop[] = [
     body: (
       <>
         Press <Kbd>A</Kbd> and click to start Claude Code or Codex there, in a zone or anywhere on the board; <Kbd>`</Kbd>{' '}
-        does the same for a shell. On the board: <Kbd>N</Kbd> note, <Kbd>T</Kbd> text, <Kbd>S</Kbd> shape, <Kbd>V</Kbd> select,{' '}
-        <Kbd>H</Kbd> pan.
+        does the same for a shell. On the board: <Kbd>N</Kbd> note, <Kbd>T</Kbd> text, <Kbd>S</Kbd> shape (<Kbd>/</Kbd> finds one by name),{' '}
+        <Kbd>V</Kbd> select, <Kbd>H</Kbd> pan.
       </>
     ),
   },

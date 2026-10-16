@@ -3,37 +3,14 @@
 import type { NodeChange } from '@xyflow/react';
 import type { TileMove } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
-import { AGENT_TILE_SIZE, clearOf, footprint, PERCH_ROOM, ROW_STEP, TILE_GAP } from './layout';
+import { AGENT_TILE_SIZE, clearOf, CREW_GAP, CREW_PER_ROW, CREW_ROWS, crewSpot, footprint, PERCH_ROOM, ROW_STEP, TILE_GAP } from '@agent-board/daemon/board-layout';
 import type { TileNodeType } from './tile';
 import type { BoardNode } from './tiles';
 
-/** Space between an orchestrator and its crew's first column: room for the frame between them. */
-export const CREW_GAP = 40;
 /** Space between a crew frame and the tiles in it. */
 export const CREW_PADDING = 10;
-/** How many of a crew go to a row beside their orchestrator before the next row. */
-const CREW_PER_ROW = 3;
-/** How many rows down a new crew member is looked for a spot before the zone slots it as any other. */
-const CREW_ROWS = 20;
 /** How far right of its orchestrator a crew member's corner may be and still sit with it: its crew's columns. */
 const CREW_REACH = AGENT_TILE_SIZE.width + CREW_GAP + CREW_PER_ROW * (AGENT_TILE_SIZE.width + TILE_GAP);
-
-/** The spot `col` along and `row` down of the crew of the orchestrator at `at`. */
-const crewSlot = (at: { x: number; y: number }, col: number, row: number) => ({
-  x: at.x + AGENT_TILE_SIZE.width + CREW_GAP + col * (AGENT_TILE_SIZE.width + TILE_GAP),
-  y: at.y + row * ROW_STEP,
-});
-
-/** Where the next of a crew goes beside its orchestrator at `at`: the first spot in its rows clear of `taken`. */
-export function crewSpot(at: { x: number; y: number }, taken: readonly Rect[]): { x: number; y: number } | undefined {
-  for (let row = 0; row < CREW_ROWS; row++) {
-    for (let col = 0; col < CREW_PER_ROW; col++) {
-      const spot = crewSlot(at, col, row);
-      if (clearOf(footprint(spot), taken)) return spot;
-    }
-  }
-  return undefined;
-}
 
 /** The dashed frame round the crew that sits with its orchestrator, relative to their zone. */
 export interface CrewFrame extends Rect {
@@ -76,11 +53,15 @@ function crewTiles(nodes: readonly BoardNode[], orchestrator: TileNodeType): Til
   ) as TileNodeType[];
 }
 
-/** A frame round each orchestrator's crew that sits with it, in its zone. */
-export function crewFrames(tiles: readonly TileNodeType[]): CrewFrame[] {
+/**
+ * A frame round each orchestrator's crew that sits with it, in its zone: who is in it decided where they are saved
+ * (`tiles`), and the frame round where they are drawn (`drawn`), so tiles an expanded tile pushed aside stay in it.
+ */
+export function crewFrames(tiles: readonly TileNodeType[], drawn: readonly TileNodeType[] = tiles): CrewFrame[] {
+  const shown = new Map(drawn.map((node) => [node.id, node]));
   const frames: CrewFrame[] = [];
   for (const orchestrator of tiles) {
-    const crew = crewTiles(tiles, orchestrator);
+    const crew = crewTiles(tiles, orchestrator).map((node) => shown.get(node.id) ?? node);
     if (crew.length === 0) continue;
     const size = (node: TileNodeType) => ({ width: node.width ?? AGENT_TILE_SIZE.width, height: node.height ?? AGENT_TILE_SIZE.height });
     const left = Math.min(...crew.map((node) => node.position.x));

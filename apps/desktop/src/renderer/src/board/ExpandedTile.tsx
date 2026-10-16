@@ -168,6 +168,7 @@ function HeadFacts({
     );
   }
   if (agent) for (const pr of agent.pullRequests) facts.push(<PullRequestChip key={pr.number} pr={pr} open={() => openPullRequest(agent, pr)} />);
+  if (agent) for (const pr of agent.pushedPullRequests) facts.push(<PullRequestChip key={pr.number} pr={pr} pushed open={() => openPullRequest(agent, pr)} />);
   return <>{facts}</>;
 }
 

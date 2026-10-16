@@ -113,9 +113,18 @@ describe('selectChecks', () => {
     'apps/desktop/src/renderer/src/App.tsx',
     'apps/desktop/src/renderer/src/ui/Dialog.tsx',
     'apps/desktop/src/renderer/src/chrome/BoardChrome.tsx',
-    'apps/desktop/src/renderer/src/board/layout.ts',
+    'packages/daemon/src/board-layout.ts',
     'apps/desktop/src/main/index.ts',
   ])('runs the full gate for the widely shared module %s', (file) => {
+    expect(selectChecks([file]).full).toBe(true);
+  });
+
+  it.each([
+    'packages/daemon/src/agent-spawns.ts',
+    'packages/daemon/src/agent-lifecycle.ts',
+    'packages/daemon/src/hook-states.ts',
+    'packages/daemon/src/deliveries.ts',
+  ])('runs the full gate for %s, split out of the agent host', (file) => {
     expect(selectChecks([file]).full).toBe(true);
   });
 

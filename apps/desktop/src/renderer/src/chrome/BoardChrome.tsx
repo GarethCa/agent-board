@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import type { Node } from '@xyflow/react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
@@ -9,6 +9,8 @@ import { BoardMenu, type BoardMenuState } from './BoardMenu';
 import { CreateToolbar, type CreateToolbarProps } from './CreateToolbar';
 import { EmptyBoard } from './EmptyBoard';
 import { NeedsYou } from './NeedsYou';
+import { BoardSpotlight } from './BoardSpotlight';
+import type { SpotlightHandle } from './Spotlight';
 import { Onboarding } from '../onboarding/Onboarding';
 import { onboardingState, shouldOpenOnboarding, type OnboardingState } from '../onboarding/first-run';
 import { SampleBoard } from '../onboarding/SampleBoard';
@@ -16,7 +18,9 @@ import { ZoneJump } from './ZoneJump';
 import { ZoomControls } from './ZoomControls';
 import type { ZoneSource } from './zones';
 import type { ClickOpens } from '../board/click-opens';
+import type { ConnectionsView } from '../board/connections-view';
 import type { CrewLook } from '../board/crew-view';
+import type { AgentNoteLook } from '../board/items/agent-note-look';
 
 export interface BoardChromeProps extends CreateToolbarProps {
   /** Whether the board has loaded: until then only the board menu shows, with the daemon's status. */
@@ -54,6 +58,10 @@ export interface BoardChromeProps extends CreateToolbarProps {
   onClickOpens(value: ClickOpens): void;
   crewLook: CrewLook;
   onCrewLook(value: CrewLook): void;
+  agentNoteLook: AgentNoteLook;
+  onAgentNoteLook(value: AgentNoteLook): void;
+  connections: ConnectionsView;
+  onConnections(value: ConnectionsView): void;
 }
 
 /**
@@ -62,23 +70,22 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
 
-  // ⌘K opens the board menu on its search field; ⌘\ opens and closes it. Never while typing: in a field, a note, a
-  // dialog or a session window's terminal, the keys are the text's.
+  const spotlight = useRef<SpotlightHandle>(null);
+
+  // ⌘\ opens the board menu on its search field, and closes it (⌘K is the switcher's, which opens anywhere). Never while
+  // typing: in a field, a note, a dialog or a session window's terminal, the key is the text's.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!commandKey(event) || event.altKey || event.shiftKey || isTyping(event)) return;
       if ((event.target as Element | null)?.closest?.('.xterm')) return;
-      if (event.key === 'k') {
+      if (event.key === '\\') {
         event.preventDefault();
-        setMenu({ open: true, at: 'search', asked: event.timeStamp });
-      } else if (event.key === '\\') {
-        event.preventDefault();
-        setMenu((current) => (current.open ? { open: false } : { open: true }));
+        setMenu((current) => (current.open ? { open: false } : { open: true, at: 'search', asked: event.timeStamp }));
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -105,8 +112,14 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells,
         onClickOpens={onClickOpens}
         crewLook={crewLook}
         onCrewLook={onCrewLook}
+        agentNoteLook={agentNoteLook}
+        onAgentNoteLook={onAgentNoteLook}
+        connections={connections}
+        onConnections={onConnections}
         onGettingStarted={onboarding.state?.showInMenu ? onboarding.reopen : undefined}
+        onFind={() => spotlight.current?.open()}
       />
+      {loaded && <BoardSpotlight ref={spotlight} agents={agents} shells={shells} zones={zones} />}
       {buildMismatch(status) && <BuildMismatch app={status.build} health={status.health} />}
       {loaded && (
         <>

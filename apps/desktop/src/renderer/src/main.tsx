@@ -7,6 +7,7 @@ import '@fontsource-variable/jetbrains-mono/index.css';
 import '@fontsource/caveat/600.css';
 import '@xyflow/react/dist/style.css';
 import './tokens.css';
+import './theme-packs.css';
 import './ui/ui.css';
 import './app.css';
 import './chrome/chrome.css';

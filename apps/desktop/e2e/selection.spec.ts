@@ -41,7 +41,7 @@ test('marquee-selects three stickies, duplicates and moves them, undoes twice an
     expect(await window.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains('react-flow__pane'), from)).toBe(true);
     await drag(window, from, to);
     await expect(window.locator('.react-flow__node.selected')).toHaveCount(3);
-    await expect(window.getByTestId('selection-box')).toHaveText('3 selected · 3 notes');
+    await expect(window.getByTestId('selection-label')).toHaveText('3 selected · 3 notes');
 
     // Duplicated: three more, a step down and right, selected in their place.
     await window.keyboard.press('ControlOrMeta+d');
@@ -114,7 +114,7 @@ test('select all asks before deleting a shell, notes alone are deleted at once, 
 
     // Everything selected; deleting asks first, as the shell is a session, and Cancel leaves it all.
     await window.keyboard.press('ControlOrMeta+a');
-    await expect(window.getByTestId('selection-box')).toHaveText('3 selected · 2 notes, 1 shell');
+    await expect(window.getByTestId('selection-label')).toHaveText('3 selected · 2 notes, 1 shell');
     await window.keyboard.press('Backspace');
     const confirm = window.getByRole('alertdialog', { name: 'Delete selection?' });
     await expect(confirm).toBeVisible();
@@ -363,7 +363,7 @@ test('a zone moved by its tab moves back on undo, but not while typing in a note
     expect(await window.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains('react-flow__pane'), from)).toBe(true);
     await drag(window, from, { x: boxB.x + boxB.width + 30, y: boxB.y + boxB.height + 30 }, { hold: 'Shift' });
     await expect(window.locator('.react-flow__node.selected')).toHaveCount(2);
-    await expect(window.getByTestId('selection-box')).toHaveText('2 selected · 2 notes');
+    await expect(window.getByTestId('selection-label')).toHaveText('2 selected · 2 notes');
   } finally {
     client?.close();
     await app.close();

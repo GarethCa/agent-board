@@ -3,7 +3,7 @@ import type { NodeChange } from '@xyflow/react';
 import type { ZoneLayout } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 import { isItemNode } from './items/items';
-import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from './layout';
+import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { holdsTiles, isSessionTile, isZone, layoutOf, sizeOfNode, type BoardNode } from './tiles';
 import { isDefaultSize } from './tile-size';
 import type { ZoneResize } from './ZoneNode';

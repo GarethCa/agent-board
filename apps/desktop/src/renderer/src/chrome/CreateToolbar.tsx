@@ -1,11 +1,17 @@
-import { Hand, MousePointer2, Plus, Shapes, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
+import { ChevronDown, Hand, MousePointer2, Plus, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
 import { useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
-import { Button, Island, IslandSeparator, Kbd, ToolButton } from '../ui';
+import { noteShapeUsed, useRecentShapes } from '../board/items/shapes/recents';
+import { ShapeIcon } from '../board/items/shapes/ShapeArt';
+import { ShapePicker } from '../board/items/shapes/ShapePicker';
+import { Button, Island, IslandSeparator, Kbd, Popover, ToolButton } from '../ui';
 
-/** How a drag on the board acts: selecting and moving what it starts on, or panning the board. */
-export type PointerMode = 'select' | 'hand';
+/**
+ * How a drag on the board acts: selecting and moving what it starts on; the same, but a zone's body draws a marquee and
+ * the zone moves only by its tab (box select); or panning the board.
+ */
+export type PointerMode = 'select' | 'box' | 'hand';
 
 export interface CreateToolbarProps {
   mode: PointerMode;
@@ -35,11 +41,12 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
   return (
     <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
       <ToolButton label="Select" icon={<MousePointer2 />} shortcut="V" hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
+      <ToolButton label="Box select" icon={<SquareDashed />} shortcut="B" hint="Draw a box round what to select, in a zone too" pressed={mode === 'box' && tool === undefined} onClick={() => onMode('box')} />
       <ToolButton label="Hand" icon={<Hand />} shortcut="H" hint="Pan the board" pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
       <IslandSeparator />
       <ToolButton label="Sticky note" icon={<StickyNote />} shortcut="N" hint="Add a sticky note, or double-click the board" onClick={onSticky} />
       <ToolButton label="Text" icon={<Type />} shortcut="T" hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
-      <ToolButton label="Shape" icon={<Shapes />} shortcut="S" hint="Add a shape, then drag on the board" pressed={tool === 'shape'} onClick={() => toggle('shape')} />
+      <ShapeTool armed={tool === 'shape'} onTool={onTool} />
       <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut="Z" hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
       <IslandSeparator />
       <Button
@@ -67,6 +74,78 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       {drag.ghost !== undefined &&
         createPortal(<ToolGhost at={drag.ghost.at} size={ghostSize} label={GHOST_LABELS[drag.ghost.tool]!} fromToolbar />, document.body)}
     </Island>
+  );
+}
+
+/**
+ * The Shape tool (CL1): its button draws the shape picked last, which a drag on the board then draws. Arming
+ * it, from the button or S, opens the shape picker under it, its search focused. A pick arms that shape and closes
+ * the picker; a press on the board closes it too and draws, while Esc or the button again puts the tool down.
+ */
+function ShapeTool({ armed, onTool }: { armed: boolean; onTool(tool: ArmedTool | undefined): void }) {
+  const last = useRecentShapes()[0] ?? 'rectangle';
+  // Open whenever the tool is armed, until it is picked from or the board is pressed.
+  const [closed, setClosed] = useState(false);
+  const [wasArmed, setWasArmed] = useState(armed);
+  if (wasArmed !== armed) {
+    setWasArmed(armed);
+    setClosed(false);
+  }
+  /** Closed by a pick or a press on the board: the tool stays armed, and focus stays off the button. */
+  const keepArmed = useRef(false);
+  const close = () => {
+    keepArmed.current = true;
+    setClosed(true);
+  };
+  return (
+    <Popover
+      aria-label="Shapes"
+      className="shape-picker-popover"
+      open={armed && !closed}
+      onOpenChange={(open) => {
+        if (open) {
+          setClosed(false);
+          onTool('shape');
+        } else if (keepArmed.current) setClosed(true);
+        else onTool(undefined);
+      }}
+      onPointerDownOutside={(event) => {
+        if ((event.target as Element | null)?.closest('[data-testid="board-tool"]')) keepArmed.current = true;
+      }}
+      onCloseAutoFocus={(event) => {
+        if (keepArmed.current) event.preventDefault();
+        keepArmed.current = false;
+      }}
+      content={
+        <ShapePicker
+          current={last}
+          hint={
+            <>
+              <span>Click, then drag on the board</span>·<span>↵ the first match</span>
+            </>
+          }
+          onEscape={() => onTool(undefined)}
+          onPick={(shape) => {
+            noteShapeUsed(shape);
+            close();
+          }}
+        />
+      }
+    >
+      <ToolButton
+        label="Shape"
+        className="create-toolbar-shape"
+        icon={
+          <>
+            <ShapeIcon shape={last} room={{ width: 20, height: 16 }} />
+            <ChevronDown className="create-toolbar-shape-more" aria-hidden />
+          </>
+        }
+        shortcut="S"
+        hint="Add a shape, then drag on the board"
+        pressed={armed}
+      />
+    </Popover>
   );
 }
 

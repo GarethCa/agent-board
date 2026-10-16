@@ -247,6 +247,8 @@ test('a Codex agent asks first in a repo with its own Codex config, and one stop
     const agent = (await agents(window)).find((a) => a.name === 'Write config')!;
     mkdirSync(join(agent.cwd, '.codex'));
     await expect(flagged).toHaveAttribute('data-state', 'failed');
+    // Stopped, it is a chip; unfolded, its tile says why.
+    await flagged.click();
     await expect(flagged.getByRole('note')).toContainText('stopped this agent');
   } finally {
     await app.close();

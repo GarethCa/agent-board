@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_TILE_SIZE } from './layout';
+import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
 import { clampTileSize, keepTileSizes, TILE_MAX_SIZE, TILE_MIN_SIZE, tileSizeOf, tileSizesFrom, withTileSize } from './tile-size';
 
 describe('clampTileSize', () => {

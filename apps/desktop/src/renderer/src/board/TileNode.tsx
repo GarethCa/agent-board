@@ -1,6 +1,7 @@
 import { memo, useContext, useRef } from 'react';
 import { NodeResizeControl, ResizeControlVariant, type ControlPosition, type NodeProps } from '@xyflow/react';
 import { ExpandedTile } from './ExpandedTile';
+import { FoldedChip } from './FoldedChip';
 import { parentKindOf, resizeAllowed } from './expanded';
 import { RepresentationContext, tileComponentFor } from './representations';
 import { useOnlySelected } from './items/items';
@@ -22,13 +23,17 @@ export const TileNode = memo(function TileNode({ id, data, parentId, selected: p
   // Resizable once it is the one thing selected, as a note is; an expanded tile has its own resizer.
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
-  const resizable = useOnlySelected(picked) && data.expanded !== true;
+  const resizable = useOnlySelected(picked) && data.expanded !== true && data.folded !== true;
   const Tile = tileComponentFor(data.style ?? style, registry);
   return (
     <>
       {data.expanded ? (
         <ExpandedTile id={id} tile={data} parent={parentKindOf(parentId)} />
-      ) : <Tile id={id} tile={data} />}
+      ) : data.folded && data.agent !== undefined ? (
+        <FoldedChip id={id} agent={data.agent} />
+      ) : (
+        <Tile id={id} tile={data} />
+      )}
       {resizable && (
         // A double-click on any handle puts the tile back to its default size, and opens nothing.
         <span

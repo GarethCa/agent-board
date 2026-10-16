@@ -21,8 +21,9 @@ interface AppearanceSource {
 }
 
 /**
- * Shows the theme on `root` (`data-theme`, which tokens.css and the terminal read), now and whenever it changes: the
- * OS switching at sunset, or the setting picked in any window. Returns a stop function.
+ * Shows the theme on `root` (`data-theme`, which tokens.css and the terminal read, and `data-scheme`, its light or dark
+ * mode, for what follows the mode rather than one theme), now and whenever it changes: the OS switching at sunset, or
+ * the setting picked in any window. Returns a stop function.
  */
 export function followTheme(
   root: { dataset: DOMStringMap } = document.documentElement,
@@ -30,7 +31,11 @@ export function followTheme(
   appearance: AppearanceSource = window.agentBoard.appearance,
 ): () => void {
   let picked = appearance.initial;
-  const show = () => (root.dataset.theme = themeFor(picked, dark.matches).id);
+  const show = () => {
+    const theme = themeFor(picked, dark.matches);
+    root.dataset.theme = theme.id;
+    root.dataset.scheme = theme.scheme;
+  };
   show();
   dark.addEventListener('change', show);
   const stopListening = appearance.onChanged((next) => {

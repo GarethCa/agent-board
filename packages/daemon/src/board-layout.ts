@@ -1,5 +1,29 @@
-import type { ZoneLayout } from '@agent-board/daemon/protocol';
-import { clamp, overlaps, type Rect } from '../geometry';
+// Where tiles, items and zones go on the board: the pure geometry the board and the daemon's layout
+// commands share, so a tile an orchestrator moves lands where a drop would. Pure, so every case is unit-tested.
+import type { Agent, TileSide, ZoneLayout } from './protocol.ts';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** A rectangle from its top-left. */
+export interface Rect extends Point, Size {}
+
+/** Whether two rects share any area: touching along an edge isn't overlapping. */
+export function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/** `value`, kept between `low` and `high`. */
+export function clamp(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high);
+}
 
 /** Space kept between a new zone and the zone it was stepped past. */
 const ZONE_GAP = 40;
@@ -14,12 +38,23 @@ export function freeSpotFor(
   existing: readonly ZoneLayout[],
 ): { x: number; y: number } {
   let spot = { ...wanted };
-  for (;;) {
-    const hit = existing.find((zone) => overlaps({ ...spot, ...size }, zone));
+  // Each step goes right past a zone it hit, so it hits each at most once.
+  for (let step = 0; step <= existing.length; step++) {
+    const hit = existing.find((zone) => overlaps({ ...spot, width: size.width, height: size.height }, zone));
     if (hit === undefined) return spot;
     spot = { x: hit.x + hit.width + ZONE_GAP, y: spot.y };
   }
+  return { x: Math.max(spot.x, ...existing.map((zone) => zone.x + zone.width + ZONE_GAP)), y: spot.y };
 }
+
+/**
+ * Most spots any search here tries before it gives up and takes one past everything in its way: a hard stop, so a
+ * crowded zone (or a bad size) can never hang the board or the daemon.
+ */
+export const MAX_SEARCH_STEPS = 10_000;
+
+/** The lowest bottom of `rects`, or `top` with none. */
+const lowestOf = (rects: readonly Rect[], top: number) => Math.max(top, ...rects.map((rect) => rect.y + rect.height));
 
 /** A new agent's terminal size until its session window opens and resizes it. */
 export const NEW_AGENT_SIZE = { cols: 120, rows: 32 };
@@ -36,6 +71,43 @@ export const PERCH_ROOM = 24;
 
 /** How far apart the rows of tiles `tileSlot` lays out are. */
 export const ROW_STEP = PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP;
+
+/**
+ * The zone's grid, which automated layout keeps tiles on so they line up across clusters: a column a default
+ * tile and a gap wide, a row `ROW_STEP` tall, counted from a zone's first tile slot.
+ */
+export const GRID_COLUMN = AGENT_TILE_SIZE.width + TILE_GAP;
+export const GRID_ORIGIN = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+
+/**
+ * The shortest rail a linked pair's token lies along in full, with its name and the line under it: the renderer's
+ * `--rail-token-room`, which a test keeps the same.
+ */
+export const RAIL_TOKEN_ROOM = 160;
+/** The least gap between two tiles a rail joins, so its token and label clear both: its room, and a tile gap each side. */
+export const RAIL_GAP = RAIL_TOKEN_ROOM + 2 * TILE_GAP;
+
+/** The top-left of the grid cell `column` along and `row` down, relative to its zone. */
+export const gridPoint = (column: number, row: number): Point => ({ x: GRID_ORIGIN.x + column * GRID_COLUMN, y: GRID_ORIGIN.y + row * ROW_STEP });
+
+/** The grid cell nearest `point`, relative to its zone: never left of or above the first. */
+export function snapToGrid(point: Point): Point {
+  return gridPoint(Math.max(0, Math.round((point.x - GRID_ORIGIN.x) / GRID_COLUMN)), Math.max(0, Math.round((point.y - GRID_ORIGIN.y) / ROW_STEP)));
+}
+
+/** The first grid row whose tiles start at or below `y`. */
+export const gridRowAtOrBelow = (y: number): number => Math.max(0, Math.ceil((y - GRID_ORIGIN.y - EPSILON) / ROW_STEP));
+
+/** The first grid column whose tiles start at or right of `x`. */
+export const gridColumnAtOrRight = (x: number): number => Math.max(0, Math.ceil((x - GRID_ORIGIN.x - EPSILON) / GRID_COLUMN));
+
+/** How many grid columns and rows a tile of `size` takes, with its gaps and the room above it for its characters. */
+export function gridSpan(size: Size): { columns: number; rows: number } {
+  return {
+    columns: Math.max(1, Math.ceil((size.width + TILE_GAP - EPSILON) / GRID_COLUMN)),
+    rows: Math.max(1, Math.ceil((size.height + PERCH_ROOM + TILE_GAP - EPSILON) / ROW_STEP)),
+  };
+}
 
 /**
  * Where the `index`th tile of a zone `zoneWidth` wide goes, relative to the zone: in rows from the top-left, as many
@@ -56,15 +128,65 @@ export function zoneHeightFor(tileCount: number, zoneWidth: number): number {
 }
 
 /**
- * Where a new tile goes in a zone `zoneWidth` wide: the first `tileSlot` no tile in `taken` (relative to the zone)
- * covers, even partly, so it never lands on top of another.
+ * Where a new tile of `size` goes in a zone `zoneWidth` wide: the first `tileSlot` where no tile in `taken` (relative to
+ * the zone) covers it, even partly, so it never lands on top of another. A resized tile takes only a slot it fits in
+ * the zone's width from, or the first of a row.
  */
-export function freeTileSlot(zoneWidth: number, taken: readonly ZoneLayout[]): { x: number; y: number } {
-  for (let index = 0; ; index++) {
+export function freeTileSlot(zoneWidth: number, taken: readonly ZoneLayout[], size: Size = AGENT_TILE_SIZE): { x: number; y: number } {
+  for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
     const slot = tileSlot(index, zoneWidth);
-    if (!taken.some((tile) => overlaps({ ...slot, ...AGENT_TILE_SIZE }, tile))) return slot;
+    const fits = slot.x === ZONE_PADDING || slot.x + size.width + ZONE_PADDING <= zoneWidth;
+    if (fits && !taken.some((tile) => overlaps({ ...slot, width: size.width, height: size.height }, tile))) return slot;
+  }
+  return { x: ZONE_PADDING, y: lowestOf(taken, 0) + TILE_GAP + PERCH_ROOM };
+}
+
+/**
+ * Where a tile of `size` goes to sit a gap beside `of` (a tile's or item's rect) on `side`: level with it to its right or
+ * left, lined up on its left below or above it, with room for the characters perched on the tile's top edge.
+ */
+export function besideSpot(of: Rect, side: TileSide, size: Size): Point {
+  switch (side) {
+    case 'right':
+      return { x: of.x + of.width + TILE_GAP, y: of.y };
+    case 'left':
+      return { x: of.x - TILE_GAP - size.width, y: of.y };
+    case 'below':
+      return { x: of.x, y: of.y + of.height + TILE_GAP + PERCH_ROOM };
+    case 'above':
+      return { x: of.x, y: of.y - PERCH_ROOM - TILE_GAP - size.height };
   }
 }
+
+/**
+ * The name the board gives a session tile's node, which its resized size is kept under in the view state
+ * (`TILE_SIZES_VIEW_KEY`): `agent:<session id>`, `shell:<id>`, `external:<id>`.
+ */
+export const tileSizeKey = (kind: 'agent' | 'shell' | 'external', id: string): string => `${kind}:${id}`;
+
+/** The view state key the board keeps each resized tile's size under, by `tileSizeKey`. */
+export const TILE_SIZES_VIEW_KEY = 'tileSizes';
+
+/** The view state key the board keeps the closed agents the user unfolded under, as a list of `tileSizeKey`s. */
+export const UNFOLDED_VIEW_KEY = 'unfoldedTiles';
+
+/** A folded chip: a closed agent's tile once it has shrunk to its mark, name and final state. */
+export const CHIP_SIZE = { width: 196, height: 34 };
+
+/**
+ * Whether the agent's session is closed: it ended, and nothing of it is left running. Not one a restart stopped (that
+ * is resumed), nor one whose pane dropped into a shell that still runs: that tile keeps its Restart, and the user may be
+ * running the harness by hand there.
+ */
+export const isClosed = (agent: Pick<Agent, 'endedAt' | 'state' | 'shellSessionId' | 'shellHarness'>): boolean =>
+  agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.shellSessionId === null && agent.shellHarness === null;
+
+/** Whether the board draws the agent as a chip: closed, and not unfolded by the user. */
+export const isFolded = (agent: Pick<Agent, 'endedAt' | 'state' | 'sessionId' | 'shellSessionId' | 'shellHarness'>, unfolded: ReadonlySet<string>): boolean =>
+  isClosed(agent) && !unfolded.has(tileSizeKey('agent', agent.sessionId));
+
+/** The unfolded node ids saved in the view state (`UNFOLDED_VIEW_KEY`), taking only the strings, once each. */
+export const unfoldedFrom = (saved: unknown): string[] => (Array.isArray(saved) ? [...new Set(saved.filter((id): id is string => typeof id === 'string'))] : []);
 
 /** How far a board item put in a zone for the user sits from its edge, and the gap between such items. */
 export const ITEM_INSET = 40;
@@ -76,13 +198,14 @@ export const ITEM_GAP = 16;
  */
 export function freeItemSpot(zoneWidth: number, size: { width: number; height: number }, taken: readonly ZoneLayout[]): { x: number; y: number } {
   const perRow = Math.max(1, Math.floor((zoneWidth - 2 * ITEM_INSET + ITEM_GAP) / (size.width + ITEM_GAP)));
-  for (let index = 0; ; index++) {
+  for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
     const spot = {
       x: ITEM_INSET + (index % perRow) * (size.width + ITEM_GAP),
       y: ITEM_INSET + Math.floor(index / perRow) * (size.height + ITEM_GAP),
     };
-    if (!taken.some((other) => overlaps({ ...spot, ...size }, other))) return spot;
+    if (!taken.some((other) => overlaps({ ...spot, width: size.width, height: size.height }, other))) return spot;
   }
+  return { x: ITEM_INSET, y: lowestOf(taken, 0) + ITEM_GAP };
 }
 
 /**
@@ -190,16 +313,17 @@ function placeEach(
 }
 
 /**
- * The spot inside `region` nearest `tile` whose footprint is clear of `blocking`. The nearest is always against the
+ * The spot inside `region` nearest `tile` whose footprint, at `size`, is clear of `blocking`. The nearest is always against the
  * region's edges, against some blocking rectangle's edges, or straight in line with where the tile was, so those are
  * the only spots tried.
  */
-function nearestFreeSpot(
-  tile: ZoneTile,
+export function nearestFreeSpot(
+  tile: Point,
   blocking: readonly Rect[],
   region: { left: number; top: number; right: number; bottom: number },
+  size: Size = AGENT_TILE_SIZE,
 ): { x: number; y: number } | undefined {
-  const { width, height } = AGENT_TILE_SIZE;
+  const { width, height } = size;
   const xs = [tile.x, region.left, region.right, ...blocking.flatMap((rect) => [rect.x - TILE_GAP - width, rect.x + rect.width + TILE_GAP])];
   const ys = [
     tile.y,
@@ -213,10 +337,77 @@ function nearestFreeSpot(
       const distance = Math.hypot(x - tile.x, y - tile.y);
       // Ties go to the higher spot, then the one further left, so the same layout always packs the same way.
       const better = best === undefined || distance < best.distance - EPSILON || (Math.abs(distance - best.distance) <= EPSILON && (y < best.y || (y === best.y && x < best.x)));
-      if (better && clearOf(footprint({ x, y }), blocking)) best = { x, y, distance };
+      if (better && clearOf(sizedFootprint({ x, y }, size), blocking)) best = { x, y, distance };
     }
   }
   return best && { x: best.x, y: best.y };
+}
+
+/** Space between an orchestrator and its crew's first column: room for the frame between them. */
+export const CREW_GAP = 40;
+/** How many of a crew go to a row beside their orchestrator before the next row. */
+export const CREW_PER_ROW = 3;
+/** How many rows down a new crew member is looked for a spot before the zone slots it as any other. */
+export const CREW_ROWS = 20;
+
+/** The spot `col` along and `row` down of the crew of the orchestrator at `at`. */
+const crewSlot = (at: { x: number; y: number }, col: number, row: number) => ({
+  x: at.x + AGENT_TILE_SIZE.width + CREW_GAP + col * (AGENT_TILE_SIZE.width + TILE_GAP),
+  y: at.y + row * ROW_STEP,
+});
+
+/** Where the next of a crew goes beside its orchestrator at `at` (BA2): the first spot in its rows clear of `taken`. */
+export function crewSpot(at: { x: number; y: number }, taken: readonly Rect[]): { x: number; y: number } | undefined {
+  for (let row = 0; row < CREW_ROWS; row++) {
+    for (let col = 0; col < CREW_PER_ROW; col++) {
+      const spot = crewSlot(at, col, row);
+      if (clearOf(footprint(spot), taken)) return spot;
+    }
+  }
+  return undefined;
+}
+
+/** How `slotUnplaced` reads and places the tiles it is given. */
+export interface Slotting<T> {
+  /** The zone it is in, or undefined for loose on the board. */
+  zoneOf(tile: T): string | undefined;
+  /** Its place, relative to its zone (a board position when loose), or undefined for none yet. */
+  placeOf(tile: T): Point | undefined;
+  place(tile: T, spot: Point): void;
+  /** The agent it is (its session id), and the orchestrator that started it, if either. */
+  agentOf(tile: T): string | undefined;
+  orchestratorOf(tile: T): string | undefined;
+  /** What it takes at its place: itself, and what it takes for a new crew member beside it. */
+  rect(tile: T): Rect;
+  footprint(tile: T): Rect;
+  zoneWidth(zoneId: string): number;
+  /** Every zone, on the board: a loose tile keeps clear of them. */
+  zones: readonly Rect[];
+  /** The board items in the zone (or loose, for undefined), which are in the way too. */
+  items(zoneId: string | undefined): readonly Rect[];
+}
+
+/**
+ * Gives each of `tiles` with no place yet the one the board draws it at, in order: an orchestrator's
+ * new agent beside it, in its crew's rows, when it is in its orchestrator's zone; else the first free slot of its zone
+ * (`freeTileSlot`); else, loose, a spot clear of the zones and loose tiles from the board's origin. The board slots
+ * them so each time it draws, without saving it, so the daemon works out the same places to lay out round them.
+ */
+export function slotUnplaced<T>(tiles: readonly T[], slotting: Slotting<T>): void {
+  const { zoneOf, placeOf } = slotting;
+  for (const tile of tiles) {
+    if (placeOf(tile) !== undefined) continue;
+    const zoneId = zoneOf(tile);
+    const siblings = tiles.filter((other) => zoneOf(other) === zoneId && placeOf(other) !== undefined);
+    const inTheWay = slotting.items(zoneId);
+    const from = slotting.orchestratorOf(tile);
+    const orchestrator = from === undefined ? undefined : siblings.find((other) => slotting.agentOf(other) === from);
+    const besideIt =
+      orchestrator && crewSpot(placeOf(orchestrator)!, [...siblings.map(slotting.footprint), ...inTheWay, ...(zoneId === undefined ? slotting.zones : [])]);
+    if (besideIt !== undefined) slotting.place(tile, besideIt);
+    else if (zoneId === undefined) slotting.place(tile, freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...slotting.zones, ...siblings.map(slotting.rect)]));
+    else slotting.place(tile, freeTileSlot(slotting.zoneWidth(zoneId), [...siblings.map(slotting.rect), ...inTheWay]));
+  }
 }
 
 /** The part of a zone a tile at `spot` takes: itself and the room above it for its subagents. */
@@ -241,11 +432,12 @@ export function clearOf(rect: Rect, others: readonly Rect[]): boolean {
 /** The `tileSlot` slots of a zone `size` that are inside it, a tile's top-left no lower than `bottom`. */
 function freeSlots(size: { width: number; height: number }, bottom: number): { x: number; y: number }[] {
   const slots: { x: number; y: number }[] = [];
-  for (let index = 0; ; index++) {
+  for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
     const slot = tileSlot(index, size.width);
     if (slot.y > bottom + EPSILON) return slots;
     if (slot.x + AGENT_TILE_SIZE.width + ZONE_PADDING <= size.width + EPSILON) slots.push(slot);
   }
+  return slots;
 }
 
 /**

@@ -261,3 +261,31 @@ describe('issue cards', () => {
     await expect(client.call('item.create', card({ ...issue, title: 3 }))).rejects.toThrow(/issue card's title/);
   });
 });
+
+describe('agent notes', () => {
+  const note = (data: Record<string, unknown>): CreateItemParams => ({ kind: 'agent-note', zoneId: null, x: 0, y: 0, width: 272, height: 140, data });
+  const written = {
+    text: '**Round 2**\n\n- fixing `R1`',
+    agent: { sessionId: 'abc', name: 'Master Orchestrator', harness: 'claude', role: 'orchestrator' },
+    writtenAt: '2026-10-15T14:02:00.000Z',
+    editedByUser: false,
+  };
+
+  it('keeps its markdown, the agent that wrote it as it was then, when, and whether the user has edited it', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const item = await client.call('item.create', note(written));
+    expect(item.data).toEqual(written);
+    expect((await client.call('item.update', { id: item.id, data: { text: 'Mine now', editedByUser: true } })).data).toMatchObject({ text: 'Mine now', editedByUser: true });
+    // What a later answer adds, such as the question it answers, is kept.
+    expect((await client.call('item.create', note({ ...written, asked: "What's risky here?" }))).data).toMatchObject({ asked: "What's risky here?" });
+  });
+
+  it('refuses one with no text, no agent, or a bad edited mark', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    await expect(client.call('item.create', note({ ...written, text: 3 }))).rejects.toThrow(/agent note's text/);
+    await expect(client.call('item.create', note({ ...written, agent: undefined }))).rejects.toThrow(/agent note's agent/);
+    await expect(client.call('item.create', note({ ...written, agent: { ...written.agent, name: 7 } }))).rejects.toThrow(/agent note's agent/);
+    await expect(client.call('item.create', note({ ...written, writtenAt: 9 }))).rejects.toThrow(/agent note's writtenAt/);
+    await expect(client.call('item.create', note({ ...written, editedByUser: 'yes' }))).rejects.toThrow(/agent note's editedByUser/);
+  });
+});

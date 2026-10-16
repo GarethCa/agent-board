@@ -1,4 +1,5 @@
 import { memo, type CSSProperties } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useStore, useStoreApi, ViewportPortal, type ReactFlowState } from '@xyflow/react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX } from '../items/items';
@@ -7,6 +8,8 @@ import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../t
 import type { Rect } from '../../geometry';
 import { selectedNodes } from './selection';
 import { boundsOf, type Guide } from './snap';
+import { ASK_CLAUDE_KEY } from './context-menu';
+import { Kbd } from '../../ui';
 
 /** What the selection box calls each kind of object, one and many. */
 const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [string, string]> = {
@@ -16,6 +19,7 @@ const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [st
   image: ['image', 'images'],
   link: ['link card', 'link cards'],
   issue: ['issue card', 'issue cards'],
+  'agent-note': ['agent note', 'agent notes'],
   zone: ['zone', 'zones'],
   agent: ['agent', 'agents'],
   shell: ['shell', 'shells'],
@@ -69,10 +73,10 @@ function selectedItems(state: ReactFlowState) {
 }
 
 /**
- * One box round a selection of several, labelled with what is in it (WbTools), with a handle under it that turns each
- * item in it about its own centre.
+ * One box round a selection of several, labelled with what is in it (WbTools), with Ask Claude… beside the label (CM)
+ * and a handle under it that turns each item in it about its own centre.
  */
-export const SelectionBox = memo(function SelectionBox() {
+export const SelectionBox = memo(function SelectionBox({ onAsk }: { onAsk(): void }) {
   const box = useStore(selectedBox, sameBox);
   const zoom = useStore((state) => state.transform[2]);
   const store = useStoreApi();
@@ -84,7 +88,14 @@ export const SelectionBox = memo(function SelectionBox() {
         data-testid="selection-box"
         style={{ '--box-x': `${box.x}px`, '--box-y': `${box.y}px`, '--box-width': `${box.width}px`, '--box-height': `${box.height}px`, '--zoom': zoom } as CSSProperties}
       >
-        <span className="selection-box-label">{box.label}</span>
+        <span className="selection-box-head">
+          <span className="selection-box-label" data-testid="selection-label">{box.label}</span>
+          <button type="button" className="selection-box-ask nodrag nopan" onClick={onAsk}>
+            <Sparkles aria-hidden />
+            Ask Claude…
+            <Kbd>{ASK_CLAUDE_KEY}</Kbd>
+          </button>
+        </span>
         {box.rotatable && <SelectionRotateHandle items={() => selectedItems(store.getState())} />}
       </div>
     </ViewportPortal>

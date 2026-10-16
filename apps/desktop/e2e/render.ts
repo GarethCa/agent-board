@@ -36,7 +36,8 @@ export async function ignorePointer(page: Page): Promise<() => Promise<void>> {
 
 /**
  * Pins what differs run to run in the board's text, so the shots guard it rather than hide it: a branch's random suffix
- * becomes `000000`, a worktree's path a fixed one, the daemon's build and pid fixed words. Text nodes only, so icons stay.
+ * becomes `000000`, a worktree's path a fixed one, the daemon's build and pid fixed words, and the time a rail's
+ * document was delivered 14:31. Text nodes only, so icons stay.
  */
 export async function pinRandomText(page: Page) {
   await page.evaluate(() => {
@@ -46,13 +47,16 @@ export async function pinRandomText(page: Page) {
       while (walker.nextNode()) nodes.push(walker.currentNode as Text);
       return nodes;
     };
-    for (const element of document.querySelectorAll('.hybrid-tile-branch, .session-window-where, .details-branch, .ui-section-meta')) {
+    for (const element of document.querySelectorAll('.hybrid-tile-branch, .session-window-where, .details-branch, .ui-section-meta, .spotlight-sub')) {
       for (const node of textNodes(element)) node.data = node.data.replace(/-[0-9a-f]{6}(?=$|-review-r\d+$)/, '-000000');
     }
     for (const element of document.querySelectorAll('.details-soft')) {
       for (const node of textNodes(element)) node.data = `~/.agent-board/worktrees/${node.data.split('/').at(-1)!.replace(/-[0-9a-f]{6}$/, '-000000')}`;
     }
     for (const element of document.querySelectorAll("[data-testid='daemon-details']")) element.textContent = 'Build 0000000 · daemon 0.0.0 · pid 1000 · schema v1';
+    for (const element of document.querySelectorAll('.rail-token-note')) {
+      for (const node of textNodes(element)) node.data = node.data.replace(/\d\d:\d\d/, '14:31');
+    }
   });
 }
 

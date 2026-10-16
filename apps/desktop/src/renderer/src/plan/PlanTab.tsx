@@ -206,7 +206,7 @@ function PlanPage({ html, visible, onFocus, onPaneKey }: PlanPageProps) {
           <ErrorText>{state.problem}</ErrorText>
         </div>
       )}
-      <div className="web-page plan-page" ref={host} data-testid="plan-page" data-plan-view={id} data-drawn={drawn || undefined}>
+      <div className="web-page plan-page" ref={host} data-testid="plan-page" data-plan-view={id} data-web-tab={id} data-drawn={drawn || undefined}>
         <span className="web-page-under" aria-hidden>
           <ClipboardList />
           {state?.title || 'Plan'}

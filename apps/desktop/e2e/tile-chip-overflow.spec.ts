@@ -1,8 +1,10 @@
 // Badges and chips never run past their container: a tile's footer (the model and role badges among them, folding into
-// a "+N" past two lines) and New agent's footer chips beside Start.
+// a "+N" past its one line) and New agent's footer chips beside Start.
 import { expect, type Locator } from '@playwright/test';
+import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
+import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { LONG_MODEL, launch, narrowBy, pickInChip, startCrowdedAgent, tile, zoneNamed } from './agent-helpers.ts';
+import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, startCrowdedAgent, tile, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -38,7 +40,7 @@ async function expectChildrenWithin(footer: Locator, container: Locator): Promis
   return shown;
 }
 
-test('a crowded tile’s footer, narrowed, wraps to two lines, folds the rest into +N and keeps every badge inside the tile', async () => {
+test('a crowded tile’s footer, narrowed, stays on one line, folds the rest into +N and keeps every badge inside the tile', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -52,7 +54,7 @@ test('a crowded tile’s footer, narrowed, wraps to two lines, folds the rest in
     await expect(footer.getByTestId('tile-muted')).toHaveCount(1);
     await expectChildrenWithin(footer, tile(window));
 
-    // However far it narrows, nothing runs out, the footer takes two lines at most, and what folded is in the +N.
+    // However far it narrows, nothing runs out, the footer takes one line, and what folded is in the +N.
     for (const dx of [-40, -40, -40]) {
       await narrowBy(window, tile(window), dx);
       await expectChildrenWithin(footer, tile(window));
@@ -64,7 +66,7 @@ test('a crowded tile’s footer, narrowed, wraps to two lines, folds the rest in
           .sort((a, b) => a - b);
         return middles.filter((middle, index) => index === 0 || middle - middles[index - 1]! > 6).length;
       });
-      expect(lines).toBeLessThanOrEqual(2);
+      expect(lines).toBe(1);
     }
     const folded = footer.getByTestId('tile-folded');
     await expect(folded).toBeVisible();
@@ -72,6 +74,58 @@ test('a crowded tile’s footer, narrowed, wraps to two lines, folds the rest in
     await expect(folded).toHaveAttribute('title', /Role: Follow-up reviewer/);
     // The model badge keeps its full id in its tooltip while its text is cut short.
     await expect(footer.getByTestId('tile-model')).toHaveAttribute('title', new RegExp(LONG_MODEL));
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, branch and description keep their boxes, and the lower ranked badges fold into +N', async () => {
+  test.setTimeout(120_000);
+  const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
+  // 'output', not 'waiting': an agent that asks swaps its description for the question, which moves the row.
+  const { dir, repo, env } = scratch('output');
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await startBadgedAgent(window);
+    const footer = tile(window).locator('.hybrid-tile-footer');
+    const rows = [tile(window).locator('.hybrid-tile-name'), tile(window).locator('.hybrid-tile-branch'), tile(window).locator('.hybrid-tile-body')];
+    const boxes = () => Promise.all(rows.map((row) => row.boundingBox()));
+    // The role is already in the +N: one line has room for the model and little more.
+    await expect(footer.getByTestId('tile-model')).toBeVisible();
+    const before = await boxes();
+    expect(before.every((box) => box !== null)).toBe(true);
+
+    // Its branch gets a pull request, and another of its branch follows: they rank above the model and the role.
+    const [agent] = await agents(window);
+    const pullRequest = (number: number): FakeGitHubPullRequest => ({
+      repo: 'acme/app',
+      number,
+      title: `Pull request ${number}`,
+      headRefName: agent!.branch,
+      headRefOid: 'b'.repeat(40),
+      state: 'OPEN',
+      isDraft: false,
+      body: 'A change.',
+      statusCheckRollup: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/app/actions/runs/1' }],
+      files: [],
+      comments: [],
+      reviewComments: [],
+    });
+    for (const numbers of [[41], [41, 42]]) {
+      github.setState({ ...FAKE_GITHUB_STATE, pullRequests: numbers.map(pullRequest) });
+      await expect(footer.getByTestId('tile-pr')).toHaveCount(numbers.length, { timeout: 20_000 });
+      await expect(footer.getByTestId('tile-pr').first()).toBeVisible();
+      await expect(footer.getByTestId('tile-folded')).toBeVisible();
+      await expectChildrenWithin(footer, tile(window));
+      expect(await boxes()).toEqual(before);
+    }
+    await expect(footer.getByTestId('tile-folded')).toHaveAttribute('title', /Role: Implementer/);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -4,6 +4,7 @@ import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fakeBinDir, fakeHarnessEnv, type HarnessName } from '../src/index.ts';
+import { boundSync, SYNC_LAUNCH_TIMEOUT_ENV } from '../src/guard.ts';
 import { removeTempDirs, tempDir } from './run-fake.ts';
 
 afterAll(removeTempDirs);
@@ -103,5 +104,36 @@ describe('harness guard', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toMatch(/harness guard: .*claude/);
+  }, 30_000);
+});
+
+describe('the bound on a blocking launch', () => {
+  it('gives a sync launch with no timeout of its own one, killing what is still running when it fires', () => {
+    expect(boundSync({ cwd: '/tmp' }, 500)).toEqual({ cwd: '/tmp', timeout: 500, killSignal: 'SIGKILL' });
+  });
+
+  it("keeps a launch's own timeout and kill signal", () => {
+    expect(boundSync({ timeout: 3000 }, 500)).toEqual({ timeout: 3000 });
+    expect(boundSync({ killSignal: 'SIGTERM' }, 500)).toEqual({ timeout: 500, killSignal: 'SIGTERM' });
+  });
+
+  it('ends every guarded sync launch that blocks past the bound, and leaves a launch with its own timeout to it', () => {
+    const fixture = fileURLToPath(new URL('./fixtures/sync-bound/launch.ts', import.meta.url));
+    const result = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', fixture], {
+      encoding: 'utf8',
+      env: { ...process.env, [SYNC_LAUNCH_TIMEOUT_ENV]: '300' },
+      timeout: 30_000,
+    });
+    expect(result.stderr).toBe('');
+    const ended = JSON.parse(result.stdout) as Record<string, { code: string; ms: number }>;
+
+    for (const launch of ['execFileSync', 'execSync', 'execSyncNoOptions', 'spawnSync']) {
+      expect(ended[launch], launch).toMatchObject({ code: 'ETIMEDOUT' });
+      expect(ended[launch]!.ms, launch).toBeLessThan(5_000);
+    }
+    expect(ended.ownTimeout).toMatchObject({ code: 'ETIMEDOUT' });
+    expect(ended.ownTimeout!.ms).toBeGreaterThanOrEqual(1_400);
+    expect(ended.unbounded).toMatchObject({ code: 'returned' });
+    expect(ended.unbounded!.ms).toBeGreaterThanOrEqual(900);
   }, 30_000);
 });

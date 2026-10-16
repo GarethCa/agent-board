@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PERCH_ROOM, ZONE_PADDING } from './layout';
+import { PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import {
   allowingOverlap,
   bringToFront,

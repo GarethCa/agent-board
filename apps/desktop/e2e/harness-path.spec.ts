@@ -3,7 +3,7 @@ import { fakeBinDir } from '@agent-board/fake-harness';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, setClickOpens, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { agents, launch, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -62,8 +62,10 @@ async function startsAndRestarts(setUp: (home: string, fake: string) => void) {
     await expandedTile(window).locator('.session-window-head').click();
     await window.keyboard.press('Escape');
     await expect(expandedTile(window)).toHaveCount(0);
-    await tileAction(tile(window), 'Restart agent');
+    // Restart from the tile's hover corner, pressed twice: it restarts once, and the second press is no error.
+    await tile(window).getByRole('button', { name: 'Restart', exact: true }).dblclick();
     await expect.poll(async () => (await agents(window))[0]!.endedAt).toBeNull();
+    await expect(window.getByText(/Could not restart/)).toHaveCount(0);
     await tile(window).dblclick();
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     await expect(expandedScreen(window)).not.toContainText('command not found');

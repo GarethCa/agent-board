@@ -1,11 +1,9 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-/** A session window's own shortcut: ⌘ on macOS, Ctrl+Shift elsewhere, where Ctrl's keys are the terminal's. */
-const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
 const undoKey = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`;
 
 const agentTile = (page: Page, id: string) => page.locator(`[data-testid="agent-tile"][data-session-id="${id}"]`);

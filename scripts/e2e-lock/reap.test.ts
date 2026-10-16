@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { killAll, leftovers, parsePs, reapWorktree } from './reap.ts';
+import { parsePs } from '../../packages/fake-harness/src/processes.ts';
+import { electronLeftovers, reapWorktree } from './reap.ts';
 
 const exe = (root: string) => `${root}/node_modules/.pnpm/electron@1/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
 const listing = [
@@ -18,31 +19,20 @@ const listing = [
   `  401    50 node /wt/a/node_modules/.bin/playwright test`,
 ].join('\n');
 
-describe('leftovers', () => {
+describe('electronLeftovers', () => {
   const pids = (found: { pid: number }[]) => found.map((p) => p.pid);
 
   it('finds only orphaned Electron processes from this worktree', () => {
-    expect(pids(leftovers(parsePs(listing), '/wt/a'))).toEqual([100, 101, 102]);
+    expect(pids(electronLeftovers(parsePs(listing), '/wt/a'))).toEqual([100, 101, 102]);
   });
 
   it('never matches another worktree, a sibling with the same prefix, or the installed app', () => {
-    const found = pids(leftovers(parsePs(listing), '/wt/a'));
+    const found = pids(electronLeftovers(parsePs(listing), '/wt/a'));
     for (const other of [200, 201, 300, 301]) expect(found).not.toContain(other);
   });
 
   it('also finds live descendants of the run that just ended', () => {
-    expect(pids(leftovers(parsePs(listing), '/wt/a', 50))).toEqual([100, 101, 102, 400]);
-  });
-});
-
-describe('killAll', () => {
-  it('terminates a process that ignores SIGTERM with SIGKILL', async () => {
-    const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});console.log('up');setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'inherit'] });
-    await new Promise((r) => child.stdout!.once('data', r));
-    const closed = new Promise((r) => child.on('close', r));
-    await killAll([{ pid: child.pid!, ppid: 1, command: '' }], 300);
-    await closed;
-    expect(child.signalCode).toBe('SIGKILL');
+    expect(pids(electronLeftovers(parsePs(listing), '/wt/a', 50))).toEqual([100, 101, 102, 400]);
   });
 });
 

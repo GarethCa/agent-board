@@ -1,6 +1,6 @@
 // Where each session window is: shown on the board, minimised to the dock, or popped out into its own OS window.
 // Pure, so every move is unit-tested; the board holds the list in state.
-import type { WindowTarget } from '../../../preload/api';
+import type { ShellChange, WindowTarget } from '../../../preload/api';
 
 /** At most one window is `shown` on the board at a time. */
 export type Placement = 'shown' | 'docked' | 'popped';
@@ -42,6 +42,16 @@ export function switchWindow(windows: SessionWindows, fromId: string, target: Wi
     .map((entry) => (entry.id === fromId ? { ...target, placement: 'shown' as const } : entry));
 }
 
+/**
+ * The popped-out window `fromId` shows the target now (its ⌘K switcher): its entry takes the target's place, out, and
+ * the target's own entry (shown on the board or docked) goes, as a session has one window.
+ */
+export function switchPoppedWindow(windows: SessionWindows, fromId: string, target: WindowTarget): SessionWindows {
+  const rest = windows.filter((entry) => entry.id !== target.id);
+  const out = { ...target, placement: 'popped' as const };
+  return rest.some((entry) => entry.id === fromId) ? rest.map((entry) => (entry.id === fromId ? out : entry)) : [...rest, out];
+}
+
 /** The sessions in OS windows of their own, which the board's window can't show. */
 export function poppedOut(windows: SessionWindows): ReadonlySet<string> {
   return new Set(windows.filter((entry) => entry.placement === 'popped').map((entry) => entry.id));
@@ -55,6 +65,15 @@ export function minimiseWindow(windows: SessionWindows, id: string): SessionWind
 /** Closes the window, wherever it is. What it shows keeps running. */
 export function closeWindow(windows: SessionWindows, id: string): SessionWindows {
   return windows.some((entry) => entry.id === id) ? windows.filter((entry) => entry.id !== id) : windows;
+}
+
+/**
+ * The windows a shell change leaves with nothing to show, by id: a removed shell's, and that of a shell tile moved into
+ * another's tabs, which shows in its owner's window instead.
+ */
+export function windowsClosedBy(windows: SessionWindows, change: ShellChange): string[] {
+  if (change.type === 'shell.removed') return [change.shellId];
+  return change.shell.owner !== null && windows.some((entry) => entry.id === change.shell.id) ? [change.shell.id] : [];
 }
 
 /** Notes that the target's window is now in its own OS window, adding it if the board never opened it (its tile popped it out). */

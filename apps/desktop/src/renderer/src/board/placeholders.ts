@@ -1,6 +1,5 @@
 import { itemNode, type ItemNodeType } from './items/items';
-import { STICKY_COLORS } from '@agent-board/daemon/protocol';
-import { STICKY_SIZE } from './items/StickyNode';
+import { STICKY_COLORS, STICKY_SIZE } from '@agent-board/daemon/protocol';
 import type { TileNodeType } from './tile';
 
 const COLUMNS = 20;

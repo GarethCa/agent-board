@@ -100,6 +100,9 @@ export async function setZoneTracker(page: Page, zoneName: string, connect: (dia
   await expect(tracker).toHaveText(shown);
 }
 
+/** A session window's own shortcut: ⌘ on macOS, Ctrl+Shift elsewhere, where Ctrl's keys are the terminal's. */
+export const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
+
 export const tile = (window: Page) => window.getByTestId('agent-tile');
 export const screen = (window: Page) => window.getByTestId('session-terminal').locator('.xterm-rows');
 
@@ -236,6 +239,19 @@ export async function startCrowdedAgent(page: Page): Promise<void> {
   }, agent!.sessionId);
 }
 
+/** Starts an agent in the zone `monorepo` on a short model id and as an implementer: a tile whose footer has room for its badges and little more. */
+export async function startBadgedAgent(page: Page): Promise<void> {
+  await zoneNamed(page, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+  const form = page.getByRole('dialog', { name: 'New agent' });
+  await pickInChip(form, 'Model', 'Other…');
+  await form.getByRole('textbox', { name: 'Model id' }).fill('claude-opus-5-5');
+  await pickInChip(form, 'Role', 'Implementer');
+  await form.getByLabel('Task').fill('Build it');
+  await form.getByRole('button', { name: 'Start' }).click();
+  await expect(form).toBeHidden();
+  await expect(tile(page)).toHaveCount(1);
+}
+
 /** Selects the tile `of` with a click on its body and drags its right edge by `dx` screen pixels (negative narrows it). */
 export async function narrowBy(page: Page, of: Locator, dx: number): Promise<void> {
   const box = await of.boundingBox();
@@ -243,4 +259,20 @@ export async function narrowBy(page: Page, of: Locator, dx: number): Promise<voi
   const handle = (await page.locator('.react-flow__node.selected .tile-resize.bottom.right').boundingBox())!;
   const [x, y] = [handle.x + handle.width / 2, handle.y + handle.height / 2];
   await drag(page, { x, y }, { x: x + dx, y });
+}
+
+/**
+ * Ends the agent and closes the shell its pane drops into, so it is closed in the board's sense (a folded chip): an agent
+ * that has only ended keeps its tile and its Restart while that shell runs.
+ */
+export async function closeAgent(page: Page, sessionId: string): Promise<void> {
+  await page.evaluate(async (id) => {
+    const { agents, sessions } = globalThis.window.agentBoard;
+    await agents.stop(id);
+    for (let tries = 0; tries < 100; tries++) {
+      const shell = (await agents.list()).find((agent) => agent.sessionId === id)?.shellSessionId;
+      if (shell) return void (await sessions.kill(shell));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }, sessionId);
 }

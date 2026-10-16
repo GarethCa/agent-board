@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeChange } from '@xyflow/react';
 import type { Agent, TilePosition, Zone } from '@agent-board/daemon/protocol';
-import { AGENT_TILE_SIZE, footprint, PERCH_ROOM, ROW_STEP, TILE_GAP } from './layout';
-import { CREW_GAP, CREW_PADDING, crewFrames, crewMoves, crewSpot, landingRects, withCrewFollowing } from './crews';
+import { AGENT_TILE_SIZE, CREW_GAP, footprint, PERCH_ROOM, TILE_GAP } from '@agent-board/daemon/board-layout';
+import { CREW_PADDING, crewFrames, crewMoves, landingRects, withCrewFollowing } from './crews';
 import { withTiles, type BoardNode } from './tiles';
 import type { TileNodeType } from './tile';
 import { zoneNode } from './ZoneNode';
@@ -10,24 +10,12 @@ import { zoneNode } from './ZoneNode';
 const { width, height } = AGENT_TILE_SIZE;
 const zone = (id: string) => zoneNode({ id, x: 0, y: 0, width: 1600, height: 900, repoRoot: '/code/app', folder: '', name: id, color: '#4c6ef5' } as Zone);
 const agent = (sessionId: string, zoneId: string | null, position: TilePosition | null, spawnedBy: string | null = null) =>
-  ({ sessionId, zoneId, position, spawnedBy, orchestrate: null, repoRoot: '/code/app', name: sessionId, harness: 'claude' }) as Agent;
+  ({ sessionId, zoneId, position, spawnedBy, orchestrate: null, repoRoot: '/code/app', name: sessionId, harness: 'claude', endedAt: null }) as Agent;
 const tiles = (nodes: BoardNode[]) => nodes.filter((node): node is TileNodeType => node.type === 'tile');
 const byId = (nodes: BoardNode[], id: string) => tiles(nodes).find((node) => node.id === id)!;
 
 const at = { x: 20, y: 44 };
 const beside = { x: at.x + width + CREW_GAP, y: at.y };
-
-describe('crewSpot', () => {
-  it('puts the first of a crew beside its orchestrator, and the next beside that', () => {
-    expect(crewSpot(at, [footprint(at)])).toEqual(beside);
-    expect(crewSpot(at, [footprint(at), footprint(beside)])).toEqual({ x: beside.x + width + TILE_GAP, y: at.y });
-  });
-
-  it('goes round a tile in the way, a row down once a row is full', () => {
-    const row = [0, 1, 2].map((col) => ({ x: beside.x + col * (width + TILE_GAP), y: at.y }));
-    expect(crewSpot(at, [footprint(at), ...row.map(footprint)])).toEqual({ x: beside.x, y: at.y + ROW_STEP });
-  });
-});
 
 describe('a crew on the board', () => {
   const laidOut = () =>
@@ -114,5 +102,40 @@ describe('a crew on the board', () => {
     const nodes = withTiles([zone('z')], [agent('boss', null, { x: 1600 - width - CREW_GAP - 10, y: 44, z: 1 }), agent('w1', null, null, 'boss')], [], []);
     const spot = byId(nodes, 'agent:w1').position;
     expect(spot.x).toBeGreaterThanOrEqual(1600);
+  });
+});
+
+describe('a crew frame round tiles an expanded tile pushed aside', () => {
+  const laidOut = () =>
+    withTiles([zone('z')], [agent('boss', 'z', { ...at, z: 1 }), agent('w1', 'z', null, 'boss'), agent('w2', 'z', null, 'boss')], [], []);
+  /** `nodes` as drawn with each tile `pushed` moved by as much. */
+  const drawn = (nodes: BoardNode[], pushed: Record<string, { dx: number; dy: number }>) =>
+    tiles(nodes).map((node) => {
+      const by = pushed[node.id];
+      return by === undefined ? node : { ...node, position: { x: node.position.x + by.dx, y: node.position.y + by.dy } };
+    });
+
+  it('keeps its members, decided where they are saved, and wraps them where they are drawn', () => {
+    const nodes = laidOut();
+    // Pushed far past the crew's columns and rows: still in the crew.
+    const [frame] = crewFrames(tiles(nodes), drawn(nodes, { 'agent:w1': { dx: 0, dy: 3000 }, 'agent:w2': { dx: 2000, dy: 0 } }));
+    expect(frame).toEqual({
+      orchestratorId: 'boss',
+      zoneId: 'z',
+      name: 'boss',
+      members: ['w1', 'w2'],
+      x: beside.x - CREW_PADDING,
+      y: at.y - CREW_PADDING,
+      width: 2000 + 2 * width + TILE_GAP + 2 * CREW_PADDING,
+      height: 3000 + height + 2 * CREW_PADDING,
+    });
+  });
+
+  it('wraps a member expanded at the size it is drawn', () => {
+    const nodes = laidOut();
+    const shown = tiles(nodes).map((node) => (node.id === 'agent:w2' ? { ...node, width: 900, height: 600 } : node));
+    const [frame] = crewFrames(tiles(nodes), shown);
+    expect(frame!.width).toBe(width + TILE_GAP + 900 + 2 * CREW_PADDING);
+    expect(frame!.height).toBe(600 + 2 * CREW_PADDING);
   });
 });

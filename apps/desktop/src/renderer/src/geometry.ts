@@ -1,22 +1,9 @@
 // Points and rectangles, on the board or on screen, and the few sums done with them everywhere. Pure, so unit-tested.
 
-export interface Point {
-  x: number;
-  y: number;
-}
+import type { Point, Rect } from '@agent-board/daemon/board-layout';
 
-export interface Size {
-  width: number;
-  height: number;
-}
-
-/** A rectangle from its top-left. */
-export interface Rect extends Point, Size {}
-
-/** Whether two rects share any area: touching along an edge isn't overlapping. */
-export function overlaps(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-}
+// The board's layout geometry (`board-layout`) is the daemon's too: its rects and sums are these.
+export { clamp, overlaps, type Point, type Rect, type Size } from '@agent-board/daemon/board-layout';
 
 /** Whether `point` is inside `rect`, its edges included. */
 export function contains(rect: Rect, point: Point): boolean {
@@ -25,11 +12,6 @@ export function contains(rect: Rect, point: Point): boolean {
 
 export function centreOf(rect: Rect): Point {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-}
-
-/** `value`, kept between `low` and `high`. */
-export function clamp(value: number, low: number, high: number): number {
-  return Math.min(Math.max(value, low), high);
 }
 
 /**

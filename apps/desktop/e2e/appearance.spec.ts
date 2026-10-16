@@ -2,8 +2,9 @@ import { expect, type ElectronApplication, type Locator, type Page } from '@play
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { newShell, test, tempDataDir } from './launch.ts';
 
-// Settings › Appearance (AO1): System, Light or Dark. Tests launch with AGENT_BOARD_APPEARANCE=light, the default
-// when nothing was picked, so the developer's own macOS setting never shows through.
+// Settings › Appearance (AO1): System, Light, Dark or a theme pack. Tests launch with
+// AGENT_BOARD_APPEARANCE=light, the default when nothing was picked, so the developer's own macOS setting never shows
+// through.
 
 const theme = (page: Page) => page.evaluate(() => document.documentElement.dataset.theme);
 const desk = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -45,6 +46,8 @@ function terminalColours(page: Page) {
 
 const LIGHT_TERMINAL = { background: 'rgb(27, 26, 24)', text: 'rgb(230, 225, 214)', red: 'rgb(204, 0, 0)', brightBlack: 'rgb(85, 87, 83)' };
 const DARK_TERMINAL = { background: 'rgb(18, 17, 16)', text: 'rgb(230, 225, 214)', red: 'rgb(224, 108, 108)', brightBlack: 'rgb(138, 132, 120)' };
+/** Catppuccin Latte's: a light pack keeps its dark sibling's (Mocha's) well and palette, its bright black lifted to AA. */
+const LATTE_TERMINAL = { background: 'rgb(17, 17, 27)', text: 'rgb(205, 214, 244)', red: 'rgb(243, 139, 168)', brightBlack: 'rgb(121, 124, 141)' };
 
 async function openSettings(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Board menu' }).click();
@@ -93,10 +96,48 @@ test('picks Dark, Light or System in Settings, the window follows at once, and t
   }
 });
 
+test('picks a theme pack in Settings, under its family and credit, and the window, its mode and its mark follow', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launchUnpinned(dataDir);
+  try {
+    await expect.poll(() => theme(window)).toBe('light');
+    await openSettings(window);
+    const catppuccin = window.getByRole('radiogroup', { name: 'Catppuccin' });
+    await expect(window.getByText('Catppuccin · MIT · github.com/catppuccin/catppuccin')).toBeVisible();
+    await expect(catppuccin.getByRole('radio')).toHaveCount(4);
+    await catppuccin.getByRole('radio', { name: /Catppuccin Mocha/ }).check();
+    await expect.poll(() => theme(window)).toBe('catppuccin-mocha');
+    expect(await desk(window)).toBe('rgb(24, 24, 37)');
+    expect(await themeSource(app)).toBe('dark');
+    await expect(window.getByText('Catppuccin Mocha whatever macOS is set to.')).toBeVisible();
+    await expect(window.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name: 'Dark' })).not.toBeChecked();
+    // Every dark theme takes the mark's dark colourway, not only the app's own.
+    await expect(window.getByTestId('board-menu').getByTestId('brand-mark').locator('.brand-mark-dark')).toBeVisible();
+
+    // Each family is a radio group of its own: Tab reaches it, and its arrow keys stay within it.
+    await catppuccin.getByRole('radio', { name: /Catppuccin Mocha/ }).focus();
+    await window.keyboard.press('ArrowUp');
+    await expect(catppuccin.getByRole('radio', { name: /Catppuccin Macchiato/ })).toBeFocused();
+    await expect.poll(() => theme(window)).toBe('catppuccin-macchiato');
+    await window.keyboard.press('Tab');
+    await expect(window.getByRole('radiogroup', { name: 'Rosé Pine' }).getByRole('radio').first()).toBeFocused();
+    await expect.poll(() => theme(window)).toBe('catppuccin-macchiato');
+
+    // A light pack puts the windows in light mode.
+    await window.getByRole('radiogroup', { name: 'Rosé Pine' }).getByRole('radio', { name: /Rosé Pine Dawn/ }).check();
+    await expect.poll(() => theme(window)).toBe('rose-pine-dawn');
+    expect(await themeSource(app)).toBe('light');
+    await expect(window.getByTestId('board-menu').getByTestId('brand-mark').locator('.brand-mark-light')).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
 test("the terminal takes the theme's well and palette, live, and a popped-out window follows a pick made on the board", async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launchUnpinned(dataDir, SHELL_ENV);
-  const pick = (appearance: 'light' | 'dark') => window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), appearance);
+  const pick = (appearance: 'light' | 'dark' | 'catppuccin-latte') =>
+    window.evaluate((value) => globalThis.window.agentBoard.appearance.set(value), appearance);
   try {
     await newShell(window);
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
@@ -105,6 +146,11 @@ test("the terminal takes the theme's well and palette, live, and a popped-out wi
     await pick('dark');
     await expect.poll(() => theme(window)).toBe('dark');
     await expect.poll(() => terminalColours(window)).toEqual(DARK_TERMINAL);
+
+    // A light theme pack's terminal is still dark: its dark sibling's well and palette.
+    await pick('catppuccin-latte');
+    await expect.poll(() => terminalColours(window)).toEqual(LATTE_TERMINAL);
+    await pick('dark');
 
     // Popped out, it opens in the theme picked, and follows the next pick, made in the board's window.
     const [popped] = await Promise.all([app.waitForEvent('window'), window.getByRole('button', { name: 'Pop out session window' }).click()]);

@@ -7,7 +7,7 @@ const pr = (number: number, state: PullRequest['state'] = 'open', checks: PullRe
   ({ number, title: `PR ${number}`, url: `https://github.com/o/r/pull/${number}`, state, checks }) as PullRequest;
 const schedule = { cron: '0 9 * * 2', prompt: 'Go', enabled: true, nextRunAt: null, lastRun: null } as AgentSchedule;
 const agent = (fields: Partial<Agent> = {}) =>
-  ({ model: null, role: null, issue: null, pullRequests: [], schedule: null, muted: false, seen: false, notice: null, ...fields }) as Agent;
+  ({ model: null, role: null, roleName: null, issue: null, pullRequests: [], pushedPullRequests: [], schedule: null, muted: false, seen: false, notice: null, workFinishedAt: null, ...fields }) as Agent;
 
 describe('a tile’s footer', () => {
   it('is empty for an agent with nothing to show', () => {
@@ -26,13 +26,41 @@ describe('a tile’s footer', () => {
     expect(footer.folded).toEqual([]);
   });
 
+  it('shows the pull requests of branches it pushed to, marked so, folding past the second as its own do', () => {
+    const footer = tileFooter(agent({ issue, pushedPullRequests: [pr(174, 'merged'), pr(175), pr(176)] }));
+
+    expect(footer.shown).toEqual([
+      { kind: 'issue', issue },
+      { kind: 'pr', pr: pr(174, 'merged'), pushed: true },
+      { kind: 'pr', pr: pr(175), pushed: true },
+    ]);
+    expect(footer.folded).toEqual(['Pushed to #176 PR 176: open, checks passing']);
+    expect(badgeLine({ kind: 'pr', pr: pr(174, 'merged'), pushed: true }, 0)).toBe('Pushed to #174 PR 174: merged, checks passing');
+  });
+
   it('shows the model and the role first, and neither for the default model and no role', () => {
     expect(tileFooter(agent({ model: 'opus', role: 'reviewer', issue })).shown).toEqual([
       { kind: 'model', model: 'opus' },
-      { kind: 'role', role: 'reviewer' },
+      { kind: 'role', role: 'reviewer', name: null },
       { kind: 'issue', issue },
     ]);
-    expect(tileFooter(agent({ role: 'implementer' })).shown).toEqual([{ kind: 'role', role: 'implementer' }]);
+    expect(tileFooter(agent({ role: 'implementer' })).shown).toEqual([{ kind: 'role', role: 'implementer', name: null }]);
+  });
+
+  it('names a custom role by its own name, and an unnamed one Custom', () => {
+    const named = tileFooter(agent({ role: 'custom', roleName: 'designer' })).shown;
+    expect(named).toEqual([{ kind: 'role', role: 'custom', name: 'designer' }]);
+    expect(badgeLine(named[0]!, 0)).toBe('Role: designer');
+    expect(badgeLine(tileFooter(agent({ role: 'custom' })).shown[0]!, 0)).toBe('Role: Custom');
+  });
+
+  it('shows that it says its work is finished after its issue, never folding it', () => {
+    const workFinishedAt = '2026-10-16T10:00:00.000Z';
+    const footer = tileFooter(agent({ issue, workFinishedAt, pullRequests: [pr(214)] }));
+    expect(footer.shown).toEqual([{ kind: 'issue', issue }, { kind: 'finished', at: workFinishedAt }, { kind: 'pr', pr: pr(214) }]);
+    expect(foldRanking(footer.shown)).not.toContain(1);
+    expect(badgeLine({ kind: 'finished', at: workFinishedAt }, 0)).toBe('Says its work is finished');
+    expect(tileFooter(agent({ workFinishedAt: null })).shown).toEqual([]);
   });
 
   it('shows one shells chip after the rest when the agent has shells, however many, and none without', () => {

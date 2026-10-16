@@ -9,7 +9,6 @@ import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items'
 import { useDraftText } from './useDraftText';
 import { fitFontSize, parseMarkdown, plainText, type FontFit, type Inline, type MeasureText } from './sticky-text';
 
-export const STICKY_SIZE = { width: 200, height: 200 };
 const MIN_STICKY_SIZE = 80;
 /** The font sizes a note's text is fitted between, px. */
 const FONT_SIZES = { min: 8, max: 28 };
@@ -159,13 +158,15 @@ export const StickyNode = memo(function StickyNode({ id, data, selected: picked,
   );
 });
 
-/** A note's markdown (`parseMarkdown`) as elements, its links opened by `openLink`. */
-export function renderMarkdown(text: string, openLink: (url: string) => void): ReactNode {
-  const inline = (inlines: Inline[]): ReactNode[] =>
-    inlines.map((part, index) => {
+/** A line of a note's markdown as elements, its links opened by `openLink`. */
+export function renderInline(inlines: Inline[], openLink: (url: string) => void): ReactNode[] {
+  const inline = (parts: Inline[]): ReactNode[] =>
+    parts.map((part, index) => {
       switch (part.type) {
         case 'text':
           return part.text;
+        case 'code':
+          return <code key={index}>{part.text}</code>;
         case 'bold':
           return <strong key={index}>{inline(part.children)}</strong>;
         case 'italic':
@@ -190,6 +191,12 @@ export function renderMarkdown(text: string, openLink: (url: string) => void): R
           );
       }
     });
+  return inline(inlines);
+}
+
+/** A note's markdown (`parseMarkdown`) as elements, its links opened by `openLink`. */
+export function renderMarkdown(text: string, openLink: (url: string) => void): ReactNode {
+  const inline = (inlines: Inline[]) => renderInline(inlines, openLink);
   return parseMarkdown(text).map((block, index) => {
     if (block.type === 'paragraph') {
       return (

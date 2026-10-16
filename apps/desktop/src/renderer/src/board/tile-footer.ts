@@ -1,22 +1,25 @@
 // What an agent tile's footer shows, and what folds into its "+N" (the TileCompact mock). Pure, so the rules are
 // unit-tested; HybridTile draws it.
 import type { Agent, AgentRole, AgentSchedule, LinkedIssue, PullRequest } from '@agent-board/daemon/protocol';
-import { modelLabel, ROLE_LABELS } from './AgentSetup';
+import { modelLabel, roleText } from './AgentSetup';
 
 export type TileBadge =
   /** The model it was started with, when not its harness's default. */
   | { kind: 'model'; model: string }
-  /** The role it was started in, when it has one. */
-  | { kind: 'role'; role: AgentRole }
+  /** The role it was started in, when it has one, and a custom role's name. */
+  | { kind: 'role'; role: AgentRole; name: string | null }
   | { kind: 'issue'; issue: LinkedIssue }
-  | { kind: 'pr'; pr: PullRequest }
+  /** It says its work is finished (`Agent.workFinishedAt`): it handed off, or set its status done. */
+  | { kind: 'finished'; at: string }
+  /** A pull request of its own branch, or, `pushed`, of a branch it pushed to: shown, never acted on from it. */
+  | { kind: 'pr'; pr: PullRequest; pushed?: true }
   | { kind: 'schedule'; schedule: AgentSchedule }
   | { kind: 'muted' }
   /** Its shell tabs' shells (AU1): one chip, however many. */
   | { kind: 'shells' };
 
 export interface TileFooter {
-  /** The badges the footer row shows, wrapping onto a second line when it must. */
+  /** The badges the footer row shows, on one line. */
   shown: TileBadge[];
   /** The rest, one line each, for the "+N" chip's tooltip. */
   folded: string[];
@@ -27,7 +30,7 @@ const MAX_PULL_REQUEST_CHIPS = 2;
 
 /**
  * The tile's footer: its model and role (none for the default model and no role, so tiles without look as before), its
- * linked issue, its first pull requests, its schedule, a mute's bell and its shells chip (when it
+ * linked issue, its first pull requests (its own branch's, else those of the branches it pushed to), its schedule, a mute's bell and its shells chip (when it
  * has `shells`) as badges, and the pull requests past those folded into a "+N", so the tile's head keeps its name
  * readable however much there is. A notice is no badge (the TileCompact mock folds it): it says why the agent stopped,
  * so the tile's body shows it.
@@ -35,14 +38,16 @@ const MAX_PULL_REQUEST_CHIPS = 2;
 export function tileFooter(agent: Agent, shells = 0): TileFooter {
   const shown: TileBadge[] = [];
   if (agent.model !== null) shown.push({ kind: 'model', model: agent.model });
-  if (agent.role !== null) shown.push({ kind: 'role', role: agent.role });
+  if (agent.role !== null) shown.push({ kind: 'role', role: agent.role, name: agent.roleName });
   if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
-  for (const pr of agent.pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS)) shown.push({ kind: 'pr', pr });
+  if (agent.workFinishedAt !== null) shown.push({ kind: 'finished', at: agent.workFinishedAt });
+  const pullRequests = [...agent.pullRequests.map((pr) => ({ kind: 'pr' as const, pr })), ...agent.pushedPullRequests.map((pr) => ({ kind: 'pr' as const, pr, pushed: true as const }))];
+  shown.push(...pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS));
   if (agent.schedule !== null) shown.push({ kind: 'schedule', schedule: agent.schedule });
   if (agent.muted) shown.push({ kind: 'muted' });
   if (shells > 0) shown.push({ kind: 'shells' });
 
-  const folded = agent.pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((pr) => `#${pr.number} ${pr.title}: ${pr.state}, ${checksLabel(pr)}`);
+  const folded = pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((badge) => badgeLine(badge, shells));
   return { shown, folded };
 }
 
@@ -51,13 +56,16 @@ export function checksLabel(pr: PullRequest): string {
   return pr.checks === 'none' ? 'no checks' : `checks ${pr.checks}`;
 }
 
-/** The most lines the footer takes; the badges that don't fit in them fold into the "+N". */
-export const FOOTER_LINES = 2;
+/**
+ * The most lines the footer takes; the badges that don't fit in it fold into the "+N". One, so a badge arriving (a pull
+ * request) never takes a second line from the description above it and moves the rows of a fixed-size tile.
+ */
+export const FOOTER_LINES = 1;
 
 /**
- * The order the footer's badges fold into the "+N" when they don't fit in its two lines (the mock leaves it open): the
+ * The order the footer's badges fold into the "+N" when they don't fit in its line (the mock leaves it open): the
  * shells chip, the schedule, the role before the model, the mute's bell, then pull requests, the later first. The issue
- * never folds: it is what the tile is for, and it is short.
+ * never folds: it is what the tile is for, and it is short. Nor does finished: it is what a lead looks for.
  */
 const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'model', 'muted', 'pr'];
 
@@ -76,11 +84,13 @@ export function badgeLine(badge: TileBadge, shells: number): string {
     case 'model':
       return `Model: ${modelLabel(badge.model)}`;
     case 'role':
-      return `Role: ${ROLE_LABELS[badge.role]}`;
+      return `Role: ${roleText(badge.role, badge.name)}`;
     case 'issue':
       return `${badge.issue.id} ${badge.issue.title}`;
+    case 'finished':
+      return 'Says its work is finished';
     case 'pr':
-      return `#${badge.pr.number} ${badge.pr.title}: ${badge.pr.state}, ${checksLabel(badge.pr)}`;
+      return `${badge.pushed ? 'Pushed to ' : ''}#${badge.pr.number} ${badge.pr.title}: ${badge.pr.state}, ${checksLabel(badge.pr)}`;
     case 'schedule':
       return `Schedule: ${badge.schedule.cron}`;
     case 'muted':

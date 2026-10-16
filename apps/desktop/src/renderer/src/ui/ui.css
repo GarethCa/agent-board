@@ -1103,7 +1103,7 @@
 /* Something to mind that isn't wrong: a shell running in another agent's worktree. */
 .ui-tag[data-tone='warning'] {
   background: var(--warning-soft);
-  color: var(--warning);
+  color: var(--warning-ink);
 }
 
 /* An agent state's pill: --pill and --pill-soft pick the state's tokens. */

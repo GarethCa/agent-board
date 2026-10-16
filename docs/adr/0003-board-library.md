@@ -111,6 +111,15 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
 
 **Update**:
 
+- **The `flow` edge type draws a rail, not an edge.** React Flow gets one `flow` edge per two agents joined by flow
+  edges (`railsOf`), its id the joined ids of the edges it stands for (`flowEdgeIdsOf`), drawn in the shape of the edge
+  made first. Its label is a token in the edge label renderer (HTML, so it sizes to its text) at the end of whoever has
+  the latest document (`railToken`), which slides between the ends by a CSS transition. A rail picked selects the edge
+  its token is from, unless one of its edges is selected already (`withRailSelected`); the Edge rules switch between its
+  edges. Superseded here: each flow edge labelled with its trigger's mark, and the note under its label.
+
+**Update**:
+
 - **A click opens the session window; Expand in place is a setting.** What a click on an agent's or shell tile does is
   the click setting (`board/click-opens.ts`, pure), kept in the daemon's view state (`clickOpens`): the session window
   by default, or the tile expanded in place. An external session's tile, having no session window,
@@ -154,3 +163,14 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   own, a ⋯ holding only what folded appears. Its name, and a clone's progress, are cut short with an ellipsis only once
   every chip has folded. A folded chip keeps the width it was last drawn at, so one whose text changes while folded may
   unfold a step early and fold again at once. Zoom is a transform, so the fold doesn't depend on it.
+
+**Update**:
+
+- **Box select is select mode with zone bodies falling through.** The **Box select** pointer mode (B) keeps select
+  mode's React Flow props and sets zone nodes `pointer-events: none` (`app.css`; their tab, resize controls and live
+  handles take presses again). A press on a zone's body then reaches React Flow's pane, the only target its
+  `selectionOnDrag` marquee starts from without the selection key, so a zone moves only by its tab there. React Flow
+  has no way to start a marquee from a node, so the CSS is the hook. The body then shows no hover and a right-click on
+  it opens the board's menu. A zone's connector handles show on hover, which its body no longer gets, and a marquee
+  started on one would draw a line, so in Box select they are hidden and take no press: a zone is joined from Select.
+- **A Shift-marquee keeps the selection from a zone's bare body too,** not only from bare board.

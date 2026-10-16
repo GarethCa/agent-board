@@ -1,6 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Moon, Sun, SunMoon } from 'lucide-react';
 import { themeFor, type Appearance } from '../../../shared/appearance';
+import { THEME_PACKS, type PackPalette } from '../../../shared/theme-packs';
 import { THEMES } from '../../../shared/themes';
 import { darkQuery } from '../themes';
 import { Choice, Choices, Fieldset, Hint, SectionLabel, Tag } from '../ui';
@@ -21,9 +22,31 @@ function useDark(): boolean {
 const OS = window.agentBoard.windows.chrome === 'inset' ? 'macOS' : 'your system';
 
 /**
- * Settings › Appearance (AO1): System, the default, or any theme in the registry. The pick is the main
- * process's (main/appearance.ts), which every window follows at once; this shows it, as picked in any window, and
- * changes it.
+ * A theme pack's look in small, from its palette, as its tokens aren't the page's until it is picked: its desk, with
+ * its accent and its running, waiting and failed colours on it.
+ */
+function PackPreview({ palette }: { palette: PackPalette }) {
+  const colours = {
+    '--preview-desk': palette.desk,
+    '--preview-edge': palette.border,
+    '--preview-accent': palette.accent,
+    '--preview-running': palette.ok,
+    '--preview-waiting': palette.warn,
+    '--preview-failed': palette.fail,
+  } as CSSProperties;
+  return (
+    <span className="theme-preview" style={colours} aria-hidden>
+      {['accent', 'running', 'waiting', 'failed'].map((role) => (
+        <span key={role} className={`theme-preview-dot theme-preview-${role}`} />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Settings › Appearance (AO1): System, the default, or any theme in the registry: the app's own two, then the
+ * theme packs, each family under its name and credit. The pick is the main process's (main/appearance.ts), which every
+ * window follows at once; this shows it, as picked in any window, and changes it.
  */
 export function AppearanceSetting({ onError }: { onError(action: string): (error: unknown) => void }) {
   const [appearance, setAppearance] = useState<Appearance>();
@@ -53,7 +76,11 @@ export function AppearanceSetting({ onError }: { onError(action: string): (error
       ),
       icon: <SunMoon />,
     },
-    ...THEMES.map(({ id, name, scheme }) => ({ value: id, label: name, icon: scheme === 'dark' ? <Moon /> : <Sun /> })),
+    ...THEMES.filter(({ family }) => family === undefined).map(({ id, name, scheme }) => ({
+      value: id,
+      label: name,
+      icon: scheme === 'dark' ? <Moon /> : <Sun />,
+    })),
   ];
   return (
     <>
@@ -77,6 +104,30 @@ export function AppearanceSetting({ onError }: { onError(action: string): (error
             ? `System follows ${OS}, which is ${dark ? 'dark' : 'light'} right now.`
             : `${themeFor(appearance, dark).name} whatever ${OS} is set to.`}
         </Hint>
+      </Fieldset>
+      <Fieldset legend="Theme packs" className="theme-packs">
+        {THEME_PACKS.map(({ family, credit, themes }) => (
+          <div key={family} className="theme-pack">
+            <p className="theme-pack-name">{family}</p>
+            <p className="theme-pack-credit">{credit}</p>
+            {/* A radio group of its own, by its own name: one Tab stop, its arrow keys staying within the family. */}
+            <div className="theme-picks" role="radiogroup" aria-label={family}>
+              {themes.map(({ id, name, scheme, palette }) => (
+                <Choice
+                  key={id}
+                  className="theme-pick"
+                  name={`appearance-${family}`}
+                  mark={<PackPreview palette={palette} />}
+                  label={name}
+                  detail={scheme === 'dark' ? 'Dark' : 'Light'}
+                  checked={appearance === id}
+                  disabled={appearance === undefined}
+                  onChange={() => pick(id)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </Fieldset>
     </>
   );

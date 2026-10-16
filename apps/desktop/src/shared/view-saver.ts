@@ -1,4 +1,5 @@
 // How the app keeps where it left the board (its viewport, its windows, pop-outs' places) in the daemon's view state.
+import { TILE_SIZES_VIEW_KEY, UNFOLDED_VIEW_KEY } from '@agent-board/daemon/board-layout';
 
 /** The view state keys the app uses (`view.get`/`view.set`). */
 export const VIEW_KEYS = {
@@ -10,8 +11,13 @@ export const VIEW_KEYS = {
   expanded: 'expandedTiles',
   /** The size each tile was last let go at once resized while expanded, by node id: it opens at that size again. */
   expandedSizes: 'expandedTiles.sizes',
-  /** The size each compact tile was resized to, by node id; a tile not in it is the default size. */
-  tileSizes: 'tileSizes',
+  /**
+   * The size each compact tile was resized to, by node id; a tile not in it is the default size. The daemon
+   * reads it too, to lay tiles out at their size.
+   */
+  tileSizes: TILE_SIZES_VIEW_KEY,
+  /** The closed agents the user unfolded from their chips, by node id; the rest of the closed ones are chips. The daemon reads it too. */
+  unfolded: UNFOLDED_VIEW_KEY,
   /** The tiles dragged onto another, one of them expanded, by node id: left there, over it, not moved clear. */
   expandedOverlaps: 'expandedTiles.overlaps',
   /** Whether onboarding was finished or skipped, and whether the board menu offers it again. */
@@ -26,6 +32,10 @@ export const VIEW_KEYS = {
   clickOpens: 'clickOpens',
   /** How the board shows the agents an orchestrator started: in a crew frame beside it, or with a "from" chip. */
   crewLook: 'crewLook',
+  /** Which connections the board draws, all, hand-offs only or none. */
+  connections: 'connections',
+  /** How agent notes look: document cards or terminal cards. */
+  agentNoteLook: 'agentNoteLook',
 } as const;
 
 /**

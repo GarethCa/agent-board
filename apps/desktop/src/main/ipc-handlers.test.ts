@@ -51,18 +51,18 @@ describe('the channels main handles', () => {
   beforeEach(() => handlers.clear());
 
   it.each([
-    ['agents', (d: DaemonLink) => registerAgentIpc(d, '/data'), ['agent:answer', 'agent:decidePermission', 'agent:delete', 'agent:interrupt', 'agent:link', 'agent:list', 'agent:markSeen', 'agent:move', 'agent:nextName', 'agent:pasteImage', 'agent:restart', 'agent:resume', 'agent:setMuted', 'agent:setName', 'agent:setSchedule', 'agent:spawn', 'agent:stop', 'agent:subagentTranscript', 'agent:transcript']],
+    ['agents', (d: DaemonLink) => registerAgentIpc(d, '/data'), ['agent:answer', 'agent:askSelection', 'agent:captureSelection', 'agent:decidePermission', 'agent:delete', 'agent:interrupt', 'agent:link', 'agent:list', 'agent:markSeen', 'agent:move', 'agent:nextName', 'agent:pasteImage', 'agent:restart', 'agent:resume', 'agent:setMuted', 'agent:setName', 'agent:setSchedule', 'agent:spawn', 'agent:stop', 'agent:subagentTranscript', 'agent:transcript']],
     ['connectors', registerConnectorIpc, ['connector:create', 'connector:delete', 'connector:list', 'connector:update']],
     ['external', registerExternalIpc, ['external:dismiss', 'external:hooksStatus', 'external:list', 'external:move', 'external:resume', 'external:resumePlan', 'external:setHooksEnabled']],
     ['flow edges', registerFlowEdgeIpc, ['flow-edge:approve', 'flow-edge:commands', 'flow-edge:create', 'flow-edge:delete', 'flow-edge:drop', 'flow-edge:lastPayload', 'flow-edge:list', 'flow-edge:preview', 'flow-edge:send', 'flow-edge:setSettings', 'flow-edge:settings', 'flow-edge:update']],
     ['asks', registerAskIpc, ['ask:answer', 'plan:decide', 'plan:list']],
-    ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:openPullRequest', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
+    ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
     ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:create', 'item:delete', 'item:import-image', 'item:list', 'item:update']],
     ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity']],
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
-    ['web tabs', () => registerWebTabIpc({ isBoard: () => false }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds']],
+    ['web tabs', () => registerWebTabIpc({ isBoard: () => false }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:focus', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds']],
     ['trackers', registerTrackerIpc, ['tracker:connect', 'tracker:disconnect', 'tracker:issues', 'tracker:openLink', 'tracker:projects', 'tracker:scopes', 'tracker:status']],
   ])('%s', (_name, register, channels) => {
     expect(registered(register)).toEqual(channels);
@@ -113,6 +113,6 @@ describe('what a pass-through sends the daemon', () => {
   it('passes the flow edge settings through the settings methods', async () => {
     registered(registerFlowEdgeIpc);
     expect(await invoke('flow-edge:settings')).toEqual({ method: 'settings.get', params: undefined });
-    expect(await invoke('flow-edge:approve', 'e', 'cmd', 'fp')).toEqual({ method: 'flowEdge.approve', params: { id: 'e', command: 'cmd', fingerprint: 'fp' } });
+    expect(await invoke('flow-edge:approve', 'e', 'cmd', 'fp', 'a')).toEqual({ method: 'flowEdge.approve', params: { id: 'e', command: 'cmd', fingerprint: 'fp', from: 'a' } });
   });
 });

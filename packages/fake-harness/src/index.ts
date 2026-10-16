@@ -1,10 +1,12 @@
 import { delimiter } from 'node:path';
 import { fakeBinDir } from './paths.ts';
+import { scrubBoardSessionEnv } from './board-guard.ts';
 import type { FakeScenario } from './scenarios.ts';
 
 export { fakeBinDir } from './paths.ts';
 export { SCENARIOS, type FakeScenario } from './scenarios.ts';
 export { installHarnessGuard, harnessGuardGlobalSetup, guardChildProcess, realHarnessFor, type HarnessGuard } from './guard.ts';
+export { BOARD_SESSION_VARS, RUN_KNOBS, scrubBoardSessionEnv, scrubBoardEnv } from './board-guard.ts';
 export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
 
@@ -23,12 +25,13 @@ export interface FakeHarnessEnvOptions {
    * expected to. Defaults to true; false plays a harness that just drops the call.
    */
   mcpCancel?: boolean;
+  /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
 
 /** Environment that makes `claude` and `codex` resolve to the fakes and keeps them out of the real ~/.claude and ~/.codex. */
 export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...(options.base ?? process.env) };
+  const env: NodeJS.ProcessEnv = options.base ? { ...options.base } : scrubBoardSessionEnv({ ...process.env });
   delete env.CLAUDE_CONFIG_DIR;
   delete env.CODEX_HOME;
   return {

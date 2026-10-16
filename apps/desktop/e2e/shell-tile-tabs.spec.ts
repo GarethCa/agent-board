@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
+import { launch, sessionWindow, SHELL_ENV, windowKey } from './agent-helpers.ts';
 import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -14,9 +14,6 @@ const windowPanes = (page: Page) => sessionWindow(page).getByTestId('window-pane
 const focusedStrip = (page: Page) => sessionWindow(page).locator('[data-testid="session-tabs"][data-focused], .session-window-strip [data-testid="session-tabs"]');
 const paneLeft = `${process.platform === 'darwin' ? 'Meta+Alt' : 'Control+Shift+Alt'}+ArrowLeft`;
 const shownScreen = (page: Page) => shown(page).locator('.shell-pane[data-focused="true"] .xterm-rows');
-
-/** A session window's own shortcut: ⌘ on macOS, Ctrl+Shift elsewhere, where Ctrl's keys are the terminal's. */
-const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
 
 /** The sessions the daemon runs now. */
 const liveSessions = (page: Page) => page.evaluate(() => window.agentBoard.sessions.list());

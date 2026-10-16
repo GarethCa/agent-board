@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
-import { AGENT_ROLES, REVIEWER_ROLES, type Agent, type AgentRole, type Harness } from '@agent-board/daemon/protocol';
+import { AGENT_ROLES, MAX_ROLE_NAME_LENGTH, parseRole, REVIEWER_ROLES, type Agent, type AgentRole, type Harness } from '@agent-board/daemon/protocol';
 import { shortCommit } from '@agent-board/daemon/gate-rules';
 import { HARNESSES } from '../harness';
 import { Button, Input, Menu, type MenuEntry } from '../ui';
@@ -17,17 +17,41 @@ export const ROLE_LABELS: Record<AgentRole, string> = {
   custom: 'Custom',
 };
 
-/** What a new agent starts with besides its task: its harness, its model ('' for the harness's default) and its role. */
+/**
+ * What a new agent starts with besides its task: its harness, its model ('' for the harness's default) and its role, as
+ * the daemon takes it: a built-in role, or a custom role's name.
+ */
 export interface AgentSetup {
   harness: Harness;
   model: string;
-  role: AgentRole | null;
+  role: string | null;
 }
 
 export const DEFAULT_SETUP: AgentSetup = { harness: 'claude', model: '', role: null };
 
+/** A role as typed, read as the daemon reads it: null for none, or for a name it would refuse. */
+const parsed = (role: string | null) => {
+  if (role === null) return null;
+  const read = parseRole(role);
+  return 'error' in read ? null : read;
+};
+
 /** Whether an agent in `role` reviews a branch, on a detached checkout of it. */
-export const reviews = (role: AgentRole | null): boolean => role !== null && REVIEWER_ROLES.includes(role);
+export const reviews = (role: string | null): boolean => {
+  const read = parsed(role);
+  return read !== null && REVIEWER_ROLES.includes(read.role);
+};
+
+/** A role as the app shows it: a custom role's own name (`designer`), else the role's label. */
+export function roleText(role: AgentRole, name: string | null): string {
+  return name ?? ROLE_LABELS[role];
+}
+
+/** A role as typed, as its chip shows it. */
+const typedRoleText = (role: string | null): string => {
+  const read = parsed(role);
+  return read === null ? 'No role' : roleText(read.role, read.name);
+};
 
 /** A model as a chip or badge shows it: Claude's offered ones by name (`Opus`), any other id as it is. */
 export function modelLabel(model: string): string {
@@ -49,11 +73,21 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
   const { harness, model, role } = setup;
   /** The model id being typed after Other…, or undefined while the chip shows. */
   const [typing, setTyping] = useState<string>();
+  /** The role name being typed after Named role…, or undefined while the chip shows. */
+  const [naming, setNaming] = useState<string>();
   const set = (patch: Partial<AgentSetup>) => onChange({ ...setup, ...patch });
   const commitTyped = () => {
     if (typing !== undefined) set({ model: typing.trim() });
     setTyping(undefined);
   };
+  // A name the daemon would refuse (blank, control characters) leaves the role as it was.
+  const commitNamed = () => {
+    const read = parsed(naming ?? null);
+    if (read !== null) set({ role: read.name ?? read.role });
+    setNaming(undefined);
+  };
+  const read = parsed(role);
+  const named = read?.name ?? null;
 
   const harnesses = (Object.keys(HARNESSES) as Harness[]).map((each) =>
     // Another harness's model means nothing to this one: back to its default.
@@ -69,8 +103,10 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
     ),
   ];
   const roles: MenuEntry[] = [
-    choice('No role', role === null, () => set({ role: null })),
-    ...AGENT_ROLES.map((each) => choice(ROLE_LABELS[each], role === each, () => set({ role: each }))),
+    choice('No role', read === null, () => set({ role: null })),
+    ...AGENT_ROLES.map((each) => choice(ROLE_LABELS[each], read?.role === each && named === null, () => set({ role: each }))),
+    'separator',
+    choice(named === null ? 'Named role…' : `Named: ${named}`, named !== null, () => setNaming(named ?? '')),
   ];
 
   return (
@@ -109,23 +145,48 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
           }}
         />
       )}
-      <Menu entries={roles} side="top">
-        <Button size="sm" variant="ghost" className="agent-setup-chip" aria-label={`Role: ${role === null ? 'No role' : ROLE_LABELS[role]}`} trailingIcon={<ChevronDown />}>
-          <span className="agent-setup-text">{role === null ? 'No role' : ROLE_LABELS[role]}</span>
-        </Button>
-      </Menu>
+      {naming === undefined ? (
+        <Menu entries={roles} side="top">
+          <Button size="sm" variant="ghost" className="agent-setup-chip" aria-label={`Role: ${typedRoleText(role)}`} title={named ?? undefined} trailingIcon={<ChevronDown />}>
+            <span className="agent-setup-text">{typedRoleText(role)}</span>
+          </Button>
+        </Menu>
+      ) : (
+        <Input
+          size="sm"
+          className="agent-setup-model"
+          aria-label="Role name"
+          placeholder="designer, researcher…"
+          maxLength={MAX_ROLE_NAME_LENGTH}
+          autoFocus
+          value={naming}
+          onChange={(event) => setNaming(event.target.value)}
+          onBlur={commitNamed}
+          onKeyDown={(event) => {
+            // Its own Enter and Esc, as the model id's.
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitNamed();
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              setNaming(undefined);
+            }
+          }}
+        />
+      )}
     </span>
   );
 }
 
 /** The one-line note under the role (BK2): the template it starts with, `whose` naming the zone (or "the repo's"). */
-export function roleNote(role: AgentRole, whose: string): string {
-  return `Uses ${whose} ${ROLE_LABELS[role]} template.`;
+export function roleNote(role: string, whose: string): string {
+  return `Uses ${whose} ${typedRoleText(role)} template.`;
 }
 
 /** An agent's harness, model and role on one line, and what a reviewer reviews: the tile's badges' tooltip. */
-export function agentSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'role' | 'reviews'>): string {
-  const role = agent.role === null ? 'no role' : ROLE_LABELS[agent.role];
+export function agentSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'role' | 'roleName' | 'reviews'>): string {
+  const role = agent.role === null ? 'no role' : roleText(agent.role, agent.roleName);
   const line = `${HARNESSES[agent.harness].label} · ${agent.model === null ? 'default model' : modelLabel(agent.model)} · ${role}`;
   return agent.reviews === null ? line : `${line}. Reviews ${agent.reviews.branch} at ${shortCommit(agent.reviews.head)}.`;
 }

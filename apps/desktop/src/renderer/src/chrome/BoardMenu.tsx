@@ -3,7 +3,7 @@ import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import { LifeBuoy, Menu as MenuIcon, Plus, Search } from 'lucide-react';
 import { APP_NAME } from '../../../shared/brand';
 import { DaemonStatus, type DaemonStatusValue } from '../DaemonStatus';
-import { withCommand } from '../keys';
+import { withCommand, withWindowShortcut } from '../keys';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
@@ -28,14 +28,16 @@ export interface BoardMenuProps extends SettingsProps {
   onOpenShell(shell: Shell): void;
   /** Reopens onboarding; the Help section's Getting started row shows only while it is set. */
   onGettingStarted?(): void;
+  /** Opens the ⌘K switcher. */
+  onFind(): void;
 }
 
 /**
  * The board menu, the top-left island (chrome C): the app's mark and the board's name, the daemon's status, and a
- * panel with the zones, the agents and shells, and the settings. Its search field (⌘K) narrows the zones and agents
- * by name, a placeholder for a command palette.
+ * panel with the zones, the agents and shells, and the settings. Its search field (⌘\ opens the menu on it) narrows
+ * the zones and agents by name; Find opens the ⌘K switcher.
  */
-export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onOpenAgent, onOpenShell, onGettingStarted, ...settings }: BoardMenuProps) {
+export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onOpenAgent, onOpenShell, onGettingStarted, onFind, ...settings }: BoardMenuProps) {
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const settingsSection = useRef<HTMLElement>(null);
@@ -154,10 +156,10 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         className="board-menu-find"
         icon={<Search />}
         aria-label="Find"
-        tooltip="Find a zone or agent"
-        onClick={() => onMenu({ open: true, at: 'search' })}
+        tooltip="Jump to a session or zone"
+        onClick={onFind}
       >
-        <Kbd>{withCommand('K')}</Kbd>
+        <Kbd>{withWindowShortcut('K')}</Kbd>
       </Button>
     </Island>
   );

@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox } from './board-helpers.ts';
-import { launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -1027,5 +1027,219 @@ test('two tiles expanded in a zone stay apart and expanded, through clicks elsew
   } finally {
     await app.close();
     await removeDataDir(dataDir);
+  }
+});
+
+/**
+ * Records, every frame until the returned function is called, where each agent tile is on screen less the view's pan:
+ * the same frame to frame for a tile that stays put on the board, whatever the view does. Resolves to each frame.
+ */
+async function recordTilesOnBoard(page: Page): Promise<() => Promise<string[][]>> {
+  await page.evaluate(() => {
+    const record = window as unknown as { tileFrames: string[][]; recordingTiles: boolean };
+    record.tileFrames = [];
+    record.recordingTiles = true;
+    const viewport = document.querySelector<HTMLElement>('.react-flow__viewport')!;
+    const frame = () => {
+      const { m41: panX, m42: panY } = new DOMMatrix(getComputedStyle(viewport).transform);
+      record.tileFrames.push(
+        [...document.querySelectorAll('[data-testid="agent-tile"]')].map((tile) => {
+          const box = tile.getBoundingClientRect();
+          return `${tile.getAttribute('data-session-id')} ${(box.x - panX).toFixed(1)},${(box.y - panY).toFixed(1)}`;
+        }),
+      );
+      if (record.recordingTiles) requestAnimationFrame(frame);
+    };
+    frame();
+  });
+  return () =>
+    page.evaluate(() => {
+      const record = window as unknown as { tileFrames: string[][]; recordingTiles: boolean };
+      record.recordingTiles = false;
+      return record.tileFrames;
+    });
+}
+
+/** Where the view is panned to. */
+const panOf = (page: Page) =>
+  page.locator('.react-flow__viewport').evaluate((viewport) => {
+    const { m41: x, m42: y } = new DOMMatrix(getComputedStyle(viewport).transform);
+    return { x, y };
+  });
+
+/** How many different layouts of the tiles `frames` show. */
+const layoutsIn = (frames: string[][]) => new Set(frames.map((frame) => frame.join('\n'))).size;
+
+test('tiles pushed clear of an expanded tile stay fixed to the board while it pans, and jump, never slide, when it moves', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    // Workers the daemon places beside their orchestrator, and a reviewer of one of them.
+    await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
+    await tileAction(tile(window).filter({ has: window.getByTitle('worker one', { exact: true }) }), 'Review its work');
+    await expect(window.locator('[data-testid="agent-tile"][data-reviewer]')).toHaveCount(1);
+    await tileAction(window.locator('[data-testid="agent-tile"][data-orchestrator]'), 'Expand in place');
+    await expect(expandedTile(window)).toHaveCount(1);
+    await viewSettled(window);
+    // Its crew and the reviewer, pushed clear of it, done moving there.
+    await expect(window.locator('.react-flow__node.displaced [data-testid="agent-tile"]')).toHaveCount(3);
+    await expect.poll(() => window.locator('.react-flow__node-tile').evaluateAll((nodes) => nodes.flatMap((node) => node.getAnimations()).length)).toBe(0);
+    // All of it in view, with board round it.
+    await window.getByRole('button', { name: 'Fit View' }).click();
+    await window.getByRole('button', { name: 'Zoom Out' }).click();
+    await viewSettled(window);
+    // The wheel over the board or the zone, clear of the tiles and the board's controls, pans it.
+    const empty = await window.evaluate(() => {
+      for (let y = innerHeight - 100; y > 100; y -= 20) {
+        for (let x = 200; x < innerWidth - 200; x += 20) {
+          const under = document.elementFromPoint(x, y);
+          if (under?.classList.contains('react-flow__pane') || under?.matches('.react-flow__node-zone, .react-flow__node-zone > *')) return { x, y };
+        }
+      }
+      throw new Error('no empty board in view');
+    });
+    await window.mouse.move(empty.x, empty.y);
+
+    const before = await panOf(window);
+    let stop = await recordTilesOnBoard(window);
+    for (let step = 0; step < 6; step++) await window.mouse.wheel(30, 20);
+    expect(layoutsIn(await stop()), 'every tile moved with the board').toBe(1);
+    expect(await panOf(window)).not.toEqual(before);
+
+    // Nudged while the board pans, the expanded tile pushes them on: each goes straight to its new place, as the board
+    // pans, rather than sliding behind it.
+    await window.locator('.react-flow__node').filter({ has: expandedTile(window) }).focus();
+    stop = await recordTilesOnBoard(window);
+    await window.keyboard.press('Shift+ArrowDown');
+    for (let step = 0; step < 6; step++) {
+      await window.mouse.wheel(-20, 10);
+      await window.waitForTimeout(50);
+    }
+    // Longer than a tile could take to ease anywhere (--motion-base).
+    await window.waitForTimeout(500);
+    expect(layoutsIn(await stop()), 'each tile went from where it was to where it goes in one frame').toBe(2);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A box on screen. */
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where the zone, its crew frame and each tile (by node id) are drawn on the board, whatever the view, with which agents
+ * the frame holds. The view is fitted first: a tile out of view isn't drawn.
+ */
+async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members: string[]; tiles: Record<string, Box> }> {
+  await page.getByRole('button', { name: 'Fit View' }).click();
+  await viewSettled(page);
+  // Done moving and growing: no node, nor the frame, easing anywhere.
+  await expect
+    .poll(() => page.locator('.react-flow__node, [data-testid="crew-frame"]').evaluateAll((nodes) => nodes.flatMap((node) => node.getAnimations()).length))
+    .toBe(0);
+  return page.evaluate(() => {
+    const flow = document.querySelector('.react-flow')!.getBoundingClientRect();
+    const { a: scale, m41: panX, m42: panY } = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform);
+    const box = (element: Element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x: (x - flow.x - panX) / scale, y: (y - flow.y - panY) / scale, width: width / scale, height: height / scale };
+    };
+    const frame = document.querySelector('[data-testid="crew-frame"]')!;
+    return {
+      zone: box(document.querySelector('.react-flow__node-zone')!),
+      frame: box(frame),
+      members: frame.getAttribute('data-members')!.split(' '),
+      tiles: Object.fromEntries([...document.querySelectorAll('.react-flow__node-tile')].map((node) => [node.getAttribute('data-id')!, box(node)])),
+    };
+  });
+}
+
+/** Whether `inner` lies inside `outer`, give or take a pixel. */
+const inside = (inner: Box, outer: Box) =>
+  inner.x >= outer.x - 1 && inner.y >= outer.y - 1 && inner.x + inner.width <= outer.x + outer.width + 1 && inner.y + inner.height <= outer.y + outer.height + 1;
+
+/** Whether `a` and `b` share no place. */
+const apart = (a: Box, b: Box) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+
+/** The same boxes, to the pixel. */
+const rounded = (layout: Awaited<ReturnType<typeof crewLayout>>) =>
+  JSON.stringify(layout, (_, value: unknown) => (typeof value === 'number' ? Math.round(value) : value));
+
+test('an expanded tile reshapes its zone round a crew frame: the frame keeps its crew where they are drawn, a crew in the way moves as one, and collapsing puts it all back', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
+    await newShell(window);
+    await expect(sessionWindow(window)).toBeVisible();
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    // The lead with its crew stacked in a column beside it, and a shell, no part of the crew, above the crew.
+    const lead = (await agents(window)).find((agent) => agent.spawnedBy === null)!;
+    const crew = (await agents(window)).filter((agent) => agent.spawnedBy === lead.sessionId).toSorted((a, b) => a.name.localeCompare(b.name));
+    const [zone] = await zones(window);
+    await window.evaluate(
+      async ({ zoneId, lead, crew }) => {
+        const { agents, shells } = globalThis.window.agentBoard;
+        await agents.move(lead, { zoneId, x: 40, y: 360 });
+        await agents.move(crew[0]!, { zoneId, x: 336, y: 360 });
+        await agents.move(crew[1]!, { zoneId, x: 336, y: 536 });
+        const [shell] = await shells.list();
+        await shells.move(shell!.id, { zoneId, x: 336, y: 40 });
+      },
+      { zoneId: zone!.id, lead: lead.sessionId, crew: crew.map((agent) => agent.sessionId) },
+    );
+    const crewIds = crew.map((agent) => `agent:${agent.sessionId}`);
+    await expect(window.getByTestId('crew-frame')).toHaveAttribute('data-members', crew.map((agent) => agent.sessionId).join(' '));
+    const atRest = await crewLayout(window);
+
+    /** Expands `opened`, checks the frame holds its crew and the zone holds it all, collapses it, and checks it is all back. */
+    const expandThenCollapse = async (opened: Locator, check: (layout: Awaited<ReturnType<typeof crewLayout>>) => void) => {
+      await tileAction(opened, 'Expand in place');
+      await expect(expandedTile(window)).toHaveCount(1);
+      const layout = await crewLayout(window);
+      expect(layout.members, 'the frame keeps its crew').toEqual(atRest.members);
+      for (const id of crewIds) expect(inside(layout.tiles[id]!, layout.frame), `${id} inside its frame`).toBe(true);
+      expect(inside(layout.frame, layout.zone), 'the frame inside the zone').toBe(true);
+      for (const [id, box] of Object.entries(layout.tiles)) expect(inside(box, layout.zone), `${id} inside the zone`).toBe(true);
+      check(layout);
+      await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+      await expect(expandedTile(window)).toHaveCount(0);
+      expect(rounded(await crewLayout(window)), 'all of it back where it was').toBe(rounded(atRest));
+    };
+
+    // The lead expanded: its crew pushed aside, in its frame.
+    await expandThenCollapse(window.locator('[data-testid="agent-tile"][data-orchestrator]'), () => {});
+    // One of the crew expanded: the frame round it at its size, and the other.
+    await expandThenCollapse(tile(window).filter({ has: window.getByTitle(crew[0]!.name, { exact: true }) }), () => {});
+    // The shell, no part of the crew, expanded over it: the crew and its frame move by one shift, keeping its layout.
+    await expandThenCollapse(window.getByTestId('shell-tile'), (layout) => {
+      const shift = (from: Box, to: Box) => ({ dx: Math.round(to.x - from.x), dy: Math.round(to.y - from.y) });
+      const moved = shift(atRest.frame, layout.frame);
+      expect(moved, 'the frame moved').not.toEqual({ dx: 0, dy: 0 });
+      for (const id of crewIds) expect(shift(atRest.tiles[id]!, layout.tiles[id]!), `${id} moved with its frame`).toEqual(moved);
+      const [, shell] = Object.entries(layout.tiles).find(([id]) => id.startsWith('shell:'))!;
+      expect(apart(layout.frame, shell), 'the frame clear of the shell').toBe(true);
+    });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

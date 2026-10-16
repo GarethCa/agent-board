@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import xtermHeadless from '@xterm/headless';
 import xtermSerialize from '@xterm/addon-serialize';
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
+import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
 import { hashToken, newToken } from './tokens.ts';
 import { createCwdLookup } from './cwd-lookup.ts';
 import { foregroundOf, harnessOfProgram, type Foreground } from './foreground.ts';
@@ -664,8 +665,15 @@ export function childEnv(base: NodeJS.ProcessEnv = process.env): Record<string, 
 }
 
 /**
- * A session's environment: `base` (the daemon's own by default), minus what only made sense for the daemon itself,
- * plus `extra`.
+ * What a board hands a session (ADR-0010). A daemon started inside a session of another board, as a test run or a dev
+ * app started by a board agent is, has that board's in its own env: a session of this board must not inherit them,
+ * or it posts hooks to, and acts as, the other board.
+ */
+const BOARD_SESSION_VARS = [HOOK_URL_ENV, HOOK_TOKEN_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV, BOARD_SESSION_ENV];
+
+/**
+ * A session's environment: `base` (the daemon's own by default), minus what only made sense for the daemon itself
+ * and any other board's session variables, plus `extra`.
  */
 export function sessionEnv(
   sessionId: string,
@@ -673,6 +681,7 @@ export function sessionEnv(
   extra: Record<string, string> = {},
 ): Record<string, string> {
   const env = childEnv(base);
+  for (const name of BOARD_SESSION_VARS) delete env[name];
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
   env[BOARD_SESSION_ENV] = sessionId;

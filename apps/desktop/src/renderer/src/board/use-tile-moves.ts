@@ -3,7 +3,7 @@ import type { NodeChange } from '@xyflow/react';
 import type { TileMove } from '@agent-board/daemon/protocol';
 import { isItemNode, type ItemNodeType } from './items/items';
 import type { TileData, TileNodeType } from './tile';
-import { isSessionTile, subjectOf, type BoardNode } from './tiles';
+import { isSessionTile, savedMove, subjectOf, type BoardNode } from './tiles';
 
 /** How far a pointer must move before a press on a node drags it, rather than clicks it, px. */
 export const DRAG_THRESHOLD = 4;
@@ -21,7 +21,7 @@ const ARROWS: Record<string, { x: number; y: number }> = {
 };
 
 /** Whether a key press or paste is typing into a field, rather than a board shortcut. */
-export function isTyping(event: Event): boolean {
+export function isTyping(event: Pick<Event, 'target'>): boolean {
   const target = event.target as HTMLElement | null;
   return target !== null && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
@@ -135,7 +135,7 @@ export function useTileMoves({
     for (const node of nodes) {
       if (!isSessionTile(node) || node.dragging === true) continue;
       if (subjectOf(node.data).position !== null || pending.current.has(node.id)) continue;
-      moveTile(node.id, node.data, { zoneId: node.parentId ?? null, x: node.position.x, y: node.position.y });
+      moveTile(node.id, node.data, savedMove(node.data, { zoneId: node.parentId ?? null, x: node.position.x, y: node.position.y }));
     }
   }, [loaded, nodes, pending, moveTile]);
 
@@ -160,7 +160,7 @@ export function useTileMoves({
       event.stopPropagation();
       const step = event.shiftKey ? NUDGE.shifted : NUDGE.step;
       for (const tile of tiles) {
-        const move = { zoneId: tile.parentId ?? null, x: tile.position.x + direction.x * step, y: tile.position.y + direction.y * step };
+        const move = savedMove(tile.data, { zoneId: tile.parentId ?? null, x: tile.position.x + direction.x * step, y: tile.position.y + direction.y * step });
         nudgers.current.recordNudge(tile.id, tile.data, move);
         moveTile(tile.id, tile.data, move, NUDGE_SAVE_PAUSE_MS);
       }

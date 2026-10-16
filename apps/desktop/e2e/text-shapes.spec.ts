@@ -98,7 +98,9 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
     await window.getByRole('button', { name: 'Fill green' }).click();
     await window.getByRole('button', { name: 'Stroke violet' }).click();
     await window.getByRole('button', { name: 'Thick stroke' }).click();
-    await window.getByRole('button', { name: 'Ellipse', exact: true }).click();
+    // The kind of shape, from the bar's shape picker.
+    await window.getByRole('button', { name: 'Change shape: Process' }).click();
+    await window.getByRole('dialog', { name: 'Shapes' }).getByRole('button', { name: 'Ellipse', exact: true }).click();
     await expect(shapes).toHaveAttribute('data-shape', 'ellipse');
     await expect
       .poll(async () => (await stored(dataDir)).find((item) => item.kind === 'shape')?.data)

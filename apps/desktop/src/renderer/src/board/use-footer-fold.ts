@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type RefCallback } from
 import { FOOTER_LINES, foldCount, type FooterItem } from './tile-footer';
 
 /**
- * Keeps a tile's footer to its two lines: the lowest-ranked badges fold into the "+N" chip, which is the child
+ * Keeps a tile's footer to its one line (`FOOTER_LINES`): the lowest-ranked badges fold into the "+N" chip, which is the child
  * with `data-folded-chip` (always drawn, so it can be measured; hidden while nothing is folded). `badges` is how many
  * leading children are badges and `ranking` their indexes in the order they fold (see `foldRanking`); `plusShown` is
  * whether pull requests past the second are in the chip already. It measures with every child showing, then hides the

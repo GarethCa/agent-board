@@ -1,6 +1,6 @@
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
@@ -12,7 +12,6 @@ import { serveWebPages } from './web-server.ts';
 // took ends is main's to read from the OS: the test sets it (`pointerAt`), the one stand-in for the platform in main.
 
 const TAB_DRAG_TYPE = 'application/x-agent-board-tab';
-const windowKey = (key: string) => `${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+${key}`;
 const undoKey = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`;
 const redoKey = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+z`;
 /** Far off every window and display. */

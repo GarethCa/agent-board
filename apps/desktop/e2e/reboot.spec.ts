@@ -4,7 +4,7 @@ import { isProcessAlive } from '@agent-board/daemon/pid';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -154,6 +154,13 @@ test('Dismiss puts the banner away for good, and each stopped tile keeps its own
 
 /** An agent stopped by a hard kill, on the relaunched app, with its session window open. */
 async function stoppedAgentWindow(dir: string, repo: string, env: Record<string, string>, dataDir: string, apps: ElectronApplication[]) {
+  const window = await stoppedAgent(dir, repo, env, dataDir, apps);
+  await tile(window).dblclick();
+  return window;
+}
+
+/** An agent stopped by a hard kill, on the relaunched app. */
+async function stoppedAgent(dir: string, repo: string, env: Record<string, string>, dataDir: string, apps: ElectronApplication[]) {
   const first = await launch(dataDir, env);
   apps.push(first.app);
   await pickFolderNext(first.app, repo);
@@ -164,9 +171,27 @@ async function stoppedAgentWindow(dir: string, repo: string, env: Record<string,
   const again = await launch(dataDir, env);
   apps.push(again.app);
   await expect(tile(again.window)).toHaveAttribute('data-state', 'stopped-by-restart');
-  await tile(again.window).dblclick();
   return again.window;
 }
+
+test("a stopped agent's tile keeps its stopped pill, and Resume agent in its ⋯ menu carries it on", async () => {
+  const apps: ElectronApplication[] = [];
+  const dataDir = tempDataDir();
+  const { dir, repo, env } = scratch('waiting');
+  try {
+    const window = await stoppedAgent(dir, repo, env, dataDir, apps);
+    const pill = tile(window).locator('.hybrid-tile-footer .ui-pill');
+    await expect(pill).toHaveText('stopped');
+    await expect(pill).toHaveAttribute('data-state', 'stopped-by-restart');
+    await tileAction(tile(window), 'Resume agent');
+    await expect(tile(window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(pill).not.toHaveText(/ended|stopped/);
+  } finally {
+    for (const app of apps) await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("a stopped agent's banner says why and offers Resume, which carries it on", async () => {
   const apps: ElectronApplication[] = [];

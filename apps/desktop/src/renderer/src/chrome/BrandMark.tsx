@@ -4,8 +4,8 @@ import markPlainUrl from '../../../../../../brand/svg/mark-plain.svg?no-inline';
 import { cx } from '../ui/cx';
 
 /**
- * The app's mark (brand/BRAND.md): on its square, desk blue or in the dark theme the dark colourway (CSS shows the
- * one for `data-theme`); or `plain`, without the square, for the board's desk. Decorative: the name beside it says what
+ * The app's mark (brand/BRAND.md): on its square, desk blue or in a dark theme the dark colourway (CSS shows the
+ * one for `data-scheme`); or `plain`, without the square, for the board's desk. Decorative: the name beside it says what
  * it is.
  */
 export function BrandMark({ variant = 'square', className }: { variant?: 'square' | 'plain'; className?: string }) {

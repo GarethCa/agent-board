@@ -1,7 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, onTestFinished } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CODEX_HOOK_EVENTS, codexHooksJson } from '../src/index.ts';
+import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, type RunFakeOptions } from './run-fake.ts';
 
 afterAll(removeTempDirs);
@@ -321,6 +322,25 @@ describe('codex MCP servers and the model shell', () => {
     expect(result.stdout).toContain('whoami {} env:yes|-');
     expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} env:yes|-');
     expect(result.stdout).toContain('hook env: none none');
+  });
+
+  it('posts to a -c mcp_servers url server with the bearer token from the env var it names', async () => {
+    const http = await startEchoHttpServer();
+    onTestFinished(http.close);
+    const result = await runFake('codex', {
+      scenario: 'board',
+      args: [
+        '-c', `mcp_servers.agent-board.url=${JSON.stringify(http.url)}`,
+        '-c', 'mcp_servers.agent-board.bearer_token_env_var="BOARD_SECRET"',
+        'Map the board',
+      ],
+      env: { BOARD_SECRET: 'from-env' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('The board says: You are on the echo board.');
+    expect(result.stdout).toContain('whoami {} auth:Bearer from-env');
+    expect(result.stdout).toContain('set_status {"summary":"Map the board","progress":10} auth:Bearer from-env');
   });
 
   it('keeps vars named like keys, secrets and tokens from shell commands by default, as Codex does', async () => {

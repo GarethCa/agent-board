@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.5.0 (2026-10-16)
+
+- agent-board restart --fresh starts a new conversation in an ended agent's own tile
+- new --no-template sends exactly the orchestrator's prompt, and new says which role template it applied
+- A finished tile drops its stale progress line
+- Arrow shaping: handles near the pointer, ends moved onto other objects, a bow handle on curves
+- Arrange's cluster note is an agent note saying where the work stands, not the prompt
+- Ask Claude about a selection: an agent reviews the picture and diagram, and its answer lands beside it with suggested edits
+- Closed agents fold to chips on the board (CA3)
+- ⌘K is a Spotlight-style switcher from any screen, a terminal too
+- Crew events and a finished signal: watch, wait --until finished, status set --done
+- A PR chip no longer shifts a tile's rows, and the dock stays between the zones pill and the zoom bar, scrolling when full
+- Arrange makes no PR cards and leaves a rail's room between linked tiles
+- The board follows the branch an agent's worktree is really on
+- Make the public repo ready to go public: settings script, package metadata, CI proposal
+- Agent notes: a board item of their own for what agents write, as a document or terminal card
+- Refresh the theme-pack baselines for the Shape button
+- A test stuck in a loop is killed and named, runs stop with their starter, and gate stages have time limits
+- Thirteen theme packs, picked in Settings, every one at WCAG AA
+- 42 diagram shapes, a shape picker under Shape (S), and / to insert one at the pointer
+- Arrange keeps the grid, an implementer before its reviewer, ticket labels and edited stickies; moves make room
+- Touching an open session marks its new ask seen, so the needs-you count drops
+- A custom role carries a name (designer, researcher…) shown on its tile, with zone templates and the app's default roles
+- Keep the Mac awake through a gate, and say when it slept; bound sync launches in tests
+- An orchestrator restarts an ended agent in place (agent-board restart, MCP restart)
+- Linked agents as one rail, the latest document riding it (CD4)
+- Serve the board MCP to Claude agents from the daemon over HTTP, not a stdio process each
+- Refresh the expanded-crew baseline now Open PR is gone
+- An expanded tile keeps a crew in its frame, moving the crew as one, inside its grown zone
+- Remove Open PR from the expanded tile and session window headers
+- Vitest worker counts come from cores, load and process headroom
+- Show or hide connections on the board: all, hand-offs only or none
+- Box select: Shift+drag or the Box select tool (B) draws a marquee inside a zone instead of moving it
+- An ended agent's tile says it ended in its pill, with Restart in its hover corner and menu
+- A tile shows the PR its agent pushed to, even on another branch
+- Tiles pushed clear of an expanded tile stay fixed to the board as it pans
+- Orchestrators organise their zone: move tiles, groups, arrange the crew into clusters, signed notes
+- Edges made without sides pick them from where their tiles are, and run side by side without crossing
+- macOS line-editing keys work in terminal panes
+- Tests and gates ignore an enclosing board's AGENT_BOARD_* variables
+- The board menu's sections scroll when its zones run past the window
+- Restarting, resuming and deleting an agent move out of createAgentHost into agent-lifecycle.ts
+- Anchor the .agent-board/ ignore so knip passes in worktrees under ~/.agent-board/
+- Starting an agent and launching its harness move out of createAgentHost into agent-spawns.ts
+- How hooks become an agent's state moves out of createAgentHost into hook-states.ts
+- Hand-off delivery moves out of createAgentHost into deliveries.ts
+- The context menu and the board's keys move out of BoardView
+- Expanded tiles and the session-window glue move out of BoardView into two hooks
+- Board data and incoming pastes and drops move out of BoardView into two hooks
+
 ## v0.4.0 (2026-10-15)
 
 - Gates test waits for the token line, not the echoed command's :end

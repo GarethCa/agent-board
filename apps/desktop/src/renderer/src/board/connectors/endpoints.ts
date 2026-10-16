@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react';
-import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide, FlowEdgeShape, UpdateConnectorParams } from '@agent-board/daemon/protocol';
+import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide, EdgePoint, FlowEdgeShape, FlowEdgeSide, UpdateConnectorParams } from '@agent-board/daemon/protocol';
 import type { ConnectorChange } from '../../../../preload/api';
 import { ITEM_NODE_PREFIX } from '../items/items';
 import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../tiles';
@@ -74,23 +74,26 @@ export function withConnector(connectors: readonly Connector[], connector: Conne
   return index < 0 ? [...connectors, connector] : connectors.with(index, connector);
 }
 
-/** How `connector` is drawn: the sides of its objects it joins, its style and its bends, as a flow edge has them. */
-export const shapeOf = (connector: Connector): FlowEdgeShape => ({
+/**
+ * How `connector` is drawn: the sides of its objects it joins, its style and its bends, as a flow edge has
+ * them, its sides always ones the user picked.
+ */
+export const shapeOf = (connector: Connector): FlowEdgeShape & { fromSide: ConnectorSide; toSide: ConnectorSide } => ({
   fromSide: connector.from.side,
   toSide: connector.to.side,
   style: connector.style,
   points: connector.points,
 });
 
-/** `connector` as `params` change it: its look, label or bends, or the side of an end. */
+/** `connector` as `params` change it: its look, label or bends, the side of an end, or an end moved onto another object. */
 export function withConnectorParams(connector: Connector, params: UpdateConnectorParams): Connector {
-  const { fromSide, toSide, ...rest } = params;
+  const { fromSide, toSide, from = connector.from, to = connector.to, ...rest } = params;
   return {
     ...connector,
     ...rest,
     id: connector.id,
-    from: fromSide === undefined ? connector.from : { ...connector.from, side: fromSide },
-    to: toSide === undefined ? connector.to : { ...connector.to, side: toSide },
+    from: fromSide === undefined ? from : { ...from, side: fromSide },
+    to: toSide === undefined ? to : { ...to, side: toSide },
   };
 }
 
@@ -106,6 +109,34 @@ export function nearestSide(rect: Rect, point: { x: number; y: number }): Connec
   const dy = (point.y - (rect.y + rect.height / 2)) / rect.height;
   if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
   return dy >= 0 ? 'bottom' : 'top';
+}
+
+/** The point `share` (0 to 1) of the way along `side` of `rect`: from the left of its top or bottom, from the top of its left or right. */
+function sidePoint(rect: Rect, side: ConnectorSide, share: number): { x: number; y: number } {
+  if (side === 'top' || side === 'bottom') return { x: rect.x + rect.width * share, y: side === 'top' ? rect.y : rect.y + rect.height };
+  return { x: side === 'left' ? rect.x : rect.x + rect.width, y: rect.y + rect.height * share };
+}
+
+const centreOf = (rect: Rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+const measured = (rect: Rect | undefined): rect is Rect => rect !== undefined && rect.width > 0 && rect.height > 0;
+
+/**
+ * The sides a line between `source` and `target` joins: each `auto` end on the side of its object facing the
+ * other's centre, by `nearestSide`, so the edges each way between two tiles join the same pair of sides; a side the
+ * user picked is kept. Until both objects are measured, an automatic end is on the right of its source or the left of
+ * its target, as edges were drawn before. Two tiles on the same centre face nowhere: both ends are on the right.
+ */
+export function autoSides(
+  fromSide: FlowEdgeSide,
+  toSide: FlowEdgeSide,
+  source: Rect | undefined,
+  target: Rect | undefined,
+): { fromSide: ConnectorSide; toSide: ConnectorSide } {
+  const known = measured(source) && measured(target);
+  return {
+    fromSide: fromSide !== 'auto' ? fromSide : known ? nearestSide(source, centreOf(target)) : 'right',
+    toSide: toSide !== 'auto' ? toSide : known ? nearestSide(target, centreOf(source)) : 'left',
+  };
 }
 
 /**
@@ -128,4 +159,23 @@ export function newEndAt(
     right: { x: half.x, y: 0 },
   }[side];
   return { centre: { x: drop.x - toSide.x, y: drop.y - toSide.y }, side };
+}
+
+/**
+ * Where a line meets its tiles at each automatic end: the sides `autoSides` picks, and on each automatic one its
+ * middle. An end on a side the user picked has no point here: it is drawn where its handle is.
+ */
+export function autoEnds(
+  fromSide: FlowEdgeSide,
+  toSide: FlowEdgeSide,
+  source: Rect | undefined,
+  target: Rect | undefined,
+): { fromSide: ConnectorSide; toSide: ConnectorSide; source?: EdgePoint; target?: EdgePoint } {
+  const sides = autoSides(fromSide, toSide, source, target);
+  if (!measured(source) || !measured(target)) return sides;
+  return {
+    ...sides,
+    ...(fromSide === 'auto' && { source: sidePoint(source, sides.fromSide, 0.5) }),
+    ...(toSide === 'auto' && { target: sidePoint(target, sides.toSide, 0.5) }),
+  };
 }

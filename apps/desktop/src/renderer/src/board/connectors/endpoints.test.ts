@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Connector } from '@agent-board/daemon/protocol';
-import { connectorEdges, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
+import { autoEnds, autoSides, connectorEdges, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
 
 const connector = (overrides: Partial<Connector> = {}): Connector => ({
   id: 'c1',
@@ -134,5 +134,54 @@ describe('newEndAt', () => {
       centre: { x: 50, y: -480 },
       side: 'bottom',
     });
+  });
+});
+
+describe('autoSides', () => {
+  const tile = (x: number, y: number) => ({ x, y, width: 280, height: 160 });
+  const here = tile(0, 0);
+
+  it('joins the sides of two tiles that face each other: bottom to top for one below, right to left for one to the right', () => {
+    expect(autoSides('auto', 'auto', here, tile(0, 400))).toEqual({ fromSide: 'bottom', toSide: 'top' });
+    expect(autoSides('auto', 'auto', here, tile(0, -400))).toEqual({ fromSide: 'top', toSide: 'bottom' });
+    expect(autoSides('auto', 'auto', here, tile(600, 0))).toEqual({ fromSide: 'right', toSide: 'left' });
+    expect(autoSides('auto', 'auto', here, tile(-600, 0))).toEqual({ fromSide: 'left', toSide: 'right' });
+  });
+
+  it('goes by how far off each tile is in its own proportions, so one down and across from a wide tile is mostly below', () => {
+    // 300 across a 280-wide tile is about 1.07 widths; 240 down a 160-high one is 1.5 heights.
+    expect(autoSides('auto', 'auto', here, tile(300, 240))).toEqual({ fromSide: 'bottom', toSide: 'top' });
+    expect(autoSides('auto', 'auto', here, tile(500, 240))).toEqual({ fromSide: 'right', toSide: 'left' });
+  });
+
+  it('picks the same pair of sides for the edge each way between two tiles', () => {
+    const there = tile(120, 380);
+    const forth = autoSides('auto', 'auto', here, there);
+    const back = autoSides('auto', 'auto', there, here);
+    expect(back).toEqual({ fromSide: forth.toSide, toSide: forth.fromSide });
+  });
+
+  it('keeps a side the user picked, and picks only the automatic end', () => {
+    expect(autoSides('right', 'auto', here, tile(0, 400))).toEqual({ fromSide: 'right', toSide: 'top' });
+    expect(autoSides('left', 'bottom', here, tile(0, 400))).toEqual({ fromSide: 'left', toSide: 'bottom' });
+  });
+
+  it('draws from right to left until both tiles have been measured', () => {
+    expect(autoSides('auto', 'auto', undefined, tile(0, 400))).toEqual({ fromSide: 'right', toSide: 'left' });
+    expect(autoSides('auto', 'auto', here, { x: 0, y: 400, width: 0, height: 0 })).toEqual({ fromSide: 'right', toSide: 'left' });
+  });
+});
+
+describe('autoEnds', () => {
+  const tile = (x: number, y: number, width = 256, height = 136) => ({ x, y, width, height });
+
+  it('joins a side round the corner when the tiles differ in size', () => {
+    expect(autoEnds('auto', 'auto', tile(0, 0, 960, 600), tile(1352, 812))).toMatchObject({ fromSide: 'right', toSide: 'top' });
+  });
+
+  it('gives an automatic end the middle of its side, and a side the user picked no point of its own', () => {
+    const [a, b] = [tile(0, 0), tile(0, 400)];
+    expect(autoEnds('auto', 'auto', a, b)).toEqual({ fromSide: 'bottom', toSide: 'top', source: { x: 128, y: 136 }, target: { x: 128, y: 400 } });
+    expect(autoEnds('right', 'auto', a, b)).toEqual({ fromSide: 'right', toSide: 'top', target: { x: 128, y: 400 } });
   });
 });

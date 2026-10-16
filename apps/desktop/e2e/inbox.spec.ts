@@ -105,6 +105,11 @@ test('opening a waiting agent marks it seen: it stops needing you until it asks 
     await expect(screen(window)).toContainText('Going with SQLite.');
     await expect(count(window)).toHaveAttribute('data-count', '1');
     await expect(agentTile).not.toHaveAttribute('data-seen', /.*/);
+
+    // Clicking into the still-open window is looking at it: the new ask is seen and the counter drops.
+    await window.getByTestId('session-terminal').click();
+    await expect(count(window)).toHaveAttribute('data-count', '0');
+    await expect(agentTile).toHaveAttribute('data-seen', 'true');
   });
 });
 

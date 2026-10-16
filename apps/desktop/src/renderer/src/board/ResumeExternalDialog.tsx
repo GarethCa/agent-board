@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Agent, ExternalResumePlan, ExternalResumeWhere, ExternalSession } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { Button, Dialog, ErrorText } from '../ui';
-import { NEW_AGENT_SIZE } from './layout';
+import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import { resumeChoices, resumeWarnings, type ResumeChoice } from './resume-external';
 
 interface ResumeExternalDialogProps {

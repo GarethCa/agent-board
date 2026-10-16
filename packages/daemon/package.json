@@ -6,6 +6,8 @@
   "description": "agent-board daemon: owns sessions and the SQLite database, serves JSON-RPC over a local socket and hook ingress over localhost HTTP.",
   "exports": {
     ".": "./src/index.ts",
+    "./board-layout": "./src/board-layout.ts",
+    "./board-tidy": "./src/board-tidy.ts",
     "./cli-install": "./src/cli-install.ts",
     "./client": "./src/client.ts",
     "./cron": "./src/cron.ts",

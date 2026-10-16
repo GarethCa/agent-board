@@ -47,6 +47,11 @@ interface EdgeRulesProps {
   drawn: boolean;
   /** A hand-off is going along it now. */
   live: boolean;
+  /**
+   * The edges drawn as one rail with it, itself among them, each named by its ends ("Fix it → Review it"): a
+   * switch picks whose rules show. Left out, or alone, there is none.
+   */
+  directions?: readonly { edge: FlowEdge; name: string }[];
   actions: FlowEdgeActions;
   onDelete(): void;
   onClose(): void;
@@ -159,7 +164,7 @@ function useCommands(edge: FlowEdge): Map<string, FlowCommandApproval> {
  * previewed), Only if (its conditions, each with how it did and, for a command not yet approved, its approval) and
  * History (what it holds, what it did, and what it last carried). Its footer pauses, deletes or sends it.
  */
-export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, drawn, live, actions, onDelete, onClose }: EdgeRulesProps) {
+export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, drawn, live, directions = [], actions, onDelete, onClose }: EdgeRulesProps) {
   const id = useId();
   const now = new Date();
   const preview = usePreview(edge, fromRevision);
@@ -221,6 +226,15 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
           <ArrowRight aria-label="to" />
           <span>{toName}</span>
         </p>
+        {directions.length > 1 && (
+          <Segmented
+            aria-label="Direction"
+            className="edge-rules-directions"
+            value={edge.id}
+            onChange={actions.select}
+            options={directions.map((direction) => ({ id: direction.edge.id, label: direction.name }))}
+          />
+        )}
         {edge.madeBy !== null && (
           <p className="edge-rules-made-by" data-testid="edge-rules-made-by">
             <Bot aria-hidden />
@@ -337,7 +351,7 @@ export function EdgeRules({ edge, fromName, toName, madeByName, fromRevision, dr
                       <div className="edge-rules-approve" data-testid="approve-command">
                         <p className="edge-rules-hint">Runs in {fromName}'s worktree, as you:</p>
                         <pre className="edge-rules-preview edge-rules-plan">{plan.shown}</pre>
-                        <Button size="sm" variant="primary" icon={<ShieldCheck />} onClick={() => actions.approve(edge.id, plan.command, plan.fingerprint)}>
+                        <Button size="sm" variant="primary" icon={<ShieldCheck />} onClick={() => actions.approve(edge.id, plan.command, plan.fingerprint, plan.from)}>
                           Approve
                         </Button>
                       </div>
