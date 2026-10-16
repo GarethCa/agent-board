@@ -6,8 +6,12 @@ import { HeldPromptsNotice } from '../inbox/Inbox';
 import { SessionWindow } from '../session/SessionWindow';
 import { keptLayout } from '../session/use-window-panes';
 import { PopOutSpotlight } from './PopOutSpotlight';
+import { useCheatSheet } from '../keys/CheatSheet';
 import { handOffWebTabs } from './SessionWindows';
 import { usePopOutMoves } from './use-pop-out-moves';
+
+/** A popped-out window is a session window: its cheat sheet opens on the window's keys. */
+const windowContext = () => 'window' as const;
 
 /**
  * A session window popped out into its own OS window: the whole window, with a button to pop it back in; or a tab
@@ -31,6 +35,8 @@ export function PopOutWindow({ target: opened }: { target: WindowTarget }) {
     history.replaceState(null, '', `${location.pathname}?${query}${location.hash}`);
     setTarget(to);
   };
+  // ⌘/ opens the cheat sheet here too, on the session window's keys.
+  const cheatSheet = useCheatSheet(windowContext);
   return (
     <>
       {target.kind === 'tabs' ? (
@@ -41,6 +47,7 @@ export function PopOutWindow({ target: opened }: { target: WindowTarget }) {
         <PoppedSession key={target.id} target={target} notice={notice} />
       )}
       <PopOutSpotlight target={target} onSwitched={switched} />
+      {cheatSheet.sheet}
     </>
   );
 }

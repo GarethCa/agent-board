@@ -89,6 +89,11 @@ describe('selectChecks', () => {
     expect(plan.full).toBe(false);
   });
 
+  it('runs the full gate when the key registry changes, which every surface matches its keys through', () => {
+    expect(selectChecks(['apps/desktop/src/renderer/src/keys/registry.ts']).full).toBe(true);
+    expect(selectChecks(['apps/desktop/src/renderer/src/keys/index.ts']).full).toBe(true);
+  });
+
   it('runs the full gate when the perf spec changes', () => {
     expect(selectChecks(['apps/desktop/e2e/board-perf.spec.ts']).full).toBe(true);
   });

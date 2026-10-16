@@ -6,6 +6,7 @@ import { SHAPE_GROUPS, SHAPES } from './catalogue';
 import { recentShapes } from './recents';
 import { searchShapes, type ShapeMatch, type ShapeResult } from './search';
 import { ShapeIcon } from './ShapeArt';
+import { keyText } from '../../../keys/registry';
 
 const groupName = (shape: ShapeType) => SHAPE_GROUPS.find(({ id }) => id === SHAPES[shape].group)!.name;
 
@@ -71,7 +72,7 @@ export function QuickInsert({ at, onPlace, onClose }: { at: { x: number; y: numb
             }
           }}
         />
-        <Kbd>esc</Kbd>
+        <Kbd>{keyText('dialog.close')}</Kbd>
       </div>
       {results.length === 0 ? (
         <p className="quick-insert-none">No shape matches “{query.trim()}”</p>

@@ -13,6 +13,7 @@ import { matches } from './add-zone';
 import { AgentSetupChips, DEFAULT_SETUP, reviews, roleNote, type AgentSetup } from './AgentSetup';
 import { bypassNoticeSeen, CodexBypassExplanation, markBypassNoticeSeen } from './codex-notice';
 import { FolderLine, FolderRow, useRecentFolders } from './RecentFolders';
+import { keyText } from '../keys/registry';
 
 /** What the picker starts an agent with. */
 export interface RepoChoice {
@@ -243,7 +244,7 @@ export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: Repo
           {/* The picker is narrow: where it works is Start's tooltip. */}
           <Button type="submit" variant="primary" size="sm" loading={starting} disabled={!canStart} tooltip={worksIn}>
             Start
-            <Kbd aria-hidden>⏎</Kbd>
+            <Kbd aria-hidden>{keyText('dialog.pick')}</Kbd>
           </Button>
         </div>
       </form>

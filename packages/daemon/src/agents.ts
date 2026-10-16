@@ -4,6 +4,7 @@ import type { PullRequest } from '@agent-board/tracker';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
 import { createAgentLifecycle } from './agent-lifecycle.ts';
+import { systemClock, type Clock } from './clock.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
 import { createDeliveries } from './deliveries.ts';
 import { createHookStates } from './hook-states.ts';
@@ -71,6 +72,8 @@ const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'Stop
 
 export interface AgentHostOptions {
   db: DatabaseSync;
+  /** The time `starting` gives up by: the system clock by default. */
+  clock?: Clock;
   sessions: SessionHost;
   /** Where agent worktrees go (ADR-0007). */
   worktreesDir: string;
@@ -91,6 +94,8 @@ export interface AgentHostOptions {
    * MCP unless their zone turns it off; no agent gets it without the CLI.
    */
   boardCliPath?: string;
+  /** The context size Claude agents compact at (`DaemonSettings.compactWindow`), read as each starts; 0 for Claude's own. */
+  compactWindow: () => number;
   /** The environment harness sessions start from. */
   env: NodeJS.ProcessEnv;
   /** The user's shell and its arguments. A login shell (`-l`) also launches the harness, so it gets the profile's PATH. */
@@ -184,9 +189,9 @@ export interface AgentHost {
   get(sessionId: string): Agent | undefined;
   /**
    * Ends the agent and removes its worktree and branch, or with `keepWorktree` leaves them, and the work in them, alone;
-   * with `keepBranch` it removes the worktree but keeps the branch.
+   * with `keepBranch` it removes the worktree but keeps the branch. `why` says who asked, for the log.
    */
-  delete(sessionId: string, force: boolean, keepWorktree?: boolean, keepBranch?: boolean): Promise<void>;
+  delete(sessionId: string, why: string, force: boolean, keepWorktree?: boolean, keepBranch?: boolean): Promise<void>;
   /** Its conversation from its transcript (`TranscriptReader.read`), for the chat view. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;
   /** A Claude subagent's conversation (`TranscriptReader.readSubagent`), started by its call `toolUseId`. */
@@ -233,17 +238,20 @@ export interface AgentHost {
    * Interrupts the agent's turn, as Ctrl-C in its terminal would, and returns it idle at its prompt with its permission
    * prompts released. Refuses an ended agent and one with no turn under way.
    */
-  interrupt(sessionId: string): Agent;
-  /** Ends the agent's session, keeping its worktree and branch, and resolves with it `done`. */
-  stop(sessionId: string): Promise<Agent>;
+  interrupt(sessionId: string, why: string): Agent;
+  /**
+   * Ends the agent's session, keeping its worktree and branch, and resolves with it `done`. `why` says who asked, for
+   * the log line of its exit.
+   */
+  stop(sessionId: string, why: string): Promise<Agent>;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
    * dropped into, refusing with `shellBusy` while that runs something, unless `force`. Refuses a running agent.
    * With `fresh` it starts a new conversation under a new harness session id instead (the old one goes to
-   * `Agent.earlierConversations`), on `fresh.prompt` if given.
+   * `Agent.earlierConversations`), on `fresh.prompt` if given. `why` says who asked, for the log.
    */
-  resume(sessionId: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
+  resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
   /** Answers one of the agent's held permission prompts. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
@@ -273,6 +281,8 @@ export interface AgentHost {
   onHook(sessionId: string, payload: Record<string, unknown>, signal: AbortSignal): HookReply | Promise<HookReply>;
   /** Settles the session's agent, if it has one, once its process has exited. */
   onExit(session: SessionInfo): void;
+  /** The agent's session printed something: an agent still `starting` with no hook for a while stops being. */
+  onOutput(sessionId: string): void;
   /** Tells every client about the agent, if it still exists, after something it shows changed. */
   announce(sessionId: string): void;
   /**
@@ -453,6 +463,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     subagents,
     save: (row, state, next, always) => save(row, state, next, always),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
+    clock: options.clock ?? systemClock,
+    startingEnded: (sessionId) => announce(sessionId),
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
@@ -475,6 +487,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     getZone: (zoneId) => selectZone.get(zoneId) as ZoneRow | undefined,
     repoZoneFor: (zoneId, repoRoot) => repoZoneFor(zoneId, repoRoot),
     announce: (sessionId) => announce(sessionId),
+    promptQueued: (sessionId) => hookStates.promptQueued(sessionId),
     watch: (...launched) => lifecycle.watchLaunched(...launched),
   });
   const lifecycle = createAgentLifecycle({
@@ -509,10 +522,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const hooked = schedule?.enabled ? hookStates.scheduledState(row) : unscheduledState(row);
     // Its call waits on the user mid-turn, whatever its hooks say, but for a permission prompt of a subagent's.
     const state = live && waitsOnUser({ ask, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
+    // Its first prompt is queued and its session has sent no hook: the turn hasn't begun, which is not idle.
+    const started = live && state === 'idle' && hookStates.isStarting(row.session_id) ? 'starting' : state;
     const shownState =
       deliveries.isHandingOff(row.session_id) && state !== 'waiting' && state !== 'needs-permission' && permissions.prompts(row.session_id).length === 0
         ? 'handing-off'
-        : state;
+        : started;
     return {
       sessionId: row.session_id,
       zoneId: row.zone_id,
@@ -742,9 +757,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     isDeleting: lifecycle.isDeleting,
 
     // Read first: a rename with no hook after it must not hide the branch it owns from the unsaved-work check.
-    async delete(sessionId, force, keepWorktree, keepBranch) {
+    async delete(sessionId, why, force, keepWorktree, keepBranch) {
       await refreshBranch(sessionId);
-      return lifecycle.delete(sessionId, force, keepWorktree, keepBranch);
+      return lifecycle.delete(sessionId, why, force, keepWorktree, keepBranch);
     },
 
     answer: deliveries.answer,
@@ -767,10 +782,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     onInput: hookStates.typed,
 
-    interrupt(sessionId) {
+    interrupt(sessionId, why) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
       if (!isMidTurn(agent)) throw invalidParams(`${agent.name} has no turn under way to interrupt`);
+      options.log(`interrupting agent ${sessionId} for ${why}`);
       sessions.write(sessionId, INTERRUPT_KEY);
       // The turn is over now: Claude fires no hook for an interrupted turn, and the subagents and prompts went with it,
       // and the call it waited on the user in, whether or not its harness cancels it.
@@ -924,6 +940,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return hookStates.onHook(row, payload, signal);
     },
 
+    onOutput: hookStates.outputSeen,
+
     onExit(session) {
       if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
@@ -1006,7 +1024,7 @@ export function agentHandlers<Context>(
       const p = paramsObject(params);
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
       if (p.keepWorktree !== undefined && typeof p.keepWorktree !== 'boolean') throw invalidParams('keepWorktree must be a boolean');
-      await agents.delete(stringParam(p, 'sessionId'), p.force === true, p.keepWorktree === true);
+      await agents.delete(stringParam(p, 'sessionId'), "the app's agent.delete", p.force === true, p.keepWorktree === true);
       return null;
     },
     'agent.answer': async (params) => {
@@ -1014,12 +1032,12 @@ export function agentHandlers<Context>(
       await agents.answer(stringParam(p, 'sessionId'), stringParam(p, 'text'), optionalBooleanParam(p, 'paste'));
       return null;
     },
-    'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId')),
-    'agent.stop': (params) => agents.stop(stringParam(paramsObject(params), 'sessionId')),
+    'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId'), "the app's agent.interrupt"),
+    'agent.stop': (params) => agents.stop(stringParam(paramsObject(params), 'sessionId'), "the app's agent.stop"),
     'agent.resume': (params) => {
       const p = paramsObject(params);
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
-      return agents.resume(stringParam(p, 'sessionId'), p.force === true);
+      return agents.resume(stringParam(p, 'sessionId'), "the app's agent.resume", p.force === true);
     },
     'agent.decidePermission': (params) => {
       const p = paramsObject(params);

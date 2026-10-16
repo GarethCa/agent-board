@@ -3,7 +3,7 @@ import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import { LifeBuoy, Menu as MenuIcon, Plus, Search } from 'lucide-react';
 import { APP_NAME } from '../../../shared/brand';
 import { DaemonStatus, type DaemonStatusValue } from '../DaemonStatus';
-import { withCommand, withWindowShortcut } from '../keys';
+import { keyText } from '../keys/registry';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
@@ -144,7 +144,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
   return (
     <Island className="board-menu island-top-left" data-testid="board-menu" data-tour="board-menu" data-drag-region>
       <Popover open={menu.open} onOpenChange={(open) => onMenu({ open })} aria-label="Board menu" content={panel} className="board-menu-popover">
-        <ToolButton size="sm" icon={<MenuIcon />} label="Board menu" hint={`Zones, agents and settings  ${withCommand('\\')}`} />
+        <ToolButton size="sm" icon={<MenuIcon />} label="Board menu" hint={`Zones, agents and settings  ${keyText('move.boardMenu')}`} />
       </Popover>
       <BrandMark className="board-menu-logo" />
       <h1 className="board-menu-title">{APP_NAME}</h1>
@@ -159,7 +159,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         tooltip="Jump to a session or zone"
         onClick={onFind}
       >
-        <Kbd>{withWindowShortcut('K')}</Kbd>
+        <Kbd>{keyText('move.spotlight')}</Kbd>
       </Button>
     </Island>
   );

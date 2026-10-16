@@ -601,6 +601,8 @@
   --size-shape-picker-list: 420px; /* its shapes' tallest, before they scroll */
   --size-shape-cell: 38px; /* one shape's button in it */
   --size-shape-cell-height: 34px;
+  --size-theme-popover: 340px; /* the Theme popover in Settings › Appearance (CV2) */
+  --size-theme-popover-list: 380px; /* its choices' tallest, before they scroll */
   --size-ask-claude: 340px; /* Ask Claude's popover beside a selection (CM) */
   --size-quick-insert: 300px; /* the / palette at the pointer (CL3) */
   --size-gallery-shape: 148px; /* a shape's cell in the component gallery */
@@ -677,6 +679,8 @@
   --size-spotlight-list: 360px; /* how tall its list grows before it scrolls */
   --size-spotlight-mark: 22px; /* a row's mark */
   --spotlight-top: 14vh; /* how far down the window it opens */
+  --size-cheat-sheet: 760px; /* the keyboard cheat sheet's width */
+  --size-cheat-sheet-column: 200px; /* the narrowest of its columns of keys */
 
   /* Onboarding (mocks X–AA) */
   --radius-sheet: 20px; /* an onboarding step's card */

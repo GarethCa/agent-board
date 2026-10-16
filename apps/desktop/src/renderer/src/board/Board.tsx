@@ -219,6 +219,9 @@ import { useBoardShortcuts } from './use-board-shortcuts';
 import { useDeleteSelection } from './use-delete-selection';
 import { useRenameRequests } from './use-rename-requests';
 import { CONTROLS, quickInsertAt, SESSION_SURFACES } from './board-shortcuts';
+import type { SheetContext } from '../keys/cheat-sheet';
+import { useCheatSheet } from '../keys/CheatSheet';
+import { keyText } from '../keys/registry';
 import { centreOf } from '../geometry';
 import { useZoneResize } from './use-zone-resize';
 
@@ -1414,7 +1417,7 @@ function BoardView() {
     // Shown for as long as the mode lasts (not for a few seconds), and dismissing it ends the mode: a click is never
     // silently a connector.
     const finish = () => setConnectingFrom(undefined);
-    toasts.show({ id: CONNECT_HINT, message: 'Click what to connect it to. Esc cancels.', tone: 'info', persistent: true, onDismissed: finish });
+    toasts.show({ id: CONNECT_HINT, message: `Click what to connect it to. ${keyText('edit.escape')} cancels.`, tone: 'info', persistent: true, onDismissed: finish });
     const onPointerDown = (event: PointerEvent) => {
       const target = (event.target as Element | null)?.closest?.('.react-flow__node')?.getAttribute('data-id');
       if (target === undefined || target === null || target === connectingFrom) return finish();
@@ -2033,8 +2036,18 @@ function BoardView() {
     [createItem, screenToFlowPosition],
   );
 
+  // Where the cheat sheet opens: in a session window or expanded tile, on the one tile selected, or on the board.
+  const cheatSheet = useCheatSheet(
+    useCallback((): SheetContext => {
+      if (document.activeElement?.closest(SESSION_SURFACES) != null) return 'window';
+      const [node, ...rest] = editing.selection().nodes;
+      return node !== undefined && rest.length === 0 && isSessionTile(node) ? 'tile' : 'board';
+    }, [editing.selection]),
+  );
+
   const { renameRequest, renameRequests, requestRename } = useRenameRequests();
   useBoardShortcuts({
+    openCheatSheet: cheatSheet.open,
     cycleConnections,
     openQuickInsert,
     loaded,
@@ -2911,7 +2924,9 @@ function BoardView() {
           </SaveZoneLayoutContext>
         </DropTargetContext>
       )}
+      {cheatSheet.sheet}
       <BoardChrome
+        onKeyboardHelp={cheatSheet.open}
         loaded={loaded}
         empty={loaded && nodes.length === 0 && !placeSession.placing}
         loadedEmpty={loadedEmpty}

@@ -237,45 +237,62 @@
   gap: var(--space-3);
 }
 
-/* Settings › Appearance's theme packs: each family under its name and credit, its themes two to a row. */
-.theme-packs {
+/* Settings › Appearance's Theme control (CV2): the choice's swatch and name, opening the Theme popover. */
+.theme-setting {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
-.theme-pack-name {
-  margin: 0;
+.theme-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--control-md);
+  padding: 0 var(--space-2-5) 0 var(--space-1-5);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
   color: var(--text);
+  box-shadow: var(--shadow-control);
+  font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
+  cursor: pointer;
 }
 
-.theme-pack-credit {
-  margin: 0 0 var(--space-1-5);
+.theme-control:hover:not(:disabled),
+.theme-control[data-state='open'] {
+  background: var(--hover);
+}
+
+.theme-control:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.theme-control:disabled {
+  color: var(--disabled-ink);
+  cursor: default;
+}
+
+.theme-control-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-control-chevron {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
   color: var(--muted);
-  font-size: var(--font-size-xs);
 }
 
-.theme-picks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-1-5);
-}
-
-.theme-pick {
-  gap: var(--space-2);
-  padding: var(--space-1-5) var(--space-2);
-  border-radius: var(--radius-lg);
-}
-
-.theme-pick .ui-choice-label {
-  font-size: var(--font-size-sm);
-}
-
-/* A pack's look in small: its desk, with its accent and its running, waiting and failed colours on it. */
-.theme-preview {
+/* A theme's look in small: its desk, with its accent and its running, waiting and failed colours on it. */
+.theme-swatch {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   gap: var(--space-0-5);
@@ -286,26 +303,140 @@
   background: var(--preview-desk);
 }
 
-.theme-preview-dot {
+.theme-swatch-dot {
   width: calc(var(--size-swatch) / 3);
   height: calc(var(--size-swatch) / 3);
   border-radius: var(--radius-pill);
 }
 
-.theme-preview-accent {
+.theme-swatch-accent {
   background: var(--preview-accent);
 }
 
-.theme-preview-running {
+.theme-swatch-running {
   background: var(--preview-running);
 }
 
-.theme-preview-waiting {
+.theme-swatch-waiting {
   background: var(--preview-waiting);
 }
 
-.theme-preview-failed {
+.theme-swatch-failed {
   background: var(--preview-failed);
+}
+
+/* The Theme popover: a search field over the choices, two to a row, grouped by family under its credit.
+   In a short window it keeps inside it, its cards scrolling under the search field. */
+.ui-popover.theme-popover {
+  display: flex;
+  flex-direction: column;
+  width: var(--size-theme-popover);
+  max-height: var(--radix-popover-content-available-height);
+  overflow: hidden;
+}
+
+.theme-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.theme-families {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  max-height: var(--size-theme-popover-list);
+  margin: 0 calc(-1 * var(--space-1));
+  padding: var(--space-1);
+  overflow-y: auto;
+}
+
+.theme-family {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.theme-family-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.theme-family-name small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1-5);
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-card:hover {
+  border-color: var(--check-edge);
+}
+
+.theme-card[aria-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent-faint);
+  box-shadow: var(--shadow-picked);
+}
+
+.theme-card:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.theme-card-previews {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.theme-card-previews .theme-swatch {
+  flex: 1;
+  width: auto;
+}
+
+.theme-card-name {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-card-variants {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Something the daemon said went wrong, under the toolbar. */
@@ -377,16 +508,6 @@
   color: var(--text);
 }
 
-.shortcut-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  margin: 0;
-  padding: 0;
-  font-size: var(--font-size-sm);
-  list-style: none;
-}
-
 /* Zoom and the minimap (bottom right) */
 
 .zoom-level {
@@ -452,6 +573,107 @@
   .needs-you-pill {
     transition: none;
   }
+}
+
+/* The keyboard cheat sheet (? on the board, ⌘/ anywhere): every key from the registry, in columns, centred over a scrim. */
+.cheat-sheet {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--layer-dialog);
+  display: flex;
+  flex-direction: column;
+  width: min(var(--size-cheat-sheet), calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--space-8));
+  overflow: hidden;
+  translate: -50% -50%;
+  border-radius: var(--radius-2xl);
+  font-family: var(--font-sans);
+}
+
+.cheat-sheet:focus {
+  outline: none;
+}
+
+.cheat-sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--space-px) solid var(--separator);
+}
+
+.cheat-sheet-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--weight-bold);
+}
+
+/* Where it opened: the sections for it come first. */
+.cheat-sheet-here {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-none);
+}
+
+.cheat-sheet-filter {
+  width: var(--size-cheat-sheet-column);
+  margin-left: auto;
+}
+
+.cheat-sheet-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--size-cheat-sheet-column)), 1fr));
+  gap: var(--space-1) var(--space-4-5);
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+.cheat-sheet-section .ui-section-label {
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.cheat-sheet-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+  border-bottom: var(--space-px) dashed var(--separator);
+  font-size: var(--font-size-sm-plus);
+}
+
+.cheat-sheet-section[data-here] .cheat-sheet-row {
+  color: var(--accent-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.cheat-sheet-keys {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+.cheat-sheet-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.cheat-sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3-5);
+  padding: var(--space-2) var(--space-4);
+  border-top: var(--space-px) solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-sm);
 }
 
 /* ⌘K, the Spotlight-style switcher (CR2): a frosted card near the top of the window, over a light scrim. */

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { ipcMain, nativeTheme } from 'electron';
 import { sendToAllWindows } from './broadcast';
 import { APPEARANCE_IPC } from '../preload/api';
-import { APPEARANCES, appearanceFrom, themeSourceFor, type Appearance } from '../shared/appearance';
+import { appearanceFrom, DEFAULT_APPEARANCE, isAppearance, themeSourceFor, type Appearance } from '../shared/appearance';
 
 /** The setting as main holds it: what a new window opens in. */
 export interface AppearanceSetting {
@@ -16,26 +16,26 @@ export interface AppearanceSetting {
  * `nativeTheme.themeSource`, which every window's `prefers-color-scheme` follows, and macOS's own parts of the
  * windows too; a pick is sent to every window, which shows its theme (renderer/src/themes.ts).
  */
-export function registerAppearance(dataDir: string, fallback: Appearance = 'system'): AppearanceSetting {
+export function registerAppearance(dataDir: string, fallback: Appearance = DEFAULT_APPEARANCE): AppearanceSetting {
   const file = join(dataDir, 'appearance.json');
   let appearance = load(file) ?? fallback;
   nativeTheme.themeSource = themeSourceFor(appearance);
 
   ipcMain.handle(APPEARANCE_IPC.get, () => appearance);
   ipcMain.handle(APPEARANCE_IPC.set, (_event, picked: unknown) => {
-    if (!APPEARANCES.includes(picked as Appearance)) throw new Error(`no such appearance: ${String(picked)}`);
+    if (!isAppearance(picked)) throw new Error(`no such appearance: ${JSON.stringify(picked)}`);
     // Saved first, whole or not at all: a pick that can't be kept changes nothing.
     const staged = `${file}.${process.pid}.tmp`;
     writeFileSync(staged, JSON.stringify({ appearance: picked }));
     renameSync(staged, file);
-    appearance = picked as Appearance;
+    appearance = picked;
     nativeTheme.themeSource = themeSourceFor(appearance);
     sendToAllWindows(APPEARANCE_IPC.changed, appearance);
   });
   return { current: () => appearance };
 }
 
-/** What was saved, or undefined if nothing (readable) was. */
+/** What was saved, or undefined if nothing (readable) was. A theme saved on its own moves to its family (`appearanceFrom`). */
 function load(file: string): Appearance | undefined {
   try {
     const saved: unknown = JSON.parse(readFileSync(file, 'utf8'));

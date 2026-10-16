@@ -29,6 +29,7 @@ import { gateDot } from '../gate/gate-view';
 import { useGateRuns } from '../gate/GatesProvider';
 import { WebLinkContext } from './web-links';
 import { useSeenWhileShown } from './mark-seen';
+import { keyText } from '../keys/registry';
 
 /**
  * What a session window or an expanded tile shows: one session's terminal (with its agent, live, for an agent's
@@ -577,13 +578,13 @@ function Composer({ agent }: { agent: Agent }) {
         {blocked === undefined && (
           <Button type="submit" size="sm" variant="primary" loading={busy || pasting} disabled={text.trim() === ''}>
             Send
-            <Kbd className="composer-key">↵</Kbd>
+            <Kbd className="composer-key">{keyText('window.send')}</Kbd>
           </Button>
         )}
       </label>
       {blocked === undefined && (
         <p className="composer-hint">
-          <Kbd>⇧↵</Kbd> new line · paste an image to attach it
+          <Kbd>{keyText('window.newLine')}</Kbd> new line · paste an image to attach it
         </p>
       )}
       {(error ?? pasteError) && <ErrorText className="composer-error">{error ?? pasteError}</ErrorText>}

@@ -8,7 +8,7 @@ import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../t
 import type { Rect } from '../../geometry';
 import { selectedNodes } from './selection';
 import { boundsOf, type Guide } from './snap';
-import { ASK_CLAUDE_KEY } from './context-menu';
+import { keyText } from '../../keys/registry';
 import { Kbd } from '../../ui';
 
 /** What the selection box calls each kind of object, one and many. */
@@ -93,7 +93,7 @@ export const SelectionBox = memo(function SelectionBox({ onAsk }: { onAsk(): voi
           <button type="button" className="selection-box-ask nodrag nopan" onClick={onAsk}>
             <Sparkles aria-hidden />
             Ask Claude…
-            <Kbd>{ASK_CLAUDE_KEY}</Kbd>
+            <Kbd>{keyText('make.askClaude')}</Kbd>
           </button>
         </span>
         {box.rotatable && <SelectionRotateHandle items={() => selectedItems(store.getState())} />}

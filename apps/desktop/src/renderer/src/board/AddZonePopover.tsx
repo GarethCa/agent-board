@@ -19,6 +19,7 @@ import { tildify } from '../session/live-folder';
 import { useHomeDir } from '../session/SessionDetails';
 import { matches, type PopoverPlacement } from './add-zone';
 import { apiKeyHint, GhLoginHelp, LINEAR_KEY_PLACEHOLDER } from './tracker-help';
+import { keyText } from '../keys/registry';
 
 
 /** A group first (AI1): a zone is a group until it is bound, and binding it to a source is optional. */
@@ -522,7 +523,7 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
           </Button>
           <Button type="submit" variant="primary" loading={adding} disabled={!canAdd}>
             {picked?.source === 'github' && picked.repo.localPath === null ? 'Clone and add' : 'Add zone'}
-            <Kbd aria-hidden>⏎</Kbd>
+            <Kbd aria-hidden>{keyText('dialog.pick')}</Kbd>
           </Button>
         </div>
         {error !== undefined && <ErrorText>{error}</ErrorText>}

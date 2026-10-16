@@ -4,6 +4,7 @@ import { Waypoints } from 'lucide-react';
 import { NEW_EDGE_LABEL } from './flow-edges';
 import type { TileNodeType } from './tile';
 import { tileSubject } from './tiles';
+import { keyText } from '../keys/registry';
 
 /** Whether ⌥ is held while a connector is dragged from an agent's tile (BP8): let go on another, a hand-off. */
 export const HandingOffContext = createContext(false);
@@ -56,7 +57,7 @@ export function ConnectionLine({ fromNode, fromX, fromY, fromPosition, toX, toY,
                 Hand off to {target}
               </>
             ) : (
-              'Hold ⌥ to hand off'
+              `Hold ${keyText('edit.handOffDrag')} to hand off`
             )}
           </div>
         </foreignObject>

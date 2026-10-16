@@ -5,7 +5,8 @@ import { Plus, Search } from 'lucide-react';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
-import { inOverlay, windowShortcut, withWindowShortcut } from '../keys';
+import { inOverlay } from '../keys';
+import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { Kbd, StatusPill, Tag } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
@@ -103,7 +104,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
   openedRef.current = opened;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (windowShortcut(event) !== 'KeyK') return;
+      if (!pressed('move.spotlight', event)) return;
       const opened = openedRef.current;
       // Another dialog or menu keeps its keys; a session window, a dialog too, is one of the views it switches.
       if (opened === undefined && inOverlay() && document.activeElement?.closest(SESSION_SURFACES) == null) return;
@@ -240,19 +241,21 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
           </div>
           <div className="spotlight-foot" aria-hidden>
             <span>
-              <Kbd>↑</Kbd>
-              <Kbd>↓</Kbd> move
+              {keysText('dialog.move').map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}{' '}
+              move
             </span>
             <span>
-              <Kbd>↵</Kbd> {showing ? 'show' : 'switch'}
+              <Kbd>{keyText('dialog.pick')}</Kbd> {showing ? 'show' : 'switch'}
             </span>
             {showing && (
               <span>
-                <Kbd>{withWindowShortcut('↵')}</Kbd> open
+                <Kbd>{keyText('dialog.openFromSwitcher')}</Kbd> open
               </span>
             )}
             <span>
-              <Kbd>esc</Kbd> back to where you were
+              <Kbd>{keyText('dialog.close')}</Kbd> back to where you were
             </span>
           </div>
         </RadixDialog.Content>

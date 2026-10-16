@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Columns2, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
 import type { PackageScripts } from '@agent-board/daemon/protocol';
-import { withWindowShortcut } from '../keys';
+import { binding, chordText, keyText } from '../keys/registry';
 import { Button, IconButton, Kbd, Menu, type MenuEntry } from '../ui';
 import type { AttachState } from './TerminalPane';
 import type { ShellState } from './tabs';
@@ -137,7 +137,7 @@ export function TabStrip({
         ? [{ label: found === 'failed' ? 'Could not read package.json' : 'No package.json scripts here', disabled: true, onSelect: () => {} }]
         : found.scripts.map((script) => ({ label: script, icon: <Play />, hint: `${found.runner} run ${script}`, onSelect: () => onRunScript(script) }));
   const shellEntries: MenuEntry[] = [
-    { label: `New shell ${here}`, icon: <SquareTerminal />, shortcut: withWindowShortcut('T'), onSelect: onNewShell },
+    { label: `New shell ${here}`, icon: <SquareTerminal />, shortcut: keyText('window.newTab'), onSelect: onNewShell },
     { label: 'New shell at a folder…', icon: <FolderOpen />, onSelect: onNewShellAt },
   ];
   const entries: MenuEntry[] = [
@@ -210,7 +210,7 @@ export function TabStrip({
                   aria-selected={tab.id === active}
                   aria-controls={panelId(tab.id)}
                   tabIndex={tab.id === active ? 0 : -1}
-                  title={index < 9 ? `${tab.title ?? tab.label} (${withWindowShortcut(String(index + 1))})` : (tab.title ?? tab.label)}
+                  title={index < 9 ? `${tab.title ?? tab.label} (${chordText({ ...binding('window.tab').keys[0]!, text: String(index + 1) })})` : (tab.title ?? tab.label)}
                   onClick={() => onSelect(tab.id)}
                 >
                   {tab.icon === undefined ? <span className="session-window-pane-dot" data-state={tab.dot} aria-hidden /> : <span className="session-tab-icon" aria-hidden>{tab.icon}</span>}
@@ -243,7 +243,7 @@ export function TabStrip({
           aria-label="New tab"
           tooltip={
             <>
-              New shell tab<Kbd>{withWindowShortcut('T')}</Kbd>
+              New shell tab<Kbd>{keyText('window.newTab')}</Kbd>
             </>
           }
         >
@@ -260,7 +260,7 @@ export function TabStrip({
         tooltip={
           <>
             Split: a new shell beside this pane
-            <Kbd>{withWindowShortcut('D')}</Kbd>
+            <Kbd>{keyText('window.splitBeside')}</Kbd>
           </>
         }
         onClick={onSplit}

@@ -5,6 +5,7 @@ import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board
 import { noteShapeUsed, useRecentShapes } from '../board/items/shapes/recents';
 import { ShapeIcon } from '../board/items/shapes/ShapeArt';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
+import { keyText } from '../keys/registry';
 import { Button, Island, IslandSeparator, Kbd, Popover, ToolButton } from '../ui';
 
 /**
@@ -40,21 +41,21 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
   const toggle = (armed: ArmedTool) => drag.consumeClick() || onTool(tool === armed ? undefined : armed);
   return (
     <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
-      <ToolButton label="Select" icon={<MousePointer2 />} shortcut="V" hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
-      <ToolButton label="Box select" icon={<SquareDashed />} shortcut="B" hint="Draw a box round what to select, in a zone too" pressed={mode === 'box' && tool === undefined} onClick={() => onMode('box')} />
-      <ToolButton label="Hand" icon={<Hand />} shortcut="H" hint="Pan the board" pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
+      <ToolButton label="Select" icon={<MousePointer2 />} shortcut={keyText('move.select')} hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
+      <ToolButton label="Box select" icon={<SquareDashed />} shortcut={keyText('move.box')} hint="Draw a box round what to select, in a zone too" pressed={mode === 'box' && tool === undefined} onClick={() => onMode('box')} />
+      <ToolButton label="Hand" icon={<Hand />} shortcut={keyText('move.hand')} hint="Pan the board" pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
       <IslandSeparator />
-      <ToolButton label="Sticky note" icon={<StickyNote />} shortcut="N" hint="Add a sticky note, or double-click the board" onClick={onSticky} />
-      <ToolButton label="Text" icon={<Type />} shortcut="T" hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
+      <ToolButton label="Sticky note" icon={<StickyNote />} shortcut={keyText('make.note')} hint="Add a sticky note, or double-click the board" onClick={onSticky} />
+      <ToolButton label="Text" icon={<Type />} shortcut={keyText('make.text')} hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
       <ShapeTool armed={tool === 'shape'} onTool={onTool} />
-      <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut="Z" hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
+      <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
       <IslandSeparator />
       <Button
         variant="primary"
         className="create-toolbar-agent"
         icon={<Plus />}
         aria-pressed={tool === 'agent'}
-        tooltip={<>Put a new agent on the board, or in a zone <Kbd>A</Kbd></>}
+        tooltip={<>Put a new agent on the board, or in a zone <Kbd>{keyText('make.agent')}</Kbd></>}
         onClick={() => toggle('agent')}
         onPointerDown={(event) => drag.start('agent', event)}
         data-tour="new-agent"
@@ -65,7 +66,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
         icon={<SquareTerminal />}
         aria-label="New shell"
         aria-pressed={tool === 'shell'}
-        tooltip={<>Put a new shell on the board, or in a zone <Kbd>`</Kbd></>}
+        tooltip={<>Put a new shell on the board, or in a zone <Kbd>{keyText('make.shell')}</Kbd></>}
         onClick={() => toggle('shell')}
         onPointerDown={(event) => drag.start('shell', event)}
       >
@@ -141,7 +142,7 @@ function ShapeTool({ armed, onTool }: { armed: boolean; onTool(tool: ArmedTool |
             <ChevronDown className="create-toolbar-shape-more" aria-hidden />
           </>
         }
-        shortcut="S"
+        shortcut={keyText('make.shape')}
         hint="Add a shape, then drag on the board"
         pressed={armed}
       />

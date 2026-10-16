@@ -1,4 +1,4 @@
-import { ipcMain, Menu, Notification, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
+import { app, ipcMain, Menu, Notification, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonLink } from '@agent-board/daemon/client';
@@ -7,6 +7,7 @@ import type { SetupTool } from '@agent-board/daemon/protocol';
 import { SETUP_IPC } from '../preload/api';
 import { revealWindow } from './background';
 import type { Notifier } from './notifications';
+import { viewMenu } from './view-menu';
 
 /**
  * Onboarding's and Settings' IPC: the daemon's CLI checks, the notification that asks the OS for permission, and
@@ -50,7 +51,7 @@ export function setAppMenu(window: () => BrowserWindow): void {
     { role: 'fileMenu' },
     { role: 'editMenu' },
     // No zoom items: ⌘+ ⌘- ⌘0 size the terminal text, and the board has its own zoom.
-    { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
+    viewMenu(app.isPackaged),
     { role: 'windowMenu' },
     { role: 'help', submenu: [{ label: 'Getting started', click: gettingStarted }] },
   ];

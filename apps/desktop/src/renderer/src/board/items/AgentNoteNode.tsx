@@ -13,6 +13,7 @@ import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items'
 import { parseMarkdown } from './sticky-text';
 import { renderInline, renderMarkdown } from './StickyNode';
 import { useDraftText } from './useDraftText';
+import { keyText } from '../../keys/registry';
 
 const MIN_AGENT_NOTE_WIDTH = 200;
 const MIN_AGENT_NOTE_HEIGHT = 96;
@@ -84,7 +85,7 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
           tooltip={
             <>
               Delete note
-              <Kbd>⌫</Kbd>
+              <Kbd>{keyText('edit.delete')}</Kbd>
             </>
           }
           onClick={() => remove(item.id)}

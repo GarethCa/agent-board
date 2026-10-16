@@ -27,5 +27,6 @@ export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' |
     return !isMac && input.code === 'KeyD' ? 'window' : undefined;
   }
   if (WINDOW_CODES.has(input.code)) return 'window';
-  return isMac && input.code === 'KeyI' && !input.shift ? 'window' : undefined;
+  // ⌘I, not ⇧⌘I; off macOS Ctrl+Shift+I, as plain Ctrl+I is Tab.
+  return input.code === 'KeyI' && !(isMac && input.shift) ? 'window' : undefined;
 }

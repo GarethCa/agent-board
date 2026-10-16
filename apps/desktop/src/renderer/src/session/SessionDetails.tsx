@@ -7,7 +7,7 @@ import { checksLabel } from '../board/tile-footer';
 import { agentSetupLine, branchLine } from '../board/AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { errorMessage } from '../../../shared/errors';
-import { withCommand } from '../keys';
+import { keyText } from '../keys/registry';
 import { STATE_LABELS } from '../states';
 import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
 import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
@@ -129,7 +129,7 @@ export function SessionDetails(props: SessionDetailsProps) {
           </>
         )}
         <span className="details-rail-fill" />
-        <IconButton icon={<PanelLeftOpen />} aria-label="Show details" tooltip={<>Show details<Kbd>{withCommand('I')}</Kbd></>} onClick={() => onCollapsed(false)} />
+        <IconButton icon={<PanelLeftOpen />} aria-label="Show details" tooltip={<>Show details<Kbd>{keyText('window.details')}</Kbd></>} onClick={() => onCollapsed(false)} />
       </nav>
     );
   }
@@ -140,7 +140,7 @@ export function SessionDetails(props: SessionDetailsProps) {
     <aside className="session-details" aria-label="Session details" style={{ width }}>
       <div className="session-details-head">
         <span className="session-details-title">Details</span>
-        <Kbd>{withCommand('I')}</Kbd>
+        <Kbd>{keyText('window.details')}</Kbd>
         <IconButton icon={<PanelLeftClose />} size="sm" aria-label="Hide details" tooltip="Collapse to an icon rail" onClick={() => onCollapsed(true)} />
       </div>
       <div className="session-details-sections">

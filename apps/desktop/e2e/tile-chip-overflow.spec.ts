@@ -4,7 +4,7 @@ import { expect, type Locator } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, startCrowdedAgent, tile, zoneNamed } from './agent-helpers.ts';
+import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -98,6 +98,18 @@ test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, b
     const boxes = () => Promise.all(rows.map((row) => row.boundingBox()));
     // The role is already in the +N: one line has room for the model and little more.
     await expect(footer.getByTestId('tile-model')).toBeVisible();
+    // Its description changes as its turn runs, and with it the rows' heights: measure once the turn is over and they
+    // have stopped moving.
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    let last = '';
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await boxes());
+        const settled = now === last;
+        last = now;
+        return settled;
+      })
+      .toBe(true);
     const before = await boxes();
     expect(before.every((box) => box !== null)).toBe(true);
 

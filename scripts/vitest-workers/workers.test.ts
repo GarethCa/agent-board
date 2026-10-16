@@ -24,6 +24,17 @@ describe('worker caps in the Vitest configs', () => {
   });
 });
 
+describe('workerSettings', () => {
+  it('gives the projects different group orders, so unequal worker counts are a valid config', async () => {
+    const { workerSettings } = await import('../../vitest.shared.ts');
+    const counts = { unit: 9, processes: 3, why: 'test' };
+    const unit = workerSettings(counts, 'unit');
+    const processes = workerSettings(counts, 'processes');
+    expect(unit.maxWorkers).not.toBe(processes.maxWorkers);
+    expect(unit.sequence.groupOrder).not.toBe(processes.sequence.groupOrder);
+  });
+});
+
 describe('chooseWorkers', () => {
   it('caps the processes project at 3 on an idle machine and leaves unit at cores - 1', () => {
     expect(chooseWorkers(base)).toMatchObject({ unit: 9, processes: 3 });

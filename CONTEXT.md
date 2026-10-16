@@ -73,6 +73,17 @@ What a double-click (or Enter) on a selected agent's or shell tile opens (a sing
 The Spotlight-style search ⌘K opens (Ctrl+Shift+K off macOS) from any window of the app, the focus in a terminal or a web tab's page too: one field over the agents, shell tiles and zones. Before anything is typed it lists those that need you, then the most recently active, then the zones; typing ranks them in one fuzzy list, by name, then issue, branch, zone and what the agent asks. Its rows follow the board while it is open. On the board, ↵ flies the board to the tile (jumps, with reduced motion), pulses it and selects it, and ⌘↵ opens it as the **click setting** says; in the session window shown on the board, or an expanded tile with the focus, ↵ switches that view to the session, focus in its terminal, as ‹ › do. In a popped-out window, ↵ shows the session in that OS window instead. A session already out in an OS window of its own comes forward there, and the view it was picked from stays as it was. A zone picked is brought into view, the session window or expanded tile closed first; from a popped-out window, the board's window comes forward to show it. With no match it offers a new agent by that name. Esc, or a pick that finds nothing, gives the focus back where it was. The board menu keeps ⌘\, which opens it on its own filter; its Find button opens the switcher.
 _Avoid_: command palette (it runs no commands), quick open
 
+**Key registry**:
+The one list of every key the app answers to (`keys/registry.ts`): for each, an id (`section.action`), its default chords (the platform's modifier rule applied: ⌘ on macOS; Ctrl on the board, Ctrl+Shift where a terminal can have focus elsewhere), where it works (board, tile, window, or terminal-safe), a label, and whether it was there before the registry (`today`), is `new`, or `fix`es an existing key. Handlers match presses against it, and the **cheat sheet**, tooltips and menu hints write keys from it.
+_Avoid_: keymap, shortcut list
+
+**Extended keyboard shortcuts**:
+The setting (Settings, under Keyboard; on by default) that turns the registry's `new` keys on. Off, the app answers only to the keys it had before the registry, plus the `fix`es, which correct bugs. Every window reads the same value.
+
+**Cheat sheet**:
+The overlay listing the registry's active keys by section, those for where it opened first (the board, a selected tile, or a session window), with a filter. `?` opens it on the board and ⌘/ (Ctrl+Shift+/ off macOS) anywhere, both `new`; the board's keyboard button opens it whatever the setting.
+_Avoid_: help popover, shortcut help
+
 **Representation**:
 A swappable way of drawing tiles and subagents. v1 ships only **Hybrid** (calm tile + subagent characters). **Character**, **Token** and **Plain tile** are post-v1.
 
@@ -160,7 +171,7 @@ A family of themes made from another project's palette, such as Catppuccin's fou
 _Avoid_: skin, preset
 
 **Appearance**:
-The setting, under Settings › Appearance, that picks the theme: **System** (the default) follows the OS's light or dark mode, live, between Light and Dark; picking a theme (**Light**, **Dark** or any theme pack's) overrides it. One per user, not per board, and every window follows it at once.
+The setting, under Settings › Appearance, that picks the theme: a mode, **Light**, **Dark** or **System** (the default, which follows the OS's light or dark mode, live), and a **theme choice**, the app's own or a theme pack's family, whose light or dark theme the mode picks. A choice with no theme for the mode shows the app's own there. One per user, not per board, and every window follows it at once.
 _Avoid_: dark mode (a mode of macOS), theme setting
 
 **Theme token**:
@@ -241,7 +252,7 @@ An agent re-run by a schedule or webhook trigger.
 A long-lived agent's cron trigger: a five-field cron expression in the daemon's local time (which follows the system's time zone) and the prompt each run sends. One per agent. Its tile carries a clock badge with the next run. A schedule outlives its agent's session: a run relaunches an ended agent.
 
 **Agent state**:
-One of: `running`, `thinking`, `waiting` (for input), `needs-permission`, `idle`, `rate-limited`, `failed`, `done`, `scheduled`, `stopped-by-restart`, `handing-off` (delivering along its edges, a **hand-off**). `done` means the agent's session has ended, or the user stopped it; `failed` that it crashed or was killed otherwise, or that a turn failed. `scheduled` means a long-lived agent sits at its prompt waiting for its next run, not for you; it is never in the needs-you inbox. A scheduled agent whose last message asks you something is `waiting` instead. `stopped-by-restart` is the state an agent is **stopped by restart** in.
+One of: `running`, `thinking`, `waiting` (for input), `needs-permission`, `idle`, `rate-limited`, `failed`, `done`, `scheduled`, `stopped-by-restart`, `handing-off` (delivering along its edges, a **hand-off**), `starting` (started with a first prompt, before its session's first hook: its turn has not begun, so it is never `idle` and takes no message yet; drawn as running, labelled starting). `done` means the agent's session has ended, or the user stopped it; `failed` that it crashed or was killed otherwise, or that a turn failed. `scheduled` means a long-lived agent sits at its prompt waiting for its next run, not for you; it is never in the needs-you inbox. A scheduled agent whose last message asks you something is `waiting` instead. `stopped-by-restart` is the state an agent is **stopped by restart** in.
 
 **Stopped by restart**:
 A session whose process ended because the daemon went away under it (a crash, a shutdown, the machine restarting), not because it exited or the user stopped it. It shows its last output with a **Resume**: an agent's tile in its hover corner and ⋯ menu, under a dashed **stopped** look; a shell tile in a row of its own; a session window in a banner over the terminal. A banner counts them all, with **Resume all**: nothing starts again, and no tokens are spent, until the user picks. Resuming carries on an agent's conversation (`claude --resume`, `codex resume`), or starts a new shell in a pane's last folder under its old output, marked restored. An agent with a schedule is never stopped by restart: its schedule relaunches it.

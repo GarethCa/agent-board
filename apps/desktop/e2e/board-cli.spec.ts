@@ -29,7 +29,7 @@ test('a shell tile runs agent-board identify and sees its own tile and zone', as
   }
 });
 
-test('an agent sets its status with agent-board status set (after the MCP set_status), and its tile shows it in place of its task, without the percentage once its turn has ended', async () => {
+test('an agent sets its status with agent-board status set (after the MCP set_status), and its tile shows it in place of its task, then its last message once its turn has ended', async () => {
   const { dir, repo, env } = scratch('board');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -39,11 +39,11 @@ test('an agent sets its status with agent-board status set (after the MCP set_st
 
     await spawnAgent(window, 'monorepo', 'Moving session ids to the daemon');
 
-    // Its CLI commands each start the app's executable as Node: a turn's worth of time, not a moment's. It set 10% and
-    // 20% mid-turn; its turn over, the tile keeps the summary and drops the percentage.
-    // The task reads the same, so the title (which has the status in it) says the status is set first.
-    await expect(tile(window).getByTestId('tile-description')).toHaveAttribute('title', /Task: Moving session ids to the daemon$/, { timeout: TURN_MS });
-    await expect(tile(window).getByTestId('tile-description')).toHaveText('Moving session ids to the daemon', { timeout: TURN_MS });
+    // Its CLI commands each start the app's executable as Node: a turn's worth of time, not a moment's. It sets 10%
+    // through the MCP and 20% through the CLI, mid-turn; its status stands in place of its task while it works.
+    await expect(tile(window).getByTestId('tile-description')).toHaveAttribute('title', /^Moving session ids to the daemon · 20%\n\nTask: Moving session ids to the daemon$/, { timeout: TURN_MS });
+    // Its turn over, it waits for you and the tile shows its last message instead (the percentage going is a unit test's).
+    await expect(tile(window).getByTestId('tile-ask')).toHaveText('I know where I am.', { timeout: TURN_MS });
   } finally {
     await app.close();
     await removeDataDir(dataDir);

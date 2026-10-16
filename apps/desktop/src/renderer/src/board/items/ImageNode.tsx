@@ -5,6 +5,7 @@ import { imageUrl } from '../../../../shared/image-url';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { Trash2 } from 'lucide-react';
 import { IconButton, Kbd } from '../../ui';
+import { keyText } from '../../keys/registry';
 
 const MIN_IMAGE_SIZE = 40;
 
@@ -59,7 +60,7 @@ export const ImageNode = memo(function ImageNode({ data, selected: picked, dragg
           tooltip={
             <>
               Delete image
-              <Kbd>⌫</Kbd>
+              <Kbd>{keyText('edit.delete')}</Kbd>
             </>
           }
           onClick={() => remove(item.id)}

@@ -85,8 +85,13 @@ export function workerCounts(): WorkerCounts {
   return counts;
 }
 
-/** A project's worker cap, and why (for announce.ts, which prints once the config has loaded; knip and others stay quiet). */
+/**
+ * A project's worker cap, and why (for announce.ts, which prints once the config has loaded; knip and others stay quiet).
+ * Each project gets its own `sequence.groupOrder`: Vitest refuses to start when two projects with different
+ * `maxWorkers` share one, and the counts differ whenever the load is low.
+ */
 export const workerSettings = (counts: WorkerCounts, project: 'unit' | 'processes') => ({
   maxWorkers: counts[project],
+  sequence: { groupOrder: project === 'unit' ? 0 : 1 },
   env: { AGENT_BOARD_VITEST_WHY: counts.why },
 });

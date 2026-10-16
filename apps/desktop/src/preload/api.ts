@@ -1145,7 +1145,7 @@ export const APPEARANCE_IPC = {
   changed: 'appearance:changed',
 } as const;
 
-/** The Appearance setting: System or a theme. Every window follows it at once. */
+/** The Appearance setting: a mode (Light, Dark or System) and a theme choice. Every window follows it at once. */
 export interface AppearanceApi {
   /** The setting as this window opened (`WINDOW_QUERY.appearance`), so its first paint is in the right theme. */
   initial: Appearance;

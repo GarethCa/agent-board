@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { constants, homedir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import xtermHeadless from '@xterm/headless';
@@ -85,6 +85,8 @@ export interface SessionHostOptions {
   killGraceMs?: number;
   /** Called when a session's process has exited and its row is marked ended, before clients hear of it. */
   onExit?(session: SessionInfo): void;
+  /** Called as a session's process prints something. */
+  onOutput?(sessionId: string): void;
   /**
    * Where each session's screen and scrollback are saved, so an ended session still shows its last output, after a
    * restart too. Nothing is saved without it.
@@ -190,9 +192,9 @@ export interface SessionHost {
   resize(sessionId: string, size: TerminalSize): void;
   /**
    * Ends the session (SIGHUP, then SIGKILL after a grace period) and resolves once it has exited. A session that is
-   * already exiting resolves the same way.
+   * already exiting resolves the same way. `why` says what had the daemon end it, for the log line of its exit.
    */
-  kill(sessionId: string): Promise<SessionInfo>;
+  kill(sessionId: string, why: string): Promise<SessionInfo>;
   /**
    * Ends every session. `stoppedByRestart` when the daemon is going away (shutting down, perhaps for a reboot), not
    * the user: the sessions are marked stopped by restart, so the app offers to resume them.
@@ -276,8 +278,11 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   const { scrollbackDir } = options;
   if (scrollbackDir !== undefined) mkdirSync(scrollbackDir, { recursive: true, mode: 0o700 });
   const screenFile = (sessionId: string) => join(scrollbackDir!, `${sessionId}.json`);
-  /** Sessions the user (or the daemon, on their behalf) is ending, which a shutdown then doesn't count as its doing. */
-  const killing = new Set<string>();
+  /**
+   * Sessions the user (or the daemon, on their behalf) is ending, which a shutdown then doesn't count as its doing:
+   * what had the daemon end each one.
+   */
+  const killing = new Map<string, string>();
   /** Live sessions by the SHA-256 of their board token. Only in memory: a session can't outlive the daemon. */
   const boardTokens = new Map<string, string>();
   /** Sessions the daemon is ending because it is going away: they are stopped by restart. */
@@ -495,6 +500,7 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     let paused = false;
     backend.attach(id, {
       onData(data) {
+        options.onOutput?.(id);
         unparsed += data.length;
         model.write(data, () => {
           unparsed -= data.length;
@@ -528,6 +534,12 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
           exitCode: exitCode(exit),
           stoppedByRestart: stoppedByShutdown.has(id),
         };
+        // Anything that ends a harness logs why: one ended by a signal the daemon never sent was ended from outside.
+        const endedBy = killing.get(id) ?? (stoppedByShutdown.has(id) ? 'its shutdown' : undefined);
+        options.log(
+          `${harness ?? 'shell'} session ${id} (pid ${terminal.pid}) exited ${exitHow(exit)}, ` +
+            (endedBy === undefined ? 'not ended by the daemon' : `ended by the daemon for ${endedBy}`),
+        );
         killing.delete(id);
         stoppedByShutdown.delete(id);
         if (boardTokenSha256 !== undefined) boardTokens.delete(boardTokenSha256);
@@ -591,14 +603,18 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       session.info = { ...session.info, cols, rows };
     },
 
-    kill(sessionId) {
-      if (sessions.has(sessionId)) killing.add(sessionId);
+    kill(sessionId, why) {
+      if (sessions.has(sessionId) && !killing.has(sessionId)) killing.set(sessionId, why);
       return kill(sessionId);
     },
 
     async killAll({ stoppedByRestart }) {
       // A session the user is already stopping ends by their hand, not the shutdown's.
-      if (stoppedByRestart) for (const id of sessions.keys()) if (!killing.has(id)) stoppedByShutdown.add(id);
+      for (const id of sessions.keys()) {
+        if (killing.has(id)) continue;
+        if (stoppedByRestart) stoppedByShutdown.add(id);
+        else killing.set(id, 'its stop');
+      }
       await Promise.all([...sessions.keys()].map(kill));
     },
 
@@ -707,6 +723,13 @@ function withBoardEnv(
 
 function exitCode(exit: TerminalExit): number | null {
   return exit.signal ? null : exit.exitCode;
+}
+
+/** How the process ended, for the log: on a signal, by name where it has one, or with its exit code. */
+function exitHow(exit: TerminalExit): string {
+  if (!exit.signal) return `with code ${exit.exitCode}`;
+  const name = Object.entries(constants.signals).find(([, number]) => number === exit.signal)?.[0];
+  return `on ${name ?? `signal ${exit.signal}`}`;
 }
 
 function isDirectory(path: string): boolean {

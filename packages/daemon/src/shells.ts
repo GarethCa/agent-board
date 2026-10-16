@@ -463,7 +463,7 @@ export function createShellHost(options: {
 
   /** Ends the session if it is still live, and forgets its output: nothing will show the pane again. */
   const endPane = async (sessionId: string): Promise<void> => {
-    if (sessions.list().some((session) => session.id === sessionId)) await sessions.kill(sessionId);
+    if (sessions.list().some((session) => session.id === sessionId)) await sessions.kill(sessionId, 'its pane closing');
     sessions.forget(sessionId);
   };
 
@@ -502,7 +502,7 @@ export function createShellHost(options: {
           if (script !== undefined) sessions.write(pane.id, `${scriptCommand(scripts!.runner, script)}\r`);
           return tab;
         } catch (error) {
-          void sessions.kill(pane.id);
+          void sessions.kill(pane.id, 'a failed open');
           throw error;
         }
       },
@@ -525,7 +525,7 @@ export function createShellHost(options: {
         try {
           return announce(get(insertShell(pane, zoneId, cwd, place)));
         } catch (error) {
-          void sessions.kill(pane.id);
+          void sessions.kill(pane.id, 'a failed open');
           throw error;
         }
       },
@@ -577,7 +577,7 @@ export function createShellHost(options: {
           try {
             return save(shellId, splitPane(shell.layout, sessionId, direction, pane.id, randomUUID()));
           } catch (error) {
-            void sessions.kill(pane.id);
+            void sessions.kill(pane.id, 'a failed open');
             throw error;
           }
         });
@@ -607,7 +607,7 @@ export function createShellHost(options: {
           notTheAgent(shell, sessionId);
           if (!shell.endedPanes.includes(sessionId)) throw invalidParams('that pane is still running');
           // Its exit is told before it has finished: wait for that, or there is no starting it again yet.
-          await sessions.kill(sessionId).catch(() => {});
+          await sessions.kill(sessionId, 'its restart').catch(() => {});
           // Where its shell last was, else where the tile's shells start, else home: a folder may have gone since.
           const lastCwd = (paneSession.get(sessionId) as PaneSession | undefined)?.last_cwd ?? null;
           const cwd = [lastCwd, shell.cwd].find((folder) => folder !== null && isDirectory(folder)) ?? homeDir;

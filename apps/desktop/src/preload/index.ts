@@ -30,7 +30,7 @@ import {
   type WebTabKey,
   type WebTabState,
 } from './api';
-import { appearanceFrom } from '../shared/appearance';
+import { appearanceFromQuery } from '../shared/appearance';
 import { ipcErrorMessage } from '../shared/errors';
 import { ipcCalls } from './ipc';
 
@@ -273,7 +273,7 @@ const api: AgentBoardApi = {
     set: (key, value) => invoke(VIEW_IPC.set, key, value),
   },
   appearance: {
-    initial: appearanceFrom(new URLSearchParams(location.search).get(WINDOW_QUERY.appearance)),
+    initial: appearanceFromQuery(new URLSearchParams(location.search).get(WINDOW_QUERY.appearance)),
     get: () => invoke(APPEARANCE_IPC.get),
     set: (appearance) => invoke(APPEARANCE_IPC.set, appearance),
     onChanged: (listener) => subscribe(APPEARANCE_IPC.changed, listener),

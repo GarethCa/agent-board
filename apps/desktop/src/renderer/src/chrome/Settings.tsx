@@ -4,11 +4,14 @@ import type { ConnectionsView } from '../board/connections-view';
 import type { CrewLook } from '../board/crew-view';
 import type { AgentNoteLook } from '../board/items/agent-note-look';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
+import { CompactWindowSetting } from './CompactWindowSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { daemonStatusText, type DaemonStatusValue } from '../DaemonStatus';
 import { Choice, Choices, Fieldset, Hint, SectionLabel, Segmented, Tag } from '../ui';
 import { AppearanceSetting } from './AppearanceSetting';
 import { CliInstallSetting } from './CliInstallSetting';
+import { KeyboardSetting } from './KeyboardSetting';
+import { keyText } from '../keys/registry';
 
 export interface SettingsProps {
   status: DaemonStatusValue;
@@ -30,8 +33,8 @@ export interface SettingsProps {
 
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
- * Dark), the paths of `claude` and `codex`, what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
- * daemon's status, and how agent notes look.
+ * Dark), the paths of `claude` and `codex`, the context size Claude agents compact at, what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
+ * daemon's status, how agent notes look, and whether the extended keyboard shortcuts work.
  */
 export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook }: SettingsProps) {
   return (
@@ -39,6 +42,7 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
       <ExternalHooksToggle onError={onError} />
       <HeldPayloadsSetting onError={onError} />
       <HarnessPathSettings onError={onError} />
+      <CompactWindowSetting onError={onError} />
       <AppearanceSetting onError={onError} />
       <SectionLabel as="h4">Board</SectionLabel>
       <Fieldset legend="Double-clicking a tile opens">
@@ -75,7 +79,7 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
           value={connections}
           onChange={onConnections}
         />
-        <Hint>Hiding only changes the view: hand-offs still go. Any object shows how many it has hidden. Its own show while it is selected or hovered, and a moment after, to reach one; a selected one stays. ⇧E cycles them.</Hint>
+        <Hint>Hiding only changes the view: hand-offs still go. Any object shows how many it has hidden. Its own show while it is selected or hovered, and a moment after, to reach one; a selected one stays. {keyText('move.connections')} cycles them.</Hint>
       </Fieldset>
       <Fieldset legend="Agent notes">
         <Segmented
@@ -111,6 +115,8 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
           />
         </Choices>
       </Fieldset>
+      <SectionLabel as="h4">Keyboard</SectionLabel>
+      <KeyboardSetting />
       <CliInstallSetting onError={onError} />
       <Hint data-testid="daemon-details">{daemonStatusText(status)}</Hint>
     </div>

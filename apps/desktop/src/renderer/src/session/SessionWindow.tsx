@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 import type { AgentState } from '@agent-board/daemon/protocol';
 import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, MessageSquare, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
-import { commandKey, windowShortcut, withWindowShortcut } from '../keys';
+import { keyText, pressed, type KeyId } from '../keys/registry';
 import { agentPill, STATE_LABELS } from '../states';
 import { Button, IconButton, Kbd, Menu, Segmented, StatusPill, Tabs, useToast, type SegmentedOption } from '../ui';
 import { ReviewViewer } from '../review/ReviewViewer';
@@ -117,7 +117,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   // ⌘I shows or hides the details.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!commandKey(event) || event.altKey || event.shiftKey || event.key !== 'i') return;
+      if (!pressed('window.details', event)) return;
       event.preventDefault();
       setDetailsCollapsed((collapsed) => !collapsed);
     };
@@ -302,21 +302,21 @@ function NavButtons({ nav }: { nav: WindowNav }) {
   // are taken even for a session alone in its group: restacking the board's selection behind this window would go unseen.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const key = windowShortcut(event);
-      if (key !== 'BracketLeft' && key !== 'BracketRight') return;
+      const step = pressed('window.previous', event) ? -1 : pressed('window.next', event) ? 1 : undefined;
+      if (step === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      if (navRef.current.count > 1) navRef.current.onStep(key === 'BracketLeft' ? -1 : 1);
+      if (navRef.current.count > 1) navRef.current.onStep(step);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
-  const preview = (label: string, to: { name: string; state?: AgentState }, key: string) => (
+  const preview = (label: string, to: { name: string; state?: AgentState }, key: KeyId) => (
     <span className="session-nav-preview">
       <span className="session-nav-preview-muted">{label}</span>
       {to.name}
       {to.state !== undefined && <span className="session-nav-preview-muted">· {STATE_LABELS[to.state]}</span>}
-      <Kbd>{withWindowShortcut(key)}</Kbd>
+      <Kbd>{keyText(key)}</Kbd>
     </span>
   );
   const alone = count < 2;
@@ -327,7 +327,7 @@ function NavButtons({ nav }: { nav: WindowNav }) {
         icon={<ChevronLeft />}
         size="sm"
         aria-label="Previous session"
-        tooltip={alone ? undefined : preview('Previous', nav.previous, '[')}
+        tooltip={alone ? undefined : preview('Previous', nav.previous, 'window.previous')}
         disabled={alone}
         onClick={() => onStep(-1)}
       />
@@ -335,7 +335,7 @@ function NavButtons({ nav }: { nav: WindowNav }) {
         icon={<ChevronRight />}
         size="sm"
         aria-label="Next session"
-        tooltip={alone ? undefined : preview('Next', nav.next, ']')}
+        tooltip={alone ? undefined : preview('Next', nav.next, 'window.next')}
         disabled={alone}
         onClick={() => onStep(1)}
       />

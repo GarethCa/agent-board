@@ -60,10 +60,18 @@ export interface PackTheme {
   /** What Settings › Appearance calls it. */
   name: string;
   scheme: 'light' | 'dark';
+  /**
+   * A choice of its own in the picker rather than its family's light or dark side: the family's extra variants for one
+   * mode, such as Catppuccin's Frappé and Macchiato beside Mocha, taking the family's theme for the other mode. Without it a
+   * family has at most one theme per mode.
+   */
+  ownChoice?: boolean;
   palette: PackPalette;
 }
 
 export interface ThemePack {
+  /** What the Appearance setting saves when the family is picked; never changes once shipped. */
+  id: string;
   /** The family's name in the picker. */
   family: string;
   /** Its attribution line, shown under the family in the picker. */
@@ -91,6 +99,7 @@ const STEEL = { well: '#0b0b0b', ink: '#f4f4f4', ansi: ['#393939', '#fa4d56', '#
 
 export const THEME_PACKS = [
   {
+    id: 'catppuccin',
     family: 'Catppuccin',
     credit: 'Catppuccin · MIT · github.com/catppuccin/catppuccin',
     themes: [
@@ -107,6 +116,7 @@ export const THEME_PACKS = [
       },
       {
         id: 'catppuccin-frappe',
+        ownChoice: true,
         name: 'Catppuccin Frappé',
         scheme: 'dark',
         palette: {
@@ -118,6 +128,7 @@ export const THEME_PACKS = [
       },
       {
         id: 'catppuccin-macchiato',
+        ownChoice: true,
         name: 'Catppuccin Macchiato',
         scheme: 'dark',
         palette: {
@@ -141,6 +152,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'rose-pine',
     family: 'Rosé Pine',
     credit: 'Rosé Pine · MIT · rosepinetheme.com',
     themes: [
@@ -170,6 +182,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'dracula',
     family: 'Dracula',
     // The OSS palette only (Dracula and Alucard in its README), never Dracula PRO's.
     credit: 'Dracula Theme · MIT · draculatheme.com (OSS palette)',
@@ -200,6 +213,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'nord',
     family: 'Nord',
     credit: 'Nord by Sven Greb · MIT · nordtheme.com',
     themes: [
@@ -217,6 +231,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'gruvbox',
     family: 'Gruvbox',
     credit: 'Gruvbox by morhetz · MIT/X11 · github.com/morhetz/gruvbox',
     themes: [
@@ -246,6 +261,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'solarized',
     family: 'Solarized',
     credit: 'Solarized by Ethan Schoonover · MIT',
     themes: [
@@ -274,6 +290,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'tokyo-night',
     family: 'Tokyo Night',
     // enkia's original theme (MIT), not the Neovim port's Storm, Moon or Day.
     credit: 'Tokyo Night by enkia · MIT',
@@ -304,6 +321,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'one',
     family: 'One',
     credit: 'One Dark / One Light, Atom project · MIT',
     themes: [
@@ -332,6 +350,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'everforest',
     family: 'Everforest',
     credit: 'Everforest by sainnhe · MIT',
     themes: [
@@ -360,6 +379,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'kanagawa',
     family: 'Kanagawa',
     credit: 'Kanagawa by rebelot · MIT',
     themes: [
@@ -388,6 +408,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'clear-sight',
     family: 'Clear Sight',
     // The colour-blind-safe pack: running (bluish green), waiting (orange) and failed (vermillion) stay apart for protan,
     // deutan and tritan vision, and every pill keeps its word. The neutrals and the ANSI brights are derived.
@@ -418,6 +439,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'sand-indigo',
     family: 'Sand & Indigo',
     // Radix's sand, indigo, grass, orange and red scales, with their own text (11, 12) and soft (3) steps.
     credit: 'Built on Radix Colors · MIT',
@@ -451,6 +473,7 @@ export const THEME_PACKS = [
     ],
   },
   {
+    id: 'steel',
     family: 'Steel',
     // IBM Carbon's grey and blue 60 scales, under a neutral name: IBM's marks stay out of product names.
     credit: 'Colours from IBM Carbon · Apache-2.0',

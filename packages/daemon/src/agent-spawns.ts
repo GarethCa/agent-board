@@ -79,6 +79,7 @@ interface AgentSpawnOptions
     | 'ensureHookShim'
     | 'boardCliPath'
     | 'env'
+    | 'compactWindow'
     | 'shell'
     | 'shellArgs'
     | 'hookUrl'
@@ -99,6 +100,8 @@ interface AgentSpawnOptions
   repoZoneFor(zoneId: string | null, repoRoot: string): ZoneRow | undefined;
   /** Tells every client about the agent. */
   announce(sessionId: string): void;
+  /** The agent was started with a first prompt, which its session has yet to take up. */
+  promptQueued(sessionId: string): void;
   /**
    * Watches the agent just launched: a bypassed Codex agent's worktree for project config, and a Codex agent carrying
    * on conversation `codexSessionId` for `codex resume` failing.
@@ -236,6 +239,9 @@ export function createAgentSpawns(
     const env = { ...options.harnessPaths.launchEnv(options.env) };
     // A daemon started from inside Claude Code must not make its agents think they are nested in it.
     delete env.CLAUDECODE;
+    // Only Claude Code has a knob for it, and only when the setting is on: off leaves whatever the user's own env has.
+    const compactWindow = options.compactWindow();
+    if (harness === 'claude' && compactWindow > 0) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(compactWindow);
     sessions.start({
       id,
       harness,
@@ -488,6 +494,7 @@ export function createAgentSpawns(
           reviews?.branch ?? null,
           reviews?.head ?? null,
         );
+        if (firstMessage !== '') options.promptQueued(id);
         if (readOnly) setReadOnly.run(id);
         if (spawnedBy !== undefined) setCrewDepth.run(spawnedBy, id);
         if (reviews !== null) insertBranchReview.run(repoRoot, reviews.branch, reviews.head, id);
@@ -568,6 +575,7 @@ export function createAgentSpawns(
         null,
         null,
       );
+      options.promptQueued(id);
       options.log(`spawned ${implementer.harness} reviewer ${id} of ${of} on ${branch} in ${worktree}`);
       announce(id);
       return get(id)!;

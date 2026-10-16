@@ -1,6 +1,8 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import type { PointerMode } from '../chrome/CreateToolbar';
+import { inOverlay } from '../keys';
+import { pressed } from '../keys/registry';
 import { boardKey, CONTROLS } from './board-shortcuts';
 import { tileOpenAction, type ClickOpens } from './click-opens';
 import type { SelectionSummary } from './editing/use-editing';
@@ -32,6 +34,8 @@ interface BoardShortcutsOptions {
   cycleConnections(): void;
   /** Opens the shape palette at `at` on the screen: where the pointer is, or undefined when it is off the board. */
   openQuickInsert(at: { x: number; y: number } | undefined): void;
+  /** Opens the keyboard cheat sheet. */
+  openCheatSheet(): void;
 }
 
 /** The board's own keys: N, the tool keys, V, B, H, ⇧E, / and Escape; F2 to rename the one tile selected; and Enter to open it. */
@@ -52,10 +56,11 @@ export function useBoardShortcuts({
   requestRename,
   cycleConnections,
   openQuickInsert,
+  openCheatSheet,
 }: BoardShortcutsOptions) {
   // N adds a note at the pointer, or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, B box-selects, H pans.
-  // / puts any tool down and opens the shape palette at the pointer.
+  // / puts any tool down and opens the shape palette at the pointer. ? opens the cheat sheet.
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -68,12 +73,15 @@ export function useBoardShortcuts({
         if (event.defaultPrevented || (active !== null && active !== document.body && active.closest('.react-flow') === null)) return;
         return collapseFrontTile();
       }
+      // A popover or menu has the keyboard (a Needs-you button, say): its keys are its own, not the board's.
+      if (inOverlay()) return;
       // F2 has asked a tile to open its name field, which is yet to take the keys: they are the name's, not a shortcut.
       if (renameRequest !== undefined) return;
       event.preventDefault();
       if (shortcut.kind === 'note') createItem('sticky', pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
       else if (shortcut.kind === 'tool') setTool((current) => (current === shortcut.tool ? undefined : shortcut.tool));
       else if (shortcut.kind === 'connections') cycleConnections();
+      else if (shortcut.kind === 'cheatSheet') openCheatSheet();
       else if (shortcut.kind === 'insert') {
         setTool(undefined);
         openQuickInsert(pointer.current);
@@ -82,13 +90,13 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, openQuickInsert]);
+  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, openQuickInsert, openCheatSheet]);
 
   // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded).
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'F2' || event.metaKey || event.ctrlKey || event.altKey || isTyping(event)) return;
+      if (!pressed('tile.rename', event) || event.metaKey || event.ctrlKey || isTyping(event)) return;
       const { nodes, renamable } = selection();
       if (!renamable) return;
       event.preventDefault();
@@ -102,7 +110,7 @@ export function useBoardShortcuts({
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isTyping(event)) return;
+      if (!pressed('tile.open', event) || event.metaKey || event.ctrlKey || isTyping(event)) return;
       // A focused control (a tile's button, a menu item) takes its own Enter, and so does anything in a window or dialog
       // open over the board (the selected tile is behind it). Only the board itself, or a tile on it, opens a tile.
       const target = event.target as HTMLElement;

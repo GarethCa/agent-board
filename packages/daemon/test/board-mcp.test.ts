@@ -95,7 +95,9 @@ describe('the board MCP server in an agent', () => {
     expect(screen).toContain('There is no agent-board MCP server here.');
     expect(screen).toContain('(an agent)');
     // Only `agent-board status set`, in its shell, set its status.
-    expect((await client.call('agent.list'))[0]!.status).toMatchObject({ summary: 'Look around', progress: 20 });
+    // (A finished turn drops the progress, so watch the update that carried it rather than the list afterwards.)
+    const updated = await untilAgent(recorder, agent.sessionId, (seen) => seen.status?.progress === 20);
+    expect(updated.status).toMatchObject({ summary: 'Look around', progress: 20 });
   });
 });
 

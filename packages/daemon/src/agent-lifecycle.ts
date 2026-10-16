@@ -154,7 +154,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     options.log(`stopping codex agent ${sessionId}: ${path} appeared while it ran with ${CODEX_BYPASS_FLAG}`);
     const agent = get(sessionId);
     if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
-    sessions.kill(sessionId).catch((error: Error) => options.log(`could not stop ${sessionId}: ${error.message}`));
+    sessions.kill(sessionId, 'project config appearing').catch((error: Error) => options.log(`could not stop ${sessionId}: ${error.message}`));
   };
 
   /** The id Claude knows the agent's conversation by: its session id, until a fresh restart started another. */
@@ -181,7 +181,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       if (existsSync(row.cwd)) void options.harnessPaths.refresh(row.harness);
       return { started: false, reason: refusal };
     }
-    void endFallbackShell(sessionId);
+    void endFallbackShell(sessionId, `relaunch ${why}`);
     if (row.harness === 'codex') {
       try {
         options.ensureHookShim();
@@ -253,7 +253,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
    * conversation in its worktree, once its old session has finished exiting, and says why on its tile.
    */
   const startAfresh = (sessionId: string) => {
-    void sessions.kill(sessionId).then(() => {
+    void sessions.kill(sessionId, 'a fresh start').then(() => {
       const row = getRow(sessionId);
       if (row === undefined || row.ended_at === null) return;
       const started = relaunch(row, undefined, "afresh: Codex couldn't resume its conversation", null);
@@ -269,7 +269,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
    * nor for an ephemeral reviewer, which the daemon itself stops once its review is in.
    */
   const startFallbackShell = (sessionId: string) => {
-    void sessions.kill(sessionId).then(() => {
+    void sessions.kill(sessionId, 'its fallback shell').then(() => {
       const row = getRow(sessionId);
       if (closed || deleting.has(sessionId) || row === undefined || row.ended_at === null || row.review_of !== null || fallbackShells.has(sessionId)) return;
       if (!existsSync(row.cwd)) return;
@@ -284,12 +284,12 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   };
 
   /** Ends the shell the agent's pane dropped into, if any, and resolves once it has exited. */
-  const endFallbackShell = async (sessionId: string): Promise<void> => {
+  const endFallbackShell = async (sessionId: string, why: string): Promise<void> => {
     const shellId = fallbackShells.get(sessionId);
     if (shellId === undefined) return;
     fallbackShells.delete(sessionId);
     fallbackOwners.delete(shellId);
-    await sessions.kill(shellId).catch((error: Error) => options.log(`could not end the shell ${shellId}: ${error.message}`));
+    await sessions.kill(shellId, `its agent's ${why}`).catch((error: Error) => options.log(`could not end the shell ${shellId}: ${error.message}`));
     sessions.forget(shellId);
   };
 
@@ -346,7 +346,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       fallbackOwners.delete(shellId);
       fallbackShells.delete(owner);
       // Forgotten once its exit has finished: its screen is saved then, and would be written back after a forget now.
-      void sessions.kill(shellId).catch(() => {}).then(() => sessions.forget(shellId));
+      void sessions.kill(shellId, 'its exit').catch(() => {}).then(() => sessions.forget(shellId));
       announce(owner);
       return true;
     },
@@ -361,7 +361,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
 
     isDeleting: (sessionId) => deleting.has(sessionId),
 
-    async delete(sessionId, force, keepWorktree = false, keepBranch = false) {
+    async delete(sessionId, why, force, keepWorktree = false, keepBranch = false) {
       const agent = requireAgent(sessionId);
       // Its own repo, wherever its tile sits.
       const { repoRoot } = agent;
@@ -372,8 +372,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       stopGuard(sessionId);
       deleting.add(sessionId);
       try {
-        if (agent.endedAt === null) await sessions.kill(sessionId);
-        await endFallbackShell(sessionId);
+        if (agent.endedAt === null) await sessions.kill(sessionId, `its delete for ${why}`);
+        await endFallbackShell(sessionId, `delete for ${why}`);
         await options.endTabs?.(sessionId);
         if (agent.reviews !== null) keepReview(sessionId, agent.worktree);
         // An agent adopted in the user's own folder takes nothing of theirs with it.
@@ -394,29 +394,29 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       deliveries.forget(sessionId);
       permissions.drop(sessionId);
       transcripts.forget(sessionId);
-      options.log(`deleted agent ${sessionId}${agent.ownsWorktree ? ` and its worktree ${agent.worktree}` : ''}`);
+      options.log(`deleted agent ${sessionId}${agent.ownsWorktree ? ` and its worktree ${agent.worktree}` : ''} for ${why}`);
       options.broadcast({ type: 'agent.removed', sessionId });
     },
 
-    async stop(sessionId) {
+    async stop(sessionId, why) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has already ended`);
       stopping.add(sessionId);
       try {
-        await sessions.kill(sessionId);
+        await sessions.kill(sessionId, why);
       } finally {
         stopping.delete(sessionId);
       }
       return get(sessionId)!;
     },
 
-    async resume(sessionId, force, fresh) {
+    async resume(sessionId, asked, force, fresh) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt === null) throw invalidParams(`${agent.name} is still running`);
       // The daemon ends a reviewer once its review is in, and its round with it: a restart wouldn't reopen the round.
       if (agent.reviewOf !== null && agent.state !== 'stopped-by-restart') throw invalidParams(`${agent.name} is a reviewer whose round is over`);
       // Its session may still be finishing its exit, which a new one under the same id would collide with.
-      await sessions.kill(sessionId).catch(() => {});
+      await sessions.kill(sessionId, `its restart for ${asked}`).catch(() => {});
       const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
       // Two harness instances never share its worktree: not even with `force`. Read now, not as of the last quiet save.
       if (shell !== undefined && (await sessions.shellHarnessNow(shell.id)) === agent.harness) {
@@ -425,7 +425,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       if (shell !== undefined && !force && (await isRunningSomething(shell.pid))) {
         throw new RpcMethodError(AGENT_ERROR.shellBusy, `${agent.name}'s shell is running something`);
       }
-      await endFallbackShell(sessionId);
+      await endFallbackShell(sessionId, `restart for ${asked}`);
       let row = getRow(sessionId);
       if (row === undefined || row.ended_at === null) return requireAgent(sessionId);
       const previous = { conversation: row.harness_session_id, transcript: row.transcript_path };
@@ -434,7 +434,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         startConversation.run(row.harness === 'claude' ? randomUUID() : null, sessionId);
         row = getRow(sessionId)!;
       }
-      const why = fresh !== undefined ? 'with a new conversation' : agent.state === 'stopped-by-restart' ? 'to resume it after a restart' : 'to restart it';
+      const how = fresh !== undefined ? 'with a new conversation' : agent.state === 'stopped-by-restart' ? 'to resume it after a restart' : 'to restart it';
+      const why = `${how}, for ${asked}`;
       const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined);
       if (fresh !== undefined) {
         if (!resumed.started) restoreConversation.run(previous.conversation, previous.transcript, sessionId);

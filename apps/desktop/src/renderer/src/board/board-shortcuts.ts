@@ -1,6 +1,7 @@
 // The board's keys: which single keys are shortcuts, and where on the page a key or click belongs to something else.
 import type { PointerMode } from '../chrome/CreateToolbar';
 import { centreOf, type Point, type Rect } from '../geometry';
+import { pressed, type KeyId } from '../keys/registry';
 import type { ArmedTool } from './ToolOverlay';
 import { isTyping } from './use-tile-moves';
 
@@ -11,31 +12,41 @@ export const KEY_BLOCKERS = '[role="dialog"], [role="alertdialog"], [data-testid
 /** What a click on a node presses rather than the node itself: its buttons, fields and links, and what takes input. */
 export const CONTROLS = 'button, a, input, textarea, select, [role="menuitem"], .nodrag, .editable-name';
 
-/** The keys that pick how a drag acts: V selects and moves, B box-selects, H pans. */
-const MODE_KEYS: Record<string, PointerMode> = { v: 'select', b: 'box', h: 'hand' };
-
-/** The keys that arm a tool (T, S, Z, A and `). */
-const TOOL_KEYS: Record<string, ArmedTool> = { t: 'text', s: 'shape', z: 'zone', a: 'agent', '`': 'shell' };
+/** What each of the board's single keys asks of it, by its registry entry. */
+const SHORTCUTS: readonly (readonly [KeyId, BoardShortcut])[] = [
+  ['edit.escape', { kind: 'escape' }],
+  ['make.insert', { kind: 'insert' }],
+  ['move.connections', { kind: 'connections' }],
+  ['make.note', { kind: 'note' }],
+  ['make.text', { kind: 'tool', tool: 'text' }],
+  ['make.shape', { kind: 'tool', tool: 'shape' }],
+  ['make.zone', { kind: 'tool', tool: 'zone' }],
+  ['make.agent', { kind: 'tool', tool: 'agent' }],
+  ['make.shell', { kind: 'tool', tool: 'shell' }],
+  ['move.select', { kind: 'mode', mode: 'select' }],
+  ['move.box', { kind: 'mode', mode: 'box' }],
+  ['move.hand', { kind: 'mode', mode: 'hand' }],
+  ['move.cheatSheet', { kind: 'cheatSheet' }],
+];
 
 /** What a single key asks of the board. */
-export type BoardShortcut = { kind: 'escape' } | { kind: 'note' } | { kind: 'tool'; tool: ArmedTool } | { kind: 'mode'; mode: PointerMode } | { kind: 'connections' } | { kind: 'insert' };
+export type BoardShortcut =
+  | { kind: 'escape' }
+  | { kind: 'note' }
+  | { kind: 'tool'; tool: ArmedTool }
+  | { kind: 'mode'; mode: PointerMode }
+  | { kind: 'connections' }
+  | { kind: 'insert' }
+  | { kind: 'cheatSheet' };
 
 /**
  * The shortcut a key press is, if any: N adds a note; T, S, Z, A and ` arm a tool; V selects, B box-selects and H pans;
- * ⇧E cycles which connections are drawn; / opens the shape palette at the pointer; and Escape.
- * Never with ⌘, Ctrl or ⌥ held, nor as the key repeats.
+ * ⇧E cycles which connections are drawn; / opens the shape palette at the pointer; ? opens the cheat sheet (with the
+ * extended keys on); and Escape. Never with ⌘, Ctrl or ⌥ held, nor as the key repeats.
  */
 export function boardShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'repeat'>): BoardShortcut | undefined {
   if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return undefined;
-  if (event.key === 'Escape') return { kind: 'escape' };
-  // Shifted or not, as some keyboards type / with ⇧.
-  if (event.key === '/') return { kind: 'insert' };
-  const key = event.key.toLowerCase();
-  if (key === 'e') return event.shiftKey ? { kind: 'connections' } : undefined;
-  if (key === 'n') return { kind: 'note' };
-  if (Object.hasOwn(TOOL_KEYS, key)) return { kind: 'tool', tool: TOOL_KEYS[key]! };
-  if (Object.hasOwn(MODE_KEYS, key)) return { kind: 'mode', mode: MODE_KEYS[key]! };
-  return undefined;
+  return SHORTCUTS.find(([id]) => pressed(id, event))?.[1];
 }
 
 /** The shortcut a key press on the board is: none while it types into a field, a note, a shape or a terminal. */

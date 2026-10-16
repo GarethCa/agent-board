@@ -14,6 +14,10 @@ describe("an agent's pill", () => {
     expect(agentPill(agent({ seen: true }), TILE_STATE_LABELS)).toEqual({ state: 'idle', label: TILE_STATE_LABELS.waiting });
   });
 
+  it('draws a starting agent as running, labelled starting', () => {
+    expect(agentPill(agent({ state: 'starting' }), TILE_STATE_LABELS)).toEqual({ state: 'running', label: 'starting' });
+  });
+
   it('says an ended agent ended and how it exited, coloured by its exit code, seen or not (BW1)', () => {
     expect(agentPill(agent({ seen: true, state: 'done', endedAt: '2026-01-01', exitCode: 0 }))).toEqual({ state: 'done', label: 'ended · exit 0' });
     expect(agentPill(agent({ state: 'failed', endedAt: '2026-01-01', exitCode: 1 }), TILE_STATE_LABELS)).toEqual({ state: 'failed', label: 'ended · exit 1' });

@@ -9,6 +9,7 @@ import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import { IssuePicker, type PickedIssue } from './IssuePicker';
 import { reviewable, reviewSpawn } from './review-target';
 import { repoName } from './tiles';
+import { keyText } from '../keys/registry';
 
 interface NewAgentDialogProps {
   zone: Zone;
@@ -162,7 +163,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, name: initia
           </Button>
           <Button type="submit" variant="primary" loading={starting}>
             {starting ? 'Starting…' : 'Start'}
-            <Kbd aria-hidden>⌘⏎</Kbd>
+            <Kbd aria-hidden>{keyText('dialog.submit')}</Kbd>
           </Button>
         </>
       }

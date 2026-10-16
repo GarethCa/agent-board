@@ -1,11 +1,12 @@
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
-import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type HookEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
+import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, SETTLED_STATES, type Agent, type AgentUpdatedEvent, type DaemonEvent, type HookEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
+import { reviewedAgent } from '../src/orchestrators.ts';
 import { BoardRefs, identifyView, newAgent, openBoardSession, readBoard, treeView } from '../src/board-ops.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { paneIds } from '../src/pane-layout.ts';
@@ -17,7 +18,7 @@ const SIZE = { cols: 120, rows: 40 };
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with two zones of one repo and one of another.
  * Their agents may not orchestrate unless a test lets them: the zones' setting is off.
  */
-async function orchestrateDaemon(options: { dataDir?: string; home?: string } = {}) {
+async function orchestrateDaemon(options: { dataDir?: string; home?: string; log?: (message: string) => void } = {}) {
   const daemon = await startOrchestrateDaemon(options);
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -33,9 +34,10 @@ async function orchestrateDaemon(options: { dataDir?: string; home?: string } = 
 type Setup = Awaited<ReturnType<typeof orchestrateDaemon>>;
 
 /** A daemon whose agents play the `orchestrate` scenario, in `dataDir` and with the fakes' `home` (fresh by default). */
-function startOrchestrateDaemon({ dataDir, home = tempDataDir() }: { dataDir?: string; home?: string }) {
+function startOrchestrateDaemon({ dataDir, home = tempDataDir(), log }: { dataDir?: string; home?: string; log?: (message: string) => void }) {
   return startTestDaemon({
     ...(dataDir === undefined ? {} : { dataDir }),
+    ...(log === undefined ? {} : { log }),
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home, idleNotifyMs: 200 }),
   });
@@ -680,7 +682,7 @@ describe('steering a turn', () => {
     const any = await connection.call('orchestrator.wait', { token, sessionIds: [quick.sessionId, slow.sessionId], any: true });
     expect(any.timedOut).toBe(false);
     // The slow one's turn hasn't ended: it hasn't begun, or is on its way (on a loaded machine it may be thinking already).
-    expect(['idle', 'running', 'thinking']).toContain(any.agents.find((agent) => agent.name === 'slow')!.state);
+    expect(['starting', 'idle', 'running', 'thinking']).toContain(any.agents.find((agent) => agent.name === 'slow')!.state);
     await expect(connection.call('orchestrator.read', { token, sessionId: slow.sessionId })).rejects.toMatchObject({
       message: expect.stringMatching(/has not finished a turn yet/),
     });
@@ -736,6 +738,61 @@ describe('steering a turn', () => {
     commit(plain.worktree, 'the work');
     const reviewer = await connection.call('orchestrator.spawn', { token, name: 'reviewer', baseBranch: plain.branch, role: 'reviewer' });
     expect(git(reviewer.worktree, 'log', '-1', '--format=%s')).toBe('the work');
+  });
+});
+
+describe("the daemon's log of an orchestrator ending or interrupting an agent", () => {
+  /** An orchestrator in the first zone, on a daemon whose log is kept. */
+  async function loggedLead() {
+    const logs: string[] = [];
+    const setup = await orchestrateDaemon({ log: (message) => void logs.push(message) });
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    /** Waits for a line of the log matching `pattern`, and returns it. */
+    const logged = async (pattern: RegExp): Promise<string> => {
+      let line: string | undefined;
+      await vi.waitFor(() => {
+        line = logs.find((message) => pattern.test(message));
+        expect(line).toBeDefined();
+      }, { timeout: 5_000 });
+      return line!;
+    };
+    return { setup, lead, logged };
+  }
+
+  it('names the orchestrator that interrupted a turn', async () => {
+    const { setup, lead, logged } = await loggedLead();
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'slow', prompt: 'Work slowly' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.state === 'running');
+
+    await lead.connection.call('orchestrator.interrupt', { token: lead.token, sessionId: worker.sessionId });
+
+    expect(await logged(/^interrupting agent /)).toBe(
+      `interrupting agent ${worker.sessionId} for orchestrator ${lead.agent.name}'s interrupt (agent:${lead.agent.sessionId})`,
+    );
+  });
+
+  it('names the orchestrator that closed an agent', async () => {
+    const { lead, logged } = await loggedLead();
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'quick', prompt: 'Write the handover' });
+    await lead.connection.call('orchestrator.wait', { token: lead.token, sessionIds: [worker.sessionId] });
+
+    await lead.connection.call('orchestrator.close', { token: lead.token, sessionId: worker.sessionId });
+
+    expect(await logged(new RegExp(`^claude session ${worker.sessionId} .* exited `))).toMatch(
+      new RegExp(`, ended by the daemon for orchestrator ${lead.agent.name}'s close \\(agent:${lead.agent.sessionId}\\)$`),
+    );
+  });
+
+  it('names the user who removed an agent, and the delete its session ended for', async () => {
+    const { setup, logged } = await loggedLead();
+    const agent = await userAgent(setup.client, setup.zone.id, 'clean');
+
+    await setup.client.call('orchestrator.close', { sessionId: agent.sessionId, remove: true });
+
+    expect(await logged(new RegExp(`^claude session ${agent.sessionId} .* exited `))).toMatch(
+      /, ended by the daemon for its delete for the user's remove$/,
+    );
+    expect(await logged(new RegExp(`^deleted agent ${agent.sessionId} `))).toMatch(/ for the user's remove$/);
   });
 });
 
@@ -1389,6 +1446,67 @@ describe('a reviewer an orchestrator starts', () => {
   });
 });
 
+describe('a reviewer started from a branch an agent owns', () => {
+  const pair = (edges: { from: string; to: string; trigger: string; madeBy: string | null }[], a: string, b: string) =>
+    edges.filter((edge) => [a, b].includes(edge.from) && [a, b].includes(edge.to));
+
+  it('is joined to that agent both ways by manual edges, named by its branch or as agent:<ref>, and never to the orchestrator', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent: me, token } = await agentSide(setup, setup.zone.id, 'zone');
+    const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const byBranch = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch });
+      const reviewer = (byBranch.json as { id: string }).id;
+      let edges = await setup.client.call('flowEdge.list');
+      expect(pair(edges, implementer.sessionId, reviewer).map(({ from, to, trigger }) => `${from === reviewer ? 'reviewer' : 'impl'}->${to === reviewer ? 'reviewer' : 'impl'} ${trigger}`).sort()).toEqual([
+        'impl->reviewer manual',
+        'reviewer->impl manual',
+      ]);
+      expect(edges.every((edge) => edge.madeBy === me.sessionId)).toBe(true);
+      expect(edges.some((edge) => edge.from === me.sessionId || edge.to === me.sessionId)).toBe(false);
+
+      // Named as `agent:<ref>`, the same; a follow-up reviewer is joined to the implementer too, one edge each way.
+      const followUp = await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review' });
+      edges = await setup.client.call('flowEdge.list');
+      expect(pair(edges, implementer.sessionId, (followUp.json as { id: string }).id)).toHaveLength(2);
+      expect(edges).toHaveLength(4);
+    } finally {
+      session.close();
+    }
+  });
+
+  it('goes with the reviewer when it is removed, leaving the implementer and its other edges', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch });
+      expect(await setup.client.call('flowEdge.list')).toHaveLength(2);
+      await connection.call('orchestrator.close', { token, sessionId: (started.json as { id: string }).id, remove: true });
+      expect(await setup.client.call('flowEdge.list')).toEqual([]);
+      expect((await setup.client.call('agent.list')).some((each) => each.sessionId === implementer.sessionId)).toBe(true);
+    } finally {
+      session.close();
+    }
+  });
+
+  it('is left unlinked when no agent owns the branch', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      // The repo's own checked-out branch belongs to no agent.
+      const loose = await newAgent(session, { prompt: 'Review the checkout', name: 'loose', role: 'reviewer' });
+      expect(loose.json).toMatchObject({ reviews: { branch: expect.any(String) } });
+      expect(await setup.client.call('flowEdge.list')).toEqual([]);
+    } finally {
+      session.close();
+    }
+  });
+});
+
 describe('an agent an orchestrator starts with or without its role’s template', () => {
   /** The first message the agent got, as its harness's UserPromptSubmit hook reported it. */
   const firstMessage = async (setup: Setup, sessionId: string) =>
@@ -1440,6 +1558,48 @@ describe('an agent an orchestrator starts with or without its role’s template'
   });
 });
 
+describe('an agent an orchestrator starts with a prompt', () => {
+  it('is starting, never idle, until its first turn begins, in `new`, `tree` and the agent', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Print your board identity', name: 'fresh' });
+
+      expect(started.text).toMatch(/^Started agent:\S+ {2}fresh {2}\[starting\]/);
+      expect(started.text).not.toContain('[idle]');
+      const refs = new BoardRefs(await readBoard(setup.client));
+      expect(refs.board.agents.find((agent) => agent.name === 'fresh')!.state).toBe('starting');
+      expect(treeView(refs, null).text).toMatch(/fresh {2}\[starting\]/);
+    } finally {
+      session.close();
+    }
+  });
+});
+
+describe('an agent still starting', () => {
+  it("is not a settled state, so a default wait on an agent no orchestrator started doesn't return for it", async () => {
+    expect(SETTLED_STATES).not.toContain('starting');
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const started = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'by-hand', prompt: 'Write the handover', ...SIZE });
+    expect(started.state).toBe('starting');
+
+    const waited = await connection.call('orchestrator.wait', { token, sessionIds: [started.sessionId] });
+    expect(waited.timedOut).toBe(false);
+    expect(waited.agents[0]!.state).not.toBe('starting');
+  });
+
+  it('takes a message, which queues behind its first prompt, rather than refusing an agent that may never start', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await connection.call('orchestrator.spawn', { token, name: 'eager', prompt: 'Write the handover' });
+    expect(worker.state).toBe('starting');
+
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+  });
+});
+
 describe('an agent an orchestrator starts in a named role', () => {
   it('carries the name, which `new`, `tree` and its own `whoami` show', async () => {
     const setup = await orchestrateDaemon();
@@ -1476,5 +1636,28 @@ describe('an agent an orchestrator starts in a named role', () => {
     } finally {
       session.close();
     }
+  });
+});
+
+describe('reviewedAgent', () => {
+  const agent = (fields: Partial<Agent>) => ({ sessionId: 'x', repoRoot: '/repo', branch: 'b', reviews: null, reviewOf: null, ...fields }) as Agent;
+  const reviewer = agent({ sessionId: 'r', branch: '', reviews: { branch: 'b', head: 'abc' } });
+
+  it('is the one agent in the same repo on the branch', () => {
+    const owner = agent({ sessionId: 'owner' });
+    expect(reviewedAgent([owner, reviewer, agent({ sessionId: 'other', branch: 'c' })], reviewer)).toBe(owner);
+  });
+
+  it('ignores a branch of that name in another repo, and another reviewer', () => {
+    const owner = agent({ sessionId: 'owner' });
+    const elsewhere = agent({ sessionId: 'elsewhere', repoRoot: '/other' });
+    const earlier = agent({ sessionId: 'earlier', branch: 'b', reviews: { branch: 'b', head: 'abc' } });
+    expect(reviewedAgent([elsewhere, earlier, reviewer], reviewer)).toBeUndefined();
+    expect(reviewedAgent([elsewhere, owner, reviewer], reviewer)).toBe(owner);
+  });
+
+  it('is none when several agents own the branch, or when it reviews nothing', () => {
+    expect(reviewedAgent([agent({ sessionId: 'a' }), agent({ sessionId: 'b' }), reviewer], reviewer)).toBeUndefined();
+    expect(reviewedAgent([agent({ sessionId: 'a' })], agent({ sessionId: 'plain' }))).toBeUndefined();
   });
 });

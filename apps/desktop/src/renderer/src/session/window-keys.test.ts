@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRunGateKey, runGateShortcut, windowPaneKey } from './window-keys';
+import { isRunGateKey, ownTabNotice, runGateShortcut, windowPaneKey } from './window-keys';
 
 const press = (code: string, keys: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   code,
@@ -47,5 +47,12 @@ describe('Run gate', () => {
     expect(isRunGateKey(key({ metaKey: true, shiftKey: true, code: 'KeyD' }), true)).toBe(false);
     expect(runGateShortcut(true)).toBe('⌘⇧G');
     expect(runGateShortcut(false)).toBe('Ctrl+Shift+G');
+  });
+});
+
+describe('the close key on a tab that cannot be closed', () => {
+  it('says whose it is: an agent\'s own tab, or a shell\'s only one', () => {
+    expect(ownTabNotice('agent')).toBe("An agent's own tab can't be closed.");
+    expect(ownTabNotice('shell')).toBe("A shell's only tab can't be closed.");
   });
 });

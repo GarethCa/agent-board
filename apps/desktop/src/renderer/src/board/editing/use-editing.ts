@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
-import { commandKey, historyStep, inOverlay } from '../../keys';
+import { historyStep, inOverlay } from '../../keys';
+import { pressed } from '../../keys/registry';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
 import type { TileData, TileNodeType } from '../tile';
 import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
@@ -247,23 +248,24 @@ export function useEditing(options: EditingOptions) {
   useEffect(() => {
     if (!options.loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const command = commandKey(event);
-      const key = event.key.toLowerCase();
+      const step = historyStep(event);
       // A select has no undo of its own, and keeps focus after a pick: ⌘Z still undoes the pick.
-      const undoingInSelect = (key === 'z' || key === 'y') && command && (event.target as HTMLElement | null)?.tagName === 'SELECT';
+      const undoingInSelect = step !== undefined && (event.target as HTMLElement | null)?.tagName === 'SELECT';
       if (event.altKey || (isTyping(event) && !undoingInSelect) || inOverlay()) return;
       const { history } = optionsRef.current;
       const run = (action: () => unknown) => {
         event.preventDefault();
         action();
       };
-      const step = historyStep(event);
       if (step !== undefined) run(() => history[step]());
-      else if (command && key === 'a' && !event.shiftKey) run(selectAll);
-      else if (command && key === 'd' && !event.shiftKey) run(duplicate);
-      else if (event.key === ']' && !event.shiftKey) run(() => restack(command ? 'forward' : 'front'));
-      else if (event.key === '[' && !event.shiftKey) run(() => restack(command ? 'backward' : 'back'));
-      else if (key === 'r' && event.shiftKey && !command && selection().items.some((node) => node.data.item.rotation !== 0)) run(resetRotation);
+      else if (pressed('edit.selectAll', event)) run(selectAll);
+      else if (pressed('edit.duplicate', event)) run(duplicate);
+      // While a session window is open it wins ⌘[ and ⌘] (it takes them in capture, for its previous and next session).
+      else if (pressed('edit.forward', event)) run(() => restack('forward'));
+      else if (pressed('edit.front', event)) run(() => restack('front'));
+      else if (pressed('edit.backward', event)) run(() => restack('backward'));
+      else if (pressed('edit.back', event)) run(() => restack('back'));
+      else if (pressed('edit.resetRotation', event) && selection().items.some((node) => node.data.item.rotation !== 0)) run(resetRotation);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

@@ -103,8 +103,10 @@ describe("an agent's pull requests", () => {
 
   it('tells its crew of a pull request opened after a first read that found none, once', async () => {
     const { client, github, agent, pullRequest, asked } = await agentWithFakeGitHub();
-    // Its first read finds nothing, so changes nothing and tells no client.
-    await expect.poll(asked, { timeout: 10_000 }).toBeGreaterThan(0);
+    // Its first read finds nothing, so changes nothing and tells no client. Its reads overlap as it starts (one as it
+    // starts, a round's, one as its turn ends), and the first answered is its first read: under load, one whose gh call
+    // isn't logged yet. Rounds run one at a time, so by the fourth ask a round's read has been answered, with nothing.
+    await expect.poll(asked, { timeout: 10_000 }).toBeGreaterThanOrEqual(4);
     const { cursor } = await client.call('orchestrator.wait', { crew: true, since: 'now', timeoutMs: 0 });
 
     github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [pullRequest()] });

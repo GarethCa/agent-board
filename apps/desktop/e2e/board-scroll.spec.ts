@@ -11,6 +11,35 @@ async function view(page: Page): Promise<{ x: number; y: number; zoom: number }>
   return { x: x!, y: y!, zoom: Number(/scale\(([-\d.e]+)\)/.exec(style)![1]) };
 }
 
+/** The view once two reads in a row agree: the board has stopped moving. */
+async function settledView(page: Page): Promise<{ x: number; y: number; zoom: number }> {
+  let last = '';
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await view(page));
+      const settled = now === last;
+      last = now;
+      return settled;
+    })
+    .toBe(true);
+  return JSON.parse(last);
+}
+
+/**
+ * Fits the view to the board, and waits for the fit to land. React Flow queues a fit for a later frame, which under
+ * load can come after the next wheel and put the view back. Here the fit leaves the view as it was, so the view is
+ * zoomed out first, making the fit show as a change.
+ */
+async function fitView(page: Page): Promise<void> {
+  const start = await settledView(page);
+  await page.getByRole('button', { name: 'Zoom out' }).click();
+  await expect.poll(async () => (await view(page)).zoom).toBeLessThan(start.zoom);
+  const zoomedOut = await settledView(page);
+  await page.getByRole('button', { name: 'Fit View' }).click();
+  await expect.poll(() => view(page)).not.toEqual(zoomedOut);
+  await settledView(page);
+}
+
 /** What a wheel event is made from here. */
 type Wheel = { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
 
@@ -35,7 +64,7 @@ test('the wheel pans the board in any direction, a pinch or the command key with
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Pick a database');
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting');
-    await window.getByRole('button', { name: 'Fit View' }).click();
+    await fitView(window);
     const pane = window.locator('.react-flow__pane');
 
     // Scroll pans both ways at once and leaves the zoom alone.

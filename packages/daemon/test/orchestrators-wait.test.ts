@@ -63,6 +63,7 @@ function host(agents = new Map<string, Agent>()) {
       create: () => {
         throw new Error('not here');
       },
+      link: () => undefined,
       get: () => undefined,
       remove: () => {},
     },

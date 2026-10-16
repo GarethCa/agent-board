@@ -320,6 +320,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       harnessPath: (harness) => harnessPaths.path(harness),
       shellIntegrationDir: join(paths.dataDir, 'shell-integration'),
+      onOutput: (sessionId) => agents.onOutput(sessionId),
       onExit: (session) => {
         asks.drop(session.id);
         agents.onExit(session);
@@ -478,6 +479,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const asks = createAskHost({ db, changed: (sessionId, began) => agents.waitChanged(sessionId, began) });
     const agents = createAgentHost({
       db,
+      clock: options.clock ?? systemClock,
       roleTemplates,
       sessions,
       worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
@@ -489,6 +491,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       hookShimPath,
       ensureHookShim,
       boardCliPath: cli === undefined ? undefined : cliPath,
+      compactWindow: () => settings.get().compactWindow,
       env: options.agentEnv ?? process.env,
       shell,
       shellArgs,
@@ -610,8 +613,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       zones: () => zoneTable.list(),
       flowEdges,
       // As `agent.delete` without force: its reviewers go first.
-      deleteAgent: async (sessionId) => {
-        await reviews.deleteAgent(sessionId, () => agents.delete(sessionId, false).then(() => null));
+      deleteAgent: async (sessionId, why) => {
+        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, false).then(() => null));
       },
       broadcast,
       log,
@@ -713,7 +716,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
-        return reviews.deleteAgent(sessionId, async () => agentHandlers(agents)['agent.delete'](params, context));
+        return reviews.deleteAgent(sessionId, "the app's agent.delete", async () => agentHandlers(agents)['agent.delete'](params, context));
       },
       ...reviews.handlers<SessionSubscriber>(),
       ...gates.handlers<SessionSubscriber>(),
@@ -728,7 +731,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
         // Merged: nothing of its work is lost, so nothing stops it short. Its reviewers go first, as with `agent.delete`.
         deleteAgent: async (sessionId, keep) => {
-          await reviews.deleteAgent(sessionId, () => agents.delete(sessionId, true, keep.worktree, keep.branch).then(() => null));
+          const why = "the merge gate's cleanup after its merge";
+          await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep.worktree, keep.branch).then(() => null));
         },
         comment: (issue, body) => trackers.comment(issue, body),
         log,
@@ -959,7 +963,7 @@ function sessionHandlers(
       sessions.resize(sessionId(p), { cols: dimensionParam(p, 'cols'), rows: dimensionParam(p, 'rows') });
       return null;
     },
-    'session.kill': (params) => sessions.kill(sessionId(params)),
+    'session.kill': (params) => sessions.kill(sessionId(params), "the app's session.kill"),
     'session.cwd': async (params) => ({ cwd: await sessions.folderOf(sessionId(params)) }),
   };
 }
