@@ -2,13 +2,13 @@
 
 ## v0.5.2 (2026-10-17)
 
-- Public release polish: GitHub Release step, version stamp, postBuffer, font notices
-- Neutral wording in shipped text, changelog rewrite rules and a leak check for internal phrases
-- Public README as the short DH2 front page, with the rest in docs/
-- Pin global-agent to 4.1.3 so electron-builder no longer pulls in sprintf-js
-- Bump sharp 0.34.5 → 0.35.5
-- Revert #228 — new agents never got their first prompt
-- An agent's first prompt is typed at its harness's own prompt, never on its command line or into another screen
+- A shorter README: a visual front page, with the full tour, install notes, quick start, FAQ, troubleshooting and how it works under docs/
+- sharp 0.34.5 → 0.35.5, fixing three high-severity advisories in its bundled image libraries
+- sprintf-js is no longer pulled in by the build tooling (global-agent pinned to 4.1.3)
+- Neutral wording throughout the docs and changelog
+- THIRD_PARTY.md lists the bundled fonts and their licences
+- The app's package.json carries the release version
+- Each release gets a GitHub Release with its notes
 
 ## v0.5.1 (2026-10-16)
 
