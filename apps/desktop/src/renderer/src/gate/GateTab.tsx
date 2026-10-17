@@ -21,7 +21,7 @@ const STEP_RESULTS: Record<GateStep['status'], string> = { passed: 'pass', faile
 const runGate = (sessionId: string): Promise<unknown> => window.agentBoard.gates.run(sessionId);
 
 /**
- * The Gate tab (BL1): an agent's latest merge gate run. Its step table on top; pick a row and its log streams
+ * The Gate tab: an agent's latest merge gate run. Its step table on top; pick a row and its log streams
  * underneath, following the running step until another is picked. Stop while it runs; Run again after; a failed run
  * offers "Send failure to <agent>", which pastes the failing step's last lines at its prompt without sending them. A run
  * on an older commit, or with uncommitted changes, is greyed and says so.

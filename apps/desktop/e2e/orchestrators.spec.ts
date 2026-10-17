@@ -4,8 +4,8 @@ import { launch, sessionWindow, SHELL_ENV, spawnAgent, tile, TURN_MS, zoneNamed 
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-// Orchestrators on the board: a zone that lets its agents orchestrate (AZ3), the crew frame or from chips
-// that show who started whom (BA2, BA3), and the orchestrator's Activity tab (BB1).
+// Orchestrators on the board: a zone that lets its agents orchestrate, the crew frame or from chips
+// that show who started whom, and the orchestrator's Activity tab.
 
 /** The tile of the agent named `name`. */
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });

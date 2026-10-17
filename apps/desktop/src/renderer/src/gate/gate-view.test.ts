@@ -25,7 +25,7 @@ const run = (fields: Partial<GateRun> = {}): GateRun => ({
   ...fields,
 });
 
-describe('the gate tab (BL1)', () => {
+describe('the gate tab', () => {
   it("keeps each agent's latest run, replacing the one before", () => {
     const first = run();
     const second = run({ status: 'running', endedAt: null });
@@ -66,7 +66,7 @@ describe('the gate tab (BL1)', () => {
 
 });
 
-describe('the merge popover (BM3)', () => {
+describe('the merge popover', () => {
 
   it('says what the merge did, and what failed, in a sentence', () => {
     const names = { agent: 'Fix checkout flake', branch: 'fix-checkout', issue: 'STO-112' };

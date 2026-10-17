@@ -395,7 +395,7 @@ export interface ReviewsApi {
   onChanged(listener: (change: ReviewUpdatedEvent) => void): () => void;
 }
 
-/** The PR tab's IPC channels between the preload and main (BI1). */
+/** The PR tab's IPC channels between the preload and main. */
 export const PULL_REQUEST_IPC = {
   details: 'pull-request:details',
   approve: 'pull-request:approve',
@@ -474,7 +474,7 @@ export interface AsksApi {
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): Promise<PlanSummary>;
 }
 
-/** The web tab's IPC channels between the preload and main (BI2). */
+/** The web tab's IPC channels between the preload and main. */
 export const WEB_TAB_IPC = {
   open: 'web-tab:open',
   /** An agent's HTML plan, drawn as a web tab's page is, locked down harder. */
@@ -527,7 +527,7 @@ export interface WebTabState {
 export type WebTabKey = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>;
 
 /**
- * A web tab's page (BI2): a locked-down web view the main process lays over the tab's area of this window. It
+ * A web tab's page: a locked-down web view the main process lays over the tab's area of this window. It
  * shows https pages and http ones on this machine only, in a session partition of its own, with no access to the app.
  */
 export interface WebTabsApi {
@@ -578,7 +578,7 @@ export const ORCHESTRATOR_IPC = {
   logged: 'orchestrator:logged',
 } as const;
 
-/** What orchestrators did and tried (BB1): the activity log the daemon keeps. */
+/** What orchestrators did and tried: the activity log the daemon keeps. */
 export interface OrchestratorsApi {
   /** The orchestrator's lines of the activity log, newest first: a page of them, older than the line `before` if given. */
   activity(orchestratorId: string, before?: number): Promise<OrchestratorActivity[]>;
@@ -1014,7 +1014,7 @@ export interface ScreenPoint {
 }
 
 /**
- * What is dragged out of a session window's strip (AT2): a tab (its shell, whole), one pane of a
+ * What is dragged out of a session window's strip: a tab (its shell, whole), one pane of a
  * split, or a tab that is only a place in its window (its own session's, a pull request, a web page, another session),
  * by its surface; and the window it is dragged from.
  */

@@ -78,7 +78,7 @@ export const HybridTile = memo(function HybridTile({ id, tile }: TileProps) {
 
 function AgentTile({ id, agent, repo, from, crew, tabs }: { id: string; agent: Agent; repo?: string } & Pick<TileData, 'from' | 'crew' | 'tabs'>) {
   const crewView = useContext(CrewViewContext);
-  // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered (BA3).
+  // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
   const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, restartAgent, rename, startReview, openReview, openGate, openPlan } =
@@ -443,7 +443,7 @@ function ShellTile({ id, shell }: { id: string; shell: Shell }) {
 }
 
 /**
- * A shell tile's folder chip (AK1): the folder its first live pane is in, following `cd`, `~` at home. It opens
+ * A shell tile's folder chip: the folder its first live pane is in, following `cd`, `~` at home. It opens
  * a menu to start a new pane elsewhere: home, a recent folder, or one browsed for. Running panes never move.
  */
 function ShellFolderChip({ shell }: { shell: Shell }) {
@@ -653,7 +653,7 @@ export function PullRequestChip({ pr, pushed = false, open }: { pr: PullRequest;
   );
 }
 
-/** The ⋯ menu's way to do, once, what a click on the tile doesn't (AM1): expand it in place, or open its window. */
+/** The ⋯ menu's way to do, once, what a click on the tile doesn't: expand it in place, or open its window. */
 function otherOpen(clickOpens: ClickOpens, expand: () => void, open: () => void): MenuEntry {
   return clickOpens === 'window'
     ? { label: 'Expand in place', icon: <Expand />, onSelect: expand }

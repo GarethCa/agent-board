@@ -1,4 +1,4 @@
-// What a PR tab (BI1) asks of GitHub, through the user's own gh login: the daemon runs gh, so no GitHub token
+// What a PR tab asks of GitHub, through the user's own gh login: the daemon runs gh, so no GitHub token
 // reaches the app, let alone its renderer. Only the user's app calls these; agents can't (`BOARD_CALLER_METHODS`).
 // Merging a pull request a merge gate guards, before the gate passed on its head, takes the user's confirmation.
 import { approvePullRequest, isGitHubRepo, mergePullRequest, pullRequestDetails, runGh, type PullRequestRef } from '@agent-board/tracker';

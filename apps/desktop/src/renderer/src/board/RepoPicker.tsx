@@ -48,9 +48,9 @@ interface RepoPickerProps {
 }
 
 /**
- * The repo picker (AH1): a popover on a new agent's tile, for when no zone gives it a repo. A recent repo (the
+ * The repo picker: a popover on a new agent's tile, for when no zone gives it a repo. A recent repo (the
  * last used preselected), Browse… for any folder, or a scratch repo; a base branch and a new branch prefilled from the
- * agent's name; then Start. The footer's harness, model and role chips (BJ3) show what will start; a reviewer
+ * agent's name; then Start. The footer's harness, model and role chips show what will start; a reviewer
  * reviews the base branch, on a detached checkout of it, so it has no new branch.
  */
 export function RepoPicker({ anchor, agentName, issue, onStart, onCancel }: RepoPickerProps) {

@@ -15,7 +15,7 @@ export type TileBadge =
   | { kind: 'pr'; pr: PullRequest; pushed?: true }
   | { kind: 'schedule'; schedule: AgentSchedule }
   | { kind: 'muted' }
-  /** Its shell tabs' shells (AU1): one chip, however many. */
+  /** Its shell tabs' shells: one chip, however many. */
   | { kind: 'shells' };
 
 export interface TileFooter {

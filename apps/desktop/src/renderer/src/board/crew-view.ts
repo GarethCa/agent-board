@@ -1,5 +1,5 @@
-// How the board shows who started whom: a crew frame beside each orchestrator (BA2, the default), or a "from"
-// chip on each agent it started, its crew lit while the chip or the orchestrator is hovered (BA3). Kept in the
+// How the board shows who started whom: a crew frame beside each orchestrator (the default), or a "from"
+// chip on each agent it started, its crew lit while the chip or the orchestrator is hovered. Kept in the
 // daemon's view state.
 import { createContext } from 'react';
 import type { CrewFrame } from './crews';

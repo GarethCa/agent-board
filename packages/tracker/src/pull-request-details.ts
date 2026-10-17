@@ -1,4 +1,4 @@
-// One pull request read whole for its PR tab (BI1): its description, checks, changed files with their diffs,
+// One pull request read whole for its PR tab: its description, checks, changed files with their diffs,
 // reviews and comments, and whether the user may merge or approve it, through the user's own `gh` login.
 import { runGh, type GhOptions } from './gh.ts';
 import { TrackerError } from './tracker.ts';

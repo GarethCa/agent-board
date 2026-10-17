@@ -21,7 +21,7 @@ describe('git guard', () => {
     expect(leakedGitVars(process.env)).toEqual([]);
   });
 
-  it('refuses a helper that hands git a GIT_DIR, which would turn the dev repo bare', () => {
+  it('refuses a helper that hands git a GIT_DIR, which would turn the repo bare', () => {
     const repo = newRepo();
     const elsewhere = tempDir('git-guard-elsewhere-');
     const before = coreConfigOf(repo);
@@ -65,7 +65,7 @@ describe('git guard', () => {
       expect(() => assertCoreConfigUnchanged(repo, { unreadable: 'ETIMEDOUT' })).not.toThrow();
       expect(() => assertCoreConfigUnchanged(repo, coreConfigOf(repo), 1)).not.toThrow();
       expect(warn).toHaveBeenCalledTimes(2);
-      expect(warn.mock.calls[0]![0]).toMatch(/could not read the dev repo's core git config .*ETIMEDOUT.*skipped/);
+      expect(warn.mock.calls[0]![0]).toMatch(/could not read this checkout's core git config .*ETIMEDOUT.*skipped/);
     } finally {
       warn.mockRestore();
     }

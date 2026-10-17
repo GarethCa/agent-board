@@ -104,7 +104,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     };
     element.addEventListener('keydown', keyDown, true);
     element.addEventListener('wheel', wheel, { passive: false });
-    // A dev server's local address in the output (BI2) opens in a web tab of the window on a ⌘-click (Ctrl off
+    // A dev server's local address in the output opens in a web tab of the window on a ⌘-click (Ctrl off
     // macOS): a plain click stays the terminal's.
     const links = terminal.registerLinkProvider({
       provideLinks(y, callback) {

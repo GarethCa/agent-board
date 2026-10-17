@@ -33,7 +33,7 @@ type Step = { kind: 'form' } | { kind: 'bypass-notice' } | { kind: 'project-conf
 
 /**
  * Asks for a new agent's task and name (optional), with its harness, model and role in the footer's chips
- * (BJ3), then starts it in the zone. A reviewer picks the agent whose branch it reviews. In a zone with a
+ *, then starts it in the zone. A reviewer picks the agent whose branch it reviews. In a zone with a
  * tracker it can start from an issue instead: the issue becomes its prompt (the task, if any, follows it) and names
  * its branch. The zone's Codex setting is saved only when a Codex agent starts, so Cancel leaves it as it was.
  */

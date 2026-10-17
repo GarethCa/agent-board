@@ -1,5 +1,5 @@
 // The environment every session the daemon starts gets, so the `agent-board` CLI and MCP in it know where they are
-// (ADR-0010), as cmux hands its terminals CMUX_WORKSPACE_ID. Kept free of imports: the CLI starts often.
+// (ADR-0010), as terminal multiplexers hand their terminals a workspace ID. Kept free of imports: the CLI starts often.
 
 /** The daemon's socket, which the CLI talks to. */
 export const BOARD_SOCKET_ENV = 'AGENT_BOARD_SOCKET';

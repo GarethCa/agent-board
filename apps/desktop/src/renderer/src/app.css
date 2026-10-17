@@ -303,12 +303,12 @@ kbd {
   text-align: center;
 }
 
-/* Its crew lit while a chip or the orchestrator is hovered (BA3). */
+/* Its crew lit while a chip or the orchestrator is hovered. */
 .hybrid-tile-agent[data-crew-lit] {
   box-shadow: var(--shadow-tile), 0 0 0 var(--space-1) var(--crew-halo);
 }
 
-/* "↳ from <orchestrator>" on an agent an orchestrator started (BA3), or one outside its crew frame. */
+/* "↳ from <orchestrator>" on an agent an orchestrator started, or one outside its crew frame. */
 .hybrid-tile-from {
   flex: none;
   max-width: 50%;
@@ -320,7 +320,7 @@ kbd {
   cursor: default;
 }
 
-/* An orchestrator's crew (BA2): a dashed frame round the agents it started, beside it, labelled on its top edge. */
+/* An orchestrator's crew: a dashed frame round the agents it started, beside it, labelled on its top edge. */
 .crew-frame {
   position: absolute;
   box-sizing: border-box;
@@ -473,7 +473,7 @@ kbd {
   height: var(--icon-xs);
 }
 
-/* A shell tile's folder chip (AK1): where its shell is now; it opens a new pane elsewhere. */
+/* A shell tile's folder chip: where its shell is now; it opens a new pane elsewhere. */
 .hybrid-tile-folder {
   align-self: flex-start;
   max-width: 100%;
@@ -640,7 +640,7 @@ kbd {
   height: var(--icon-xs);
 }
 
-/* An agent's shells chip (AU1): "2 shells", one dot per shell, and the list it opens. */
+/* An agent's shells chip: "2 shells", one dot per shell, and the list it opens. */
 .hybrid-tile-shells {
   gap: var(--space-1);
 }
@@ -1029,7 +1029,7 @@ kbd {
   border-style: dashed;
 }
 
-/* A group (AI1): a neutral tab with a dot of its colour, and the soft chip of its default repo (AJ2) */
+/* A group: a neutral tab with a dot of its colour, and the soft chip of its default repo */
 .zone[data-kind='unbound']:not([data-cloning]) .zone-tab {
   background: var(--raised);
   color: var(--text);
@@ -1266,7 +1266,7 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
-/* A question an agent asks through the board (BN1): one button per option, a reply field, a timer line. */
+/* A question an agent asks through the board: one button per option, a reply field, a timer line. */
 .inbox-ask,
 .inbox-plan {
   display: flex;
@@ -1464,7 +1464,7 @@ kbd {
   height: var(--icon-xs);
 }
 
-/* Moving between a group's sessions (AL1): ‹ › as one bordered pair before the name, and a count after the state. */
+/* Moving between a group's sessions: ‹ › as one bordered pair before the name, and a count after the state. */
 .session-nav {
   display: inline-flex;
   flex: none;
@@ -1846,7 +1846,7 @@ kbd {
   background: var(--window-live);
 }
 
-/* An agent's terminal tabs (AS3), cmux-style: the agent's own first, then its shells, + and Split after. */
+/* An agent's terminal tabs: the agent's own first, then its shells, + and Split after. */
 .session-tabs {
   display: flex;
   flex: 0 1 auto;
@@ -1909,7 +1909,7 @@ kbd {
   outline-offset: -2px;
 }
 
-/* Tabs and panes drag between windows and onto the board (AT2), as the AT2 mock draws it: the tab dragged
+/* Tabs and panes drag between windows and onto the board: the tab dragged
    dims where it was, lifts as an accent tab under the pointer, and the strip it would land in shows a dashed slot. */
 .session-tab[draggable='true'] {
   cursor: grab;
@@ -1990,7 +1990,7 @@ kbd {
   background: var(--window-live);
 }
 
-/* A Gate tab's dot while its run runs (BL1): a ring that turns. */
+/* A Gate tab's dot while its run runs: a ring that turns. */
 .session-window-pane-dot[data-state='gate-running'] {
   border: 2px solid var(--window-live);
   border-right-color: transparent;
@@ -1998,7 +1998,7 @@ kbd {
   animation: ui-spin var(--motion-spin) var(--ease-linear) infinite;
 }
 
-/* A window's panes (BH1), cmux-style: each a box with its strip of tabs, and every tab's surface laid out
+/* A window's panes: each a box with its strip of tabs, and every tab's surface laid out
    flat over its pane's box under the strip, so moving a tab to another pane never re-mounts its terminal. With one
    pane its strip is the window's own, and the surfaces fill the box. */
 .window-panes {
@@ -2119,7 +2119,7 @@ kbd {
   background: var(--window-composer);
 }
 
-/* The session window's terminal, or its chat view (AE1): one shows, the other waits behind it. */
+/* The session window's terminal, or its chat view: one shows, the other waits behind it. */
 .session-terminal-view,
 .session-chat-view {
   display: flex;
@@ -2851,7 +2851,7 @@ kbd {
   box-shadow: var(--shadow-overlay);
 }
 
-/* Agent notes: a document card (CO2) or a terminal card (CO1), as the Agent notes setting says */
+/* Agent notes: a document card or a terminal card, as the Agent notes setting says */
 
 .agent-note {
   display: flex;
@@ -3006,7 +3006,7 @@ kbd {
   cursor: pointer;
 }
 
-/* An answer's suggested edits, offered all at once (CPb). */
+/* An answer's suggested edits, offered all at once. */
 .agent-note-edits {
   display: flex;
   flex: none;
@@ -3038,14 +3038,14 @@ kbd {
   color: var(--muted);
 }
 
-/* CPa: the tether from a note to its agent's tile. */
+/* The tether from a note to its agent's tile. */
 .react-flow__edge-path.agent-note-tether {
   stroke: var(--agent-note-tether);
   stroke-width: var(--connector-width);
   stroke-dasharray: var(--agent-note-tether-dash);
 }
 
-/* CO1: the agent's terminal, cut out and pinned. */
+/* The agent's terminal, cut out and pinned. */
 .agent-note[data-look='terminal'] {
   border: 1px solid var(--window-edge);
   border-radius: var(--radius-lg);
@@ -3478,7 +3478,7 @@ kbd {
   pointer-events: none;
 }
 
-/* The Agent and Shell tools' ghost tile (AG2): where the new tile lands */
+/* The Agent and Shell tools' ghost tile: where the new tile lands */
 .board-tool-ghost {
   position: fixed;
   z-index: var(--layer-tool);
@@ -3495,7 +3495,7 @@ kbd {
   pointer-events: none;
 }
 
-/* A new agent waiting on the repo picker (AH1), and the picker beside it */
+/* A new agent waiting on the repo picker, and the picker beside it */
 .pending-tile {
   position: absolute;
   box-sizing: border-box;
@@ -3645,7 +3645,7 @@ kbd {
   background: var(--raised);
 }
 
-/* The harness, model and role chips (BJ3), in the repo picker's and New agent's footers. */
+/* The harness, model and role chips, in the repo picker's and New agent's footers. */
 .agent-setup {
   display: flex;
   flex: 0 1 auto;
@@ -3683,7 +3683,7 @@ kbd {
   width: var(--icon-sm);
 }
 
-/* A zone's role templates (BK2): the roles on the left, the picked one's editor on the right. */
+/* A zone's role templates: the roles on the left, the picked one's editor on the right. */
 .ui-dialog:has(.role-templates-body) {
   width: min(var(--size-role-templates), calc(100vw - var(--space-8)));
 }
@@ -3916,8 +3916,8 @@ kbd {
 }
 
 /* The handles of a selected line: a round one on each end, dragged to another side of its object or onto
-   another object (BT1); on a straight or elbow line, a square one on each bend and a smaller, fainter one halfway along
-   each stretch, pulled out into a new bend; on a curve, one bow handle on its middle (BU3). */
+   another object; on a straight or elbow line, a square one on each bend and a smaller, fainter one halfway along
+   each stretch, pulled out into a new bend; on a curve, one bow handle on its middle. */
 .line-handle {
   position: absolute;
   width: var(--line-handle-size);
@@ -4079,7 +4079,7 @@ kbd {
 }
 
 /* While an arrow is drawn or an end dragged, only the object near the pointer shows its handles, grown so a side is
-   easy to drop on (BS4); a drop on its body lands on the side facing the other end. */
+   easy to drop on; a drop on its body lands on the side facing the other end. */
 .board-connecting .react-flow__node > .connector-handle:not([data-near]),
 .board-connecting .react-flow__node > .item-rotor > .connector-handle:not([data-near]) {
   opacity: 0;
@@ -4586,7 +4586,7 @@ kbd {
   height: var(--icon-xs);
 }
 
-/* Over another agent without ⌥ (BP8): only a hint, in the board's neutral ink. */
+/* Over another agent without ⌥: only a hint, in the board's neutral ink. */
 .flow-drop-hint:not([data-handing-off]) {
   background: var(--inverse);
   color: var(--on-inverse);
@@ -4608,7 +4608,7 @@ kbd {
   white-space: nowrap;
 }
 
-/* What a connector dropped from one agent on another is (BP5): Arrow or Hand off, beside where it was let go. */
+/* What a connector dropped from one agent on another is: Arrow or Hand off, beside where it was let go. */
 .handoff-chooser-anchor {
   position: fixed;
   width: 0;
@@ -4644,7 +4644,7 @@ kbd {
 }
 
 /*
- * Linked sessions as one rail (CD4): the edges between two agents as one faint dashed line, no arrowheads on
+ * Linked sessions as one rail: the edges between two agents as one faint dashed line, no arrowheads on
  * a pair, a small open arrow at the receiving end of a one-way one; the latest document rides it as a token at the end
  * of whoever has it, and slides along when sent.
  */
@@ -5038,7 +5038,7 @@ kbd {
 }
 
 /*
- * An answer's suggested edits (CM3, CPb): each shape and arrow dashed in the accent where it would go, under a chip with
+ * An answer's suggested edits: each shape and arrow dashed in the accent where it would go, under a chip with
  * its number, its title, ✓ and ✕. Drawn on the board, under its zoom; the chip keeps its size on screen.
  */
 .suggestion-ghosts {
@@ -5199,7 +5199,7 @@ kbd {
   container-type: inline-size;
 }
 
-/* With the merge gate's controls in it (BM3), a header short of room folds Minimise and Pop out to their icons,
+/* With the merge gate's controls in it, a header short of room folds Minimise and Pop out to their icons,
    which keep their tooltips and names; Delete and Close keep their words. */
 @container (max-width: 1400px) {
   .session-window-head:has(.gate-controls) .session-window-folding-label {
@@ -5283,7 +5283,7 @@ kbd {
 }
 
 /*
- * The Edge rules panel (FlowDraw AB2, FlowRules AC): on the right of the board, under the top islands, for the flow
+ * The Edge rules panel: on the right of the board, under the top islands, for the flow
  * edge selected: its payload, trigger and conditions, a preview of its payload and its history, its body scrolling
  * between a fixed head and foot.
  */
@@ -5428,7 +5428,7 @@ kbd {
   white-space: nowrap;
 }
 
-/* The bold line that opens each section (BQ3): what it does, in words. */
+/* The bold line that opens each section: what it does, in words. */
 .edge-rules-summary {
   margin: 0;
   font-size: var(--font-size-md);
@@ -6057,7 +6057,7 @@ kbd {
   margin: 0 0 var(--space-2);
 }
 
-/* The Plan tab (BO2): the Review tab's rail of versions, the plan, and the decision under it. */
+/* The Plan tab: the Review tab's rail of versions, the plan, and the decision under it. */
 .plan-doc {
   display: flex;
   flex: 1;
@@ -6270,7 +6270,7 @@ kbd {
   grid-column: 1 / -1;
 }
 
-/* A PR tab (BI1): a pull request drawn by the app from GitHub, in the dark window column beside a terminal. */
+/* A PR tab: a pull request drawn by the app from GitHub, in the dark window column beside a terminal. */
 .pr-view {
   display: flex;
   flex: 1;
@@ -6558,9 +6558,9 @@ kbd {
 }
 
 /*
- * The merge gate. BL1: a Gate tab in the dark window column, like a PR tab:
+ * The merge gate. A Gate tab in the dark window column, like a PR tab:
  * its headline and command, its steps as a table, and the picked step's log under it. A run on an older commit, or with
- * uncommitted changes, is greyed. BM3: Run gate or the gate's badge and Merge in the window's header.
+ * uncommitted changes, is greyed. Run gate or the gate's badge and Merge in the window's header.
  */
 .gate-view {
   font-size: var(--font-size-sm);
@@ -6731,7 +6731,7 @@ tr[data-status='running'] .gate-step-icon {
   overflow-wrap: anywhere;
 }
 
-/* In the window's header (BM3). */
+/* In the window's header. */
 .gate-controls {
   display: flex;
   flex: none;
@@ -6829,7 +6829,7 @@ tr[data-status='running'] .gate-step-icon {
   font-size: var(--font-size-xs);
 }
 
-/* A web tab (BI2): its address row over the area the main process draws its page in. */
+/* A web tab: its address row over the area the main process draws its page in. */
 .web-view {
   display: flex;
   flex: 1;
@@ -6913,7 +6913,7 @@ tr[data-status='running'] .gate-step-icon {
   height: var(--icon-xs);
 }
 
-/* A tile ⌘K showed (CS2): ringed in the accent, pulsing twice; held still with reduced motion. */
+/* A tile ⌘K showed: ringed in the accent, pulsing twice; held still with reduced motion. */
 .react-flow__node[data-pulse] {
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-pulse);
@@ -6936,7 +6936,7 @@ tr[data-status='running'] .gate-step-icon {
   }
 }
 
-/* The diagram shapes' picker (CL1) and the / palette (CL3) */
+/* The diagram shapes' picker and the / palette */
 .shape-icon {
   --shape-fill: var(--raised);
   --shape-stroke: var(--text-soft);

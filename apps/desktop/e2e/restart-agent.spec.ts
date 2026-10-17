@@ -43,7 +43,7 @@ test('an agent that exits drops its pane into a shell in its worktree, and Resta
     await expandedTile(window).locator('.session-window-head').click();
     await window.keyboard.press('Escape');
     await expect(expandedTile(window)).toHaveCount(0);
-    // Its tile says it ended, and how, in its state pill (BW1): no Restart row pushes its footer out of it.
+    // Its tile says it ended, and how, in its state pill: no Restart row pushes its footer out of it.
     await expect(tile(window).locator('.hybrid-tile-footer .ui-pill')).toHaveText('ended · exit 0');
     await expect(tile(window).getByTestId('restart-agent')).toHaveCount(0);
     const [footer, card] = [await tile(window).locator('.hybrid-tile-footer').boundingBox(), await tile(window).boundingBox()];

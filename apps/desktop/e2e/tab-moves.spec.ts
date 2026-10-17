@@ -553,7 +553,7 @@ test("a tab split inside itself before windows had panes is laid out as panes as
     await spawnAgent(window, 'monorepo', 'Wire the fallback');
     await expect(window.getByTestId('agent-tile')).toHaveCount(1, { timeout: TURN_MS });
     const [impl] = await agents(window);
-    // The agent's own tab split as AS3's ⌘D split it: a shell beside the agent, in the same tab.
+    // The agent's own tab split as its ⌘D split it: a shell beside the agent, in the same tab.
     const old = await window.evaluate(async (agentId) => {
       const own = await globalThis.window.agentBoard.shells.ownTab(agentId);
       return globalThis.window.agentBoard.shells.split(own.id, agentId, 'horizontal');

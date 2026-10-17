@@ -103,7 +103,7 @@ test("a hand-off drawn from one agent's handle to another opens its Edge rules, 
     await expect(rules).toContainText('Write the code');
     await expect(rules).toContainText('Review the code');
     await expect(rules.getByText('new', { exact: true })).toBeVisible();
-    // Its four sections open with what they do (BQ3).
+    // Its four sections open with what they do.
     await expect(rules.getByRole('group', { name: 'Trigger' }).getByRole('button', { name: 'When it hands off' })).toHaveAttribute('aria-pressed', 'true');
     await expect(rules.locator('.edge-rules-summary')).toHaveText([
       'Sends by itself when Write the code hands off',

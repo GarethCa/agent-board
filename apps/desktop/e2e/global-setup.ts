@@ -16,7 +16,7 @@ export default function globalSetup(): () => Promise<void> {
   createRequire(import.meta.url)('electron');
   scrubBoardEnv();
   const teardownGuard = harnessGuardGlobalSetup();
-  // git in a spec must not see a GIT_DIR from the run's own environment, and the dev repo's core config must come out as it went in.
+  // git in a spec must not see a GIT_DIR from the run's own environment, and this checkout's core config must come out as it went in.
   const teardownGit = gitGuardGlobalSetup();
   const dataDir = tempDataDir();
   process.env.AGENT_BOARD_DATA_DIR = dataDir;

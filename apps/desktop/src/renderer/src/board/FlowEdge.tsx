@@ -96,7 +96,7 @@ function agentOf(nodeId: string): string | undefined {
 const OUTWARD: Record<ConnectorSide, EdgePoint> = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, top: { x: 0, y: -1 }, bottom: { x: 0, y: 1 } };
 
 /**
- * The edges between two agents as one rail (CD4): a faint line with no arrowheads when they hand work both
+ * The edges between two agents as one rail: a faint line with no arrowheads when they hand work both
  * ways, or with a small arrow at the receiving end when only one way, and the latest document riding it as a token at
  * the end of whoever has it (`railToken`). A click on the rail or its token selects the edge the token is from (or the
  * one of its edges already selected), which opens its Edge rules; a token waiting for Send has Send on it, and slides
@@ -112,7 +112,7 @@ export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentF
   const selected = props.selected === true;
   const pair = isLinkedPair(rail);
   const { shape, ends, handles } = useLine(props, shaped.style, shaped, (geometry) => actions.update(shaped.id, geometry), undefined, {
-    // Either end goes onto another agent's tile (BT1), where every edge on it can go: it hands off there instead.
+    // Either end goes onto another agent's tile, where every edge on it can go: it hands off there instead.
     canEndOn: (nodeId, which) => {
       const agent = agentOf(nodeId);
       return agent !== undefined && actions.canMoveRail(rail, which, agent);
@@ -211,7 +211,7 @@ const STATE_NAMES: Record<RailToken['state'], string> = {
 };
 
 /**
- * The document on a rail (CD4): its name, its round on a linked pair (R2) or a held one's passing conditions (1/2),
+ * The document on a rail: its name, its round on a linked pair (R2) or a held one's passing conditions (1/2),
  * Send while it waits for it, and the line under it (`delivered 14:31`, `held until CI green`). It sits `at` the end
  * of whoever has it, off the `side` of that tile, and slides there while `sliding` (not under reduced motion). On a
  * rail too short for it (`compact`), only its mark, round and Send show until it is hovered or focused.

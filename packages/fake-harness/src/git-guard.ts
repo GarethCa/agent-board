@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 /**
  * The variables that point git at a repository, set when a run starts inside a git hook, a merge or a worktree command.
- * Left in a test's environment they make `git -C <tmp> init --bare` (no path) re-initialise the dev repo as bare
+ * Left in a test's environment they make `git -C <tmp> init --bare` (no path) re-initialise this checkout's repo as bare
  * (`core.bare = true`, which breaks every worktree) and `git init` write `core.worktree` into its config.
  */
 export const REPO_GIT_VARS = [
@@ -35,7 +35,7 @@ export function scrubGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
  */
 const GIT_TIMEOUT_MS = 10_000;
 
-/** A snapshot of the dev repo's `core.*` config: its entries, undefined outside a repo, or why git could not read it. */
+/** A snapshot of this checkout's `core.*` config: its entries, undefined outside a repo, or why git could not read it. */
 export type CoreConfig = string | undefined | { unreadable: string };
 
 /** Git ran out of time: the config is unknown, not absent. */
@@ -49,7 +49,7 @@ function sharedConfig(cwd: string, timeoutMs: number): string | undefined {
   return existsSync(config) ? config : undefined;
 }
 
-/** The `core.*` entries of the dev repo's shared config: where a leaked GIT_DIR shows (`core.bare`, `core.worktree`). */
+/** The `core.*` entries of this checkout's shared config: where a leaked GIT_DIR shows (`core.bare`, `core.worktree`). */
 export function coreConfigOf(cwd: string, timeoutMs: number = GIT_TIMEOUT_MS): CoreConfig {
   let config: string | undefined;
   try {
@@ -69,7 +69,7 @@ export function coreConfigOf(cwd: string, timeoutMs: number = GIT_TIMEOUT_MS): C
 }
 
 /**
- * Throws if the dev repo's `core.*` config now differs from `before`, naming the change. Other config (a worker's
+ * Throws if this checkout's `core.*` config now differs from `before`, naming the change. Other config (a worker's
  * `push -u` writes branch entries) is not compared, so concurrent gates do not trip it. When either snapshot could not
  * be read, it warns and skips the check rather than report a leak that may not have happened.
  */
@@ -77,17 +77,17 @@ export function assertCoreConfigUnchanged(cwd: string, before: CoreConfig, timeo
   const after = coreConfigOf(cwd, timeoutMs);
   const unreadable = [before, after].find((snapshot) => typeof snapshot === 'object');
   if (unreadable !== undefined) {
-    console.warn(`agent-board git guard: could not read the dev repo's core git config (${unreadable.unreadable}), so its check is skipped this run`);
+    console.warn(`agent-board git guard: could not read this checkout's core git config (${unreadable.unreadable}), so its check is skipped this run`);
     return;
   }
   if (before !== after) {
-    throw new Error(`agent-board git guard: the dev repo's core git config changed during the run (a test leaked GIT_DIR or GIT_WORK_TREE?)\nbefore:\n${before ?? '(none)'}\nafter:\n${after ?? '(none)'}`);
+    throw new Error(`agent-board git guard: this checkout's core git config changed during the run (a test leaked GIT_DIR or GIT_WORK_TREE?)\nbefore:\n${before ?? '(none)'}\nafter:\n${after ?? '(none)'}`);
   }
 }
 
 /**
  * Vitest/Playwright globalSetup body: strips the repo-locating variables from the run's environment (workers inherit
- * them clean), snapshots the dev repo's `core.*` config, and fails the run at teardown if it changed.
+ * them clean), snapshots this checkout's `core.*` config, and fails the run at teardown if it changed.
  */
 export function gitGuardGlobalSetup(cwd: string = process.cwd()): () => void {
   scrubGitEnv();

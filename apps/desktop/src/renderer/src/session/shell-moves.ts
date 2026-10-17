@@ -1,4 +1,4 @@
-// Moving tabs between session windows, across OS windows too, and the board (AT2): what is dragged, what
+// Moving tabs between session windows, across OS windows too, and the board: what is dragged, what
 // a drop does with it, and how the undo history keeps the move. Pure but for the one drag in flight, which every window
 // of the app hears of; the board makes the moves.
 import { useEffect, useSyncExternalStore, type DragEvent } from 'react';
@@ -195,8 +195,8 @@ export const agentWorktrees = boardValue<readonly { name: string; worktree: stri
 export const dropOver = boardValue<string | undefined>(undefined);
 
 /**
- * Starts dragging a tab or pane (AT2): its data typed so only the app's windows and board take it, noted for
- * the surfaces it passes over, and drawn as a lifted tab, as the AT2 mock has it.
+ * Starts dragging a tab or pane: its data typed so only the app's windows and board take it, noted for
+ * the surfaces it passes over, and drawn as a lifted tab.
  */
 export function startDrag(event: DragEvent, drag: TabDrag, label: string): void {
   event.dataTransfer.setData(TAB_DRAG_TYPE, JSON.stringify(drag));

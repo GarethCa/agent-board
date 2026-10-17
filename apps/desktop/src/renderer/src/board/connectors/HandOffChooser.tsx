@@ -4,7 +4,7 @@ import { AnchoredPopover, Kbd } from '../../ui';
 import { keyText } from '../../keys/registry';
 
 /**
- * Asks what a connector just dropped from one agent's tile on another's is (BP5): an Arrow, as it is drawn
+ * Asks what a connector just dropped from one agent's tile on another's is: an Arrow, as it is drawn
  * (the default: Enter, Esc or a click elsewhere), or a hand-off carrying `payload` (H). Beside `at`, where it was let
  * go, on the window.
  */

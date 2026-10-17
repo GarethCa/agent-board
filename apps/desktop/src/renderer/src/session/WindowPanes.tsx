@@ -33,7 +33,7 @@ interface WindowPanesProps {
 }
 
 /**
- * A session window's panes (BH1), cmux-style: each with its strip of tabs over the surface it shows. Every
+ * A session window's panes: each with its strip of tabs over the surface it shows. Every
  * surface is laid out flat and keyed by itself, so moving a tab to another pane, or splitting one, never re-mounts a
  * terminal; those not showing stay attached behind the one that is. A tab dragged over a pane shows where it would
  * land: in its strip from the middle, or in a new pane at an edge.

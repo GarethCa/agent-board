@@ -1,4 +1,4 @@
-// Moving between the sessions of a group from the session window (AL1): the sessions of the shown one's zone,
+// Moving between the sessions of a group from the session window: the sessions of the shown one's zone,
 // or the loose ones for a session in none, in board order, wrapping at the ends. Pure, so the order is unit-tested.
 import type { WindowTarget } from '../../../preload/api';
 

@@ -3,7 +3,7 @@ status: accepted
 ---
 # Agents learn the board from an `agent-board` CLI and a small MCP, told once
 
-The maintainer wants a Claude or Codex on the board to know about its zones, tiles, groups and edges, as cmux tells a session about its workspaces. His rule: tell the model **once** where it is and to read `agent-board --help`, and let it work out the rest. So the help text is the product, and nothing long is injected into the prompt.
+The maintainer wants a Claude or Codex on the board to know about its zones, tiles, groups and edges, as a terminal multiplexer tells a session about its workspaces. His rule: tell the model **once** where it is and to read `agent-board --help`, and let it work out the rest. So the help text is the product, and nothing long is injected into the prompt.
 
 ## One API, two faces
 

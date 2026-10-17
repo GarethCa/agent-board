@@ -59,3 +59,26 @@ The Clear Sight theme pack is built on the colour-blind-safe palette of Masataka
 Universal Design guide (<https://jfly.uni-koeln.de/color/>), popularised by Bang Wong, "Points of view: Color
 blindness", *Nature Methods* 8, 441 (2011). No licence is stated for its eight colours; agent-board credits the
 authors as the guide asks. Its neutrals and terminal colours are agent-board's own.
+
+## Fonts
+
+The app bundles three typefaces through [Fontsource](https://fontsource.org) packages, all under the SIL Open Font
+License, Version 1.1, whose full text is in [`licenses/OFL-1.1.txt`](licenses/OFL-1.1.txt). The copyright lines are the
+ones in each package's `LICENSE` file.
+
+| Typeface | Package | Copyright |
+| --- | --- | --- |
+| Bricolage Grotesque | `@fontsource-variable/bricolage-grotesque` | Copyright 2022 The Bricolage Grotesque Project Authors (<https://github.com/ateliertriay/bricolage>) |
+| JetBrains Mono | `@fontsource-variable/jetbrains-mono` | Copyright 2020 The JetBrains Mono Project Authors (<https://github.com/JetBrains/JetBrainsMono>) |
+| Caveat | `@fontsource/caveat` | Copyright 2014 The Caveat Project Authors (<https://github.com/googlefonts/caveat>) |
+
+### DejaVu, in the visual tests only
+
+The visual-regression spec renders with DejaVu Sans, DejaVu Sans Bold and DejaVu Sans Mono
+(<https://dejavu-fonts.github.io/>, version 2.37), subset to the glyphs the app shows and stored in
+`apps/desktop/e2e/fonts/`. They are not part of the shipped app. They are under the Bitstream Vera licence:
+
+> Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream Vera is a trademark of Bitstream, Inc.
+> DejaVu changes are in public domain.
+
+The licence text is in [`apps/desktop/e2e/fonts/LICENSE.txt`](apps/desktop/e2e/fonts/LICENSE.txt).

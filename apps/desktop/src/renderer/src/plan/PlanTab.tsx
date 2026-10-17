@@ -46,7 +46,7 @@ interface PlanTabProps {
 }
 
 /**
- * The Plan tab (BO2): an agent's plans as the Review tab shows rounds. A rail of its versions, each stamped
+ * The Plan tab: an agent's plans as the Review tab shows rounds. A rail of its versions, each stamped
  * with its decision; the one picked rendered (Markdown as the PR tab renders it; HTML in a locked-down view of its own);
  * and, while the agent waits on it, comments and Reject / Request changes / Approve under it.
  */

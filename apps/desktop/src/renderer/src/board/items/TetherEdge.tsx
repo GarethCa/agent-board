@@ -17,7 +17,7 @@ function sideMiddle(rect: Rect, side: ConnectorSide): { x: number; y: number } {
 }
 
 /**
- * The dashed tether from an agent note to its agent's tile (CPa): straight, from the middle of the note's side that
+ * The dashed tether from an agent note to its agent's tile: straight, from the middle of the note's side that
  * faces the tile to the middle of the tile's side that faces the note.
  */
 export const TetherEdge = memo(function TetherEdge({ id, source, target }: EdgeProps) {

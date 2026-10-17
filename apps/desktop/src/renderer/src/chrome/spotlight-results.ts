@@ -1,4 +1,4 @@
-// What the ⌘K switcher lists (CR2, CT2): grouped before anything is typed, one ranked fuzzy list after. Pure, so the
+// What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
 import { needsYouNow, planPending, type Agent, type Shell, type Zone } from '@agent-board/daemon/protocol';
 

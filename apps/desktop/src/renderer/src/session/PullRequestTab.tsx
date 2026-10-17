@@ -30,7 +30,7 @@ const OPEN_DIFF_LENGTH = 20_000;
 type Asking = 'approve' | 'merge';
 
 /**
- * A PR tab (BI1): a GitHub pull request drawn by the app from what the daemon reads with gh, with no web content
+ * A PR tab: a GitHub pull request drawn by the app from what the daemon reads with gh, with no web content
  * loaded. Its description (Markdown, nothing in it loading or running, links to the OS browser), its checks, its
  * changed files each with its diff, and its reviews and comments. Read as it shows, as the app is focused, and by
  * Refresh; never on a timer. Approve and Merge show only when GitHub would allow them, and each asks first.

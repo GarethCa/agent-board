@@ -7,7 +7,7 @@ import { chooseWorkers, type WorkerCounts } from './scripts/vitest-workers/worke
 const at = (path: string): string => fileURLToPath(new URL(path, import.meta.url));
 
 /**
- * The guards every Vitest run loads, wherever it starts: tests must never reach the real claude/codex, git's dev repo,
+ * The guards every Vitest run loads, wherever it starts: tests must never reach the real claude/codex, git's own repo,
  * a real tracker or an enclosing board (packages/fake-harness/src/guard.ts, git-guard.ts, board-guard.ts,
  * packages/tracker/src/vitest/setup.ts), and a test stuck in a loop or a run whose starter is gone must not spin on
  * (the runner packages/fake-harness/src/vitest/watchdog.ts, and reap.ts). Absolute paths, so a package's own config can use them too.

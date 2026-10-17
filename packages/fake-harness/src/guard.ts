@@ -226,7 +226,7 @@ function check(launch: Launch): void {
     const leaked = basename(launched.command) === 'git' ? leakedGitVars(env) : [];
     if (leaked.length > 0) {
       throw new Error(
-        `agent-board git guard: refused to run git with ${leaked.join(', ')} in its environment (${words.join(' ')}); a leaked GIT_DIR makes git write to the dev repo. Scrub it with scrubGitEnv().`,
+        `agent-board git guard: refused to run git with ${leaked.join(', ')} in its environment (${words.join(' ')}); a leaked GIT_DIR makes git write to this checkout's repo. Scrub it with scrubGitEnv().`,
       );
     }
     const real = realHarnessFor(launched.command, { ...env, PATH: launched.path }, cwd);

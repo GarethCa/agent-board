@@ -1,4 +1,4 @@
-// What a drag on a selected line's handles does to it (BT1, BU3), apart from the pointer events that drive it.
+// What a drag on a selected line's handles does to it, apart from the pointer events that drive it.
 import type { ConnectorSide, EdgePoint, FlowEdgeSide } from '@agent-board/daemon/protocol';
 import type { Rect } from '../../geometry';
 import { nearestSide } from './endpoints';

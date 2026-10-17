@@ -1,4 +1,4 @@
-// Linked sessions as one rail (CD4): the edges between two agents are drawn as one line with no arrowheads,
+// Linked sessions as one rail: the edges between two agents are drawn as one line with no arrowheads,
 // and the latest document rides it as a token, at the end of whoever has it. The edges stay apart in the data (their
 // rules, conditions and payloads); only the drawing merges them.
 import type { ConnectorSide, FlowEdge, FlowEdgeShape, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
@@ -159,7 +159,7 @@ export function withRailSelected(current: ReadonlySet<string>, ids: readonly str
 }
 
 /**
- * The changes that move `rail`'s `which` end onto agent `agent` (BT1): each of its edges takes `agent` in place of the
+ * The changes that move `rail`'s `which` end onto agent `agent`: each of its edges takes `agent` in place of the
  * one it left, and its edge made first, whose shape it is drawn in, takes `shape` too.
  */
 export function railMoved(

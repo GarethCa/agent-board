@@ -6,7 +6,7 @@ import type { TileNodeType } from './tile';
 import { tileSubject } from './tiles';
 import { keyText } from '../keys/registry';
 
-/** Whether ⌥ is held while a connector is dragged from an agent's tile (BP8): let go on another, a hand-off. */
+/** Whether ⌥ is held while a connector is dragged from an agent's tile: let go on another, a hand-off. */
 export const HandingOffContext = createContext(false);
 
 /**

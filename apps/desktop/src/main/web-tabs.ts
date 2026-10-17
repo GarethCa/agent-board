@@ -73,7 +73,7 @@ interface ViewKind {
   lockContents(contents: WebContents, onBlocked: (url: string) => void, onOffer: (url: string) => void): void;
 }
 
-/** A web page at `url` (BI2): https and this machine's http only (`web-lockdown.ts`). */
+/** A web page at `url`: https and this machine's http only (`web-lockdown.ts`). */
 const webKind = (url: string): ViewKind => ({
   asked: url,
   plan: false,
@@ -92,7 +92,7 @@ const planKind = (tabId: string): ViewKind => ({
 });
 
 /**
- * The web tabs' IPC (BI2): each tab's page is a `WebContentsView` of its own over the tab's area of the window
+ * The web tabs' IPC: each tab's page is a `WebContentsView` of its own over the tab's area of the window
  * whose renderer opened it, which places it (`setBounds`) and hides it. Locked down (`web-lockdown.ts`): no Node, a
  * sandbox, no preload, no devtools, no dialogs, a partition of its own, https and this machine's http only. Its page
  * goes when its renderer takes it away, reloads or closes; its partition's data when the tab is closed (`forget`), or

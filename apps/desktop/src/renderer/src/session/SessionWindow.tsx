@@ -23,7 +23,7 @@ import { dropKey } from './shell-moves';
 import { tokenNumber } from '../theme';
 import { clampFrame, defaultFrame, EDGES, fromFractions, resizeFrame, toFractions, type Bounds, type Edge, type Frame, type SavedFrame } from '../windows/window-frame';
 
-/** Where the window's session is among its group's, and how to step to the others (AL1). */
+/** Where the window's session is among its group's, and how to step to the others. */
 export interface WindowNav {
   /** From 0, in board order. */
   index: number;
@@ -67,9 +67,9 @@ interface SessionWindowProps {
  * composer under it for an agent. On the board it has labelled Minimise, Pop out and Close buttons (V-c); popped out,
  * its header holds the OS window's traffic lights on macOS and Back to board, and its details start as an icon rail
  * (W-a). Closing or minimising it detaches; Stop ends the session. An implementer whose work is under review has a
- * Review tab beside its terminal (AD2), with the review doc viewer; the terminal stays attached behind it. An orchestrator
- * has an Activity tab (BB1), with what it did and tried. An agent's
- * header has a Terminal/Chat switch (AE1): the chat view reads its conversation from its transcript instead.
+ * Review tab beside its terminal, with the review doc viewer; the terminal stays attached behind it. An orchestrator
+ * has an Activity tab, with what it did and tried. An agent's
+ * header has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
  */
 export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
@@ -104,7 +104,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
     askedAtOpen.current = false;
     seenTabRequests.current = tabRequests;
   }, [tabRequests]);
-  // An orchestrator's Activity tab (BB1), once it has done or tried something (most agents may orchestrate, few do),
+  // An orchestrator's Activity tab, once it has done or tried something (most agents may orchestrate, few do),
   // or to say its activity could not be read.
   const activity = useActivity(agent?.sessionId);
   const orchestrates = agent !== undefined && (activity.lines.length > 0 || activity.error !== undefined);
@@ -170,7 +170,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           </span>
         )}
         <span className="session-window-head-fill" />
-        {/* Its merge gate (BM3), for an agent with a branch of its own. */}
+        {/* Its merge gate, for an agent with a branch of its own. */}
         {agent && gated(agent) && <GateControls agent={agent} visible />}
         {/* How its terminal tab shows it: hidden over the Review tab, whose own tabs lead back. */}
         {agent && showing === 'terminal' && <Segmented<SessionView> className="session-window-view-switch" aria-label="View" value={view} onChange={setView} options={VIEW_OPTIONS} />}
@@ -255,7 +255,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   );
 }
 
-/** The window's tabs: its terminal, an implementer's Review (AD2) and an orchestrator's Activity (BB1). */
+/** The window's tabs: its terminal, an implementer's Review and an orchestrator's Activity. */
 type WindowTab = 'terminal' | 'review' | 'activity';
 
 const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
@@ -290,7 +290,7 @@ function useMinimiseOnClickOutside(root: React.RefObject<HTMLDivElement | null>,
 }
 
 /**
- * ‹ and › with ⌘[ and ⌘] (AL1; Ctrl+Shift+[ and ] off macOS, where Ctrl+[ is the terminal's Esc): each previews the
+ * ‹ and › with ⌘[ and ⌘] (Ctrl+Shift+[ and ] off macOS, where Ctrl+[ is the terminal's Esc): each previews the
  * session it goes to. Disabled when the session is alone in its group.
  */
 function NavButtons({ nav }: { nav: WindowNav }) {

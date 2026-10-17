@@ -364,7 +364,7 @@ test('a group holds shells, asks for a repo for an agent until it is bound as a 
     const zone = zoneNamed(window, 'Ideas');
     await expect(zone).toHaveAttribute('data-kind', 'unbound');
     await expect(zone.getByTestId('zone-tab')).toContainText('group');
-    // With no repo of its own, its New agent asks for one with the repo picker (AJ2).
+    // With no repo of its own, its New agent asks for one with the repo picker.
     await zone.getByRole('button', { name: 'New agent' }).click();
     const picker = window.getByRole('dialog', { name: 'Choose where the agent works' });
     await expect(picker).toBeVisible();
@@ -444,7 +444,7 @@ test('the Zone tool (Z) drags out where a zone goes, a group by default, which c
     await window.mouse.move(box.x + 350, box.y + 250, { steps: 4 });
     await window.mouse.move(box.x + 650, box.y + 510, { steps: 4 });
     await window.mouse.up();
-    // A group first (AI1).
+    // A group first.
     await expect(popover.getByRole('tab', { name: 'Group' })).toHaveAttribute('aria-selected', 'true');
     await popover.getByRole('textbox', { name: 'Zone name' }).fill('Ideas');
     await expect(popover.getByRole('radio', { name: 'Teal' })).toHaveAttribute('title', '#12b886');

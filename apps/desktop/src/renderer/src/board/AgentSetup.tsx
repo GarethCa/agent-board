@@ -66,7 +66,7 @@ const choice = (label: string, picked: boolean, onSelect: () => void): MenuEntry
 });
 
 /**
- * The three chip menus always in New agent's footer (BJ3): harness ▾, model ▾ and role ▾, so what will start
+ * The three chip menus always in New agent's footer: harness ▾, model ▾ and role ▾, so what will start
  * is always on show. The model menu has Default, the harness's models, and Other… for a typed model id.
  */
 export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChange(next: AgentSetup): void }) {
@@ -179,7 +179,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
   );
 }
 
-/** The one-line note under the role (BK2): the template it starts with, `whose` naming the zone (or "the repo's"). */
+/** The one-line note under the role: the template it starts with, `whose` naming the zone (or "the repo's"). */
 export function roleNote(role: string, whose: string): string {
   return `Uses ${whose} ${typedRoleText(role)} template.`;
 }

@@ -452,7 +452,7 @@ function BoardView() {
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
   );
-  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames (BA2). */
+  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames. */
   const applyNodeChanges = useCallback(
     (changes: NodeChange<BoardNode>[]) =>
       setNodes((current) => applyFlowNodeChanges(crewLookRef.current === 'frames' ? withCrewFollowing(changes, current) : changes, current)),
@@ -1017,7 +1017,7 @@ function BoardView() {
     const shown = getNodes();
     const onto = droppedOnto(shown, node.id, expandedRef.current);
     const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true };
-    // Its crew comes along under crew frames (BA2), each where it was beside it, undone with it as one step.
+    // Its crew comes along under crew frames, each where it was beside it, undone with it as one step.
     // Measured from where it is drawn, as its crew is.
     const drawn = shown.find((known): known is TileNodeType => known.id === node.id && isSessionTile(known)) ?? node;
     const crew = crewLookRef.current === 'frames' ? crewMoves(shown, drawn, move, landingRects(shown, move.zoneId, drawn)) : [];
@@ -1039,7 +1039,7 @@ function BoardView() {
   };
 
   /**
-   * Makes a move the user dropped, in any window, across OS windows too (AT2), and records it for undo: a
+   * Makes a move the user dropped, in any window, across OS windows too, and records it for undo: a
    * whole shell, a pane out of its split, or a pull request, web or session tab between windows. Nothing restarts:
    * only a shell's owner or place, or where a tab is, changes. The window it lands in keeps the tab it shows, so the
    * keyboard stays where it was and ⌘Z can take the move back. Resolves with whether it was made (a refusal is said),
@@ -1468,7 +1468,7 @@ function BoardView() {
       } else {
         const drop = dropAt(point, new Set(nodes.filter(isZone).map((zone) => zone.id)));
         if (drop.type === 'nothing' || (drop.type === 'node' && drop.nodeId === fromNode.id)) return;
-        // The object whose handles were lit as it was let go, by the same hit-test (BS4): on it, or near it.
+        // The object whose handles were lit as it was let go, by the same hit-test: on it, or near it.
         const near = findNear(point, (nodeId) => nodeId !== fromNode.id);
         if (near !== undefined) {
           // It arrives on the side facing where it came from.
@@ -1551,7 +1551,7 @@ function BoardView() {
     };
   }, [connecting, findNear]);
 
-  // While a connector is dragged from an agent's tile, holding ⌥ makes it a hand-off (BP8): the line thickens
+  // While a connector is dragged from an agent's tile, holding ⌥ makes it a hand-off: the line thickens
   // and says what it carries before it is let go.
   useEffect(() => {
     if (connecting === undefined || !connectingFromAgent.current) return;
@@ -1566,7 +1566,7 @@ function BoardView() {
     };
   }, [connecting]);
 
-  // Escape calls off a hand-off being dragged (FlowDraw): nothing is joined, wherever it is let go.
+  // Escape calls off a hand-off being dragged: nothing is joined, wherever it is let go.
   useEffect(() => {
     if (!handingOff) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1616,7 +1616,7 @@ function BoardView() {
   );
 
   /**
-   * The Agent or Shell tool dragged off the toolbar and let go at `at` on the screen (AG2): its tile goes there, unless
+   * The Agent or Shell tool dragged off the toolbar and let go at `at` on the screen: its tile goes there, unless
    * that is off the board or on one of the islands over it.
    */
   const dropTool = useCallback(
@@ -1924,7 +1924,7 @@ function BoardView() {
       const { id, from, to, fromSide, toSide, style, points } = state.edge;
       const agentsHere = nodeIds.has(tileNodeId('agent', from)) && nodeIds.has(tileNodeId('agent', to));
       if (flowEdgesRef.current.some((known) => known.id === id)) {
-        // Its ends go back to the agents they were on, if both are still here (BT1).
+        // Its ends go back to the agents they were on, if both are still here.
         flow.actions.update(id, { ...(agentsHere && { from, to }), fromSide, toSide, style, points });
       } else if (agentsHere) flow.actions.restore(state.edge);
     }
@@ -2603,7 +2603,7 @@ function BoardView() {
     from: agents.find((agent) => agent.sessionId === shownFlowEdge.from),
     to: agents.find((agent) => agent.sessionId === shownFlowEdge.to),
   };
-  // Opened on an edge whose tiles it would cover, the panel pans the board left until they clear it (FlowDraw AB2).
+  // Opened on an edge whose tiles it would cover, the panel pans the board left until they clear it.
   const shownFlowEdgeId = shownFlowEdge?.id;
   useEffect(() => {
     const edge = flowEdgesRef.current.find((known) => known.id === shownFlowEdgeId);
@@ -2628,7 +2628,7 @@ function BoardView() {
   const zones = useMemo(() => nodes.filter(isZone).map((node) => node.data.zone), [nodes]);
   // Each agent's name and worktree: a shell moved into another agent's window says whose worktree it runs in.
   useEffect(() => agentWorktrees.set(agents.map((agent) => ({ name: agent.name, worktree: agent.worktree }))), [agents]);
-  /** Where every agent's and shell's tile sits, for the session window's steps through its zone (AL1). */
+  /** Where every agent's and shell's tile sits, for the session window's steps through its zone. */
   const navSessions = useMemo(() => nodes.filter(isSessionTile).flatMap(navSessionOf), [nodes]);
 
   return (
@@ -2781,7 +2781,7 @@ function BoardView() {
                                 snapping.onDragStop();
                                 setDropTarget(undefined);
                                 dropOver.set(undefined);
-                                // A shell tile dropped on an agent's tile or window becomes one of its tabs (AT2),
+                                // A shell tile dropped on an agent's tile or window becomes one of its tabs,
                                 // rather than overlapping it.
                                 const adopter = adopterOf(dragged, pointOf(event));
                                 if (adopter !== undefined) {

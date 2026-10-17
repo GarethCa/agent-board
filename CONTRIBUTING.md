@@ -21,6 +21,23 @@ Before you change anything, read:
 - [`CONTEXT.md`](CONTEXT.md): the domain glossary. Use its words (zone, tile, session, harness, edge) in code, tests, issues and PRs, and avoid the synonyms it lists.
 - [`docs/adr/`](docs/adr): the decisions already made. If your change goes against one, say so in the PR and update the ADR in the same PR.
 
+## Repo layout
+
+```text
+apps/desktop/          Electron app: main process, preload, React renderer, Playwright e2e and visual tests
+packages/daemon/       agent-board daemon: JSON-RPC over a local socket, hook ingress, SQLite migrations
+packages/fake-harness/ Fake claude/codex CLIs and the guard that keeps tests off the real ones
+packages/tracker/      Issue trackers (Linear, GitHub) behind one interface, recorded-HTTP fixtures, keychain credentials
+fixtures/              Real Codex hook payloads captured for tests
+docs/                  The tour, quick start, install, FAQ, troubleshooting and how it works
+docs/adr/              Architecture decision records
+docs/assets/           Logo and the README's screenshots
+scripts/               Dev scripts: update-app updates a checkout and installs its app; readme-screenshots redraws the README's screenshots; visual and check-local run the merge gate; codex-capture records real Codex hook payloads into fixtures/
+CONTEXT.md             Domain glossary
+```
+
+How the pieces fit together is in [How it works](docs/how-it-works.md).
+
 ## Issues, branches and pull requests
 
 - **Issues** are on GitHub. For a bug, include the build from the app's window title and the steps to reproduce it. For a feature, say what you are trying to do; the maintainer may already have it planned.
@@ -82,7 +99,7 @@ The gate is the `pnpm check:pr` table on the PR, run on the PR's head commit, an
 
 ## Docs
 
-- The README describes the latest release. If your PR changes a command the README or this guide shows, update it in the same PR. `pnpm readme:screenshots` redraws its screenshots from a seeded demo board.
+- The README and the pages in `docs/` describe the latest release. If your PR changes a command they or this guide show, update it in the same PR. `pnpm readme:screenshots` redraws its screenshots from a seeded demo board.
 - New architectural decisions get an ADR in `docs/adr/`. New domain terms go in `CONTEXT.md`.
 
 ## Licence

@@ -3,7 +3,7 @@ import type { BoardItem, Connector } from '@agent-board/daemon/protocol';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, removeDataDir, stopDaemon, tempDataDir } from './launch.ts';
 
-// The diagram shapes: the picker under Shape (CL1), the / palette (CL3), and a picked shape on the board.
+// The diagram shapes: the picker under Shape, the / palette, and a picked shape on the board.
 
 /** The board as the daemon has stored it. */
 function stored(dataDir: string): Promise<{ items: BoardItem[]; connectors: Connector[] }> {

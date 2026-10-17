@@ -72,7 +72,7 @@ function bowOf(samples: readonly EdgePoint[], points: readonly EdgePoint[], labe
 }
 
 /**
- * React Flow's curve `path` (one cubic, `middle` halfway along it) bowed through `bow` (BU3): both its controls moved
+ * React Flow's curve `path` (one cubic, `middle` halfway along it) bowed through `bow`: both its controls moved
  * by the same step, which moves its middle by three quarters of it, so it passes through `bow` there. A bow on its own
  * middle is the same curve, so grabbing the handle moves nothing; bowed, it leans out of its sides as it bows.
  */

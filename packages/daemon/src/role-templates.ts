@@ -1,5 +1,5 @@
 // Role templates: the prompt an agent started in a role begins with, one per role and zone. A zone's template
-// is the one the user saved for it, else its seed: its repo's worker prompt (`.claude/skills/cmux-workers/*-prompt.md`),
+// is the one the user saved for it, else its seed: its repo's worker prompt (a `*-prompt.md` in its worker skill),
 // else the app's own. A named custom role's is the zone's saved one for the name, else the app's default role
 // of that name, else empty: never a seed. Filling it is plain text substitution, never a shell.
 import { readFileSync } from 'node:fs';

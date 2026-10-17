@@ -80,7 +80,7 @@ export async function spawnAgent(
 }
 
 /**
- * Picks `choice` from one of a New agent form's footer chips (BJ3): `Harness`, `Model` or `Role`. The chip's
+ * Picks `choice` from one of a New agent form's footer chips: `Harness`, `Model` or `Role`. The chip's
  * name is "<chip>: <what it is now>".
  */
 export async function pickInChip(form: Locator, chip: 'Harness' | 'Model' | 'Role', choice: string): Promise<void> {

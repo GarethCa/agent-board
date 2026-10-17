@@ -9,7 +9,7 @@ type RefreshReason = 'shown' | 'focus' | 'manual';
 export const REFRESH_GAP_MS = 15_000;
 
 /**
- * A PR tab's calls to the daemon (BI1), each numbered as it starts: how many are under way, the newest approve
+ * A PR tab's calls to the daemon, each numbered as it starts: how many are under way, the newest approve
  * or merge, the newest whose answer is shown, and when the last one ended, whether it worked or not.
  */
 export interface Runs {

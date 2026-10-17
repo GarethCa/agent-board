@@ -32,7 +32,7 @@ const TEXT_SIZE_BUTTONS: { size: TextSize; label: string }[] = [
   { size: 'h1', label: 'L' },
 ];
 
-/** The bar's button that changes the kind of shape, drawn as the shape it is, opening the shape picker (CL1). */
+/** The bar's button that changes the kind of shape, drawn as the shape it is, opening the shape picker. */
 function ChangeShape({ current, onPick }: { current: ShapeType; onPick(shape: ShapeType): void }) {
   const [open, setOpen] = useState(false);
   return (

@@ -40,7 +40,7 @@ export function agentPill(agent: Agent, labels: Record<AgentState, string> = STA
 }
 
 /**
- * An ended agent's pill (BW1): `ended · exit N`, coloured by its exit code, or plain `ended` when a signal ended it,
+ * An ended agent's pill: `ended · exit N`, coloured by its exit code, or plain `ended` when a signal ended it,
  * coloured by its state then (done when the user stopped it, failed when it was killed otherwise). Not one a restart
  * stopped, which keeps its own stopped look until it is resumed.
  */

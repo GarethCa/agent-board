@@ -358,7 +358,7 @@ const PR = 35;
 const NO_CLEANUP = { close: false, worktree: false, branch: false, comment: false };
 const ALL = { close: true, worktree: true, branch: true, comment: true };
 
-describe('Open PR and Merge (BM3)', { timeout: 20_000 }, () => {
+describe('Open PR and Merge', { timeout: 20_000 }, () => {
   it("opens an agent's pull request from its board token as a draft, and only its own; merging stays the user's", async () => {
     const { github, client, recorder, daemon, agent, passed } = await pullRequestDaemon({ printsToken: true });
     await passed();

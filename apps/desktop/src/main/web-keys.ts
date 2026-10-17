@@ -1,4 +1,4 @@
-// The session window's own keys pressed while a web tab's page has the keyboard (BI2). The page is another
+// The session window's own keys pressed while a web tab's page has the keyboard. The page is another
 // web contents, so they never reach the window's renderer by themselves. Pure, so both platforms are tested.
 import type { Input } from 'electron';
 

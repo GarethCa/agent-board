@@ -324,7 +324,7 @@ function useDockScroll(ids: readonly string[]): { track: RefObject<HTMLDivElemen
  * windows to restore, and popped-out ones to bring forward. `agents` gives an agent's window its live controls, and
  * `shells` (undefined until listed) a shell tile's window its panes. Once the board has `loaded` them, a window whose
  * agent or shell is gone (deleted while the board was closed, or since) is closed. `sessions`, where every agent's and shell's
- * tile sits, and `zones` let the shown window step through the other sessions of its tile's zone (AL1).
+ * tile sits, and `zones` let the shown window step through the other sessions of its tile's zone.
  */
 export function SessionWindowsLayer({
   agents,

@@ -1,4 +1,4 @@
-// What the review viewer (AD2) shows, from the implementer's review rounds. Pure, so it is unit-tested. When a
+// What the review viewer shows, from the implementer's review rounds. Pure, so it is unit-tested. When a
 // round may start or merge is `startBlocked` and `mergeBlocked` in `@agent-board/daemon/review-doc`, which the daemon
 // checks too.
 import type { ReviewRound, ReviewUpdatedEvent } from '@agent-board/daemon/protocol';

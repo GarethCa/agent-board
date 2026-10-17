@@ -1,4 +1,4 @@
-// What a web tab's page may do (BI2): go to https pages and to this machine over http, and nothing else. It
+// What a web tab's page may do: go to https pages and to this machine over http, and nothing else. It
 // opens no window, shows no dialog, gets no permission, downloads nothing and picks no device; only a page on this
 // machine reaches this machine. Its session's partition is its own.
 import type { Session, WebContents } from 'electron';

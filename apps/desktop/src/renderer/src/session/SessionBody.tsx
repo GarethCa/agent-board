@@ -89,7 +89,7 @@ export function SessionBody({
     [],
   );
   const owner: TabOwner | undefined = agent ? { kind: 'agent', agent } : shell ? { kind: 'shell', shell } : content.kind === 'tabs' ? content : undefined;
-  // Tabs and panes drag between windows and onto the board (AT2), and between OS windows, where the
+  // Tabs and panes drag between windows and onto the board, and between OS windows, where the
   // board can move them: a pop-out asks it to.
   const moves = tabMover.use();
   const panes = useWindowPanes(owner, { onProblem: setProblem, moves });
@@ -365,7 +365,7 @@ function BlockedBanner({ agent, chat, onShowTerminal }: { agent: Agent; chat: bo
 }
 
 /**
- * What one tab of a window shows (BH1), by its kind: a shell tab's panes (the window's own, with the agent's
+ * What one tab of a window shows, by its kind: a shell tab's panes (the window's own, with the agent's
  * pane in an agent's), another agent's terminal, or a shell tile's panes. The keyboard goes to it while its pane has it.
  */
 function SurfaceView({

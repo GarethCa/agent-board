@@ -137,11 +137,11 @@ function withMovedEnd(ends: LineEnds, { moved, fromSide, toSide }: LineDraft<Flo
 type Grip = { kind: 'end'; which: 'from' | 'to' } | { kind: 'bend'; index: number } | { kind: 'insert'; leg: number } | { kind: 'bow' };
 
 /**
- * The handles of a selected line: one on each end (BT1), dragged along its object's outline to another side, which
+ * The handles of a selected line: one on each end, dragged along its object's outline to another side, which
  * fixes that end there (an automatic one too), or onto another object it `canEndOn`, whose side nearest the pointer
  * lights and takes it; let go anywhere else, it goes back. A straight or elbow line has one on each bend, dragged to
  * move it, or double-clicked to take it out, and a smaller one halfway along each stretch, pulled out into a new
- * bend. A curve has one bow handle instead (BU3), on its middle, pulled sideways to bow the whole curve through it, and
+ * bend. A curve has one bow handle instead, on its middle, pulled sideways to bow the whole curve through it, and
  * double-clicked to straighten it again.
  */
 function LineHandles<Side extends FlowEdgeSide>(props: {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PullRequestDetails } from '@agent-board/daemon/protocol';
 import { afterAction, NO_RUNS, REFRESH_GAP_MS, refreshDue, settleRun, startRun } from './use-pull-request';
 
-describe('when a PR tab reads its pull request again (BI1): no polling', () => {
+describe('when a PR tab reads its pull request again: no polling', () => {
   const ended = (lastAt: number) => ({ ...NO_RUNS, lastAt });
 
   it('reads it the first time it shows, and again on a manual refresh at any time', () => {

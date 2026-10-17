@@ -1,4 +1,4 @@
-// Where a web tab's page is drawn over its window (BI2), and where an overlay crosses it. Pure.
+// Where a web tab's page is drawn over its window, and where an overlay crosses it. Pure.
 import type { WebTabBounds } from '../../../preload/api';
 
 /**

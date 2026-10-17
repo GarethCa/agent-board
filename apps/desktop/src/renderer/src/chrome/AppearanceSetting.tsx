@@ -178,7 +178,7 @@ function ThemeList({ picked, onPick }: { picked: string; onPick(theme: string): 
 }
 
 /**
- * Settings › Appearance (CV2, CW1): the mode, Light, Dark or System (the default, which follows the OS), then the theme,
+ * Settings › Appearance: the mode, Light, Dark or System (the default, which follows the OS), then the theme,
  * a button showing the choice that opens the Theme popover. A choice is a family, and the mode picks its light or dark
  * theme; where it has none for the mode, the app's own shows, and a hint says so. The setting is the main process's
  * (main/appearance.ts), which every window follows at once; this shows it, as picked in any window, and changes it.

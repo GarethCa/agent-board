@@ -21,7 +21,7 @@ const note = (id: string, sessionId: string, kind: BoardItem['kind'] = 'agent-no
 const answer = (id: string, sessionId: string): BoardItem => ({ ...note(id, sessionId), data: { ...note(id, sessionId).data, asked: 'why?' } });
 const tile = (sessionId: string) => ({ id: `${AGENT_NODE_PREFIX}${sessionId}`, position: { x: 0, y: 0 }, data: {} });
 
-describe('agentNoteTethers (CPa)', () => {
+describe('agentNoteTethers', () => {
   it("ties each answer to its agent's tile while the tile is on the board, and nothing else", () => {
     const nodes = [itemNode(answer('n1', 'a1')), itemNode(answer('n2', 'gone')), itemNode(note('s1', 'a1', 'sticky')), tile('a1')];
 

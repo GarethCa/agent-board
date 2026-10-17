@@ -12,7 +12,7 @@ const MAX_DOTS = 5;
 const CLOSE_DELAY_MS = 200;
 
 /**
- * The shells chip on an agent's tile (AU1): "2 shells", with one dot per shell (green running a command, grey
+ * The shells chip on an agent's tile: "2 shells", with one dot per shell (green running a command, grey
  * idle, red failed). Hovering it, or clicking it, lists them with how each is doing and "+ New shell in this worktree";
  * a row opens the agent's session window on that shell's tab. Nothing for an agent with no shells. A shell never
  * changes the agent's state or joins Needs you. A badge of the tile's footer (`tileFooter`).

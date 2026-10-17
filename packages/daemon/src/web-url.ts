@@ -1,4 +1,4 @@
-// What a web tab (BI2) may show: https anywhere, and plain http only from this machine (a dev server). Pure,
+// What a web tab may show: https anywhere, and plain http only from this machine (a dev server). Pure,
 // so the daemon (which keeps a tab's URL), the main process (which loads it) and the app (its address row) share it.
 
 /** The hosts of this machine a web tab may load over plain http, as `URL` writes them. */

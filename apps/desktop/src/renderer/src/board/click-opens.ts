@@ -1,4 +1,4 @@
-// What a double-click on an agent's or shell tile opens (AM1): its session window, the default, or the tile expanded
+// What a double-click on an agent's or shell tile opens: its session window, the default, or the tile expanded
 // in place. Kept in the daemon's view state. Pure, so the rules are unit-tested.
 
 /** The click setting: the session window, or the tile expanded in place. */

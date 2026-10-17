@@ -36,7 +36,7 @@ function inOrder(text: string, query: string): boolean {
 }
 
 /**
- * The shapes `query` finds, best first (CL1's search and CL3's `/` palette): the start of a name, then the start of
+ * The shapes `query` finds, best first (the picker's search and the `/` palette): the start of a name, then the start of
  * another word for it ("db", "data"), then a name's letters anywhere, then in order from its first. Another word
  * matches only from the start of one of its words, so "da" doesn't find "lambda". Ties keep the picker's order. An empty query finds every shape.
  */

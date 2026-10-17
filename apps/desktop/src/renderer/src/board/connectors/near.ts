@@ -1,5 +1,5 @@
 // The object near the pointer while an arrow is drawn or one of its ends dragged: only its connector handles show,
-// grown, so the board isn't covered in dots (BS4).
+// grown, so the board isn't covered in dots.
 import { useCallback, useSyncExternalStore } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import type { ConnectorSide, EdgePoint } from '@agent-board/daemon/protocol';

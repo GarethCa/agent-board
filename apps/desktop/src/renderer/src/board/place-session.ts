@@ -1,4 +1,4 @@
-// Placing a new agent or shell with the Agent and Shell tools (AG2), and what a dropped agent needs next.
+// Placing a new agent or shell with the Agent and Shell tools, and what a dropped agent needs next.
 import type { IssueCardData, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { placeOnBoard } from './items/items';
 import { AGENT_TILE_SIZE } from '@agent-board/daemon/board-layout';
@@ -22,7 +22,7 @@ export function dropPlace(
 
 /**
  * What starting an agent in `zone` (or on bare board, undefined) needs: it starts at once with the zone's repo or a
- * group's default repo (AG2, AJ2), asks for a repo with the picker (AH1), or can't start while the zone clones.
+ * group's default repo, asks for a repo with the picker, or can't start while the zone clones.
  */
 export type AgentStart = { kind: 'start' } | { kind: 'pick' } | { kind: 'refuse'; reason: string };
 

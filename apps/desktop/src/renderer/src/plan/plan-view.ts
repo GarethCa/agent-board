@@ -1,4 +1,4 @@
-// What the Plan tab (BO2) and the inbox say of a plan: pure, so the words are unit-tested.
+// What the Plan tab and the inbox say of a plan: pure, so the words are unit-tested.
 import type { PlanDecision, PlanSummary } from '@agent-board/daemon/protocol';
 
 /** How a version's outcome reads in the rail, and its tone. */

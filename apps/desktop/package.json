@@ -1,6 +1,6 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.0.0",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -27,7 +27,7 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "postcss": "8.5.29",
-    "sharp": "0.34.5",
+    "sharp": "0.35.5",
     "vite": "^7.3.7"
   },
   "dependencies": {

@@ -887,7 +887,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         // How it is drawn changes nothing it does, so a reshape alone touches none of its rules, holds or queue. Every
         // field is checked before any is saved, so a call refused for one changes nothing.
         const shape = shapeParams(fields, toFlowEdge(row));
-        // An end moved onto another agent (BT1) is checked as a new edge between them would be.
+        // An end moved onto another agent is checked as a new edge between them would be.
         const from = fields.from === undefined ? row.from_session_id : stringParam(fields, 'from');
         const to = fields.to === undefined ? row.to_session_id : stringParam(fields, 'to');
         const newSender = from !== row.from_session_id;

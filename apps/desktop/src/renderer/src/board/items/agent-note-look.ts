@@ -1,5 +1,5 @@
-// How agent notes look: a document card in the app's UI type (CO2, the default) or a cut of the agent's
-// terminal (CO1). A view setting, kept in the daemon's view state; every agent note switches as it changes.
+// How agent notes look: a document card in the app's UI type (the default) or a cut of the agent's
+// terminal. A view setting, kept in the daemon's view state; every agent note switches as it changes.
 import { createContext } from 'react';
 
 export type AgentNoteLook = 'document' | 'terminal';

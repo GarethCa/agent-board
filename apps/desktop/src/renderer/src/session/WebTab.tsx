@@ -23,7 +23,7 @@ interface WebTabProps {
 }
 
 /**
- * A web tab (BI2): a page the main process draws in a locked-down web view of its own over the tab's area,
+ * A web tab: a page the main process draws in a locked-down web view of its own over the tab's area,
  * mainly an agent's dev server on localhost. An address row over it: back, forward, reload, its URL (edited and checked
  * with the rule its page is held to) and Open in browser. Opened, the page loads its URL afresh; taken away (the tab
  * closing, the window closing or going elsewhere) the page goes with it.

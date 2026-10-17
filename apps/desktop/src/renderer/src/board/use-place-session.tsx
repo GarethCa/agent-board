@@ -1,5 +1,5 @@
-// Starting agents and shells where they are put: the Agent and Shell tools (AG2), a group's + agent (AJ2),
-// and the repo picker (AH1) on a new agent's tile when no zone gives it a repo, from an issue card too.
+// Starting agents and shells where they are put: the Agent and Shell tools, a group's + agent,
+// and the repo picker on a new agent's tile when no zone gives it a repo, from an issue card too.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Agent, CreateShellTileParams, IssueCardData, Shell, SpawnAgentParams, Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { HarnessMark } from './HarnessMark';
