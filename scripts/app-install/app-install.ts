@@ -67,7 +67,7 @@ export function installApp(builtApp: string, installDir: string): string {
   return swapIn(installDir);
 }
 
-/** Whether `pnpm package` installs. The dev repo's package script passes `--opt-in`, so there it takes an explicit `--install`. */
+/** Whether `pnpm package` installs. With `--opt-in` it takes an explicit `--install`. */
 export function shouldInstall(flags: { noInstall: boolean; install: boolean; optIn: boolean }): boolean {
   return !flags.noInstall && (flags.install || !flags.optIn);
 }

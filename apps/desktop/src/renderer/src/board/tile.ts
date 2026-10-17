@@ -109,16 +109,16 @@ export interface TileActions {
    */
   openTab(agent: Agent, tab: string | undefined): void;
   /**
-   * Opens one of the agent's pull requests in a PR tab (BI1): in its expanded tile, if it is expanded, else in
+   * Opens one of the agent's pull requests in a PR tab: in its expanded tile, if it is expanded, else in
    * its session window; in the focused pane, or where its tab already is.
    */
   openPullRequest(agent: Agent, pr: PullRequest): void;
   /**
-   * Opens the agent's Gate tab (BL1) where a PR tab would open, and with `run`, runs its gate first (only ever
+   * Opens the agent's Gate tab where a PR tab would open, and with `run`, runs its gate first (only ever
    * on the user's click), saying why when it can't.
    */
   openGate(agent: Agent, run: boolean): void;
-  /** Opens the agent's Plan tab (BO2) where a PR tab would open. */
+  /** Opens the agent's Plan tab where a PR tab would open. */
   openPlan(agent: Agent): void;
 }
 
@@ -157,7 +157,7 @@ export const TileActionsContext = createContext<TileActions>({
   openPullRequest: () => {},
 });
 
-/** What a shell tile's folder chip needs (AK1): home, to show it as `~`, and where to open a new pane. */
+/** What a shell tile's folder chip needs: home, to show it as `~`, and where to open a new pane. */
 export interface ShellFolders {
   /** The home directory loose shells start in; undefined until the daemon says. */
   home: string | undefined;

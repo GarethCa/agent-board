@@ -67,7 +67,7 @@ tab among its owner's (NULL for older rows, which sort first by rowid), so one m
 back where it was. A pane leaving a split is a new row (`shell.movePane`), and `shell.returnPane` puts the source's layout
 back verbatim for undo. Connectors on a tile that becomes a tab stay in the table and are drawn again if it comes back.
 
-**Update**: a session window's panes (BH1) are kept in a table of their own, `window_layouts` (migration
+**Update**: a session window's panes are kept in a table of their own, `window_layouts` (migration
 `0039_window_layouts`), one row per owner (`owner_kind`, `owner_id`, as a tab's), holding `WindowLayout` JSON: a split
 tree whose leaves are panes, each an ordered strip of surfaces (`own`, `shell` by id, or `session`, another agent or
 shell tile shown there) and the one it shows. Tabs stay rows of `shells`, so nothing moves, migrates or restarts: an owner

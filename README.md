@@ -14,178 +14,65 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/board.png" alt="The agent-board board: two zones (web-app and api-service) with agent tiles waiting, idle, asking for permission and running, subagent characters perched on tiles, sticky notes, a shape and connectors, under floating controls" width="880">
+  <img src="docs/assets/screenshots/board.png" alt="The agent-board board: two zones with agent tiles waiting, idle, asking for permission and running, subagents perched on tiles, sticky notes and connectors" width="880">
 </p>
 
 <p align="center">
+  <a href="#tour">Tour</a> ·
   <a href="#install">Install</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#a-tour">Tour</a> ·
-  <a href="#faq">FAQ</a> ·
-  <a href="#docs">Docs</a>
+  <a href="#update">Update</a> ·
+  <a href="#privacy-and-data">Privacy</a> ·
+  <a href="#more">More</a>
 </p>
-
-## Why
-
-Run more than a couple of coding agents and the terminals win: you lose track of which one is waiting for an answer, which wants permission, which finished an hour ago and which branch each is on. agent-board puts every session on one board, shows its state at a glance, and lets you answer it right there.
-
-- **One place for every agent.** Claude Code and Codex, each in its own git worktree, grouped into zones for your repos.
-- **Nothing gets missed.** The **Needs you** pill counts agents that are waiting or asking for permission, and answers them from a popover.
-- **Agents hand off to agents.** Draw an edge and one agent's work goes to the next when it finishes, with a review loop built in.
-- **Your tools, your logins.** It runs your own `claude`, `codex` and `gh`. No API keys, no proxy, nothing between you and the CLIs.
 
 > [!NOTE]
 > **Alpha.** agent-board is built for one person on macOS, and it changes fast. Expect rough edges, and please [report them](https://github.com/GarethCa/agent-board/issues).
 
-## A tour
+## Tour
 
-The screenshots are real captures of the running app, driven by a fake `claude` over a seeded demo board: `pnpm readme:screenshots` makes them again, byte for byte.
-
-### Answer agents without hunting for their terminals
-
-The **Needs you** pill counts agents that are waiting or want permission. Its popover lets you answer a question, or allow or deny a command, right there. Tiles that need you get an orange border, and macOS notifications bring you back.
-
-An agent can also ask you through the board: a question with a button per answer (or a reply in your own words, or Skip), or a plan for you to approve, send back with comments or reject, which opens in a **Plan** tab with its versions. Its call waits until you answer; nothing answers for you, and an HTML plan runs offline in a locked-down view of its own ([ADR-0014](docs/adr/0014-questions-and-plans.md)).
+**Answer agents without hunting for their terminals.** The **Needs you** pill counts agents that are waiting or want permission; answer a question, or allow or deny a command, from its popover.
 
 <p align="center">
   <img src="docs/assets/screenshots/inbox.png" alt="The Needs you popover listing a waiting agent with an answer box and two permission requests with Deny and Allow buttons" width="760">
 </p>
 
-### Zones and groups
-
-A **zone** is a tinted region for a project: a git repo, a folder inside one, a GitHub repo agent-board clones for you, or a Linear team. A **group**, drawn dashed, is a zone bound to nothing yet. Each agent is a **tile** with its name, branch, state and last message, and its subagents perch on it as small characters while they work. Stickies, text, shapes, images, link cards and connectors let you annotate the board like a whiteboard.
-
-When you add a zone for a GitHub repo you already have cloned, it can use that copy (**Use my copy…**, or **Find my local copies**) instead of a fresh clone, and the **File browser** tab picks a folder that isn't listed. Any zone can be deleted, with ⌫, its context menu or its ⋯ menu, and the delete can be undone.
-
-When you start an agent, the chips beside the task pick its model and, optionally, a role: implementer, reviewer, follow-up reviewer or custom. A role starts the agent with its zone's role template, filled in, and shows as a badge on its tile. A reviewer reads a branch on a detached checkout, so it has no branch of its own to push.
+**Zones for your repos, a worktree for every agent.** A zone is a git repo, a folder, a GitHub repo it clones for you, or a Linear team. Each agent gets its own branch and worktree.
 
 <p align="center">
   <img src="docs/assets/screenshots/add-zone.png" alt="The Add zone popover on its GitHub tab, listing repositories that will be cloned" width="440">
-  <img src="docs/assets/screenshots/add-zone-linear.png" alt="The Add zone popover on its Linear tab, listing teams" width="440">
 </p>
 
-### A session window for every tile
-
-Double-click a tile for its session window: the live terminal, with the controls, issue, last message, worktree, pull request and subagents beside it. Switch it to [Chat](#chat-view) to read the conversation and answer in a message box. Step through a zone's sessions, minimise to a dock, pop out into a window of its own, or expand the tile in place on the board instead.
+**A session window for every tile.** The live terminal or a chat view.
+It splits into panes of shells.
+A PR tab shows checks and diffs.
+A gate tab runs your gate command.
+A web tab shows your dev server.
 
 <p align="center">
-  <img src="docs/assets/screenshots/session-window.png" alt="The session window: details on the left, the live terminal on the right, with Minimise, Pop out and Close in the header" width="760">
+  <img src="docs/assets/screenshots/session-panes.png" alt="An agent's session window with two panes: the agent's terminal on the left, a shell in its worktree on the right" width="760">
 </p>
 
-A window is laid out in **panes**, and each pane has its own tab strip: the agent's own tab, then shells and any other session you show there. **+** or ⌘T opens a shell in the focused pane, and ⌘D splits it. Drag a tab along its strip to reorder it, onto another pane's strip to move it there, or onto the edge of a pane to split a new pane off. Closing a pane's last tab closes the pane.
+**Agents hand work to agents.** Draw an edge and one agent's final message or `handover.md` goes to the next when it finishes, held until checks or a gate pass if you like.
 
 <p align="center">
-  <img src="docs/assets/screenshots/session-panes.png" alt="An agent's session window with two panes: the left pane's strip reads claude and PR #41 above the agent's terminal, and the right pane's strip reads sh above a shell in the agent's worktree" width="760">
+  <img src="docs/assets/screenshots/flow-edges.png" alt="Three agent tiles joined by two edges, one manual with a Send button and one automatic, held until CI is green, beside the Edge rules panel" width="880">
 </p>
 
-Tabs move too. Drag a tab, or a split pane, onto another agent's window to move it there, or out onto the board to make it a tile of its own; drag a shell tile onto an agent to bring it in as a tab.
-
-An agent's pull request opens as a **PR tab**, from the PR chip on its tile: the description, checks, each file's diff and the review comments, read from GitHub through `gh`, with **Approve** and **Squash and merge** when GitHub allows them, each asking first.
+**A review loop built in.** **Review its work** starts a reviewer on a branch from the tip of the implementer's; its findings come back by severity, and you send them on, start another round or approve and merge.
 
 <p align="center">
-  <img src="docs/assets/screenshots/pr-tab.png" alt="A PR tab: the pull request's title, Open state, Approve and Squash and merge buttons, its description, three passing checks and the diff of one changed file" width="760">
+  <img src="docs/assets/screenshots/review-doc.png" alt="The Review tab: round 1, a Changes requested verdict, blocker, major and minor findings with file and line chips, and the actions Send to implementer, Start round 2 and Approve and merge" width="760">
 </p>
 
-A zone can have a **gate command**, such as `pnpm check:local`, set from its tab's ⋯ menu. **Run gate** (⌘⇧G, the details' Gate section or the tile's ⋯) runs it in the agent's worktree, only when you ask, into a **Gate tab**: its steps as a table, the picked step's log streaming under it, and on a failure **Send failure**, which pastes the failing lines at the agent's prompt for you to send. The window's header offers **Open PR**, which pushes the branch and opens a pull request from the repo's template and the agent's `.agent-board/handover.md`, and **Merge**, which squash-merges only once GitHub's checks are green and, in a zone with a gate, the gate passed on the pull request's head. A PR tab may merge it before the gate passed there, once you confirm going past the gate. An agent may open its own pull request too (`agent-board open-pr`), always as a draft. The command runs through `sh -c`, so `&&` and pipes work ([ADR-0013](docs/adr/0013-merge-gate.md)).
-
-A dev server opens as a **web tab**: **Web…** in the + menu, or ⌘-click a `localhost` address in a terminal. It is a locked-down web view that shows only https pages and http ones on your machine, in a session of its own, with no access to the app.
+**Agents that know the board.** Every agent can read the board through the `agent-board` command line or its MCP server.
+An agent can also hand off on purpose.
+If the zone allows, an agent can lead a crew of its own.
 
 <p align="center">
-  <img src="docs/assets/screenshots/web-tab.png" alt="A web tab in the left pane showing a local storefront page at localhost:5173 under an address row, beside a shell in the right pane" width="760">
+  <img src="docs/assets/screenshots/orchestrator-crew.png" alt="An orchestrator's tile with a badge counting its two workers, which sit beside it in a dashed frame labelled with its name" width="880">
 </p>
 
-### Flows between agents
-
-An **edge** carries one agent's work to another when the first finishes. Hover an agent's tile and drag from one of its round handles onto another agent's tile, then pick **Hand off** (or press H) in the chooser; **Arrow**, the default, keeps a plain arrow. Hold **⌥** while dragging to make a hand-off straight away. Its **Edge rules** open on the right, in four sections: When, What, Only if and History. Like an arrow, an edge is straight, elbow or curved, can be bent by dragging the handle halfway along it, and its ends dragged to other sides of their tiles.
-
-- **Payload:** the agent's final message, a markdown file from its worktree (`handover.md` unless you name another, such as `plan.md`) or a JSON file (`handoff.json`). A file must sit inside the worktree and be at most 64 KB.
-- **Trigger:** automatic when the agent hands off (it runs `agent-board handoff`, or calls the board MCP's `handoff` tool, once its work is ready) or else when its turn ends, or manual, with a **Send** button on the edge. If the receiver is busy, the delivery is skipped, or waits for its turn to end if you pick **Wait for its turn**.
-- **Conditions:** an automatic edge can wait until *PR checks* pass, a *gate* command (such as `pnpm check:local`) passes in the sender's worktree, the sender's issue has a label, or a *custom script* exits 0. Gates and scripts only run after you approve the exact command, shown whole under the condition ([ADR-0009](docs/adr/0009-edge-condition-approvals.md)). While a condition fails, the hand-off is **held** and checked again, and the edge says what it is held until.
-- Each edge keeps its history, and can be paused, deleted or sent now. A hand-off shows travelling along its edge, and the receiver reads "receiving…". Deleting an edge can be undone.
-
-<p align="center">
-  <img src="docs/assets/screenshots/flow-edges.png" alt="Three agent tiles joined by two edges, a manual one carrying plan.md with a Send button and an automatic one carrying handover.md, held until CI is green; the Edge rules panel on the right shows its payload, trigger, conditions and a preview, and a dashed reviewer tile sits below" width="880">
-</p>
-
-**A review loop.** From an agent's ⋯ menu, **Review its work** starts an ephemeral **reviewer**: a dashed tile on a branch of its own from the tip of the implementer's, told to read the diff, change nothing and reply with a review doc. When the doc is in, the reviewer stops, and a chip on the implementer's tile opens its window on a **Review** tab: the rounds on the left, the verdict and the findings by severity (blocker, major, minor) with `file:line` chips in the middle, and the actions on the right.
-
-<p align="center">
-  <img src="docs/assets/screenshots/review-doc.png" alt="The Review tab of an implementer's session window: round 1, a Changes requested verdict, a blocker, a major and a minor finding with file and line chips, and the actions Send to implementer, Start round 2 and Approve and merge" width="760">
-</p>
-
-**Send to implementer** hands the doc back as the agent's next message; **Start round 2** reviews the fixes (up to 3 rounds unless you change the cap), with findings the new round sees fixed struck through; **Approve and merge** squash-merges the agent's pull request once the latest round approves with no open blocker and the checks pass. The loop is implementer, reviewer, implementer again, until the doc approves.
-
-### Agents that know the board
-
-Every agent agent-board starts is told one thing: it is on agent-board, and `agent-board --help` says the rest. That help is the whole manual (zones, tiles, edges, refs and commands), so nothing long is pasted into the agent's prompt and it costs no tokens until the agent asks. Two doors lead to the same place:
-
-- **The `agent-board` command line.** Inside a session it is already on the `PATH`. For your own terminals, **Settings › Command line › Install command-line tool** links it into `~/.local/bin`. It reads the board (`tree`, `zones`, `agents`, `shells`, `edges`, `show <ref>`), and an agent uses it to set its own one-line status, which its tile shows in place of the task. Read commands take `--json`.
-- **The board MCP server.** `agent-board mcp` is a small stdio MCP server that Claude and Codex are started with, giving them `whoami`, `board`, `connections` and `set_status` tools. It is on by default; a zone's ⋯ menu has **Turn off board MCP** for agents started there afterwards (the command line stays).
-
-An agent can also hand off on purpose. `agent-board handoff` (or the `handoff` MCP tool) sends a message over one of the agent's own edges, and `agent-board edge list` shows them. An [orchestrator](#orchestrators) can wire its crew with `agent-board edge add` and `edge remove`; an edge an agent made is drawn dashed and says who made it, and the agent can remove only its own ([ADR-0012](docs/adr/0012-explicit-handoff-and-agent-made-edges.md)).
-
-Things are named by short refs such as `zone:cd62` or `agent:22a7`, the first characters of their ids, like git's short hashes. A name works too. An agent sees the board, but it cannot approve another agent's permission prompt, type into a terminal or change a setting ([ADR-0010](docs/adr/0010-board-cli-and-mcp.md)).
-
-This is a real run against the fake `claude` the tests use, with a zone and two agents:
-
-```console
-$ agent-board tree
-zone:cd62  web-app  (repo ~/code/web-app)
-  agent:22a7  Fix the failing login test  [waiting]  task: Fix the failing login test
-  agent:e91b  Add dark mode to settings  [waiting]  task: Add dark mode to settings
-
-$ agent-board show agent:22a7
-agent:22a7  Fix the failing login test
-  state      waiting
-  status     not set
-  task       Fix the failing login test
-  harness    claude
-  zone       (in zone:cd62 web-app)
-  repo       ~/code/web-app
-  branch     fix-the-failing-login-test-0a409e
-  worktree   ~/.agent-board/worktrees/web-app-4c737128/fix-the-failing-login-test-0a409e
-  last said  All tests pass.
-```
-
-#### Orchestrators
-
-An agent can lead other agents the way you would: start one with a task, wait for its turn to end, read what it handed back, send a follow-up and close it. The commands are `new`, `send`, `wait`, `read`, `interrupt` and `close`, with matching MCP tools, and they work from any shell on the board or your own terminal too, where they act for you; `agent-board help orchestrate` shows the loop.
-
-- **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent in the zone may start and steer agents in that zone, and only there. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
-- **Crews go three deep.** An agent an orchestrator starts runs in its own worktree and branch, and leads its own crew only as its zone allows, three agents deep at most. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
-- **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board** can show a "from" chip on each agent instead.
-- **An Activity tab.** The orchestrator's session window gets an **Activity** tab listing what it started, sent, interrupted and closed, and what it tried and was refused, with why.
-
-<p align="center">
-  <img src="docs/assets/screenshots/orchestrator-crew.png" alt="An orchestrator's tile with a badge counting its two workers, which sit beside it in a dashed frame labelled with the orchestrator's name" width="880">
-</p>
-
-An orchestrator cannot answer a permission prompt, type raw keys, change a permission mode or a setting, or open a message with a command such as `/model` or `!`. It runs as you, so this limits what the board offers it, not what a determined agent could do on your machine ([ADR-0011](docs/adr/0011-orchestrators.md)).
-
-### Chat view
-
-Switch a session window from **Terminal** to **Chat** to read the agent's conversation from its transcript: its messages, each tool call as one line that opens to show what went in and how it went, and its subagents' messages. It grows live as the agent works.
-
-<p align="center">
-  <img src="docs/assets/screenshots/chat-view.png" alt="The session window in Chat view: the task, the agent's reply, a Bash tool call as one line, and its closing message" width="760">
-</p>
-
-### Light or dark
-
-The **Workbench** theme comes in light and dark. **Settings › Appearance** follows macOS, or picks one.
-
-<p align="center">
-  <img src="docs/assets/screenshots/board-dark.png" alt="The same board in the dark theme" width="880">
-</p>
-
-### Set up in a minute
-
-On first launch a short flow checks which tools you have (Claude Code, Codex, GitHub, Linear, global hooks, notifications), then tours the board. Everything is skippable.
-
-<p align="center">
-  <img src="docs/assets/screenshots/onboarding-welcome.png" alt="The welcome card of first-run onboarding" width="440">
-  <img src="docs/assets/screenshots/onboarding-connect.png" alt="The Connect your tools step, showing which CLIs were found and which are still to set up" width="440">
-</p>
+Light and dark themes, a first-run setup that checks your tools, and much more: see the [full tour](docs/tour.md).
 
 ## Install
 
@@ -205,150 +92,42 @@ pnpm install
 pnpm package
 ```
 
-`pnpm package` builds an unsigned macOS app and installs it as `~/Applications/agent-board.app`, replacing any earlier copy, so there is nothing to drag. If agent-board is running, it quits it first and asks whether to reopen it afterwards; your sessions keep running in the daemon. It installs only once the build has succeeded, so a failed build never removes the app you have. `pnpm package --no-install` only builds, leaving the app in `apps/desktop/dist/`. Installing is macOS only. Your data lives in `~/Library/Application Support/agent-board`.
+`pnpm package` builds an unsigned macOS app and installs it as `~/Applications/agent-board.app`, replacing any earlier copy. If agent-board is running, it quits it first and asks whether to reopen it; your sessions keep running in the daemon. A failed build never removes the app you have. `pnpm package --no-install` only builds.
 
-### Update
+Then open it: a short first-run flow checks your tools and tours the board. The [quick start](docs/quick-start.md) walks you through your first zone and agent.
+
+## Update
 
 ```sh
 pnpm update:app
 ```
 
-Run it in your clone whenever you want the latest release. If your clone predates the command and `pnpm update:app` is missing, run `git pull` once first. It fast-forwards the clone (`git pull --ff-only`), runs `pnpm install --frozen-lockfile` and `pnpm package` (which quits the app, installs the new one over `~/Applications/agent-board.app` and opens it again). It prints the old and new version and a link to the release notes. It never runs by itself.
+Run it in your clone whenever you want the latest release (if the command is missing, `git pull` once first). It fast-forwards the clone, rebuilds and reinstalls the app, and prints the old and new versions. It never runs by itself.
 
-- It refuses, and changes nothing, if the clone has uncommitted changes or has diverged from `origin`. It says what to do.
-- If the build fails, the app you have stays installed. Fix the cause and run it again.
-- Your sessions live in the daemon, not the app, so they keep running. If the daemon is from an older build than the new app, the app shows its **Restart daemon** banner. Restarting ends running sessions, so you choose when.
-- `--no-launch` installs without opening the app, `--install-dir <dir>` installs elsewhere, and `--force` builds again even when you are up to date.
+- It refuses, and changes nothing, if the clone has uncommitted changes or has diverged from `origin`.
+- If the build fails, the app you have stays installed.
+- Sessions keep running in the daemon. If the daemon is older than the new app, a **Restart daemon** banner lets you choose when, since restarting ends running sessions.
 
-## Quick start
+Flags such as `--no-launch` and `--install-dir` are in [docs/install.md](docs/install.md#update).
 
-1. **Add a zone.** Open the board menu (top left) and choose **Add a zone**, or press `Z` and drag one out. Pick a GitHub repo, a Linear team or a recent folder, or start with a group and bind it later.
-2. **Start an agent.** Click **New agent** in the zone's tab, choose Claude or Codex, write the task and press **Start**. agent-board makes a worktree and a branch for it, and a tile appears with its live state. **Shell** (`` ` ``) puts a plain shell where you drop it.
-3. **Answer it.** When it needs you, the orange **Needs you** pill counts it: answer from the popover, or double-click the tile for its session window.
-4. **Connect your trackers.** GitHub needs only `gh auth login`. Linear needs a personal API key, which agent-board keeps in the macOS Keychain. Start an agent from an issue and its branch is named after it.
-5. **Pick up sessions started elsewhere.** Turn on **Global hooks** in onboarding (Help › Getting started), and a `claude` or `codex` started in any terminal shows up as a tile you can resume inside agent-board.
+## Privacy and data
 
-Quit the app and open it again: every agent and shell is still running, because a background daemon owns them.
+- **No keys, no tokens of its own.** It starts your own `claude` and `codex` through your login shell, with their own logins, settings and models. It never sees an Anthropic or OpenAI key, and there is no proxy between you and the CLIs.
+- **No terminal scraping.** Each session reports its state through the CLIs' own hooks, to a daemon on your machine. Nothing leaves your machine except what your CLIs and `gh` already send.
+- **Nothing approved for you.** Permission prompts wait for you. An edge condition's command only starts after you approve that exact command.
+- **Where things live.** Your data is in `~/Library/Application Support/agent-board`, and each agent's worktree is under `~/.agent-board/worktrees/`. Linear keys are kept in the macOS Keychain.
 
-## FAQ
+## More
 
-**Does agent-board need my API keys, or spend tokens of its own?**
-No. It starts your own `claude` and `codex` through your login shell, with their own logins, settings and models. It never sees an Anthropic or OpenAI key. Its test suite runs on fake CLIs and spends no tokens at all.
-
-**Does it read my terminal to know what an agent is doing?**
-No. Each session it starts reports its state through the CLIs' own hooks, to a daemon on your machine ([ADR-0004](docs/adr/0004-agent-telemetry.md)). Nothing leaves your machine except what your CLIs and `gh` already send.
-
-**What happens to my sessions when I close the app?**
-They keep running. A background process, `agent-board daemon`, owns them, and the app reconnects when it opens. After a reboot, their tiles keep their last output and offer **Resume**, which picks the conversation up where it stopped (an agent that never got one starts fresh).
-
-**Where does it put my code?**
-Each agent works in its own git worktree under `~/.agent-board/worktrees/`, on its own branch, so agents never trip over each other or your checkout.
-
-**Does it approve things for my agents?**
-No. It does what the CLIs do and no more: permission prompts wait for you, in the inbox or the terminal. Edge conditions that run a command run only after you approve that exact command ([ADR-0009](docs/adr/0009-edge-condition-approvals.md)).
-
-**Linux or Windows?**
-macOS is the supported platform today. The end-to-end tests pass on Linux, but it is not packaged yet; Windows comes later.
-
-**Is it made by Anthropic or OpenAI?**
-No. agent-board is an independent project, not affiliated with or endorsed by either.
-
-## Docs
-
-- [`CONTEXT.md`](CONTEXT.md): the words agent-board uses (zone, tile, session, harness, edge).
-- [`docs/adr/`](docs/adr): the architecture decisions and why they were made.
-- [`CHANGELOG.md`](CHANGELOG.md): what each release changed.
-- [CONTRIBUTING.md](CONTRIBUTING.md): setup, conventions and how we test.
-
-## Under the hood
-
-### How it works
-
-```mermaid
-flowchart LR
-  subgraph app["Electron app (client)"]
-    ui["Board UI<br/>React + React Flow"]
-    main["Main process"]
-  end
-  subgraph daemon["agent-board daemon"]
-    rpc["JSON-RPC server"]
-    ingress["Hook ingress<br/>127.0.0.1 HTTP"]
-    db[("SQLite")]
-  end
-  ptys["PTYs running<br/>claude / codex / shells"]
-  git["git worktrees<br/>one per agent"]
-  trackers["Linear API<br/>GitHub via gh"]
-
-  ui <--> main
-  main <-- "local socket:<br/>JSON-RPC + events" --> rpc
-  rpc --> db
-  rpc -- "spawns, streams output" --> ptys
-  ptys -- "hook events<br/>(per-session token)" --> ingress
-  ingress --> db
-  rpc -- "creates, removes" --> git
-  rpc -- "issues, PRs" --> trackers
-```
-
-- **The app is a client.** Sessions, PTYs and the database live in a separate background process, `agent-board daemon`. The app starts it if it isn't running and talks to it over a local socket. That is what lets sessions survive closing a window or restarting the app. ([ADR-0002](docs/adr/0002-session-daemon.md))
-- **State comes from hooks, never from scraping the terminal.** Each spawned session gets per-session hook config and a token, and its `claude` or `codex` reports state changes to the daemon over localhost HTTP. ([ADR-0004](docs/adr/0004-agent-telemetry.md))
-- **One SQLite database**, owned by the daemon and changed only through forward-only migrations. ([ADR-0005](docs/adr/0005-storage.md))
-- **Each agent gets its own git worktree**, outside your repo under `~/.agent-board/worktrees`. ([ADR-0007](docs/adr/0007-worktree-location.md))
-- **Trackers sit behind one interface** in `packages/tracker`: Linear over its API with a key in the macOS Keychain, GitHub through your `gh` login. Their tests replay recorded responses.
-
-The rest of the decisions are in [`docs/adr/`](docs/adr):
-
-- [Electron + TypeScript](docs/adr/0001-app-shell.md)
-- [React Flow for the board](docs/adr/0003-board-library.md)
-- [The terminal backend seam](docs/adr/0006-terminal-backends.md)
-- [The in-repo design system](docs/adr/0008-design-system.md)
-- [Approving what edge conditions run](docs/adr/0009-edge-condition-approvals.md)
-- [The board CLI and MCP](docs/adr/0010-board-cli-and-mcp.md)
-- [Orchestrators](docs/adr/0011-orchestrators.md)
-- [Explicit hand-off and agent-made edges](docs/adr/0012-explicit-handoff-and-agent-made-edges.md)
-- [The merge gate](docs/adr/0013-merge-gate.md)
-- [Questions and plans](docs/adr/0014-questions-and-plans.md)
-
-The domain vocabulary (zone, tile, session, harness, edge…) is in [`CONTEXT.md`](CONTEXT.md).
-
-### Troubleshooting
-
-**The Connect step says `claude` isn't found.** The daemon looks on your login shell's `PATH`. Check that `which claude` works in a fresh terminal, fix your shell profile if not, then click **Re-check**. `~/Library/Application Support/agent-board/daemon.log` says which `PATH` it adopted.
-
-**An agent starts and then fails straight away.** Run `claude` in a terminal first: it must be logged in, and it may be waiting for you to trust the folder or accept its terms.
-
-**Codex asks me to review hooks.** If a repo has Codex config of its own, agent-board explains it before it starts an agent there. This is Codex's hook trust, and it is expected.
-
-**GitHub says it needs a login.** Run `gh auth status` and, if needed, `gh auth login`, then reopen Add zone.
-
-**Linear rejects my key.** Make a new personal API key, with access to the teams you want, and paste it again. To remove a stored key: `security delete-generic-password -s agent-board -a linear`.
-
-**A banner says the daemon is from an older build.** The daemon outlives the app by design, so after an upgrade it can be the old one. Click **Restart daemon**; it warns first if sessions are running, because restarting ends them.
-
-**"Delete agent" stops short.** The agent's worktree has uncommitted changes, or its branch has commits no other branch has. Push or merge them, or confirm that you want them gone.
-
-**Start over.** Quit the app, stop the daemon and delete its data directory, then `rm -rf ~/Library/Application\ Support/agent-board`. Agent worktrees stay under `~/.agent-board/worktrees/` because they may hold unpushed work.
-
-Anything else: search the [issues](https://github.com/GarethCa/agent-board/issues), and when you open one, include the build from the window title.
-
-### Development
-
-`pnpm --filter @agent-board/desktop dev` runs the app with hot reload. `pnpm check:pr` runs the checks a branch's diff needs and prints why; `pnpm check:local` is the full gate: lint, typecheck, unit tests, the build, the Playwright end-to-end and visual tests, the Markdown lint and knip. [CONTRIBUTING.md](CONTRIBUTING.md#tests) lists every command.
-
-**Tests never spend tokens.** They run the fake `claude` and `codex` in [`packages/fake-harness`](packages/fake-harness/README.md) instead of the real CLIs, and a guard fails the run if anything reaches a real one.
-
-### Repo layout
-
-```text
-apps/desktop/          Electron app: main process, preload, React renderer, Playwright e2e and visual tests
-packages/daemon/       agent-board daemon: JSON-RPC over a local socket, hook ingress, SQLite migrations
-packages/fake-harness/ Fake claude/codex CLIs and the guard that keeps tests off the real ones
-packages/tracker/      Issue trackers (Linear, GitHub) behind one interface, recorded-HTTP fixtures, keychain credentials
-fixtures/              Real Codex hook payloads captured for tests
-docs/adr/              Architecture decision records
-docs/assets/           Logo and the README's screenshots
-scripts/               Dev scripts: update-app updates a checkout and installs its app; readme-screenshots redraws the README's screenshots; visual and check-local run the merge gate; codex-capture records real Codex hook payloads into fixtures/
-CONTEXT.md             Domain glossary
-```
+- [Quick start](docs/quick-start.md): your first zone and agent, trackers, and picking up sessions started elsewhere.
+- [Tour](docs/tour.md): every feature, with screenshots.
+- [FAQ](docs/faq.md): sessions after quitting or a reboot, Linux and Windows, and more.
+- [Troubleshooting](docs/troubleshooting.md): `claude` not found, GitHub and Linear logins, the daemon banner, starting over.
+- [How it works](docs/how-it-works.md): the daemon, hooks, SQLite and worktrees, with a diagram.
+- [Architecture decisions](docs/adr): why it is built the way it is.
+- [CONTEXT.md](CONTEXT.md): the words agent-board uses: zone, tile, session, harness, edge.
+- [CHANGELOG.md](CHANGELOG.md): what each release changed.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests (which never spend tokens) and the repo layout.
 
 ## Contributing
 

@@ -432,7 +432,7 @@ for (const { theme, suffix } of [
   });
 }
 
-/** Settings › Appearance's Mode switch and Theme control, and the Theme popover open over the board menu (CV2). */
+/** Settings › Appearance's Mode switch and Theme control, and the Theme popover open over the board menu. */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },
@@ -731,7 +731,7 @@ for (const { theme, suffix } of [
   });
 }
 
-test('the dark theme (AN1): a busy board with notes, text, a shape and a flow edge, its Edge rules, and the session window in both views', async () => {
+test('the dark theme: a busy board with notes, text, a shape and a flow edge, its Edge rules, and the session window in both views', async () => {
   needsBaselines('dark-board', 'dark-edge-rules', 'dark-session-window', 'dark-chat-view');
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -891,7 +891,7 @@ test('two agents stacked one above the other, joined both ways by edges made wit
   }
 });
 
-test('linked sessions as one rail (CD4): a pair waiting for Send beside a one-way link, then its review on its way, a hand-off held, and the pair at rest', async () => {
+test('linked sessions as one rail: a pair waiting for Send beside a one-way link, then its review on its way, a hand-off held, and the pair at rest', async () => {
   needsBaselines('rail-waiting', 'rail-chain', 'rail-sending', 'rail-held', 'rail-rest');
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -1195,7 +1195,7 @@ for (const { theme, scheme } of [{ theme: 'light', scheme: 'light' }, { theme: '
   });
 }
 
-test("the dark theme (AN1): a review doc in its implementer's session window", async () => {
+test("the dark theme: a review doc in its implementer's session window", async () => {
   needsBaselines('dark-review-viewer');
   const { dir, repo, env } = scratch('review');
   const dataDir = tempDataDir();
@@ -1457,7 +1457,7 @@ for (const { theme, suffix } of [
               ],
             },
           });
-          // Joined to the selection's rightmost object, as the daemon joins an answer (CM1).
+          // Joined to the selection's rightmost object, as the daemon joins an answer.
           await board.connectors.create({ from: { type: 'item', id: postgres.id, side: 'right' }, to: { type: 'item', id: answer.id, side: 'left' } });
           // The ghost goes under the orders service, on the board.
           const placed = (await board.zones.list()).find((each) => each.id === zoneId)!;
@@ -1554,7 +1554,7 @@ for (const { theme, suffix } of [
       await expect.soft(window.locator('.board')).toHaveScreenshot(`agent-notes${suffix}.png`, SHOT);
       await restorePointer();
 
-      // The terminal card, every note at once (CO1).
+      // The terminal card, every note at once.
       const menu = window.getByRole('dialog', { name: 'Board menu' });
       await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
       await menu.getByRole('group', { name: 'Agent notes' }).getByRole('button', { name: 'Terminal' }).click();

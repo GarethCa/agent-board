@@ -1,4 +1,4 @@
-// The tabs inside a session window (AS3): an agent's own tab or a shell tile's own panes first, then its
+// The tabs inside a session window: an agent's own tab or a shell tile's own panes first, then its
 // shell tabs, each a pane tree that can be split. Pure, so the rules are unit-tested; SessionBody and the agent tile's
 // shells chip draw them.
 import { paneIds, type PaneLayout } from '@agent-board/daemon/pane-layout';
@@ -80,7 +80,7 @@ export interface WindowShell {
   ports?: number[];
 }
 
-/** Every shell pane in the window's tabs, never an agent's own, in tab order: what an agent tile's shells chip lists (AU1). */
+/** Every shell pane in the window's tabs, never an agent's own, in tab order: what an agent tile's shells chip lists. */
 export function windowShells(owner: TabOwner, shells: readonly Shell[]): WindowShell[] {
   return windowTabs(owner, shells).flatMap(({ id: tab, shell }) => {
     if (shell === undefined) return [];
@@ -141,8 +141,8 @@ export interface SessionTargets {
 }
 
 /**
- * What one of a window's tabs shows (BH1), named as its tab is: one of `windowTabs` (its own, or a shell
- * tab), another agent's session, a shell tile's panes, a pull request (BI1), a web page (BI2), an agent's gate
+ * What one of a window's tabs shows, named as its tab is: one of `windowTabs` (its own, or a shell
+ * tab), another agent's session, a shell tile's panes, a pull request, a web page, an agent's gate
  * or its plans.
  */
 export type WindowSurface = { key: string; surface: Surface; label: string } & (

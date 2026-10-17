@@ -52,7 +52,7 @@ const pr = (fields: Partial<Parameters<typeof mergeBlocked>[0]['pr']> = {}) => (
   ...fields,
 });
 
-describe('the tile badge (BL1)', () => {
+describe('the tile badge', () => {
   it('says the step running and how far it is, then the result in a word', () => {
     expect(gateBadge(run({ status: 'running', endedAt: null, steps: [step('lint', 'passed'), step('test', 'running'), step('e2e', 'waiting')] }))).toBe('gate 1/3 · test');
     expect(gateBadge(run())).toBe('✓ gate 2/2');
@@ -69,7 +69,7 @@ describe('the gate table', () => {
   });
 });
 
-describe('when Open PR may be pressed (BM3)', () => {
+describe('when Open PR may be pressed', () => {
   it('needs the gate to have passed on the head, with nothing uncommitted', () => {
     expect(openPullRequestBlocked({ run: run(), head: HEAD, uncommitted: 0, gated: true })).toBeUndefined();
     expect(openPullRequestBlocked({ run: undefined, head: HEAD, uncommitted: 0, gated: true })).toBe('Run the gate first: the PR carries its table for the head commit.');
@@ -79,7 +79,7 @@ describe('when Open PR may be pressed (BM3)', () => {
   });
 });
 
-describe('when Merge may be pressed (BM3)', () => {
+describe('when Merge may be pressed', () => {
   it('needs the gate passed on the PR head and GitHub green', () => {
     expect(mergeBlocked({ run: run(), pr: pr(), gated: true })).toBeUndefined();
   });

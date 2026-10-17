@@ -277,7 +277,7 @@ function textItemData(text: string, color: string): Record<string, unknown> {
   return { text, size: 'body', fontSize: TEXT_PRESET_FONT_SIZES.body, minHeight: 0, bold: false, italic: false, align: 'left', color, wrap: true };
 }
 
-/** An orchestrator's signature on a note it writes (CB1): 🤖, its name and the time, on a line of its own at the end. */
+/** An orchestrator's signature on a note it writes: 🤖, its name and the time, on a line of its own at the end. */
 const SIGNATURE = /\n\n🤖 [^\n]* · \d\d:\d\d$/;
 
 /** The agent `agent` reviews, among `agents`: its `reviewOf`, else the one in its zone on the branch it reviews. */
@@ -1120,7 +1120,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         if (!NOTE_KINDS.includes(asked)) throw invalidParams(`kind must be ${NOTE_KINDS.join(' or ')}`);
         // An agent's note, with no kind asked for, is an agent note, badged with who wrote it; `--kind sticky` makes a sticky.
         const agentNote = given === undefined && me.agent !== null;
-        // Text an agent writes is signed (CB1); an agent note says who wrote it on its badge.
+        // Text an agent writes is signed; an agent note says who wrote it on its badge.
         const signs = me.agent !== null && !agentNote;
         checkNoteText(text, asked, signs ? signatureLength(me.name) : 0);
         // An agent note has no colour: one asked for is ignored, not refused, so callers that give one still work (the

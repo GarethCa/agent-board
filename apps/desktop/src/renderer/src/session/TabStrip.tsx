@@ -43,9 +43,9 @@ interface TabStripProps {
   scripts(): Promise<PackageScripts>;
   /** The other agents and shell tiles the + menu offers to show as a tab here. */
   sessions: { label: string; onSelect(): void }[];
-  /** The agent's pull requests the + menu offers to open as a tab here (BI1). */
+  /** The agent's pull requests the + menu offers to open as a tab here. */
   pullRequests?: { label: string; onSelect(): void }[];
-  /** Asks for a page to open in a web tab here (BI2): the + menu's "Web…". */
+  /** Asks for a page to open in a web tab here: the + menu's "Web…". */
   onOpenWeb?(): void;
   /** Named "Shell", not just +, while the window has no tab but its own, so the way to one is plain to see. */
   named: boolean;
@@ -55,14 +55,14 @@ interface TabStripProps {
   onSplit(): void;
   /** The id of the panel that shows a tab, for its `aria-controls`. */
   panelId(tabId: string): string;
-  /** What the tab drags as (AT2); undefined for one that stays put, and for every tab where nothing drags. */
+  /** What the tab drags as; undefined for one that stays put, and for every tab where nothing drags. */
   dragOf?(tabId: string): TabDrag | undefined;
   /** What the strip does with a tab or pane dropped on it at `index` among its tabs, if it would take it. */
   drop?: { accepts(drag: TabDrag): boolean; onDrop(drag: TabDrag, index: number): void };
 }
 
 /**
- * One pane's strip of tabs in a session window (BH1), cmux-style, with + (⌘T) for a new shell, at
+ * One pane's strip of tabs in a session window, with + (⌘T) for a new shell, at
  * a folder, running a package script, or showing another session, and Split (⌘D) for a new pane beside it. ⌘1–9
  * switch. A tab closes by its ×, shown on hover and on the tab showing, or a middle-click. A tab dragged along the
  * strip, from another, or from another window lands where a slot shows.

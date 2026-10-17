@@ -1,4 +1,4 @@
-// A session window's panes (BH1), cmux-style: a binary tree of splits whose leaves are panes, each with its
+// A session window's panes: a binary tree of splits whose leaves are panes, each with its
 // own strip of tabs. A tab shows one surface: the window's own session, one of its shell tabs, another session, a pull
 // request or a web page.
 // Pure, with no Node imports, so the daemon (which keeps it) and the app (which draws and changes it) share it.
@@ -15,10 +15,10 @@ export interface SessionTarget {
 /**
  * What a tab shows. `own` is the window's own session (an agent's, or a shell tile's own panes), `shell` one of its
  * shell tabs (a row of `shells` it owns), `session` another agent or shell tile, shown here and still its own, `pr`
- * a GitHub pull request (`repo` is its `owner/repo`), read from GitHub by the daemon, and `web` a web page (BI2), kept
+ * a GitHub pull request (`repo` is its `owner/repo`), read from GitHub by the daemon, and `web` a web page, kept
  * by the URL it was last at (`isWebTabUrl`) and named by an `id` of its own, so it stays one tab as its page changes.
- * `gate` is an agent's merge gate (BL1): its latest run's steps and logs, named by the agent's session. `plan`
- * is an agent's plans (BO2): their versions, the one picked rendered, and the decision on the latest.
+ * `gate` is an agent's merge gate: its latest run's steps and logs, named by the agent's session. `plan`
+ * is an agent's plans: their versions, the one picked rendered, and the decision on the latest.
  */
 export type Surface =
   | { kind: 'own' }

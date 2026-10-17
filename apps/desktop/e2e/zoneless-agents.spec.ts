@@ -1,6 +1,6 @@
 // Zone-less agents and group zones: agents and shells put straight on the board with the Agent and Shell
-// tools (AG2), the repo picker (AH1), groups bound later and unbound again (AI1), a group's default repo (AJ2), and a
-// loose shell's folder chip (AK1).
+// tools, the repo picker, groups bound later and unbound again, a group's default repo, and a
+// loose shell's folder chip.
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent, Zone } from '@agent-board/daemon/protocol';
 import { createTempKeychain } from '@agent-board/tracker/testing';
@@ -17,7 +17,7 @@ function stored(dataDir: string): Promise<{ zones: Zone[]; agents: Agent[] }> {
 
 const picker = (window: Page) => window.getByRole('dialog', { name: 'Choose where the agent works' });
 
-/** Drags the toolbar's `tool` button onto the board, letting go at `at` (relative to the board), as a hand would (AG2). */
+/** Drags the toolbar's `tool` button onto the board, letting go at `at` (relative to the board), as a hand would. */
 async function dragTool(window: Page, tool: 'New agent' | 'New shell', at: { x: number; y: number }): Promise<void> {
   const button = (await window.getByRole('button', { name: tool, exact: true }).boundingBox())!;
   const board = (await window.locator('.board').boundingBox())!;
@@ -44,7 +44,7 @@ test('the Agent tool starts an agent loose on the board, in a repo picked for it
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
-    // A drop on bare board: the new tile waits for a repo, with the picker on it (AH1).
+    // A drop on bare board: the new tile waits for a repo, with the picker on it.
     await placeWithTool(window, 'New agent');
     await expect(window.getByTestId('pending-tile')).toContainText('new-agent-1');
     // Placing again moves the picker to the new spot; the empty board's welcome stays away from the stand-in tile.
@@ -54,7 +54,7 @@ test('the Agent tool starts an agent loose on the board, in a repo picked for it
     await pickFolderNext(app, repo);
     await picker(window).getByRole('button', { name: 'Browse…' }).click();
     await picker(window).getByRole('textbox', { name: 'New branch' }).fill('agent/first-loose');
-    // The harness, model and role chips (BJ3), on the defaults until picked.
+    // The harness, model and role chips, on the defaults until picked.
     const chips = picker(window).getByRole('group', { name: 'Harness, model and role' });
     await expect(chips).toHaveText(/Claude\s*Default\s*No role/);
     await pickInChip(picker(window), 'Model', 'Haiku');

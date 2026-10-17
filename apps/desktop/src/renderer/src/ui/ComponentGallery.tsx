@@ -399,7 +399,7 @@ export function ComponentGallery() {
             </div>
           </Row>
         ))}
-        <Row label="Picker (CL1)">
+        <Row label="Picker">
           <PopoverPreview aria-label="Shapes" className="shape-picker-popover">
             <ShapePicker current="database" autoFocus={false} hint={<span>Click, then drag on the board</span>} onPick={() => {}} />
           </PopoverPreview>

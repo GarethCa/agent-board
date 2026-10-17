@@ -158,7 +158,7 @@ function useCommands(edge: FlowEdge): Map<string, FlowCommandApproval> {
 }
 
 /**
- * The Edge rules panel (FlowDraw AB2, FlowRules AC, BQ3): on the right of the board, for the flow edge selected, and
+ * The Edge rules panel: on the right of the board, for the flow edge selected, and
  * opened on one as soon as it is drawn. Four sections, each opening with a line saying what it does: When (its trigger,
  * and what happens if its agent is busy), What (its final message, a markdown file or JSON from its agent's worktree,
  * previewed), Only if (its conditions, each with how it did and, for a command not yet approved, its approval) and

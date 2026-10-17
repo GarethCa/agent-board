@@ -47,7 +47,7 @@ export function ConnectorMarkers() {
         >
           <path d="M1.5 1.5 L8.5 5 L1.5 8.5" className="connector-arrow" />
         </marker>
-        {/* A flow edge's: filled, in its colour (FlowDraw). */}
+        {/* A flow edge's: filled, in its colour. */}
         <marker
           id="flow-arrow"
           viewBox="0 0 10 10"
@@ -60,7 +60,7 @@ export function ConnectorMarkers() {
         >
           <path d="M1 1 L10 5 L1 9 Z" className="flow-arrow" />
         </marker>
-        {/* A one-way rail's (CD4): small and open, at its receiving end. */}
+        {/* A one-way rail's: small and open, at its receiving end. */}
         <marker
           id="rail-arrow"
           viewBox="0 0 10 10"
@@ -107,7 +107,7 @@ const LABEL_CHARACTER_WIDTH = 7;
 
 /**
  * A connector: a thin neutral line between two board objects, with an optional label on its middle. Selected,
- * it can be bent (a curve bowed, BU3) and its ends moved to other sides of their objects, or onto other objects (BT1).
+ * it can be bent (a curve bowed) and its ends moved to other sides of their objects, or onto other objects.
  */
 export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<ConnectorEdgeType>) {
   const { data, selected = false } = props;
@@ -126,7 +126,7 @@ export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<Connec
     // Roughly, as drawn: the handles keep clear of it, so a press on it reaches it.
     connector.label === '' ? undefined : { width: connector.label.length * LABEL_CHARACTER_WIDTH + 2 * tokenNumber('--space-2'), height: tokenNumber('--control-row') },
     {
-      // Either end goes onto any other object a connector can join (BT1).
+      // Either end goes onto any other object a connector can join.
       canEndOn: (nodeId) => endOn(nodeId) !== undefined,
       onDoubleClick: () => edit(connector.id),
       onMoved: (which, nodeId, { fromSide, toSide, points }) => {

@@ -28,7 +28,7 @@ interface ShellPanesProps {
    */
   agentPane?: { sessionId: string; label: string; content: ReactNode };
   /**
-   * The window the panes are in, when a shell pane can be dragged out of its split by its header (AT2): to a
+   * The window the panes are in, when a shell pane can be dragged out of its split by its header: to a
    * window's tab strip, or onto the board. Unset where nothing drags.
    */
   dragFrom?: ShellOwner;

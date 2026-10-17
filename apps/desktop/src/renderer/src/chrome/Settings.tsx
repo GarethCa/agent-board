@@ -17,16 +17,16 @@ export interface SettingsProps {
   status: DaemonStatusValue;
   /** Shows why a setting could not be read or saved. */
   onError(action: string): (error: unknown) => void;
-  /** What a double-click on an agent's or shell tile opens, and picks it (AM1). */
+  /** What a double-click on an agent's or shell tile opens, and picks it. */
   clickOpens: ClickOpens;
   onClickOpens(value: ClickOpens): void;
-  /** How the board shows the agents an orchestrator started, and picks it (BA2 or BA3). */
+  /** How the board shows the agents an orchestrator started, and picks it. */
   crewLook: CrewLook;
   onCrewLook(value: CrewLook): void;
   /** Which connections the board draws, and picks it. */
   connections: ConnectionsView;
   onConnections(value: ConnectionsView): void;
-  /** How agent notes look (CO2 or CO1), and picks it. */
+  /** How agent notes look, and picks it. */
   agentNoteLook: AgentNoteLook;
   onAgentNoteLook(value: AgentNoteLook): void;
 }

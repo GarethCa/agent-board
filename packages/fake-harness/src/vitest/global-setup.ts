@@ -1,6 +1,6 @@
 /**
  * Vitest globalSetup: no `AGENT_BOARD_*` from an enclosing board, a throwaway app-data dir, tripwires first on PATH for
- * every worker, and git kept off the dev repo; fail the run if either guard was hit. Also reaps this worktree's stale
+ * every worker, and git kept off this checkout's repo; fail the run if either guard was hit. Also reaps this worktree's stale
  * runs and stops this one if whatever started it goes (reap.ts).
  */
 import { mkdtempSync, rmSync } from 'node:fs';

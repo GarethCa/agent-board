@@ -78,7 +78,7 @@ function focusKeeper(at: Element | null): () => void {
 }
 
 /**
- * ⌘K, a Spotlight-style switcher over any window of the app (CR2, CS2, CT2): a search field over the sessions and
+ * ⌘K, a Spotlight-style switcher over any window of the app: a search field over the sessions and
  * zones, grouped before anything is typed and ranked once something is, live as they change. It opens wherever the
  * focus is, a terminal or a web tab's page too, and Esc gives the focus back where it was. What ↵ does is the
  * window's: the board's shows the tile or switches the view in focus (`BoardSpotlight`), a popped-out window switches

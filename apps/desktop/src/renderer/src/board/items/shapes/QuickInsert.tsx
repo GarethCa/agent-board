@@ -23,7 +23,7 @@ function marked(text: string, match: ShapeMatch | undefined): ReactNode {
 }
 
 /**
- * The quick-insert palette (CL3): `/` on the board opens it at the pointer (`at`, on the screen). Typing finds shapes by
+ * The quick-insert palette: `/` on the board opens it at the pointer (`at`, on the screen). Typing finds shapes by
  * name or another word for them; ↑ and ↓ pick one, and Enter or a click puts it where the pointer was. Empty, it lists
  * the recent shapes (every shape before any is used). Esc or a click elsewhere closes it.
  */

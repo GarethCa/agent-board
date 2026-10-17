@@ -99,13 +99,13 @@ export interface WindowPanesControl {
    * tab of the pane (else the focused one).
    */
   open(surface: Surface, paneId?: string): void;
-  /** Shows `url` in a web tab (BI2): one of the window's already at it, else a new one in the pane (else the focused one). */
+  /** Shows `url` in a web tab: one of the window's already at it, else a new one in the pane (else the focused one). */
   openWeb(url: string, paneId?: string): void;
   /** Keeps where a web tab's page went, to reload it there at the next start. */
   navigated(web: WebSurface): void;
   /** The address "Web…" starts at: the first port the window's running shells listen on, on localhost (a dev server). */
   webSuggestion: string;
-  /** The agent's pull requests the + menu offers to open as a tab (BI1). */
+  /** The agent's pull requests the + menu offers to open as a tab. */
   pullRequestChoices: { label: string; surface: Surface }[];
   /** Splits the pane (else the focused one), a new shell tab in the new pane, beside it or below it, with the keyboard. */
   split(direction: SplitDirection, paneId?: string): void;
@@ -180,7 +180,7 @@ type Stored = { key: string; layout: WindowLayout | null; unread?: string };
 const DEFAULT_FONT_SIZE = 13;
 
 /**
- * The panes of an agent's or a shell tile's session window (BH1), or a tab window's (slice 4), cmux-style:
+ * The panes of an agent's or a shell tile's session window, or a tab window's (slice 4):
  * each pane has its own strip of tabs, and the window keeps how they are laid out with the daemon, so it outlives a
  * restart; a tab moved in or out of it from another window is laid out by the daemon, which the window hears of. A window with no layout
  * kept yet shows one pane holding its tabs, as before panes; a tab split inside itself before panes has its split laid

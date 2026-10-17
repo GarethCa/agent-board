@@ -12,7 +12,7 @@ interface DefaultRepoDialogProps {
 }
 
 /**
- * A group's default repo (AJ2): a recent repo or one browsed for, that agents started in the group use without
+ * A group's default repo: a recent repo or one browsed for, that agents started in the group use without
  * asking; "Always ask" clears it, so each new agent gets the repo picker. It doesn't bind the group.
  */
 export function DefaultRepoDialog({ zone, onSaved, onCancel }: DefaultRepoDialogProps) {

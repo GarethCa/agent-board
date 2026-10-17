@@ -15,7 +15,7 @@ const isBuiltIn = (role: string): role is AgentRole => AGENT_ROLES.includes(role
 const roleName = (role: string) => (isBuiltIn(role) ? ROLE_LABELS[role] : role);
 
 /**
- * A zone's role templates (BK2), from its tab's ⋯ › Role templates…: the roles on the left, the picked one's
+ * A zone's role templates, from its tab's ⋯ › Role templates…: the roles on the left, the picked one's
  * template on the right, with its variables to insert, Reset to the repo's (its worker prompt, else the app's own) and
  * Save. Each role's edits are kept while another is looked at; Save saves every one changed. Below the built-in roles,
  * the named roles used in the zone or among the app's default roles, each reset to the app's default.

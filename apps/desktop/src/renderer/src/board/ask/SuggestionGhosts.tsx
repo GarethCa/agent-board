@@ -96,7 +96,7 @@ function plans(state: ReactFlowState): { noteId: string; suggestion: SuggestedEd
 const samePlans = (a: ReturnType<typeof plans>, b: ReturnType<typeof plans>) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
- * The suggested edits of every Ask Claude answer on the board (CM3, CPb): each shape and arrow drawn dashed in the accent
+ * The suggested edits of every Ask Claude answer on the board: each shape and arrow drawn dashed in the accent
  * colour where it would go, and a chip with its number, its title, ✓ to make it real and ✕ to dismiss it.
  */
 export const SuggestionGhosts = memo(function SuggestionGhosts() {

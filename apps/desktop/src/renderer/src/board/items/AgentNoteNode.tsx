@@ -21,7 +21,7 @@ const MIN_AGENT_NOTE_HEIGHT = 96;
 /**
  * A note an agent wrote: a typed card, never a handwritten sticky. Its badge names the agent (its harness's
  * mark, its name and role) and selects its tile; the time is when the agent last wrote it. It is drawn as a document
- * card (CO2) or a cut of a terminal (CO1), as the Agent notes setting says. The user can move, resize, delete and
+ * card or a cut of a terminal, as the Agent notes setting says. The user can move, resize, delete and
  * edit it like a sticky; once they edit it, it says "edited by you" until its agent writes it again.
  */
 export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: picked, dragging }: NodeProps<ItemNodeType>) {
@@ -141,7 +141,7 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
   );
 });
 
-/** A note's markdown as the terminal card draws it (CO1): each paragraph's line on a `❯` prompt, each list item a dash. */
+/** A note's markdown as the terminal card draws it: each paragraph's line on a `❯` prompt, each list item a dash. */
 function renderPrompts(text: string, openLink: (url: string) => void): ReactNode {
   return parseMarkdown(text).flatMap((block, index) => {
     const lines = block.type === 'paragraph' ? block.lines : block.items;

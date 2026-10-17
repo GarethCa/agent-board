@@ -181,7 +181,7 @@ export function connectorHandlers<Context>(
       const fields = paramsObject(params);
       const connector = get(stringParam(fields, 'id'));
       const given = (name: string) => fields[name] !== undefined;
-      // An end moved onto another object (BT1) joins it, on the side given; a side alone moves it round its own.
+      // An end moved onto another object joins it, on the side given; a side alone moves it round its own.
       const [from, to] = (['from', 'to'] as const).map((name) => {
         const end = given(name) ? endParam(fields, name) : connector[name];
         return given(`${name}Side`) ? { ...end, side: oneOf(fields, `${name}Side`, CONNECTOR_SIDES) } : end;

@@ -22,7 +22,7 @@ import { apiKeyHint, GhLoginHelp, LINEAR_KEY_PLACEHOLDER } from './tracker-help'
 import { keyText } from '../keys/registry';
 
 
-/** A group first (AI1): a zone is a group until it is bound, and binding it to a source is optional. */
+/** A group first: a zone is a group until it is bound, and binding it to a source is optional. */
 const SOURCES: { id: ZoneSource; label: string; icon: ReactNode }[] = [
   { id: 'empty', label: 'Group', icon: <SquareDashed /> },
   { id: 'github', label: 'GitHub', icon: <GitBranch /> },
@@ -62,7 +62,7 @@ interface AddZonePopoverProps {
 
 /**
  * Add zone (P1): a popover beside the outline the Zone tool dragged out, with a search and a tab per source: a
- * group, bound to nothing, which it opens on (AI1); a GitHub repo (its local clone, or one the daemon makes); a
+ * group, bound to nothing, which it opens on; a GitHub repo (its local clone, or one the daemon makes); a
  * Linear team, or one of its projects (the zone's tracker, bound to a recent folder or left unbound); or a recent
  * folder ("Browse…" is the only way to the OS picker). The name and colour are set at the bottom (T1).
  */

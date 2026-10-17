@@ -55,7 +55,7 @@ export function ratioAt(divider: Divider, point: { x: number; y: number }): numb
   return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, ratio));
 }
 
-/** Where a drop on a pane lands (BH1): in its strip from the middle, or in a new pane at an edge. */
+/** Where a drop on a pane lands: in its strip from the middle, or in a new pane at an edge. */
 export type DropZone = 'center' | 'left' | 'right' | 'top' | 'bottom';
 
 /** How near an edge, as a share of the pane, a drop splits there. */

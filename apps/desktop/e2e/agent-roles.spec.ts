@@ -1,5 +1,5 @@
-// An agent's model and role at spawn: the harness, model and role chips in New agent (BJ3), a zone's Role
-// templates dialog (BK2), and the tile's model and role badges, with a reviewer's detached branch line.
+// An agent's model and role at spawn: the harness, model and role chips in New agent, a zone's Role
+// templates dialog, and the tile's model and role badges, with a reviewer's detached branch line.
 // A named custom role shows its name on the chip and the badge.
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';

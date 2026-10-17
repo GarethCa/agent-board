@@ -12,7 +12,7 @@ type Tab = 'all' | ShapeGroup;
 const TABS: SegmentedOption<Tab>[] = [{ id: 'all', label: 'All' }, ...SHAPE_GROUPS.map(({ id, name }) => ({ id, label: name }))];
 
 /**
- * The shape picker (CL1): a search field, the recent shapes, then every shape by group, with tabs to show one group.
+ * The shape picker: a search field, the recent shapes, then every shape by group, with tabs to show one group.
  * Typing filters the shapes by name and other words for them; Enter picks the first. `current` is pressed.
  */
 export function ShapePicker({

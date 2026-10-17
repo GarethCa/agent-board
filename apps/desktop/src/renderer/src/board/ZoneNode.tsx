@@ -384,7 +384,7 @@ export const ZoneNode = memo(function ZoneNode({
       data-fill={zone.fillOpacity ?? undefined}
       style={{ '--zone-color': zone.color, '--zone-fill-pct': zone.fillOpacity ?? undefined } as CSSProperties}
     >
-      {/* Under its tiles: each orchestrator's crew, framed beside it (BA2). */}
+      {/* Under its tiles: each orchestrator's crew, framed beside it. */}
       {crews.map((frame) => (
         <div
           key={frame.orchestratorId}

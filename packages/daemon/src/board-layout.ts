@@ -356,7 +356,7 @@ const crewSlot = (at: { x: number; y: number }, col: number, row: number) => ({
   y: at.y + row * ROW_STEP,
 });
 
-/** Where the next of a crew goes beside its orchestrator at `at` (BA2): the first spot in its rows clear of `taken`. */
+/** Where the next of a crew goes beside its orchestrator at `at`: the first spot in its rows clear of `taken`. */
 export function crewSpot(at: { x: number; y: number }, taken: readonly Rect[]): { x: number; y: number } | undefined {
   for (let row = 0; row < CREW_ROWS; row++) {
     for (let col = 0; col < CREW_PER_ROW; col++) {

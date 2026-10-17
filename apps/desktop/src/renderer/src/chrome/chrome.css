@@ -237,7 +237,7 @@
   gap: var(--space-3);
 }
 
-/* Settings › Appearance's Theme control (CV2): the choice's swatch and name, opening the Theme popover. */
+/* Settings › Appearance's Theme control: the choice's swatch and name, opening the Theme popover. */
 .theme-setting {
   display: flex;
 }
@@ -676,7 +676,7 @@
   font-size: var(--font-size-sm);
 }
 
-/* ⌘K, the Spotlight-style switcher (CR2): a frosted card near the top of the window, over a light scrim. */
+/* ⌘K, the Spotlight-style switcher: a frosted card near the top of the window, over a light scrim. */
 .spotlight-scrim {
   position: fixed;
   inset: 0;

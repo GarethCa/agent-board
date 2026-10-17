@@ -129,7 +129,7 @@ export interface Zone {
    */
   boardMcp: boolean;
   /**
-   * Whether the agents the user starts in it may orchestrate in it (AZ3): each starts with `orchestrate` `zone`,
+   * Whether the agents the user starts in it may orchestrate in it: each starts with `orchestrate` `zone`,
    * which holds while its tile is in this zone and this stays on. On by default. Turned off, no agent in it orchestrates
    * any more, whoever let it. An agent an orchestrator starts never orchestrates.
    */
@@ -842,7 +842,7 @@ export interface EdgePoint {
   x: number;
   y: number;
   /**
-   * Set on a curve's one point when it is its bow (BU3): the curve is drawn bowed through it. A curve's one point kept
+   * Set on a curve's one point when it is its bow: the curve is drawn bowed through it. A curve's one point kept
    * without it is a bend from before bows, drawn through it as it always was.
    */
   bow?: true;
@@ -2182,7 +2182,7 @@ export interface Shell {
 }
 
 /**
- * Where a shell moves to (AT2): one of an agent's or a shell tile's tabs, or a shell tile on the board, at
+ * Where a shell moves to: one of an agent's or a shell tile's tabs, or a shell tile on the board, at
  * `tile` (relative to its zone, as `shell.move` takes it).
  */
 export type ShellPlace = { owner: ShellOwner } | { tile: TileMove };
@@ -2470,7 +2470,7 @@ export interface DaemonMethods {
    */
   'shell.delete': { params: { shellId: string }; result: null };
   /**
-   * Moves the shell, all its panes, to `to` (AT2): into the owner's tabs, after its others (at `order`, as an
+   * Moves the shell, all its panes, to `to`: into the owner's tabs, after its others (at `order`, as an
    * undo puts one back, if given), or onto the board as a shell tile. Its processes, their output and folders are
    * untouched: only its owner, or its place, changes, and its panes speak for the new one from then on. A shell tile
    * moving into tabs takes its own tabs with it, after it. Resolves with each shell it moved, itself first. Fails with
@@ -2479,7 +2479,7 @@ export interface DaemonMethods {
    */
   'shell.moveTab': { params: { shellId: string; to: ShellPlace; order?: number | null }; result: Shell[] };
   /**
-   * Moves the pane `sessionId` out of the shell's split into a shell of its own at `to` (AT2), named after the
+   * Moves the pane `sessionId` out of the shell's split into a shell of its own at `to`, named after the
    * pane's label, else the shell's, with the id `id` if given (a redo's). Its process is untouched. Resolves with the new
    * shell, the shell it left and that shell's layout before. Fails with `invalidParams` for a pane alone in its shell
    * (move the shell), the agent's own pane, a taken `id`, or as `shell.moveTab` does for `to`.
@@ -2495,7 +2495,7 @@ export interface DaemonMethods {
    */
   'shell.returnPane': { params: { shellId: string; sessionId: string; layout: PaneLayout }; result: Shell };
   /**
-   * How the owner's session window lays out its tabs (BH1): its panes, each with a strip. Null until its
+   * How the owner's session window lays out its tabs: its panes, each with a strip. Null until its
    * window first saves one, when the window shows one pane holding its tabs in their order.
    */
   'shell.windowLayout': { params: { owner: WindowOwner }; result: WindowLayout | null };
@@ -3067,7 +3067,7 @@ export interface DaemonMethods {
   /** Sets how many review rounds the implementer may have, 1 to `MAX_REVIEW_CAP`. */
   'review.setCap': { params: { sessionId: string; cap: number }; result: Agent };
   /**
-   * Reads a pull request whole for its PR tab (BI1) with gh: its description, checks, changed files with
+   * Reads a pull request whole for its PR tab with gh: its description, checks, changed files with
    * their diffs, reviews and comments, and whether the user may merge or approve it. Fails with
    * `TRACKER_ERROR.unavailable` when GitHub can't be reached or its rate limit is reached, `TRACKER_ERROR.unauthorized`
    * when gh isn't logged in, and `invalidParams` for anything GitHub refuses, such as an unknown pull request.
@@ -3109,7 +3109,7 @@ export interface DaemonMethods {
    */
   'gate.log': { params: SessionRef & { step?: string; since?: number }; result: GateLog };
   /**
-   * Opens a pull request of the agent's branch (BM3): pushes it, then has gh make one, titled after its issue
+   * Opens a pull request of the agent's branch: pushes it, then has gh make one, titled after its issue
    * (or its name), described from the repo's pull request template filled from its worktree's `.agent-board/handover.md`
    * with the gate table (in a zone with a gate), and `Fixes` its issue. It pushes the commit checked, not whatever the
    * branch is at by then. Fails with `invalidParams` when anything is uncommitted, when in a zone with a gate the gate hasn't
@@ -3124,7 +3124,7 @@ export interface DaemonMethods {
    */
   'board.openPullRequest': { params: { token: string }; result: PullRequest };
   /**
-   * Squash-merges the agent's pull request `number` while its head is `headCommit` (BM3), only if GitHub's checks
+   * Squash-merges the agent's pull request `number` while its head is `headCommit`, only if GitHub's checks
    * are green and, in a zone with a gate command, its gate passed on that commit (`mergeBlocked`, checked again here),
    * then cleans up as `cleanup` says: its worktree and branch only while the worktree is still at `headCommit` with nothing
    * uncommitted, so no work that wasn't merged is lost.
@@ -3287,7 +3287,7 @@ export function statusLine(status: Pick<AgentStatus, 'summary' | 'progress'>): s
 }
 
 /**
- * What an approve or merge answers once it is done (BI1): the pull request as it is now, or, when reading it
+ * What an approve or merge answers once it is done: the pull request as it is now, or, when reading it
  * again failed, why: the action itself still happened.
  */
 export type PullRequestActed = { details: PullRequestDetails } | { readError: string };

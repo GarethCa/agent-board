@@ -53,7 +53,7 @@ test('a closed agent folds to a chip that keeps its edge, unfolds on click, fold
     await expect(chip(window).locator('.ui-pill')).toContainText('ended');
     await expect(tile(window).filter({ hasNot: window.locator('[data-folded]') })).toHaveCount(1);
 
-    // The chip is centred in its tile's place, as CA3 draws it: its edge leaves from the same height as the tile's did.
+    // The chip is centred in its tile's place, as it is drawn: its edge leaves from the same height as the tile's did.
     await expect
       .poll(async () => {
         const [now, box] = [await edgeEnds(window), await chip(window).boundingBox()];

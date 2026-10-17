@@ -1,4 +1,4 @@
--- A session window's panes (BH1): how its tabs are laid out, as panes with a strip each, kept per owner (an
+-- A session window's panes: how its tabs are laid out, as panes with a strip each, kept per owner (an
 -- agent's session id, or a shell tile's id) as WindowLayout JSON. Tabs themselves stay rows of shells; this keeps only
 -- where each shows. An owner with no row shows one pane holding its strip as it was, so nothing needs migrating.
 CREATE TABLE window_layouts (

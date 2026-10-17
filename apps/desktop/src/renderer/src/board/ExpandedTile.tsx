@@ -86,7 +86,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
         <HeadFacts agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
         <span className="session-window-head-fill" />
-        {/* Its merge gate, as in its session window (BM3); not a drag handle. */}
+        {/* Its merge gate, as in its session window; not a drag handle. */}
         {agent && gated(agent) && (
           <span className="nodrag">
             <GateControls agent={agent} visible />

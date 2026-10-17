@@ -1,4 +1,4 @@
--- Whether the agents the user starts in a zone may orchestrate there (AZ3). On by default, for the zones there
+-- Whether the agents the user starts in a zone may orchestrate there. On by default, for the zones there
 -- are too; the user turns it off per zone. Agents already on the board are left as they are: only the agents started in
 -- a zone that allows it get it. `orchestrate_zone` is the zone that let an agent orchestrate, NULL when the user did so
 -- by hand: the zone's grant holds only while the agent's tile is in that zone and the zone still allows it.

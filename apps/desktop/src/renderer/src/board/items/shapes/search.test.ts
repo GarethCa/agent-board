@@ -4,7 +4,7 @@ import { searchShapes } from './search';
 const names = (query: string) => searchShapes(query).map(({ shape }) => shape);
 
 describe('searchShapes', () => {
-  it('finds a shape by the start of its name first, then by another word for it, then by its letters in order (CL3)', () => {
+  it('finds a shape by the start of its name first, then by another word for it, then by its letters in order', () => {
     expect(names('da')).toEqual(['database', 'input-output', 'storage', 'delay']);
     const [database, io] = searchShapes('da');
     expect(database).toEqual({ shape: 'database', match: { in: 'name', text: 'Database', from: 0, to: 2 } });

@@ -62,7 +62,7 @@ export interface ArrangeOptions {
   /** What it may not move (notes, cards, tiles out of scope), relative to the zone: every tile keeps a gap from them. */
   obstacles?: readonly Rect[];
   /**
-   * Lay each group out as a cluster (BZ4, CB1): a label above it, a sticky at its start, then its tiles. Only in rows.
+   * Lay each group out as a cluster: a label above it, a sticky at its start, then its tiles. Only in rows.
    */
   clusters?: boolean;
 }

@@ -3,7 +3,7 @@ import type { Point } from '../geometry';
 
 /**
  * A tool the user arms (T, S, Z, A, `, or its button) before clicking, or dragging, on the board. The Agent and Shell
- * tools (AG2) carry a ghost tile under the pointer to where it lands.
+ * tools carry a ghost tile under the pointer to where it lands.
  */
 export type ArmedTool = 'text' | 'shape' | 'zone' | 'agent' | 'shell';
 

@@ -17,7 +17,7 @@ const tileOf = (subject: SpotlightSubject): TileRef | undefined =>
   subject.kind === 'agent' ? { kind: 'agent', id: subject.agent.sessionId } : subject.kind === 'shell' ? { kind: 'shell', id: subject.shell.id } : undefined;
 
 /**
- * The board window's ⌘K switcher. On the board, ↵ flies to the tile, pulses and selects it (CS2), and ⌘↵ opens it. In
+ * The board window's ⌘K switcher. On the board, ↵ flies to the tile, pulses and selects it, and ⌘↵ opens it. In
  * the session window shown on the board, ↵ switches it to the session, as ‹ › do; in an expanded tile with the focus,
  * the session picked expands in its place. A session popped out into an OS window of its own comes forward there. A
  * zone is brought into view, out of the session window or expanded tile.

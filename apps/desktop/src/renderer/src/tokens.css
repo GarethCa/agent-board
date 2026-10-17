@@ -197,8 +197,8 @@
   --sticky-resizer: var(--muted); /* the resize handles and outline of a selected note */
   --sticky-swatch-edge: rgb(0 0 0 / 18%); /* the ring round a colour swatch, on any colour */
   /*
-   * Agent notes, never taken for a sticky: the document card (CO2) is a tile's surface with an accent bar;
-   * the terminal card (CO1) is the session window's terminal, dark in every theme.
+   * Agent notes, never taken for a sticky: the document card is a tile's surface with an accent bar;
+   * the terminal card is the session window's terminal, dark in every theme.
    */
   --agent-note-radius: var(--radius-md);
   --agent-note-bar: var(--accent); /* the document card's left edge, and the note on the minimap */
@@ -212,9 +212,9 @@
   --agent-note-term-prompt: var(--harness-claude); /* the ❯ before each line */
   --agent-note-term-edited: #f0a36b;
   --agent-note-term-link: #91a7f5; /* "show agent", and a link */
-  --agent-note-tether: var(--muted); /* the dashed line from a note to its agent's tile (CPa) */
+  --agent-note-tether: var(--muted); /* the dashed line from a note to its agent's tile */
   --agent-note-tether-dash: 3 3;
-  --suggestion-ghost: var(--accent); /* an Ask Claude answer's suggested shapes and arrows, dashed where they would go (CM3) */
+  --suggestion-ghost: var(--accent); /* an Ask Claude answer's suggested shapes and arrows, dashed where they would go */
   --suggestion-ghost-fill: var(--accent-faint);
   --suggestion-ghost-dash: 4 3;
   /*
@@ -307,10 +307,10 @@
   --connector-handle-offset: 10px; /* how far outside its side a handle sits, clear of the resize grips on the side */
   --connector-zone-top-handle-at: 92%; /* along a zone's top: its tab's buttons are in the way of the middle */
   --connector-handle-hover-size: 13px;
-  --connector-handle-near-size: 17px; /* the handles of the object an arrow being drawn is near (BS4) */
+  --connector-handle-near-size: 17px; /* the handles of the object an arrow being drawn is near */
   --line-handle-size: 10px; /* an end or bend of a selected line */
   --line-insert-size: 8px; /* halfway along a stretch of it, where a new bend is pulled out */
-  --line-bow-size: 12px; /* the one handle on a curve's middle that bows it (BU3) */
+  --line-bow-size: 12px; /* the one handle on a curve's middle that bows it */
   --line-bow-edge-width: 2px;
   --line-insert-opacity: 0.6;
   --connector-label-gap: 2px;
@@ -342,7 +342,7 @@
   --flow-receiving-ring: color-mix(in srgb, var(--flow-edge) 14%, transparent); /* round a tile receiving a hand-off */
   --flow-held: var(--state-rate-limited-soft); /* a hand-off an edge holds until its conditions pass (FlowRules) */
   --flow-held-ink: var(--state-rate-limited-ink);
-  /* Linked sessions as one rail (CD4): a faint dashed line, the document riding it as a token. */
+  /* Linked sessions as one rail: a faint dashed line, the document riding it as a token. */
   --rail: color-mix(in srgb, var(--flow-edge) 45%, transparent);
   --rail-faint: var(--control-edge); /* a one-way rail that has carried nothing yet */
   --rail-cap: color-mix(in srgb, var(--flow-edge) 55%, transparent); /* the small ring at each end without an arrow */
@@ -360,7 +360,7 @@
   --flow-condition-passed-ink: var(--success);
 
   /*
-   * Reviews (AD2): a reviewer's dashed tile, the Review tab's mark, and the review doc viewer's findings by
+   * Reviews: a reviewer's dashed tile, the Review tab's mark, and the review doc viewer's findings by
    * severity, verdicts and file:line chips.
    */
   --reviewer-edge: #9c88e0; /* a reviewer's tile: dashed, as it is ephemeral */
@@ -411,7 +411,7 @@
   --window-disabled-ink: #858585;
   --window-notice: #3f3420; /* a notice over the terminal, e.g. a held permission prompt */
   --window-warning: #f0a46c; /* a warning, as text over the terminal or on a notice */
-  --window-chat-you: #26315c; /* your message in the chat view (AE1) */
+  --window-chat-you: #26315c; /* your message in the chat view */
   --window-chat-you-ink: #dbe4ff;
   --window-added: #8ce99a; /* a tool call's added lines in the chat view: +38 */
   --window-diff-added: #1f3324; /* an added line's row in a PR tab's diff */
@@ -466,12 +466,12 @@
   --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 45%);
   /* A tile being dragged (TileCompact mock): blurred, as only the one tile in hand draws it. */
   --shadow-lifted: 0 2px 0 rgb(43 42 39 / 5%), 0 10px 14px -4px rgb(43 42 39 / 16%), 0 34px 48px -16px rgb(43 42 39 / 42%);
-  /* The ⌘K switcher (CR2): frosted, lifted well off the board, over a light scrim. */
+  /* The ⌘K switcher: frosted, lifted well off the board, over a light scrim. */
   --shadow-spotlight: 0 2px 4px rgb(60 45 20 / 8%), 0 24px 60px -18px rgb(60 45 20 / 45%);
   --scrim-spotlight: rgb(40 32 20 / 18%);
   --spotlight-fill: color-mix(in srgb, var(--raised) 92%, transparent);
   --blur-spotlight: 14px;
-  /* A tile ⌘K showed (CS2): an accent border and a soft ring round it, pulsing. */
+  /* A tile ⌘K showed: an accent border and a soft ring round it, pulsing. */
   --shadow-pulse: 0 0 0 2px var(--accent), 0 0 0 8px color-mix(in srgb, var(--accent) 22%, transparent);
   --shadow-expanded: 0 1px 0 rgb(40 32 16 / 12%), 0 4px 0 -1px rgb(40 32 16 / 8%), 0 10px 0 -4px rgb(40 32 16 / 5%); /* an expanded tile at rest: unblurred, as several may be open while the board pans */
   --shadow-window: 0 0 0 1px rgb(43 42 39 / 22%), 0 30px 60px -18px rgb(0 0 0 / 50%), 0 12px 24px -12px rgb(0 0 0 / 25%);
@@ -596,20 +596,20 @@
   --size-zone-tab: 28px; /* a zone's tab */
   --size-clone-bar: 72px; /* a cloning zone's progress bar, on its tab */
   --size-clone-bar-height: 5px;
-  --size-repo-picker: 360px; /* the repo picker beside a new agent's tile (AH1) */
-  --size-shape-picker: 290px; /* the shape picker under the Shape tool (CL1): six shapes a row */
+  --size-repo-picker: 360px; /* the repo picker beside a new agent's tile */
+  --size-shape-picker: 290px; /* the shape picker under the Shape tool: six shapes a row */
   --size-shape-picker-list: 420px; /* its shapes' tallest, before they scroll */
   --size-shape-cell: 38px; /* one shape's button in it */
   --size-shape-cell-height: 34px;
-  --size-theme-popover: 340px; /* the Theme popover in Settings › Appearance (CV2) */
+  --size-theme-popover: 340px; /* the Theme popover in Settings › Appearance */
   --size-theme-popover-list: 380px; /* its choices' tallest, before they scroll */
   --size-ask-claude: 340px; /* Ask Claude's popover beside a selection (CM) */
-  --size-quick-insert: 300px; /* the / palette at the pointer (CL3) */
+  --size-quick-insert: 300px; /* the / palette at the pointer */
   --size-gallery-shape: 148px; /* a shape's cell in the component gallery */
   --size-gallery-shape-height: 112px;
   --size-quick-insert-list: 260px; /* its results' tallest, before they scroll */
-  --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor (BK2) */
-  --size-agent-setup-model: 140px; /* the typed model id in place of the model chip (BJ3) */
+  --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor */
+  --size-agent-setup-model: 140px; /* the typed model id in place of the model chip */
   --size-add-zone: 700px; /* the Add zone popover: wide enough for its foot, the name, eight colours and two buttons */
   --size-add-zone-list: 300px; /* its list's tallest, before it scrolls */
   --size-add-zone-teams: 190px; /* its Linear tab's teams column, beside the team's projects */
@@ -624,9 +624,9 @@
   --rail-token-room: 160px; /* the shortest rail its token lies along in full; on a shorter one it shows its mark alone. Arrange spaces linked tiles by it (the daemon's RAIL_TOKEN_ROOM) */
   --size-rail-token-height: 24px;
   --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
-  --size-edge-rules: 384px; /* the Edge rules panel's width (FlowDraw AB2) */
+  --size-edge-rules: 384px; /* the Edge rules panel's width */
   --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
-  --size-edge-file: 120px; /* the least its payload file field narrows to before it wraps under the switch (BQ3) */
+  --size-edge-file: 120px; /* the least its payload file field narrows to before it wraps under the switch */
   --size-edge-history-time: 64px; /* its history's times: "14:01", "Fri 17:40" */
   --size-tile-head: 22px; /* a tile's head row */
   --size-header-chip-min: 56px; /* a session window header's branch and "N of M" chips, narrowest: they shrink before its title does */
@@ -675,7 +675,7 @@
   --size-menu: 214px; /* a menu's narrowest */
   --size-empty-body: 200px; /* an empty state's text, widest */
   --size-dialog: 440px; /* a dialog's width */
-  --size-spotlight: 520px; /* the ⌘K switcher's width (CR2) */
+  --size-spotlight: 520px; /* the ⌘K switcher's width */
   --size-spotlight-list: 360px; /* how tall its list grows before it scrolls */
   --size-spotlight-mark: 22px; /* a row's mark */
   --spotlight-top: 14vh; /* how far down the window it opens */
@@ -776,7 +776,7 @@
 }
 
 /*
- * The dark theme: AN1 Warm graphite. Near-black warm greys, the light
+ * The dark theme, Warm graphite. Near-black warm greys, the light
  * theme's blue kept for fills, state colours muted. It sets every colour the light theme writes as a literal, bar the
  * few that are the same in both (tokens.test.ts lists them), and the aliases that would otherwise follow the wrong way:
  * a scrim shaded with the light text, a zone's tab shaded towards it.

@@ -223,7 +223,7 @@ export function withTiles(
   // Board items in each zone (an issue card, a sticky), and loose on the board, are in the way too.
   const items = new Map<string | undefined, ZoneLayout[]>();
   for (const node of nodes.filter(isItemNode)) items.set(node.parentId, [...(items.get(node.parentId) ?? []), node.data.item]);
-  // An orchestrator's new agent goes beside it, in its crew (BA2), when it starts where its orchestrator is.
+  // An orchestrator's new agent goes beside it, in its crew, when it starts where its orchestrator is.
   slotUnplaced(entries, {
     zoneOf: (entry) => entry.parentId,
     placeOf: (entry) => entry.position,

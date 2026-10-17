@@ -273,7 +273,7 @@ describe('edgeTitle', () => {
 describe('rulesSummary', () => {
   const names = { from: 'Fix flake', to: 'Review fix' };
 
-  it("says, in a line each, when the edge sends, what, and what it waits for (BQ3)", () => {
+  it("says, in a line each, when the edge sends, what, and what it waits for", () => {
     expect(rulesSummary(edge('e', 'a', 'b'), names)).toEqual({
       when: 'Sends by itself when Fix flake hands off',
       what: "Sends Fix flake's final message",

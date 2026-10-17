@@ -184,7 +184,7 @@ function ReviewActions({ implementer, rounds, round, onDismissed }: ReviewAction
   const notStarted = startBlocked(implementer, rounds);
   const notMerged = mergeBlocked(implementer, rounds, round);
   const pr = implementer.pullRequests.find((known) => known.state === 'open');
-  // Its newest pull request, in a PR tab beside its terminal (BI1).
+  // Its newest pull request, in a PR tab beside its terminal.
   const newest = implementer.pullRequests.flatMap((known) => pullRequestSurfaceOf(known) ?? [])[0];
   const merge = (
     <Button

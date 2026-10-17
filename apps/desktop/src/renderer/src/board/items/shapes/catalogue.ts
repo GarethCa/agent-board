@@ -29,7 +29,7 @@ export interface ShapeKind {
   /** As the picker and the bar name it. */
   name: string;
   group: ShapeGroup;
-  /** Other words for it, which search matches too (CL3): "db" finds Database. */
+  /** Other words for it, which search matches too: "db" finds Database. */
   synonyms: readonly string[];
   /** Its size when placed with a click. */
   size: { width: number; height: number };

@@ -1,4 +1,4 @@
-// What a session window's tabs drag as, and what a drag means to the window it is dropped on (BH1; slice 4
+// What a session window's tabs drag as, and what a drag means to the window it is dropped on (slice 4
 // across windows). Pure.
 import type { WindowOwner } from '@agent-board/daemon/protocol';
 import { isLooseSurface, OWN_SURFACE, surfaceKey, type Placement, type Surface } from '@agent-board/daemon/window-layout';

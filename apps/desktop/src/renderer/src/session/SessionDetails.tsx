@@ -44,7 +44,7 @@ export interface SessionDetailsProps {
   onCollapsed(collapsed: boolean): void;
   /** Opens a link in the OS browser: an issue, or a pull request with no PR tab to open. */
   onOpenLink(url: string): void;
-  /** Opens one of the agent's pull requests in a PR tab (BI1). */
+  /** Opens one of the agent's pull requests in a PR tab. */
   onOpenPullRequest?(pr: PullRequest): void;
 }
 
@@ -354,7 +354,7 @@ function AgentSections({
 }
 
 /**
- * The agent's merge gate (BL1): its last run in a word, on which commit, and Run gate, which shows the run in a
+ * The agent's merge gate: its last run in a word, on which commit, and Run gate, which shows the run in a
  * Gate tab in the focused pane, as the tile's badge and ⌘⇧G do.
  */
 function GateSection({ agent, sectionProps }: { agent: Agent; sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void } }) {

@@ -1,4 +1,4 @@
-// Opening a pull request and Merge from an agent's session window (BM3), each only when the rules allow it
+// Opening a pull request and Merge from an agent's session window, each only when the rules allow it
 // (`gate-rules.ts`), checked here again whatever the app showed. GitHub is asked through the user's own gh login, as every GitHub call is
 // (ADR-0002); merging and approving reuse the PR tab's calls. Only the user's app calls these (`BOARD_CALLER_METHODS`),
 // but for an agent opening its own pull request as a draft (`board.openPullRequest`).

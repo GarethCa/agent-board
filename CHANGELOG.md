@@ -1,8 +1,18 @@
 # Changelog
 
+## v0.5.2 (2026-10-17)
+
+- A shorter README: a visual front page, with the full tour, install notes, quick start, FAQ, troubleshooting and how it works under docs/
+- sharp 0.34.5 → 0.35.5, fixing three high-severity advisories in its bundled image libraries
+- sprintf-js is no longer pulled in by the build tooling (global-agent pinned to 4.1.3)
+- Neutral wording throughout the docs and changelog
+- THIRD_PARTY.md lists the bundled fonts and their licences
+- The app's package.json carries the release version
+- Each release gets a GitHub Release with its notes
+
 ## v0.5.1 (2026-10-16)
 
-- quitAndWait lives in its own module the public tree uses; popover-keys waits for focus and retries Escape until the popover closes
+- quitAndWait lives in its own module; popover-keys waits for focus and retries Escape until the popover closes
 - One key registry, the Extended keyboard shortcuts setting, and the ? / ⌘/ cheat sheet
 - A setting for Claude's context compact window, off by default
 - Give each Vitest project its own groupOrder; board-mcp test waits for the progress update
@@ -10,7 +20,7 @@
 - pnpm package installs the app; pnpm update:app updates a public checkout
 - Keyboard conflict fixes: Ctrl+I and Ctrl+- stay the terminal's off macOS, no app reload or board close by accident, no single keys inside popovers
 - Theme picker behind a Theme… popover; pick a family and the mode picks its light or dark theme
-- daemon.log says how each agent's session ended (two agents killed by another agent's pkill -f)
+- daemon.log says how each agent's session ended
 - Link a reviewer to the agent whose branch it reviews
 - The status-set e2e expects a waiting tile's last message, not its status line
 - A new agent shows starting, not idle, until its first turn begins
@@ -23,7 +33,7 @@
 - Arrow shaping: handles near the pointer, ends moved onto other objects, a bow handle on curves
 - Arrange's cluster note is an agent note saying where the work stands, not the prompt
 - Ask Claude about a selection: an agent reviews the picture and diagram, and its answer lands beside it with suggested edits
-- Closed agents fold to chips on the board (CA3)
+- Closed agents fold to chips on the board
 - ⌘K is a Spotlight-style switcher from any screen, a terminal too
 - Crew events and a finished signal: watch, wait --until finished, status set --done
 - A PR chip no longer shifts a tile's rows, and the dock stays between the zones pill and the zoom bar, scrolling when full
@@ -40,7 +50,7 @@
 - A custom role carries a name (designer, researcher…) shown on its tile, with zone templates and the app's default roles
 - Keep the Mac awake through a gate, and say when it slept; bound sync launches in tests
 - An orchestrator restarts an ended agent in place (agent-board restart, MCP restart)
-- Linked agents as one rail, the latest document riding it (CD4)
+- Linked agents as one rail, the latest document riding it
 - Serve the board MCP to Claude agents from the daemon over HTTP, not a stdio process each
 - Refresh the expanded-crew baseline now Open PR is gone
 - An expanded tile keeps a crew in its frame, moving the crew as one, inside its grown zone
@@ -92,7 +102,7 @@
 ## v0.3.0 (2026-10-14)
 
 - Deleted agents' windows close, dead controls go, and Dissolve asks first and can be undone
-- Session windows lay tabs out in panes, each with its own tab strip (cmux model)
+- Session windows lay tabs out in panes, each with its own tab strip
 - Tiles resize, and a long task never pushes the branch or footer off
 - One pass-through helper for the main-process IPC handlers, and a test that pins the channel set
 - Remove dead paths and unused options; add a CLI ↔ MCP parity test
@@ -100,18 +110,18 @@
 - Agents hand off explicitly over their edges, and orchestrators can wire their crew with edges
 - Drag tabs and panes between session windows and the board, and a shell tile onto an agent
 - Shell tiles get tabs too, so every session window works the same way
-- Each staged public release's README describes only what its snapshot contains
+- Each staged public release's README describes only what that release contains
 - Any window showing an agent's own pane marks its ask seen: one hook for ‹ ›, restored windows, app focus and shell tabs
 - Refresh the README screenshots; add an orchestrator crew frame and an agent's shell tab
 - Shell tabs and splits inside an agent's session window, and a shells chip on its tile
-- Tests run with a scrubbed git env and fail if the dev repo's core config changes; check:pr catches bare ticket IDs
+- Tests run with a scrubbed git env and fail if this checkout's core config changes; check:pr catches bare ticket IDs
 - Text boxes resize from any edge or corner, with a font size control
 - A click on onboarding's Back to setup pill no longer minimises the sign-in window first (a regression broke the first-run e2e)
 - Opening a needs-you session marks it seen until it asks again
 - The session window fills the board, and a size you choose scales with the screen
 - Orchestrator UI: a per-zone switch (on by default), crew frames or from-chips, and an Activity tab
 - A click on the board outside a session window minimises it
-- Tile hover row is Expand · Pop out · ⋯ again (BC2), Delete in ⋯; e2e for ⌫ and the hover row
+- Tile hover row is Expand · Pop out · ⋯ again, Delete in ⋯; e2e for ⌫ and the hover row
 - The session details strip opens collapsed
 - 16 zone colours and a fill-opacity slider per zone
 - Zones drag by their header or empty body, and the header always fits the zone
@@ -122,7 +132,7 @@
 - Delete works on every session tile, with one combined confirmation for a multi-select
 - The hover test waits for the tile to settle in its state before measuring its parts
 - Tiles sit straight; a Rotate tool for board items; the repo picker keeps Start inside its card
-- Release pipeline hardening: pre-rename leak check, binary scan, ID spellings, and a leaner public snapshot
+- Release pipeline hardening: pre-rename leak check, binary scan, ID spellings, and a leaner release
 
 ## v0.2.0 (2026-10-14)
 

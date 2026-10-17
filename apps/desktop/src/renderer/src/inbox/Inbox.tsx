@@ -86,7 +86,7 @@ function InboxItem({ agent, now, onOpen }: { agent: Agent; now: number; onOpen(a
 }
 
 /**
- * A question an agent asks through the board (BN1): each option a button that answers in one click (keys 1–9
+ * A question an agent asks through the board: each option a button that answers in one click (keys 1–9
  * while the card has focus), and with `freeText` a reply field and Send. A timer line says how long it waits, then
  * that it carries on without an answer, with Skip.
  */
@@ -146,7 +146,7 @@ function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number 
   );
 }
 
-/** A plan an agent waits on (BO2): its title and version, Show plan, which opens its Plan tab, and the decision. */
+/** A plan an agent waits on: its title and version, Show plan, which opens its Plan tab, and the decision. */
 function PlanRow({ agent, plan, now, onShow }: { agent: Agent; plan: PlanSummary; now: number; onShow(): void }) {
   return (
     <div className="inbox-plan" data-testid="inbox-plan">

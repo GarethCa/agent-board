@@ -76,7 +76,7 @@ export function useActivity(orchestratorId: string | undefined): Activity {
 }
 
 /**
- * The Activity tab of an orchestrator's session window (BB1): every agent it started, message it sent, and
+ * The Activity tab of an orchestrator's session window: every agent it started, message it sent, and
  * agent it interrupted or closed, with times, and what it tried and was refused, with why; older pages on asking.
  * Reads and waits change nothing, so the daemon doesn't log them (ADR-0011).
  */

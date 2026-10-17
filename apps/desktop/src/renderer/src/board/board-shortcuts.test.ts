@@ -75,7 +75,7 @@ describe("the board's single-key shortcuts", () => {
   });
 });
 
-describe('/ and the palette (CL3)', () => {
+describe('/ and the palette', () => {
   const typedIn = (tagName: string, isContentEditable = false) => ({ ...press('/'), target: { tagName, isContentEditable } as unknown as EventTarget });
 
   it('is a / typed into text: a note, a shape or the picker, or a terminal (its xterm textarea)', () => {

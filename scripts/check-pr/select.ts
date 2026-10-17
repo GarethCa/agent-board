@@ -154,7 +154,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/trackers.ts', ['trackers.spec.ts']],
   ['packages/daemon/src/{transcripts,transcript-adapters}.ts', ['chat-view.spec.ts']],
   ['packages/tracker/**', ['trackers.spec.ts']],
-  // The PR tab (BI1), from the GitHub calls and the fake gh to the tab.
+  // The PR tab, from the GitHub calls and the fake gh to the tab.
   ['apps/desktop/src/renderer/src/session/{PullRequestTab.tsx,use-pull-request.ts,pr-diff.ts}', ['pr-tab.spec.ts']],
   ['apps/desktop/src/main/pull-requests.ts', ['pr-tab.spec.ts']],
   ['packages/daemon/src/pull-request-tabs.ts', ['pr-tab.spec.ts']],

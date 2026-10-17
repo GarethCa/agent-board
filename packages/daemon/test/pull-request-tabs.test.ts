@@ -25,7 +25,7 @@ async function daemonWith(state: Partial<FakeGitHubState>) {
   return { github, client };
 }
 
-describe('PR tabs (BI1)', () => {
+describe('PR tabs', () => {
   it('reads a pull request whole with gh', async () => {
     const { client } = await daemonWith({ pullRequests: [pr({ body: 'Sends users home.' })] });
 

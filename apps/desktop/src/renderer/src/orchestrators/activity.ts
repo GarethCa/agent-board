@@ -1,4 +1,4 @@
-// The Activity tab's lines (BB1): what an orchestrator did and tried, and the hand-offs of any agent, from the daemon's activity log. Pure, so
+// The Activity tab's lines: what an orchestrator did and tried, and the hand-offs of any agent, from the daemon's activity log. Pure, so
 // the wording is unit-tested.
 import { DEFAULT_ACTIVITY_LIMIT, type OrchestratorAction, type OrchestratorActivity } from '@agent-board/daemon/protocol';
 

@@ -141,7 +141,7 @@ const NAMES: Agent[] = [
 ];
 
 /**
- * Agents that ended (BW1): one that exited cleanly into a shell, one that exited with 1. Each says so in its state
+ * Agents that ended: one that exited cleanly into a shell, one that exited with 1. Each says so in its state
  * pill, with no Restart row on the tile.
  */
 const ENDED: Agent[] = [

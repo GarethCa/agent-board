@@ -23,7 +23,7 @@ export interface CreateToolbarProps {
   onSticky(): void;
   /** The size on screen of the ghost tile the Agent and Shell tools carry, at the board's zoom. */
   ghostSize: { width: number; height: number };
-  /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen (AG2). */
+  /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen. */
   onDropTool(tool: DraggedTool, at: { x: number; y: number }): void;
 }
 
@@ -33,7 +33,7 @@ export type DraggedTool = 'agent' | 'shell';
 /**
  * The creation toolbar, the top-centre island (chrome C, WbTools): how a drag acts, then what to put on the board, then
  * the sessions to start. The Zone tool (Z) drags out where a new zone goes, then asks what it is for (P1). The
- * Agent (A) and Shell (`) tools carry a ghost tile to where the new session goes, in a zone or loose (AG2).
+ * Agent (A) and Shell (`) tools carry a ghost tile to where the new session goes, in a zone or loose.
  */
 export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
@@ -79,7 +79,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
 }
 
 /**
- * The Shape tool (CL1): its button draws the shape picked last, which a drag on the board then draws. Arming
+ * The Shape tool: its button draws the shape picked last, which a drag on the board then draws. Arming
  * it, from the button or S, opens the shape picker under it, its search focused. A pick arms that shape and closes
  * the picker; a press on the board closes it too and draws, while Esc or the button again puts the tool down.
  */
@@ -151,7 +151,7 @@ function ShapeTool({ armed, onTool }: { armed: boolean; onTool(tool: ArmedTool |
 }
 
 /**
- * Dragging the Agent or Shell tool straight off its button (AG2): past `TOOL_DRAG_MIN` a ghost tile follows the
+ * Dragging the Agent or Shell tool straight off its button: past `TOOL_DRAG_MIN` a ghost tile follows the
  * pointer, and letting go hands where to `onDrop`. The click that may follow a drag is then not a click.
  */
 function useToolDrag(onDrop: (tool: DraggedTool, at: { x: number; y: number }) => void) {

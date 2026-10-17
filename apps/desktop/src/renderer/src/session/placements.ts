@@ -1,4 +1,4 @@
-// Where a tab arriving in a window lands (BH1): moves between windows are the daemon's (`shell.moveTab`,
+// Where a tab arriving in a window lands: moves between windows are the daemon's (`shell.moveTab`,
 // `shell.movePane`), and the window the tab lands in lays it out once it hears of it. A drop says where it should go
 // beforehand, and a window remembers where each tab it lost was, so an undo puts it back there.
 import { paneIds } from '@agent-board/daemon/pane-layout';

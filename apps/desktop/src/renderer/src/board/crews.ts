@@ -1,4 +1,4 @@
-// An orchestrator's crew (BA2): the agents it started, slotted beside it, framed together, and moved with it.
+// An orchestrator's crew: the agents it started, slotted beside it, framed together, and moved with it.
 // Pure, so the layout is unit-tested.
 import type { NodeChange } from '@xyflow/react';
 import type { TileMove } from '@agent-board/daemon/protocol';

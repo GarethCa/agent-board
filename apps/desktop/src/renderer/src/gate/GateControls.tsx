@@ -41,7 +41,7 @@ function keepCleanup(zoneId: string | null, cleanup: GateCleanup): void {
 }
 
 /**
- * The merge gate in an agent's session window or expanded tile header (BM3), in every zone, whatever its tabs
+ * The merge gate in an agent's session window or expanded tile header, in every zone, whatever its tabs
  * show: the gate's badge, or Run gate in a zone with a gate command; then, once it has an open pull request,
  * Merge, whose popover lists its conditions and the clean-up, or Approve when the pull request isn't the user's own. In a
  * zone with no gate, Merge waits for GitHub's checks alone. Each acts only on the user's click, and a disabled one says

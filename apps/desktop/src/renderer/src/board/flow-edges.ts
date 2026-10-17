@@ -46,7 +46,7 @@ export interface RailBoard {
 }
 
 /**
- * One rail for each two agents joined by edges (CD4), leaving out any whose agent's tile isn't on the board
+ * One rail for each two agents joined by edges, leaving out any whose agent's tile isn't on the board
  * (`nodeIds`): the daemon deletes an edge with its agent, and tells nobody. It is drawn in the shape of the edge made
  * first, and selected while any of its edges is; its token is the latest document on it (`railToken`), in its slot
  * off its tile's side (`tokenSlots`).
@@ -192,7 +192,7 @@ export function heldLabel(edge: Pick<FlowEdge, 'held' | 'conditions' | 'checks'>
 }
 
 /**
- * The bold line that opens each section of the Edge rules (BQ3): when the edge sends, what it sends, and what it waits
+ * The bold line that opens each section of the Edge rules: when the edge sends, what it sends, and what it waits
  * for (what a hand-off it holds waits for, if it holds one).
  */
 export function rulesSummary(
@@ -261,7 +261,7 @@ export function historyLine(event: FlowEdgeEvent, to: string): string {
 
 /**
  * How far to pan the board left, in screen pixels, so an edge's ends (the screen span of its two tiles) clear the
- * Edge rules panel, whose left side is at `panelLeft`, by `margin` (FlowDraw AB2: "tiles shift left"): 0 when they
+ * Edge rules panel, whose left side is at `panelLeft`, by `margin` ("tiles shift left"): 0 when they
  * do already, and never so far that their left goes out of view.
  */
 export function panClear(span: { left: number; right: number }, panelLeft: number, margin: number): number {

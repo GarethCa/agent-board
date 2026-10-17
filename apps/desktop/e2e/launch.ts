@@ -196,7 +196,7 @@ export async function addEmptyZone(page: Page, name: string, color?: string): Pr
 }
 
 /**
- * Puts a new agent or shell on the board with the toolbar's tool (AG2): arms it, then clicks the board at
+ * Puts a new agent or shell on the board with the toolbar's tool: arms it, then clicks the board at
  * `at` (relative to the board), near its top left by default.
  */
 export async function placeWithTool(page: Page, tool: 'New agent' | 'New shell', at?: { x: number; y: number }): Promise<void> {

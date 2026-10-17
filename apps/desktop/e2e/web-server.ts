@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 const page = (title: string, body = '') => `<!doctype html><title>${title}</title><h1>${title}</h1>${body}`;
 
 /**
- * A dev server on 127.0.0.1 for the web tab's tests (BI2), so they load nothing from the internet. `/` links
+ * A dev server on 127.0.0.1 for the web tab's tests, so they load nothing from the internet. `/` links
  * to `/next` (with a sign-in's code and token, as a callback has) and holds an empty frame, as a dev server's overlay does; `/to-file`, `/to-data` and `/to-http` (plain
  * http elsewhere) redirect where a web tab may not go; `/download` is an attachment. `hits` lists the paths asked for.
  */

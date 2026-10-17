@@ -1,4 +1,4 @@
-// A PR tab's diff (BI1): a file's unified diff hunks, as GitHub gives them, line by line. Pure.
+// A PR tab's diff: a file's unified diff hunks, as GitHub gives them, line by line. Pure.
 
 /** One line of a file's diff, with its line numbers on the side it is on. */
 export type DiffLine =
