@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue" alt="Licence: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-FSL--1.1--ALv2-blue" alt="Licence: FSL-1.1-ALv2"></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS">
   <img src="https://img.shields.io/badge/status-alpha-yellow" alt="Status: alpha">
 </p>
@@ -135,6 +135,6 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, co
 
 ## Licence
 
-[MIT](LICENSE).
+[Functional Source License 1.1, Apache 2.0 future licence](LICENSE) (FSL-1.1-ALv2). You can use, change and share agent-board for anything except a competing commercial product or service, and each release also becomes available under the Apache License 2.0 two years after it ships. Releases up to v0.5.2 were published under the MIT Licence and stay available under it.
 
 Claude and Claude Code are trademarks of Anthropic, PBC. Codex is a trademark of OpenAI. agent-board is an independent project, not affiliated with or endorsed by either company; their names and brand assets are used only to identify the tools agent-board works with, following each owner's brand guidelines.
