@@ -2,7 +2,7 @@
   "name": "agent-board",
   "private": true,
   "description": "An infinite board for your Claude Code and Codex sessions",
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "homepage": "https://github.com/GarethCa/agent-board#readme",
   "repository": {
     "type": "git",

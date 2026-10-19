@@ -104,4 +104,10 @@ The gate is the `pnpm check:pr` table on the PR, run on the PR's head commit, an
 
 ## Licence
 
-By contributing, you agree that your contributions are licensed under the [MIT Licence](LICENSE).
+agent-board is under the [Functional Source License 1.1, Apache 2.0 future licence](LICENSE) (FSL-1.1-ALv2).
+
+Before a contribution can be merged, you need to agree to the [Contributor Licence Agreement](CLA.md). You keep the
+copyright in your work; the agreement lets the project use it and offer it under any licence, including a commercial
+one, so the project can change its licence or offer paid editions without asking every past contributor. Agree to it
+by ticking its box in the PR template, or by commenting "I have read the CLA and I agree to it" on your PR. You only
+need to do it once.

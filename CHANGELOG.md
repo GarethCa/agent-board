@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.3 (2026-10-19)
+
+- Switch to FSL-1.1-ALv2 and add a contributor licence agreement
+- The social preview shows a mini board: agents in three states, a hand-off and a note
+
 ## v0.5.2 (2026-10-17)
 
 - A shorter README: a visual front page, with the full tour, install notes, quick start, FAQ, troubleshooting and how it works under docs/

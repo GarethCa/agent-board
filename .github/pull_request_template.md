@@ -27,3 +27,4 @@ Fixes #
 - [ ] No test calls the real `claude` or `codex` (use `packages/fake-harness`)
 - [ ] `pnpm check:pr` passes on the head commit (it runs the full `pnpm check:local` when the gate, shared config, helpers, fakes or protocol change), and its table is under "How to verify"
 - [ ] README, `CONTEXT.md` and ADRs updated if this changes a command, a domain term or a decision
+- [ ] I have read the [Contributor Licence Agreement](https://github.com/GarethCa/agent-board/blob/main/CLA.md) and I agree to it
