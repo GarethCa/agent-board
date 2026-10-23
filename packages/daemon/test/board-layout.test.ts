@@ -12,6 +12,7 @@ import {
   ITEM_GAP,
   ITEM_INSET,
   freeTileSlot,
+  expandedSizesFrom,
   isFolded,
   unfoldedFrom,
   leastZoneSize,
@@ -503,9 +504,10 @@ describe('isFolded', () => {
     expect(isFolded(closed, new Set(['agent:a']))).toBe(false);
   });
 
-  it('never folds a live agent, nor one a restart stopped', () => {
+  it('never folds a live agent, nor one a restart stopped, nor one paused', () => {
     expect(isFolded({ ...closed, endedAt: null, state: 'idle' }, new Set())).toBe(false);
     expect(isFolded({ ...closed, state: 'stopped-by-restart' }, new Set())).toBe(false);
+    expect(isFolded({ ...closed, state: 'hibernated' }, new Set())).toBe(false);
   });
 
   it('never folds an ended agent whose pane is a live shell, or whose harness the user runs by hand in it: it keeps its Restart', () => {
@@ -518,5 +520,13 @@ describe('unfoldedFrom', () => {
   it('takes only strings, once each', () => {
     expect(unfoldedFrom(['agent:a', 3, 'agent:a', null, 'agent:b'])).toEqual(['agent:a', 'agent:b']);
     expect(unfoldedFrom({ a: 1 })).toEqual([]);
+  });
+});
+
+describe('expandedSizesFrom', () => {
+  it("reads each expanded tile's size by its node id, taking only the well-formed entries", () => {
+    const saved = [{ id: 'agent:a', width: 960, height: 600 }, { id: 'shell:b', width: 0, height: 600 }, { id: 3, width: 1, height: 1 }, null, 'x'];
+    expect(expandedSizesFrom(saved)).toEqual({ 'agent:a': { width: 960, height: 600 } });
+    expect(expandedSizesFrom(null)).toEqual({});
   });
 });

@@ -22,6 +22,8 @@ describe('activityText', () => {
     expect(activityText(line({}))).toBe('started web impl');
     expect(activityText(line({ action: 'send' }))).toBe('sent web impl');
     expect(activityText(line({ action: 'interrupt' }))).toBe('interrupted web impl');
+    expect(activityText(line({ action: 'continue' }))).toBe('continued web impl on credits');
+    expect(activityText(line({ action: 'continue', outcome: 'refused' }))).toBe('tried to continue web impl on credits');
     expect(activityText(line({ action: 'restart' }))).toBe('restarted web impl');
     expect(activityText(line({ action: 'close' }))).toBe('closed web impl');
     expect(activityText(line({ action: 'remove' }))).toBe('removed web impl');

@@ -12,6 +12,7 @@ import {
   pullRequestOfUrl,
   type CredentialStore,
 } from '@agent-board/tracker';
+import { pullRequestRecord } from './agent-records.ts';
 import { agentHandlers, createAgentHost } from './agents.ts';
 import { systemClock, type Clock } from './clock.ts';
 import { externalHookFiles, externalHooksHandlers } from './external-hooks.ts';
@@ -22,7 +23,8 @@ import { boardHandlers, guardBoardCallers, type BoardConnection } from './board.
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import { boardMcpHandlers } from './board-mcp.ts';
 import { openBoardSession } from './board-ops.ts';
-import { layoutHandlers } from './orchestrator-layout.ts';
+import { layoutHandlers, spotBesideAgent, type DaemonCall } from './orchestrator-layout.ts';
+import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
 import { connectorHandlers } from './connectors.ts';
 import { commandPlan } from './flow-approvals.ts';
@@ -32,6 +34,8 @@ import { gateActionHandlers } from './gate-actions.ts';
 import { gatedOwner, mergeGateBlocked } from './gate-rules.ts';
 import { createGateHost } from './gates.ts';
 import { createAskHost } from './asks.ts';
+import { createDocumentHost } from './documents.ts';
+import { createCrewFlags } from './crew-flags.ts';
 import { runGit } from './git.ts';
 import { itemHandlers, itemsLeavingZone } from './items.ts';
 import { startHookIngress, type HookIngress } from './hook-ingress.ts';
@@ -43,6 +47,7 @@ import { migrate, schemaVersion as readSchemaVersion } from './migrate.ts';
 import { daemonPaths, prepareSocketDir } from './paths.ts';
 import {
   DAEMON_VERSION,
+  DOCUMENT_CARD_SIZE,
   eventLine,
   PROTOCOL_VERSION,
   lineSplitter,
@@ -51,6 +56,8 @@ import {
   type DaemonEvent,
   type DaemonHealth,
   type DaemonMethods,
+  type DocumentCardData,
+  type DocumentSummary,
   type Harness,
   type SessionInfo,
   type TrackerProvider,
@@ -68,8 +75,9 @@ import { createLinkCards } from './link-cards.ts';
 import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
 import { createSelectionAsks } from './selection-asks.ts';
+import { createBoardMaster } from './master.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
-import { createScheduleHost } from './schedules.ts';
+import { createClockHost } from './clocks.ts';
 import { createSettings } from './settings.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
@@ -129,6 +137,10 @@ export interface DaemonOptions {
    * prompt takes over: `DEFAULT_PERMISSION_HOLD_MS` by default.
    */
   permissionHoldMs?: number;
+  /** How often agents at their prompt are looked at for commands left running in the background: 5 s by default. */
+  backgroundPollMs?: number;
+  /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
+  startStepTimeoutMs?: number;
   /**
    * How to run this app's `agent-board` CLI, which Codex agents' hooks run as the forwarder. When set, the daemon
    * (re)writes the shim at `hookShimPath` to run it, at start and before each Codex spawn; without it, the shim is
@@ -188,6 +200,11 @@ export interface DaemonOptions {
   imageSweepGraceMs?: number;
   /** The time agents' schedules fire by: the system clock by default. Tests drive a fake one. */
   clock?: Clock;
+  /**
+   * How long Enter first gets to start a turn of a message typed at an agent's prompt before it is pressed again:
+   * `$AGENT_BOARD_SUBMIT_CONFIRM_MS` (for tests), else `DEFAULT_SUBMIT_CONFIRM_MS`.
+   */
+  submitConfirmMs?: number;
   /**
    * How often hand-offs held by an edge's conditions, and deliveries it queued, are tried again:
    * `$AGENT_BOARD_FLOW_RECHECK_MS` (for tests), else `DEFAULT_FLOW_RECHECK_MS`; 0 never by itself.
@@ -324,7 +341,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onExit: (session) => {
         asks.drop(session.id);
         agents.onExit(session);
-        reviews.onExit(session.id, session.stoppedByRestart);
+        reviews.onExit(session.id, session.stoppedByRestart || (agents.get(session.id)?.hibernated ?? null) !== null);
         shells.onSessionExit(session);
       },
     });
@@ -406,8 +423,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
             worktree: agent.worktree,
             repo: githubRepo(repoZoneTracker(agent.sessionId)),
             ended: agent.endedAt !== null,
+            recorded: agent.records.flatMap((record) => {
+              const ref = record.kind === 'pr' && record.deletedAt === null ? pullRequestOfUrl(record.url) : undefined;
+              return ref === undefined ? [] : [{ ...ref, recordedAt: record.recordedAt }];
+            }),
           })),
-      pullRequests: createPullRequestLookup({ gh }),
+      pullRequests: createPullRequestLookup({ gh, log }),
       intervalMs:
         options.pullRequestPollMs ??
         (Number(process.env.AGENT_BOARD_PULL_REQUEST_POLL_MS) || DEFAULT_PULL_REQUEST_POLL_MS),
@@ -420,19 +441,31 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       onRead: (sessionId, own, first) => crew.hearsPullRequests?.(sessionId, own, first),
       log,
     });
-    // `agents` is created just below; a schedule first fires from a timer, once it exists.
-    const schedules = createScheduleHost({
+    // `agents` and `handlers` are made below; a clock first fires from a timer, once they exist.
+    const clocks = createClockHost({
       db,
       clock: options.clock ?? systemClock,
-      run: (sessionId, prompt) => agents.runScheduled(sessionId, prompt),
-      onChange: (sessionId) => agents.announce(sessionId),
+      agents: {
+        get: (sessionId) => agents.get(sessionId),
+        runScheduled: (sessionId, prompt) => agents.runScheduled(sessionId, prompt),
+        spawn: (...args) => agents.spawn(...args),
+        finalMessage: (sessionId) => agents.finalMessage(sessionId),
+        delete: (...args) => agents.delete(...args),
+        stop: (...args) => agents.stop(...args),
+        deliver: (...args) => agents.deliver(...args),
+        announce: (sessionId) => agents.announce(sessionId),
+      },
+      call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
+      broadcast,
       log,
     });
+    const schedules = clocks.schedules;
     // Gates and scripts an edge's conditions run, all stopped when the daemon shuts down.
     const conditionShell = createShellRunner();
     // Keeping only paths from now on drops the copies held now.
     const settings = createSettings(db, (now, was) => {
       if (now.heldPayloads === 'path' && was.heldPayloads !== 'path') flowEdges.dropCopies();
+      broadcast({ type: 'settings.updated', settings: now });
     });
     // Where `claude` and `codex` are, as absolute paths: what agents launch and onboarding checks. Looked for now, in the
     // background: a start or a Restart waits for it only if it is still running (and finds nothing yet).
@@ -476,7 +509,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const stopFollowingTimeZone = followSystemTimeZone({ log });
     const roleTemplates = createRoleTemplates(db);
     // An agent's questions and plans: it is `waiting` while one waits on the user.
-    const asks = createAskHost({ db, changed: (sessionId, began) => agents.waitChanged(sessionId, began) });
+    const asks = createAskHost({ db, changed: (sessionId, began) => agents.waitChanged(sessionId, began), placed: (sessionId) => agents.waitChanged(sessionId, false) });
+    // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
+    const documents = createDocumentHost({
+      db,
+      changed: (sessionId) => agents.announce(sessionId),
+      agent: (sessionId) => agents.get(sessionId),
+      tell: (sessionId, text) => agents.tell(sessionId, text),
+      addCard: (document) => addDocumentCard(document),
+      log,
+    });
     const agents = createAgentHost({
       db,
       clock: options.clock ?? systemClock,
@@ -498,15 +540,20 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       hookUrl: () => `http://127.0.0.1:${hookPort}/hooks`,
       boardMcpUrl: () => `http://127.0.0.1:${hookPort}/mcp`,
       permissionHoldMs: options.permissionHoldMs ?? DEFAULT_PERMISSION_HOLD_MS,
+      backgroundPollMs: options.backgroundPollMs,
+      startStepTimeoutMs: options.startStepTimeoutMs,
+      submitConfirmMs: options.submitConfirmMs ?? (Number(process.env.AGENT_BOARD_SUBMIT_CONFIRM_MS) || undefined),
       trackers,
       pullRequests: (sessionId) => pullRequests.get(sessionId),
       pushedPullRequests: (sessionId) => pullRequests.pushed(sessionId),
+      recordedPullRequests: (sessionId) => pullRequests.recorded(sessionId),
       schedules,
       onHandoff: (sessionId) => {
         flowEdges.handOff(sessionId);
         reviews.onHandoff(sessionId);
         const finalMessage = agents.finalMessage(sessionId);
         if (finalMessage !== undefined) void selectionAsks.finished(sessionId, finalMessage);
+        clocks.turnEnded(sessionId);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
@@ -519,9 +566,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges.dropAgent(sessionId);
         gates.forget(sessionId);
         asks.forget(sessionId);
+        removeDocumentCards(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s document cards off the board: ${(error as Error).message}`));
+        documents.forget(sessionId);
         selectionAsks.forget(sessionId);
+        clocks.agentRemoved(sessionId);
       },
       asks,
+      documents,
       broadcast,
       log,
     });
@@ -582,6 +633,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       log,
     });
+    // The board master (ADR-0019): started only from the app, in a folder of its own.
+    const boardMaster = createBoardMaster({
+      dir: join(paths.dataDir, 'master'),
+      spawn: (params, place) => agents.spawn(params, undefined, place),
+      agents: () => agents.list(),
+      zones: () => zoneTable.list(),
+    });
     const gates = createGateHost({
       db,
       dir: join(paths.dataDir, 'gates'),
@@ -597,6 +655,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const agent = agents.get(sessionId);
         if (agent === undefined || agent.endedAt !== null) throw new Error(`${agent?.name ?? 'the agent'} has ended`);
         if (agent.state === 'needs-permission') throw new Error(`${agent.name} is waiting on a permission prompt: answer it first`);
+        // It would run on from what sits unsent there.
+        if (agent.unsent !== null) throw new Error(`${agent.name} has a message typed at its prompt that was never sent: send or clear it first`);
         sessions.write(sessionId, text);
         agents.onInput(sessionId, text);
       },
@@ -604,7 +664,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       broadcast,
       log,
     });
-    const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId, on) => agents.zoneOrchestrateChanged(zoneId, on));
+    const zones = zoneHandlers<unknown>(db, zoneTable, trackers, (zoneId, on) => agents.zoneOrchestrateChanged(zoneId, on), (zoneId) =>
+      agents.dismissStartsIn(zoneId),
+    );
     const orchestrators = createOrchestratorHost({
       db,
       sessions,
@@ -620,6 +682,18 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       log,
     });
     listeners.push((event) => orchestrators.onEvent(event));
+    listeners.push((event) => clocks.onEvent(event));
+    clocks.resumeRuns();
+    // A crew member's flag goes to its orchestrator, typed at its prompt.
+    const crewFlags = createCrewFlags({
+      agent: (sessionId) => agents.get(sessionId),
+      crewOf: (sessionId) => agents.list().filter((agent) => agent.spawnedBy === sessionId),
+      tell: (sessionId, text) => agents.tell(sessionId, text),
+      log,
+    });
+    listeners.push((event) => {
+      if (event.type === 'agent.updated') crewFlags.observe(event.agent);
+    });
     crew.hearsPullRequests = (sessionId, own, first) => orchestrators.onPullRequestsRead(sessionId, own, first);
     pullRequests.start();
     // An agent started this run has its pull requests read as it starts, not at the next round: what it opens before
@@ -699,6 +773,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges,
         logActivity: orchestrators.logActivity,
         checkHandoffTarget: (from, to) => orchestrators.checkHandoffTarget(from, to),
+        refreshPullRequests: (sessionId) => pullRequests.refresh(sessionId),
       }),
       ...orchestratorHandlers,
       // The layout commands act through the daemon's own methods, as the board's drags and menus call them; a reviewer an
@@ -708,11 +783,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         access: orchestrators.access,
         call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
         spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection as SessionSubscriber & BoardConnection),
+        close: async (params, connection) => orchestratorHandlers['orchestrator.close'](params as never, connection as SessionSubscriber & BoardConnection),
         warn: log,
       }),
       ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
+      ...documents.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...selectionAsks.handlers<SessionSubscriber & BoardConnection>(),
+      ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
+      ...clocks.handlers<SessionSubscriber & BoardConnection>(),
+      ...clocks.orchestratorHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
@@ -735,6 +815,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, true, keep.worktree, keep.branch).then(() => null));
         },
         comment: (issue, body) => trackers.comment(issue, body),
+        recordPullRequest: (sessionId, pr) => {
+          const record = pullRequestRecord(pr.url, pr.title);
+          if (record === undefined) return;
+          agents.records.put(sessionId, record);
+          agents.announce(sessionId);
+        },
         log,
       }),
       ...pullRequestTabHandlers<SessionSubscriber>({
@@ -781,6 +867,37 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         ensureHookShim,
       }),
     };
+
+    const call: DaemonCall = async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never;
+    /** The document cards on the board, of `sessionId`'s documents or of the one document. */
+    const documentCards = async (match: (data: DocumentCardData) => boolean) =>
+      (await call('item.list', undefined)).filter((item) => item.kind === 'document' && match(item.data as unknown as DocumentCardData));
+    // A document shown on the board is a card beside its agent's tile, joined to it; one card for each document, the
+    // check and the making one step for each document, so two shows at once make one card.
+    const addingCards = new Set<string>();
+    async function addDocumentCard(document: DocumentSummary): Promise<void> {
+      if (addingCards.has(document.id)) return;
+      addingCards.add(document.id);
+      try {
+        if ((await documentCards((data) => data.documentId === document.id)).length > 0) return;
+        const agent = agents.get(document.sessionId);
+        if (agent === undefined) return;
+        const size = DOCUMENT_CARD_SIZE;
+        const spot = (await spotBesideAgent(call, agent.sessionId, size)) ?? { zoneId: agent.zoneId, x: 0, y: 0 };
+        const data: DocumentCardData = { documentId: document.id, agent: agentNoteAuthor(agent), title: document.title, format: document.format, collapsed: false };
+        await call('item.create', { kind: 'document', ...spot, ...size, data: { ...data } });
+      } finally {
+        addingCards.delete(document.id);
+      }
+    }
+    // An agent's document cards go with it, as its documents do.
+    async function removeDocumentCards(sessionId: string): Promise<void> {
+      for (const card of await documentCards((data) => data.agent.sessionId === sessionId)) await call('item.delete', { id: card.id }).catch(() => null);
+    }
+    listeners.push((event) => {
+      if (event.type === 'agent.updated') documents.observe(event.agent);
+    });
+    documents.start();
 
     const guardedHandlers = guardBoardCallers(handlers, orchestrators);
     const server = createServer((socket) => {
@@ -830,7 +947,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         conditionShell.stop();
         gates.stop();
         sweeper.stop();
-        schedules.close();
+        clocks.close();
         stopFollowingTimeZone();
         // A clone the daemon can't see through is cancelled, and its zone and folder go with it.
         await sources.close();
@@ -842,6 +959,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         // didn't stop them, so they are stopped by restart, and the app offers to resume them.
         await Promise.all([new Promise((resolve) => server.close(resolve)), ingress!.close(), sessions.killAll({ stoppedByRestart: true })]);
         asks.close();
+        documents.close();
         agents.close();
         db!.close();
         releaseLock();
@@ -867,7 +985,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     idleTimer.unref();
 
     log(`listening on ${paths.socket}, hook ingress on 127.0.0.1:${hookPort}, schema version ${schemaVersion}`);
-    const startedWith = { sessions: countLiveSessions(), waiting: agents.list().filter(waitsForYou).length };
+    const startedWith = { sessions: countLiveSessions(), waiting: agents.list().filter((agent) => waitsForYou(agent, settings.get().needsYouShows)).length };
     return { socketPath: paths.socket, hookPort, closed, startedWith, stop: () => shutdown('stopped') };
   } catch (error) {
     external?.stop();

@@ -1,15 +1,24 @@
 import type {
   Agent,
+  AgentRecordKind,
   AgentRemovedEvent,
+  AgentStart,
+  AgentStartEndedEvent,
+  AgentStartingEvent,
   AgentUpdatedEvent,
   BoardItem,
   BuildInfo,
+  ClockData,
+  ClockPlace,
+  ClockStatus,
+  ClockUpdatedEvent,
   Connector,
   ConnectorRemovedEvent,
   ConnectorUpdatedEvent,
   CreateConnectorParams,
   CreateFlowEdgeParams,
   DaemonSettings,
+  SettingsUpdatedEvent,
   FlowCommandApproval,
   FlowEdge,
   FlowEdgeRemovedEvent,
@@ -17,6 +26,7 @@ import type {
   FlowDeliveredPayload,
   FlowPayloadPreview,
   RoleTemplate,
+  CheckoutState,
   UpdateFlowEdgeParams,
   PullRequestActed,
   PullRequestDetails,
@@ -56,6 +66,7 @@ import type {
   ShellUpdatedEvent,
   SpawnAgentParams,
   AskSelectionParams,
+  StartMasterParams,
   SplitDirection,
   TerminalSize,
   TrackerIssue,
@@ -89,6 +100,8 @@ import type {
   Plan,
   PlanOutcome,
   PlanSummary,
+  DocumentContent,
+  DocumentSummary,
 } from '@agent-board/daemon/protocol';
 import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
@@ -133,7 +146,7 @@ export const SESSION_IPC = {
   resize: 'session:resize',
   kill: 'session:kill',
   cwd: 'session:cwd',
-  openFolder: 'session:openFolder',
+  revealFolder: 'session:revealFolder',
   /** main → renderer: `(attachId, SessionStreamEvent)` for an attachment. */
   event: 'session:event',
   /** main → renderer: `(SessionExitedEvent)` for every session that ends. */
@@ -154,8 +167,8 @@ export interface SessionsApi {
   kill(sessionId: string): Promise<SessionInfo>;
   /** The folder the session is in now; where it was last seen once it has ended. */
   cwd(sessionId: string): Promise<string>;
-  /** Opens a folder in the OS file manager (Finder). */
-  openFolder(path: string): Promise<void>;
+  /** Reveals a folder in the OS file manager (Finder), selected in its parent. Never opens it: a `.app` would launch. */
+  revealFolder(path: string): Promise<void>;
   /** Calls `listener` whenever any session ends. Returns the unsubscribe function. */
   onExited(listener: (event: SessionExitedEvent) => void): () => void;
 }
@@ -203,6 +216,7 @@ export const ZONE_IPC = {
   githubRepos: 'zone:githubRepos',
   checkFolder: 'zone:checkFolder',
   findCopies: 'zone:findCopies',
+  checkoutState: 'zone:checkoutState',
   bind: 'zone:bind',
   update: 'zone:update',
   configure: 'zone:configure',
@@ -249,6 +263,8 @@ export interface ZonesApi {
   checkFolder(path: string, repo?: string): Promise<CheckFolderResult>;
   /** Has the daemon look one level deep in the usual code folders for copies of GitHub repos; resolves with how many it found. */
   findCopies(): Promise<number>;
+  /** The branch the checkout holding `path` is on, its default branch, and whether it has uncommitted changes. Only reads. */
+  checkoutState(path: string): Promise<CheckoutState>;
   /** Shows a folder picker and binds the unbound zone to the picked folder, as a repo or as a new project. */
   bind(id: string, as: ZoneBinding): Promise<BindZoneResult>;
   /** Moves and resizes a zone. */
@@ -331,6 +347,8 @@ export const FLOW_EDGE_IPC = {
   delete: 'flow-edge:delete',
   /** main → renderer: `(FlowEdgeChange)` for every flow edge change. */
   changed: 'flow-edge:changed',
+  /** main → renderer: `(SettingsUpdatedEvent)` whenever a daemon setting changes. */
+  settingsChanged: 'flow-edge:settingsChanged',
 } as const;
 
 export interface FlowEdgesApi {
@@ -351,9 +369,11 @@ export interface FlowEdgesApi {
   approve(id: string, command: string, fingerprint: string, from: string): Promise<FlowEdge>;
   /** Drops the hand-off the edge holds and the delivery it queued, and their copies. */
   drop(id: string): Promise<FlowEdge>;
-  /** The daemon's settings: where held hand-offs are kept. */
+  /** The daemon's settings: where held hand-offs are kept, what Needs you lists and when it notifies, and more. */
   settings(): Promise<DaemonSettings>;
   setSettings(settings: Partial<DaemonSettings>): Promise<DaemonSettings>;
+  /** Calls `listener` whenever a daemon setting changes, from any window. Returns the unsubscribe function. */
+  onSettingsChanged(listener: (change: SettingsUpdatedEvent) => void): () => void;
   /** Delivers the edge's payload now; resolves with the edge and how its delivery went. */
   send(id: string): Promise<FlowEdge>;
   delete(id: string): Promise<void>;
@@ -460,18 +480,33 @@ export interface GatesApi {
 /** The IPC channels for agents' questions and plans. */
 export const ASK_IPC = {
   answer: 'ask:answer',
+  place: 'ask:place',
   plans: 'plan:list',
   decide: 'plan:decide',
+  readDoc: 'doc:read',
+  saveDoc: 'doc:save',
+  commentDoc: 'doc:comment',
 } as const;
 
 /** What the user does with the questions and plans agents wait on. Only their clicks answer them. */
 export interface AsksApi {
   /** Answers the agent's question `askId`: an option, their own words, or a skip. */
   answer(sessionId: string, askId: string, answer: AskAnswer): Promise<void>;
+  /** Moves the card of the agent's question `askId` on the board to `at`, where it stays until the question goes. */
+  place(sessionId: string, askId: string, at: { x: number; y: number }): Promise<void>;
   /** The agent's plans, oldest first, with their bodies. */
   plans(sessionId: string): Promise<Plan[]>;
   /** Decides the agent's plan `planId` while it waits on it. */
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): Promise<PlanSummary>;
+  /** A document an agent showed, with its file's text now. */
+  readDoc(documentId: string): Promise<DocumentContent>;
+  /**
+   * Saves the user's `text` over a Markdown document they edited at `baseVersion`: its file is written and its agent
+   * told what changed. Refused when the agent wrote it since, unless `force` (keep mine).
+   */
+  saveDoc(documentId: string, text: string, baseVersion: number, force?: boolean): Promise<DocumentSummary>;
+  /** Sends the user's comments on a document to its agent. */
+  commentDoc(documentId: string, text: string): Promise<void>;
 }
 
 /** The web tab's IPC channels between the preload and main. */
@@ -593,8 +628,12 @@ export const ITEM_IPC = {
   update: 'item:update',
   delete: 'item:delete',
   importImage: 'item:import-image',
+  clocks: 'item:clocks',
+  addClock: 'item:add-clock',
   /** main → renderer: `(ItemChange)` for every board item change. */
   changed: 'item:changed',
+  /** main → renderer: `(ClockUpdatedEvent)` whenever a clock is planned again, fires or a run of it ends. */
+  clockChanged: 'item:clock-changed',
 } as const;
 
 export interface ItemsApi {
@@ -612,6 +651,12 @@ export interface ItemsApi {
   importImage(bytes: ArrayBuffer): Promise<ImageRef>;
   /** Calls `listener` whenever an item changes or is deleted, from any window. Returns the unsubscribe function. */
   onChanged(listener: (change: ItemChange) => void): () => void;
+  /** Every clock's next run and latest runs. */
+  clocks(): Promise<ClockStatus[]>;
+  /** Adds a clock beside an agent's tile (joined to it) or at a place, with `data` over a new clock's. */
+  addClock(data: Partial<ClockData>, place: ClockPlace): Promise<BoardItem>;
+  /** Calls `listener` with a clock's status whenever it changes. Returns the unsubscribe function. */
+  onClockChanged(listener: (event: ClockUpdatedEvent) => void): () => void;
 }
 
 /** The outcome of deleting an agent. */
@@ -635,20 +680,38 @@ export type SpawnAgentResult =
 /** An agent changed or was deleted. */
 export type AgentChange = AgentUpdatedEvent | AgentRemovedEvent;
 
+/** The app reached the daemon (again): what it knew of agents being started may be out of date, so list them again. */
+export interface AgentStartsResetEvent {
+  type: 'agent.startsReset';
+}
+
+/** An agent's start changed (a step, its name, its failure), or is over; or the starts must be listed again. */
+export type AgentStartChange = AgentStartingEvent | AgentStartEndedEvent | AgentStartsResetEvent;
+
 /** The agent IPC channels between the preload and main. */
 export const AGENT_IPC = {
   list: 'agent:list',
   spawn: 'agent:spawn',
+  start: 'agent:start',
+  starts: 'agent:starts',
+  retryStart: 'agent:retryStart',
+  dismissStart: 'agent:dismissStart',
+  updateStart: 'agent:updateStart',
   nextName: 'agent:nextName',
   delete: 'agent:delete',
   answer: 'agent:answer',
   pasteImage: 'agent:pasteImage',
   captureSelection: 'agent:captureSelection',
   askSelection: 'agent:askSelection',
+  startMaster: 'agent:startMaster',
   transcript: 'agent:transcript',
   subagentTranscript: 'agent:subagentTranscript',
   interrupt: 'agent:interrupt',
+  continueOnCredits: 'agent:continueOnCredits',
+  sendUnsent: 'agent:sendUnsent',
+  clearUnsent: 'agent:clearUnsent',
   stop: 'agent:stop',
+  pause: 'agent:pause',
   resume: 'agent:resume',
   restart: 'agent:restart',
   decidePermission: 'agent:decidePermission',
@@ -656,6 +719,8 @@ export const AGENT_IPC = {
   setSchedule: 'agent:setSchedule',
   markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
+  setRecordDeleted: 'agent:setRecordDeleted',
+  readDoc: 'agent:readDoc',
   setName: 'agent:setName',
   move: 'agent:move',
   /** Takes the agent the user last asked to open from outside the window (a notification), if any. */
@@ -664,6 +729,8 @@ export const AGENT_IPC = {
   openRequested: 'agent:openRequested',
   /** main → renderer: `(AgentChange)` for every agent change. */
   changed: 'agent:changed',
+  /** main → renderer: `(AgentStartChange)` for every change of an agent's start. */
+  startChanged: 'agent:startChanged',
 } as const;
 
 export interface AgentsApi {
@@ -671,6 +738,19 @@ export interface AgentsApi {
   list(): Promise<Agent[]>;
   /** Starts an agent in the zone, in a new worktree and branch. */
   spawn(params: SpawnAgentParams): Promise<SpawnAgentResult>;
+  /**
+   * Starts an agent as `spawn` does, resolving with its session id as soon as its tile is on the board (`agent.start`):
+   * what fails after that stays on the tile.
+   */
+  start(params: SpawnAgentParams): Promise<string>;
+  /** The agents being started, and the starts that failed. */
+  starts(): Promise<AgentStart[]>;
+  /** Starts a failed start again; `allowProjectCodexConfig` confirms its warning. */
+  retryStart(sessionId: string, allowProjectCodexConfig?: boolean): Promise<void>;
+  /** Takes a start off the board, stopping one still going. */
+  dismissStart(sessionId: string): Promise<void>;
+  /** Renames or moves a start's tile while it starts; once it is an agent, the agent's. */
+  updateStart(sessionId: string, change: { name?: string; move?: TileMove }): Promise<void>;
   /** The name an agent started now with no task would get (`new-agent-N`), as the daemon picks it. */
   nextName(): Promise<string>;
   /** Ends the agent and removes its worktree and branch (or keeps them); without `force`, stops short of losing work. */
@@ -692,15 +772,28 @@ export interface AgentsApi {
   captureSelection(rect: { x: number; y: number; width: number; height: number }, width: number): Promise<string>;
   /** Ask Claude about a selection: starts an agent with its picture and diagram (`selection.ask`). */
   askSelection(params: AskSelectionParams): Promise<Agent>;
+  /** The board master: the board's own, or a new one started at board scope (`master.start`, ADR-0019). */
+  startMaster(params: StartMasterParams): Promise<Agent>;
   /** Its conversation from its transcript, from entry `since` of `generation` on. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;
   /** A Claude subagent's conversation, started by the agent's call `toolUseId`. */
   subagentTranscript(sessionId: string, toolUseId: string, agentId?: string): Promise<TranscriptChunk>;
   /** Interrupts the agent's turn, as Ctrl-C in its terminal would; resolves with it idle at its prompt. */
   interrupt(sessionId: string): Promise<Agent>;
+  /** Resumes the rate-limited agent's turn on usage credits, as its harness offers; resolves with it once its turn starts. */
+  continueOnCredits(sessionId: string): Promise<Agent>;
+  /**
+   * Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`); resolves with the agent
+   * once its turn starts or no Enter starts one.
+   */
+  sendUnsent(sessionId: string): Promise<Agent>;
+  /** Clears the message typed at the agent's prompt and never sent (`Agent.unsent`); resolves with the agent. */
+  clearUnsent(sessionId: string): Promise<Agent>;
   /** Ends the agent's session, keeping its worktree and branch; resolves with it done. */
   stop(sessionId: string): Promise<Agent>;
-  /** Starts an agent stopped by restart again, carrying on its conversation; resolves with it live. */
+  /** Pauses the idle agent (hibernated), ending its session to free what it held; resolves with it paused. */
+  pause(sessionId: string): Promise<Agent>;
+  /** Starts an agent stopped by restart or paused again, carrying on its conversation; resolves with it live. */
   resume(sessionId: string): Promise<Agent>;
   /**
    * Starts an ended agent again, carrying on its conversation, ending the shell its pane dropped into; without `force`,
@@ -717,12 +810,18 @@ export interface AgentsApi {
   markSeen(sessionId: string): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
+  /** Deletes one of the agent's records from its sidebar, or with `deleted` false brings it back. */
+  setRecordDeleted(sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean): Promise<Agent>;
+  /** Reads one of the agent's hand-off docs, for its Doc tab. */
+  readDoc(sessionId: string, path: string): Promise<{ path: string; text: string }>;
   /** Renames the agent's tile. */
   setName(sessionId: string, name: string): Promise<Agent>;
   /** Moves the agent's tile within its zone, into any other, or out onto the board (`zoneId` null). */
   move(sessionId: string, move: TileMove): Promise<Agent>;
   /** Calls `listener` whenever an agent changes or is deleted. Returns the unsubscribe function. */
   onChanged(listener: (change: AgentChange) => void): () => void;
+  /** Calls `listener` whenever an agent's start changes or is over. Returns the unsubscribe function. */
+  onStartChanged(listener: (change: AgentStartChange) => void): () => void;
   /**
    * Calls `listener` with the agent's session id whenever the user asks to open an agent from outside the window, by
    * clicking its notification: at once for a request made before this window listened. Returns the unsubscribe

@@ -58,7 +58,8 @@ Agent state comes from each harness's **hook system**, posted to the daemon; the
   The `exited` above is not a separate agent state.
 - A crash, a non-zero exit or a kill → failed. So is an agent whose session a restarted daemon finds lost.
 - `StopFailure` → rate-limited when `error` is `rate_limit`, otherwise failed. Claude is still running then, and its
-  next prompt moves it on, so `failed` doesn't always mean the process has ended.
+  next prompt moves it on, so `failed` doesn't always mean the process has ended. A rate-limited agent stays so
+  through its `idle_prompt`: Claude still shows its rate-limit menu, or `continue` at its prompt, until a turn starts.
 - Hooks that land after the process exited (in flight when it was killed) are ignored.
 - `Notification`s other than `permission_prompt`, `idle_prompt` and `agent_needs_input` leave the state alone, as do
   `SubagentStart`/`SubagentStop` and any event the mapping doesn't know.
@@ -130,7 +131,8 @@ PTY.
 - **Asked before spawn.**
   - When the check finds config, `agent.spawn` fails with `AGENT_ERROR.projectCodexConfig`. The new worktree is
     removed again.
-  - The dialog shows why and offers "Start anyway" (`allowProjectCodexConfig`), which starts Codex without the flag.
+  - The agent's starting tile keeps the failure (`AgentStart.confirm`). Its Retry shows why and offers "Start anyway"
+    (`agent.retryStart` with `allowProjectCodexConfig`), which starts Codex without the flag.
 - **"Trust all" bundles hooks (verified).** Codex's review lists the project's hooks with ours, each with its source
   (project config path, or session flags) and command. `t` in the review list trusts *all* of them; that was verified
   by accident, as it wrote 9 trust records. Trusting one hook at a time was not verified. So the warning tells the user
@@ -271,3 +273,34 @@ PTY.
 - **Fixtures.** `fixtures/claude/transcripts/` and `fixtures/codex/rollouts/` are hand-written in the entry shapes of
   real Claude Code 2.1.296 transcripts and codex-cli 0.162.0-alpha.2 rollouts, with no real content: copying real files
   in was not allowed, and they hold prompts, account IDs and system prompts.
+
+**Background commands**, as built (`packages/daemon/src/background-commands.ts`):
+
+- **A second source, for liveness only.** An agent can end its turn while a command it started runs on (a gate, a
+  build, a dev server). Hooks name such a command but don't say when it ends: Claude Code reports that by starting a
+  turn, if at all, and Codex not at all. So the daemon also reads the process table (`ps`), never terminal output. It
+  decides nothing but whether a command still runs; the state machine above is unchanged.
+- **Naming.** Claude's `PreToolUse` for `Bash` with `tool_input.run_in_background: true` records the command and when
+  it started; its `PostToolUse` carries the `backgroundTaskId`, and a `KillShell`/`KillBash`/`TaskStop` call naming it
+  drops it. Codex has no such flag: its commands are found in the process table alone.
+- **Liveness.** A command runs while a shell running it (`<sh|bash|zsh|fish|dash|ksh> [flags] -c …`, Claude Code's
+  `eval '…'` wrapper taken off) is a child of the agent's harness process, or of Codex's sandbox (`sandbox-exec`,
+  `bwrap`) under it. Nothing deeper counts: a shell under an MCP server (`npx` runs its server in `sh -c`) or inside a
+  command is not a command the agent ran, and nor are other children (`caffeinate`) or the hook forwarder's runs. A
+  recorded command names the shell running exactly its text, quoting aside, one shell each; an unrecorded one takes its
+  text from the shell's argv and its start from `ps`'s elapsed time.
+- **Only at the prompt.** The table is read only for live agents at their prompt asking nothing (`atPrompt`), as a
+  command under an agent mid-turn may be the turn's own. It is read when a turn ends, then every 5 s while such an
+  agent has a recorded command or is a Codex agent. Between a turn's end and that first read, the commands the turn
+  started in its last seconds count as running, so the tile doesn't flash idle; older ones wait for the read, as they may
+  have ended in the turn.
+- **State.** Such an agent is `on-command`, derived like `scheduled`: out of the needs-you inbox. Claude's
+  `idle_prompt` while a command runs leaves its row `idle`, not `waiting`, so the command's end, in the seconds before
+  Claude takes up its result, never shows it waiting for you. A question, a permission prompt or a turn takes over. Once no shell of its
+  commands runs, it is `idle` or `waiting` again, whatever its status says: a status that still says "running" is
+  then visibly stale.
+- **The npm wrapper.** Codex installed from npm is a node wrapper whose child is the real `codex`, so its shells sit
+  one level deeper: the scan steps once through a child named `codex`, and no further.
+- **Gaps.** Linux `bwrap --unshare-pid` adds a process level between the sandbox and the shell, which isn't followed,
+  so a Codex agent sandboxed that way never shows `on-command`. A command that daemonises (`nohup … &`, `setsid`) leaves the tree and isn't seen. Windows has no `ps`, so
+  agents there are never `on-command`.

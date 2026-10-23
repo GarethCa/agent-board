@@ -8,7 +8,8 @@ export type FollowedLink = Pick<DaemonLink, 'call' | 'onEvent' | 'onConnected' |
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
 /**
- * Keeps `alerts` on the daemon's agents: every `agent.*` event, and a full listing on every new connection, since
+ * Keeps `alerts` on the daemon's agents and settings: every `agent.*` and `settings.updated` event, and a full listing
+ * (with the settings) on every new connection, since
  * events pushed while disconnected are lost. After a drop, or a listing that failed, it lists again after a delay,
  * which reconnects the link (starting the daemon if it is gone), so the badge recovers without anything else calling.
  * Returns the function that stops it.
@@ -35,11 +36,11 @@ export function followAgents(link: FollowedLink, alerts: AgentAlerts, retryDelay
     clearTimeout(retry);
     retry = undefined;
     listing = true;
-    link.call('agent.list').then(
-      (agents) => {
+    Promise.all([link.call('agent.list'), link.call('settings.get')]).then(
+      ([agents, settings]) => {
         listing = false;
         failures = 0;
-        if (!stopped) alerts.reset(agents);
+        if (!stopped) alerts.reset(agents, settings);
       },
       () => {
         listing = false;
@@ -52,6 +53,7 @@ export function followAgents(link: FollowedLink, alerts: AgentAlerts, retryDelay
     link.onEvent((event) => {
       if (event.type === 'agent.updated') alerts.updated(event.agent);
       else if (event.type === 'agent.removed') alerts.removed(event.sessionId);
+      else if (event.type === 'settings.updated') alerts.settingsChanged(event.settings);
     }),
     link.onConnected(list),
     link.onDisconnected(later),

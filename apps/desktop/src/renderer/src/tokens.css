@@ -77,6 +77,13 @@
   --shadow-picked: 0 0 0 3px var(--picked-halo);
   --crew-edge: color-mix(in srgb, var(--accent) 55%, transparent); /* an orchestrator's crew frame, dashed */
   --crew-halo: color-mix(in srgb, var(--accent) 25%, transparent); /* round an orchestrator's tile, and a lit family's */
+  /* The board master: its tile's edge and badge, its rails, and the Master button and panel. The teal of a running command. */
+  --master: var(--state-on-command);
+  --master-ink: var(--state-on-command-ink);
+  --master-soft: var(--state-on-command-soft);
+  --master-halo: color-mix(in srgb, var(--master) 16%, transparent);
+  --crew-flag: var(--pr-merged); /* a crew member's flag to its orchestrator, and the orchestrator's count of them */
+  --crew-flag-soft: var(--pr-merged-soft);
 
   /* Inverse: a dark chip on the light desk, for tooltips and toasts */
   --inverse: var(--text);
@@ -141,8 +148,20 @@
   --state-stopped-by-restart: #868e96; /* the dashed outline of a tile waiting to be resumed */
   --state-stopped-by-restart-ink: #495057;
   --state-stopped-by-restart-soft: #eef0f3;
+  --state-hibernated: #5f6fa3; /* a paused tile's slate border and stripes */
+  --state-hibernated-ink: #4c5a8c;
+  --state-hibernated-soft: #eceff8;
+  --state-on-command: #0b7285; /* a command left running: its row on the tile, the running count and the stopwatch */
+  --state-on-command-ink: var(--state-on-command);
+  --state-on-command-soft: #e3f6f8;
   --state-handing-off-ink: var(--flow-label-ink); /* delivering along its flow edges, in the edges' colour */
   --state-handing-off-soft: var(--flow-label);
+  --state-starting-ink: var(--accent-ink); /* started, before its session's first hook */
+  --state-starting-soft: var(--accent-soft);
+  /* A tile while its agent starts: dashed on a fill between a tile's and the desk's, solid red once its start failed */
+  --tile-starting: color-mix(in srgb, var(--raised) 75%, var(--surface));
+  --tile-starting-edge: var(--neutral-edge);
+  --tile-start-failed-edge: var(--state-failed);
   /* What a tile waiting for you asks, in a warm box under its head */
   --ask: #fff7ef;
   --ask-edge: #fde0c4;
@@ -201,19 +220,45 @@
    * the terminal card is the session window's terminal, dark in every theme.
    */
   --agent-note-radius: var(--radius-md);
-  --agent-note-bar: var(--accent); /* the document card's left edge, and the note on the minimap */
-  --agent-note-badge: var(--accent-soft); /* the badge naming its agent */
-  --agent-note-badge-ink: var(--accent-ink);
+  --agent-note-bar: var(--accent); /* the note on the minimap */
+  --agent-note-tab-height: 21px;
+  --agent-note-loose: var(--muted); /* the colour a note outside every zone takes in place of a zone's */
+  --agent-note-tab-mix: 12%; /* its zone's colour in the tab that reads NOTE and names the agent, over the card */
+  --agent-note-tab-ink-mix: 20%; /* ... in the tab's text, over the text colour */
+  --agent-note-edge-mix: 42%; /* ... in the card's dashed edge (and the tab's), over the border colour */
   --agent-note-edited: var(--warning-ink); /* "edited by you": the warning as text, readable on its soft fill */
   --agent-note-edited-soft: var(--warning-soft);
   --agent-note-code: var(--hover); /* `code` in the document card */
   --agent-note-term-strong: #ffffff; /* bold in the terminal card */
+  /* A question card: an agent's question as a speech bubble beside its tile, in the waiting orange */
+  --question-card-edge: var(--state-waiting);
+  --question-card-edge-width: 1.5px;
+  --question-card-head: var(--state-waiting-ink);
+  --question-card-tail: 14px; /* the tail's square, turned to point at the tile */
+  --question-card-tail-at: 34px; /* from the card's top (or left) edge to its tail */
   --agent-note-term-code: var(--window-added);
   --agent-note-term-prompt: var(--harness-claude); /* the ❯ before each line */
   --agent-note-term-edited: #f0a36b;
   --agent-note-term-link: #91a7f5; /* "show agent", and a link */
   --agent-note-tether: var(--muted); /* the dashed line from a note to its agent's tile */
   --agent-note-tether-dash: 3 3;
+  --clock-radius: 38px var(--radius-xl) var(--radius-xl) 38px; /* a clock card: round at its face's end */
+  --clock-face: 58px; /* a clock card's face */
+  --clock-face-folded: 22px; /* a folded clock's face */
+  --clock-face-edge: 2px;
+  --clock-face-edge-folded: 1.5px;
+  --clock-face-ring: var(--text-soft); /* a clock face's rim */
+  --clock-hand-hour: 14px;
+  --clock-hand-minute: 21px;
+  --clock-hand-hour-folded: 6px;
+  --clock-hand-minute-folded: 8px;
+  --clock-hand-width: 2px;
+  --clock-run: 8px; /* one run's square in a clock's strip */
+  --clock-run-ok: var(--success);
+  --clock-run-fail: var(--state-failed);
+  --clock-run-skip: var(--border);
+  --clock-run-run: var(--accent);
+  --clock-tether: var(--accent); /* the dashed line from a clock to the agent it runs */
   --suggestion-ghost: var(--accent); /* an Ask Claude answer's suggested shapes and arrows, dashed where they would go */
   --suggestion-ghost-fill: var(--accent-faint);
   --suggestion-ghost-dash: 4 3;
@@ -280,6 +325,9 @@
   --shape-text-body-size: 13px; /* "S" */
   --shape-leading: 1.2;
   --shape-padding: var(--space-3);
+  --shape-section-padding-block: var(--space-1-5); /* a class's name, attributes and methods */
+  --shape-section-padding-inline: var(--space-2-5);
+  --shape-stereotype-scale: 0.82em; /* «entity» over a class's name */
   --shape-radius: 16px; /* a rounded rectangle's corners */
   --item-handle: var(
     --accent
@@ -315,6 +363,7 @@
   --line-insert-opacity: 0.6;
   --connector-label-gap: 2px;
   --connector-bar-gap: 10px; /* between the style bar and the line it is over */
+  --connector-end-label-height: 16px; /* a label at a line's end: a multiplicity or a role */
   --connector-drop-edge: var(--accent); /* the outline of the object a connector would join, while one is dragged */
   --connector-drop-fill: color-mix(in srgb, var(--accent) 5%, transparent);
   --shell-drop-edge: var(--accent); /* a tab strip's slot where a dragged tab or pane would land */
@@ -596,9 +645,8 @@
   --size-zone-tab: 28px; /* a zone's tab */
   --size-clone-bar: 72px; /* a cloning zone's progress bar, on its tab */
   --size-clone-bar-height: 5px;
-  --size-repo-picker: 360px; /* the repo picker beside a new agent's tile */
   --size-shape-picker: 290px; /* the shape picker under the Shape tool: six shapes a row */
-  --size-shape-picker-list: 420px; /* its shapes' tallest, before they scroll */
+  --size-shape-picker-list: 440px; /* its shapes' tallest, before they scroll */
   --size-shape-cell: 38px; /* one shape's button in it */
   --size-shape-cell-height: 34px;
   --size-theme-popover: 340px; /* the Theme popover in Settings › Appearance */
@@ -625,6 +673,7 @@
   --size-rail-token-height: 24px;
   --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
   --size-edge-rules: 384px; /* the Edge rules panel's width */
+  --size-master-panel: 360px; /* the board master's docked panel's width */
   --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
   --size-edge-file: 120px; /* the least its payload file field narrows to before it wraps under the switch */
   --size-edge-history-time: 64px; /* its history's times: "14:01", "Fri 17:40" */
@@ -643,8 +692,11 @@
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
   --size-dock-item: 260px; /* a window's chip in the dock, widest */
   --window-gutter: var(--space-6); /* the margin the board's session window leaves round itself when it fills the board */
-  --size-dock-min: 240px; /* the dock's narrowest: a pill and its arrows */
-  --size-dock-clear: 200px; /* room the dock leaves each side for the zone and zoom islands */
+  --size-dock-min: 200px; /* the dock's narrowest, when there is the room; the zones pill is capped so there is */
+  --size-dock-gap: 12px; /* the space the dock keeps from the zones pill, the zoom bar and the minimap (read by `useDockScroll` too) */
+  --size-zones-max: 340px; /* the zones pill's widest, before it scrolls (also at most a third of the bar) */
+  --size-zones-min: 118px; /* its narrowest, in a narrow window */
+  --size-dock-clear: 200px; /* room the dock leaves each side for the zone and zoom islands, until measured */
   --control-xs: 18px; /* an icon button in a dense row: a tile's head */
   --control-sm: 26px; /* a small button or input's height */
   --control-row: 30px; /* a menu's row */
@@ -671,10 +723,12 @@
   --size-divider: 7px; /* the grab area between split panes */
   --size-divider-overhang: calc(var(--size-divider) / 2); /* how far a grab area reaches over each neighbour */
   --size-tooltip: 240px; /* a tooltip's widest */
+  --size-hover-card: 270px; /* a hover card's widest */
   --size-toast: 380px; /* a toast's widest */
   --size-menu: 214px; /* a menu's narrowest */
   --size-empty-body: 200px; /* an empty state's text, widest */
   --size-dialog: 440px; /* a dialog's width */
+  --size-view-popover: 260px; /* the zoom bar's View popover */
   --size-spotlight: 520px; /* the ⌘K switcher's width */
   --size-spotlight-list: 360px; /* how tall its list grows before it scrolls */
   --size-spotlight-mark: 22px; /* a row's mark */
@@ -725,6 +779,7 @@
   --motion-stride: 380ms; /* a running character's leg swing: two bobs */
   --motion-handoff: 1600ms; /* a payload's trip along a flow edge; a hand-off shows for at least this long */
   --motion-pulse: 700ms; /* one pulse of a tile ⌘K showed */
+  --motion-record-fade: 5s; /* a deleted sidebar record fading out while its Undo is up */
   --pulse-count: 2; /* how many times it pulses */
   --ease-in: cubic-bezier(0.42, 0, 1, 1); /* leaving */
   --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1); /* back and forth */
@@ -863,6 +918,11 @@
   --state-stopped-by-restart: #8f897d;
   --state-stopped-by-restart-ink: #b5afa2;
   --state-stopped-by-restart-soft: #2c2b28;
+  --state-hibernated: #9fb0e6;
+  --state-hibernated-ink: #9fb0e6;
+  --state-hibernated-soft: #262b3d;
+  --state-on-command: #5cc4d4;
+  --state-on-command-soft: #16313a;
   --ask: #33281f;
   --ask-edge: #4a3826;
   --ask-ink: #f3d9c2;

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { issuePrompt, shortIssueId } from '@agent-board/tracker';
+import type { AgentRecordStore } from './agent-records.ts';
+import { createAgentStarts, type AgentStarts, type NewStart, type StartProgress } from './agent-starts.ts';
 import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agents.ts';
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
 import { CLAUDE_HOOK_EVENTS } from './claude-state.ts';
@@ -63,6 +65,9 @@ const HOOK_TIMEOUT_S = 5;
 /** How much longer claude waits on a held PermissionRequest hook than the daemon holds it, so the daemon answers first. */
 const PERMISSION_HOOK_MARGIN_S = 10;
 
+/** The longest a step of a start may wait on another process (git, a tracker, the harness lookup) before it fails. */
+const START_STEP_TIMEOUT_MS = 3 * 60_000;
+
 /** How far a loose implementer's reviewer starts from it, down and right, in board units. */
 const REVIEWER_OFFSET = 48;
 
@@ -87,10 +92,11 @@ interface AgentSpawnOptions
     | 'permissionHoldMs'
     | 'trackers'
     | 'roleTemplates'
+    | 'startStepTimeoutMs'
     | 'broadcast'
     | 'log'
   > {
-  sessions: Pick<SessionHost, 'start'>;
+  sessions: Pick<SessionHost, 'start' | 'kill' | 'forget'>;
   getRow(sessionId: string): AgentRow | undefined;
   get(sessionId: string): Agent | undefined;
   /** Every agent's row, in the order they were spawned. */
@@ -100,6 +106,8 @@ interface AgentSpawnOptions
   repoZoneFor(zoneId: string | null, repoRoot: string): ZoneRow | undefined;
   /** Tells every client about the agent. */
   announce(sessionId: string): void;
+  /** Agents' records: an agent an orchestrator starts is recorded in its crew. */
+  records: Pick<AgentRecordStore, 'put'>;
   /** The agent was started with a first prompt, which its session has yet to take up. */
   promptQueued(sessionId: string): void;
   /**
@@ -149,6 +157,8 @@ export interface FolderPlace {
   cwd: string;
   repoRoot: string;
   readOnly: boolean;
+  /** It is the board master (ADR-0019): only `master.start` says so. */
+  master?: boolean;
 }
 
 /**
@@ -157,7 +167,15 @@ export interface FolderPlace {
  */
 export function createAgentSpawns(
   options: AgentSpawnOptions,
-): Pick<AgentHost, 'nextName' | 'spawn' | 'spawnReviewer' | 'adopt'> & { launch(spec: LaunchSpec): boolean } {
+): Pick<AgentHost, 'nextName' | 'spawn' | 'start' | 'starts' | 'spawnReviewer' | 'adopt'> & {
+  launch(spec: LaunchSpec): boolean;
+  /** The agents being started, before they are agents. */
+  pending: Pick<AgentStarts, 'has' | 'retry' | 'update' | 'dismiss' | 'dismissIn'>;
+  /** The first message the agent was started with, if any, while it is on the board. */
+  firstMessage(sessionId: string): string | undefined;
+  /** The agent was deleted. */
+  forget(sessionId: string): void;
+} {
   const { db, sessions, getRow, get, rows, getZone, repoZoneFor, announce, watch } = options;
   const insert = db.prepare(
     `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, role, role_name, name, description,
@@ -167,6 +185,7 @@ export function createAgentSpawns(
   );
   const selectNames = db.prepare('SELECT name FROM agents');
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
+  const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
   const selectBranchReviews = db.prepare('SELECT * FROM branch_reviews WHERE repo_root = ? AND branch = ? ORDER BY id');
   const insertBranchReview = db.prepare('INSERT INTO branch_reviews (repo_root, branch, head, session_id) VALUES (?, ?, ?, ?)');
   /** One deeper than the agent that started it; its crew depth is kept even if that agent is deleted later. */
@@ -259,12 +278,15 @@ export function createAgentSpawns(
   /** Choosing a free branch and creating it run one at a time per repo, so two spawns never pick the same name. */
   const inRepoQueue = keyedQueue();
 
-  /** Names given to agents still being spawned, so two spawns at once never both take the same `new-agent-N`. */
-  const reservedNames = new Set<string>();
+  /**
+   * The names of agents being started, by session id, so two starts never both take the same `new-agent-N`: held until
+   * the agent is made, or its tile (a failed one too) dismissed.
+   */
+  const reservedNames = new Map<string, string>();
 
   /** The lowest `new-agent-N` no agent is called, or is being given: what an agent started with no task is named. */
   const freeAgentName = (): string => {
-    const taken = new Set([...(selectNames.all() as { name: string }[]).map((row) => row.name), ...reservedNames]);
+    const taken = new Set([...(selectNames.all() as { name: string }[]).map((row) => row.name), ...reservedNames.values()]);
     let n = 1;
     while (taken.has(`new-agent-${n}`)) n += 1;
     return `new-agent-${n}`;
@@ -300,6 +322,16 @@ export function createAgentSpawns(
     }
     if (zone.default_repo !== null) return resolveZoneFolder(zone.default_repo);
     throw invalidParams(`${zone.name} has no repo: pick one to start the agent in`);
+  };
+
+  /**
+   * A new agent working in the repo's own checkout: nothing is made. It owns no branch (`''`, as an adopted agent in a
+   * folder of the user's), whatever is checked out there, so no pull request, push or merge of the app can name that
+   * branch as its own.
+   */
+  const inMainCheckout = async (repoRoot: string) => {
+    const head = await runGit(repoRoot, ['rev-parse', 'HEAD']);
+    return { branch: '', worktree: repoRoot, baseCommit: head.ok ? head.stdout : null, reviews: null };
   };
 
   /**
@@ -351,40 +383,130 @@ export function createAgentSpawns(
     return from.id;
   };
 
-  return {
-    launch,
+  const starts = createAgentStarts(options.broadcast);
 
-    nextName: freeAgentName,
+  /** The first message each agent was started with, for a retry of a start whose harness exited before its first hook. */
+  const firstMessages = new Map<string, string>();
 
-    async spawn(params, spawnedBy, place, used) {
-      const { zoneId, harness = 'claude', prompt = '', name, issueId, allowProjectCodexConfig = false, position, cols, rows } = params;
-      const zone = zoneId === null ? undefined : getZone(zoneId);
-      if (zoneId !== null && zone === undefined) throw invalidParams(`no zone ${zoneId}`);
-      if (zoneId === null && position === undefined) throw invalidParams('an agent loose on the board needs a position');
-      if (harness !== 'claude' && harness !== 'codex') throw invalidParams(`unknown harness ${String(harness)}`);
-      await requireHarness(harness);
-      const model = params.model?.trim() || null;
-      // Passed to the harness as an argument: never an option of its own.
-      if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
-      if (params.role !== undefined && typeof params.role !== 'string') throw invalidParams('role must be a string');
-      // A built-in role, or a custom one by its name.
-      const choice = params.role === undefined ? null : roleChoice(params.role);
-      const role = choice?.role ?? null;
-      // A reviewer checks out the branch it reviews, detached: it has none of its own.
-      const reviewer = role !== null && REVIEWER_ROLES.includes(role);
-      if (reviewer && params.branch !== undefined) {
-        throw invalidParams('a reviewer works on a detached checkout of the branch it reviews: it takes no branch of its own');
-      }
-      if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
-        throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
-      }
-      // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
-      const orchestrate = spawnedBy === undefined ? (params.orchestrate ?? null) : null;
+  /**
+   * `work`, unless it takes longer than a start's step may: then the start fails, saying `what` took too long, and
+   * whatever `work` made once it does finish is undone by `late`.
+   */
+  const within = <T>(work: Promise<T>, what: string, late?: (made: T) => Promise<void>): Promise<T> => {
+    const limitMs = options.startStepTimeoutMs ?? START_STEP_TIMEOUT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        if (late !== undefined) void work.then(late).catch(() => {});
+        reject(invalidParams(`${what} took longer than ${limitMs >= 60_000 ? `${limitMs / 60_000} min` : `${limitMs / 1000} s`}`));
+      }, limitMs);
+      timer.unref();
+    });
+    return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+  };
+
+  /**
+   * Checks what a new agent is asked for, then puts its tile on the board (an `AgentStart`) and starts it: `done`
+   * settles with the agent once its session runs, or with why it failed, which its tile keeps. Nothing before the tile
+   * is on the board waits on another process: what needs git or the harness's path is checked as its first step.
+   */
+  const begin = (
+    params: SpawnAgentParams,
+    spawnedBy?: string,
+    place?: FolderPlace,
+    used?: { template: string | null },
+  ): { sessionId: string; done: Promise<Agent> } => {
+    const { zoneId, harness = 'claude', prompt = '', name, issueId, position } = params;
+    const zone = zoneId === null ? undefined : getZone(zoneId);
+    if (zoneId !== null && zone === undefined) throw invalidParams(`no zone ${zoneId}`);
+    if (zoneId === null && position === undefined) throw invalidParams('an agent loose on the board needs a position');
+    if (harness !== 'claude' && harness !== 'codex') throw invalidParams(`unknown harness ${String(harness)}`);
+    const model = params.model?.trim() || null;
+    // Passed to the harness as an argument: never an option of its own.
+    if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
+    if (params.role !== undefined && typeof params.role !== 'string') throw invalidParams('role must be a string');
+    // A built-in role, or a custom one by its name.
+    const choice = params.role === undefined ? null : roleChoice(params.role);
+    // A reviewer checks out the branch it reviews, detached: it has none of its own.
+    const reviewer = choice !== null && REVIEWER_ROLES.includes(choice.role);
+    if (reviewer && params.branch !== undefined) {
+      throw invalidParams('a reviewer works on a detached checkout of the branch it reviews: it takes no branch of its own');
+    }
+    if (params.checkout !== undefined && params.checkout !== 'main' && params.checkout !== 'worktree') {
+      throw invalidParams(`unknown checkout ${String(params.checkout)}`);
+    }
+    // The repo's own checkout, with no worktree, is the user's to give (ADR-0011): an orchestrator's agents each get their own.
+    const mainCheckout = params.checkout === 'main' && place === undefined;
+    if (mainCheckout && spawnedBy !== undefined) throw invalidParams("an orchestrator's agents each work in a worktree of their own");
+    if (mainCheckout && (reviewer || params.branch !== undefined || params.baseBranch !== undefined)) {
+      throw invalidParams("an agent in the repo's own checkout takes no branch, base branch or reviewer role: it works on the branch checked out there");
+    }
+    if (params.orchestrate !== undefined && !ORCHESTRATE_SCOPES.includes(params.orchestrate)) {
+      throw invalidParams(`unknown orchestrate scope ${String(params.orchestrate)}`);
+    }
+    const fromZone = issueId === undefined ? undefined : issueZone(params, zone);
+    const id = randomUUID();
+    // Named for now by what it was given; one started from an issue is named after it once the issue is read.
+    const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
+    // Kept until its agent is made or its tile dismissed, so no other start takes the name meanwhile.
+    reservedNames.set(id, shownName);
+    const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, spawnedBy: spawnedBy ?? null };
+    const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
+      startAgent({ id, shownName, params, spawnedBy, place, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
+    const progress = starts.open(shown, {
+      retry: (again, allow) => void run(again, allow).catch(() => {}),
+      dismissed: () => reservedNames.delete(id),
+    });
+    return { sessionId: id, done: run(progress, params.allowProjectCodexConfig ?? false) };
+  };
+
+  /**
+   * Runs a start's steps, each shown on its tile as it goes: the checks that need git or the harness's path, the issue
+   * read, the repo and worktree made, the harness launched. Each step that waits on another process gives up after
+   * `START_STEP_TIMEOUT_MS`. What was made is undone if a later step fails (a launched harness is stopped), and when
+   * the tile was dismissed, or its zone removed, before its session would run. The agent takes the name and place its
+   * tile has then: the user may have renamed or moved it meanwhile.
+   */
+  const startAgent = async (
+    start: {
+      id: string;
+      /** The name its tile was first shown with. */
+      shownName: string;
+      params: SpawnAgentParams;
+      spawnedBy: string | undefined;
+      place: FolderPlace | undefined;
+      used: { template: string | null } | undefined;
+      zone: ZoneRow | undefined;
+      harness: Harness;
+      model: string | null;
+      choice: ReturnType<typeof roleChoice> | null;
+      reviewer: boolean;
+      /** It works in the repo's own checkout: no worktree is made for it. */
+      mainCheckout: boolean;
+      fromZone: string | undefined;
+      allowProjectCodexConfig: boolean;
+    },
+    progress: StartProgress,
+  ): Promise<Agent> => {
+    const { id, shownName, params, spawnedBy, place, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
+    const { zoneId, prompt = '', name, issueId, cols, rows } = params;
+    const role = choice?.role ?? null;
+    // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
+    const orchestrate = spawnedBy === undefined ? (params.orchestrate ?? null) : null;
+    // What was made for it so far, undone if it fails to start: its harness, its worktree and branch, then any scratch repo.
+    const undo: (() => Promise<void>)[] = [];
+    /** Stops a start whose tile was dismissed, or whose zone went, before anything more is made for it. */
+    const stillWanted = () => {
+      if (progress.dismissed) throw invalidParams('its start was dismissed');
+      const { zoneId: tileZone } = progress.start;
+      if (tileZone !== null && getZone(tileZone) === undefined) throw invalidParams('its zone was removed');
+    };
+    try {
+      await within(requireHarness(harness), `finding ${harness}`);
       // A typed branch is checked before anything is made for the agent, a scratch repo included.
-      const typedBranch = params.branch === undefined ? undefined : await checkedBranchName(params.branch).catch(wrapInvalid);
+      const typedBranch = params.branch === undefined ? undefined : await within(checkedBranchName(params.branch), 'checking its branch name').catch(wrapInvalid);
       // Its base reaches git only as `refs/heads/<base>`; checked all the same, so no name is ever read as an option.
-      if (params.baseBranch !== undefined) await checkedBranchName(params.baseBranch).catch(wrapInvalid);
-      const fromZone = issueId === undefined ? undefined : issueZone(params, zone);
+      if (params.baseBranch !== undefined) await within(checkedBranchName(params.baseBranch), 'checking its base branch').catch(wrapInvalid);
       if (harness === 'codex') {
         try {
           options.ensureHookShim();
@@ -392,126 +514,176 @@ export function createAgentSpawns(
           throw invalidParams(`can't write the Codex hook launcher ${options.hookShimPath}: ${(error as Error).message}`);
         }
       }
+      stillWanted();
       // Started from an issue: the issue comes first in its prompt, and names its branch.
-      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await options.trackers.issue(fromZone, issueId);
+      if (fromZone !== undefined) progress.step('issue', 'now');
+      const fromIssue = fromZone === undefined || issueId === undefined ? undefined : await within(options.trackers.issue(fromZone, issueId), 'reading the issue');
+      if (fromIssue !== undefined) progress.step('issue', 'done', shortIssueId(fromIssue.issue));
+      stillWanted();
       const task = [fromIssue && issuePrompt(fromIssue.issue), prompt.trim()].filter(Boolean).join('\n\n');
       // Named after its issue as people write it in its scope (`#34`, not `acme/app#34`), else after its task, else
-      // `new-agent-N` when it starts at its prompt.
-      const agentName =
-        name?.trim() ||
-        (fromIssue ? defaultName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' ? freeAgentName() : defaultName(task));
-      reservedNames.add(agentName);
-      // What was made for it so far, undone if it fails to start: its worktree and branch, then any scratch repo.
-      const undo: (() => Promise<void>)[] = [];
-      try {
-        const { repoRoot, folder, undo: undoRepo } = place === undefined ? await agentRepo(params, zone, agentName) : { repoRoot: place.repoRoot, folder: '', undo: undefined };
-        if (undoRepo !== undefined) undo.unshift(undoRepo);
-        const { branch, worktree, baseCommit, reviews } = place !== undefined ? { branch: '', worktree: place.cwd, baseCommit: null, reviews: null } : await inRepoQueue(repoRoot, async () => {
-          if (reviewer) {
-            const reviewed = params.baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
-            const worktree = freeWorktreePath(agentWorktreePath(options.worktreesDir, repoRoot, `${reviewed}-review`));
-            const head = await addDetachedWorktree(repoRoot, worktree, reviewed).catch(wrapInvalid);
-            return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head } };
-          }
-          const branch =
-            typedBranch !== undefined
-              ? await freeTypedBranch(repoRoot, typedBranch).catch(wrapInvalid)
-              : fromIssue
-                ? await freeBranchName(repoRoot, fromIssue.branch)
-                : agentBranchName(agentName);
-          const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
-          await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid);
-          // What its work is reviewed against: the commit it started from.
-          const head = await runGit(worktree, ['rev-parse', 'HEAD']);
-          return { branch, worktree, baseCommit: head.ok ? head.stdout : null, reviews: null };
-        });
-        // A folder it was put in is not its own: it stays.
-        if (place === undefined) undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
-        // The tile shows the issue already: describe the work by the typed task, else the issue's own description.
-        const description =
-          prompt.trim() || fromIssue?.issue.description.trim() || task || (reviews === null ? '' : `Reviews ${reviews.branch}`);
-        // A role's template comes first, filled in for this agent; then the issue, then what was typed.
-        const template =
-          choice === null || params.noTemplate === true
-            ? ''
-            : fillTemplate(
-                options.roleTemplates.body(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice),
-                templateValues({ repoRoot, branch, worktree, reviews, issue: fromIssue?.issue ?? null }),
-              ).trim();
-        // A named role's template may be an orchestrator's: checked as its text, filled in, whoever starts the agent.
-        if (choice?.name != null) checkNamedTemplate(choice.name, template);
-        if (used !== undefined) {
-          used.template = template === '' ? null : options.roleTemplates.describe(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice!);
+      // `new-agent-N` when it starts at its prompt; unless the user renamed its tile already.
+      const renamed = progress.start.name !== shownName;
+      const agentName = renamed
+        ? progress.start.name
+        : name?.trim() ||
+          (fromIssue ? defaultName(`${shortIssueId(fromIssue.issue)}: ${fromIssue.issue.title}`) : task === '' ? shownName : defaultName(task));
+      reservedNames.set(id, agentName);
+      if (!renamed) progress.rename(agentName);
+      if (place === undefined && !mainCheckout) progress.step('worktree', 'now');
+      const { repoRoot, folder, undo: undoRepo } =
+        place === undefined
+          ? await within(agentRepo(params, zone, agentName), 'creating the project', async (made) => made.undo?.())
+          : { repoRoot: place.repoRoot, folder: '', undo: undefined };
+      if (undoRepo !== undefined) undo.unshift(undoRepo);
+      stillWanted();
+      // Timed inside the repo's queue, so a step that gives up frees it for the next start in the repo.
+      const { branch, worktree, baseCommit, reviews } = place !== undefined ? { branch: '', worktree: place.cwd, baseCommit: null, reviews: null } : mainCheckout ? await within(inMainCheckout(repoRoot), 'reading the checkout') : await inRepoQueue(repoRoot, () => within((async () => {
+        if (reviewer) {
+          const reviewed = params.baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
+          const worktree = freeWorktreePath(agentWorktreePath(options.worktreesDir, repoRoot, `${reviewed}-review`));
+          const head = await addDetachedWorktree(repoRoot, worktree, reviewed).catch(wrapInvalid);
+          return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head } };
         }
-        const firstMessage = [template, task].filter(Boolean).join('\n\n');
-        // A zone-less agent takes the bypass setting of its repo's zone, else the default (on).
-        const bypassHookTrust =
-          zone?.repo_root === repoRoot ? zone.codex_bypass_hook_trust : (repoZoneFor(zoneId, repoRoot)?.codex_bypass_hook_trust ?? 1);
-
-        const id = randomUUID();
-        // A folder zone's folder may be untracked, so missing from the new worktree.
-        const cwd = folder === '' ? worktree : join(worktree, folder);
-        mkdirSync(cwd, { recursive: true });
-        const readOnly = place?.readOnly === true;
-        const bypassed = launch({
-          id,
-          harness,
-          model,
-          bypassHookTrust: bypassHookTrust === 1,
-          zoneId,
-          cwd,
-          worktree,
-          task: firstMessage === '' ? undefined : firstMessage,
-          allowProjectCodexConfig,
-          size: { cols, rows },
-          readOnly,
-        });
-        // The session already runs, but its hooks can't arrive before this synchronous insert. It is idle until its
-        // SessionStart hook says it runs.
-        insert.run(
-          id,
-          zoneId,
-          repoRoot,
-          bypassHookTrust,
-          model,
-          role,
-          choice?.name ?? null,
-          agentName,
-          description.slice(0, MAX_DESCRIPTION_LENGTH),
-          branch,
-          worktree,
-          'idle',
-          ...issueColumns(fromIssue?.issue ?? null),
-          position?.x ?? null,
-          position?.y ?? null,
-          position === undefined ? null : frontZ(db),
-          null,
-          baseCommit,
-          place === undefined ? 1 : 0,
-          null,
-          orchestrate,
-          spawnedBy ?? null,
-          reviews?.branch ?? null,
-          reviews?.head ?? null,
-        );
-        if (firstMessage !== '') options.promptQueued(id);
-        if (readOnly) setReadOnly.run(id);
-        if (spawnedBy !== undefined) setCrewDepth.run(spawnedBy, id);
-        if (reviews !== null) insertBranchReview.run(repoRoot, reviews.branch, reviews.head, id);
-        // A repo it was given is offered again, once it has an agent in it.
-        if (params.repo !== undefined && 'path' in params.repo) options.rememberFolder(folderPath(repoRoot, folder));
-        const agent = get(id)!;
-        options.log(`spawned ${harness} agent ${id} on ${branch} in ${worktree}${bypassed ? ` with ${CODEX_BYPASS_FLAG}` : ''}`);
-        options.broadcast({ type: 'agent.updated', agent });
-        watch(id, harness, cwd, worktree, bypassed, null);
-        return get(id)!;
-      } catch (error) {
-        for (const step of undo) await step().catch(() => {});
-        throw error;
-      } finally {
-        reservedNames.delete(agentName);
+        const branch =
+          typedBranch !== undefined
+            ? await freeTypedBranch(repoRoot, typedBranch).catch(wrapInvalid)
+            : fromIssue
+              ? await freeBranchName(repoRoot, fromIssue.branch)
+              : agentBranchName(agentName);
+        const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
+        await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid);
+        // What its work is reviewed against: the commit it started from.
+        const head = await runGit(worktree, ['rev-parse', 'HEAD']);
+        return { branch, worktree, baseCommit: head.ok ? head.stdout : null, reviews: null };
+      })(), 'creating the worktree', (made) => removeWorktree(repoRoot, made.worktree, made.branch)));
+      // A folder it was put in is not its own: it stays.
+      if (place === undefined && !mainCheckout) {
+        undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
+        progress.step('worktree', 'done', branch || basename(worktree));
       }
+      stillWanted();
+      progress.step('launch', 'now');
+      // The tile shows the issue already: describe the work by the typed task, else the issue's own description.
+      const description =
+        prompt.trim() || fromIssue?.issue.description.trim() || task || (reviews === null ? '' : `Reviews ${reviews.branch}`);
+      // A role's template comes first, filled in for this agent; then the issue, then what was typed.
+      const template =
+        choice === null || params.noTemplate === true
+          ? ''
+          : fillTemplate(
+              options.roleTemplates.body(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice),
+              templateValues({ repoRoot, branch, worktree, reviews, issue: fromIssue?.issue ?? null }),
+            ).trim();
+      // A named role's template may be an orchestrator's: checked as its text, filled in, whoever starts the agent.
+      if (choice?.name != null) checkNamedTemplate(choice.name, template);
+      if (used !== undefined) {
+        used.template = template === '' ? null : options.roleTemplates.describe(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice!);
+      }
+      const firstMessage = [template, task].filter(Boolean).join('\n\n');
+      // A zone-less agent takes the bypass setting of its repo's zone, else the default (on).
+      const bypassHookTrust =
+        zone?.repo_root === repoRoot ? zone.codex_bypass_hook_trust : (repoZoneFor(zoneId, repoRoot)?.codex_bypass_hook_trust ?? 1);
+
+      // A folder zone's folder may be untracked, so missing from the new worktree.
+      const cwd = folder === '' ? worktree : join(worktree, folder);
+      mkdirSync(cwd, { recursive: true });
+      const readOnly = place?.readOnly === true;
+      // Where its tile is now, and what it is called.
+      const tile = progress.start;
+      const bypassed = launch({
+        id,
+        harness,
+        model,
+        bypassHookTrust: bypassHookTrust === 1,
+        zoneId: tile.zoneId,
+        cwd,
+        worktree,
+        task: firstMessage === '' ? undefined : firstMessage,
+        allowProjectCodexConfig,
+        size: { cols, rows },
+        readOnly,
+      });
+      // Should the agent not be made after all, its harness must not run on with no tile.
+      undo.unshift(() => sessions.kill(id, 'its start failing').then(() => sessions.forget(id)));
+      // The session already runs, but its hooks can't arrive before this synchronous insert. It is idle until its
+      // SessionStart hook says it runs.
+      insert.run(
+        id,
+        tile.zoneId,
+        repoRoot,
+        bypassHookTrust,
+        model,
+        role,
+        choice?.name ?? null,
+        tile.name,
+        description.slice(0, MAX_DESCRIPTION_LENGTH),
+        branch,
+        worktree,
+        'idle',
+        ...issueColumns(fromIssue?.issue ?? null),
+        tile.position?.x ?? null,
+        tile.position?.y ?? null,
+        tile.position === null ? null : frontZ(db),
+        null,
+        baseCommit,
+        place === undefined && !mainCheckout ? 1 : 0,
+        null,
+        orchestrate,
+        spawnedBy ?? null,
+        reviews?.branch ?? null,
+        reviews?.head ?? null,
+      );
+      reservedNames.delete(id);
+      if (firstMessage !== '') {
+        firstMessages.set(id, firstMessage);
+        options.promptQueued(id);
+      }
+      if (readOnly) setReadOnly.run(id);
+      if (place?.master === true) setMaster.run(id);
+      if (spawnedBy !== undefined) {
+        setCrewDepth.run(spawnedBy, id);
+        options.records.put(spawnedBy, { kind: 'crew', key: id });
+      }
+      if (reviews !== null) insertBranchReview.run(repoRoot, reviews.branch, reviews.head, id);
+      // A repo it was given is offered again, once it has an agent in it.
+      if (params.repo !== undefined && 'path' in params.repo) options.rememberFolder(folderPath(repoRoot, folder));
+      const agent = get(id)!;
+      options.log(`spawned ${harness} agent ${id} on ${branch} in ${worktree}${bypassed ? ` with ${CODEX_BYPASS_FLAG}` : ''}`);
+      // Its tile turns into the agent's: the agent first, so the board never shows neither.
+      options.broadcast({ type: 'agent.updated', agent });
+      if (spawnedBy !== undefined) announce(spawnedBy);
+      progress.end();
+      watch(id, harness, cwd, worktree, bypassed, null);
+      return get(id)!;
+    } catch (error) {
+      for (const step of undo) await step().catch(() => {});
+      progress.fail((error as Error).message, error instanceof RpcMethodError && error.code === AGENT_ERROR.projectCodexConfig);
+      throw error;
+    }
+  };
+
+  return {
+    launch,
+
+    nextName: freeAgentName,
+
+    spawn: async (params, spawnedBy, place, used) => begin(params, spawnedBy, place, used).done,
+
+    async start(params) {
+      const { sessionId, done } = begin(params);
+      // Whatever fails from here on stays on its tile.
+      done.catch(() => {});
+      return { sessionId };
     },
+
+    starts: starts.list,
+
+    pending: starts,
+
+    firstMessage: (sessionId) => firstMessages.get(sessionId),
+
+    forget: (sessionId) => void firstMessages.delete(sessionId),
 
     async spawnReviewer({ of, name, branch: wanted, prompt, cols, rows }) {
       const implementer = getRow(of);

@@ -122,9 +122,10 @@ export function placeOnBoard(
 export interface ItemActions {
   /**
    * Saves a change to the item, showing it at once. Changes with the same `coalesce` key made close together undo as
-   * one, as the saves of one typing do.
+   * one, as the saves of one typing do. A `silent` one is not an undo step: a change the board made by itself, such as
+   * growing a shape to fit its text.
    */
-  update(params: UpdateItemParams, coalesce?: string): void;
+  update(params: UpdateItemParams, coalesce?: string, options?: { silent?: boolean }): void;
   /**
    * Deletes the item, which can be undone. One `abandoned` as it was made, such as a text item left empty, takes its
    * making out of the undo history instead.

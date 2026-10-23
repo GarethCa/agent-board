@@ -2,7 +2,7 @@ import { expect, type ElectronApplication } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, pickInChip, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
+import { agents, launch, listFinishedTurns, pickInChip, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -13,6 +13,8 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
   try {
     const first = await launch(dataDir, env);
     apps.push(first.app);
+    // Its waiting tile is outlined as needing you once Needs you lists finished turns.
+    await listFinishedTurns(first.window);
     await pickFolderNext(first.app, repo);
     await browseForZone(first.window);
     await recordStates(first.window);
@@ -66,6 +68,57 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
     expect(execFileSync('git', ['-C', repo, 'branch', '--list', agent!.branch], { encoding: 'utf8' })).toBe('');
   } finally {
     for (const app of apps) await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a message whose Enter the agent's harness keeps losing shows on its tile as not sent, and the tile's Send sends it", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  // Its harness loses three Enters: the first and both pressed again; the tile's Send is its fourth.
+  const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_LOSE_ENTERS: '3', AGENT_BOARD_SUBMIT_CONFIRM_MS: '300' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    const [agent] = await agents(window);
+
+    await window.evaluate((sessionId) => globalThis.window.agentBoard.agents.answer(sessionId, 'SQLite'), agent!.sessionId);
+    const unsent = tile(window).getByTestId('tile-unsent');
+    await expect(unsent).toHaveText(/A message not sent: it is typed at its prompt/);
+
+    await unsent.getByRole('button', { name: 'Send' }).click();
+    await expect(unsent).toBeHidden();
+    await tile(window).dblclick();
+    await expect(screen(window)).toContainText('Going with SQLite.', { timeout: TURN_MS });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a rate-limited Claude agent's tile offers Continue on credits, which closes Claude's menu picking no row and resumes its turn", async () => {
+  const { dir, repo, env } = scratch('rate-limit');
+  const dataDir = tempDataDir();
+  // Claude's menu with its usage-credits row first, under its pointer: Escape picks no row.
+  const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_RATE_LIMIT_SCREEN: 'menu-credits-first' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Fix the tests');
+    await expect(tile(window)).toHaveAttribute('data-state', 'rate-limited', { timeout: TURN_MS });
+
+    await tile(window).getByTestId('continue-on-credits').click();
+    await expect(tile(window)).not.toHaveAttribute('data-state', 'rate-limited', { timeout: TURN_MS });
+    await expect(tile(window).getByTestId('continue-on-credits')).toBeHidden();
+    await tile(window).dblclick();
+    await expect(screen(window)).toContainText('Done: continue.', { timeout: TURN_MS });
+    await expect(screen(window)).not.toContainText('opened its page');
+  } finally {
+    await app.close();
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }
@@ -202,7 +255,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
   }
 });
 
-test('a Codex agent asks first in a repo with its own Codex config, and one stopped for new config says why', async () => {
+test('a Codex agent asks first, from its tile, in a repo with its own Codex config, and one stopped for new config says why', async () => {
   const { dir, repo, env } = scratch('output');
   mkdirSync(join(repo, '.codex'));
   writeFileSync(join(repo, '.codex', 'hooks.json'), '{}\n');
@@ -230,6 +283,11 @@ test('a Codex agent asks first in a repo with its own Codex config, and one stop
     };
 
     await startCodex('monorepo', 'Tidy up');
+    // Its tile says so, and Retry asks before it starts.
+    const failed = window.getByTestId('start-tile');
+    await expect(failed).toHaveAttribute('data-start', 'failed');
+    await expect(failed.getByRole('alert')).toContainText('own Codex config');
+    await failed.getByRole('button', { name: 'Retry' }).click();
     const confirm = window.getByRole('alertdialog', { name: 'Codex config in this repo' });
     await expect(confirm).toContainText('.codex');
     await expect(confirm).toContainText('trusting all of them trusts both');
@@ -237,6 +295,7 @@ test('a Codex agent asks first in a repo with its own Codex config, and one stop
     await confirm.getByRole('button', { name: 'Start anyway' }).click();
     await expect(confirm).toBeHidden();
     await expect(tile(window)).toHaveCount(1);
+    await expect(failed).toHaveCount(0);
 
     // A flagged agent whose worktree gains Codex config is stopped, and its tile says why.
     await pickFolderNext(app, plain);

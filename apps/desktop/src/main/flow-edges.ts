@@ -7,6 +7,7 @@ import { passthrough, passthroughVoid } from './passthrough';
 /** The flow edge IPC the preload's `flowEdges` API calls. Every window hears every change, so boards stay in step. */
 export function registerFlowEdgeIpc(daemon: DaemonLink): void {
   forwardEvents(daemon, ['flowEdge.updated', 'flowEdge.removed'], FLOW_EDGE_IPC.changed);
+  forwardEvents(daemon, ['settings.updated'], FLOW_EDGE_IPC.settingsChanged);
 
   passthrough(daemon, FLOW_EDGE_IPC.list, 'flowEdge.list');
   passthrough(daemon, FLOW_EDGE_IPC.create, 'flowEdge.create', (params: CreateFlowEdgeParams) => params);

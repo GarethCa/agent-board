@@ -1,4 +1,4 @@
-import { Notification } from 'electron';
+import { BrowserWindow, Notification } from 'electron';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { createAgentAlerts, type AgentNotification } from './alerts';
 import { createAppIcon } from './app-icon';
@@ -52,7 +52,7 @@ export function createNotifier(): Notifier {
 }
 
 /**
- * Notifies the user through `notify` when an agent needs them or stops (`createAgentAlerts`), and shows the app's
+ * Notifies the user through `notify` of each new request in the needs-you inbox (`createAgentAlerts`), and shows the app's
  * state on the dock icon, its badge and the menu bar (`createAppIcon`). Clicking a notification calls `openAgent`, and
  * clicking the menu-bar icon `openBoard`. Returns the function that stops it.
  */
@@ -67,6 +67,8 @@ export function registerNotifications(
   const alerts = createAgentAlerts({
     notify: (notification) => notify(notification, () => openAgent(notification.sessionId)),
     showState: (status) => appIcon.show(status),
+    // A focused window that isn't drawn (an e2e run's, headless) is no board in front of the user.
+    inFront: () => BrowserWindow.getFocusedWindow()?.isVisible() === true,
   });
   const stopFollowing = followAgents(daemon, alerts);
   return () => {

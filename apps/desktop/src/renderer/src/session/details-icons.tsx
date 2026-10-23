@@ -4,20 +4,24 @@ import {
   CalendarClock,
   CircleDot,
   Columns2,
+  FileStack,
   FileText,
   FolderGit2,
   GitPullRequest,
   OctagonX,
+  Pause,
+  Play,
   Rows2,
   ShieldCheck,
   SquareX,
+  UsersRound,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
 import type { ControlId } from './controls';
 
 /** The details' sections that have an icon, which the icon rail opens the strip at. */
-export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'gate' | 'subagents' | 'schedule' | 'status';
+export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'gate' | 'crew' | 'docs' | 'subagents' | 'schedule' | 'status';
 
 /**
  * The one place the details' icons are chosen: the icon rail draws them as buttons, and the expanded strip draws the
@@ -28,6 +32,8 @@ const SECTION_COMPONENTS: Partial<Record<SectionId, LucideIcon>> = {
   worktree: FolderGit2,
   pulls: GitPullRequest,
   gate: ShieldCheck,
+  crew: UsersRound,
+  docs: FileStack,
   subagents: Bot,
   schedule: CalendarClock,
   status: FileText,
@@ -41,6 +47,8 @@ export function SectionIcon({ id, className }: { id: SectionId; className?: stri
 
 export const CONTROL_ICONS: Record<ControlId, ReactNode> = {
   interrupt: <Zap />,
+  pause: <Pause />,
+  wake: <Play />,
   stop: <OctagonX />,
 };
 

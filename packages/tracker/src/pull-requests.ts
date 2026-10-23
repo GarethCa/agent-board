@@ -1,4 +1,5 @@
 import { GhError, runGh, type GhOptions } from './gh.ts';
+import type { PullRequestRef } from './pull-request-ref.ts';
 
 /** A pull request's state, as a tile shows it. */
 export type PullRequestState = 'open' | 'draft' | 'merged' | 'closed';
@@ -27,6 +28,9 @@ interface GhPullRequest {
 /** At most this many pull requests per `gh pr list`. */
 const MAX_PULL_REQUESTS = 20;
 
+/** What gh says when there is no such repo or pull request; not a network failure's "could not resolve host". */
+const NO_SUCH_PULL_REQUEST = /GraphQL: Could not resolve to (a Repository|a PullRequest|an issue or pull request)/;
+
 /** What gh says in a repo none of whose remotes is on GitHub. */
 const NOT_ON_GITHUB = /no git remotes found|none of the git remotes configured/i;
 
@@ -40,6 +44,23 @@ type PullRequestOptions = GhOptions & { cwd: string; repo?: string };
  */
 export function listPullRequests(branch: string, options: PullRequestOptions): Promise<PullRequest[]> {
   return pullRequestList(['--head', branch], options);
+}
+
+/**
+ * Pull request `ref` as gh sees it now, through the user's own `gh` login; undefined for one GitHub doesn't have (or
+ * won't show). Other failures are `TrackerError`s.
+ */
+export async function viewPullRequest(ref: PullRequestRef, options: GhOptions & { cwd?: string }): Promise<PullRequest | undefined> {
+  let found: GhPullRequest;
+  try {
+    found = JSON.parse(
+      await runGh(['pr', 'view', String(ref.number), '--repo', ref.repo, '--json', 'number,title,url,state,isDraft,statusCheckRollup'], options),
+    ) as GhPullRequest;
+  } catch (error) {
+    if (error instanceof GhError && NO_SUCH_PULL_REQUEST.test(error.stderr)) return undefined;
+    throw error;
+  }
+  return { number: found.number, title: found.title, url: found.url, state: pullRequestState(found), checks: checksState(found.statusCheckRollup ?? []) };
 }
 
 /** At most this many branches an agent pushed to are asked about. */

@@ -21,15 +21,15 @@ export function dropPlace(
 }
 
 /**
- * What starting an agent in `zone` (or on bare board, undefined) needs: it starts at once with the zone's repo or a
- * group's default repo, asks for a repo with the picker, or can't start while the zone clones.
+ * What starting an agent in `zone` (or on bare board, undefined) needs: it starts at once in a repo zone, asks in the
+ * New agent dialog (with its Repo field) in a group or on bare board, or can't start while the zone clones.
  */
-export type AgentStart = { kind: 'start' } | { kind: 'pick' } | { kind: 'refuse'; reason: string };
+export type AgentStart = { kind: 'start' } | { kind: 'dialog' } | { kind: 'refuse'; reason: string };
 
 export function agentStartIn(zone: Pick<Zone, 'repoRoot' | 'clone' | 'defaultRepo'> | undefined): AgentStart {
-  if (zone === undefined) return { kind: 'pick' };
+  if (zone === undefined) return { kind: 'dialog' };
   if (zone.clone !== null) return { kind: 'refuse', reason: whyNoAgents(zone)! };
-  return zone.repoRoot !== null || zone.defaultRepo !== null ? { kind: 'start' } : { kind: 'pick' };
+  return zone.repoRoot !== null ? { kind: 'start' } : { kind: 'dialog' };
 }
 
 /** The tracker scope an issue is in, from its ID: a Linear team's key (`ACME-12` → `ACME`), a GitHub repo (`o/r#3` → `o/r`). */
@@ -47,19 +47,15 @@ export function trackerZoneFor<Z extends TrackedZone>(issue: Pick<IssueCardData,
 }
 
 /**
- * How an agent starts from an issue card in `zone` (undefined for a card loose on the board): the New agent dialog
- * where the zone gives a repo; else the repo picker, the issue taken from the zone that tracks it; or not at
- * all while the zone clones, or when no zone on the board tracks the issue.
+ * How an agent starts from an issue card in `zone` (undefined for a card loose on the board): in the New agent dialog,
+ * the issue taken from `issueZoneId`, the zone that tracks it (the card's own first); with a Repo field where the zone
+ * gives no repo. Or not at all while the zone clones, or when no zone on the board tracks the issue.
  */
-export type IssueStart =
-  | { kind: 'dialog'; zone: Zone }
-  | { kind: 'pick'; zone: Zone | undefined; issueZoneId: string }
-  | { kind: 'refuse'; reason: string };
+export type IssueStart = { kind: 'dialog'; zone: Zone | undefined; issueZoneId: string } | { kind: 'refuse'; reason: string };
 
 export function issueStartIn(issue: Pick<IssueCardData, 'provider' | 'id'>, zone: Zone | undefined, zones: readonly Zone[]): IssueStart {
   if (zone?.clone != null) return { kind: 'refuse', reason: whyNoAgents(zone)! };
-  if (zone !== undefined && (zone.repoRoot !== null || zone.defaultRepo !== null)) return { kind: 'dialog', zone };
   const from = trackerZoneFor(issue, zones, zone);
   if (from === undefined) return { kind: 'refuse', reason: `No zone on the board takes issues from ${issueScope(issue)}` };
-  return { kind: 'pick', zone, issueZoneId: from.id };
+  return { kind: 'dialog', zone, issueZoneId: from.id };
 }

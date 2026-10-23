@@ -6,6 +6,7 @@ import { pressed } from '../keys/registry';
 import { boardKey, CONTROLS } from './board-shortcuts';
 import { tileOpenAction, type ClickOpens } from './click-opens';
 import type { SelectionSummary } from './editing/use-editing';
+import { isItemNode } from './items/items';
 import { isSessionTile } from './tiles';
 import type { TileActions } from './tile';
 import type { ArmedTool } from './ToolOverlay';
@@ -32,13 +33,17 @@ interface BoardShortcutsOptions {
   requestRename(nodeId: string): void;
   /** Cycles which connections are drawn. */
   cycleConnections(): void;
+  /** Cycles how an orchestrator's crew is shown: frames, chips, off. */
+  cycleCrewLook(): void;
   /** Opens the shape palette at `at` on the screen: where the pointer is, or undefined when it is off the board. */
   openQuickInsert(at: { x: number; y: number } | undefined): void;
   /** Opens the keyboard cheat sheet. */
   openCheatSheet(): void;
+  /** Starts typing in the shape with `nodeId`. */
+  typeInShape(nodeId: string): void;
 }
 
-/** The board's own keys: N, the tool keys, V, B, H, ⇧E, / and Escape; F2 to rename the one tile selected; and Enter to open it. */
+/** The board's own keys: N, the tool keys, V, B, H, ⇧E, / and Escape; F2 to rename the one tile selected; and Enter to open it, or to type in a shape. */
 export function useBoardShortcuts({
   loaded,
   tool,
@@ -55,8 +60,10 @@ export function useBoardShortcuts({
   renameRequest,
   requestRename,
   cycleConnections,
+  cycleCrewLook,
   openQuickInsert,
   openCheatSheet,
+  typeInShape,
 }: BoardShortcutsOptions) {
   // N adds a note at the pointer, or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, B box-selects, H pans.
@@ -81,6 +88,7 @@ export function useBoardShortcuts({
       if (shortcut.kind === 'note') createItem('sticky', pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
       else if (shortcut.kind === 'tool') setTool((current) => (current === shortcut.tool ? undefined : shortcut.tool));
       else if (shortcut.kind === 'connections') cycleConnections();
+      else if (shortcut.kind === 'crews') cycleCrewLook();
       else if (shortcut.kind === 'cheatSheet') openCheatSheet();
       else if (shortcut.kind === 'insert') {
         setTool(undefined);
@@ -90,7 +98,7 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, openQuickInsert, openCheatSheet]);
+  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet]);
 
   // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded).
   useEffect(() => {
@@ -106,7 +114,7 @@ export function useBoardShortcuts({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [loaded, selection, requestRename]);
 
-  // Enter opens the one agent or shell tile selected, as a double-click does.
+  // Enter opens the one agent or shell tile selected, as a double-click does, or starts typing in the one shape.
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -117,6 +125,10 @@ export function useBoardShortcuts({
       if (target.closest(CONTROLS) !== null || document.querySelector('[role="dialog"]') !== null) return;
       if (target !== document.body && target.closest('.react-flow') === null) return;
       const [node, ...rest] = selection().nodes;
+      if (node !== undefined && rest.length === 0 && isItemNode(node) && node.data.item.kind === 'shape') {
+        event.preventDefault();
+        return typeInShape(node.id);
+      }
       if (node === undefined || rest.length > 0 || !isSessionTile(node) || node.data.expanded === true) return;
       event.preventDefault();
       if (tileOpenAction(clickOpens, { hasWindow: node.data.external === undefined }) === 'window') tileActions.maximise(node.data);
@@ -124,5 +136,5 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, selection, clickOpens, tileActions]);
+  }, [loaded, selection, clickOpens, tileActions, typeInShape]);
 }

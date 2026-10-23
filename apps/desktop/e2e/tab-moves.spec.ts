@@ -170,7 +170,8 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     // The shell tile dragged onto the implementer's window: one of its tabs again, not a tile.
     const tileBox = (await shellTiles(window).boundingBox())!;
     const windowBox = (await implWindow.getByTestId('session-terminal').first().boundingBox())!;
-    await window.mouse.move(tileBox.x + 40, tileBox.y + 20);
+    // Grabbed by its middle: at the board's zoom, a fixed offset from its corner can land on one of its chips, which take the press.
+    await window.mouse.move(tileBox.x + tileBox.width / 2, tileBox.y + tileBox.height / 2);
     await window.mouse.down();
     await window.mouse.move(windowBox.x + windowBox.width / 2, windowBox.y + windowBox.height / 2, { steps: 16 });
     await expect(implWindow.locator('.session-window-body')).toHaveAttribute('data-drop-over', 'true');

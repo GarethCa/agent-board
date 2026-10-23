@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
-import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
+import type { BoardItem, BoardItemKind, Connector, TileMove, UpdateConnectorParams, UpdateItemParams, ZoneLayout } from '@agent-board/daemon/protocol';
 import { historyStep, inOverlay } from '../../keys';
 import { pressed } from '../../keys/registry';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
@@ -10,6 +10,7 @@ import type { Rect } from '../../geometry';
 import { align, distribute, reorder, type Alignment, type Reorder } from './arrange';
 import { BOARD_CLIPBOARD_TYPE, centreOf, copied, parseCopied, placed, plainText, serialiseCopied, type Copied } from './clipboard';
 import { selectedNodes } from './selection';
+import { swapped } from '../connectors/relations';
 import type { BoardHistory } from './use-history';
 
 interface EditingOptions {
@@ -30,6 +31,7 @@ interface EditingOptions {
   updateItem(params: UpdateItemParams): void;
   removeItem(id: string): void;
   removeConnector(id: string): void;
+  updateConnector(params: UpdateConnectorParams): void;
   moveTile(nodeId: string, tile: TileData, move: TileMove): void;
   /** Moves the zone's top-left corner to `at` on the board, and saves it. */
   moveZone(id: string, at: { x: number; y: number }): void;
@@ -270,6 +272,23 @@ export function useEditing(options: EditingOptions) {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [options.loaded, optionsRef, selectAll, duplicate, restack, selection, resetRotation]);
+
+  // ⇧S turns the selected arrows round, ahead of the board's S, which would arm the Shape tool: in capture, so it never
+  // reaches it. With no arrow selected it is the board's.
+  useEffect(() => {
+    if (!options.loaded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!pressed('edit.swapDirection', event) || isTyping(event) || inOverlay()) return;
+      const { connectorsRef, selectedConnectorsRef, updateConnector } = optionsRef.current;
+      const selected = connectorsRef.current.filter((connector) => selectedConnectorsRef.current.has(connector.id));
+      if (selected.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      for (const connector of selected) updateConnector({ id: connector.id, ...swapped(connector) });
+    };
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
+  }, [options.loaded, optionsRef]);
 
   // Copy and cut put the selected items on the clipboard, for this board or another window's, and their text for
   // other apps; not while typing, or with text selected, which is copied as usual.

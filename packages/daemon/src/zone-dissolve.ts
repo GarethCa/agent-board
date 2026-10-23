@@ -4,7 +4,7 @@ import { dirname, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { runGit } from './git.ts';
 import { invalidParams, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
-import { TILE_SLOT, type Agent, type DaemonEvent, type DaemonMethods, type ExternalSession, type Shell, type TileMove, type Zone } from './protocol.ts';
+import { TILE_SLOT, type Agent, type AgentStart, type DaemonEvent, type DaemonMethods, type ExternalSession, type Shell, type TileMove, type Zone } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 
 interface Tile {
@@ -14,7 +14,14 @@ interface Tile {
 export interface ZoneDissolveOptions {
   db: DatabaseSync;
   zones: { get(id: string): Zone; list(): Zone[] };
-  agents: { list(): Agent[]; get(sessionId: string): Agent | undefined; move(sessionId: string, move: TileMove): Agent };
+  agents: {
+    list(): Agent[];
+    get(sessionId: string): Agent | undefined;
+    move(sessionId: string, move: TileMove): Agent;
+    /** The agents being started, whose tiles go loose as the agents' do. */
+    starts(): AgentStart[];
+    updateStart(sessionId: string, change: { move: TileMove }): void;
+  };
   shells: { list(): Shell[]; move(shellId: string, move: TileMove): Shell };
   externals: { list(): ExternalSession[]; move(id: string, move: TileMove): ExternalSession; placeUnsorted(): void };
   broadcast(event: DaemonEvent): void;
@@ -55,7 +62,9 @@ export async function removeManagedClone(path: string): Promise<void> {
  * The `zone.dissolve` handler, the app's one way to delete a zone, of any kind. Every move and the removal are one
  * transaction: if any fails, none of them happened and clients are told where every tile is again. A tile that was
  * never given a place goes where the board would slot it. Nothing of a session, and not a zone's repo folder, is
- * touched; only with `deleteClone`, a managed clone's folder goes, after the zone has.
+ * touched; only with `deleteClone`, a managed clone's folder goes, after the zone has. An agent being started in it
+ * carries on, loose where its tile was drawn: its tile is moved before the zone goes (it is in no transaction, so it is
+ * put back by hand if the delete fails).
  */
 export function zoneDissolveHandlers<Context>(options: ZoneDissolveOptions): RpcHandlers<Pick<DaemonMethods, 'zone.dissolve'>, Context> {
   const { db, zones, agents, shells, externals } = options;
@@ -85,6 +94,7 @@ export function zoneDissolveHandlers<Context>(options: ZoneDissolveOptions): Rpc
         agents: agents.list().filter((agent) => agent.zoneId === id),
         shells: shells.list().filter((shell) => shell.zoneId === id),
         externals: externals.list().filter((session) => session.zoneId === id),
+        starts: agents.starts().filter((start) => start.zoneId === id),
       };
       let slot = 0;
       const looseAt = (tile: Tile): TileMove => {
@@ -101,10 +111,20 @@ export function zoneDissolveHandlers<Context>(options: ZoneDissolveOptions): Rpc
         for (const agent of inZone.agents) agents.move(agent.sessionId, looseAt(agent));
         for (const shell of inZone.shells) shells.move(shell.id, looseAt(shell));
         for (const session of inZone.externals) externals.move(session.id, looseAt(session));
+        for (const start of inZone.starts) agents.updateStart(start.sessionId, { move: looseAt(start) });
         await options.removeZone(id);
         db.exec('COMMIT');
       } catch (error) {
         db.exec('ROLLBACK');
+        // A start still going goes back into the zone; one that became an agent meanwhile is put back with the agents.
+        for (const start of inZone.starts) {
+          const back = { zoneId: id, ...(start.position ?? { x: 0, y: 0 }) };
+          try {
+            agents.updateStart(start.sessionId, { move: back });
+          } catch {
+            // Over already: dismissed, or failed and dismissed.
+          }
+        }
         // The moves were announced as they were made; say where everything is now.
         for (const agent of inZone.agents) {
           const now = agents.get(agent.sessionId);

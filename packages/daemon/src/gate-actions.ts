@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createPullRequest, deleteRemoteBranch, mergePullRequest, pullRequestDetails, pullRequestOfUrl, shortIssueId, type PullRequest } from '@agent-board/tracker';
-import { cleanupProblem, isOpenPullRequest, mergeBlocked, openPullRequestBlocked, pullRequestBody, shortCommit, type GateCleanup } from './gate-rules.ts';
+import { cleanupProblem, inCheckoutWhy, inRepoCheckout, isOpenPullRequest, mergeBlocked, openPullRequestBlocked, pullRequestBody, shortCommit, type GateCleanup } from './gate-rules.ts';
 import { boardCaller, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { GateHost } from './gates.ts';
 import { runGit } from './git.ts';
@@ -32,6 +32,8 @@ export interface GateActionOptions {
   log(message: string): void;
   /** Who holds a board token, for `board.openPullRequest`. */
   callers: BoardCallerSources;
+  /** Records a pull request an agent opened itself on its sidebar (`Agent.records`). */
+  recordPullRequest(sessionId: string, pr: PullRequest): void;
 }
 
 type Methods = Pick<DaemonMethods, 'gate.openPullRequest' | 'gate.merge' | 'board.openPullRequest'>;
@@ -77,6 +79,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
   const openPullRequest = async (sessionId: string, { draft }: { draft: boolean }): Promise<PullRequest> => {
     await options.refreshBranch(sessionId);
     const agent = requireAgent(sessionId);
+    if (inRepoCheckout(agent)) throw invalidParams(inCheckoutWhy(agent.name));
     if (agent.ownedBranch === '') throw invalidParams(`${agent.name} has no branch to open a pull request of.`);
     const open = options.pullRequests(sessionId).find(isOpenPullRequest);
     if (open !== undefined) throw invalidParams(`${agent.name} has #${open.number} open already.`);
@@ -115,7 +118,10 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
       const who = boardCaller(options.callers, stringParam(paramsObject(params), 'token'), connection);
       // The agent's own session alone: a shell, a tab or an ended agent's shell is the user's, who has Open PR.
       if (who.side !== 'agent') throw invalidParams("only an agent opens a pull request this way, of its own branch, from its own session: the user has Open PR");
-      return openPullRequest(who.tileId, { draft: true });
+      return openPullRequest(who.tileId, { draft: true }).then((pr) => {
+        options.recordPullRequest(who.tileId, pr);
+        return pr;
+      });
     },
 
     'gate.merge': async (params) => {
@@ -128,6 +134,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
       const cleanup = cleanupParam(fields);
       await options.refreshBranch(sessionId);
       const agent = requireAgent(sessionId);
+      if (inRepoCheckout(agent)) throw invalidParams(inCheckoutWhy(agent.name));
       const pr = options.pullRequests(sessionId).find((each) => each.number === number);
       const ref = pr === undefined ? undefined : pullRequestOfUrl(pr.url);
       if (ref === undefined) throw invalidParams(`#${number} is not one of ${agent.name}'s pull requests on GitHub.`);

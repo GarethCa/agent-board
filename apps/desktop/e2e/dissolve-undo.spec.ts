@@ -93,8 +93,9 @@ test('undoing a delete brings back an agent tile, the default repo and the conne
     await addEmptyZone(page, 'G1');
     const [made] = await zones(page);
     await page.evaluate(({ id, path }) => window.agentBoard.zones.setDefaultRepo(id, path), { id: made!.id, path: repo });
-    // With a default repo, New agent starts one at once.
+    // With a default repo, New agent's Repo field has it filled in already.
     await zoneNamed(page, 'G1').getByRole('button', { name: 'New agent' }).click();
+    await page.getByRole('dialog', { name: 'New agent' }).getByRole('button', { name: 'Start' }).click();
     await expect(tile(page)).toHaveCount(1);
     const sticky = await page.evaluate(
       () => window.agentBoard.items.create({ kind: 'sticky', zoneId: null, x: 900, y: 100, width: 160, height: 120, data: { text: 'note', color: '#fff3a3' } }),

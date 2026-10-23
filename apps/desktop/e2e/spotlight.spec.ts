@@ -1,6 +1,6 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, TURN_MS, windowKey, zones } from './agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, TURN_MS, windowKey, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
@@ -70,6 +70,7 @@ test('⌘K on the board finds an agent by part of its name and flies to its tile
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
   try {
     await twoAgents(app, window, repo);
     // Away from the tile, so flying there has somewhere to go.
@@ -133,6 +134,7 @@ test('⌘K from a session window’s terminal switches the window to the agent p
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
   try {
     await twoAgents(app, window, repo);
     await agentTile(window, 'Tidy the docs').dblclick();
@@ -173,6 +175,7 @@ test('⌘K from an expanded tile’s terminal expands the agent picked in its pl
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
   try {
     await twoAgents(app, window, repo);
     await setClickOpens(window, 'Expand in place');
@@ -214,6 +217,7 @@ test('⌘K with no match offers a new agent by that name, in the zone', async ()
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
@@ -235,6 +239,7 @@ test('the switcher follows the board while it is open: an agent that starts aski
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
+  await listFinishedTurns(window);
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
@@ -276,6 +281,7 @@ test('⌘K pressed in a web tab’s page opens the switcher, which takes the key
   const server = await serveWebPages();
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
+  await listFinishedTurns(window);
   /**
    * The web contents given the keyboard from now on, by URL, as the main process asks it to: an e2e window in the
    * background never holds the OS's focus, so who has it can't be read back.
@@ -298,9 +304,11 @@ test('⌘K pressed in a web tab’s page opens the switcher, which takes the key
     await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = window.getByRole('dialog', { name: 'Open a web tab' });
-    await ask.getByRole('textbox', { name: 'Address' }).fill(server.url);
-    await ask.getByRole('button', { name: 'Open' }).click();
+    // A new tab has no page and its address bar is focused: the URL typed there loads.
+    const address = window.getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await address.fill(server.url);
+    await address.press('Enter');
     await expect.poll(() => app.windows().some((page) => page.url().startsWith(server.url))).toBe(true);
     const page = app.windows().find((each) => each.url().startsWith(server.url))!;
     await expect(page.locator('h1')).toHaveText('Dev home');
@@ -332,6 +340,7 @@ test('⌘K pressed in a web tab’s page opens the switcher, which takes the key
 test('a popped-out window has the switcher too: ↵ shows the session picked in it, and a zone on the board; from an expanded tile, a popped-out session comes forward and the tile stays', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
+  await listFinishedTurns(window);
   try {
     await addEmptyZone(window, 'Frontend');
     const zone = (await zones(window))[0]!;

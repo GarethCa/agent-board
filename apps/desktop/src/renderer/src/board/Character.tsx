@@ -3,8 +3,11 @@ import { SESSION_STATES, type Harness } from '@agent-board/daemon/protocol';
 import { HARNESSES } from '../harness';
 import { STATE_LABELS } from '../states';
 
-/** Every pose a character can strike: each state a subagent can be in, and handing off its result. */
-export const CHARACTER_POSES = [...SESSION_STATES, 'handing-off'] as const;
+/**
+ * Every pose a character can strike: each state a subagent can be in, handing off its result, and waiting on a
+ * command it left running.
+ */
+export const CHARACTER_POSES = [...SESSION_STATES, 'handing-off', 'on-command'] as const;
 export type CharacterPose = (typeof CHARACTER_POSES)[number];
 
 const POSE_LABELS: Record<CharacterPose, string> = { ...STATE_LABELS, 'handing-off': 'handing off' };
@@ -127,6 +130,19 @@ const FIGURES: Record<CharacterPose, Figure> = {
       <g>
         <circle cx="27" cy="6" r="4.2" style={{ fill: 'var(--state-done)' }} />
         <path d="M25 6.2 L26.5 7.7 L29.2 4.6" fill="none" style={{ stroke: PAPER }} strokeWidth="1.3" strokeLinecap="round" />
+      </g>
+    ),
+  },
+  // Holding up a stopwatch, timing what it left running.
+  'on-command': {
+    eyes: 'open',
+    legs: STANDING,
+    arms: [[9, 19, 6, 24], [23, 19, 25.5, 14]],
+    prop: (
+      <g style={{ stroke: INK }} strokeWidth="0.9" strokeLinecap="round">
+        <line x1="28" y1="1.4" x2="28" y2="3" />
+        <circle cx="28" cy="8" r="4.8" style={{ fill: 'var(--state-on-command)' }} />
+        <path d="M28 8 L28 5.3 M28 8 L30 9.2" style={{ stroke: PAPER }} strokeWidth="1.1" />
       </g>
     ),
   },

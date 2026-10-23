@@ -1,5 +1,5 @@
 // The shapes: each one's name, group, other words for it, size and drawing.
-import { SHAPE_TYPES, type ShapeType } from '@agent-board/daemon/protocol';
+import { SHAPE_SECTIONS, SHAPE_TYPES, type ShapeSection, type ShapeType } from '@agent-board/daemon/protocol';
 import { closed, fitParts, type Box, type Fit, type MockPart, type ShapePart } from './geometry';
 
 export type ShapeGroup = 'flowchart' | 'architecture' | 'uml';
@@ -34,6 +34,13 @@ export interface ShapeKind {
   /** Its size when placed with a click. */
   size: { width: number; height: number };
   label: LabelBox;
+  /**
+   * The sections it has under its text, by name, each typed in on its own and divided from the one above by a rule:
+   * a class's attributes and methods, under its name. Its label then takes the whole box, the sections stacked in it.
+   */
+  sections?: readonly ShapeSection[];
+  /** The stereotype shown over its name when the name gives none, as `«interface»` over a box interface's. */
+  stereotype?: string;
   /** Its parts in `box`, the node's box inset by half the stroke so the outline meets the edges. */
   draw(box: Box): ShapePart[];
 }
@@ -544,14 +551,36 @@ const KINDS: Kinds = {
     group: 'uml',
     synonyms: ['object', 'entity', 'model', 'type', 'struct'],
     size: { width: 200, height: 180 },
-    label: { top: 0, right: 0, bottom: 0.76, left: 0, tight: true },
+    label: { ...WHOLE, tight: true },
+    sections: SHAPE_SECTIONS,
     draw: mock(
       [12, 3, 68, 53],
       [
         { el: 'rect', ink: s, x: 12, y: 3, width: 56, height: 50 },
-        { el: 'path', ink: l, d: 'M12 15H68M12 34H68' },
+        // On the board the sections draw their own rules, where their text puts them.
+        { el: 'path', ink: l, iconOnly: true, d: 'M12 15H68M12 34H68' },
         { el: 'path', ink: l, opacity: 0.7, iconOnly: true, d: 'M30 9H50' },
         { el: 'path', ink: l, opacity: 0.45, iconOnly: true, d: 'M17 21H44M17 27H38M17 40H50M17 46H42' },
+      ],
+    ),
+  },
+  'interface-box': {
+    name: 'Interface',
+    group: 'uml',
+    synonyms: ['protocol', 'contract', 'trait', 'abstract', 'api'],
+    size: { width: 200, height: 160 },
+    label: { ...WHOLE, tight: true },
+    sections: SHAPE_SECTIONS,
+    stereotype: '«interface»',
+    draw: mock(
+      [12, 3, 68, 53],
+      [
+        { el: 'rect', ink: s, x: 12, y: 3, width: 56, height: 50 },
+        { el: 'path', ink: l, iconOnly: true, d: 'M12 15H68M12 34H68' },
+        // A lollipop's head beside its name, which tells it from a class in the picker.
+        { el: 'circle', ink: l, iconOnly: true, cx: 21, cy: 9, r: 3 },
+        { el: 'path', ink: l, opacity: 0.7, iconOnly: true, d: 'M30 9H50' },
+        { el: 'path', ink: l, opacity: 0.45, iconOnly: true, d: 'M17 40H50M17 46H42' },
       ],
     ),
   },
@@ -585,9 +614,9 @@ const KINDS: Kinds = {
     ),
   },
   interface: {
-    name: 'Interface',
+    name: 'Provided interface',
     group: 'uml',
-    synonyms: ['lollipop', 'protocol', 'contract', 'port', 'provided'],
+    synonyms: ['lollipop', 'interface', 'port', 'provided', 'socket'],
     size: { width: 140, height: 90 },
     label: underFigure,
     draw: mock(

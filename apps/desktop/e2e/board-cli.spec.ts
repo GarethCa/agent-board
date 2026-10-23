@@ -29,7 +29,7 @@ test('a shell tile runs agent-board identify and sees its own tile and zone', as
   }
 });
 
-test('an agent sets its status with agent-board status set (after the MCP set_status), and its tile shows it in place of its task, then its last message once its turn has ended', async () => {
+test('an agent sets its status with agent-board status set (after the MCP set_status), and its tile shows it in place of its task, and its last message once its turn has ended only on a hover card', async () => {
   const { dir, repo, env } = scratch('board');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -42,8 +42,18 @@ test('an agent sets its status with agent-board status set (after the MCP set_st
     // Its CLI commands each start the app's executable as Node: a turn's worth of time, not a moment's. It sets 10%
     // through the MCP and 20% through the CLI, mid-turn; its status stands in place of its task while it works.
     await expect(tile(window).getByTestId('tile-description')).toHaveAttribute('title', /^Moving session ids to the daemon · 20%\n\nTask: Moving session ids to the daemon$/, { timeout: TURN_MS });
-    // Its turn over, it waits for you and the tile shows its last message instead (the percentage going is a unit test's).
-    await expect(tile(window).getByTestId('tile-ask')).toHaveText('I know where I am.', { timeout: TURN_MS });
+    // Its turn over, the tile still says what it is doing (the percentage going is a unit test's); its last message
+    // is on the card that shows below the tile after a moment's hover.
+    await expect(tile(window).getByTestId('tile-description')).toHaveText('Moving session ids to the daemon', { timeout: TURN_MS });
+    await expect(tile(window).getByTestId('tile-ask')).toHaveCount(0);
+    await tile(window).hover();
+    const card = window.locator('.ui-hover-card');
+    await expect(card).toHaveText(/I know where I am\./);
+    // It never takes the pointer, and goes as the pointer leaves the tile: a click below it lands on what is there.
+    expect(await card.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe('none');
+    const box = (await tile(window).boundingBox())!;
+    await window.mouse.move(box.x + box.width / 2, box.y + box.height + 40);
+    await expect(card).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

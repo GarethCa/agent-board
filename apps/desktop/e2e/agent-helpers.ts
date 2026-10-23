@@ -16,6 +16,14 @@ export async function launch(dataDir: string, env: Record<string, string>, args:
   return { app, window };
 }
 
+/**
+ * Lists every finished turn in Needs you, not only explicit requests: for tests of an agent waiting at its prompt,
+ * which the inbox, the pill and notifications leave out by default.
+ */
+export async function listFinishedTurns(page: Page): Promise<void> {
+  await page.evaluate(() => window.agentBoard.flowEdges.setSettings({ needsYouShows: 'turns' }));
+}
+
 // A plain, non-login sh: never the developer's own shell, rc files or profile.
 export const SHELL_ENV = { SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' };
 
@@ -56,13 +64,13 @@ export const zoneNamed = (window: Page, name: string): Locator =>
 
 /**
  * Starts an agent with `prompt` from the zone named `zoneName`'s New agent button: a Claude one unless `harness` says
- * Codex (past Codex's one-time hooks notice), working on the zone tracker's issue `issue` if given.
+ * Codex (past Codex's one-time hooks notice), working on the zone tracker's issue `issue` if given. It waits until the agent has started, unless `started` is false.
  */
 export async function spawnAgent(
   window: Page,
   zoneName: string,
   prompt: string,
-  { harness = 'Claude', issue }: { harness?: 'Claude' | 'Codex'; issue?: string } = {},
+  { harness = 'Claude', issue, started = true }: { harness?: 'Claude' | 'Codex'; issue?: string; started?: boolean } = {},
 ): Promise<void> {
   await zoneNamed(window, zoneName).getByRole('button', { name: 'New agent' }).click();
   const form = window.getByRole('dialog', { name: 'New agent' });
@@ -77,6 +85,12 @@ export async function spawnAgent(
     await notice.getByRole('button', { name: 'Start' }).click();
     await expect(notice).toBeHidden();
   }
+  if (started) await untilStarted(window);
+}
+
+/** The New agent dialog closes as soon as the start's tile is on the board: waits until every start is an agent, or failed. */
+export async function untilStarted(window: Page): Promise<void> {
+  await expect.poll(() => window.evaluate(async () => (await self.agentBoard.agents.starts()).some((start) => start.error === null))).toBe(false);
 }
 
 /**

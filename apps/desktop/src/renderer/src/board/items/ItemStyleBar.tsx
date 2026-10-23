@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react';
+import { TEXT_FONT_SIZES } from '@agent-board/daemon/protocol';
+import { Minus, Plus } from 'lucide-react';
+import { stepFontSize } from './text-style';
 import { NodeToolbar, Position } from '@xyflow/react';
 import { Button, Swatch } from '../../ui';
 import { themedColor } from '../../board-colors';
@@ -70,17 +73,55 @@ export function BarButton({
 /**
  * A sample of the item's own style, drawn from SVG path data, such as a stroke's weight or a shape's outline: not an
  * icon (those come from lucide), any more than a swatch is. Its line `weight` (in the sample's 24 units) is given when
- * it matters.
+ * it matters, a part of it drawn `filled` (such as a filled end), `dashed` for a dashed line's, and `mirrored` end for end
+ * (a line's start, drawn as its end is).
  */
-export function BarSample({ path, weight }: { path: string; weight?: number }) {
+export function BarSample({
+  path,
+  weight,
+  filled,
+  dashed = false,
+  mirrored = false,
+}: {
+  path: string;
+  weight?: number;
+  filled?: string;
+  dashed?: boolean;
+  mirrored?: boolean;
+}) {
   return (
     <svg
       className="item-bar-sample"
       viewBox="0 0 24 24"
       aria-hidden="true"
+      data-mirrored={mirrored || undefined}
       style={weight === undefined ? undefined : { strokeWidth: weight }}
     >
-      <path d={path} />
+      <path d={path} strokeDasharray={dashed ? '3 2.5' : undefined} />
+      {filled !== undefined && <path d={filled} className="item-bar-sample-fill" />}
     </svg>
+  );
+}
+
+/** A smaller and a larger button around a list of font sizes, for a text item or a shape: `px` is the size now. */
+export function FontSizeControl({ px, onChange }: { px: number; onChange(px: number): void }) {
+  return (
+    <>
+      <BarButton name="Smaller text" onClick={() => onChange(stepFontSize(px, -1))}>
+        <Minus />
+      </BarButton>
+      <select className="item-bar-select" aria-label="Font size" value={px} onChange={(event) => onChange(Number(event.target.value))}>
+        {[...new Set([...TEXT_FONT_SIZES, px])]
+          .sort((a, b) => a - b)
+          .map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+      </select>
+      <BarButton name="Larger text" onClick={() => onChange(stepFontSize(px, 1))}>
+        <Plus />
+      </BarButton>
+    </>
   );
 }

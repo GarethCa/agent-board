@@ -175,11 +175,29 @@ export const CHIP_SIZE = { width: 196, height: 34 };
 
 /**
  * Whether the agent's session is closed: it ended, and nothing of it is left running. Not one a restart stopped (that
- * is resumed), nor one whose pane dropped into a shell that still runs: that tile keeps its Restart, and the user may be
- * running the harness by hand there.
+ * is resumed), nor one paused (that is woken: its tile keeps what it was doing, and Wake), nor one whose pane dropped
+ * into a shell that still runs: that tile keeps its Restart, and the user may be running the harness by hand there.
  */
 export const isClosed = (agent: Pick<Agent, 'endedAt' | 'state' | 'shellSessionId' | 'shellHarness'>): boolean =>
-  agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.shellSessionId === null && agent.shellHarness === null;
+  agent.endedAt !== null &&
+  agent.state !== 'stopped-by-restart' &&
+  agent.state !== 'hibernated' &&
+  agent.shellSessionId === null &&
+  agent.shellHarness === null;
+
+/** The view state key the board keeps the tiles expanded in place under, as a list of `{ id, width, height }` by `tileSizeKey`. */
+export const EXPANDED_VIEW_KEY = 'expandedTiles';
+
+/** The size of each expanded tile saved in the view state (`EXPANDED_VIEW_KEY`), by `tileSizeKey`: only the well-formed ones. */
+export function expandedSizesFrom(saved: unknown): Record<string, Size> {
+  const sizes: Record<string, Size> = {};
+  if (!Array.isArray(saved)) return sizes;
+  for (const entry of saved as unknown[]) {
+    const { id, width, height } = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+    if (typeof id === 'string' && typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) sizes[id] = { width, height };
+  }
+  return sizes;
+}
 
 /** Whether the board draws the agent as a chip: closed, and not unfolded by the user. */
 export const isFolded = (agent: Pick<Agent, 'endedAt' | 'state' | 'sessionId' | 'shellSessionId' | 'shellHarness'>, unfolded: ReadonlySet<string>): boolean =>

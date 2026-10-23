@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { launch, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { GESTURE_QUIET_MS } from '../src/renderer/src/board/wheel-latch.ts';
 
 /** The board's view: where it is panned to, and its zoom. */
 async function view(page: Page): Promise<{ x: number; y: number; zoom: number }> {
@@ -149,6 +150,57 @@ test('the wheel pans the board in any direction, a pinch or the command key with
     await wheel(terminal, { deltaY: -100, ctrlKey: true });
     await expect.poll(rowHeight).toBeGreaterThan(start.font);
     expect(await view(window)).toEqual(before);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Wheel events dispatched in one task, so they are one gesture whatever the load: each on the first element its selector finds. */
+const burst = (page: Page, events: [selector: string, init: Wheel][]) =>
+  page.evaluate((list) => {
+    for (const [selector, init] of list) {
+      const element = document.querySelector(selector)!;
+      const box = element.getBoundingClientRect();
+      element.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, ...init }));
+    }
+  }, events);
+
+test('a wheel gesture stays with the surface it started on: a pan from the bare board carries over a terminal, a scroll from a terminal does not pan', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting');
+    await tileAction(tile(window), 'Expand in place');
+    await expect(window.getByTestId('expanded-tile').getByTestId('session-terminal')).toBeVisible();
+    await expect(window.getByTestId('expanded-tile')).not.toHaveAttribute('data-opening');
+    const pane = '.react-flow__pane';
+    const terminal = '[data-testid="session-terminal"]';
+    const pan: Wheel = { deltaX: 40, deltaY: 60 };
+
+    // The first event on the bare board (it moves nothing), the second over the terminal: one gesture, so the board pans.
+    // Only the second has a vertical delta, so the board moving in y shows it reached the board through the terminal.
+    const before = await settledView(window);
+    await burst(window, [[pane, { deltaX: 0, deltaY: 0 }], [terminal, pan]]);
+    await expect.poll(async () => (await view(window)).y).not.toBe(before.y);
+
+    // After a pause longer than the quiet gap a gesture that starts in the terminal is the terminal's, and the bare board
+    // under it does not pan.
+    await window.waitForTimeout(GESTURE_QUIET_MS * 3);
+    const still = await settledView(window);
+    await burst(window, [[terminal, pan], [pane, pan]]);
+    await window.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await view(window)).toEqual(still);
+
+    // The same wheel on the bare board, as a gesture of its own, does pan: the check above can fail.
+    await window.waitForTimeout(GESTURE_QUIET_MS * 3);
+    await burst(window, [[pane, pan]]);
+    await expect.poll(async () => (await view(window)).x).not.toBe(still.x);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

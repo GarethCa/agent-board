@@ -12,7 +12,7 @@ import { invalidParams } from './params.ts';
 import type { PermissionHolds } from './permissions.ts';
 import { AGENT_ERROR, type Agent, type Harness, type SessionState, type TerminalSize } from './protocol.ts';
 import { RpcMethodError } from './rpc.ts';
-import type { RunStart, ScheduleHost } from './schedules.ts';
+import type { RunStart } from './schedules.ts';
 import type { SessionHost } from './sessions.ts';
 import { RESET_MODES } from './shells.ts';
 import type { SubagentStore } from './subagents.ts';
@@ -41,7 +41,6 @@ interface AgentLifecycleOptions
     | 'log'
   > {
   sessions: Pick<SessionHost, 'kill' | 'forget' | 'list' | 'shellHarnessNow' | 'savedScreen' | 'createShell' | 'shellState'>;
-  schedules: Pick<ScheduleHost, 'remove'>;
   getRow(sessionId: string): AgentRow | undefined;
   get(sessionId: string): Agent | undefined;
   /** The agent, or an invalid-params error if there is none. */
@@ -74,6 +73,16 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   AgentHost,
   'isDeleting' | 'delete' | 'stop' | 'resume' | 'fallbackShellCount' | 'fallbackOwner' | 'onShellChanged'
 > & {
+  /**
+   * Ends the live agent's session as `stop` does, marked paused (`hibernated`) by `by` (null for the user), so its
+   * pane keeps its last screen and drops into no shell. Its caller checks it may be paused.
+   */
+  hibernate(sessionId: string, by: string | null, why: string): Promise<Agent>;
+  /**
+   * While the agent is being paused, what resolves once its session has ended (or failed to): what is sent to it
+   * meanwhile then wakes it instead of being typed into a terminal that is going. Undefined while it isn't.
+   */
+  pausing(sessionId: string): Promise<void> | undefined;
   /**
    * Relaunches an ended agent in its worktree as a new session under the same id, back at `idle` until its
    * SessionStart hook: for a scheduled run with its `prompt` (Codex afresh), or, with no prompt, to resume it where
@@ -121,9 +130,12 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL WHERE session_id = ?');
   const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ? WHERE session_id = ?');
   const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
+  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ? WHERE session_id = ?');
   /** Live Codex agents running with the bypass flag, watched for project config appearing. */
   const guards = new Map<string, CodexConfigGuard>();
   const remove = db.prepare('DELETE FROM agents WHERE session_id = ?');
+  /** Per agent being paused, what resolves once its session has ended (`pausing`). */
+  const pausing = new Map<string, Promise<void>>();
   /** Agents being stopped by the user, whose exit is `done` however their process ends. */
   const stopping = new Set<string>();
   /**
@@ -227,6 +239,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     }
     subagents.set(sessionId, []);
     hookStates.relaunched(sessionId);
+    // Whatever started it, it is awake now.
+    updateHibernated.run(null, null, sessionId);
     updateNotice.run(noConversation && prompt === undefined && !fresh ? NO_CONVERSATION_NOTICE : null, sessionId);
     options.setState(sessionId, 'idle');
     options.unsee(sessionId);
@@ -272,6 +286,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     void sessions.kill(sessionId, 'its fallback shell').then(() => {
       const row = getRow(sessionId);
       if (closed || deleting.has(sessionId) || row === undefined || row.ended_at === null || row.review_of !== null || fallbackShells.has(sessionId)) return;
+      // A paused agent's pane keeps its last screen: a shell there would hold what pausing freed.
+      if (row.hibernated_at !== null) return;
       if (!existsSync(row.cwd)) return;
       const saved = sessions.savedScreen(sessionId);
       const size = saved === undefined ? RELAUNCH_SIZE : { cols: saved.cols, rows: saved.rows };
@@ -322,6 +338,18 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       }
     }
     keepBranchReview.run(kept, review.id);
+  };
+
+  const stop = async (sessionId: string, why: string): Promise<Agent> => {
+    const agent = requireAgent(sessionId);
+    if (agent.endedAt !== null) throw invalidParams(`${agent.name} has already ended`);
+    stopping.add(sessionId);
+    try {
+      await sessions.kill(sessionId, why);
+    } finally {
+      stopping.delete(sessionId);
+    }
+    return get(sessionId)!;
   };
 
   return {
@@ -381,7 +409,6 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       } finally {
         deleting.delete(sessionId);
       }
-      options.schedules.remove(sessionId);
       options.onRemoving(sessionId);
       remove.run(sessionId);
       // The agents it started stay, started by no one now; the activity log keeps who did.
@@ -399,22 +426,43 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     },
 
     async stop(sessionId, why) {
-      const agent = requireAgent(sessionId);
-      if (agent.endedAt !== null) throw invalidParams(`${agent.name} has already ended`);
-      stopping.add(sessionId);
-      try {
-        await sessions.kill(sessionId, why);
-      } finally {
-        stopping.delete(sessionId);
+      // A paused agent is closed as it is, never woken: a plain closed agent then, with its last screen and no shell.
+      if (requireAgent(sessionId).state === 'hibernated') {
+        updateHibernated.run(null, null, sessionId);
+        options.log(`closed paused agent ${sessionId} for ${why}`);
+        announce(sessionId);
+        return get(sessionId)!;
       }
-      return get(sessionId)!;
+      return stop(sessionId, why);
     },
+
+    hibernate(sessionId, by, why) {
+      updateHibernated.run(new Date().toISOString(), by, sessionId);
+      const pause = stop(sessionId, why).catch((error: unknown) => {
+        updateHibernated.run(null, null, sessionId);
+        throw error;
+      });
+      const settled = pause.then(
+        () => {},
+        () => {},
+      );
+      pausing.set(sessionId, settled);
+      void settled.then(() => {
+        if (pausing.get(sessionId) === settled) pausing.delete(sessionId);
+      });
+      return pause;
+    },
+
+    pausing: (sessionId) => pausing.get(sessionId),
 
     async resume(sessionId, asked, force, fresh) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt === null) throw invalidParams(`${agent.name} is still running`);
       // The daemon ends a reviewer once its review is in, and its round with it: a restart wouldn't reopen the round.
-      if (agent.reviewOf !== null && agent.state !== 'stopped-by-restart') throw invalidParams(`${agent.name} is a reviewer whose round is over`);
+      // A paused reviewer's round goes on: it was paused, not ended.
+      if (agent.reviewOf !== null && agent.state !== 'stopped-by-restart' && agent.state !== 'hibernated') {
+        throw invalidParams(`${agent.name} is a reviewer whose round is over`);
+      }
       // Its session may still be finishing its exit, which a new one under the same id would collide with.
       await sessions.kill(sessionId, `its restart for ${asked}`).catch(() => {});
       const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
@@ -434,7 +482,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         startConversation.run(row.harness === 'claude' ? randomUUID() : null, sessionId);
         row = getRow(sessionId)!;
       }
-      const how = fresh !== undefined ? 'with a new conversation' : agent.state === 'stopped-by-restart' ? 'to resume it after a restart' : 'to restart it';
+      const how =
+        fresh !== undefined
+          ? 'with a new conversation'
+          : agent.state === 'stopped-by-restart'
+            ? 'to resume it after a restart'
+            : agent.state === 'hibernated'
+              ? 'to wake it'
+              : 'to restart it';
       const why = `${how}, for ${asked}`;
       const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined);
       if (fresh !== undefined) {

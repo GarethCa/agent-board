@@ -32,6 +32,11 @@ describe("the board's single-key shortcuts", () => {
     expect(boardShortcut(press('E', { shiftKey: true, metaKey: true }))).toBeUndefined();
   });
 
+  it('cycle how a crew is shown with ⇧C, and leave a bare C alone', () => {
+    expect(boardShortcut(press('C', { shiftKey: true }))).toEqual({ kind: 'crews' });
+    expect(boardShortcut(press('c'))).toBeUndefined();
+  });
+
   it('open the shape palette with /, typed shifted or not, but not with a modifier or as it repeats', () => {
     expect(boardShortcut(press('/'))).toEqual({ kind: 'insert' });
     // On a keyboard where / is ⇧7.

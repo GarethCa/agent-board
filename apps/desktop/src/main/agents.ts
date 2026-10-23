@@ -2,10 +2,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { AGENT_ERROR, type AskSelectionParams, type PermissionDecision, type ScheduleSpec, type SpawnAgentParams, type TileMove } from '@agent-board/daemon/protocol';
+import { AGENT_ERROR, type AgentRecordKind, type AskSelectionParams, type PermissionDecision, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
-import { AGENT_IPC, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
-import { forwardEvents } from './broadcast';
+import { AGENT_IPC, type AgentStartsResetEvent, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
+import { forwardEvents, sendToAllWindows } from './broadcast';
 import { handImage } from './image-staging';
 import { passthrough, passthroughVoid } from './passthrough';
 
@@ -18,6 +18,9 @@ const moveAnswerDelayMs = app.isPackaged ? 0 : Number(process.env.AGENT_BOARD_MO
 /** The agent IPC the preload's `agents` API calls. Every window hears every agent change, so tiles stay live. */
 export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['agent.updated', 'agent.removed'], AGENT_IPC.changed);
+  forwardEvents(daemon, ['agent.starting', 'agent.startEnded'], AGENT_IPC.startChanged);
+  // Starts live in the daemon's memory: a daemon restarted under the link has none of the ones the board shows.
+  daemon.onConnected(() => sendToAllWindows(AGENT_IPC.startChanged, { type: 'agent.startsReset' } satisfies AgentStartsResetEvent));
 
   passthrough(daemon, AGENT_IPC.list, 'agent.list');
   ipcMain.handle(AGENT_IPC.spawn, async (_event, params: SpawnAgentParams): Promise<SpawnAgentResult> => {
@@ -30,6 +33,11 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
       throw error;
     }
   });
+  ipcMain.handle(AGENT_IPC.start, async (_event, params: SpawnAgentParams) => (await daemon.call('agent.start', params)).sessionId);
+  passthrough(daemon, AGENT_IPC.starts, 'agent.starts');
+  passthroughVoid(daemon, AGENT_IPC.retryStart, 'agent.retryStart', (sessionId: string, allowProjectCodexConfig: boolean) => ({ sessionId, allowProjectCodexConfig }));
+  passthroughVoid(daemon, AGENT_IPC.dismissStart, 'agent.dismissStart', (sessionId: string) => ({ sessionId }));
+  passthroughVoid(daemon, AGENT_IPC.updateStart, 'agent.updateStart', (sessionId: string, change: { name?: string; move?: TileMove }) => ({ sessionId, ...change }));
   ipcMain.handle(AGENT_IPC.nextName, async () => (await daemon.call('agent.nextName')).name);
   passthroughVoid(daemon, AGENT_IPC.answer, 'agent.answer', (sessionId: string, text: string, paste?: boolean) => ({ sessionId, text, paste }));
   ipcMain.handle(AGENT_IPC.pasteImage, async (_event, bytes: unknown) => (await handImage(dataDir, bytes, (path) => daemon.call('image.paste', { path }))).path);
@@ -39,10 +47,15 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
     return stageCapture(dataDir, await window.webContents.capturePage(captureRect(rect)), captureWidth(width));
   });
   passthrough(daemon, AGENT_IPC.askSelection, 'selection.ask', (params: AskSelectionParams) => params);
+  passthrough(daemon, AGENT_IPC.startMaster, 'master.start', (params: StartMasterParams) => params);
   passthrough(daemon, AGENT_IPC.transcript, 'agent.transcript', (sessionId: string, since: number, generation?: number) => ({ sessionId, since, generation }));
   passthrough(daemon, AGENT_IPC.subagentTranscript, 'agent.subagentTranscript', (sessionId: string, toolUseId: string, agentId?: string) => ({ sessionId, toolUseId, agentId }));
   passthrough(daemon, AGENT_IPC.interrupt, 'agent.interrupt', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.continueOnCredits, 'agent.continueOnCredits', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.sendUnsent, 'agent.sendUnsent', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.clearUnsent, 'agent.clearUnsent', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.stop, 'agent.stop', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.pause, 'agent.pause', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.resume, 'agent.resume', (sessionId: string) => ({ sessionId }));
   ipcMain.handle(AGENT_IPC.restart, async (_event, sessionId: string, force: boolean): Promise<RestartAgentResult> => {
     try {
@@ -58,6 +71,13 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));
   passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
+  passthrough(daemon, AGENT_IPC.setRecordDeleted, 'agent.setRecordDeleted', (sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean) => ({
+    sessionId,
+    kind,
+    key,
+    deleted,
+  }));
+  passthrough(daemon, AGENT_IPC.readDoc, 'agent.readDoc', (sessionId: string, path: string) => ({ sessionId, path }));
   ipcMain.handle(AGENT_IPC.move, async (_event, sessionId: string, move: TileMove) => {
     const moved = await daemon.call('agent.move', { ...move, sessionId });
     if (moveAnswerDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, moveAnswerDelayMs));

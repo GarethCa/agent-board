@@ -1,4 +1,6 @@
+import { recordFor, recordParams } from './agent-records.ts';
 import type { AgentHost } from './agents.ts';
+import { checkPayloadPath } from './flow-payloads.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { paneIds } from './pane-layout.ts';
 import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
@@ -19,7 +21,7 @@ import type { SessionHost } from './sessions.ts';
 import type { ShellHost } from './shells.ts';
 
 /** The `board.*` methods here; a question and a plan wait on the user, so `asks.ts` has them, and `gate-actions.ts` opening a pull request. */
-type BoardMethods = Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.openPullRequest'>>;
+type BoardMethods = Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest'>>;
 
 /**
  * A connection, as the board methods see it: the session whose board token it presented, if it has, and a signal
@@ -153,16 +155,38 @@ export type ActivityLogger = (
  */
 export function boardHandlers<Context extends BoardConnection>(
   options: BoardCallerSources & {
-    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get'>;
+    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get' | 'flag' | 'clearFlag' | 'records' | 'announce'>;
     flowEdges: Pick<FlowEdgeHost, 'handOffExplicitly'>;
     logActivity: ActivityLogger;
     /** Throws unless the agent may name `to` in a hand-off with no edge to it (`OrchestratorHost.checkHandoffTarget`). */
     checkHandoffTarget(from: string, to: string): void;
+    /** Asks gh for the agent's pull requests now: one it just recorded may be on a branch gh wasn't asked about. */
+    refreshPullRequests?(sessionId: string): Promise<void>;
   },
 ): RpcHandlers<BoardMethods, Context> {
   const { agents } = options;
   const caller = (params: Record<string, unknown>, connection: Context): BoardCaller =>
     boardCaller(options, stringParam(params, 'token'), connection);
+
+  /** A handover it handed off with is one of its hand-off docs: recorded, unless it is no file of its worktree's. */
+  const recordHandover = (sessionId: string, handover: string) => {
+    const me = agents.get(sessionId);
+    if (me === undefined) return;
+    try {
+      const { on, record } = recordFor({ ...me, cwd: me.worktree }, { kind: 'doc', path: checkPayloadPath(handover) }, agents);
+      agents.records.put(on, record);
+      agents.announce(on);
+    } catch {
+      // Its hand-off said why the file couldn't be read.
+    }
+  };
+
+  /** The name of the crew member `via`, whose flag the orchestrator `me` passes on to the user. */
+  const viaName = (me: string, via: string): string => {
+    const crew = agents.get(via);
+    if (crew === undefined || crew.spawnedBy !== me) throw invalidParams(`${via} is not an agent you started: via names the crew member whose flag you pass on`);
+    return crew.name;
+  };
 
   return {
     'board.identify': (params, connection) => caller(paramsObject(params), connection),
@@ -176,6 +200,33 @@ export function boardHandlers<Context extends BoardConnection>(
         p.progress === undefined ? null : (p.progress as number),
         optionalBooleanParam(p, 'done') ?? false,
       );
+    },
+    'board.record': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined) throw invalidParams('only an agent keeps records; this is a shell tile');
+      const { on, record } = recordFor(me, recordParams(p), agents);
+      const recorded = agents.records.put(on, record);
+      agents.announce(on);
+      // A doc for its orchestrator is one of its own too.
+      if (record.kind === 'doc' && on !== me.sessionId) {
+        agents.records.put(me.sessionId, { ...record, from: null });
+        agents.announce(me.sessionId);
+      }
+      if (record.kind === 'pr') void options.refreshPullRequests?.(on).catch(() => {});
+      return recorded;
+    },
+    'board.needsYou': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined || !isOwnLiveSession(me, who.sessionId)) {
+        throw invalidParams("only a live agent flags for a look, from its own session: not a shell, nor an ended agent's shell");
+      }
+      if (optionalBooleanParam(p, 'clear') === true) return agents.clearFlag(me.sessionId);
+      const via = optionalStringParam(p, 'via');
+      return agents.flag(me.sessionId, stringParam(p, 'reason'), via === undefined ? null : viaName(me.sessionId, via));
     },
     'board.handoff': async (params, connection) => {
       const p = paramsObject(params);
@@ -212,6 +263,8 @@ export function boardHandlers<Context extends BoardConnection>(
         throw error;
       }
       for (const outcome of outcomes) logOutcome(outcome);
+      const handover = optionalStringParam(p, 'handoverPath');
+      if (handover !== undefined) recordHandover(who.tileId, handover);
       // Handing off says its work is finished, however each edge took it.
       agents.markFinished(who.tileId);
       return outcomes;

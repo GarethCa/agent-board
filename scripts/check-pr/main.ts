@@ -8,14 +8,16 @@
  * Run `git fetch origin` first so the diff is against the current main. --dry-run prints the plan and runs nothing. Exits non-zero if any step failed.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, createWriteStream } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scrubBoardEnv } from '../../packages/fake-harness/src/board-guard.ts';
+import { flakyTests } from '../e2e-flaky/flaky.ts';
 import { acquireLock } from '../e2e-lock/lock.ts';
 import { reapWorktree } from '../e2e-lock/reap.ts';
 import { keepAwake, readBatteryNote, readSleeps, sleepNote } from '../machine-sleep/sleeps.ts';
-import { selectChecks, type Plan } from './select.ts';
+import { selectChecks } from './select.ts';
+import { leakCheckStep, stepsFor, type Step } from './steps.ts';
 import { filesNamingTickets } from './ticket-ids.ts';
 
 const args = process.argv.slice(2);
@@ -47,13 +49,6 @@ function changedFiles(): { files: string[]; base: string } {
   return { files: [...new Set(files)], base: `${ref} (${base.slice(0, 7)})` };
 }
 
-interface Step {
-  name: string;
-  argv: string[];
-  /** Steps that start only once the build has passed. */
-  needsBuild?: boolean;
-}
-
 /**
  * Each step's wall-clock limit in minutes, as in check-local.sh: about three times a usual run on a loaded machine, and
  * more for the unit tests, which may run on one worker per project. Past it, scripts/deadline kills the step and
@@ -64,42 +59,6 @@ const limitOf = (step: Step): number => LIMIT_MIN[step.name] ?? 10;
 /** scripts/deadline's exit status, and the start of the line it prints, for a step that ran past its limit. */
 const TIMED_OUT = 124;
 const DEADLINE_MARK = 'deadline: stage';
-
-/** The release's leak check on this branch (no pnpm install, no gate): a bare ticket ID in a changed file would stop the next release. */
-const leakCheckStep: Step = { name: 'release-leaks', argv: ['pnpm', 'release:public', '0.0.0', '--dry-run', '--skip-verify', '--ref', 'HEAD'] };
-
-function stepsFor(plan: Plan): Step[] {
-  const linux = process.platform === 'linux' && !process.env.DISPLAY;
-  const headless = linux ? ['sh', 'scripts/e2e-headless.sh'] : [];
-  const steps: Step[] = [
-    { name: 'lint', argv: ['pnpm', 'lint'] },
-    { name: 'typecheck', argv: ['pnpm', 'typecheck'] },
-    { name: 'markdownlint', argv: ['pnpm', 'dlx', 'markdownlint-cli2@0.23.2'] },
-  ];
-  if (leakCheck) steps.push(leakCheckStep);
-  const related = plan.unit.filter((file) => existsSync(join(root, file)));
-  if (related.length > 0) {
-    steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...related] });
-  }
-  if (plan.e2e.length > 0 || plan.visual) steps.unshift({ name: 'build', argv: ['pnpm', 'build'] });
-  if (plan.e2e.length > 0) {
-    const specs = plan.e2e.map((spec) => `e2e/${spec}`);
-    steps.push({
-      name: 'e2e',
-      needsBuild: true,
-      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'exec', 'playwright', 'test', '--project=app', ...specs],
-    });
-  }
-  if (plan.visual) {
-    steps.push({
-      name: 'visual',
-      needsBuild: true,
-      // Its own output dir, beside the e2e one: Playwright empties its output dir at the start of a run.
-      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'test:visual', '--output', 'test-results-visual'],
-    });
-  }
-  return steps;
-}
 
 /** Signals a step and everything it started: each step leads its own process group, and its deadline passes the signal on to the command's. */
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -131,12 +90,27 @@ process.once('SIGINT', () => void stop('SIGINT'));
 process.once('SIGTERM', () => void stop('SIGTERM'));
 process.once('SIGHUP', () => void stop('SIGHUP'));
 
+const reportOf = (step: Step, logDir: string): string => join(logDir, `${step.name}.json`);
+
+/** The flaky tests of a Playwright step's run, none if it wrote no report. */
+function flakyOf(step: Step, logDir: string): string[] {
+  if (!step.playwright) return [];
+  try {
+    return flakyTests(JSON.parse(readFileSync(reportOf(step, logDir), 'utf8')));
+  } catch {
+    return [];
+  }
+}
+
 function run(step: Step, logDir: string): Promise<{ name: string; outcome: string; seconds: number }> {
   const started = Date.now();
   const log = createWriteStream(join(logDir, `${step.name}.log`));
   return new Promise((resolve) => {
     const argv = [join(root, 'scripts', 'deadline', 'main.ts'), step.name, String(limitOf(step)), '--', ...step.argv];
-    const child = spawn(process.execPath, argv, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    // A report left in a reused log dir by an earlier run would name its flaky tests as this run's.
+    if (step.playwright) rmSync(reportOf(step, logDir), { force: true });
+    const env = step.playwright ? { ...process.env, PLAYWRIGHT_JSON_OUTPUT_FILE: reportOf(step, logDir) } : process.env;
+    const child = spawn(process.execPath, argv, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     running.add(child);
     child.stdout.pipe(log, { end: false });
     child.stderr.pipe(log, { end: false });
@@ -171,7 +145,7 @@ if (plan.full) {
   fullGate = full;
   full.on('close', (code) => process.exit(code || leaks !== 'pass' ? 1 : 0));
 } else {
-  const steps = stepsFor(plan);
+  const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY });
   console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
   if (dryRun) process.exit(0);
   const logDir = process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.'));
@@ -214,15 +188,19 @@ if (plan.full) {
   }
   let failed = false;
   const rows: string[] = [];
+  const flaky: string[] = [];
   for (const step of steps) {
     const r = results.get(step.name);
     if (!r) { rows.push(`| \`${step.name}\` | not run: the build failed | |`); failed = true; continue; }
     if (r.outcome !== 'pass') failed = true;
-    rows.push(`| \`${step.name}\` | ${r.outcome} | ${r.seconds}s |`);
+    const names = flakyOf(step, logDir);
+    flaky.push(...names);
+    rows.push(`| \`${step.name}\` | ${r.outcome}${names.length > 0 ? `, ${names.length} flaky` : ''} | ${r.seconds}s |`);
   }
   const dirty = git('status', '--porcelain').length > 0;
   console.log(`\nPer-PR checks on \`${git('rev-parse', '--short', 'HEAD')}\`${dirty ? ' (with uncommitted changes)' : ''}, ${Math.round((Date.now() - started) / 1000)}s wall:\n`);
   console.log(['| Step | Result | Time |', '| --- | --- | --- |', ...rows].join('\n'));
+  if (flaky.length > 0) console.log(`\nFlaky, passed on a retry (fix them; they don't fail the gate):\n\n${flaky.map((name) => `- ${name}`).join('\n')}`);
   console.log('\nThis is the subset for this change, not the full gate; the master runs `pnpm check:local` on main after merge.');
   const slept = sleepNote(await readSleeps(new Date(started)), new Date(started), new Date());
   if (slept !== undefined) console.log(`\n${slept}`);

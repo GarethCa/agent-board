@@ -1,7 +1,8 @@
 // The layout commands as the CLI and MCP give them (`move`, `arrange`, `zone`, `note`): refs and words turned into the
 // daemon's `orchestrator.*` layout methods, and their results as text and JSON (ADR-0010's one API, two faces).
-import { BoardError, BoardRefs, inZone, itemLine, readBoard, zoneLine, type BoardSession, type BoardView } from './board-ops.ts';
-import { ARRANGE_BYS, ARRANGE_LAYOUTS, NOTE_KINDS, TILE_SIDES, type BoardCaller, type BoardItem, type LayoutPlace, type LayoutTarget, type TileSide } from './protocol.ts';
+import { BoardError, BoardRefs, inZone, itemLine, readBoard, REF_KINDS, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import { ARRANGE_BYS, ARRANGE_LAYOUTS, NOTE_KINDS, TILE_SIDES, type BoardCaller, type BoardItem, type LayoutPlace, type LayoutTarget, type TileSide, type ZoneMap } from './protocol.ts';
+import { boxPicture, laneTable } from './zone-map.ts';
 
 /** A point as typed: `x,y`. Throws `BoardError` for anything else. */
 export function pointOf(text: string, what: string): { x: number; y: number } {
@@ -82,14 +83,36 @@ export async function moveTile(session: BoardSession, ref: string, options: Plac
 export interface ArrangeOptions {
   by?: string;
   layout?: string;
+  /** `on` or `off`. */
+  auto?: string;
 }
 
 /** Checks `arrange`'s options before anything connects. */
 export function checkArrange(options: ArrangeOptions): void {
   if (options.by !== undefined && !(ARRANGE_BYS as readonly string[]).includes(options.by)) throw new BoardError(`--by must be ${ARRANGE_BYS.join(', ')}`);
   if (options.layout !== undefined && !(ARRANGE_LAYOUTS as readonly string[]).includes(options.layout)) {
-    throw new BoardError(`--layout must be ${ARRANGE_LAYOUTS.join(' or ')}`);
+    throw new BoardError(`--layout must be ${ARRANGE_LAYOUTS.join(', ')}`);
   }
+  if (options.auto !== undefined && options.auto !== 'on' && options.auto !== 'off') throw new BoardError('--auto must be on or off');
+}
+
+/** The ref of a map's thing, by its key (`agent:<id>`, `item:<id>`); one of no ref kind as it is. */
+function mapRef(refs: BoardRefs, key: string): string {
+  const colon = key.indexOf(':');
+  const kind = key.slice(0, colon);
+  return (REF_KINDS as readonly string[]).includes(kind) ? refs.of(kind as RefKind, key.slice(colon + 1)) : key;
+}
+
+/** A zone's map as text: its lane table, or its box picture. */
+function mapText(refs: BoardRefs, map: ZoneMap, boxes: boolean): string {
+  return (boxes ? boxPicture : laneTable)(map, refs.of('zone', map.zoneId), (key) => mapRef(refs, key));
+}
+
+/** `zone map`: a zone (the caller's by default) as its lanes and what is amiss, or with `boxes` as a box picture. */
+export async function zoneMap(session: BoardSession, zone: string | undefined, options: { boxes?: boolean }): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const map = await session.client.call('orchestrator.map', { token: session.token, ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }) });
+  return { text: mapText(refs, map, options.boxes === true), json: map };
 }
 
 /** `arrange`: lays out the tiles of a zone (the caller's by default) it may move. */
@@ -101,15 +124,22 @@ export async function arrangeZone(session: BoardSession, zone: string | undefine
     ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
     ...(options.by === undefined ? {} : { by: options.by as (typeof ARRANGE_BYS)[number] }),
     ...(options.layout === undefined ? {} : { layout: options.layout as (typeof ARRANGE_LAYOUTS)[number] }),
+    ...(options.auto === undefined ? {} : { auto: options.auto === 'on' }),
   });
   const name = refs.board.zones.find((each) => each.id === result.zoneId)?.name ?? '';
   const moved = result.moved.map((each) => `  ${label(refs, each.target)} ${where(each.x, each.y)}`);
+  // Then the zone's map, so the layout can be checked at once: read afresh, with the labels and notes it made.
+  const map = await session.client.call('orchestrator.map', { token: session.token, zoneId: result.zoneId });
+  const after = new BoardRefs(await readBoard(session.client));
   return {
-    text:
+    text: [
       result.moved.length === 0
         ? `${refs.of('zone', result.zoneId)} ${name} was arranged already: nothing moved.`
         : [`Arranged ${refs.of('zone', result.zoneId)} ${name} (${Math.round(result.width)}×${Math.round(result.height)}):`, ...moved].join('\n'),
-    json: result,
+      '',
+      mapText(after, map, false),
+    ].join('\n'),
+    json: { ...result, map },
   };
 }
 

@@ -20,6 +20,8 @@ const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [st
   link: ['link card', 'link cards'],
   issue: ['issue card', 'issue cards'],
   'agent-note': ['agent note', 'agent notes'],
+  document: ['document', 'documents'],
+  clock: ['clock', 'clocks'],
   zone: ['zone', 'zones'],
   agent: ['agent', 'agents'],
   shell: ['shell', 'shells'],

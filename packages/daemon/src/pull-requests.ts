@@ -1,4 +1,4 @@
-import type { PullRequest } from '@agent-board/tracker';
+import type { PullRequest, PullRequestRef } from '@agent-board/tracker';
 
 /** What the watcher needs to know of an agent. */
 export interface WatchedAgent {
@@ -9,12 +9,18 @@ export interface WatchedAgent {
   repo?: string;
   /** Its session has ended. */
   ended: boolean;
+  /** The pull requests it recorded on its sidebar (and the user hasn't deleted), on any branch, with when each was recorded. */
+  recorded?: (PullRequestRef & { recordedAt: string })[];
 }
 
-/** An agent's pull requests: its own branch's, and, for its tile alone, those of the branches it pushed to. */
+/**
+ * An agent's pull requests: its own branch's, and, for its tile alone, those of the branches it pushed to;
+ * and, for its sidebar, those it recorded that are neither.
+ */
 export interface AgentPullRequests {
   own: PullRequest[];
   pushed: PullRequest[];
+  recorded?: PullRequest[];
 }
 
 export interface PullRequestWatcherOptions {
@@ -41,6 +47,8 @@ export interface PullRequestWatcher {
   get(sessionId: string): PullRequest[];
   /** The pull requests of the branches it pushed to, as last seen: for its tile alone. Empty until first seen. */
   pushed(sessionId: string): PullRequest[];
+  /** The pull requests it recorded that are neither its own nor pushed ones, as last seen: for its sidebar. */
+  recorded(sessionId: string): PullRequest[];
   /** Whether the agent's pull requests have been read since the watcher started, so `get`'s empty means none. */
   read(sessionId: string): boolean;
   /** Asks for the agent's pull requests now, as when its turn has ended and it may just have opened one. */
@@ -92,7 +100,8 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
       }
       return;
     }
-    if (agent.ended && [...pullRequests.own, ...pullRequests.pushed].every((pr) => pr.state === 'merged' || pr.state === 'closed')) {
+    const all = [...pullRequests.own, ...pullRequests.pushed, ...(pullRequests.recorded ?? [])];
+    if (agent.ended && all.every((pr) => pr.state === 'merged' || pr.state === 'closed')) {
       settled.add(agent.sessionId);
     }
     const json = JSON.stringify(pullRequests);
@@ -133,6 +142,7 @@ export function watchPullRequests(options: PullRequestWatcherOptions): PullReque
   return {
     get: (sessionId) => seen.get(sessionId)?.pullRequests.own ?? [],
     pushed: (sessionId) => seen.get(sessionId)?.pullRequests.pushed ?? [],
+    recorded: (sessionId) => seen.get(sessionId)?.pullRequests.recorded ?? [],
     read: (sessionId) => read.has(sessionId),
     start,
     async refresh(sessionId) {

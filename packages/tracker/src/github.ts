@@ -1,4 +1,5 @@
 import { GhError, runGh, type GhOptions } from './gh.ts';
+import { listOf, objectOf, parseJson, stringOf } from './shape.ts';
 import { shortIssueId } from './providers.ts';
 import { issueBranchName, TrackerError, type Tracker, type TrackerIssue, type TrackerScope } from './tracker.ts';
 
@@ -14,7 +15,7 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 /** An issue's ID: `owner/repo#34`, GitHub's own way to name an issue in any repo. */
 const ISSUE_ID = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
 /** What gh says when there is no such repo, issue or pull request. */
-const NOT_FOUND = /Could not resolve to (a Repository|an issue or pull request)/;
+const NOT_FOUND = /Could not resolve to (a Repository|a PullRequest|an issue or pull request)/;
 
 interface GhIssue {
   number: number;
@@ -37,7 +38,7 @@ interface GhPullRequest {
  */
 export function createGitHubTracker(options: GitHubTrackerOptions = {}): Tracker {
   const gh = async <T>(args: string[], input?: string): Promise<T> =>
-    JSON.parse(await runGh(args, { ...options, input })) as T;
+    parseJson(await runGh(args, { ...options, input }), 'GitHub') as T;
   const limit = (wanted = DEFAULT_LIMIT) => String(Math.max(1, Math.min(wanted, MAX_LIMIT)));
   /** A repo's issues: open ones most recently updated first, or all of them matching `search`, best match first. */
   const issueList = async (scope: string, state: 'open' | 'all', search: string, wanted?: number) => {
@@ -100,11 +101,14 @@ export function createGitHubTracker(options: GitHubTrackerOptions = {}): Tracker
     async issueLabels(id) {
       const ref = parseIssueId(id);
       if (ref === undefined) return undefined;
-      const issue = await gh<{ labels: { name: string }[] }>(['issue', 'view', ref.number, '--repo', ref.repo, '--json', 'labels']).then(
+      const issue = await gh<{ labels: unknown }>(['issue', 'view', ref.number, '--repo', ref.repo, '--json', 'labels']).then(
         (found) => found,
-        unlessMissing<{ labels: { name: string }[] }>,
+        unlessMissing<{ labels: unknown }>,
       );
-      return issue?.labels.map((label) => label.name);
+      if (issue === undefined) return undefined;
+      return listOf(objectOf(issue, 'the issue', 'GitHub').labels, 'labels', 'GitHub').map((label) =>
+        stringOf(objectOf(label, 'a label', 'GitHub'), 'name', 'a label name', 'GitHub'),
+      );
     },
     async getPullRequest(id) {
       const ref = parseIssueId(id);
@@ -114,6 +118,8 @@ export function createGitHubTracker(options: GitHubTrackerOptions = {}): Tracker
         unlessMissing<GhPullRequest>,
       );
       if (pr === undefined) return undefined;
+      const fields = objectOf(pr, 'the pull request', 'GitHub');
+      for (const key of ['title', 'url', 'state']) stringOf(fields, key, `the pull request ${key}`, 'GitHub');
       const state = pr.state === 'OPEN' ? (pr.isDraft ? 'Draft' : 'Open') : pr.state.charAt(0) + pr.state.slice(1).toLowerCase();
       return { title: pr.title, url: pr.url, state };
     },

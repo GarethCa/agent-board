@@ -4,8 +4,9 @@ import type { ConnectorSide, EdgePoint, FlowEdgeShape, FlowEdgeTrigger, UpdateFl
 import { FileText, Send, Zap, type LucideIcon } from 'lucide-react';
 import { tokenNumber } from '../theme';
 import { BarRow } from './items/ItemStyleBar';
-import { LineStyleButtons } from './connectors/LineStyleButtons';
-import { useLine } from './connectors/line';
+import { LineStyleButtons, RouteButton } from './connectors/LineStyleButtons';
+import { lineShape, type LineEnds, type RoutePoint } from './connectors/geometry';
+import { SIDES, useLine, useRoute } from './connectors/line';
 import { edgeLabel, edgeTitle, type FlowRailData } from './flow-edges';
 import { isLinkedPair, type Rail, type RailToken, type TokenSlot } from './rails';
 import { tileSubject } from './tiles';
@@ -60,16 +61,32 @@ const pressed = (act: () => void) => ({
  */
 const BRIEF_MARK: { icon: LucideIcon; name: string; trigger: FlowEdgeTrigger } = { icon: Zap, name: 'Briefs the agent when it starts', trigger: 'auto' };
 
+/** The issue-card line between `ends`: `plain`, the curve React Flow draws with its middle `middle`, or a curve through the corners of `route`. The pill sits on the middle of the line drawn. */
+export function briefLine(ends: LineEnds, plain: string, middle: EdgePoint, route?: readonly RoutePoint[]): { path: string; pill: EdgePoint } {
+  if (route === undefined) return { path: plain, pill: middle };
+  const shape = lineShape('curved', ends, route.slice(1, -1), undefined, true);
+  return { path: shape.path, pill: shape.label };
+}
+
 export const BriefEdge = memo(function BriefEdge(props: EdgeProps) {
-  const [path, x, y] = getBezierPath(props);
+  const [plain, x, y] = getBezierPath(props);
+  const ends: LineEnds = {
+    source: { x: props.sourceX, y: props.sourceY },
+    sourceSide: SIDES[props.sourcePosition],
+    target: { x: props.targetX, y: props.targetY },
+    targetSide: SIDES[props.targetPosition],
+  };
+  // Round the objects between the issue card and the agent, as a curved arrow goes (`useRoute`).
+  const route = useRoute(true, ends, plain, props.source, props.target);
+  const { path, pill } = briefLine(ends, plain, { x, y }, route);
   const width = tokenNumber('--size-flow-label');
   const height = tokenNumber('--size-flow-label-height');
   const Icon = BRIEF_MARK.icon;
   return (
     <>
-      <BaseEdge id={props.id} path={path} className="flow-edge" markerEnd="url(#flow-arrow)" />
+      <BaseEdge id={props.id} path={path} className="flow-edge" markerEnd="url(#flow-arrow)" data-routed={route !== undefined || undefined} />
       <g className="flow-edge-label" data-testid="brief-edge" data-trigger={BRIEF_MARK.trigger}>
-        <g className="flow-edge-pill-group" transform={`translate(${x - width / 2} ${y - height / 2})`}>
+        <g className="flow-edge-pill-group" transform={`translate(${pill.x - width / 2} ${pill.y - height / 2})`}>
           <rect className="flow-edge-pill" width={width} height={height} rx={height / 2} />
           <g className="flow-edge-trigger" role="img" aria-label={BRIEF_MARK.name}>
             <circle className="flow-edge-trigger-dot" cx={height / 2} cy={height / 2} r={height / 2 - 2} />
@@ -111,7 +128,7 @@ export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentF
   const shaped = rail.edges[0]!;
   const selected = props.selected === true;
   const pair = isLinkedPair(rail);
-  const { shape, ends, handles } = useLine(props, shaped.style, shaped, (geometry) => actions.update(shaped.id, geometry), undefined, {
+  const { shape, ends, handles, routed } = useLine(props, shaped.style, shaped, (geometry) => actions.update(shaped.id, geometry), undefined, {
     // Either end goes onto another agent's tile, where every edge on it can go: it hands off there instead.
     canEndOn: (nodeId, which) => {
       const agent = agentOf(nodeId);
@@ -142,6 +159,7 @@ export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentF
         markerEnd={pair ? undefined : 'url(#rail-arrow)'}
         data-testid="flow-edge"
         data-pair={pair || undefined}
+        data-routed={routed || undefined}
       />
       <circle className="flow-rail-cap" cx={ends.source.x} cy={ends.source.y} r={capRadius} />
       {pair && <circle className="flow-rail-cap" cx={ends.target.x} cy={ends.target.y} r={capRadius} />}
@@ -165,6 +183,7 @@ export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentF
             <div role="toolbar" aria-label="Edge style" className="item-bar-rows">
               <BarRow>
                 <LineStyleButtons current={shaped.style} onPick={(style) => actions.update(shaped.id, { style })} />
+                <RouteButton style={shaped.style} bent={shaped.points.length > 0} onRoute={() => actions.update(shaped.id, { points: [] })} />
               </BarRow>
             </div>
           </div>

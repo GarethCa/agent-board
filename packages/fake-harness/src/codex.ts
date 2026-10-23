@@ -95,6 +95,7 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
       permissionModeEvents: PERMISSION_MODE_EVENTS,
       subagentToolName: 'spawn_agent',
       shellToolName: 'Bash',
+      backgroundFlag: false,
       mcpServers: codexMcpServers(overrides, env),
       shellEnv: shellEnvironment(env, overrides),
       sessionEndReason: 'other',

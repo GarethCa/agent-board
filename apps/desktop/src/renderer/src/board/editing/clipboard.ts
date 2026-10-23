@@ -1,7 +1,8 @@
 // Copying board items: what goes on the clipboard, and the copies a paste or a duplicate makes from it.
 
-import { BOARD_ITEM_KINDS, type BoardItem, type BoardItemKind, type Connector } from '@agent-board/daemon/protocol';
+import { BOARD_ITEM_KINDS, DEFAULT_CONNECTOR_LOOK, type BoardItem, type BoardItemKind, type Connector } from '@agent-board/daemon/protocol';
 import { boundsOf } from './snap';
+import { createParamsOf } from '../connectors/endpoints';
 
 /** The clipboard type board items are copied under, beside plain text for other apps. */
 export const BOARD_CLIPBOARD_TYPE = 'application/x-agent-board+json';
@@ -24,7 +25,7 @@ export function copied(items: readonly { item: BoardItem; at: { x: number; y: nu
     items: items.map(({ item: { id, kind, width, height, rotation, data }, at }) => ({ id, kind, x: at.x, y: at.y, width, height, rotation, data })),
     connectors: connectors
       .filter((connector) => joinsCopied(connector.from) && joinsCopied(connector.to))
-      .map(({ id, from, to, style, startEnd, endEnd, color, label, points }) => ({ id, from, to, style, startEnd, endEnd, color, label, points })),
+      .map(createParamsOf),
   };
 }
 
@@ -83,8 +84,8 @@ export function parseCopied(text: string): Copied | undefined {
     items: items.map((item) => ({ ...item, rotation: item.rotation ?? 0 })),
     connectors: (connectors as CopiedConnector[])
       .filter((connector) => typeof connector === 'object' && connector !== null && joins(connector.from) && joins(connector.to))
-      // One copied before lines bent has none.
-      .map((connector) => ({ ...connector, points: Array.isArray(connector.points) ? connector.points.filter((point) => isNumber(point?.x) && isNumber(point.y)) : [] })),
+      // One copied before lines bent has none; one copied before dashes and end labels, the default look's.
+      .map((connector) => ({ ...DEFAULT_CONNECTOR_LOOK, ...connector, points: Array.isArray(connector.points) ? connector.points.filter((point) => isNumber(point?.x) && isNumber(point.y)) : [] })),
   };
 }
 

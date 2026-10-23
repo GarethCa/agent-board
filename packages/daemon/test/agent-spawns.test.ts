@@ -27,11 +27,14 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
   };
   const spawns = createAgentSpawns({
     db,
+    records: { put: unused },
     sessions: {
       start(spec) {
         started.push(spec);
         return { id: spec.id } as SessionInfo;
       },
+      kill: unused,
+      forget: unused,
     },
     worktreesDir: '/worktrees',
     scratchDir: '/scratch',

@@ -22,3 +22,8 @@ function parseTokenNumber(name: string, value: string): number {
   if (match === null) throw new Error(`theme token ${name} is ${JSON.stringify(value)}, not a length in px or a duration`);
   return Number(match[1]) * UNITS[match[2] ?? '']!;
 }
+
+/** A motion duration in ms (from `tokenNumber`) for a library animation CSS can't reach: none with reduced motion. */
+export function motionDuration(duration: number, reducedMotion: boolean = matchMedia('(prefers-reduced-motion: reduce)').matches): number {
+  return reducedMotion ? 0 : duration;
+}

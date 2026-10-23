@@ -2,8 +2,9 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
 import type { AppNotification } from '../src/main/notifications.ts';
-import { launch, screen, spawnAgent, tile, tileAction } from './agent-helpers.ts';
+import { launch, listFinishedTurns, screen, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone } from './launch.ts';
+import type { FakeScenario } from '@agent-board/fake-harness';
 import { scratch } from './scratch.ts';
 
 /** The notifications the app raised so far, from its fake notifier (`AGENT_BOARD_FAKE_NOTIFICATIONS`). */
@@ -41,12 +42,16 @@ async function answer(page: Page, text: string): Promise<void> {
   await item.getByRole('button', { name: 'Send' }).click();
 }
 
-/** Runs `body` with the app open on a fresh repo zone whose agents run the fake claude's waiting scenario. */
-async function withApp(body: (page: Page, app: ElectronApplication, dataDir: string) => Promise<void>): Promise<void> {
-  const setup = scratch('waiting');
+/**
+ * Runs `body` with the app open on a fresh repo zone whose agents run the fake claude's waiting scenario, Needs you
+ * listing every finished turn, so a waiting agent notifies; or with `scenario`, as by default: explicit requests only.
+ */
+async function withApp(body: (page: Page, app: ElectronApplication, dataDir: string) => Promise<void>, scenario?: FakeScenario): Promise<void> {
+  const setup = scratch(scenario ?? 'waiting');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, setup.env);
   try {
+    if (scenario === undefined) await listFinishedTurns(page);
     await pickFolderNext(app, setup.repo);
     await browseForZone(page);
     await body(page, app, dataDir);
@@ -57,7 +62,22 @@ async function withApp(body: (page: Page, app: ElectronApplication, dataDir: str
   }
 }
 
-test('notifies once when an agent starts waiting and when it is done, with the inbox size on the badge; clicking opens the agent', async () => {
+test('by default notifies once per explicit request, with its reason, and never of a turn ending; clicking opens the agent', async () => {
+  await withApp(async (page, app) => {
+    const done = await spawn(page, 'Write the handover');
+    await expect(agentTile(page, done)).toHaveAttribute('data-state', /idle|waiting/);
+    const flagged = await spawn(page, 'Flag: PR #12 is ready for review.');
+    await expect.poll(() => notifications(app)).toEqual([{ sessionId: flagged.sessionId, title: `${flagged.name} needs you`, body: 'PR #12 is ready for review.' }]);
+    await expect.poll(() => badge(app)).toBe(1);
+
+    await clickNotification(app, 0);
+    await expect(page.getByTestId('session-window')).toHaveAttribute('data-session-id', flagged.sessionId);
+    await expect.poll(() => badge(app)).toBe(0);
+    expect(await notifications(app)).toHaveLength(1);
+  }, 'orchestrate');
+});
+
+test('with finished turns listed, notifies once when an agent starts waiting, with the inbox size on the badge; clicking opens the agent', async () => {
   await withApp(async (page, app) => {
     expect(await badge(app)).toBe(0);
     const agent = await spawn(page, 'Pick a database');
@@ -77,11 +97,10 @@ test('notifies once when an agent starts waiting and when it is done, with the i
     await expect.poll(async () => (await notifications(app)).length).toBe(2);
     expect((await notifications(app))[1]).toMatchObject({ title: 'Pick a database is waiting for you', body: 'Going with SQLite.' });
 
-    // EOF at its prompt ends it, as Ctrl-D does.
+    // EOF at its prompt ends it, as Ctrl-D does: an end is no request, so it notifies of nothing.
     await page.evaluate((sessionId) => window.agentBoard.sessions.write(sessionId, '\x04'), agent.sessionId);
-    await expect.poll(async () => (await notifications(app)).at(-1)?.title).toBe('Pick a database is done');
     await expect.poll(() => badge(app)).toBe(0);
-    expect(await notifications(app)).toHaveLength(3);
+    expect(await notifications(app)).toHaveLength(2);
   });
 });
 

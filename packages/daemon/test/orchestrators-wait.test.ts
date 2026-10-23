@@ -27,11 +27,14 @@ function host(agents = new Map<string, Agent>()) {
       plan: null,
       orchestrate: null,
       spawnedBy: null,
+      flag: null,
+      unsent: null,
       lastMessage: null,
       workFinishedAt: null,
       pullRequests: [],
       exitCode: null,
       status: null,
+      hibernated: null,
       ...fields,
     } as Agent);
   if (agents.size === 0) {
@@ -52,11 +55,17 @@ function host(agents = new Map<string, Agent>()) {
       interrupt: () => {
         throw new Error('not here');
       },
+      continueOnCredits: () => Promise.reject(new Error('not here')),
       resume: () => Promise.reject(new Error('not here')),
       stop: () => Promise.reject(new Error('not here')),
+      pause: () => Promise.reject(new Error('not here')),
       finalMessage: () => undefined,
       orchestrateFacts: () => ({ off: false, depth: 0 }),
       idlePrompted: (id) => idlePrompted.has(id),
+      clearFlag: (id) => agents.get(id)!,
+      setStatus: () => {
+        throw new Error('not here');
+      },
     },
     zones: () => [],
     flowEdges: {
@@ -172,7 +181,7 @@ describe('crew events', () => {
     expect(answered).toBe(false);
 
     update('running');
-    update('running', { workFinishedAt: '2026-10-16T10:00:00.000Z', status: { summary: 'PR open', progress: null, updatedAt: '' } });
+    update('running', { workFinishedAt: '2026-10-16T10:00:00.000Z', status: { summary: 'PR open', progress: null, updatedAt: '', setBy: null } });
     update('idle');
     update('waiting', {}, 'worker', true);
     expect((await heard(start)).lines).toEqual(['worker turn-ended', 'worker turn-ended', 'worker finished PR open']);
@@ -203,6 +212,16 @@ describe('crew events', () => {
       'worker pr-opened #7 https://github.com/o/r/pull/7',
       'worker ended exited 0',
     ]);
+  });
+
+  it('hears a message typed at its prompt that started no turn, once, until it is sent and lost again', async () => {
+    const { update, heard } = host();
+    const { cursor: start } = await heard('now');
+    update('idle', { unsent: 'Hand-off from impl' });
+    update('idle', { unsent: 'Hand-off from impl', name: 'worker' });
+    update('idle', { unsent: null });
+    update('idle', { unsent: 'A scheduled run' });
+    expect((await heard(start)).lines).toEqual(['worker not-sent Hand-off from impl', 'worker not-sent A scheduled run']);
   });
 
   it('answers as soon as one comes, with a cursor to hear only what came next', async () => {

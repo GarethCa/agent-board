@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.6.0 (2026-10-23)
+
+- A sturdier, faster release: retries for flaky e2e and visual tests, and reuse of a green main run
+- Visual shots that show agent notes take the zone-tinted tab, and the expanded-crew shot waits for its zone
+- The expanded-crew baseline shows the zone at its grown size
+- An agent note's tab is a tint of its zone's colour, neutral when loose
+- The on-command robot shows on an expanded tile too, from one shared component
+- Release blockers: shape stroke tokens are allowed, agent-state baselines regenerated, changelog escapes \<
+- Class and Interface shapes have name, attributes and methods sections, typed in one by one and grown to fit
+- The zones pill brings its current zone back only when the window is resized, so it no longer snaps back while browsed
+- Connectors take a class diagram's ends, a dash, a label at each end, and a Relation picker
+- A built-in board master: ⌘⇧M panel and pinned tile that routes work to zone orchestrators
+- README screenshots and feature list show the week's work
+- Agent notes grow to show all their text, and arrange spaces lanes for them
+- A zone grown round its crew's old places shrinks back to its saved size, and the arranged-crew shot fits once the crew holds still
+- Continue on credits for a rate-limited agent: tile menu, pill button, agent-board continue and MCP continue_on_credits
+- Pause an idle agent (hibernate) and wake it by Wake, a message or a hand-off
+- Agent-note tethers and issue-card lines route round other tiles, like arrows
+- The Ask Claude spec measures the shapes as drawn, grown to fit their text
+- Agents show Markdown and HTML documents as a Doc tab and a board card; the user's edits write the file and tell the agent
+- OSC 8 hyperlinks in the terminal open as other links do
+- Drop three exports nothing else uses, so knip passes on main
+- Schedules are clocks on the board that message an agent or start a fresh one
+- Arrows and edge-rules baselines show routed lines and the new style bar
+- The orchestrator ADR keeps \<branch> in code, so markdownlint passes
+- Test branch names are neutral, so the public release check passes
+- Arrange lays a zone out in lanes, prints a zone map, and can arrange by itself
+- Expanding a loose tile pushes its neighbours as blocks, as in a zone
+- A shape grows to fit its text, with align, font size and mono
+- Agents write their own sidebar: PR, crew and hand-off doc records, guesses as the fallback
+- Elbow and curved edges route round the tiles between their ends
+- An orchestrator in a dirty or off-branch main checkout warns in New agent and on its tile
+- Tiles show when an agent waits on a background command, instead of looking idle
+- The chat-view e2e takes the tile back expanded when its session window closes
+- A board change with nothing left still sets the nodes, so a Shift-click on a zone's body deselects it again
+- The Tidy-with-an-expanded-tile e2e fits the view before it measures the tiles
+- Restore the review chip on an implementer's tile, lost to a duplicated folded chip
+- e2e waits for a start to finish only where it reads the agent, so the starting-tile and trackers specs pass
+- A View popover in the zoom bar, a third crew look (Off) and ⇧C to cycle it
+- Drop the unused isQuestionNode export, so knip passes on main
+- A queued answer never types into a dialog, and a mid-turn Enter is confirmed at the turn's end
+- Terminal / Chat switch in the pane strip, in the expanded tile and the session window
+- The web tab's dev-server dot uses a font-size token, so the tokens test passes on main
+- Agents can put a question on the board as a card beside their tile
+- A new web tab opens blank with its address bar focused, listing local dev servers
+- A new agent's tile is on the board at once, showing its start's steps
+- Expanding a tile pushes what is right of it right and the rows below it down
+- Needs you lists what agents explicitly flag, and crew flags go to their orchestrator
+- ⌘-click links in the terminal view: web tab, ⌘⇧-click the browser, wrapped URLs
+- New agent in a group has a Repo field; Orchestrator is a role with a Checkout row
+- Tiles say what the agent does, not its last message; orchestrators set their crew's status
+- Double-click on a tile's name opens it; a slow click on a selected tile's name renames
+- Hand-offs confirm their turn started, press Enter again, and show one never sent
+- Zones pill and dock share the bottom bar and both scroll
+- Agent notes are a dashed card under a NOTE tab
+- A click through a maximised window only minimises it; closing it restores an expanded tile
+- Retry a failed worktree removal and stop the agent's whole process group
+- Board pan keeps its momentum over terminals and other scrollable surfaces
+- Friendly errors for partial Linear and GitHub answers, and the Linear Add zone screenshot back
+- Reveal a session's folder in Finder instead of opening it
+
 ## v0.5.3 (2026-10-19)
 
 - Switch to FSL-1.1-ALv2 and add a contributor licence agreement

@@ -303,6 +303,16 @@
   color: var(--muted);
 }
 
+.ui-hint-warning {
+  color: var(--warning-ink);
+}
+
+.ui-hint-warning svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+}
+
 .ui-error {
   color: var(--danger);
 }
@@ -978,6 +988,36 @@
   color: var(--on-inverse-soft);
 }
 
+/* Text under a small caps label, in a raised card below the object it is about (`HoverCard`). */
+.ui-hover-card {
+  z-index: var(--layer-tooltip);
+  display: grid;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: var(--size-hover-card);
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  color: var(--text-soft);
+  box-shadow: var(--shadow-tooltip);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  pointer-events: none;
+  animation: ui-fade var(--motion-fast) var(--ease-out);
+}
+
+.ui-hover-card-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+}
+
 /* Top centre, between the board's controls and the inbox: clear of the dock and of the zones' resize handles below. */
 .ui-toasts {
   position: fixed;
@@ -1196,9 +1236,24 @@
   --pill-soft: var(--state-stopped-by-restart-soft);
 }
 
+.ui-pill[data-state='hibernated'] {
+  --pill: var(--state-hibernated-ink);
+  --pill-soft: var(--state-hibernated-soft);
+}
+
 .ui-pill[data-state='handing-off'] {
   --pill: var(--state-handing-off-ink);
   --pill-soft: var(--state-handing-off-soft);
+}
+
+.ui-pill[data-state='on-command'] {
+  --pill: var(--state-on-command-ink);
+  --pill-soft: var(--state-on-command-soft);
+}
+
+.ui-pill[data-state='starting'] {
+  --pill: var(--state-starting-ink);
+  --pill-soft: var(--state-starting-soft);
 }
 
 /* A flow edge's or a hand-off's pill (FlowPill): "new", "sending now", "receiving…". */
@@ -1546,6 +1601,7 @@ button.ui-row:focus-visible {
   .ui-menu,
   .ui-popover,
   .ui-tooltip,
+  .ui-hover-card,
   .ui-toast {
     animation: none;
   }

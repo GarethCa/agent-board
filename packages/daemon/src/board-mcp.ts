@@ -1,15 +1,19 @@
 // The board as an MCP server (ADR-0010): a few tools over the same board-ops the CLI uses, and instructions that say
 // once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
 // here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
+import { addSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
 import {
   addEdge,
   BoardError,
   askUser,
   BoardRefs,
   closeAgent,
+  pauseAgent,
+  wakeAgent,
   defaultRolesView,
   presentPlan,
   readPlanSource,
+  showDoc,
   EDGE_CARRIES,
   edgesView,
   handOff,
@@ -18,6 +22,7 @@ import {
   connectionsView,
   identifyView,
   interruptAgent,
+  continueAgent,
   restartAgent,
   newAgent,
   openBoardSession,
@@ -25,15 +30,20 @@ import {
   readBoard,
   sendToAgent,
   setDefaultRole,
+  setCrewStatus,
   setOwnStatus,
+  flagLine,
+  flagOwn,
   openOwnPullRequest,
+  recordEntry,
   treeView,
   waitForAgents,
   watchCrew,
   type BoardSession,
 } from './board-ops.ts';
 import { DaemonRpcError } from './client.ts';
-import { addNote, arrangeZone, editNote, moveTile, removeNote, type PlaceOptions } from './layout-ops.ts';
+import { documentTitle } from './document-names.ts';
+import { addNote, arrangeZone, editNote, moveTile, removeNote, zoneMap, type PlaceOptions } from './layout-ops.ts';
 import {
   AGENT_ROLES,
   ARRANGE_BYS,
@@ -53,10 +63,12 @@ import {
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
+  CLOCK_RESULTS,
   HARNESSES,
   isCrewSince,
   isWaitState,
   lineSplitter,
+  MAX_FLAG_LENGTH,
   MAX_STATUS_LENGTH,
   RPC_ERROR,
   statusLine,
@@ -74,7 +86,8 @@ const MCP_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 export const BOARD_MCP_INSTRUCTIONS =
   'You are running on agent-board, a desktop app that shows coding agents and shells as tiles in zones on one board, ' +
   'joined by edges that hand work from one agent to the next. Run `agent-board --help` in your shell once to learn the ' +
-  'board and its commands; these tools are the few you need most.';
+  'board and its commands; these tools are the few you need most. A turn ending tells no one: when you are blocked, ' +
+  'your work is ready for review, or you need a decision, call `needs_you` with the reason in a line.';
 
 /** What the server adds to its instructions for an agent that may orchestrate as it starts. */
 export const ORCHESTRATOR_INSTRUCTIONS =
@@ -82,7 +95,11 @@ export const ORCHESTRATOR_INSTRUCTIONS =
   'your zone tidy (move tiles, arrange your crew, notes), with the tools below or the same commands in ' +
   '`agent-board help orchestrate`. A reviewer started from an agent\'s branch is joined to that agent both ways, as ' +
   'manual edges; wire only reviewer ↔ implementer (findings back, next round), never an edge to your own tile, and ' +
-  'keep one of the pair manual, as two auto edges in a loop re-trigger each other.';
+  'keep one of the pair manual, as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
+  'with `set_status` and `agent`: what each agent is doing now, as its work moves on. A crew member\'s `needs_you` comes ' +
+  'to you, typed at your prompt, and so do its `ask` questions and `present_plan` plans (the plan written in its ' +
+  'worktree, for `read`): answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
+  'and `via`. Only its permission prompts reach the user directly.';
 
 /** How long the `wait` tool waits by default, in seconds. */
 const MCP_WAIT_SECONDS = DEFAULT_ORCHESTRATOR_WAIT_MS / 1000;
@@ -141,7 +158,8 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Ask the user a question you can\'t settle yourself, and wait for the answer: it shows in their Needs you inbox, ' +
       'each option a button, and your tile says you ask them. Returns their answer, or that they skipped it or no ' +
       `answer came in time (${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default): then carry on with your best judgement. ` +
-      'One question at a time.',
+      'One question at a time. If an orchestrator started you, the question goes to it instead and nothing waits: end ' +
+      'your turn, and its answer comes as your next message.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -153,6 +171,10 @@ export const BOARD_MCP_TOOLS: Tool[] = [
           description: 'Short answers to pick from, one click each. Without, the user replies in their own words.',
         },
         free_text: { type: 'boolean', description: 'Let the user reply in their own words besides the options.' },
+        on_board: {
+          type: 'boolean',
+          description: 'Also show it as a card beside your tile on the board, for a quick question the user can answer at a glance.',
+        },
         timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait.' },
       },
       required: ['question'],
@@ -166,7 +188,9 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'and they read it in a Plan tab in your window, kept as v1, v2… in your history; they approve it, ask for ' +
       'changes (with comments) or reject it. Give ' +
       'it as Markdown, as HTML (shown sandboxed, offline: no network, no navigation), or as the path of a .md or .html ' +
-      `file. Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, present the revised plan again.`,
+      `file. Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, present the revised plan again. ` +
+      'If an orchestrator started you, the plan goes to it instead, written in your worktree, and nothing waits: end ' +
+      'your turn, and its answer comes as your next message.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,19 +205,59 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'show_doc',
+    description:
+      'Show the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read than your ' +
+      'terminal: a Document tab in your window, and with on_board a card beside your tile too. Returns at once. It stays ' +
+      'live: write the file again and they see the new version. They may edit a Markdown document there: their edit is ' +
+      'written to the file, and you are told what changed at your prompt. An HTML document is view-only, sandboxed and ' +
+      'offline. With plan, it is a plan for them to decide on, as present_plan, and waits for their decision.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The file, relative to your working directory.' },
+        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it is, in a line; else its first heading.' },
+        on_board: { type: 'boolean', description: 'Also put it on the board, as a card beside your tile.' },
+        plan: { type: 'boolean', description: 'It is a plan to approve, send back with changes, or reject: waits as present_plan does.' },
+        timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'With plan, how long to wait.' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'set_status',
     description:
       'Set the one line your tile shows: the change you are making now, not the task you were given. Call it once you ' +
       'understand the work, and again when its direction changes. With done, your work is finished, not only this ' +
-      'turn: the agent that started you hears it once. As `agent-board status set`.',
+      'turn: the agent that started you hears it once. As an orchestrator, pass agent to set the line of an agent in your ' +
+      'crew instead (its tile says you set it); keep your crew\'s lines current. As `agent-board status set`.',
     inputSchema: {
       type: 'object',
       properties: {
         summary: { type: 'string', maxLength: MAX_STATUS_LENGTH, description: 'What you are doing now, in a line.' },
         progress: { type: 'integer', minimum: 0, maximum: 100, description: 'How far through you are, if you know.' },
         done: { type: 'boolean', description: 'Your work is finished (handoff says so too). Your next prompt clears it.' },
+        agent: { type: 'string', description: 'An agent in your crew to set the line of, by ref or unique name; yours without. Not with done.' },
       },
       required: ['summary'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'needs_you',
+    description:
+      'Ask for a look, without a question: when you are blocked, your work is ready for review, or you need a decision. ' +
+      'It lists you in the user\'s Needs you with your reason (or, if an orchestrator started you, tells that one), and ' +
+      'nothing waits. A turn ending alone tells no one. Opening your session clears it; so does clear. As ' +
+      '`agent-board needs-you`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', maxLength: MAX_FLAG_LENGTH, description: 'Why, in a line: "PR #12 is ready for review".' },
+        via: { type: 'string', description: 'Orchestrators: the crew member whose flag you pass on to the user, by ref (agent:9c1e) or name.' },
+        clear: { type: 'boolean', description: 'Drop your flag instead: you no longer need a look.' },
+      },
       additionalProperties: false,
     },
   },
@@ -204,6 +268,37 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'zone with a gate, the gate must have passed on that commit. Marking it ready and merging stay the user\'s. As ' +
       '`agent-board open-pr`.',
     inputSchema: NO_INPUT,
+  },
+  {
+    name: 'record_pr',
+    description:
+      'Put a pull request you opened on your sidebar\'s PR section, as soon as you open it: any branch\'s, not only ' +
+      'yours (open_pr records its own). What you record wins over what the board guesses from gh. As `agent-board record pr`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The pull request\'s GitHub URL, https://github.com/owner/repo/pull/n.' },
+        title: { type: 'string', description: 'Its title, shown until gh is asked.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'record_doc',
+    description:
+      'Put a hand-off doc you wrote (a handover, findings, a plan) on your sidebar\'s Hand-off docs, where the user opens ' +
+      'it in a Doc tab. With for_orchestrator, it goes on the sidebar of the orchestrator that started you instead, ' +
+      'saying you wrote it: do that for what your orchestrator should read. As `agent-board record doc`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The file, relative to your working directory, or absolute.' },
+        for_orchestrator: { type: 'boolean', description: 'Record it for the orchestrator that started you.' },
+      },
+      required: ['path'],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -311,6 +406,15 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
   },
   {
+    name: 'continue_on_credits',
+    description:
+      'Continue on credits: resume the turn of a Claude agent its usage limit stopped (rate-limited), for its usage ' +
+      "credits to pay for, by the step Claude Code offers for it; never a billing page. Only while it is rate-limited. " +
+      'Returns once its turn starts. If the limit stops it again at once, its usage credits are spent too: tell the user. ' +
+      'As `agent-board continue`.',
+    inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
+  },
+  {
     name: 'restart',
     description:
       "Start an ended agent again in its tile, worktree and branch, carrying on its conversation, as its tile's Restart " +
@@ -326,6 +430,19 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       required: ['agent'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'pause',
+    description:
+      "Pause an idle agent to free the memory its harness holds: its session ends, keeping its tile, worktree, branch " +
+      'and conversation, and its tile shows it hibernated. Only an agent between turns that waits on no one. `wake`, ' +
+      'a message (send) or a hand-off wakes it, carrying on its conversation. As `agent-board pause`.',
+    inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
+  },
+  {
+    name: 'wake',
+    description: 'Wake a paused agent, carrying on its conversation. As `agent-board wake`.',
+    inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
   },
   {
     name: 'add_edge',
@@ -390,17 +507,39 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'arrange',
     description:
-      "Lay out your zone's tiles that you may move, on its grid: you first, then a cluster per issue or branch ticket (a " +
-      'label and a sticky you sign saying what each agent is doing, then its implementer and its reviewer, a rail apart ' +
-      'where an edge joins them), or a row per role or state. Arranging again moves the stickies with their clusters, ' +
-      'keeping any edited text. As ' +
-      '`agent-board arrange`.',
+      "Lay out your zone's tiles that you may move, on its grid: you and the shells first, then a lane per issue or branch " +
+      'ticket (its label; its implementer, reviewer and follow-up reviewer, each slot a column lining up down the lanes, a ' +
+      'rail apart where an edge joins them; then a note you sign saying what each agent is doing), or a row per role or ' +
+      'state. Arranging again moves the notes with their lanes, keeping any edited text, and fits the zone to what it ' +
+      'holds. It answers with the zone\'s map (see map). by, layout and auto are kept as your settings for the next ' +
+      'arrange. As `agent-board arrange`.',
     inputSchema: {
       type: 'object',
       properties: {
         zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
-        by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue by default.' },
-        layout: { type: 'string', enum: [...ARRANGE_LAYOUTS], description: 'A row per group (rows, the default), or filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows.' },
+        by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue at first, then as you last asked.' },
+        layout: {
+          type: 'string',
+          enum: [...ARRANGE_LAYOUTS],
+          description:
+            'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), or filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows.',
+        },
+        auto: { type: 'boolean', description: 'Arrange by itself after every agent you start, note you add and agent you close (true), or stop (false). Off at first.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'map',
+    description:
+      'Your zone as arrange sees it, to check a layout without a screenshot: a line per lane with a cell per slot ' +
+      '(implementer, reviewer, follow-up, notes), each tile\'s ref, name and state, and a lint line naming overlaps, the ' +
+      'widest gap in a lane, and tiles off the grid or out of their lane. Moves nothing. As `agent-board zone map`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+        boxes: { type: 'boolean', description: 'Draw the zone in characters instead, overlaps and gaps where they really are (about three times as long).' },
       },
       additionalProperties: false,
     },
@@ -440,6 +579,46 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' } },
       required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'add_schedule',
+    description:
+      'Put a schedule on the board as a clock, marked as made by you: at each fire time of cron (five fields, local time) it either ' +
+      'messages the agent `to` with prompt, or with fresh starts a fresh agent in your zone (or zone) with prompt as its task, waits ' +
+      'for its turn to end, keeps its final message in the clock\'s run history and closes it. As `agent-board schedule add`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cron: { type: 'string', description: 'Five fields (minute hour day month weekday) or @daily, @hourly…: 0 9 * * 1-5.' },
+        prompt: { type: 'string', description: 'What it sends the agent, or a fresh agent its task.' },
+        to: { type: 'string', description: 'The agent it messages, by ref.' },
+        fresh: { type: 'boolean', description: 'Start a fresh agent each run instead.' },
+        zone: { type: 'string', description: "A fresh agent's zone, by ref: yours by default." },
+        harness: { type: 'string', enum: [...HARNESSES] },
+        model: { type: 'string' },
+        role: { type: 'string' },
+        keep: { type: 'boolean', description: 'Leave a fresh agent open once its run is over.' },
+        result: { type: 'string', enum: [...CLOCK_RESULTS], description: "Where a fresh agent's result goes besides the history: a note where its tile was, or a hand-off." },
+        handoff_to: { type: 'string', description: 'The agent a fresh agent hands its result to (result handoff), by ref.' },
+      },
+      required: ['cron', 'prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_schedules',
+    description: "Every schedule (clock) on the board: its ref, its cron, what it does, its next run and its last run's outcome. As `agent-board schedule list`.",
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'remove_schedule',
+    description: 'Remove a schedule you, or an agent you started, made. As `agent-board schedule remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: { schedule: { type: 'string', description: 'The clock, by ref (item:31f0).' } },
+      required: ['schedule'],
       additionalProperties: false,
     },
   },
@@ -522,6 +701,18 @@ function stringArg(args: Record<string, unknown>, name: string, optional = false
   return value;
 }
 
+/**
+ * `arrange`'s `auto` as the CLI's `--auto`: true or false, or as a model may send it, `"true"`, `"on"`, `"false"` or
+ * `"off"`; anything else is refused rather than read as off.
+ */
+function autoArg(args: Record<string, unknown>): { auto?: string } {
+  const value = args.auto;
+  if (value === undefined) return {};
+  if (value === true || value === 'true' || value === 'on') return { auto: 'on' };
+  if (value === false || value === 'false' || value === 'off') return { auto: 'off' };
+  throw new BoardError('auto must be true or false');
+}
+
 /** A tool's `timeout_minutes`, as the daemon's `timeoutMs`; nothing when absent. */
 function timeoutArg(args: Record<string, unknown>): { timeoutMs?: number } {
   const minutes = args.timeout_minutes;
@@ -545,9 +736,26 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
-  set_status: async (session, { summary, progress, done }) => {
+  record_pr: async (session, args, cwd) => {
+    const title = stringArg(args, 'title', true);
+    return (await recordEntry(session, { kind: 'pr', url: stringArg(args, 'url'), ...(title === undefined ? {} : { title }) }, cwd)).text;
+  },
+  record_doc: async (session, args, cwd) =>
+    (await recordEntry(session, { kind: 'doc', path: stringArg(args, 'path'), forOrchestrator: args.for_orchestrator === true }, cwd)).text,
+  needs_you: async (session, { reason, via, clear }) => {
+    if (clear === true) return flagLine(await flagOwn(session, undefined));
+    if (typeof reason !== 'string') throw new BoardError('give a reason, or clear');
+    if (via !== undefined && typeof via !== 'string') throw new BoardError('via must be a string');
+    return flagLine(await flagOwn(session, reason, via));
+  },
+  set_status: async (session, { summary, progress, done, agent: crewMember }) => {
     if (typeof summary !== 'string') throw new BoardError('summary must be a string');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
+    if (crewMember !== undefined) {
+      if (typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
+      if (done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
+      return (await setCrewStatus(session, crewMember, summary, progress)).text;
+    }
     const agent = await setOwnStatus(session, summary, progress, done === true);
     return `Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`;
   },
@@ -592,12 +800,15 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
+  continue_on_credits: async (session, args) => (await continueAgent(session, stringArg(args, 'agent'))).text,
   restart: async (session, args) => {
     const prompt = stringArg(args, 'prompt', true);
     if (args.fresh !== true && prompt !== undefined && prompt.trim() !== '') throw new BoardError('prompt needs fresh');
     const anew = args.fresh === true ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined;
     return (await restartAgent(session, stringArg(args, 'agent'), anew)).text;
   },
+  pause: async (session, args) => (await pauseAgent(session, stringArg(args, 'agent'))).text,
+  wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
   handoff: async (session, args) =>
     (
@@ -623,16 +834,18 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     ).text;
   },
   ask: async (session, args) => {
-    const { options, free_text: freeText } = args;
+    const { options, free_text: freeText, on_board: onBoard } = args;
     if (options !== undefined && (!Array.isArray(options) || !options.every((option) => typeof option === 'string'))) {
       throw new BoardError('options must be a list of strings');
     }
     if (freeText !== undefined && typeof freeText !== 'boolean') throw new BoardError('free_text must be true or false');
+    if (onBoard !== undefined && typeof onBoard !== 'boolean') throw new BoardError('on_board must be true or false');
     return (
       await askUser(session, {
         question: stringArg(args, 'question'),
         ...(options === undefined ? {} : { options: options as string[] }),
         ...(freeText === undefined ? {} : { freeText }),
+        ...(onBoard === undefined ? {} : { onBoard }),
         ...timeoutArg(args),
       })
     ).text;
@@ -641,11 +854,30 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const source = { markdown: stringArg(args, 'markdown', true), html: stringArg(args, 'html', true), path: stringArg(args, 'path', true) };
     return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, cwd), ...timeoutArg(args) })).text;
   },
+  show_doc: async (session, args, cwd) => {
+    const path = stringArg(args, 'path');
+    const title = stringArg(args, 'title', true);
+    if (args.on_board !== undefined && typeof args.on_board !== 'boolean') throw new BoardError('on_board must be true or false');
+    if (args.plan === true) {
+      if (args.on_board === true) throw new BoardError('a plan is not put on the board: give plan or on_board, not both');
+      const source = readPlanSource({ path }, cwd);
+      return (await presentPlan(session, { title: title ?? documentTitle(path, source.format, source.body), ...source, ...timeoutArg(args) })).text;
+    }
+    if (args.timeout_minutes !== undefined) throw new BoardError('timeout_minutes is for a plan: give plan too');
+    return (await showDoc(session, { path, title, onBoard: args.on_board === true }, cwd)).text;
+  },
   list_edges: async (session) => edgesView(new BoardRefs(await readBoard(session.client))).text,
   remove_edge: async (session, args) => (await removeEdge(session, stringArg(args, 'edge'))).text,
   move: async (session, args) => (await moveTile(session, stringArg(args, 'tile'), placeArgs(args))).text,
   arrange: async (session, args) =>
-    (await arrangeZone(session, stringArg(args, 'zone', true), { by: stringArg(args, 'by', true), layout: stringArg(args, 'layout', true) })).text,
+    (
+      await arrangeZone(session, stringArg(args, 'zone', true), {
+        by: stringArg(args, 'by', true),
+        layout: stringArg(args, 'layout', true),
+        ...autoArg(args),
+      })
+    ).text,
+  map: async (session, args) => (await zoneMap(session, stringArg(args, 'zone', true), { boxes: args.boxes === true })).text,
   add_note: async (session, args) =>
     (
       await addNote(session, {
@@ -662,6 +894,24 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await editNote(session, stringArg(args, 'note'), { text, color })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
+  add_schedule: async (session, args) =>
+    (
+      await addSchedule(session, {
+        cron: stringArg(args, 'cron'),
+        prompt: stringArg(args, 'prompt'),
+        to: stringArg(args, 'to', true),
+        fresh: args.fresh === true ? true : undefined,
+        zone: stringArg(args, 'zone', true),
+        harness: stringArg(args, 'harness', true),
+        model: stringArg(args, 'model', true),
+        role: stringArg(args, 'role', true),
+        keep: args.keep === true ? true : undefined,
+        result: stringArg(args, 'result', true),
+        handoffTo: stringArg(args, 'handoff_to', true),
+      })
+    ).text,
+  list_schedules: async (session) => (await listSchedules(session)).text,
+  remove_schedule: async (session, args) => (await removeSchedule(session, stringArg(args, 'schedule'))).text,
   roles: async (session) => (await defaultRolesView(session)).text,
   set_role: async (session, args) =>
     (await setDefaultRole(session, stringArg(args, 'name'), stringArg(args, 'template'), stringArg(args, 'zone', true))).text,

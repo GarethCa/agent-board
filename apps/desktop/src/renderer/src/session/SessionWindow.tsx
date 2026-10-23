@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { AgentState } from '@agent-board/daemon/protocol';
-import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, MessageSquare, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
 import { keyText, pressed, type KeyId } from '../keys/registry';
 import { agentPill, STATE_LABELS } from '../states';
-import { Button, IconButton, Kbd, Menu, Segmented, StatusPill, Tabs, useToast, type SegmentedOption } from '../ui';
+import { useNeedsYouShows } from '../needs-you-setting';
+import { Button, IconButton, Kbd, Menu, StatusPill, Tabs, useToast } from '../ui';
 import { ReviewViewer } from '../review/ReviewViewer';
 import { useReviews } from '../review/ReviewsProvider';
 import { useReviewTabRequests } from '../review/review-tab';
 import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
-import { SessionBody, type SessionView, type WindowContent } from './SessionBody';
+import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
 import { isRunGateKey } from './window-keys';
@@ -69,13 +70,14 @@ interface SessionWindowProps {
  * (W-a). Closing or minimising it detaches; Stop ends the session. An implementer whose work is under review has a
  * Review tab beside its terminal, with the review doc viewer; the terminal stays attached behind it. An orchestrator
  * has an Activity tab, with what it did and tried. An agent's
- * header has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
+ * strip has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
  */
 export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
+  const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
   const rounds = roundsOf(useReviews(), content.kind === 'session' ? content.sessionId : '');
@@ -109,7 +111,6 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const activity = useActivity(agent?.sessionId);
   const orchestrates = agent !== undefined && (activity.lines.length > 0 || activity.error !== undefined);
   const showing = (tab === 'review' && reviewable) || (tab === 'activity' && orchestrates) ? tab : 'terminal';
-  const [view, setView] = useState<SessionView>('terminal');
   const root = useRef<HTMLDivElement>(null);
   const placed = useWindowFrame(root, frame);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
@@ -161,7 +162,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         {nav && <NavButtons nav={nav} />}
         {content.kind !== 'tabs' && <HarnessMark className="session-window-mark" harness={agent?.harness ?? 'shell'} />}
         <SessionName agent={agent} shell={shell} name={name} title={title} />
-        {agent && <StatusPill {...agentPill(agent)} />}
+        {agent && <StatusPill {...agentPill(agent, shows)} />}
         {nav && <NavCount nav={nav} />}
         {where !== undefined && (
           <span className="session-window-where" title={agent?.worktree ?? where}>
@@ -172,8 +173,6 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         <span className="session-window-head-fill" />
         {/* Its merge gate, for an agent with a branch of its own. */}
         {agent && gated(agent) && <GateControls agent={agent} visible />}
-        {/* How its terminal tab shows it: hidden over the Review tab, whose own tabs lead back. */}
-        {agent && showing === 'terminal' && <Segmented<SessionView> className="session-window-view-switch" aria-label="View" value={view} onChange={setView} options={VIEW_OPTIONS} />}
         {onMinimise && (
           <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip="Minimise to the dock; it keeps running">
             <span className="session-window-folding-label">Minimise</span>
@@ -233,9 +232,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           onDetailsCollapsed={setDetailsCollapsed}
           notice={notice}
           onAttachState={setAttach}
-          view={view}
           shown={showing === 'terminal'}
-          onShowTerminal={() => setView('terminal')}
         />
       </div>
       {/* A new round is shown as it starts, whichever round was picked. */}
@@ -258,11 +255,6 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
 /** The window's tabs: its terminal, an implementer's Review and an orchestrator's Activity. */
 type WindowTab = 'terminal' | 'review' | 'activity';
 
-const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
-  { id: 'terminal', label: 'Terminal', icon: <SquareTerminal aria-hidden /> },
-  { id: 'chat', label: 'Chat', icon: <MessageSquare aria-hidden /> },
-];
-
 /**
  * A pointer-down on the board outside the window minimises it, and carries on to do its normal job there. Not
  * outside: the window itself, the dock and its list of sessions, the onboarding "Back to setup" pill (that click closes the sign-in window and
@@ -281,12 +273,39 @@ function useMinimiseOnClickOutside(root: React.RefObject<HTMLDivElement | null>,
       const target = event.target;
       if (element === null || !(target instanceof Node) || element.contains(target)) return;
       if (!element.offsetParent?.contains(target)) return;
-      if (target instanceof Element && target.closest('.session-dock, .session-dock-popover, .onboarding-away') !== null) return;
+      if (target instanceof Element && target.closest('.session-dock, .onboarding-away') !== null) return;
+      // A click on the board's own buttons (the zones, the toolbar) only minimises: the click that follows is dropped.
+      if (target instanceof Element && target.closest('.ui-island') !== null) swallowNextClick();
       latest.current?.();
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [root, active]);
+}
+
+/**
+ * Drops the click that ends this press, before it reaches what was pressed. It ends with that click, or just after the
+ * press is let go or cancelled without one (a drag off the button), so a later keyboard click is never dropped.
+ */
+function swallowNextClick() {
+  const stop = () => {
+    document.removeEventListener('click', swallow, true);
+    document.removeEventListener('pointerdown', stop, true);
+    document.removeEventListener('pointerup', end, true);
+    document.removeEventListener('pointercancel', end, true);
+  };
+  const swallow = (event: MouseEvent) => {
+    event.stopPropagation();
+    event.preventDefault();
+    stop();
+  };
+  // The click follows the pointer-up in the same task: a timer runs after it.
+  const end = () => setTimeout(stop);
+  document.addEventListener('click', swallow, true);
+  // Added during this pointer-down, so it only hears the next one.
+  document.addEventListener('pointerdown', stop, true);
+  document.addEventListener('pointerup', end, true);
+  document.addEventListener('pointercancel', end, true);
 }
 
 /**

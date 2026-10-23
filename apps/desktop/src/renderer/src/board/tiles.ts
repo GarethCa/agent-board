@@ -16,12 +16,15 @@ import { tileSizeOf, type TileSizes } from './tile-size';
 import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, slotUnplaced, tileSizeKey, ZONE_PADDING, zoneMinSize } from '@agent-board/daemon/board-layout';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
+import type { ShownStart } from './use-agent-starts';
 
 export type BoardNode = ZoneNodeType | TileNodeType | ItemNodeType;
 
 export const AGENT_NODE_PREFIX = 'agent:';
 export const SHELL_NODE_PREFIX = 'shell:';
 export const EXTERNAL_NODE_PREFIX = 'external:';
+/** An agent being started (`AgentStart`), by the session id it will have: no session tile yet, so nothing acts on it as one. */
+const START_NODE_PREFIX = 'start:';
 
 /** What a session tile stands for: an agent (by its session id), a shell tile or an external session. */
 export type TileKind = 'agent' | 'shell' | 'external';
@@ -56,6 +59,9 @@ export const isZone = (node: Node): node is ZoneNodeType => node.type === 'zone'
 export const isSessionTile = (node: Node): node is TileNodeType =>
   node.id.startsWith(AGENT_NODE_PREFIX) || node.id.startsWith(SHELL_NODE_PREFIX) || node.id.startsWith(EXTERNAL_NODE_PREFIX);
 
+/** The tile of an agent being started, until it is an agent's. */
+export const isStartTile = (node: Node): node is TileNodeType => node.id.startsWith(START_NODE_PREFIX);
+
 export function layoutOf(node: ZoneNodeType): ZoneLayout {
   return {
     x: node.position.x,
@@ -67,6 +73,10 @@ export function layoutOf(node: ZoneNodeType): ZoneLayout {
 
 /** The agent, shell or external session a tile stands for: what is placed, with its zone and place. */
 export function subjectOf(data: TileData): { zoneId: string | null; position: TilePosition | null } {
+  if (data.start !== undefined) {
+    const { zoneId, position } = data.start;
+    return { zoneId, position: position === null ? null : { ...position, z: null } };
+  }
   return data.agent ?? data.shell ?? data.external ?? { zoneId: null, position: null };
 }
 
@@ -132,8 +142,11 @@ export function withTiles(
   sizes: TileSizes = {},
   /** The closed agents the user unfolded, by node id: the other closed agents are folded to chips. */
   unfolded: ReadonlySet<string> = new Set(),
+  /** The agents being started: each has a tile until its agent is listed. */
+  starts: readonly ShownStart[] = [],
 ): BoardNode[] {
-  const known = new Map(nodes.filter(isSessionTile).map((node) => [node.id, node]));
+  const isTile = (node: Node) => isSessionTile(node) || isStartTile(node);
+  const known = new Map(nodes.filter(isTile).map((node) => [node.id, node]));
   const zones = new Map(nodes.filter(isZone).map((zone) => [zone.id, zone]));
   const entries: Placed[] = [];
   const add = (id: string, zoneId: string | null, data: TileData) => {
@@ -142,9 +155,11 @@ export function withTiles(
   };
   const byId = new Map(agents.map((agent) => [agent.sessionId, agent]));
   const crews = new Map<string, number>();
+  const crewFlags = new Map<string, number>();
   const folded = new Set<string>();
   for (const agent of agents) {
     if (agent.spawnedBy !== null && byId.has(agent.spawnedBy)) crews.set(agent.spawnedBy, (crews.get(agent.spawnedBy) ?? 0) + 1);
+    if (agent.spawnedBy !== null && agent.flag?.to === 'orchestrator') crewFlags.set(agent.spawnedBy, (crewFlags.get(agent.spawnedBy) ?? 0) + 1);
   }
   // An agent's or shell tile's tabs are shells of its session window, not tiles of their own; an agent's tile shows its.
   const tabs = new Map<string, Shell[]>();
@@ -165,8 +180,24 @@ export function withTiles(
       ...(home ? {} : { repo: repoName(agent.repoRoot) }),
       ...(orchestrator === undefined ? {} : { from: { sessionId: orchestrator.sessionId, name: orchestrator.name } }),
       ...(crew === undefined ? {} : { crew }),
+      ...(crewFlags.has(agent.sessionId) ? { crewFlags: crewFlags.get(agent.sessionId) } : {}),
       ...(tabs.has(agent.sessionId) ? { tabs: tabs.get(agent.sessionId) } : {}),
       ...(folded.has(id) ? { folded: true as const, lift: chipLift(tileSizeOf(sizes, id).height) } : {}),
+    });
+  }
+  // After the agents, so an agent takes its start's slot once it is listed.
+  for (const listed of starts) {
+    if (byId.has(listed.sessionId)) continue;
+    const id = `${START_NODE_PREFIX}${listed.sessionId}`;
+    // A move of its tile shows at once, as any tile's does, until the daemon has it.
+    const move = pending.get(id);
+    const start = move === undefined ? listed : { ...listed, zoneId: move.zoneId, position: { x: move.x, y: move.y } };
+    const orchestrator = start.spawnedBy === null ? undefined : byId.get(start.spawnedBy);
+    add(id, start.zoneId, {
+      label: start.name,
+      harness: start.harness,
+      start,
+      ...(orchestrator === undefined ? {} : { from: { sessionId: orchestrator.sessionId, name: orchestrator.name } }),
     });
   }
   for (const listed of shells) {
@@ -238,7 +269,7 @@ export function withTiles(
   });
 
   const sized = nodes
-    .filter((node) => !isSessionTile(node))
+    .filter((node) => !isTile(node))
     .map((node) => {
       if (!isZone(node)) return node;
       // A tile being dragged out doesn't stretch its zone after it.
@@ -278,8 +309,8 @@ export function withTiles(
 }
 
 /**
- * `zone` grown right and down to hold `tiles` (relative to it), remembering for its resizer the part of the board it
- * must cover and how many tiles it holds.
+ * `zone` at its saved size, grown right and down to hold `tiles` (relative to it), remembering for its resizer the part
+ * of the board it must cover and how many tiles it holds.
  */
 function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[]): ZoneNodeType {
   const { x, y } = zone.position;
@@ -299,8 +330,10 @@ function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[]): ZoneNodeT
   // Not mid-resize: the resizer works from the size the drag started at and would fight a size changed under it.
   if (zone.resizing === true) return same ? zone : { ...zone, data };
   const layout = layoutOf(zone);
-  const width = Math.max(layout.width, covers.right - x);
-  const height = Math.max(layout.height, covers.bottom - y);
+  // Grown from the size it was saved at, not the size it was last drawn: grown round where its tiles were a moment ago
+  // (a crew moved, then the zone fitted to them, heard in the other order), it goes back once they are elsewhere.
+  const width = Math.max(zone.data.zone.width, covers.right - x);
+  const height = Math.max(zone.data.zone.height, covers.bottom - y);
   if (width === layout.width && height === layout.height && same) return zone;
   return { ...zone, width, height, data };
 }

@@ -76,6 +76,26 @@ describe('connectors over the socket', () => {
     );
   });
 
+  it('takes the diagram ends, a dash and a label at each end, solid with none by default', async () => {
+    const { client, a, b } = await twoStickies();
+    const plain = await client.call('connector.create', between(a.id, b.id));
+    expect(plain).toMatchObject({ dashed: false, startLabel: '', endLabel: '' });
+
+    const made = await client.call(
+      'connector.create',
+      between(a.id, b.id, { startEnd: 'filled-diamond', endEnd: 'triangle', dashed: true, startLabel: '1', endLabel: '0..*' }),
+    );
+    expect(made).toMatchObject({ startEnd: 'filled-diamond', endEnd: 'triangle', dashed: true, startLabel: '1', endLabel: '0..*' });
+
+    const changed = await client.call('connector.update', { id: made.id, startEnd: 'diamond', dashed: false, endLabel: 'parts' });
+    expect(changed).toMatchObject({ startEnd: 'diamond', endEnd: 'triangle', dashed: false, startLabel: '1', endLabel: 'parts' });
+    expect(await client.call('connector.list')).toEqual([plain, changed]);
+
+    await expect(client.call('connector.update', { id: made.id, endEnd: 'star' as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('connector.update', { id: made.id, dashed: 'yes' as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('connector.update', { id: made.id, startLabel: 'x'.repeat(501) })).rejects.toThrow('startLabel is over 500');
+  });
+
   it('bends through points, and moves an end to another side of its object, keeping its look', async () => {
     const { client, a, b } = await twoStickies();
     const connector = await client.call('connector.create', between(a.id, b.id, { style: 'elbow', label: 'see' }));

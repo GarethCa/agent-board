@@ -1,25 +1,30 @@
-// How the board shows who started whom: a crew frame beside each orchestrator (the default), or a "from"
-// chip on each agent it started, its crew lit while the chip or the orchestrator is hovered. Kept in the
-// daemon's view state.
+// How the board shows who started whom: a crew frame beside each orchestrator (the default), a "from"
+// chip on each agent it started, its crew lit while the chip or the orchestrator is hovered, or neither.
+// Kept in the daemon's view state.
 import { createContext } from 'react';
 import type { CrewFrame } from './crews';
 
-export type CrewLook = 'frames' | 'chips';
+export type CrewLook = 'frames' | 'chips' | 'off';
 
-/** The setting as saved (view state, read back untyped): crew frames unless chips were saved. */
+/** The setting as saved (view state, read back untyped): crew frames unless another was saved. */
 export function crewLookFrom(saved: unknown): CrewLook {
-  return saved === 'chips' ? 'chips' : 'frames';
+  return saved === 'chips' || saved === 'off' ? saved : 'frames';
+}
+
+/** The look ⇧C picks next: frames, chips, off, and round again. */
+export function nextCrewLook(look: CrewLook): CrewLook {
+  return look === 'frames' ? 'chips' : look === 'chips' ? 'off' : 'frames';
 }
 
 export interface CrewView {
   look: CrewLook;
-  /** The agents (by session id) drawn in a crew frame: the rest of a crew carry a chip. */
+  /** The agents (by session id) drawn in a crew frame: with chips, the whole crew carry one; with Off, none do. */
   framed: ReadonlySet<string>;
 }
 
 export const CrewViewContext = createContext<CrewView>({ look: 'frames', framed: new Set() });
 
-/** The crew frames to draw, for the zones they are in; none with chips. */
+/** The crew frames to draw, for the zones they are in; none with chips or off. */
 export const CrewFramesContext = createContext<readonly CrewFrame[]>([]);
 
 /**

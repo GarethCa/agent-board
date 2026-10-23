@@ -351,9 +351,11 @@ test("a web tab pops out into a tab window and back with its page as it was, nev
     const otherId = (await shells(window)).find((shell) => shell.owner === null && shell.id !== tileId)!.id;
     await tileWindow.getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = window.getByRole('dialog', { name: 'Open a web tab' });
-    await ask.getByRole('textbox', { name: 'Address' }).fill(server.url);
-    await ask.getByRole('button', { name: 'Open' }).click();
+    // A new tab has no page and its address bar is focused: the URL typed there loads.
+    const address = window.getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await address.fill(server.url);
+    await address.press('Enter');
     const host = new URL(server.url).host;
     await expect(tabNamed(tileWindow, host)).toHaveAttribute('data-active', 'true');
     const page = app.windows().find((each) => each.url().startsWith(server.url)) ?? (await app.waitForEvent('window'));
@@ -461,9 +463,11 @@ test("a web tab dropped on a tile whose window isn't open keeps its cookies: its
     const tileId = (await tileWindow.getAttribute('data-shell-id'))!;
     await tileWindow.getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = window.getByRole('dialog', { name: 'Open a web tab' });
-    await ask.getByRole('textbox', { name: 'Address' }).fill(server.url);
-    await ask.getByRole('button', { name: 'Open' }).click();
+    // A new tab has no page and its address bar is focused: the URL typed there loads.
+    const address = window.getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await address.fill(server.url);
+    await address.press('Enter');
     const host = new URL(server.url).host;
     await expect(tabNamed(tileWindow, host)).toHaveCount(1);
     await expect.poll(() => app.windows().some((each) => each.url().startsWith(server.url))).toBe(true);
@@ -514,9 +518,11 @@ test('a tab window open as the app quits comes back, with its tabs, at the next 
     const tileWindow = sessionWindow(window);
     await tileWindow.getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = window.getByRole('dialog', { name: 'Open a web tab' });
-    await ask.getByRole('textbox', { name: 'Address' }).fill(server.url);
-    await ask.getByRole('button', { name: 'Open' }).click();
+    // A new tab has no page and its address bar is focused: the URL typed there loads.
+    const address = window.getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await address.fill(server.url);
+    await address.press('Enter');
     const host = new URL(server.url).host;
     await expect(tabNamed(tileWindow, host)).toHaveCount(1);
     const tabWindow = await dragOut(app, tabNamed(tileWindow, host));

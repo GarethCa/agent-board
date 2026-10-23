@@ -1,4 +1,5 @@
-import { fillUnder, mix, readable } from './colour';
+import { ZONE_COLORS } from '@agent-board/daemon/protocol';
+import { contrast, fillUnder, mix, readable } from './colour';
 import { THEME_PACKS, type PackTheme } from './theme-packs';
 
 /*
@@ -12,6 +13,9 @@ export interface BaseThemes {
   light: ReadonlyMap<string, string>;
   dark: ReadonlyMap<string, string>;
 }
+
+/** How much less than its text on its panel a pack's agent note tab text may read (tokens.test.ts holds the same bar). */
+export const NOTE_TAB_ROOM = 0.5;
 
 const WHITE = '#ffffff';
 const BLACK = '#000000';
@@ -99,9 +103,21 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
 
   // Text
   const idleSoft = mix(p.text, p.tile, 0.07);
-  set('--text', readable(p.text, [pressed, p.desk, p.tile, hover, warningSoft, accentFaint, badgeNeutral]));
+  const text = readable(p.text, [pressed, p.desk, p.tile, hover, warningSoft, accentFaint, badgeNeutral]);
+  set('--text', text);
+  // An agent note's tab is a tint of its zone's colour under text that leans on it. A palette that can't hold the bar
+  // below with that tint, on any zone colour or loose, keeps the tab the panel's (the card's edge still carries the colour).
+  const muted = readable(p.muted, [hover, p.desk, p.tile]);
+  const share = (name: string) => Number.parseFloat(base.light.get(name) ?? '') / 100;
+  const [tabMix, inkMix] = [share('--agent-note-tab-mix'), share('--agent-note-tab-ink-mix')];
+  const noteBar = Math.min(contrast(text, p.panel) - NOTE_TAB_ROOM, 4.5);
+  const noteTabReads = [...ZONE_COLORS, muted].every((zone) => contrast(mix(zone, text, inkMix), mix(zone, p.panel, tabMix)) >= noteBar);
+  if (!noteTabReads) {
+    set('--agent-note-tab-mix', '0%');
+    set('--agent-note-tab-ink-mix', '0%');
+  }
   set('--text-soft', readable(p.soft ?? mix(p.text, p.muted, 0.55), [hover, p.desk, p.tile]));
-  set('--muted', readable(p.muted, [hover, p.desk, p.tile]));
+  set('--muted', muted);
   set('--placeholder', readable(mix(p.muted, p.tile, 0.9), [p.tile]));
   set('--neutral-ink', readable(p.muted, [idleSoft, p.tile]));
 
@@ -126,6 +142,7 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   const failedSoft = p.softs?.failed ?? tint(p.fail);
   const scheduledSoft = tint(p.hues.cyan);
   const stoppedSoft = mix(p.text, p.tile, 0.07);
+  const onCommandSoft = tint(p.hues.teal);
   set('--state-running', p.ok);
   set('--state-thinking-ink', accentInk);
   set('--state-waiting', p.warn);
@@ -144,6 +161,14 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   set('--state-stopped-by-restart', mix(p.muted, p.tile, 0.8));
   set('--state-stopped-by-restart-ink', readable(p.muted, [stoppedSoft, p.tile]));
   set('--state-stopped-by-restart-soft', stoppedSoft);
+  // A paused tile's slate: the palette's blue, greyed.
+  const hibernated = mix(p.hues.blue, p.muted, 0.5);
+  const hibernatedSoft = tint(hibernated);
+  set('--state-hibernated', hibernated);
+  set('--state-hibernated-ink', readable(hibernated, [hibernatedSoft, p.tile]));
+  set('--state-hibernated-soft', hibernatedSoft);
+  set('--state-on-command', readable(p.hues.teal, [onCommandSoft, p.tile]));
+  set('--state-on-command-soft', onCommandSoft);
   const ask = mix(p.warn, p.tile, dark ? 0.13 : 0.08);
   set('--ask', ask);
   set('--ask-edge', mix(p.warn, p.tile, dark ? 0.3 : 0.25));

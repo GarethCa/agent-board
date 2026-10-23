@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
-import { heldPrompts, needsYou, secondsLeft, toolSummary, unseenCount, waitLeft } from './needs-you';
+import type { Agent, AgentAsk, AgentFlag, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
+import { heldPrompts, needsYou, needsYouEntries, secondsLeft, toolSummary, unseenCount, waitLeft } from './needs-you';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
   sessionId,
@@ -28,24 +28,34 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   issue: null,
   notice: null,
   earlierConversations: [],
+  hibernated: null,
   muted: false,
   seen: false,
   subagents: [],
+  commands: [],
   pullRequests: [],
   pushedPullRequests: [],
+  records: [],
+  recordedPullRequests: [],
+  guessedDoc: null,
   lastMessage: null,
   finishedAt: null,
   permissions: [],
   ask: null,
   plan: null,
+  docs: [],
   schedule: null,
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  master: false,
   orchestrate: null,
   spawnedBy: null,
+  startup: null,
+  unsent: null,
   status: null,
   workFinishedAt: null,
+  flag: null,
   ...fields,
 });
 
@@ -59,43 +69,99 @@ const prompt: PermissionPrompt = {
 };
 const lapsed: PermissionPrompt = { ...prompt, id: 'p2', heldUntil: null };
 
+const ask: AgentAsk = {
+  id: 'q1',
+  question: 'Postgres or SQLite?',
+  options: ['Postgres', 'SQLite'],
+  freeText: false,
+  askedAt: '2026-10-09T10:03:00.000Z',
+  expiresAt: '2026-10-09T10:33:00.000Z',
+  onBoard: false,
+  at: null,
+};
+const flag = (to: AgentFlag['to'], at = '2026-10-09T10:02:00.000Z'): AgentFlag => ({ id: 1, reason: 'PR #241 is ready for review.', at, to, via: null });
+
 describe('the unseen count', () => {
   it('leaves out an ask whose session was opened, but keeps it in the inbox', () => {
     const agents = [agent('a', 'waiting'), agent('b', 'waiting', { seen: true }), agent('c', 'needs-permission', { permissions: [prompt], seen: true })];
-    expect(unseenCount(agents)).toBe(1);
-    expect(needsYou(agents)).toHaveLength(3);
+    expect(unseenCount(agents, 'turns')).toBe(1);
+    expect(needsYou(agents, 'turns')).toHaveLength(3);
+  });
+
+  it('counts a flag to the user until it is cleared, as opening the session clears it', () => {
+    expect(unseenCount([agent('a', 'idle', { flag: flag('user'), seen: true })], 'explicit')).toBe(1);
+  });
+
+  it('counts a flag raised behind a question the user has seen', () => {
+    expect(unseenCount([agent('a', 'waiting', { ask, flag: flag('user'), seen: true })], 'explicit')).toBe(1);
+    expect(unseenCount([agent('a', 'waiting', { ask, seen: true })], 'explicit')).toBe(0);
   });
 });
 
 describe('the needs-you inbox', () => {
-  it('lists the agents waiting for input or needing permission, in board order', () => {
+  it('lists only explicit requests by default: permission prompts, questions, plans and flags to the user', () => {
     const agents = [
-      agent('a', 'running'),
-      agent('b', 'waiting'),
-      agent('c', 'idle'),
-      agent('d', 'needs-permission'),
-      agent('e', 'done'),
+      agent('running', 'running'),
+      agent('turn-ended', 'waiting'),
+      agent('idle', 'idle'),
+      agent('permission', 'needs-permission'),
+      agent('asks', 'waiting', { ask }),
+      agent('flagged', 'idle', { flag: flag('user') }),
+      agent('done', 'done'),
     ];
-    expect(needsYou(agents).map((a) => a.sessionId)).toEqual(['b', 'd']);
+    expect(needsYouEntries(agents, 'explicit').map(({ agent: { sessionId }, kind }) => [sessionId, kind])).toEqual([
+      ['permission', 'permission'],
+      ['flagged', 'flagged'],
+      ['asks', 'asks'],
+    ]);
+  });
+
+  it('lists every agent waiting at its prompt too, as before, with turns', () => {
+    const agents = [agent('a', 'running'), agent('b', 'waiting'), agent('c', 'idle'), agent('d', 'needs-permission'), agent('e', 'done')];
+    expect(needsYou(agents, 'turns').map((a) => a.sessionId)).toEqual(['b', 'd']);
+    expect(needsYouEntries(agents, 'turns').map((entry) => entry.kind)).toEqual(['turn', 'permission']);
+  });
+
+  it("leaves a crew member's flag to its orchestrator out, but always lists its permission prompts and questions", () => {
+    const agents = [
+      agent('lead', 'running'),
+      agent('crew-flag', 'idle', { spawnedBy: 'lead', flag: flag('orchestrator') }),
+      agent('crew-permission', 'needs-permission', { spawnedBy: 'lead', permissions: [prompt] }),
+      agent('crew-asks', 'waiting', { spawnedBy: 'lead', ask }),
+    ];
+    expect(needsYou(agents, 'explicit').map((a) => a.sessionId)).toEqual(['crew-permission', 'crew-asks']);
+  });
+
+  it('puts the oldest request first', () => {
+    const agents = [agent('later', 'idle', { flag: flag('user', '2026-10-09T10:05:00.000Z') }), agent('sooner', 'waiting', { ask })];
+    expect(needsYou(agents, 'explicit').map((a) => a.sessionId)).toEqual(['sooner', 'later']);
   });
 
   it('lists an agent with any prompt pending, held or asking in its terminal, whatever its state says', () => {
-    expect(needsYou([agent('a', 'running', { permissions: [prompt] })])).toHaveLength(1);
-    expect(needsYou([agent('a', 'running', { permissions: [lapsed] })])).toHaveLength(1);
+    expect(needsYou([agent('a', 'running', { permissions: [prompt] })], 'explicit')).toHaveLength(1);
+    expect(needsYou([agent('a', 'running', { permissions: [lapsed] })], 'explicit')).toHaveLength(1);
   });
 
   it('lists a scheduled run that needs you, but not a scheduled agent waiting for its next run', () => {
-    const schedule = { cron: '@daily', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-10T00:00:00.000Z', lastRun: null };
+    const schedule = { clockId: 'clock-1', cron: '@daily', prompt: 'Sweep', enabled: true, nextRunAt: '2026-10-10T00:00:00.000Z', lastRun: null };
     const agents = [
       agent('between-runs', 'scheduled', { schedule }),
       agent('asking', 'needs-permission', { schedule, permissions: [prompt] }),
       agent('waiting', 'waiting', { schedule }),
     ];
-    expect(needsYou(agents).map((a) => a.sessionId)).toEqual(['asking', 'waiting']);
+    expect(needsYou(agents, 'turns').map((a) => a.sessionId)).toEqual(['asking', 'waiting']);
+  });
+
+  it('never lists or counts an agent on a command it left running', () => {
+    const running = agent('gate', 'on-command', { commands: [{ command: 'pnpm check:pr', startedAt: '2026-10-09T10:00:00.000Z' }] });
+    for (const shows of ['explicit', 'turns'] as const) {
+      expect(needsYou([running], shows)).toEqual([]);
+      expect(unseenCount([running], shows)).toBe(0);
+    }
   });
 
   it('never lists an ended agent', () => {
-    expect(needsYou([agent('a', 'waiting', { endedAt: '2026-10-09T10:01:00.000Z' })])).toEqual([]);
+    expect(needsYou([agent('a', 'waiting', { endedAt: '2026-10-09T10:01:00.000Z', flag: flag('user') })], 'turns')).toEqual([]);
   });
 
   it("picks the prompts still held for the inbox, and counts down each one's hold", () => {

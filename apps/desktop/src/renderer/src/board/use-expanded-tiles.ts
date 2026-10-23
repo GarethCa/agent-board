@@ -14,6 +14,7 @@ import {
   keepSizes,
   rememberSize,
   resizeExpanded,
+  windowedExpanded,
   withoutOverlaps,
   type ExpandedSizes,
   type ExpandedTiles,
@@ -34,6 +35,8 @@ interface ExpandedTilesOptions {
   externals: ExternalSession[];
   /** The session windows: a session shown in one is not also expanded. */
   windows: SessionWindows;
+  /** Whether the saved session windows have been taken back. */
+  windowsRestored: boolean;
   /** Lays the session tiles out again, with the expanded ones and the tile sizes as they are now. */
   relayout(): void;
   /** The tiles of each crew frame, by node id: an expanded tile pushes each crew aside as one. */
@@ -45,7 +48,7 @@ interface ExpandedTilesOptions {
  * each is, and which two may overlap. Saved with the view as they change and laid out again; an expanded tile
  * collapses when its session goes or shows in its session window. Returns the nodes as drawn with them open.
  */
-export function useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, relayout, crews }: ExpandedTilesOptions) {
+export function useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews }: ExpandedTilesOptions) {
   /**
    * The tiles expanded in place, back to front, with their sizes: the one place the board keeps
    * which are open.
@@ -67,19 +70,22 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   unfoldedRef.current = unfolded;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+  /** The tiles that were expanded when their session window opened, to be expanded again when it closes (saved with the view). */
+  const [hidden, setHidden] = useState<ExpandedTiles>([]);
   /** Which tile the user dragged onto which, one of the two expanded: the two may overlap. */
   const [overlapsAllowed, setOverlapsAllowed] = useState<OverlapsAllowed>(new Map());
   /**
    * The nodes as drawn: the expanded tiles kept apart and what they would cover moved clear of them until they collapse
    *, a crew as one, never saved.
    */
-  const shown = useDisplaced(nodes, expanded, overlapsAllowed, crews);
+  const shown = useDisplaced(nodes, expanded, overlapsAllowed, crews, tileSizes);
   const shownRef = useRef(shown);
   shownRef.current = shown;
 
   /** Puts back the expanded tiles and sizes saved with the view, in the render that shows the board's lists. */
   const restoreExpanded = useCallback((view: SavedView) => {
     setExpanded(view.expanded);
+    setHidden(view.hiddenExpanded);
     setExpandedSizes(view.expandedSizes);
     setTileSizes(view.tileSizes);
     setUnfolded(view.unfolded);
@@ -122,11 +128,7 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   // An expanded tile collapses when it goes: its agent or shell deleted, its external session dismissed.
   useEffect(() => {
     if (!loaded || shells === undefined) return;
-    const present = new Set([
-      ...agents.map((agent) => tileNodeId('agent', agent.sessionId)),
-      ...shells.map((shell) => tileNodeId('shell', shell.id)),
-      ...externals.map((session) => tileNodeId('external', session.id)),
-    ]);
+    const present = presentTiles(agents, shells, externals);
     setExpanded((current) => keepExpanded(current, present));
     setExpandedSizes((current) => keepSizes(current, present));
     setTileSizes((current) => keepTileSizes(current, present));
@@ -153,6 +155,10 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
   useEffect(() => {
     if (loaded) saveUnfolded(unfolded);
   }, [loaded, unfolded, saveUnfolded]);
+  const saveHidden = useMemo(() => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.hiddenExpanded, value), SAVE_EXPANDED_DELAY_MS), []);
+  useEffect(() => {
+    if (loaded) saveHidden(hidden);
+  }, [loaded, hidden, saveHidden]);
   const saveOverlaps = useMemo(
     () => viewSaver((value) => window.agentBoard.view.set(VIEW_KEYS.expandedOverlaps, value), SAVE_EXPANDED_DELAY_MS),
     [],
@@ -167,18 +173,32 @@ export function useExpandedTiles({ nodes, loaded, agents, shells, externals, win
     lastExpanded.current = expanded;
     if (collapsed.length > 0) setOverlapsAllowed((current) => withoutOverlaps(current, collapsed));
   }, [expanded]);
-  // A session shown in its session window, on the board or popped out, is not also expanded: one terminal sizes it.
+  // A session shown in its session window, on the board or popped out, is not also expanded: one terminal sizes it. It
+  // is expanded again, at that size, once its window is closed; docked, it stays compact.
   useEffect(() => {
-    const inWindows = new Set(
-      windows
-        .filter((entry) => entry.placement !== 'docked')
-        .map((entry) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id)),
-    );
-    // On `expanded` too: the saved expanded tiles may arrive after the saved windows.
-    if (expanded.some((entry) => inWindows.has(entry.id))) setExpanded((current) => current.filter((entry) => !inWindows.has(entry.id)));
-  }, [windows, expanded]);
+    // Once the saved windows are back, else a tile whose window is still on its way would look closed.
+    if (!loaded || !windowsRestored || shells === undefined) return;
+    const present = presentTiles(agents, shells, externals);
+    const idOf = (entry: SessionWindows[number]) => tileNodeId(entry.kind === 'shell' ? 'shell' : 'agent', entry.id);
+    const windowed = {
+      open: new Set(windows.filter((entry) => entry.placement !== 'docked').map(idOf)),
+      all: new Set(windows.map(idOf)),
+    };
+    const next = windowedExpanded(expanded, hidden, windowed, present);
+    if (next.hidden !== hidden) setHidden(next.hidden);
+    if (next.expanded !== expanded) setExpanded(next.expanded);
+  }, [loaded, windowsRestored, windows, expanded, hidden, agents, shells, externals]);
 
   return { shown, shownRef, expandedRef, tileSizesRef, unfoldedRef, restoreExpanded, ...actions };
+}
+
+/** The node ids of the session tiles on the board. */
+function presentTiles(agents: Agent[], shells: Shell[], externals: ExternalSession[]): Set<string> {
+  return new Set([
+    ...agents.map((agent) => tileNodeId('agent', agent.sessionId)),
+    ...shells.map((shell) => tileNodeId('shell', shell.id)),
+    ...externals.map((session) => tileNodeId('external', session.id)),
+  ]);
 }
 
 /** How long the expanded tiles must stay as they are before they are saved. */

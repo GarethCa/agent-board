@@ -37,11 +37,16 @@ export interface BoardChromeProps extends CreateToolbarProps {
   loadedEmpty: boolean;
   zones: readonly Zone[];
   agents: readonly Agent[];
+  /** The board master's panel: whether it is open, and the Master button's toggle. */
+  masterOpen: boolean;
+  onMaster(): void;
   /** Undefined until the board has listed them. */
   shells: readonly Shell[] | undefined;
   /** Opens Add zone in the middle of the view, on the source's tab (GitHub without one). */
   onAddZone(source?: ZoneSource): void;
   onJump(zone: Zone): void;
+  /** The zone last brought into view, which the zones pill marks and keeps in view. */
+  currentZone?: string;
   /** Opens the keyboard cheat sheet. */
   onKeyboardHelp(): void;
   onOpenAgent(agent: Agent): void;
@@ -72,7 +77,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells, onAddZone, onJump, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterOpen, onMaster, shells, onAddZone, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
@@ -124,9 +129,9 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, shells,
       {loaded && (
         <>
           <CreateToolbar {...toolbar} />
-          <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={() => setMenu({ open: true, at: 'settings', asked: performance.now() })} />
-          <ZoneJump zones={zones} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
-          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} />
+          <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={() => setMenu({ open: true, at: 'settings', asked: performance.now() })} onMaster={onMaster} masterOpen={masterOpen} />
+          <ZoneJump zones={zones} current={currentZone} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
+          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={onConnections} crewLook={crewLook} onCrewLook={onCrewLook} />
           {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} />}
           {onboarding.open && onboarding.state !== undefined && (
             <Onboarding

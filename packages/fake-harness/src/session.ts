@@ -4,6 +4,7 @@ import { runHooks, permissionDecision, type HooksConfig, type HookRunOptions, ty
 import { execFile } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
+import { drawRateLimitMenu, rateLimitMenuRows, RATE_LIMIT_CONTINUE, RATE_LIMIT_STOP_ROW } from './rate-limit-menu.ts';
 
 /** One message of a conversation, as a resumed session shows it again. */
 export interface ConversationMessage {
@@ -62,6 +63,11 @@ export interface Dialect {
   permissionModeEvents?: ReadonlySet<string>;
   subagentToolName: string;
   shellToolName: string;
+  /**
+   * Its shell tool takes `run_in_background` and answers with a `backgroundTaskId` (Claude). Codex has no such flag:
+   * its command simply goes on running after the call returns.
+   */
+  backgroundFlag: boolean;
   /** The MCP servers its config names, by name, started on first use. */
   mcpServers: Record<string, McpServerConfig>;
   /** The env the model's shell commands run with: Codex leaves out what its `shell_environment_policy` excludes. */
@@ -131,6 +137,22 @@ export class FakeSession {
   /** Rejects whatever the turn is waiting on, once it is interrupted. */
   private wake: (() => void) | undefined;
   private lastExitPress = 0;
+  /**
+   * How many more Enters after text are lost, as a slow TUI loses one that lands before it has taken in the text:
+   * `FAKE_HARNESS_LOSE_ENTERS`, 0 by default.
+   */
+  private entersToLose = Number(process.env.FAKE_HARNESS_LOSE_ENTERS ?? 0);
+  /**
+   * How many more prompts typed at it (not given on the command line) fire no `UserPromptSubmit`, as a hook that timed
+   * out on a loaded machine: `FAKE_HARNESS_LOSE_PROMPT_HOOKS`, 0 by default.
+   */
+  private promptHooksToLose = Number(process.env.FAKE_HARNESS_LOSE_PROMPT_HOOKS ?? 0);
+  /** Whether the prompt about to be submitted was typed at it. */
+  private promptTyped = false;
+  /** Keys a menu read raw, which the line reader holds as the start of its next line (`readKeys`). */
+  private heldKeys = '';
+  /** What it put at its prompt itself, as Claude puts `continue` there after a rate limit: Enter submits it. */
+  private prefilled = '';
   /** The MCP servers started so far. */
   private readonly mcpClients: Record<string, McpClient> = {};
 
@@ -174,7 +196,10 @@ export class FakeSession {
     this.turnId = randomUUID();
     this.print(`> ${prompt}\n`);
     this.dialect.transcript.userPrompt(prompt, this.turnId);
-    await this.fire('UserPromptSubmit', { prompt });
+    const lost = this.promptTyped && this.promptHooksToLose > 0;
+    this.promptTyped = false;
+    if (lost) this.promptHooksToLose -= 1;
+    else await this.fire('UserPromptSubmit', { prompt });
   }
 
   /**
@@ -187,6 +212,11 @@ export class FakeSession {
     this.turnId = randomUUID();
   }
 
+  /** How long a session sits at its prompt before its `idle_prompt` (`FAKE_HARNESS_IDLE_NOTIFY_MS`). */
+  get idleNotifyMs(): number {
+    return this.dialect.idleNotifyMs;
+  }
+
   /** Fires the `idle_prompt` notification that a session sitting at its prompt raises (Claude only). */
   async idlePrompt(): Promise<void> {
     if (this.dialect.notificationEvents) {
@@ -194,9 +224,12 @@ export class FakeSession {
     }
   }
 
-  /** Streams text to the terminal word by word, then records it as one assistant message. */
-  async say(text: string): Promise<void> {
-    for (const word of text.split(/(?<= )/)) {
+  /**
+   * Streams text to the terminal word by word, then records it as one assistant message. `atOnce` prints it whole, after
+   * one step, for text whose length is not the scenario's to pace (what a server sent).
+   */
+  async say(text: string, atOnce = false): Promise<void> {
+    for (const word of atOnce ? [text] : text.split(/(?<= )/)) {
       this.print(word);
       await this.pause();
     }
@@ -248,6 +281,32 @@ export class FakeSession {
     await this.runTool(this.shellTool, { command, description: command }, { stdout, stderr, interrupted: false });
     this.print(`${stdout}${stderr}`);
     return stdout;
+  }
+
+  /**
+   * Starts `command` for real in the model's shell (`sh -c`, a child of this process) as a shell tool call that returns
+   * at once, leaving it running in the background: with `run_in_background` for Claude, which answers with its task id.
+   * Resolves, once the call has returned, with `ended`: the command's end, which never rejects.
+   */
+  async runInBackground(command: string): Promise<{ ended: Promise<void> }> {
+    const child = execFile('/bin/sh', ['-c', command], { cwd: this.dialect.cwd, env: this.dialect.shellEnv });
+    const ended = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    // An ending session takes its commands with it, so none outlives a test.
+    const kill = () => child.kill();
+    process.once('exit', kill);
+    void ended.then(() => process.off('exit', kill));
+    const taskId = `b${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const input = this.dialect.backgroundFlag ? { command, description: command, run_in_background: true } : { command, description: command };
+    const response = this.dialect.backgroundFlag
+      ? { stdout: '', stderr: '', interrupted: false, isImage: false, backgroundTaskId: taskId }
+      : { stdout: '', stderr: '', interrupted: false };
+    await this.runTool(this.shellTool, input, response);
+    return { ended };
+  }
+
+  /** Whether a command left running in the background reports back when it ends, starting a turn (Claude). */
+  get takesUpBackgroundResults(): boolean {
+    return this.dialect.backgroundFlag;
   }
 
   /**
@@ -356,23 +415,26 @@ export class FakeSession {
    * `idle_prompt` once it has sat idle for `idleNotifyMs` (immediately when 0).
    */
   async waitForInput(): Promise<string | undefined> {
-    if (!this.dialect.notificationEvents) return this.readLine();
+    if (!this.dialect.notificationEvents) return this.readPrompt();
     const idle = () =>
       this.fire('Notification', { message: `${this.dialect.displayName} is waiting for your input`, notification_type: 'idle_prompt' });
     if (this.dialect.idleNotifyMs <= 0) {
       await idle();
-      return this.readLine();
+      return this.readPrompt();
     }
     // Hooks fire in order: a notification already under way finishes before the next turn or SessionEnd.
     let notifying: Promise<unknown> | undefined;
     const timer = setTimeout(() => (notifying = idle()), this.dialect.idleNotifyMs);
-    const line = await this.readLine();
+    const line = await this.readPrompt();
     clearTimeout(timer);
     await notifying;
     return line;
   }
 
-  /** The API call behind the turn failed (Claude's StopFailure). */
+  /**
+   * The API call behind the turn failed (Claude's StopFailure). Then Claude shows a rate limit's screen
+   * (`rateLimitScreen`).
+   */
   async failTurn(error: string, details: string): Promise<void> {
     const message = `API Error: ${details}`;
     this.print(`${message}\n`);
@@ -380,6 +442,54 @@ export class FakeSession {
       await this.fire('StopFailure', { error, error_details: details, last_assistant_message: message });
     }
     this.inTurn = false;
+    if (error === 'rate_limit' && this.dialect.stopFailureEvent) await this.rateLimitScreen();
+  }
+
+  /**
+   * What Claude shows once a turn hit its usage limit, by `FAKE_HARNESS_RATE_LIMIT_SCREEN` (`rate-limit-menu.ts`):
+   * `prompt` puts `continue` at its prompt, for Enter to submit; `menu` (or `menu-credits-first`, its rows in the other
+   * order) opens its menu, reads the arrows and Enter of one pick, and closes it, saying what the pick did: the stop
+   * row leaves an empty prompt, any other row opens a page and leaves it too. None by default: just the error.
+   */
+  private async rateLimitScreen(): Promise<void> {
+    const screen = process.env.FAKE_HARNESS_RATE_LIMIT_SCREEN ?? '';
+    if (screen === 'prompt') {
+      this.prefilled = RATE_LIMIT_CONTINUE;
+      this.print(`> ${RATE_LIMIT_CONTINUE}\n`);
+      return;
+    }
+    if (screen !== 'menu' && screen !== 'menu-credits-first') return;
+    const rows = rateLimitMenuRows(screen === 'menu' ? 'stop-first' : 'credits-first');
+    this.print(`${drawRateLimitMenu(rows).join('\n')}\n`);
+    const keys = await this.readKeys();
+    // Ink draws over the menu as it closes: here the screen is cleared.
+    this.print('\x1b[2J\x1b[H');
+    // Escape is its cancel: it picks no row, and leaves an empty prompt (Claude puts `continue` there only while its own
+    // continue at the reset is armed).
+    // eslint-disable-next-line no-control-regex -- a lone Escape, not the start of an arrow key's sequence
+    if (/\x1b(?!\[)/.test(keys)) {
+      this.print('> \n');
+      return;
+    }
+    let picked = 0;
+    // eslint-disable-next-line no-control-regex -- the arrow keys' escape sequences
+    for (const [arrow] of keys.matchAll(/\x1b\[[AB]/g)) picked = Math.min(rows.length - 1, Math.max(0, picked + (arrow.endsWith('B') ? 1 : -1)));
+    if (rows[picked] !== RATE_LIMIT_STOP_ROW) this.print(`Picked ${rows[picked]}: opened its page in your browser\n`);
+    this.print('> \n');
+  }
+
+  /**
+   * The keys of one pick in a menu, as a TUI reads them: under a terminal, raw, so a lone Escape arrives as typed;
+   * piped, a line. Each key also reaches the line reader, which holds them until the next line: that line drops them.
+   */
+  private async readKeys(): Promise<string> {
+    const input = process.stdin;
+    if (!input.isTTY) return (await this.readRawLine()) ?? '';
+    input.setRawMode(true);
+    const keys = await new Promise<string>((resolve) => input.once('data', (chunk: Buffer | string) => resolve(chunk.toString())));
+    input.setRawMode(false);
+    this.heldKeys = keys.replace(/[\r\n]/g, '');
+    return keys;
   }
 
   async end(reason: string): Promise<never> {
@@ -393,12 +503,38 @@ export class FakeSession {
     process.exit(1);
   }
 
+  /** The next prompt the user typed: like the real TUIs, Enter at an empty prompt submits nothing. */
+  async readPrompt(): Promise<string | undefined> {
+    for (;;) {
+      const line = await this.readLine();
+      this.promptTyped = line !== undefined;
+      // What it put there itself goes up on Enter, or goes as the user types over it.
+      const prefilled = this.prefilled;
+      this.prefilled = '';
+      if (line === '' && prefilled !== '') return prefilled;
+      if (line === undefined || line.trim() !== '') return line;
+    }
+  }
+
   /**
-   * The next prompt the user typed. Like the real TUIs, ESC CR (Alt+Enter, which the app sends for Shift+Enter) is a
+   * The next line the user typed. Like the real TUIs, ESC CR (Alt+Enter, which the app sends for Shift+Enter) is a
    * new line within it rather than its end; and a bracketed paste of several lines (the app's composer sends one, as a
    * terminal pastes) is one prompt, its line breaks kept and its markers dropped.
    */
   async readLine(): Promise<string | undefined> {
+    let line = await this.readMessage();
+    // A lost Enter leaves the text at the prompt until the next one, and whatever is typed before it joins it.
+    while (line !== undefined && line !== '' && this.entersToLose > 0) {
+      this.entersToLose -= 1;
+      const more = await this.readMessage();
+      if (more === undefined) break;
+      line = `${line}${more}`;
+    }
+    return line;
+  }
+
+  /** The next prompt or paste as it ended at an Enter. */
+  private async readMessage(): Promise<string | undefined> {
     let line = await this.readTypedLine();
     if (line === undefined || !line.startsWith(PASTE_START)) return line;
     const lines = [line];
@@ -426,7 +562,11 @@ export class FakeSession {
     this.nextLine ??= this.lines.next();
     const next = await this.untilInterrupted(this.nextLine);
     this.nextLine = undefined;
-    return next.done ? undefined : next.value;
+    if (next.done) return undefined;
+    // A menu's keys, read raw, start the line after them: they were the menu's.
+    const held = this.heldKeys;
+    this.heldKeys = '';
+    return held !== '' && next.value.startsWith(held) ? next.value.slice(held.length) : next.value;
   }
 
   private onCtrlC(): void {

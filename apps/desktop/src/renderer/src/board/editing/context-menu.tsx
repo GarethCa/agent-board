@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import {
+  AlarmClock,
   AlignCenterVertical,
   AlignEndHorizontal,
   AlignEndVertical,
@@ -55,6 +56,8 @@ export interface ContextActions {
   toggleGrid(): void;
   /** Lays the tiles loose on the board out in a grid where they are. */
   tidyLoose(): void;
+  /** Puts a new clock where the menu was opened, and opens its editor. */
+  addClock(): void;
 }
 
 /**
@@ -143,6 +146,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
 /** The context menu on empty board: select everything, and snap to the grid. */
 export function boardEntries(actions: ContextActions): MenuEntry[] {
   return [
+    { label: 'Add a clock', icon: <AlarmClock />, hint: 'A schedule that messages an agent, or starts one', onSelect: actions.addClock },
     { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },

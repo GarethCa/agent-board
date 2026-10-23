@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { drag, run, settledBox } from './board-helpers.ts';
+import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -23,26 +23,6 @@ const savedExpanded = (page: Page) => page.evaluate(async () => JSON.stringify(a
 
 /** The tiles the board has saved as dragged onto another, left there, as JSON. */
 const savedOverlaps = (page: Page) => page.evaluate(async () => JSON.stringify(await window.agentBoard.view.get('expandedTiles.overlaps')));
-
-/**
- * Waits for the view to stop moving once tiles have expanded: it follows a tile that opened past the edge when its
- * opening time is over, so a click or a measure before then can land where the view is about to leave.
- */
-async function viewSettled(page: Page): Promise<void> {
-  await expect(page.locator('[data-testid="expanded-tile"][data-opening]')).toHaveCount(0);
-  let last = '';
-  await expect
-    .poll(
-      async () => {
-        const transform = await page.locator('.react-flow__viewport').evaluate((viewport) => (viewport as HTMLElement).style.transform);
-        const settled = transform === last;
-        last = transform;
-        return settled;
-      },
-      { intervals: [400] },
-    )
-    .toBe(true);
-}
 
 /** Each shell's place as the daemon stores it, by id, in id order. */
 const storedShellPlaces = (page: Page) =>
@@ -92,6 +72,18 @@ const scatter = (page: Page, ids: readonly string[], places: readonly { x: numbe
       for (const [index, id] of ids.entries()) await window.agentBoard.shells.move(id, { zoneId: zone!.id, ...places[index]! });
     },
     { ids, places },
+  );
+
+/** Makes a shell tile in the one zone (loose on the board if `loose`) at each of `places`, with the daemon's API, and returns their ids. */
+const shellsAt = (page: Page, places: readonly { x: number; y: number }[], loose = false) =>
+  page.evaluate(
+    async ({ places, loose }) => {
+      const [zone] = await window.agentBoard.zones.list();
+      const made: string[] = [];
+      for (const position of places) made.push((await window.agentBoard.shells.create({ zoneId: loose ? null : zone!.id, position })).id);
+      return made;
+    },
+    { places, loose },
   );
 
 /** The node of the shell tile with id `shellId`. */
@@ -273,6 +265,7 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await expect(expandedTile(window)).toHaveCount(1);
 
     // Maximise opens its session window, and the tile goes back to compact: one terminal at a time.
+    const sizeBefore = await settledBox(expandedTile(window));
     await expandedTile(window).getByRole('button', { name: 'Maximise' }).click();
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await expect(expandedTile(window)).toHaveCount(0);
@@ -280,10 +273,15 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     // Minimise still docks it.
     await window.getByRole('button', { name: 'Minimise session window' }).click();
     await expect(window.getByTestId('dock-item')).toHaveAttribute('data-placement', 'docked');
+    // Docked, it stays compact; closing the window gives the tile back as it was, expanded at the same size.
+    await expect(expandedTile(window)).toHaveCount(0);
     await window.getByTestId('dock-item').getByRole('button', { name: 'Close Pick a database' }).click();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expect(tile(window)).toHaveCount(0);
+    const sizeAfter = await settledBox(expandedTile(window));
+    expect([sizeAfter.width, sizeAfter.height]).toEqual([sizeBefore.width, sizeBefore.height]);
 
     // Pop out opens it in its own OS window, which pops back in.
-    await tile(window).dblclick();
     const [popped] = await Promise.all([app.waitForEvent('window'), expandedTile(window).getByRole('button', { name: 'Pop out' }).click()]);
     await expect(sessionWindow(popped)).toHaveAttribute('data-state', 'attached');
     await expect(popped.getByTestId('session-terminal').locator('.xterm-rows')).toContainText('Going with SQLite.');
@@ -294,6 +292,9 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await window.getByRole('button', { name: 'Close session window' }).click();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expect(expandedTile(window)).toHaveCount(0);
 
     // A single click only selects the compact tile; the double-click expands it, the view following if it would open
     // past the window's edge.
@@ -339,6 +340,13 @@ test('a shell tile expands in place with its two panes, each taking input, and k
     await expect(panes.nth(1)).toContainText('second-42');
     await expect(panes.first()).not.toContainText('second-42');
 
+    // + › Web… in the expanded tile opens a blank tab with its address bar focused, though the tile expanding gave the keyboard away.
+    await expandedTile(window).getByRole('button', { name: 'New tab' }).click();
+    await window.getByRole('menuitem', { name: 'Web…' }).click();
+    await expect(expandedTile(window).getByTestId('web-address')).toBeFocused();
+    await expandedTile(window).getByRole('button', { name: 'Close New tab' }).click();
+    await expect(panes).toHaveCount(2);
+
     // Collapsed, it attaches nothing; expanded again, both panes come back with what they had.
     await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
     await expect(terminals(window)).toHaveCount(0);
@@ -349,13 +357,16 @@ test('a shell tile expands in place with its two panes, each taking input, and k
     await expect(panes.nth(1)).toContainText('second-42');
 
     // Maximised, the session window has both panes.
+    const shellSizeBefore = await settledBox(expandedTile(window));
     await expandedTile(window).getByRole('button', { name: 'Maximise' }).click();
     await expect(sessionWindow(window).getByTestId('shell-pane')).toHaveCount(2);
     await expect(expandedTile(window)).toHaveCount(0);
     await window.getByRole('button', { name: 'Close session window' }).click();
+    await expect(panes).toHaveCount(2);
+    const shellSizeAfter = await settledBox(expandedTile(window));
+    expect([shellSizeAfter.width, shellSizeAfter.height]).toEqual([shellSizeBefore.width, shellSizeBefore.height]);
 
     // Popped out from the expanded tile, its own window has both panes too.
-    await shellTile.dblclick();
     const [popped] = await Promise.all([app.waitForEvent('window'), expandedTile(window).getByRole('button', { name: 'Pop out' }).click()]);
     await expect(popped.getByTestId('shell-pane')).toHaveCount(2);
     await expect(popped.getByTestId('shell-pane').nth(1)).toContainText('second-42');
@@ -365,7 +376,6 @@ test('a shell tile expands in place with its two panes, each taking input, and k
     await window.getByRole('button', { name: 'Close session window' }).click();
 
     // Left expanded when the app quits, it opens expanded again, its panes attached afresh.
-    await shellTile.dblclick();
     await expect(panes).toHaveCount(2);
     await expect.poll(() => savedExpanded(window)).toContain('shell:');
     await app.close();
@@ -611,6 +621,9 @@ test("an expanded tile in a zone grows the zone to hold it, rearranges the zone'
     await expect(expandedTile(window)).toHaveCount(1);
     // The zone grows to hold the expanded tile and every other tile, which go clear of it: only as drawn.
     await expect.poll(async () => holds(await zoneRect(zone), await nodeRect(shellNode(window, first)))).toBe(true);
+    await expect
+      .poll(async () => (await Promise.all(ids.map(async (id) => holds(await zoneRect(zone), await nodeRect(shellNode(window, id)))))).every(Boolean))
+      .toBe(true);
     const open = await nodeRect(shellNode(window, first));
     const grown = await zoneRect(zone);
     for (const id of ids.filter((id) => id !== first)) {
@@ -626,6 +639,101 @@ test("an expanded tile in a zone grows the zone to hold it, rearranges the zone'
     await expect.poll(() => zoneRect(zone)).toEqual(before);
     await expect.poll(drawnTiles).toEqual(home);
     expect(await stored()).toBe(layout);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+for (const loose of [false, true]) {
+  test(`expanding the centre tile of a ${loose ? 'loose' : "zone's"} 3×3 grid pushes the tiles right of it right and the rows below it down, as blocks, and collapsing puts them back`, async () => {
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, SHELL_ENV);
+    try {
+      await setClickOpens(window, 'Expand in place');
+      if (!loose) await addEmptyZone(window, 'Grid');
+      // A1 B1 C1 / A2 B2 C2 / A3 B3 C3, a tile gap apart, the room above each for its subagents.
+      const cells = ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'] as const;
+      const STEP = { x: 256 + 16, y: 24 + 136 + 16 };
+      const ids = await shellsAt(
+        window,
+        cells.map((cell) => ({ x: 20 + 'ABC'.indexOf(cell[0]!) * STEP.x, y: 44 + (Number(cell[1]) - 1) * STEP.y })),
+        loose,
+      );
+      await expect(window.getByTestId('shell-tile')).toHaveCount(9);
+      const idOf = (cell: (typeof cells)[number]) => ids[cells.indexOf(cell)]!;
+      const drawn = async () =>
+        Object.fromEntries(await Promise.all(cells.map(async (cell) => [cell, await nodeRect(shellNode(window, idOf(cell)))] as const))) as Record<(typeof cells)[number], Rect>;
+      const stored = async () => JSON.stringify([await storedShellPlaces(window), await storedZoneLayouts(window)]);
+      await expect.poll(async () => (await drawn()).C3.y - (await drawn()).A1.y).toBe(2 * STEP.y);
+      const home = await drawn();
+      const layout = await stored();
+
+      await shellNode(window, idOf('B2')).dblclick();
+      await expect(expandedTile(window)).toHaveCount(1);
+      await expect.poll(async () => (await drawn()).B2.width).toBeGreaterThan(home.B2.width);
+      const open = (await drawn()).B2;
+      const grew = { x: open.width - home.B2.width, y: open.height - home.B2.height };
+      // Right of it, in every row but those below it: by the width it grew. The rows below it: whole rows, by the
+      // height it grew, and C3 does not also move right. The rest stay.
+      await expect
+        .poll(async () => {
+          const now = await drawn();
+          return Object.fromEntries(cells.map((cell) => [cell, { dx: now[cell].x - home[cell].x, dy: now[cell].y - home[cell].y }]));
+        })
+        .toEqual({
+          A1: { dx: 0, dy: 0 },
+          B1: { dx: 0, dy: 0 },
+          C1: { dx: grew.x, dy: 0 },
+          A2: { dx: 0, dy: 0 },
+          B2: { dx: 0, dy: 0 },
+          C2: { dx: grew.x, dy: 0 },
+          A3: { dx: 0, dy: grew.y },
+          B3: { dx: 0, dy: grew.y },
+          C3: { dx: 0, dy: grew.y },
+        });
+      expect(await stored()).toBe(layout);
+
+      await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+      await expect(expandedTile(window)).toHaveCount(0);
+      await expect.poll(drawn).toEqual(home);
+      expect(await stored()).toBe(layout);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+test("Tidy with a tile expanded lays the zone out round its expanded size, and expanding or collapsing it then moves nothing more", async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV);
+  try {
+    await setClickOpens(window, 'Expand in place');
+    const zone = await zoneWithShells(window, 'Grid', 4);
+    const ids = (await storedShellPlaces(window)).map(([id]) => id);
+    await shellNode(window, ids[0]!).dblclick();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await zone.getByRole('button', { name: 'Tidy zone' }).click();
+    // The board draws only the tiles in view, and Tidy may put some below the expanded one, past the window's edge.
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    const drawn = () => Promise.all(ids.map((id) => nodeRect(shellNode(window, id))));
+    const apart = (rects: Rect[]) =>
+      rects.every((a, i) => rects.every((b, j) => i === j || a.x >= b.x + b.width || b.x >= a.x + a.width || a.y >= b.y + b.height || b.y >= a.y + a.height));
+    await expect.poll(async () => apart(await drawn())).toBe(true);
+    // The layout was made for the expanded size, so nothing is pushed on top of it: the stored places are the drawn ones.
+    const stored = async () => (await storedShellPlaces(window)).map(([id, place]) => [id, place!.x, place!.y]);
+    const drawnAfter = await drawn();
+    const places = await stored();
+    for (const [index, id] of ids.entries()) {
+      const place = places.find(([each]) => each === id)!;
+      expect(drawnAfter[index]!.x - (await zoneRect(zone)).x).toBe(place[1]);
+    }
+    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expect(expandedTile(window)).toHaveCount(0);
+    await shellNode(window, ids[0]!).dblclick();
+    await expect(expandedTile(window)).toHaveCount(1);
+    await expect.poll(drawn).toEqual(drawnAfter);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -1087,12 +1195,13 @@ test('tiles pushed clear of an expanded tile stay fixed to the board while it pa
     await expect(expandedTile(window)).toHaveCount(1);
     await viewSettled(window);
     // Its crew and the reviewer, pushed clear of it, done moving there.
-    await expect(window.locator('.react-flow__node.displaced [data-testid="agent-tile"]')).toHaveCount(3);
     await expect.poll(() => window.locator('.react-flow__node-tile').evaluateAll((nodes) => nodes.flatMap((node) => node.getAnimations()).length)).toBe(0);
     // All of it in view, with board round it.
     await window.getByRole('button', { name: 'Fit View' }).click();
     await window.getByRole('button', { name: 'Zoom Out' }).click();
     await viewSettled(window);
+    // They are pushed right of the expanded tile, past the edge of the view until it is fitted, so only now are all drawn.
+    await expect(window.locator('.react-flow__node.displaced [data-testid="agent-tile"]')).toHaveCount(3);
     // The wheel over the board or the zone, clear of the tiles and the board's controls, pans it.
     const empty = await window.evaluate(() => {
       for (let y = innerHeight - 100; y > 100; y -= 20) {

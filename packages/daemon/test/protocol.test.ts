@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lineSplitter, normalisedAngle, notOrchestratingReason, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
+import { continuesOnCredits, lineSplitter, normalisedAngle, notOrchestratingReason, parseRole, roleLabel, validZoneFillOpacity, ZONE_COLOR_NAMES, ZONE_COLORS } from '../src/protocol.ts';
 
 function split(chunks: string[], maxLength?: number) {
   const lines: string[] = [];
@@ -118,5 +118,14 @@ describe('roleLabel', () => {
     expect(roleLabel({ role: 'custom', roleName: null })).toBe('custom');
     expect(roleLabel({ role: 'reviewer', roleName: null })).toBe('reviewer');
     expect(roleLabel({ role: null, roleName: null })).toBeNull();
+  });
+});
+
+describe('continuesOnCredits', () => {
+  it('offers Continue on credits only to a live Claude agent its usage limit stopped', () => {
+    expect(continuesOnCredits({ harness: 'claude', state: 'rate-limited', endedAt: null })).toBe(true);
+    expect(continuesOnCredits({ harness: 'codex', state: 'rate-limited', endedAt: null })).toBe(false);
+    expect(continuesOnCredits({ harness: 'claude', state: 'waiting', endedAt: null })).toBe(false);
+    expect(continuesOnCredits({ harness: 'claude', state: 'rate-limited', endedAt: '2026-10-23T10:00:00Z' })).toBe(false);
   });
 });

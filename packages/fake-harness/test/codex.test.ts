@@ -133,6 +133,20 @@ describe('fake codex', () => {
     expect(result.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').at(-1)).toMatchObject({ prompt: 'line one\nline two' });
   });
 
+  it('loses the first Enters after text with FAKE_HARNESS_LOSE_ENTERS, as a slow TUI does: the next one submits it', async () => {
+    const result = await runWithHooks({
+      scenario: 'waiting',
+      args: [TRUST, 'set up storage'],
+      input: ['SQLite', '', ''],
+      env: { FAKE_HARNESS_LOSE_ENTERS: '2' },
+    });
+
+    expect(result.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt)).toEqual([
+      'set up storage',
+      'SQLite',
+    ]);
+  });
+
   it('permission: a PermissionRequest hook decision allows the tool', async () => {
     const allow = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
     const result = await runWithHooks({

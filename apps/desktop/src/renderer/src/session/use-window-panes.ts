@@ -27,6 +27,8 @@ import { chosenFontSize } from './terminal-size';
 import { useTabRequest } from './tab-request';
 import {
   OWN_TAB,
+  localServersOf,
+  newWebTabs,
   pullRequestChoices,
   sessionChoices,
   shellOwner,
@@ -38,6 +40,7 @@ import {
   windowSurfaces,
   windowTabs,
   worstState,
+  type LocalServer,
   type ShellState,
   type TabOwner,
   type WindowSurface,
@@ -95,16 +98,18 @@ export interface WindowPanesControl {
   /** Shows another session as a tab of the pane. */
   showSession(paneId: string, surface: Surface): void;
   /**
-   * Shows the surface, with the keyboard: where its tab is, or, for a pull request or web page not open here, in a new
-   * tab of the pane (else the focused one).
+   * Shows the surface, with the keyboard: where its tab is, or, for anything but its own session or a shell tab of its
+   * own not open here (a pull request, a web page, another session, a doc…), in a new tab of the pane (else the focused one).
    */
   open(surface: Surface, paneId?: string): void;
   /** Shows `url` in a web tab: one of the window's already at it, else a new one in the pane (else the focused one). */
   openWeb(url: string, paneId?: string): void;
   /** Keeps where a web tab's page went, to reload it there at the next start. */
   navigated(web: WebSurface): void;
-  /** The address "Web…" starts at: the first port the window's running shells listen on, on localhost (a dev server). */
-  webSuggestion: string;
+  /** Opens a new web tab with no page in the pane (else the focused one): its address bar is for typing in, over the `localServers` it offers. */
+  openBlankWeb(paneId?: string): void;
+  /** The local dev servers the window's running shells listen on, each with the shell that runs it, for a blank web tab to offer. */
+  localServers: LocalServer[];
   /** The agent's pull requests the + menu offers to open as a tab. */
   pullRequestChoices: { label: string; surface: Surface }[];
   /** Splits the pane (else the focused one), a new shell tab in the new pane, beside it or below it, with the keyboard. */
@@ -143,9 +148,6 @@ const kept = new Map<string, WindowLayout | null>();
 /** The owner's window layout as this page last kept it, or heard of it: what a tab window forgets as it closes. */
 export const keptLayout = (owner: { kind: string; id: string }): WindowLayout | null | undefined => kept.get(dropKey(owner));
 
-/** The port "Web…" suggests on localhost while no shell of the window listens on one. */
-const DEFAULT_DEV_PORT = 3000;
-
 /** How long a window waits to read its layout again after reading it failed. */
 const REREAD_MS = 3000;
 
@@ -162,6 +164,8 @@ function sessionsOf(surface: WindowSurface): string[] {
     case 'web':
     case 'gate':
     case 'plan':
+    case 'doc':
+    case 'document':
       return [];
     default: {
       const unknown: never = surface;
@@ -535,15 +539,20 @@ export function useWindowPanes(
     open(surface, paneId) {
       const openKey = surfaceKey(surface);
       if (paneOf(openKey) !== undefined) select(openKey);
-      else if (surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'gate' || surface.kind === 'plan') placeAndShow(surface, { pane: paneOrFocused(paneId) });
+      else if (surface.kind !== 'own' && surface.kind !== 'shell') placeAndShow(surface, { pane: paneOrFocused(paneId) });
     },
     openWeb(url, paneId) {
       const open = surfaces.find((surface) => surface.kind === 'web' && surface.web.url === url);
       if (open !== undefined) select(open.key);
       else control.open({ kind: 'web', id: newId(), url }, paneId);
     },
+    openBlankWeb(paneId) {
+      const id = newId();
+      newWebTabs.add(id);
+      control.open({ kind: 'web', id, url: '' }, paneId);
+    },
     navigated: (web) => void change((current) => updateSurface(current, web)),
-    webSuggestion: `http://localhost:${shellStates.find((shell) => shell.ports !== undefined)?.ports?.[0] ?? DEFAULT_DEV_PORT}/`,
+    localServers: localServersOf(shellStates),
     pullRequestChoices: pullRequestChoices(agents?.find((each) => owner.kind === 'agent' && each.sessionId === owner.agent.sessionId)?.pullRequests ?? [], shown),
     split,
     splitFromDetails,

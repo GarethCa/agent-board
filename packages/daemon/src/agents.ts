@@ -1,11 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import type { PullRequest } from '@agent-board/tracker';
+import { createAgentRecordStore, guessedDocOf, recordHandlers, type AgentRecordStore } from './agent-records.ts';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
 import { createAgentLifecycle } from './agent-lifecycle.ts';
 import { systemClock, type Clock } from './clock.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
+import type { StartChange } from './agent-starts.ts';
 import { createDeliveries } from './deliveries.ts';
 import { createHookStates } from './hook-states.ts';
 import { type HarnessPaths } from './harness-path.ts';
@@ -20,29 +22,33 @@ import {
   stringParam,
 } from './params.ts';
 import type { AskHost } from './asks.ts';
+import type { DocumentHost } from './documents.ts';
 import { createPermissionHolds, stateWithPrompts, type HookReply } from './permissions.ts';
 import {
   AGENT_ERROR,
   DEFAULT_REVIEW_CAP,
   INTERRUPT_KEY,
   isMidTurn,
+  pauseRefusal,
   waitsOnUser,
   isStatusProgress,
   MAX_CREW_DEPTH,
+  MAX_FLAG_LENGTH,
   MAX_STATUS_LENGTH,
   type Agent,
   type AgentRepo,
+  type AgentStart,
   type AgentRole,
   type AgentState,
   type DaemonEvent,
   type Harness,
   type TileMove,
+  type AgentFlag,
   type DaemonMethods,
   ORCHESTRATE_SCOPES,
   type OrchestrateScope,
   type PermissionDecision,
   type LinkedIssue,
-  type ScheduleSpec,
   type SessionInfo,
   type SessionState,
   type SpawnAgentParams,
@@ -56,6 +62,7 @@ import { repoZoneOf } from './repo-zone.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { RunStart, ScheduleHost } from './schedules.ts';
 import type { SessionHost } from './sessions.ts';
+import { createBackgroundCommands } from './background-commands.ts';
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine } from './terminal-input.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
@@ -70,10 +77,21 @@ const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse',
 /** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
 const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
 
+/**
+ * Hooks of an agent's own turn, which only fire once a prompt was taken: one after something was typed at its prompt
+ * says that it was, even when its `UserPromptSubmit` was lost.
+ */
+const TURN_HOOKS: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop', 'StopFailure', 'Interrupt']);
+
+/** The hooks that end the agent's own turn: by its `Stop`, failed (a rate limit too), or interrupted (Codex's). */
+const TURN_ENDS: ReadonlySet<unknown> = new Set(['Stop', 'StopFailure', 'Interrupt']);
+
 export interface AgentHostOptions {
   db: DatabaseSync;
   /** The time `starting` gives up by: the system clock by default. */
   clock?: Clock;
+  /** How often agents at their prompt are looked at for commands left running: 5 s by default. */
+  backgroundPollMs?: number;
   sessions: SessionHost;
   /** Where agent worktrees go (ADR-0007). */
   worktreesDir: string;
@@ -107,14 +125,20 @@ export interface AgentHostOptions {
   boardMcpUrl(): string;
   /** How long a PermissionRequest hook is held for an inbox answer before the harness's own prompt takes over. */
   permissionHoldMs: number;
+  /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
+  startStepTimeoutMs?: number;
+  /** How long Enter first gets to start a turn of a message typed at an agent's prompt before it is pressed again. */
+  submitConfirmMs?: number;
   /** The zones' trackers, where agents started from or linked to an issue get it. */
   trackers: Pick<TrackerHost, 'issue'>;
   /** The pull requests made from the agent's branch, as last seen. */
   pullRequests(sessionId: string): readonly PullRequest[];
   /** The pull requests of branches it pushed to, as last seen: for its tile alone. */
   pushedPullRequests(sessionId: string): readonly PullRequest[];
-  /** Long-lived agents' cron schedules. */
-  schedules: Pick<ScheduleHost, 'get' | 'set' | 'remove'>;
+  /** The pull requests it recorded that are neither of those, as last seen: for its sidebar. */
+  recordedPullRequests?(sessionId: string): readonly PullRequest[];
+  /** Long-lived agents' cron schedules (the clocks that message them), and the clock runs fresh agents do. */
+  schedules: Pick<ScheduleHost, 'forAgent' | 'runOf'>;
   /** The zones' role templates, which an agent started in a role begins with. */
   roleTemplates: Pick<RoleTemplates, 'body' | 'describe'>;
   /** Hears an agent hand off: today, its own turn ending with a final message (its Stop hook). */
@@ -130,6 +154,8 @@ export interface AgentHostOptions {
   onRemoving(sessionId: string): void;
   /** The questions and plans agents wait on the user for: while one does, it is `waiting`. */
   asks?: Pick<AskHost, 'pendingAsk' | 'latestPlan' | 'drop'>;
+  /** The documents agents show the user. */
+  documents?: Pick<DocumentHost, 'list'>;
   /** Ends the shells in the agent's session window's tabs, and removes the tabs: it is being deleted. */
   endTabs?(sessionId: string): Promise<void>;
   /** Whether the shell `pid` is running something: `isRunningSomething` by default. */
@@ -172,6 +198,21 @@ export interface AgentHost {
   isDeleting(sessionId: string): boolean;
   /** Starts an agent; `spawnedBy` is the orchestrator starting it, if one is. */
   spawn(params: SpawnAgentParams, spawnedBy?: string, place?: FolderPlace, used?: { template: string | null }): Promise<Agent>;
+  /** Starts an agent as `spawn` does, settling as soon as its tile is on the board (`agent.start`). */
+  start(params: SpawnAgentParams): Promise<{ sessionId: string }>;
+  /** The agents being started, and the starts that failed (`AgentStart`). */
+  starts(): AgentStart[];
+  /**
+   * Runs a failed start again: one that failed before its agent was made, from the beginning; an agent whose harness
+   * exited before its first hook, relaunched in its worktree with the first message it was started with.
+   */
+  retryStart(sessionId: string, allowProjectCodexConfig: boolean): void;
+  /** Renames or moves the tile of an agent being started; once it is an agent, the agent's. */
+  updateStart(sessionId: string, change: StartChange): void;
+  /** Takes a start off the board, stopping one still going before its session would run; a start not known is over. */
+  dismissStart(sessionId: string): void;
+  /** Dismisses the starts whose tiles are in the zone, as it is removed. */
+  dismissStartsIn(zoneId: string): void;
   /**
    * Spawns a reviewer of agent `of`: in its harness, repo and zone, on a new branch `branch` (or the first free
    * one after it) from the tip of its branch, in the same folder of its worktree, with `prompt` as its task.
@@ -200,15 +241,25 @@ export interface AgentHost {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Agent;
-  /** Marks the agent's current ask seen, if it has one: it stops needing the user until it works and asks again. */
+  /**
+   * Marks the agent's current ask seen, if it has one: it stops needing the user until it works and asks again. Its
+   * flag, if it has one, goes: the user has looked.
+   */
   markSeen(sessionId: string): Agent;
+  /**
+   * Flags the live agent for a look (`Agent.flag`), replacing any flag it had: `reason` trimmed to one line, at most
+   * `MAX_FLAG_LENGTH`; `via` the crew member an orchestrator passes on, by name.
+   */
+  flag(sessionId: string, reason: string, via: string | null): Agent;
+  /** Drops the agent's flag, if it has one. */
+  clearFlag(sessionId: string): Agent;
   /** Renames the agent's tile. */
   setName(sessionId: string, name: string): Agent;
   /**
    * Sets what the agent says it is doing now (ADR-0010), replacing what was there: a summary, trimmed and at most
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
    */
-  setStatus(sessionId: string, summary: string, progress: number | null, done?: boolean): Agent;
+  setStatus(sessionId: string, summary: string, progress: number | null, done?: boolean, setBy?: string | null): Agent;
   /** Whether only its idle prompt left the live agent waiting, asking nothing (`createHookStates`'s). */
   idlePrompted(sessionId: string): boolean;
   /** Notes that the agent says its work is finished (`Agent.workFinishedAt`), until its next prompt. */
@@ -240,10 +291,22 @@ export interface AgentHost {
    */
   interrupt(sessionId: string, why: string): Agent;
   /**
+   * Resumes the rate-limited Claude agent's turn on usage credits (`agent.continueOnCredits`), and resolves with it once
+   * that turn starts. `why` says who asked, for the log. Refuses a Codex agent, and one not stopped by its usage limit.
+   */
+  continueOnCredits(sessionId: string, why: string): Promise<Agent>;
+  /**
    * Ends the agent's session, keeping its worktree and branch, and resolves with it `done`. `why` says who asked, for
    * the log line of its exit.
    */
   stop(sessionId: string, why: string): Promise<Agent>;
+  /**
+   * Pauses the live agent between turns (`hibernated`): ends its session as `stop` does, its conversation kept to
+   * carry on when it wakes. `by` is the session id of the orchestrator that paused it, or null for the user; `why`
+   * says who asked, for the log. Refuses one mid-turn, waiting on you, with the user typing or a message never sent
+   * at its prompt, or with a message being typed or sent to it.
+   */
+  pause(sessionId: string, by: string | null, why: string): Promise<Agent>;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
@@ -254,12 +317,10 @@ export interface AgentHost {
   resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
   /** Answers one of the agent's held permission prompts. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
-  /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */
-  setSchedule(sessionId: string, schedule: ScheduleSpec | null): Agent;
   /**
    * Starts a scheduled run. An agent sitting at its prompt (idle, or after a failed turn) gets `prompt` as its next
    * message. An ended agent is relaunched in its worktree with `prompt`: Claude resumes its conversation, Codex starts
-   * a new one (a hand-off resumes it). The run is skipped, saying why, while the agent is still working, rate-limited, waiting for you (on a
+   * a new one unless it was paused (a hand-off resumes it). The run is skipped, saying why, while the agent is still working, rate-limited, waiting for you (on a
    * permission prompt, or its last message asks you something) or you are typing at its prompt.
    */
   runScheduled(sessionId: string, prompt: string): RunStart;
@@ -269,10 +330,19 @@ export interface AgentHost {
    * conversation whichever the harness, skipping one that can't take it now, saying why), `from` showing `handing-off` until it has landed.
    */
   deliver(from: string, to: string, name: string, text: string): Promise<RunStart>;
+  /**
+   * Types `text` for the board at the live agent's prompt, once it is ready for its next message, as a hand-off is
+   * (`whyNotReady`): never into a turn, a question or the user's half-typed line. Not started, busy, otherwise.
+   */
+  tell(to: string, text: string): Promise<RunStart>;
   /** The agent's final message from the turn it last finished, if it has finished one. */
   finalMessage(sessionId: string): string | undefined;
   /** Hears what a client typed into the agent's terminal, so a run never adds to a draft at its prompt. */
   onInput(sessionId: string, data: string): void;
+  /** Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked. */
+  sendUnsent(sessionId: string): Promise<Agent>;
+  /** Clears the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked. */
+  clearUnsent(sessionId: string): Agent;
   /**
    * Moves the session's agent, if it has one, and its subagents on a hook call. Resolves with the hook's reply: a
    * PermissionRequest is held open until the user decides in the inbox, or the hold lapses (`signal` aborts if the
@@ -285,6 +355,8 @@ export interface AgentHost {
   onOutput(sessionId: string): void;
   /** Tells every client about the agent, if it still exists, after something it shows changed. */
   announce(sessionId: string): void;
+  /** What agents recorded about their own work (`Agent.records`). */
+  records: AgentRecordStore;
   /**
    * Tells every client the agent began (`began`) or stopped waiting on a question or plan. One beginning is a
    * new ask: what the user saw of its last is over.
@@ -354,6 +426,8 @@ export interface AgentRow extends PositionColumns {
   owns_worktree: number;
   /** 1 for an agent that may change nothing where it runs (`FolderPlace.readOnly`). */
   read_only: number;
+  /** 1 for the board master (migration 0060): at most one agent. */
+  master: number;
   /** A reviewer's: the branch it reviews, and the commit it checked out detached. Null for any other agent. */
   reviews_branch: string | null;
   reviews_head: string | null;
@@ -361,6 +435,10 @@ export interface AgentRow extends PositionColumns {
   status_summary: string | null;
   status_progress: number | null;
   status_updated_at: string | null;
+  status_set_by: string | null;
+  /** When it was paused, and the session id of the orchestrator that paused it (null for the user): `Agent.hibernated`. */
+  hibernated_at: string | null;
+  hibernated_by: string | null;
   /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
   work_finished_at: string | null;
   /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
@@ -424,14 +502,14 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
   const updateStatus = db.prepare(
-    'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ? WHERE session_id = ?',
+    'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
   const updateFinished = db.prepare('UPDATE agents SET work_finished_at = ? WHERE session_id = ?');
   const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_off = ? WHERE session_id = ?');
   /** The agents a zone's setting reaches: those in it. */
   const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ?');
-  /** The agents in a zone the user let orchestrate by hand. */
-  const clearHandGrantsIn = db.prepare('UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL');
+  /** The agents in a zone the user let orchestrate by hand: not the board master, whose scope is what it is (ADR-0019). */
+  const clearHandGrantsIn = db.prepare('UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL AND master = 0');
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
   const selectConversations = db.prepare(
     'SELECT harness_session_id, transcript_path, ended_at FROM agent_conversations WHERE session_id = ? ORDER BY id',
@@ -443,6 +521,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   );
 
   const subagents = createSubagentStore();
+  const records = createAgentRecordStore(db);
   /**
    * The final message of each agent's last finished turn (its Stop's `last_assistant_message`), which a manual edge
    * sends. Unlike its last message (`hookStates`) a new prompt keeps it: it is still the last finished turn's. Kept in
@@ -464,11 +543,23 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     save: (row, state, next, always) => save(row, state, next, always),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
     clock: options.clock ?? systemClock,
+    onCommand: (sessionId) => backgroundCommands.of(sessionId).length > 0,
     startingEnded: (sessionId) => announce(sessionId),
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
     },
+  });
+  const backgroundCommands = createBackgroundCommands({
+    atPrompt: () =>
+      (selectAll.all() as unknown as AgentRow[])
+        .filter((row) => hookStates.isAtPrompt(row) && !hookStates.isStarting(row.session_id))
+        .map((row) => ({ sessionId: row.session_id, harness: row.harness })),
+    pidOf: (sessionId) => sessions.list().find((session) => session.id === sessionId && session.endedAt === null)?.pid,
+    changed: (sessionId) => announce(sessionId),
+    pollMs: options.backgroundPollMs,
+    log: options.log,
+    hookShimPath: options.hookShimPath,
   });
   const deliveries = createDeliveries({
     write: (sessionId, data) => sessions.write(sessionId, data),
@@ -476,11 +567,20 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     requireAgent: (sessionId) => requireAgent(sessionId),
     whyNotReady: hookStates.whyNotReady,
     relaunch: (row, prompt, why, codexSessionId) => lifecycle.relaunch(row, prompt, why, codexSessionId),
+    pausing: (sessionId) => lifecycle.pausing(sessionId),
+    promptNow(sessionId) {
+      const row = getRow(sessionId);
+      return row === undefined || row.ended_at !== null ? 'moved-on' : hookStates.promptNow(row);
+    },
     announce: (sessionId) => announce(sessionId),
     log: options.log,
+    // Its waits are the terminal's, in real time: never the schedules' clock, which tests drive by hand.
+    submitConfirmMs: options.submitConfirmMs,
   });
+  const startupLines = createStartupLines(options.sessions, (sessionId) => hookStates.isStarting(sessionId), (sessionId) => announce(sessionId));
   const spawns = createAgentSpawns({
     ...options,
+    records,
     getRow: (sessionId) => getRow(sessionId),
     get: (sessionId) => get(sessionId),
     rows: () => selectAll.all() as unknown as AgentRow[],
@@ -503,7 +603,18 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     subagents,
     permissions,
     transcripts,
-    hookStates,
+    // What is kept of an agent's start goes with its run, and with it.
+    hookStates: {
+      relaunched(sessionId) {
+        startupLines.forget(sessionId);
+        hookStates.relaunched(sessionId);
+      },
+      deleted(sessionId) {
+        startupLines.forget(sessionId);
+        spawns.forget(sessionId);
+        hookStates.deleted(sessionId);
+      },
+    },
     deliveries,
   });
 
@@ -514,16 +625,48 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const unscheduledState = (row: AgentRow): AgentState =>
     row.ended_at !== null && row.stopped_by_restart === 1 ? 'stopped-by-restart' : row.state;
 
+  /** Whether the agent is paused: ended by a pause, not woken since. */
+  const isHibernated = (row: AgentRow) => row.ended_at !== null && row.hibernated_at !== null;
+
+  /** Who paused an agent, by name as it is now: the user (null), or the orchestrator `id`, removed or not. */
+  const pausedBy = (id: string | null): { by: string | null; byId: string | null } =>
+    id === null ? { by: null, byId: null } : { by: getRow(id)?.name ?? 'a removed orchestrator', byId: id };
+
+  /** Each live agent's flag (`Agent.flag`), without who it reaches: in memory, as its session ending clears it. */
+  const flags = new Map<string, Omit<AgentFlag, 'to'>>();
+  /** The last flag's id: each new one is the next. */
+  let lastFlagId = 0;
+  const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
+  const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
+
+  /** The agent's flag, reaching its orchestrator while that one is live, else the user. */
+  const flagOf = (row: AgentRow): AgentFlag | null => {
+    const flag = flags.get(row.session_id);
+    if (flag === undefined || row.ended_at !== null) return null;
+    const led = row.spawned_by !== null && selectLiveSession.get(row.spawned_by) !== undefined;
+    return { ...flag, to: led ? 'orchestrator' : 'user' };
+  };
+
   const toAgent = (row: AgentRow): Agent => {
-    const schedule = options.schedules.get(row.session_id);
+    const schedule = options.schedules.forAgent(row.session_id);
     const live = row.ended_at === null;
     const ask = live ? (options.asks?.pendingAsk(row.session_id) ?? null) : null;
     const plan = options.asks?.latestPlan(row.session_id) ?? null;
-    const hooked = schedule?.enabled ? hookStates.scheduledState(row) : unscheduledState(row);
+    // A clock's fresh agent whose turn ended on a question waits for you, as a scheduled one does: its run goes on.
+    const clockRunAsking = options.schedules.runOf(row.session_id) !== undefined && hookStates.askingAtPrompt(row);
+    const hooked = isHibernated(row) ? 'hibernated' : schedule?.enabled ? hookStates.scheduledState(row) : clockRunAsking ? 'waiting' : unscheduledState(row);
     // Its call waits on the user mid-turn, whatever its hooks say, but for a permission prompt of a subagent's.
     const state = live && waitsOnUser({ ask, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
     // Its first prompt is queued and its session has sent no hook: the turn hasn't begun, which is not idle.
-    const started = live && state === 'idle' && hookStates.isStarting(row.session_id) ? 'starting' : state;
+    const starting = live && state === 'idle' && hookStates.isStarting(row.session_id);
+    // At its prompt, asking nothing, with a command it left running: its work goes on, and it doesn't wait for you.
+    const commands = live && !starting && state === hooked && hookStates.isAtPrompt(row) ? backgroundCommands.of(row.session_id) : [];
+    const started = starting ? 'starting' : commands.length > 0 ? 'on-command' : state;
+    // One the board stopped as it started (its notice says why) didn't fail to start.
+    const startup =
+      started === 'starting' || (!live && hookStates.startFailed(row.session_id) && row.notice === null)
+        ? { output: startupLines.get(row.session_id), failed: !live }
+        : null;
     const shownState =
       deliveries.isHandingOff(row.session_id) && state !== 'waiting' && state !== 'needs-permission' && permissions.prompts(row.session_id).length === 0
         ? 'handing-off'
@@ -549,6 +692,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // and tell you again that it waits when it came back.
       state: shownState,
       notice: row.notice,
+      hibernated: isHibernated(row) ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by) } : null,
       earlierConversations: (selectConversations.all(row.session_id) as unknown as ConversationRow[]).map((each) => ({
         conversationId: each.harness_session_id,
         transcriptPath: each.transcript_path,
@@ -557,7 +701,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       status: statusAfterTurn(
         row.status_summary === null || row.status_updated_at === null
           ? null
-          : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at },
+          : { summary: row.status_summary, progress: row.status_progress, updatedAt: row.status_updated_at, setBy: row.status_set_by },
         isWorking({ state: shownState, ask, plan, endedAt: row.ended_at }),
         // Kept for hand-offs, but of a turn before an interrupted one: no tile shows it as that turn's.
         hookStates.endedOnNoMessage(row.session_id)
@@ -579,19 +723,28 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       shellSessionId: lifecycle.fallbackShell(row.session_id) ?? null,
       shellHarness: lifecycle.shellHarnessOf(row),
       subagents: [...subagents.of(row.session_id)],
+      commands: [...commands],
       pullRequests: [...options.pullRequests(row.session_id)],
       pushedPullRequests: [...options.pushedPullRequests(row.session_id)],
+      recordedPullRequests: [...(options.recordedPullRequests?.(row.session_id) ?? [])],
       lastMessage: hookStates.lastMessage(row.session_id) ?? null,
       finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
       plan,
+      docs: options.documents?.list(row.session_id) ?? [],
       schedule,
       reviewOf: row.review_of,
       reviewCap: row.review_cap ?? DEFAULT_REVIEW_CAP,
       ownsWorktree: row.owns_worktree === 1,
+      master: row.master === 1,
       orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
+      records: records.of(row.session_id),
+      guessedDoc: guessedDocOf(row.worktree),
+      startup,
+      flag: flagOf(row),
+      unsent: live ? (deliveries.unsent(row.session_id) ?? null) : null,
     };
   };
 
@@ -724,10 +877,49 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
   };
 
-  return {
+  /** Tells every client the agent changed, and returns it. */
+  const announced = (sessionId: string): Agent => {
+    const agent = get(sessionId)!;
+    options.broadcast({ type: 'agent.updated', agent });
+    return agent;
+  };
+
+  const host: AgentHost = {
     nextName: spawns.nextName,
 
     spawn: spawns.spawn,
+
+    start: spawns.start,
+
+    starts: spawns.starts,
+
+    retryStart(sessionId, allowProjectCodexConfig) {
+      if (spawns.pending.has(sessionId)) return spawns.pending.retry(sessionId, allowProjectCodexConfig);
+      const row = getRow(sessionId);
+      if (row === undefined) throw invalidParams(`no agent being started as ${sessionId}`);
+      if (row.ended_at === null || !hookStates.startFailed(sessionId)) throw invalidParams(`${row.name} did not fail to start`);
+      // The same first message as it was started with: its role's template and issue too, not only its task.
+      const first = spawns.firstMessage(sessionId) ?? (row.description || undefined);
+      const started = lifecycle.relaunch(row, first, 'to retry its start', null);
+      if (!started.started) throw invalidParams(`${row.name} can't be started again: ${started.reason}`);
+      startupLines.forget(sessionId);
+      // Starting again, so a second exit before its first hook is a failed start as well.
+      if (first !== undefined) hookStates.promptQueued(sessionId);
+      announce(sessionId);
+    },
+
+    updateStart(sessionId, change) {
+      const zoneId = change.move?.zoneId;
+      if (zoneId != null && selectZone.get(zoneId) === undefined) throw invalidParams(`no zone ${zoneId}`);
+      if (spawns.pending.has(sessionId)) return void spawns.pending.update(sessionId, change);
+      // Its session runs by now: the change is the agent's.
+      if (change.move !== undefined) host.move(sessionId, change.move);
+      if (change.name !== undefined) host.setName(sessionId, change.name.trim());
+    },
+
+    dismissStart: (sessionId) => spawns.pending.dismiss(sessionId),
+
+    dismissStartsIn: (zoneId) => spawns.pending.dismissIn(zoneId),
 
     spawnReviewer: spawns.spawnReviewer,
 
@@ -764,23 +956,29 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     answer: deliveries.answer,
 
-    // An ended agent may have one too: its next run relaunches it.
-    setSchedule(sessionId, schedule) {
-      requireAgent(sessionId);
-      if (schedule === null) options.schedules.remove(sessionId);
-      else options.schedules.set(sessionId, schedule);
-      announce(sessionId);
-      return get(sessionId)!;
-    },
-
     runScheduled: deliveries.runScheduled,
 
     deliver: deliveries.deliver,
+    tell: deliveries.tell,
 
     finalMessage: (sessionId) =>
       (selectFinalMessage.get(sessionId) as { final_message: string | null } | undefined)?.final_message ?? undefined,
 
-    onInput: hookStates.typed,
+    onInput(sessionId, data) {
+      hookStates.typed(sessionId, data);
+      deliveries.typed(sessionId, data);
+    },
+
+    async sendUnsent(sessionId) {
+      await deliveries.send(sessionId);
+      return get(sessionId)!;
+    },
+
+    clearUnsent(sessionId) {
+      // Typed at its terminal as much as the user's keys are: a draft of theirs there goes with it.
+      hookStates.typed(sessionId, deliveries.clear(sessionId));
+      return get(sessionId)!;
+    },
 
     interrupt(sessionId, why) {
       const agent = requireAgent(sessionId);
@@ -793,11 +991,33 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       permissions.drop(sessionId);
       options.asks?.drop(sessionId);
       hookStates.interrupted(sessionId);
+      deliveries.turnEnded(sessionId, false);
       save(getRow(sessionId)!, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
       return get(sessionId)!;
     },
 
+    async continueOnCredits(sessionId, why) {
+      const agent = requireAgent(sessionId);
+      if (agent.harness !== 'claude') throw invalidParams(`${agent.name} runs ${agent.harness}, which has no usage credits to continue on`);
+      options.log(`continuing agent ${sessionId} on credits for ${why}`);
+      await deliveries.continueOnCredits(sessionId, () => sessions.screenLines(sessionId));
+      return get(sessionId)!;
+    },
+
     stop: lifecycle.stop,
+
+    pause(sessionId, by, why) {
+      const agent = requireAgent(sessionId);
+      const row = getRow(sessionId)!;
+      const refusal =
+        pauseRefusal(agent) ??
+        (lifecycle.pausing(sessionId) === undefined ? undefined : 'it is already being paused') ??
+        (deliveries.unsent(sessionId) === undefined ? undefined : 'a message typed at its prompt was never sent') ??
+        (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined) ??
+        hookStates.whyNotReady(row, true);
+      if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`);
+      return lifecycle.hibernate(sessionId, by, why);
+    },
 
     resume: lifecycle.resume,
 
@@ -838,11 +1058,27 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     markSeen(sessionId) {
       const row = requireRow(sessionId);
-      if (row.seen === 0 && waitsForYou(toAgent(row))) {
-        updateSeen.run(1, sessionId);
-        options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
-      }
+      const unflagged = flags.delete(sessionId);
+      // Seen is the user having looked, whatever Needs you lists: a finished turn too, so listing those later shows it read.
+      const seeing = row.seen === 0 && waitsForYou(toAgent(row), 'turns');
+      if (seeing) updateSeen.run(1, sessionId);
+      if (seeing || unflagged) options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
       return get(sessionId)!;
+    },
+
+    flag(sessionId, reason, via) {
+      const row = requireRow(sessionId);
+      if (row.ended_at !== null) throw invalidParams(`${row.name} has ended`);
+      const text = oneLine(reason);
+      if (text === '') throw invalidParams('say why you need a look: the reason must not be blank');
+      if (text.length > MAX_FLAG_LENGTH) throw invalidParams(`the reason is ${text.length} characters; at most ${MAX_FLAG_LENGTH}`);
+      flags.set(sessionId, { id: ++lastFlagId, reason: text, at: new Date().toISOString(), via });
+      return announced(sessionId);
+    },
+
+    clearFlag(sessionId) {
+      requireRow(sessionId);
+      return flags.delete(sessionId) ? announced(sessionId) : get(sessionId)!;
     },
 
     setMuted(sessionId, muted) {
@@ -861,7 +1097,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    setStatus(sessionId, summary, progress, done = false) {
+    setStatus(sessionId, summary, progress, done = false, setBy = null) {
       requireAgent(sessionId);
       const text = oneLine(summary);
       if (text === '') throw invalidParams('the status summary must not be blank');
@@ -872,7 +1108,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         throw invalidParams('progress must be a whole number from 0 to 100');
       }
       const at = new Date().toISOString();
-      updateStatus.run(text, progress, at, sessionId);
+      updateStatus.run(text, progress, at, setBy, sessionId);
       if (done && requireRow(sessionId).work_finished_at === null) updateFinished.run(at, sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
@@ -930,6 +1166,16 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // The agent may have just run `git branch -m` or checked out another branch.
       if (payload.agent_id === undefined && BRANCH_HOOKS.has(payload.hook_event_name as string)) void refreshBranch(sessionId);
       if (payload.agent_id === undefined && TURN_BOUNDARIES.has(payload.hook_event_name)) options.onTurnBoundary?.(sessionId);
+      // Its own turn started or ran, so what was typed at its prompt has been taken; never a stale hook of a turn interrupted.
+      if (payload.agent_id === undefined && TURN_HOOKS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
+        if (payload.hook_event_name === 'UserPromptSubmit') deliveries.promptSubmitted(sessionId, payload.prompt);
+        deliveries.turnSeen(sessionId, payload.hook_event_name === 'Interrupt');
+      }
+      // Its own turn ended: what was queued in it is due to start a turn of its own.
+      if (payload.agent_id === undefined && TURN_ENDS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
+        const limited = payload.hook_event_name === 'StopFailure' && payload.error === 'rate_limit';
+        deliveries.turnEnded(sessionId, payload.hook_event_name !== 'Interrupt' && !limited, limited ? 'rate-limited' : 'interrupted');
+      }
       // A new prompt is new work: it is no longer finished.
       if (payload.agent_id === undefined && payload.hook_event_name === 'UserPromptSubmit' && row.work_finished_at !== null) {
         updateFinished.run(null, sessionId);
@@ -937,18 +1183,33 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       }
       // Its own turn ended, so no call of it still waits on the user: one its harness gave up on (timed out) goes too.
       if (payload.agent_id === undefined && payload.hook_event_name === 'Stop') options.asks?.drop(sessionId);
+      // Before its state is saved, so the turn's end already shows what it left running.
+      backgroundCommands.onHook(sessionId, payload);
       return hookStates.onHook(row, payload, signal);
     },
 
-    onOutput: hookStates.outputSeen,
+    onOutput(sessionId) {
+      hookStates.outputSeen(sessionId);
+      if (hookStates.isStarting(sessionId)) startupLines.soon(sessionId);
+      deliveries.outputSeen(sessionId);
+    },
 
     onExit(session) {
       if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
       hookStates.ended(session.id);
+      backgroundCommands.forget(session.id);
+      // What it printed last, as it ended, is why its start failed.
+      if (hookStates.startFailed(session.id)) startupLines.now(session.id);
+      deliveries.ended(session.id);
       lifecycle.stopGuard(session.id);
+      flags.delete(session.id);
       const row = getRow(session.id);
       if (row === undefined) return;
+      // Its crew's flags reach the user now.
+      for (const { session_id: crewId } of selectCrew.all(session.id) as { session_id: string }[]) {
+        if (flags.has(crewId)) announce(crewId);
+      }
       // Always tell clients: the agent has ended even if its state already said so. Stopped by the user is not a failure.
       const state = lifecycle.isStopping(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
       save(row, state, subagentsAfterExit(subagents.of(session.id), state, new Date()), true);
@@ -961,6 +1222,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     announce,
+    records,
 
     waitChanged(sessionId, began) {
       if (began) updateSeen.run(0, sessionId);
@@ -974,37 +1236,62 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     onShellChanged: lifecycle.onShellChanged,
 
     close: () => {
+      backgroundCommands.close();
       lifecycle.close();
       permissions.close();
     },
+  };
+  return host;
+}
+
+/** `agent.spawn`'s and `agent.start`'s params, checked. */
+function spawnParams(params: unknown): SpawnAgentParams {
+  const p = paramsObject(params);
+  return {
+    zoneId: zoneIdParam(p),
+    repo: agentRepoParam(p),
+    baseBranch: optionalStringParam(p, 'baseBranch'),
+    branch: optionalStringParam(p, 'branch'),
+    harness: optionalStringParam(p, 'harness') as Harness | undefined,
+    model: optionalStringParam(p, 'model'),
+    role: optionalStringParam(p, 'role'),
+    noTemplate: optionalBooleanParam(p, 'noTemplate'),
+    checkout: optionalStringParam(p, 'checkout') as 'main' | 'worktree' | undefined,
+    issueZoneId: optionalStringParam(p, 'issueZoneId'),
+    allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
+    prompt: optionalStringParam(p, 'prompt'),
+    name: optionalStringParam(p, 'name'),
+    issueId: optionalStringParam(p, 'issueId'),
+    position: optionalPlaceParam(p),
+    orchestrate: optionalStringParam(p, 'orchestrate') as OrchestrateScope | undefined,
+    cols: dimensionParam(p, 'cols'),
+    rows: dimensionParam(p, 'rows'),
   };
 }
 
 /** The `agent.*` RPC handlers. */
 export function agentHandlers<Context>(
   agents: AgentHost,
-): RpcHandlers<Pick<DaemonMethods, Extract<keyof DaemonMethods, `agent.${string}`>>, Context> {
+): RpcHandlers<Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `agent.${string}`>, 'agent.setSchedule'>>, Context> {
   return {
-    'agent.spawn': (params) => {
+    ...recordHandlers<Context>({ records: agents.records, agents }),
+    'agent.spawn': (params) => agents.spawn(spawnParams(params)),
+    'agent.start': (params) => agents.start(spawnParams(params)),
+    'agent.starts': () => agents.starts(),
+    'agent.retryStart': (params) => {
       const p = paramsObject(params);
-      return agents.spawn({
-        zoneId: zoneIdParam(p),
-        repo: agentRepoParam(p),
-        baseBranch: optionalStringParam(p, 'baseBranch'),
-        branch: optionalStringParam(p, 'branch'),
-        harness: optionalStringParam(p, 'harness') as Harness | undefined,
-        model: optionalStringParam(p, 'model'),
-        role: optionalStringParam(p, 'role'),
-        issueZoneId: optionalStringParam(p, 'issueZoneId'),
-        allowProjectCodexConfig: optionalBooleanParam(p, 'allowProjectCodexConfig'),
-        prompt: optionalStringParam(p, 'prompt'),
-        name: optionalStringParam(p, 'name'),
-        issueId: optionalStringParam(p, 'issueId'),
-        position: optionalPlaceParam(p),
-        orchestrate: optionalStringParam(p, 'orchestrate') as OrchestrateScope | undefined,
-        cols: dimensionParam(p, 'cols'),
-        rows: dimensionParam(p, 'rows'),
-      });
+      agents.retryStart(stringParam(p, 'sessionId'), optionalBooleanParam(p, 'allowProjectCodexConfig') ?? false);
+      return null;
+    },
+    'agent.updateStart': (params) => {
+      const p = paramsObject(params);
+      const move = p.move === undefined ? undefined : moveParams(paramsObject(p.move));
+      agents.updateStart(stringParam(p, 'sessionId'), { name: p.name === undefined ? undefined : requiredNameParam(p, 'name'), move });
+      return null;
+    },
+    'agent.dismissStart': (params) => {
+      agents.dismissStart(stringParam(paramsObject(params), 'sessionId'));
+      return null;
     },
     'agent.list': () => agents.list(),
     'agent.refreshBranches': async () => {
@@ -1033,7 +1320,11 @@ export function agentHandlers<Context>(
       return null;
     },
     'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId'), "the app's agent.interrupt"),
+    'agent.continueOnCredits': (params) => agents.continueOnCredits(stringParam(paramsObject(params), 'sessionId'), "the app's agent.continueOnCredits"),
+    'agent.sendUnsent': (params) => agents.sendUnsent(stringParam(paramsObject(params), 'sessionId')),
+    'agent.clearUnsent': (params) => agents.clearUnsent(stringParam(paramsObject(params), 'sessionId')),
     'agent.stop': (params) => agents.stop(stringParam(paramsObject(params), 'sessionId'), "the app's agent.stop"),
+    'agent.pause': (params) => agents.pause(stringParam(paramsObject(params), 'sessionId'), null, "the app's agent.pause"),
     'agent.resume': (params) => {
       const p = paramsObject(params);
       if (p.force !== undefined && typeof p.force !== 'boolean') throw invalidParams('force must be a boolean');
@@ -1050,16 +1341,6 @@ export function agentHandlers<Context>(
     'agent.link': (params) => {
       const p = paramsObject(params);
       return agents.link(stringParam(p, 'sessionId'), p.issueId === null ? null : stringParam(p, 'issueId'));
-    },
-    'agent.setSchedule': (params) => {
-      const p = paramsObject(params);
-      if (p.schedule === null) return agents.setSchedule(stringParam(p, 'sessionId'), null);
-      const schedule = paramsObject(p.schedule);
-      return agents.setSchedule(stringParam(p, 'sessionId'), {
-        cron: stringParam(schedule, 'cron'),
-        prompt: stringParam(schedule, 'prompt'),
-        enabled: optionalBooleanParam(schedule, 'enabled'),
-      });
     },
     'agent.move': (params) => {
       const p = paramsObject(params);
@@ -1088,4 +1369,46 @@ function agentRepoParam(fields: Record<string, unknown>): AgentRepo | undefined 
   const repo = paramsObject(fields.repo);
   if (repo.scratch === true) return { scratch: true };
   return { path: stringParam(repo, 'path') };
+}
+
+/** How often a starting agent's tile is told the last line its terminal shows, at most. */
+const STARTUP_LINE_MS = 250;
+
+/**
+ * The last line each starting agent's terminal showed, for its tile (`AgentStartup.output`): read from its screen a
+ * moment after output comes, at most every `STARTUP_LINE_MS`, and told to clients when it changes.
+ */
+function createStartupLines(
+  sessions: Pick<SessionHost, 'screenLine'>,
+  isStarting: (sessionId: string) => boolean,
+  changed: (sessionId: string) => void,
+) {
+  const lines = new Map<string, string>();
+  const due = new Set<string>();
+  const read = (sessionId: string) =>
+    void sessions
+      .screenLine(sessionId)
+      .then((line) => {
+        if (line === null || line === lines.get(sessionId)) return;
+        lines.set(sessionId, line);
+        changed(sessionId);
+      })
+      .catch(() => {});
+  return {
+    get: (sessionId: string): string | null => lines.get(sessionId) ?? null,
+    /** Forgets the agent's line: it is relaunched, or deleted. */
+    forget: (sessionId: string) => void lines.delete(sessionId),
+    /** Reads the line soon, once for all the output that comes meanwhile. */
+    soon(sessionId: string) {
+      if (due.has(sessionId)) return;
+      due.add(sessionId);
+      setTimeout(() => {
+        due.delete(sessionId);
+        // One that ended meanwhile had its line read as it ended.
+        if (isStarting(sessionId)) read(sessionId);
+      }, STARTUP_LINE_MS).unref();
+    },
+    /** Reads the line now: the session is ending. */
+    now: read,
+  };
 }

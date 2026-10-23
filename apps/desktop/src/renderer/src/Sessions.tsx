@@ -7,6 +7,7 @@ import { HarnessMark } from './board/HarnessMark';
 import { errorMessage } from '../../shared/errors';
 import { HARNESSES } from './harness';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from './states';
+import { useNeedsYouShows } from './needs-you-setting';
 import { Button, EmptyState, PanelRow, Section, StatusPill, Tag, Tooltip, useToast } from './ui';
 import { useSessionWindows } from './windows/SessionWindows';
 import { panesLabel } from './session/panes';
@@ -29,6 +30,7 @@ interface SessionsProps {
  * and any other session the daemon runs. Clicking a row shows its tile; Open opens its window on the board.
  */
 export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAgent, onOpenShell }: SessionsProps) {
+  const shows = useNeedsYouShows();
   const sessions = useLiveSessions();
   const windows = useSessionWindows();
   const board = useBoardCommands();
@@ -64,7 +66,7 @@ export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAge
               id={agent.sessionId}
               mark={<HarnessMark harness={agent.harness} />}
               name={agent.name}
-              end={<StatusPill {...agentPill(agent, TILE_STATE_LABELS)} title={STATE_LABELS[agent.state]} />}
+              end={<StatusPill {...agentPill(agent, shows, TILE_STATE_LABELS)} title={STATE_LABELS[agent.state]} />}
               onShow={picked(() => board.focusSession(agent.sessionId))}
               onOpen={picked(() => onOpenAgent(agent))}
             />

@@ -497,11 +497,132 @@
   overflow: hidden;
 }
 
+/* Beside it, quietly, the agents on a command (RunningCount): in their teal, never the needs-you look. */
+.running-count.ui-button {
+  border-color: transparent;
+  background: var(--state-on-command-soft);
+  color: var(--state-on-command-ink);
+}
+
+.running-count.ui-button > svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.ui-popover.running-popover {
+  width: var(--size-inbox);
+  max-height: calc(100vh - var(--island-height) - var(--space-8));
+  padding: 0;
+  overflow-y: auto;
+}
+
+.running-list-head {
+  padding: var(--space-3) var(--space-3) var(--space-2-5) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+}
+
+.running-list-head h2 {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+}
+
+.running-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.running-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1-5) var(--space-2);
+  align-items: center;
+  padding: var(--space-3) var(--space-3-5);
+}
+
+.running-list li + li {
+  border-top: 1px solid var(--separator);
+}
+
+.running-item-name {
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-item-command {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: var(--space-1-5);
+  min-width: 0;
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--state-on-command-soft);
+  color: var(--state-on-command-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
+.running-item-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.running-item-command b {
+  margin-left: auto;
+  font-weight: var(--weight-semibold);
+}
+
 /* Zones (bottom left) */
 
+/* At most about a third of the bar, and less when the dock needs the room (`useDockScroll` sets --dock-right): the dock keeps
+   its minimum, the zones pill keeps its own. With no zones it is just the help button. The zones scroll sideways inside, fading
+   at an edge with more past it (`data-more`, from `useSidewaysScroll`). */
 .zone-jump {
-  max-width: calc(50% - var(--space-8));
+  max-width: max(var(--size-zones-min), min(32%, var(--size-zones-max), calc(100% - var(--dock-right, 0px) - var(--size-dock-min) - var(--island-inset) - var(--size-dock-gap))));
+}
+
+.zone-jump:has(.zone-jump-zone) {
+  min-width: var(--size-zones-min);
+}
+
+.zone-jump-track {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-0-5);
+  align-items: center;
+  min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.zone-jump-track::-webkit-scrollbar {
+  display: none;
+}
+
+.zone-jump-track > * {
+  flex: none;
+}
+
+/* A mask reads only its colour's alpha, so the opaque text token stands in for the solid. */
+.zone-jump[data-more='end'] .zone-jump-track {
+  mask-image: linear-gradient(to right, var(--text) calc(100% - var(--space-6)), transparent);
+}
+
+.zone-jump[data-more='start'] .zone-jump-track {
+  mask-image: linear-gradient(to right, transparent, var(--text) var(--space-6));
+}
+
+.zone-jump[data-more='both'] .zone-jump-track {
+  mask-image: linear-gradient(to right, transparent, var(--text) var(--space-6), var(--text) calc(100% - var(--space-6)), transparent);
+}
+
+.zone-jump-zone.ui-button[aria-current='true'] {
+  background: var(--hover);
 }
 
 .zone-jump-zone.ui-button {
@@ -869,4 +990,286 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-25);
+}
+
+/* The zoom bar's View popover: one labelled segmented row per view setting, over a one-line footnote. */
+.view-popover {
+  display: grid;
+  gap: var(--space-3);
+  width: var(--size-view-popover);
+}
+
+.view-row {
+  display: grid;
+  gap: var(--space-1-25);
+}
+
+.view-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.view-foot {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: var(--space-px) solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+/* The View button is an eye with a caret, wider than a square tool, to say it opens a popover. */
+.ui-tool.view-button {
+  width: auto;
+  gap: var(--space-px);
+  padding: 0 var(--space-1-25);
+}
+
+.ui-tool.view-button .view-caret {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+/*
+ * The board master (ADR-0019): its button beside Needs you, in its teal, and its panel docked on the right of the
+ * board under the top islands, as the Edge rules panel is: Watching and For you on top, its chat filling the rest.
+ */
+.master-glyph {
+  display: inline-grid;
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--master);
+  color: var(--master-soft);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+}
+
+.master-button.ui-button {
+  border: 1.5px solid color-mix(in srgb, var(--master) 50%, transparent);
+  background: var(--master-soft);
+  color: var(--master-ink);
+  font-weight: var(--weight-bold);
+}
+
+.master-button.ui-button[aria-pressed='true'] {
+  border-color: var(--master);
+}
+
+.master-button-count {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--master);
+  color: var(--master-soft);
+  font-size: var(--font-size-2xs);
+}
+
+.master-panel {
+  position: absolute;
+  top: calc(var(--island-inset) * 2 + var(--island-height));
+  right: var(--island-inset);
+  bottom: var(--island-inset);
+  z-index: var(--layer-chrome);
+  display: flex;
+  flex-direction: column;
+  width: var(--size-master-panel);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-window);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-overlay);
+  font-size: var(--font-size-sm);
+}
+
+.master-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+
+.master-panel-head h2 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.master-panel-scope {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.master-panel-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.master-panel-section {
+  flex: none;
+  display: grid;
+  gap: var(--space-1-5);
+  padding: var(--space-2-5) var(--space-3);
+  border-bottom: 1px solid var(--separator);
+}
+
+.master-panel-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.master-panel-section h3 small {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.master-panel-muted {
+  margin: 0;
+  color: var(--muted);
+}
+
+.master-panel-start p {
+  margin: 0;
+}
+
+.master-watch,
+.master-for-you {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.master-watch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.master-watch-row:hover {
+  background: var(--hover);
+}
+
+.master-watch-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-xs);
+  background: var(--zone-color);
+}
+
+.master-watch-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.master-panel-for-you {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.master-for-you-item {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--state-waiting);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--state-waiting) 5%, var(--raised));
+}
+
+.master-for-you-item p {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.master-for-you-item .ui-button {
+  justify-self: start;
+}
+
+.master-for-you-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.master-for-you-head small {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.master-digest {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px dashed color-mix(in srgb, var(--master) 55%, var(--border));
+  border-radius: var(--radius-md);
+}
+
+.master-digest-head {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--master-ink);
+  font: inherit;
+  font-weight: var(--weight-bold);
+  text-align: left;
+  cursor: pointer;
+}
+
+.master-digest-head small {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.master-panel-chat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--window-bg);
+  color: var(--window-ink);
+}
+
+/*
+ * In a narrower window the island would reach the creation toolbar: the Master button drops its word, then itself
+ * (⌘⇧M and the master's tile still reach it). The widths are where the islands would otherwise meet.
+ */
+@media (max-width: 1239px) {
+  .master-button-label {
+    display: none;
+  }
+}
+
+@media (max-width: 1099px) {
+  .master-button.ui-button {
+    display: none;
+  }
 }

@@ -43,10 +43,10 @@ describe('fitParts', () => {
 });
 
 describe('the shape catalogue (row CK)', () => {
-  it('has the 42 shapes of the mock: 15 flowchart, 15 architecture and 12 UML, each named once', () => {
+  it('has the 43 shapes: 15 flowchart, 15 architecture and 13 UML, each named once', () => {
     const counts = SHAPE_GROUPS.map(({ id }) => SHAPE_TYPES.filter((type) => SHAPES[type].group === id).length);
-    expect(counts).toEqual([15, 15, 12]);
-    expect(new Set(SHAPE_TYPES.map((type) => SHAPES[type].name)).size).toBe(42);
+    expect(counts).toEqual([15, 15, 13]);
+    expect(new Set(SHAPE_TYPES.map((type) => SHAPES[type].name)).size).toBe(43);
   });
 
   it("draws today's four as before: the outline fills the box", () => {

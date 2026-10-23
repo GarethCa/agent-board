@@ -41,8 +41,11 @@ export interface ReviewHostOptions {
 export interface ReviewHost {
   /** Hears an agent's turn end with a final message: a reviewer's is its doc, and it is stopped. */
   onHandoff(sessionId: string): void;
-  /** Hears an agent's session end: a reviewer's with no doc fails its round, unless a restart stopped it. */
-  onExit(sessionId: string, stoppedByRestart: boolean): void;
+  /**
+   * Hears an agent's session end: a reviewer's with no doc fails its round, unless it will carry on (`resumable`: a
+   * restart stopped it, or it was paused).
+   */
+  onExit(sessionId: string, resumable: boolean): void;
   /**
    * Deletes an agent with `remove`: first the reviewers of its rounds, telling every client, as `remove` would not; and
    * after it, tells them of the rounds it reviewed, which no longer have their reviewer.
@@ -203,9 +206,9 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
       agents.stop(sessionId, 'its review being in').catch((error: Error) => options.log(`could not stop reviewer ${sessionId}: ${error.message}`));
     },
 
-    onExit(sessionId, stoppedByRestart) {
+    onExit(sessionId, resumable) {
       const row = reviewing(sessionId);
-      if (row === undefined || stoppedByRestart) return;
+      if (row === undefined || resumable) return;
       setFailed.run('the reviewer ended before it left its review', row.id);
       announce(row.id);
     },

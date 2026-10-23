@@ -38,6 +38,8 @@ export function createNodePtyBackend(options: { log?: (message: string) => void 
       });
       pty.onExit(({ exitCode, signal }) => {
         entry.exit = signal ? { exitCode, signal } : { exitCode };
+        // The leader is gone; whatever it left behind in its group must not keep writing into the agent's folder.
+        if (process.platform !== 'win32') signalGroup(pty.pid, 'SIGKILL');
         terminals.delete(options.id);
         for (const listener of entry.listeners) listener.onExit(entry.exit);
         entry.listeners.clear();
@@ -51,7 +53,11 @@ export function createNodePtyBackend(options: { log?: (message: string) => void 
       get(id).pty.resize(cols, rows);
     },
     kill(id, signal = 'SIGHUP') {
-      get(id).pty.kill(process.platform === 'win32' ? undefined : signal);
+      const { pty } = get(id);
+      if (process.platform === 'win32') return pty.kill();
+      // The whole process group, so what the agent started (a build, a dev server) stops with it.
+      signalGroup(pty.pid, signal);
+      pty.kill(signal);
     },
     pause(id) {
       get(id).pty.pause();
@@ -68,6 +74,17 @@ export function createNodePtyBackend(options: { log?: (message: string) => void 
       return [...terminals].map(([id, entry]) => ({ id, pid: entry.pty.pid }));
     },
   };
+}
+
+/** Signals the process group a PTY's child leads (`forkpty` makes it a session leader), ignoring an empty group. */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  // `kill(0)` and `kill(-1)` would signal the daemon's own group, or every process there is.
+  if (!(pid > 0)) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // The group is gone already.
+  }
 }
 
 /**

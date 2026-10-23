@@ -23,6 +23,7 @@ export async function runFakeCli(harness: HarnessName, invoke: () => Invocation)
   for (const warning of invocation.warnings ?? []) process.stderr.write(`${harness}: ${warning}\n`);
   const scenario = process.env.FAKE_HARNESS_SCENARIO ?? 'output';
   if (!isScenario(scenario)) fail(harness, `unknown FAKE_HARNESS_SCENARIO "${scenario}" (expected one of ${SCENARIOS.join(', ')})`);
+  await boot(harness, invocation.prompt);
   const session = new FakeSession({
     ...invocation.dialect,
     stepDelayMs: Number(process.env.FAKE_HARNESS_STEP_DELAY_MS ?? 0),
@@ -34,4 +35,22 @@ export async function runFakeCli(harness: HarnessName, invoke: () => Invocation)
 function fail(harness: HarnessName, message: string): never {
   process.stderr.write(`${harness}: ${message}\n`);
   process.exit(2);
+}
+
+/**
+ * What the TUI does before its session starts: prints a boot line and, with `FAKE_HARNESS_START_DELAY_MS`, takes that
+ * long, as a slow machine does; with `FAKE_HARNESS_START_FAIL`, prints the first line of the task it was given, then
+ * that, and exits 1 before its first hook.
+ */
+async function boot(harness: HarnessName, prompt: string | undefined): Promise<void> {
+  const delayMs = Number(process.env.FAKE_HARNESS_START_DELAY_MS ?? 0);
+  const failure = process.env.FAKE_HARNESS_START_FAIL;
+  if (delayMs <= 0 && !failure) return;
+  process.stdout.write(`${harness} is starting\r\n`);
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  if (failure) {
+    if (prompt !== undefined) process.stdout.write(`task: ${prompt.split('\n', 1)[0]}\r\n`);
+    process.stdout.write(`${failure}\r\n`);
+    process.exit(1);
+  }
 }

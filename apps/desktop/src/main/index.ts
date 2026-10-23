@@ -68,6 +68,9 @@ const daemonConnection: EnsureDaemonOptions = {
 };
 const daemon = createDaemonLink(daemonConnection);
 
+/** The narrowest the board's window gets: the bottom bar's zones pill, dock and zoom bar fit side by side down to here. */
+const BOARD_MIN_SIZE = { minWidth: 640, minHeight: 480 };
+
 /** Opens a renderer window: the board, or with `query` set, one view of it such as a popped-out session window. */
 function openWindow(
   query: Record<string, string> = {},
@@ -88,6 +91,7 @@ function openWindow(
     // The desk of the theme it opens in, so it never flashes the other one before the page paints.
     backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
     ...chromeOptions(process.platform, WINDOW_QUERY.popOut in query ? 'pop-out' : 'board'),
+    ...(WINDOW_QUERY.popOut in query ? {} : BOARD_MIN_SIZE),
     // Background mode shows the window without focus once it has loaded; headless mode never shows it.
     show: !backgroundMode,
     webPreferences: {

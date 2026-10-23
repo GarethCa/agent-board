@@ -11,7 +11,7 @@ import { scratch } from './scratch.ts';
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
 
 /** Picks how the board shows an orchestrator's agents, from the board menu's Settings, and closes the menu again. */
-async function setCrewLook(window: Page, look: 'In a crew frame' | 'With a “from” chip'): Promise<void> {
+async function setCrewLook(window: Page, look: 'In a crew frame' | 'With a “from” chip' | 'Off'): Promise<void> {
   const panel = window.getByRole('dialog', { name: 'Board menu' });
   if (!(await panel.isVisible())) await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
   const choice = panel.getByRole('radiogroup', { name: 'Agents an orchestrator starts' }).getByRole('radio', { name: look });
@@ -21,10 +21,10 @@ async function setCrewLook(window: Page, look: 'In a crew frame' | 'With a “fr
   await expect(panel).toBeHidden();
 }
 
-test('an orchestrator in a zone that lets it starts two workers: they sit in its crew frame, or carry from chips, and its Activity tab lists them', async () => {
+test('an orchestrator in a zone that lets it starts two workers: they sit in its crew frame, or carry from chips, or neither, and its Activity tab lists them', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
-  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  let { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
@@ -55,12 +55,43 @@ test('an orchestrator in a zone that lets it starts two workers: they sit in its
     await workers[0]!.getByTestId('from-chip').hover();
     for (const member of [lead, ...workers]) await expect(member).toHaveAttribute('data-crew-lit', '');
 
+    // The zoom bar's View popover turns both off, and the choice is saved; ⇧C cycles on to frames again.
+    await window.getByRole('button', { name: 'View', exact: true }).click();
+    const view = window.getByRole('dialog', { name: 'View', exact: true });
+    await view.getByRole('group', { name: 'Crews' }).getByRole('button', { name: 'Off' }).click();
+    await expect(frame).toHaveCount(0);
+    await expect(window.getByTestId('from-chip')).toHaveCount(0);
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('crewLook'))).toBe('off');
+    await window.keyboard.press('Escape');
+    await expect(view).toBeHidden();
+    await window.keyboard.press('Shift+C');
+    await expect(frame).toHaveCount(1);
+    await expect(window.getByTestId('from-chip')).toHaveCount(0);
+
+    // Settings has the same choice: Off there is checked in the popover too, and the other way round.
+    await setCrewLook(window, 'Off');
+    await expect(frame).toHaveCount(0);
+    await window.getByRole('button', { name: 'View', exact: true }).click();
+    await expect(view.getByRole('group', { name: 'Crews' }).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+    await window.keyboard.press('Escape');
+    await expect(view).toBeHidden();
+
     await lead.dblclick();
     await sessionWindow(window).getByRole('tab', { name: 'Activity' }).click();
     const lines = sessionWindow(window).getByTestId('activity-line');
     await expect(lines).toHaveCount(2);
     await expect(lines.nth(0)).toContainText('started worker two');
     await expect(lines.nth(1)).toContainText('started worker one');
+
+    // Off is kept across a restart: the crew comes back with no frame and no chip.
+    await app.close();
+    const again = await launch(dataDir, { ...env, ...SHELL_ENV });
+    app = again.app;
+    window = again.window;
+    await expect(tile(window)).toHaveCount(3);
+    await expect(window.getByTestId('crew-frame')).toHaveCount(0);
+    await expect(window.getByTestId('from-chip')).toHaveCount(0);
+    await expect.poll(() => window.evaluate(() => globalThis.window.agentBoard.view.get('crewLook'))).toBe('off');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -107,7 +138,7 @@ test('an orchestrator wires itself to its worker and hands off along the edge: i
   }
 });
 
-test('an orchestrator scatters its crew about its zone, then arranges it: itself first, then a cluster with an agent note, the implementer and its reviewer side by side', async () => {
+test('an orchestrator scatters its crew about its zone, then arranges it: itself first, then a lane with its implementer and its reviewer side by side, then an agent note', async () => {
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -131,17 +162,21 @@ test('an orchestrator scatters its crew about its zone, then arranges it: itself
             row: Math.round(review.y - impl.y),
             reviewRight: review.x > impl.x + impl.width,
             implBelowLead: impl.y > me.y + me.height,
-            // The lead lines up with its units' stickies; the implementer comes after the sticky.
-            implAfterSticky: impl.x > me.x,
+            // The lead lines up with its lanes' labels; the implementer comes after the label.
+            implAfterLabel: impl.x > me.x,
           };
         },
         { timeout: 4 * TURN_MS },
       )
-      .toEqual({ row: 0, reviewRight: true, implBelowLead: true, implAfterSticky: true });
-    // The unit starts with an agent note by the lead, saying where each of its agents stands.
-    const sticky = window.getByTestId('agent-note').filter({ hasText: /impl.*review/s });
-    await expect(sticky).toHaveCount(1);
-    expect((await sticky.boundingBox())!.x + (await sticky.boundingBox())!.width).toBeLessThan((await box('impl')).x);
+      .toEqual({ row: 0, reviewRight: true, implBelowLead: true, implAfterLabel: true });
+    // The lane ends with an agent note by the lead, saying where each of its agents stands: in view once the view
+    // fits the zone, as the board draws only what is in view.
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    const note = window.getByTestId('agent-note').filter({ hasText: /impl.*review/s });
+    await expect(note).toHaveCount(1);
+    const [noteBox, review] = [(await note.boundingBox())!, await box('review')];
+    expect(noteBox.x).toBeGreaterThan(review.x + review.width);
+    expect(Math.abs(noteBox.y - review.y)).toBeLessThan(review.height);
 
     // Its Activity tab lists the moves and the arrange, newest first.
     await agentTile(window, lead).dblclick();

@@ -22,6 +22,8 @@ const pr41: Surface = { kind: 'pr', repo: 'acme/app', number: 41 };
 const web: Surface = { kind: 'web', id: 'w1', url: 'http://localhost:5173/' };
 const gate: Surface = { kind: 'gate', sessionId: 'a' };
 const plan: Surface = { kind: 'plan', sessionId: 'a' };
+const doc: Surface = { kind: 'doc', sessionId: 'a', path: '/wt/notes.md' };
+const document: Surface = { kind: 'document', sessionId: 'a', documentId: 'd1' };
 
 /** Ids handed out in order: p1, p2… for panes and s1, s2… for splits alike, as a generator would. */
 const counter = () => {
@@ -34,7 +36,7 @@ const strips = (layout: WindowLayout) => windowPanes(layout).map((pane) => [pane
 
 describe('window layout', () => {
   it('names each kind of surface by a key of its own', () => {
-    expect([own, shell('x'), agentB, { kind: 'session', target: { kind: 'shell', id: 't' } } as Surface, pr41, web, gate, plan].map(surfaceKey)).toEqual([
+    expect([own, shell('x'), agentB, { kind: 'session', target: { kind: 'shell', id: 't' } } as Surface, pr41, web, gate, plan, doc, document].map(surfaceKey)).toEqual([
       'own',
       'shell:x',
       'session:agent:b',
@@ -43,6 +45,8 @@ describe('window layout', () => {
       'web:w1',
       'gate:a',
       'plan:a',
+      'doc:a:/wt/notes.md',
+      'document:d1',
     ]);
     // A web tab is the same tab wherever its page goes.
     expect(surfaceKey({ kind: 'web', id: 'w1', url: 'https://example.com/' })).toBe(surfaceKey(web));
@@ -212,6 +216,11 @@ describe('window layout', () => {
   });
 
   describe('update', () => {
+    it('keeps a new web tab with no page yet through a save and a read', () => {
+      const blank = placeSurface(singlePane([own]), { kind: 'web', id: 'w2', url: '' }, { pane: 'main', edge: 'right' }, counter());
+      expect(parseWindowLayout(JSON.parse(JSON.stringify(blank)))).toEqual(blank);
+    });
+
     it("changes a surface in its place, its pane still showing it: a web tab's page as it goes elsewhere", () => {
       const two = placeSurface(singlePane([own, web]), shell('x'), { pane: 'main', edge: 'right' }, counter());
       const shown = selectSurface(two, 'web:w1');
@@ -229,7 +238,7 @@ describe('window layout', () => {
 
   describe('parse', () => {
     it('reads back what it wrote', () => {
-      const two = placeSurface(singlePane([own, agentB, shell('x'), pr41, web, gate, plan]), shell('x'), { pane: 'main', edge: 'bottom' }, counter());
+      const two = placeSurface(singlePane([own, agentB, shell('x'), pr41, web, gate, plan, doc, document]), shell('x'), { pane: 'main', edge: 'bottom' }, counter());
       expect(parseWindowLayout(JSON.parse(JSON.stringify(two)))).toEqual(two);
     });
 
@@ -247,6 +256,8 @@ describe('window layout', () => {
       ['a PR surface of no GitHub repo', { type: 'pane', id: 'p', tabs: [{ kind: 'pr', repo: '../..', number: 41 }], active: 'pr:../..#41' }],
       ['a gate surface of no agent', { type: 'pane', id: 'p', tabs: [{ kind: 'gate', sessionId: '' }], active: 'gate:' }],
       ['a plan surface of no agent', { type: 'pane', id: 'p', tabs: [{ kind: 'plan', sessionId: '' }], active: 'plan:' }],
+      ['a doc surface of no absolute path', { type: 'pane', id: 'p', tabs: [{ kind: 'doc', sessionId: 'a', path: 'notes.md' }], active: 'doc:a:notes.md' }],
+      ['a document surface of no document', { type: 'pane', id: 'p', tabs: [{ kind: 'document', sessionId: 'a', documentId: '' }], active: 'document:' }],
       ['a session surface of no known kind', { type: 'pane', id: 'p', tabs: [{ kind: 'session', target: { kind: 'zone', id: 'z' } }], active: 'session:zone:z' }],
       [
         'a surface twice',

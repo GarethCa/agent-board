@@ -66,6 +66,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
       permissionSuggestions: true,
       subagentToolName: 'Agent',
       shellToolName: 'Bash',
+      backgroundFlag: true,
       mcpServers: mcpConfigFlags(listFlag(args, '--mcp-config'), env),
       // Claude's Bash tool runs with its own env.
       shellEnv: env,

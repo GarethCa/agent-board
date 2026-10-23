@@ -39,6 +39,8 @@ const upsertExternal = (externals: ExternalSession[], session: ExternalSession) 
 /** The view state the board opens with, read with its lists. */
 export interface SavedView {
   expanded: ExpandedTiles;
+  /** The tiles expanded before their session window opened: expanded again when it closes. */
+  hiddenExpanded: ExpandedTiles;
   expandedSizes: ExpandedSizes;
   tileSizes: TileSizes;
   unfolded: Unfolded;
@@ -215,9 +217,10 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         window.agentBoard.view.get(VIEW_KEYS.connections),
         window.agentBoard.view.get(VIEW_KEYS.agentNoteLook),
         window.agentBoard.view.get(VIEW_KEYS.unfolded),
-      ]).catch(() => [null, null, null, null, null, null, null, null, null, null] as const),
+        window.agentBoard.view.get(VIEW_KEYS.hiddenExpanded),
+      ]).catch(() => [null, null, null, null, null, null, null, null, null, null, null] as const),
     ]).then(
-      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedCrewLook, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded]]) => {
+      ([zones, loadedAgents, loadedExternals, items, listedShells, listedConnectors, [viewport, savedExpanded, savedClickOpens, savedCrewLook, savedSizes, savedOverlaps, savedTileSizes, savedConnections, savedAgentNoteLook, savedUnfolded, savedHidden]]) => {
         if (cancelled) return;
         const search = window.location.search;
         // Items after zones: a child node needs its parent first.
@@ -235,6 +238,7 @@ export function useBoardData({ setNodes, report, setNotice, onShellChange, resto
         setSavedViewport(saved);
         restoreView({
           expanded: expandedFrom(savedExpanded),
+          hiddenExpanded: expandedFrom(savedHidden),
           expandedSizes: sizesFrom(savedSizes),
           tileSizes: tileSizesFrom(savedTileSizes),
           unfolded: unfoldedFrom(savedUnfolded),

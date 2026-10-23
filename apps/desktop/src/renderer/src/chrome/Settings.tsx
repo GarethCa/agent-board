@@ -11,6 +11,7 @@ import { Choice, Choices, Fieldset, Hint, SectionLabel, Segmented, Tag } from '.
 import { AppearanceSetting } from './AppearanceSetting';
 import { CliInstallSetting } from './CliInstallSetting';
 import { KeyboardSetting } from './KeyboardSetting';
+import { NotificationsSetting } from './NotificationsSetting';
 import { keyText } from '../keys/registry';
 
 export interface SettingsProps {
@@ -29,14 +30,17 @@ export interface SettingsProps {
   /** How agent notes look, and picks it. */
   agentNoteLook: AgentNoteLook;
   onAgentNoteLook(value: AgentNoteLook): void;
+  /** How many agents are muted, which notify of nothing. */
+  muted: number;
 }
 
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
  * Dark), the paths of `claude` and `codex`, the context size Claude agents compact at, what a double-click on a tile opens, how an orchestrator's agents show, installing the command line, and the
- * daemon's status, how agent notes look, and whether the extended keyboard shortcuts work.
+ * daemon's status, how agent notes look, what Needs you lists and when it notifies, and whether the extended keyboard
+ * shortcuts work.
  */
-export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook }: SettingsProps) {
+export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, muted }: SettingsProps) {
   return (
     <div className="settings">
       <ExternalHooksToggle onError={onError} />
@@ -113,8 +117,16 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
             checked={crewLook === 'chips'}
             onChange={() => onCrewLook('chips')}
           />
+          <Choice
+            name="crew-look"
+            label="Off"
+            detail="No frame and no chip. Hover the orchestrator to light its crew."
+            checked={crewLook === 'off'}
+            onChange={() => onCrewLook('off')}
+          />
         </Choices>
       </Fieldset>
+      <NotificationsSetting muted={muted} onError={onError} />
       <SectionLabel as="h4">Keyboard</SectionLabel>
       <KeyboardSetting />
       <CliInstallSetting onError={onError} />

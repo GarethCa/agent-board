@@ -90,9 +90,11 @@ function bowed(path: string, middle: EdgePoint, bow: EdgePoint): string {
  * The line drawn in `style` from `ends.source` to `ends.target` through `points`. With no bends it is React Flow's own
  * path, so a line never bent draws exactly as it always has; a curve through one point is that path bowed through it
  * (`bowed`). `label` is the size of what sits halfway along it, if anything, kept clear of the places to pull out a
- * bend and of the bow handle.
+ * bend and of the bow handle. A `routed` line's points are the corners of its way round the objects in between
+ * (`routeAround`), not bends of the user's: see `routedShape`.
  */
-export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonly EdgePoint[], label?: LabelSize): LineShape {
+export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonly RoutePoint[], label?: LabelSize, routed = false): LineShape {
+  if (routed && points.length > 0) return routedShape(style, [ends.source, ...points, ends.target], label);
   if (points.length === 0 || (style === 'curved' && points.length === 1 && points[0]!.bow === true)) {
     const flow = {
       sourceX: ends.source.x,
@@ -125,6 +127,43 @@ export function lineShape(style: ConnectorStyle, ends: LineEnds, points: readonl
     inserts: legs.map((leg, index) => insertOn(samplePath(`M${at(stops[index]!)} ${leg}`), middle, label)),
     ...run,
   };
+}
+
+/** A corner of a route (`routeAround`), with how far a curve along it may round it: as far as stays clear of the objects. */
+export type RoutePoint = EdgePoint & { radius?: number };
+
+/** The most a routed curve rounds a corner by. */
+export const ROUTED_CORNER = 40;
+
+/**
+ * Where a curve rounding the corner `to`, between the stretches from `from` and on to `after`, by `radius`, leaves the
+ * first and joins the second: no further from the corner than half of either stretch. Between them it is a quadratic
+ * curve with the corner for its control.
+ */
+export function roundedCorner(from: EdgePoint, to: EdgePoint, after: EdgePoint, radius: number): { enter: EdgePoint; leave: EdgePoint } {
+  const by = Math.min(radius, Math.hypot(to.x - from.x, to.y - from.y) / 2, Math.hypot(after.x - to.x, after.y - to.y) / 2);
+  const toward = (point: EdgePoint) => {
+    const length = Math.hypot(point.x - to.x, point.y - to.y);
+    return length === 0 ? to : { x: to.x + ((point.x - to.x) * by) / length, y: to.y + ((point.y - to.y) * by) / length };
+  };
+  return { enter: toward(from), leave: toward(after) };
+}
+
+/**
+ * A line along a `route` of square stretches: straight through its corners on an elbow, round them on a curve, each
+ * by its corner's `radius`. It offers one place to pull out a bend, halfway along it: pulled, the line takes the bend
+ * and is no longer routed.
+ */
+function routedShape(style: ConnectorStyle, route: readonly RoutePoint[], label: LabelSize | undefined): LineShape {
+  const legs = route.slice(1).map((to, index) => {
+    if (style !== 'curved' || index === route.length - 2) return `L${at(to)}`;
+    const { enter, leave } = roundedCorner(route[index]!, to, route[index + 2]!, to.radius ?? ROUTED_CORNER);
+    return `L${at(enter)} Q${at(to)} ${at(leave)}`;
+  });
+  const path = `M${at(route[0]!)} ${legs.join(' ')}`;
+  const samples = samplePath(path);
+  const middle = pointAlong(samples, 0.5);
+  return { path, label: middle, inserts: [insertOn(samples, middle, label)], length: lengthOf(samples), bow: middle, bowHandle: insertOn(samples, middle, label) };
 }
 
 /** `point` moved `distance` along `direction`. */
@@ -239,7 +278,8 @@ function quadratic(p0: EdgePoint, p1: EdgePoint, p2: EdgePoint, t: number): Edge
   return { x: a * p0.x + b * p1.x + c * p2.x, y: a * p0.y + b * p1.y + c * p2.y };
 }
 
-const lengthOf = (samples: readonly EdgePoint[]) =>
+/** How long the polyline `samples` is. */
+export const lengthOf = (samples: readonly EdgePoint[]) =>
   samples.slice(1).reduce((sum, point, index) => sum + Math.hypot(point.x - samples[index]!.x, point.y - samples[index]!.y), 0);
 
 /** The point `share` (0 to 1) of the way along the polyline `samples`. */
@@ -252,6 +292,66 @@ export function pointAlong(samples: readonly EdgePoint[], share: number): EdgePo
     left -= step;
   }
   return samples.at(-1) ?? { x: 0, y: 0 };
+}
+
+/** How far along the line from its end a label at the end begins: past the end's shape and its handle. */
+const END_LABEL_CLEAR = 16;
+/** How far from the line a label at an end is. */
+const END_LABEL_GAP = 6;
+
+/**
+ * Where the middle of a label of `size` at the `which` end of the line `samples` goes: just along the line from that
+ * end, past the end's shape, beside it on its right as it goes from `from` to `to` (below a line going right, left of
+ * one going down), so both ends' labels are on the same side. It goes straight back from the end the way the line
+ * leaves it, and where the line near that end would run under it there (a route that turns soon before its end), it
+ * goes on the other side, the outside of the corner, so it never covers the line. On a short line each end's label
+ * keeps to its own half.
+ */
+export function endLabelAt(samples: readonly EdgePoint[], which: 'from' | 'to', size: LabelSize): EdgePoint {
+  const length = lengthOf(samples);
+  const end = (which === 'from' ? samples[0] : samples.at(-1)) ?? { x: 0, y: 0 };
+  // The way the line goes at its end, from `from` to `to`: its last stretch's (its first's, at the start).
+  const next = which === 'from' ? samples.find((point) => point.x !== end.x || point.y !== end.y) : samples.findLast((point) => point.x !== end.x || point.y !== end.y);
+  if (length === 0 || next === undefined) return end;
+  const step = Math.hypot(next.x - end.x, next.y - end.y);
+  const inward = { x: (next.x - end.x) / step, y: (next.y - end.y) / step };
+  const along = which === 'from' ? inward : { x: -inward.x, y: -inward.y };
+  const right = { x: -along.y, y: along.x };
+  // Half the label's box, along the line and across it.
+  const lengthwise = (Math.abs(along.x) * size.width + Math.abs(along.y) * size.height) / 2;
+  const across = (Math.abs(right.x) * size.width + Math.abs(right.y) * size.height) / 2;
+  const distance = Math.max(0, Math.min(END_LABEL_CLEAR + lengthwise, length / 2 - lengthwise));
+  const base = { x: end.x + inward.x * distance, y: end.y + inward.y * distance };
+  const placed = (side: 1 | -1) => ({ x: base.x + right.x * side * (END_LABEL_GAP + across), y: base.y + right.y * side * (END_LABEL_GAP + across) });
+  // The line near this end, as far along as the label could reach.
+  const reach = distance + lengthwise + across + END_LABEL_GAP;
+  const near = Array.from({ length: Math.ceil(reach / NEAR_STEP) + 1 }, (_, step) => {
+    const share = Math.min(1, (step * NEAR_STEP) / length);
+    return pointAlong(samples, which === 'from' ? share : 1 - share);
+  });
+  const covers = (at: EdgePoint) =>
+    near.some((point) => Math.abs(point.x - at.x) < size.width / 2 && Math.abs(point.y - at.y) < size.height / 2);
+  const onRight = placed(1);
+  return covers(onRight) && !covers(placed(-1)) ? placed(-1) : onRight;
+}
+
+/** How finely the line near an end is walked, to keep its label off it. */
+const NEAR_STEP = 2;
+
+/** How far along the polyline `samples` the point on it nearest `point` is. */
+export function distanceAlong(samples: readonly EdgePoint[], point: EdgePoint): number {
+  let best = { gap: Infinity, along: 0 };
+  let walked = 0;
+  for (let index = 1; index < samples.length; index++) {
+    const [from, to] = [samples[index - 1]!, samples[index]!];
+    const step = Math.hypot(to.x - from.x, to.y - from.y);
+    if (step === 0) continue;
+    const share = Math.min(1, Math.max(0, ((point.x - from.x) * (to.x - from.x) + (point.y - from.y) * (to.y - from.y)) / (step * step)));
+    const gap = Math.hypot(from.x + (to.x - from.x) * share - point.x, from.y + (to.y - from.y) * share - point.y);
+    if (gap < best.gap) best = { gap, along: walked + step * share };
+    walked += step;
+  }
+  return best.along;
 }
 
 /** Where bends are kept from: the middle of the line's two ends. */

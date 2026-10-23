@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CronError, nextRun, parseCron } from '../src/cron.ts';
+import { CronError, cronWords, nextRun, parseCron } from '../src/cron.ts';
 import { pinTimeZone } from './pin-time-zone.ts';
 
 // Local time, in a zone with daylight saving, so the DST cases mean something.
@@ -142,5 +142,35 @@ describe('nextRun', () => {
       Date.UTC(2026, 9, 25, 1, 30),
       Date.UTC(2026, 9, 25, 2, 30),
     ]);
+  });
+});
+
+describe('cronWords', () => {
+  it.each([
+    ['0 9 * * 1-5', 'Weekdays 09:00'],
+    ['0 9 * * mon-fri', 'Weekdays 09:00'],
+    ['0 2 * * 0', 'Sundays 02:00'],
+    ['0 2 * * 7', 'Sundays 02:00'],
+    ['30 18 * * 1,3', 'Mon, Wed 18:30'],
+    ['0 10 * * 6,0', 'Weekends 10:00'],
+    ['0 9 * * *', 'Daily 09:00'],
+    ['@daily', 'Daily 00:00'],
+    ['@weekly', 'Sundays 00:00'],
+    ['0 * * * *', 'Every hour'],
+    ['@hourly', 'Every hour'],
+    ['15 * * * *', 'Hourly at :15'],
+    ['*/15 * * * *', 'Every 15 min'],
+    ['* * * * *', 'Every minute'],
+    ['0 9 1 * *', 'Monthly on the 1st, 09:00'],
+    ['0 9 22 * *', 'Monthly on the 22nd, 09:00'],
+  ])('says %s as "%s"', (expression, words) => {
+    expect(cronWords(expression)).toBe(words);
+  });
+
+  it('says what it has no words for, or cannot read, as the expression itself', () => {
+    expect(cronWords('0 9,17 * * *')).toBe('0 9,17 * * *');
+    expect(cronWords('0 9 * 1 *')).toBe('0 9 * 1 *');
+    expect(cronWords('@yearly')).toBe('@yearly');
+    expect(cronWords(' 61 * * * * ')).toBe('61 * * * *');
   });
 });

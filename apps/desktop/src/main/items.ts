@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ipcMain, net, protocol } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import { IMAGE_EXTENSIONS, type CreateItemParams, type UpdateItemParams } from '@agent-board/daemon/protocol';
+import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type UpdateItemParams } from '@agent-board/daemon/protocol';
 import { ITEM_IPC } from '../preload/api';
 import { IMAGE_SCHEME } from '../shared/image-url';
 import { forwardEvents } from './broadcast';
@@ -12,12 +12,15 @@ import { passthrough, passthroughVoid } from './passthrough';
 /** The board item IPC the preload's `items` API calls. Every window hears every change, so boards stay in step. */
 export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['item.updated', 'item.removed'], ITEM_IPC.changed);
+  forwardEvents(daemon, ['clock.updated'], ITEM_IPC.clockChanged);
 
   passthrough(daemon, ITEM_IPC.list, 'item.list');
   passthrough(daemon, ITEM_IPC.create, 'item.create', (params: CreateItemParams) => params);
   passthrough(daemon, ITEM_IPC.update, 'item.update', (params: UpdateItemParams) => params);
   ipcMain.handle(ITEM_IPC.importImage, (_event, bytes: unknown) => handImage(dataDir, bytes, (path) => daemon.call('image.import', { path })));
   passthroughVoid(daemon, ITEM_IPC.delete, 'item.delete', (id: string) => ({ id }));
+  passthrough(daemon, ITEM_IPC.clocks, 'clock.list');
+  passthrough(daemon, ITEM_IPC.addClock, 'clock.add', (data: Partial<ClockData>, place: ClockPlace) => ({ data, place }));
 }
 
 const IMAGE_FILE = new RegExp(`^[0-9a-f]{64}\\.(${IMAGE_EXTENSIONS.join('|')})$`);

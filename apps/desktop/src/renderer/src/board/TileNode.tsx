@@ -20,10 +20,12 @@ const RESIZE_HANDLE = '.tile-resize';
 export const TileNode = memo(function TileNode({ id, data, parentId, selected: picked }: NodeProps<TileNodeType>) {
   const { style, registry } = useContext(RepresentationContext);
   const { resizeTile } = useContext(TileActionsContext);
-  // Resizable once it is the one thing selected, as a note is; an expanded tile has its own resizer.
+  // Resizable once it is the one thing selected, as a note is; an expanded tile has its own resizer, and a start's tile
+  // has no size to keep until it is an agent's.
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
-  const resizable = useOnlySelected(picked) && data.expanded !== true && data.folded !== true;
+  const only = useOnlySelected(picked);
+  const resizable = only && data.expanded !== true && data.folded !== true && data.start === undefined;
   const Tile = tileComponentFor(data.style ?? style, registry);
   return (
     <>
@@ -32,7 +34,7 @@ export const TileNode = memo(function TileNode({ id, data, parentId, selected: p
       ) : data.folded && data.agent !== undefined ? (
         <FoldedChip id={id} agent={data.agent} />
       ) : (
-        <Tile id={id} tile={data} />
+        <Tile id={id} tile={data} selected={only} />
       )}
       {resizable && (
         // A double-click on any handle puts the tile back to its default size, and opens nothing.

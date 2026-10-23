@@ -1,4 +1,8 @@
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { isProcessAlive } from '../src/pid.ts';
 import { createNodePtyBackend } from '../src/node-pty-backend.ts';
 import type { TerminalBackend, TerminalExit, TerminalSpawnOptions } from '../src/terminal-backend.ts';
 
@@ -132,5 +136,44 @@ describe('node-pty terminal backend', () => {
 
     expect((await watched.waitForExit()).exitCode).not.toBe(0);
     expect(terminals.list()).toEqual([]);
+  });
+});
+
+/** Reads the pid a script wrote to `file`, once it has, and kills that process when the test ends. */
+async function recordedPid(file: string): Promise<number> {
+  await vi.waitFor(() => expect(existsSync(file) && readFileSync(file, 'utf8').trim()).toBeTruthy(), { timeout: 5_000 });
+  const pid = Number(readFileSync(file, 'utf8'));
+  onTestFinished(() => {
+    if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL');
+  });
+  return pid;
+}
+
+describe('a terminal that started a background process', () => {
+  const pidFile = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pty-group-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+    return join(dir, 'pid');
+  };
+
+  it('signals the whole process group on kill, not only the leader', async () => {
+    const b = backend();
+    const file = pidFile();
+    // The leader catches TERM and carries on; its background child has the default action from the moment it forks.
+    b.spawn(shOptions('t', `trap 'true' TERM; (exec sleep 30) & echo $! > ${file}; while :; do sleep 1; done`));
+    const child = await recordedPid(file);
+    b.kill('t', 'SIGTERM');
+    await vi.waitFor(() => expect(isProcessAlive(child)).toBe(false));
+    expect(b.list().map((terminal) => terminal.id)).toEqual(['t']);
+  });
+
+  it('kills what the leader leaves behind when it exits, even a process that ignores the hang-up', async () => {
+    const b = backend();
+    const file = pidFile();
+    b.spawn(shOptions('t', `(trap '' HUP; exec sleep 30) & echo $! > ${file}; sleep 0.2`));
+    const w = watch(b, 't');
+    const straggler = await recordedPid(file);
+    await w.waitForExit();
+    await vi.waitFor(() => expect(isProcessAlive(straggler)).toBe(false));
   });
 });

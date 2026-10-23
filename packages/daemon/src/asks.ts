@@ -2,23 +2,30 @@
 // `board.presentPlan` hold the agent's call open until the user answers in the needs-you inbox or the Plan tab, the wait
 // times out, or the agent stops waiting. Nothing here answers for the user: a timeout tells the agent there was no answer.
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { systemClock, type Clock } from './clock.ts';
-import { invalidParams, oneOf, optionalBooleanParam, optionalCountParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalCountParam, paramsObject, stringParam } from './params.ts';
 import {
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
   MAX_ASK_OPTIONS,
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
+  CREW_PLAN_PATH,
+  CREW_QUESTION_PATH,
+  MAX_FLAG_LENGTH,
   MAX_PLAN_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
   MAX_QUESTION_LENGTH,
   MAX_REPLY_LENGTH,
   PLAN_FORMATS,
   PLAN_OUTCOMES,
+  type Agent,
   type AgentAsk,
+  type SentToOrchestrator,
   type AskAnswer,
   type AskResult,
   type DaemonMethods,
@@ -30,15 +37,19 @@ import {
   type PlanSummary,
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
+import { oneLine } from './terminal-input.ts';
+import { cutText } from './text-cut.ts';
 import type { AgentHost } from './agents.ts';
 
-type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'plan.list' | 'plan.decide'>;
+type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.place' | 'plan.list' | 'plan.decide'>;
 
 /** A question as an agent asks it. */
 export interface AskSpec {
   question: string;
   options?: string[];
   freeText?: boolean;
+  /** Shows a question card on the board, beside the agent's tile, besides the inbox item. */
+  onBoard?: boolean;
   timeoutMs?: number;
 }
 
@@ -54,6 +65,8 @@ export interface AskHostOptions {
   db: DatabaseSync;
   /** The agent began (`began`) or stopped waiting on a question or plan: its tile and the inbox follow. */
   changed(sessionId: string, began: boolean): void;
+  /** The user moved the card of the agent's question: its tile and the inbox follow, the question no newer for it. */
+  placed(sessionId: string): void;
   clock?: Clock;
 }
 
@@ -70,6 +83,8 @@ export interface AskHost {
   plans(sessionId: string): Plan[];
   /** The user answers the agent's question `askId`. Throws `invalidParams` once it no longer asks it, or for an answer it can't take. */
   answer(sessionId: string, askId: string, answer: AskAnswer): void;
+  /** The user moves the card of the agent's question `askId` to `at`. Throws `invalidParams` as `answer` does, or for a question with no card. */
+  place(sessionId: string, askId: string, at: { x: number; y: number }): void;
   /** The user decides the agent's plan `planId`. Throws `invalidParams` once it no longer waits on it. */
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): PlanSummary;
   /** The agent stopped waiting (its turn ended, or its session): its question goes, its plan is withdrawn. */
@@ -128,7 +143,7 @@ function text(value: string, name: string, max: number): string {
 const waitMs = (asked: number | undefined, fallback: number) => Math.min(asked ?? fallback, MAX_ASK_WAIT_MS);
 
 export function createAskHost(options: AskHostOptions): AskHost {
-  const { db, changed } = options;
+  const { db, changed, placed } = options;
   const clock = options.clock ?? systemClock;
   const insertPlan = db.prepare(
     'INSERT INTO plans (id, session_id, version, title, format, body, presented_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -199,6 +214,14 @@ export function createAskHost(options: AskHostOptions): AskHost {
 
   const now = () => new Date(clock.now()).toISOString();
 
+  /** The agent's wait on its question `askId`, while it still asks it. */
+  const asking = (sessionId: string, askId: string): { entry: Waiting; ask: AgentAsk } => {
+    const entry = waiting.get(sessionId);
+    const ask = entry?.ask;
+    if (entry === undefined || ask === null || ask === undefined || ask.id !== askId) throw invalidParams('the agent no longer asks that: it was answered, timed out or stopped waiting');
+    return { entry, ask };
+  };
+
   const host: AskHost = {
     ask(sessionId, spec, signal) {
       checkFree(sessionId);
@@ -214,6 +237,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
         freeText: offered.length === 0 || spec.freeText === true,
         askedAt: now(),
         expiresAt: new Date(clock.now() + ms).toISOString(),
+        onBoard: spec.onBoard === true,
+        at: null,
       };
       return hold(sessionId, { ask, planId: null }, ms, signal, (how): AskResult => {
         if (how === null) throw stoppedWaiting();
@@ -255,9 +280,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
     plans: (sessionId) => (selectPlans.all(sessionId) as unknown as PlanRow[]).map((row) => ({ ...toSummary(row), body: row.body })),
 
     answer(sessionId, askId, answer) {
-      const entry = waiting.get(sessionId);
-      const ask = entry?.ask;
-      if (entry === undefined || ask === null || ask === undefined || ask.id !== askId) throw invalidParams('the agent no longer asks that: it was answered, timed out or stopped waiting');
+      const { entry, ask } = asking(sessionId, askId);
       if ('option' in answer) {
         if (!Number.isInteger(answer.option) || answer.option < 0 || answer.option >= ask.options.length) {
           throw invalidParams(`the question has no option ${Number(answer.option) + 1}`);
@@ -267,6 +290,14 @@ export function createAskHost(options: AskHostOptions): AskHost {
         text(answer.text, 'the answer', MAX_REPLY_LENGTH);
       }
       entry.settle({ answer });
+    },
+
+    place(sessionId, askId, at) {
+      const { entry, ask } = asking(sessionId, askId);
+      if (!ask.onBoard) throw invalidParams('that question is not on the board: it is answered in the inbox');
+      if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) throw invalidParams('at must be a point: finite x and y');
+      entry.ask = { ...ask, at: { x: at.x, y: at.y } };
+      placed(sessionId);
     },
 
     decide(sessionId, planId, outcome, comments) {
@@ -288,7 +319,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
       latest.delete(sessionId);
     },
 
-    handlers<Context extends BoardConnection>(sources: BoardCallerSources & { agents: Pick<AgentHost, 'get'> }): RpcHandlers<AskMethods, Context> {
+    handlers<Context extends BoardConnection>(sources: BoardCallerSources & { agents: Pick<AgentHost, 'get' | 'flag'> }): RpcHandlers<AskMethods, Context> {
       /** The live agent whose own session holds the call's board token: never a shell's, nor an ended agent's. */
       const asker = (p: Record<string, unknown>, connection: Context): string => {
         const who = boardCaller(sources, stringParam(p, 'token'), connection);
@@ -297,6 +328,29 @@ export function createAskHost(options: AskHostOptions): AskHost {
           throw invalidParams('only a live agent asks the user, from its own session: not a shell, nor an ended agent\'s shell');
         }
         return me.sessionId;
+      };
+      /**
+       * The live orchestrator that started the agent, which its questions and plans go to instead of the user; else
+       * undefined. Never the board master (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
+       */
+      const leadOf = (sessionId: string): Agent | undefined => {
+        const spawnedBy = sources.agents.get(sessionId)?.spawnedBy;
+        const lead = spawnedBy === null || spawnedBy === undefined ? undefined : sources.agents.get(spawnedBy);
+        return lead?.endedAt === null && !lead.master ? lead : undefined;
+      };
+      /**
+       * Flags the crew member's orchestrator with `reason` in its place: nothing waits, and its answer is its next
+       * message. `reason` fits a flag: what doesn't is written to a file the reason names, never cut.
+       */
+      const sendToLead = (sessionId: string, lead: Agent, reason: string): SentToOrchestrator => {
+        sources.agents.flag(sessionId, reason, null);
+        return { sentTo: 'orchestrator', name: lead.name };
+      };
+      /** Writes `text` to `path` in the crew member's worktree, beside its handover, for its orchestrator to `read`. */
+      const writeForLead = (sessionId: string, path: string, text: string) => {
+        const file = join(sources.agents.get(sessionId)!.worktree, path);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, text);
       };
       /** Stops a wait once the call's connection goes: the harness cancelled the call, or went. */
       const closed = (connection: Context) => connection.closed ?? new AbortController().signal;
@@ -314,19 +368,49 @@ export function createAskHost(options: AskHostOptions): AskHost {
           if (options !== undefined && (!Array.isArray(options) || !options.every((option) => typeof option === 'string'))) {
             throw invalidParams('options must be a list of strings');
           }
-          const spec: AskSpec = { question: stringParam(p, 'question'), options: options as string[] | undefined, freeText: optionalBooleanParam(p, 'freeText'), timeoutMs: timeout(p) };
-          return host.ask(sessionId, spec, closed(connection));
+          const spec: AskSpec = {
+            question: stringParam(p, 'question'),
+            options: options as string[] | undefined,
+            freeText: optionalBooleanParam(p, 'freeText'),
+            onBoard: optionalBooleanParam(p, 'onBoard'),
+            timeoutMs: timeout(p),
+          };
+          const lead = leadOf(sessionId);
+          if (lead === undefined) return host.ask(sessionId, spec, closed(connection));
+          const offered = (spec.options ?? []).map((option, index) => text(option, `option ${index + 1}`, MAX_OPTION_LENGTH));
+          const question = text(spec.question, 'question', MAX_QUESTION_LENGTH);
+          const line = oneLine(`asks: ${question}${offered.length === 0 ? '' : ` (${offered.join(' · ')})`}`);
+          if (line.length <= MAX_FLAG_LENGTH) return sendToLead(sessionId, lead, line);
+          // Too long for a flag: the question and every option go in full to a file, which the flag points to.
+          if (!sources.agents.get(sessionId)!.ownsWorktree) return host.ask(sessionId, spec, closed(connection));
+          writeForLead(sessionId, CREW_QUESTION_PATH, crewQuestionText(question, offered));
+          const head = `asks (in full, with ${offered.length === 0 ? 'no options' : `its ${offered.length} options`}, in ${CREW_QUESTION_PATH}): `;
+          return sendToLead(sessionId, lead, `${head}${cutText(oneLine(question), MAX_FLAG_LENGTH - head.length)}`);
         },
         'board.presentPlan': (params, connection) => {
           const p = paramsObject(params);
           const sessionId = asker(p, connection);
           const spec: PlanSpec = { title: stringParam(p, 'title'), body: stringParam(p, 'body'), format: oneOf(p, 'format', PLAN_FORMATS), timeoutMs: timeout(p) };
-          return host.presentPlan(sessionId, spec, closed(connection));
+          const lead = leadOf(sessionId);
+          // Its plan is written where its orchestrator reads it: never into a folder of the user's it was resumed in.
+          if (lead === undefined || !sources.agents.get(sessionId)!.ownsWorktree) return host.presentPlan(sessionId, spec, closed(connection));
+          const title = text(spec.title, 'title', MAX_PLAN_TITLE_LENGTH);
+          if (spec.body.trim() === '') throw invalidParams('the plan must not be empty');
+          if (spec.body.length > MAX_PLAN_LENGTH) throw invalidParams(`the plan must be at most ${MAX_PLAN_LENGTH} characters; it has ${spec.body.length}`);
+          const path = CREW_PLAN_PATH[spec.format];
+          writeForLead(sessionId, path, spec.body);
+          return sendToLead(sessionId, lead, `plan to review, in ${path}: ${title}`);
         },
         'ask.answer': (params) => {
           const p = paramsObject(params);
           const sessionId = sessionOf(p);
           host.answer(sessionId, stringParam(p, 'askId'), askAnswer(p.answer));
+          return null;
+        },
+        'ask.place': (params) => {
+          const p = paramsObject(params);
+          const at = paramsObject(p.at);
+          host.place(sessionOf(p), stringParam(p, 'askId'), { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') });
           return null;
         },
         'plan.list': (params) => host.plans(sessionOf(paramsObject(params))),
@@ -343,6 +427,12 @@ export function createAskHost(options: AskHostOptions): AskHost {
     },
   };
   return host;
+}
+
+/** A crew member's question as its orchestrator reads it in full: the question, then each option, numbered. */
+function crewQuestionText(question: string, options: readonly string[]): string {
+  const offered = options.map((option, index) => `${index + 1}. ${option}`);
+  return [question, ...(offered.length === 0 ? [] : ['', 'Options:', '', ...offered])].join('\n') + '\n';
 }
 
 /** An answer off the wire: an option's index, the user's words, or a skip. */

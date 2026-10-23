@@ -56,9 +56,9 @@ export function Fieldset({ legend, children, className, ...rest }: FieldsetHTMLA
 }
 
 /** A line that says what a control is for, outside a Field. */
-export function Hint({ children, ...rest }: { children: ReactNode; 'data-testid'?: string }) {
+export function Hint({ children, className, ...rest }: { children: ReactNode; className?: string; 'data-testid'?: string }) {
   return (
-    <p className="ui-hint" {...rest}>
+    <p className={cx('ui-hint', className)} {...rest}>
       {children}
     </p>
   );

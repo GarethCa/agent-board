@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
-import { ArrowRight, Check, Clock, Hourglass, RotateCcw, ShieldAlert, X } from 'lucide-react';
+import { ArrowRight, Check, Clock, Hourglass, Pause, RotateCcw, ShieldAlert, Timer, X } from 'lucide-react';
 import type { AgentState } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
 import { cx } from './cx';
@@ -24,7 +24,10 @@ const STATE_ICONS: Partial<Record<AgentState, ReactNode>> = {
   done: <Check aria-hidden />,
   scheduled: <Clock aria-hidden />,
   'stopped-by-restart': <RotateCcw aria-hidden />,
+  hibernated: <Pause aria-hidden />,
   'handing-off': <ArrowRight aria-hidden />,
+  // A stopwatch, not the rate limit's hourglass, nor the spinner of a tile starting.
+  'on-command': <Timer aria-hidden />,
 };
 
 /** An agent's state as a pill: its colour, a dot or mark, and its name. */

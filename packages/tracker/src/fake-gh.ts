@@ -122,9 +122,12 @@ function answer(state: FakeGitHubState, { words, flags }: Command): unknown {
   }
   if (command === 'pr view') {
     const repo = findRepo(state, flags.get('--repo') ?? '').nameWithOwner;
+    if (state.unreadableRepos?.some((name) => name.toLowerCase() === repo.toLowerCase())) {
+      throw new GhExit(1, `GraphQL: Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization. (repository)`);
+    }
     const found = state.pullRequests.find((pr) => pr.repo === repo && pr.number === Number(words[2]));
     if (found === undefined) {
-      throw new GhExit(1, `GraphQL: Could not resolve to an issue or pull request with the number of ${words[2]}. (repository.pullRequest)`);
+      throw new GhExit(1, `GraphQL: Could not resolve to a PullRequest with the number of ${words[2]}. (repository.pullRequest)`);
     }
     return pick(pullRequestJson(found), fields);
   }

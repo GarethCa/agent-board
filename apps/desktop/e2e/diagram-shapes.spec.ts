@@ -34,6 +34,10 @@ test('picks a shape from the picker by search and draws it, joins an arrow to ea
     await expect(picker).toBeVisible();
     await expect(picker.getByRole('searchbox', { name: 'Search shapes' })).toBeFocused();
     await expect(picker.getByRole('region', { name: 'Architecture' }).getByRole('button')).toHaveCount(15);
+    // All of them show at once, the last UML shape whole, with nothing to scroll to.
+    const list = picker.locator('.shape-picker-scroll');
+    expect(await list.evaluate((scroll) => scroll.scrollHeight - scroll.clientHeight)).toBeLessThanOrEqual(0);
+    await expect(picker.getByRole('region', { name: 'UML' }).getByRole('button')).toHaveCount(13);
     await window.keyboard.press('Escape');
     await expect(picker).toHaveCount(0);
     await expect(window.getByTestId('board-tool')).toHaveCount(0);

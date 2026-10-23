@@ -19,6 +19,8 @@ function setup(removeZone: () => Promise<unknown>, options: { zone?: Zone; agent
       list: () => [tile('a', { x: 10, y: 20 }), ...(options.agentRepos ?? []).map((repoRoot, index) => ({ ...tile(`r${index}`, null), zoneId: null, repoRoot }))] as unknown as Agent[],
       get: (id) => tile(id, null) as unknown as Agent,
       move: (id, to) => (move(id, to), tile(id, null) as unknown as Agent),
+      starts: () => [],
+      updateStart: () => {},
     },
     shells: {
       list: () => [{ ...tile('s', { x: 30, y: 40 }), id: 's' }] as unknown as Shell[],

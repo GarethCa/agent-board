@@ -3,14 +3,17 @@
 import { DEFAULT_ACTIVITY_LIMIT, type OrchestratorAction, type OrchestratorActivity } from '@agent-board/daemon/protocol';
 
 /**
- * Each action's verb, as done and as tried; what goes before the name of what it acted on (`of`), and what it acted on
- * when the line names nothing (an agent, without).
+ * Each action's verb, as done and as tried; what goes before the name of what it acted on (`of`) and after it (`after`),
+ * and what it acted on when the line names nothing (an agent, without).
  */
-const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: string; nothing?: string }> = {
+const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: string; after?: string; nothing?: string }> = {
   spawn: { done: 'started', tried: 'start' },
   send: { done: 'sent', tried: 'send' },
   interrupt: { done: 'interrupted', tried: 'interrupt' },
+  continue: { done: 'continued', tried: 'continue', after: ' on credits' },
   restart: { done: 'restarted', tried: 'restart' },
+  pause: { done: 'paused', tried: 'pause' },
+  wake: { done: 'woke', tried: 'wake' },
   close: { done: 'closed', tried: 'close' },
   remove: { done: 'removed', tried: 'remove' },
   'add-edge': { done: 'added an edge into', tried: 'add an edge into' },
@@ -24,14 +27,17 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'add-note': { done: 'added', tried: 'add', nothing: 'a note' },
   'edit-note': { done: 'edited', tried: 'edit', nothing: 'a note' },
   'remove-note': { done: 'removed', tried: 'remove', nothing: 'a note' },
+  'add-clock': { done: 'added', tried: 'add', nothing: 'a clock' },
+  'remove-clock': { done: 'removed', tried: 'remove', nothing: 'a clock' },
   'set-role': { done: 'set', tried: 'set', of: 'the default role ', nothing: 'a default role' },
   'remove-role': { done: 'removed', tried: 'remove', of: 'the default role ', nothing: 'a default role' },
+  'set-status': { done: 'set the status of', tried: 'set the status of' },
 };
 
 /** What the line says it did to whom ("started web impl"), or tried to ("tried to close …"). */
 export function activityText(entry: OrchestratorActivity): string {
   const verb = VERBS[entry.action];
-  const target = entry.targetName === null ? (verb.nothing ?? 'an agent') : `${verb.of ?? ''}${entry.targetName}`;
+  const target = `${entry.targetName === null ? (verb.nothing ?? 'an agent') : `${verb.of ?? ''}${entry.targetName}`}${verb.after ?? ''}`;
   return entry.outcome === 'done' ? `${verb.done} ${target}` : `tried to ${verb.tried} ${target}`;
 }
 

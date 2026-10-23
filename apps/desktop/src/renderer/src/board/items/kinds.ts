@@ -1,9 +1,12 @@
 import type { ComponentType } from 'react';
 import type { NodeProps } from '@xyflow/react';
-import { AGENT_NOTE_SIZE, SHAPE_FILLS, STICKY_COLORS, STICKY_SIZE, TEXT_COLORS, type BoardItemKind } from '@agent-board/daemon/protocol';
+import { AGENT_NOTE_SIZE, CLOCK_SIZE, DOCUMENT_CARD_SIZE, SHAPE_FILLS, STICKY_COLORS, STICKY_SIZE, TEXT_COLORS, type BoardItemKind } from '@agent-board/daemon/protocol';
 import { themedColor } from '../../board-colors';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
 import { AgentNoteNode } from './AgentNoteNode';
+import { clockData } from '../clocks';
+import { ClockNode } from './ClockNode';
+import { DocumentNode } from './DocumentNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
 import { LINK_CARD_SIZE, LinkNode } from './LinkNode';
@@ -97,6 +100,23 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: AGENT_NOTE_SIZE,
     editOnCreate: false,
     minimapColor: () => 'var(--agent-note-bar)',
+  },
+  // Made by agents only (`show_doc` on the board), never from the toolbar.
+  document: {
+    label: 'document',
+    node: DocumentNode,
+    size: DOCUMENT_CARD_SIZE,
+    editOnCreate: false,
+    minimapColor: () => 'var(--raised)',
+  },
+  // Made from the board's menu, or a tile's Schedule…, then set in its editor.
+  clock: {
+    label: 'clock',
+    node: ClockNode,
+    size: CLOCK_SIZE,
+    newData: () => ({ ...clockData({}) }),
+    editOnCreate: false,
+    minimapColor: () => 'var(--accent)',
   },
 };
 

@@ -23,6 +23,7 @@ import {
   MAX_ORCHESTRATOR_READ_BYTES,
   MAX_ORCHESTRATOR_WAIT_MS,
   orchestrateScopeWords,
+  isOrchestratorRole,
   notOrchestratingReason,
   orchestratorTextRefusal,
   waitsOnUser,
@@ -49,7 +50,7 @@ import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
 type OrchestratorMethods = Omit<
   Pick<DaemonMethods, Extract<keyof DaemonMethods, `orchestrator.${string}`>>,
-  keyof LayoutMethods | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole'
+  keyof LayoutMethods | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole' | 'orchestrator.addClock' | 'orchestrator.removeClock'
 >;
 
 /** The terminal an orchestrator's agent starts in, before any client attaches and resizes it. */
@@ -81,8 +82,12 @@ const PROJECT_CONFIG_PATHS = ['.claude', '.mcp.json', '.codex'];
 const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.spawn': 'spawn',
   'orchestrator.send': 'send',
+  'orchestrator.setStatus': 'set-status',
   'orchestrator.interrupt': 'interrupt',
+  'orchestrator.continueOnCredits': 'continue',
   'orchestrator.restart': 'restart',
+  'orchestrator.pause': 'pause',
+  'orchestrator.wake': 'wake',
   'orchestrator.close': 'close',
   'orchestrator.addEdge': 'add-edge',
   'orchestrator.removeEdge': 'remove-edge',
@@ -94,6 +99,8 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.addNote': 'add-note',
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
+  'orchestrator.addClock': 'add-clock',
+  'orchestrator.removeClock': 'remove-clock',
   'orchestrator.setRole': 'set-role',
   'orchestrator.removeRole': 'remove-role',
 };
@@ -149,14 +156,18 @@ const SCOPES: Record<OrchestrateScope, { agent(me: Orchestrator, target: Agent):
 /** How far each scope reaches, to compare two: an orchestrator never steers one whose scope is wider than its own. */
 const SCOPE_RANK: Record<OrchestrateScope, number> = { zone: 0, repo: 1, board: 2 };
 
-/** States an agent takes a message in: between turns, at its prompt (after a failed or rate-limited turn too), or `starting`: the message queues behind its first prompt in the terminal. */
-const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['starting', 'idle', 'waiting', 'scheduled', 'failed', 'rate-limited']);
+/**
+ * States an agent takes a message in: between turns, at its prompt (after a failed or rate-limited turn too, or with a
+ * command still running), `starting` (the message queues behind its first prompt in the terminal), or `hibernated` (it
+ * wakes with it).
+ */
+const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['starting', 'idle', 'waiting', 'scheduled', 'on-command', 'failed', 'rate-limited', 'hibernated']);
 
 export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'resume' | 'stop' | 'finalMessage' | 'orchestrateFacts' | 'idlePrompted'
+    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'idlePrompted' | 'setStatus' | 'clearFlag'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -332,7 +343,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /** A string param a control call names as what it asks, for its log line. */
   const askedText = (params: unknown): string => {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
-    const text = p.text ?? p.prompt;
+    const text = p.text ?? p.prompt ?? p.summary;
     return typeof text === 'string' ? text : '';
   };
 
@@ -606,6 +617,12 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               throw outOfScope(`you are ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes: ask the agent that started you to start it`);
             }
             if (!SCOPES[me.orchestrate].zone(me, zone)) throw outOfScope(`${zone.name} is outside your scope (${scopeText(me)})`);
+            // The board master's lead in a zone whose switch is off could start no one: the user hears of it instead (ADR-0019).
+            if (me.agent?.master === true && !zone.agentsOrchestrate && isOrchestratorRole(optionalStringParam(p, 'role') ?? null)) {
+              throw invalidParams(
+                `${zone.name} doesn't let its agents orchestrate, so an orchestrator started there could start no one: tell the user with agent-board needs-you, who can turn its Let agents orchestrate on or start its orchestrator`,
+              );
+            }
             checkText(prompt);
             const baseBranch = optionalStringParam(p, 'baseBranch');
             const repoRoot = zone.repoRoot ?? zone.defaultRepo;
@@ -649,7 +666,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             entry.on = agentTarget(to);
             checkSteerable(me, to);
             checkText(text);
-            if (to.endedAt !== null) throw invalidParams(`${to.name} has ended`);
+            if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
             if (to.permissions.length > 0 || to.state === 'needs-permission') {
               throw invalidParams(`${to.name} needs the user's permission first`);
             }
@@ -665,6 +682,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               awaitingTurn.delete(to.sessionId);
               throw error;
             }
+            // Its orchestrator answered it: its flag is seen to.
+            if (to.flag !== null && to.spawnedBy === me.agent?.sessionId) return agents.clearFlag(to.sessionId);
             return agents.get(to.sessionId)!;
           });
         },
@@ -775,6 +794,22 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           return { text, path: null };
         },
 
+        'orchestrator.setStatus': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.setStatus', p, connection);
+          const entry: Entry = { detail: askedText(p) };
+          return logged(me, 'set-status', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            // Only its own crew's line (the agents it started, and theirs): a wider scope reaches the board, not a status.
+            if (me.agent !== null && !inCrewOf(me.agent, agent.spawnedBy)) {
+              throw outOfScope(`${agent.name} is not in your crew, and you did not start it: only its own agent, or the orchestrator that started it, sets its status`);
+            }
+            return agents.setStatus(agent.sessionId, stringParam(p, 'summary'), p.progress === undefined ? null : (p.progress as number), false, me.agent === null ? null : me.name);
+          });
+        },
+
         'orchestrator.interrupt': (params, connection) => {
           const p = paramsObject(params);
           const me = orchestrator('orchestrator.interrupt', p, connection);
@@ -787,11 +822,25 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
           });
         },
 
+        'orchestrator.continueOnCredits': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.continueOnCredits', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'continue', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            return agents.continueOnCredits(agent.sessionId, actedBy(me, 'continue'));
+          });
+        },
+
         'orchestrator.restart': (params, connection) => {
           const p = paramsObject(params);
           const me = orchestrator('orchestrator.restart', p, connection);
           const entry: Entry = { detail: '' };
-          return logged(me, 'restart', entry, () => {
+          // A plain restart of a paused agent wakes it: logged as what it did.
+          const paused = typeof p.sessionId === 'string' && agents.get(p.sessionId)?.state === 'hibernated' && p.fresh !== true;
+          return logged(me, paused ? 'wake' : 'restart', entry, () => {
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
@@ -804,6 +853,32 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             }
             // Never forced: a busy shell is the user's to end.
             return agents.resume(agent.sessionId, actedBy(me, 'restart'), false, fresh ? { prompt: prompt === undefined || prompt.trim() === '' ? undefined : prompt } : undefined);
+          });
+        },
+
+        'orchestrator.pause': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.pause', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'pause', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            return agents.pause(agent.sessionId, me.agent === null ? null : me.sessionId, actedBy(me, 'pause'));
+          });
+        },
+
+        'orchestrator.wake': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.wake', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'wake', entry, () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            if (agent.state !== 'hibernated') throw invalidParams(`${agent.name} is not paused`);
+            // Never forced: a paused agent's pane drops into no shell.
+            return agents.resume(agent.sessionId, actedBy(me, 'wake'), false);
           });
         },
 

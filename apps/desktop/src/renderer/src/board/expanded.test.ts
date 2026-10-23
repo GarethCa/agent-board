@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PERCH_ROOM, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, clearOf, PERCH_ROOM, sizedFootprint, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { tidyZone } from '@agent-board/daemon/board-tidy';
 import {
   allowingOverlap,
   bringToFront,
@@ -10,6 +11,7 @@ import {
   EXPANDED_MIN_SIZE,
   EXPANDED_SIZE,
   expandTile,
+  tidySize,
   expandedFrom,
   expandedRank,
   keepExpanded,
@@ -22,6 +24,7 @@ import {
   resizeExpanded,
   sizesFrom,
   type ExpandedTiles,
+  windowedExpanded,
   withoutOverlaps,
 } from './expanded';
 
@@ -183,5 +186,79 @@ describe('expanded tiles', () => {
     const before = expandTile(expandTile(expandTile([], 'a'), 'b'), 'c');
     expect(collapsedBetween(before, collapseTile(collapseTile(before, 'a'), 'c'))).toEqual(['a', 'c']);
     expect(collapsedBetween(before, bringToFront(before, 'a'))).toEqual([]);
+  });
+});
+
+describe('windowedExpanded', () => {
+  const a = { id: 'a', width: 800, height: 500 };
+  const b = { id: 'b', width: 700, height: 400 };
+  const sets = (open: string[], docked: string[] = []) => ({ open: new Set(open), all: new Set([...open, ...docked]) });
+  const present = new Set(['a', 'b']);
+
+  it('takes an expanded tile out while its window is open, and remembers its size', () => {
+    const next = windowedExpanded([a, b], [], sets(['a']), present);
+    expect(ids(next.expanded)).toEqual(['b']);
+    expect(next.hidden).toEqual([a]);
+  });
+
+  it('gives the tile back at its size once the window is closed', () => {
+    const next = windowedExpanded([b], [a], sets([]), present);
+    expect(next.expanded).toEqual([b, a]);
+    expect(next.hidden).toEqual([]);
+  });
+
+  it('leaves a tile whose window was compact, compact', () => {
+    const next = windowedExpanded([], [], sets([]), present);
+    expect(next.expanded).toEqual([]);
+  });
+
+  it('keeps it compact while the window is docked, and expanded by hand meanwhile is the state to come back to', () => {
+    const docked = windowedExpanded([], [a], sets([], ['a']), present);
+    expect(docked.expanded).toEqual([]);
+    expect(docked.hidden).toEqual([a]);
+    const byHand = { id: 'a', width: 900, height: 600 };
+    const expandedAgain = windowedExpanded([byHand], [a], sets([], ['a']), present);
+    expect(expandedAgain.expanded).toEqual([byHand]);
+    expect(expandedAgain.hidden).toEqual([]);
+    // Reopened from the dock, then closed: it comes back as it was when the window opened.
+    const reopened = windowedExpanded([byHand], [], sets(['a']), present);
+    expect(reopened.hidden).toEqual([byHand]);
+    expect(windowedExpanded([], reopened.hidden, sets([]), present).expanded).toEqual([byHand]);
+  });
+
+  it('does not duplicate a tile that is already expanded', () => {
+    const next = windowedExpanded([a], [a], sets([]), present);
+    expect(next.expanded).toEqual([a]);
+    expect(next.hidden).toEqual([]);
+  });
+
+  it('forgets a tile whose session is gone instead of bringing it back', () => {
+    const next = windowedExpanded([], [a], sets([]), new Set(['b']));
+    expect(next.expanded).toEqual([]);
+    expect(next.hidden).toEqual([]);
+  });
+
+  it('returns the same arrays when nothing changes', () => {
+    const expanded = [b];
+    const hidden = [a];
+    const next = windowedExpanded(expanded, hidden, sets(['a']), present);
+    expect(next.expanded).toBe(expanded);
+    expect(next.hidden).toBe(hidden);
+  });
+});
+
+describe('tidySize', () => {
+  it('is the expanded size for an expanded tile and the compact size for the rest', () => {
+    const expanded = expandTile([], 'shell:a');
+    expect(tidySize(expanded, 'shell:a', AGENT_TILE_SIZE)).toEqual(EXPANDED_SIZE);
+    expect(tidySize(expanded, 'shell:b', AGENT_TILE_SIZE)).toEqual(AGENT_TILE_SIZE);
+  });
+
+  it('lays a zone out with nothing under the expanded tile', () => {
+    const expanded = expandTile([], 'b');
+    const tiles = ['a', 'b', 'c', 'd'].map((id, index) => ({ id, x: 40 + index * 10, y: 60, ...tidySize(expanded, id, AGENT_TILE_SIZE) }));
+    const { positions } = tidyZone({ width: 1400, height: 800 }, tiles);
+    const rects = tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile));
+    for (const [index, rect] of rects.entries()) expect(clearOf(rect, rects.filter((_, other) => other !== index))).toBe(true);
   });
 });

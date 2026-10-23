@@ -382,6 +382,29 @@ describe('Open PR and Merge', { timeout: 20_000 }, () => {
     expect(pr).toMatchObject({ number: PR, state: 'draft' });
     const create = github.calls().find((call) => call.args[0] === 'pr' && call.args[1] === 'create')!;
     expect(create.args).toContain('--draft');
+    // It is recorded on its sidebar, with gh's title.
+    const listed = async () => (await client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!;
+    expect((await listed()).records).toEqual([expect.objectContaining({ kind: 'pr', key: `acme/app#${PR}`, url: `https://github.com/acme/app/pull/${PR}`, title: expect.any(String) })]);
+    const title = ((await listed()).records[0] as { title: string }).title;
+
+    // Recorded again, spelled in another case and with no title: one entry, its title kept.
+    await agentSide.call('board.record', { token, kind: 'pr', url: `https://github.com/ACME/App/pull/${PR}` });
+    expect((await listed()).records).toEqual([expect.objectContaining({ key: `acme/app#${PR}`, title })]);
+
+    // A pull request it records on another branch is asked about by its number, for its state and checks.
+    const state = github.state();
+    github.setState({
+      ...state,
+      pullRequests: [
+        { repo: 'acme/app', number: 99, title: 'Release notes', headRefName: 'release-1-4', state: 'OPEN', isDraft: false, statusCheckRollup: [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }] },
+        ...state.pullRequests,
+      ],
+    });
+    await agentSide.call('board.record', { token, kind: 'pr', url: 'https://github.com/Acme/app/pull/99' });
+    await vi.waitFor(async () => expect((await listed()).recordedPullRequests).toEqual([expect.objectContaining({ number: 99, title: 'Release notes', state: 'open', checks: 'passing' })]), {
+      timeout: 10_000,
+    });
+
     for (const call of [
       agentSide.call('gate.openPullRequest', { sessionId: agent.sessionId }),
       agentSide.call('gate.merge', { sessionId: agent.sessionId, number: PR, headCommit: '0'.repeat(40), cleanup: NO_CLEANUP }),

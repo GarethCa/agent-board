@@ -5,7 +5,7 @@ import type { WebTabKey, WebTabState } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { Markdown } from '../session/Markdown';
 import { useWebViewBounds } from '../session/use-web-view';
-import { Button, ErrorText, Textarea } from '../ui';
+import { Button, ErrorText, Tag, Textarea } from '../ui';
 import { useAction } from '../use-action';
 import { shortWhen } from '../when';
 import { planStamp, shownPlan } from './plan-view';
@@ -85,6 +85,7 @@ export function PlanTab({ agent, visible, onFocus, onPaneKey }: PlanTabProps) {
           <header className="plan-head">
             <ClipboardList aria-hidden />
             <h4>{plan.title}</h4>
+            <Tag mono>PLAN</Tag>
             <span className="review-meta">v{plan.version}</span>
           </header>
           {plan.format === 'html' ? (
@@ -176,7 +177,7 @@ interface PlanPageProps {
  * web tab's page is drawn, served from memory, offline, going nowhere and opening nothing. Its scripts run there alone.
  * Each one is a view of its own, gone with its cookies and storage as it goes.
  */
-function PlanPage({ html, visible, onFocus, onPaneKey }: PlanPageProps) {
+export function PlanPage({ html, visible, onFocus, onPaneKey }: PlanPageProps) {
   const host = useRef<HTMLDivElement>(null);
   const [id] = useState(() => `plan-${crypto.randomUUID()}`);
   const [state, setState] = useState<WebTabState>();

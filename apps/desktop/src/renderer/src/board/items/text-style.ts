@@ -16,6 +16,7 @@ import {
 } from '@agent-board/daemon/protocol';
 import { token, tokenNumber } from '../../theme';
 import type { MeasureLine, TextBox } from './text-layout';
+import { SHAPES } from './shapes/catalogue';
 
 const pick = <T extends string>(options: readonly T[], value: unknown, fallback: T): T =>
   options.includes(value as T) ? (value as T) : fallback;
@@ -60,18 +61,32 @@ export const newTextData = (): TextData => textData({});
 
 /** A shape's data, with defaults for anything missing or of the wrong type. */
 export function shapeData(data: Record<string, unknown>): ShapeData {
+  const shape = pick(SHAPE_TYPES, data.shape, 'rectangle');
   return {
-    shape: pick(SHAPE_TYPES, data.shape, 'rectangle'),
+    shape,
     fill: data.fill === null ? null : color(data.fill, SHAPE_FILLS[0].value),
     stroke: color(data.stroke, SHAPE_STROKES[0].value),
     strokeWidth: typeof data.strokeWidth === 'number' ? data.strokeWidth : SHAPE_STROKE_WIDTHS[1],
     dashed: flag(data.dashed),
     text: text(data.text),
     textSize: pick(TEXT_SIZES, data.textSize, 'h2'),
+    fontSize: typeof data.fontSize === 'number' && Number.isFinite(data.fontSize) ? clampFontSize(data.fontSize) : null,
     bold: flag(data.bold, true),
+    align: pick(TEXT_ALIGNS, data.align, 'center'),
+    // A class's attributes and methods are code: in mono unless the user says not.
+    mono: flag(data.mono, SHAPES[shape].sections !== undefined),
+    attributes: text(data.attributes),
+    methods: text(data.methods),
     textColor: color(data.textColor, TEXT_COLORS[0].value),
   };
 }
+
+/**
+ * A shape's saved `data` with every key it lacks as it is read (one saved before alignment or sections existed has
+ * none), its own kept as they are. An update only merges keys in, so putting a shape back as it was (undo, redo) sends
+ * this: what was set since on a key it lacked goes too.
+ */
+export const completeShapeData = (data: Record<string, unknown>): Record<string, unknown> => ({ ...shapeData(data), ...data });
 
 /** A new shape's data. */
 export const newShapeData = (shape: ShapeType = 'rectangle'): ShapeData => shapeData({ shape });

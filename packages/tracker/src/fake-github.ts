@@ -28,6 +28,8 @@ export interface FakeGitHubState {
   viewerPermissions?: Record<string, 'ADMIN' | 'MAINTAIN' | 'WRITE' | 'TRIAGE' | 'READ'>;
   /** True: every GitHub call fails as gh does once GitHub's API rate limit is reached. */
   rateLimited?: boolean;
+  /** Repos whose pull requests `gh pr view` can't read, as in an org whose SAML session has lapsed: it fails, not "not found". */
+  unreadableRepos?: string[];
 }
 
 export interface FakeGitHubIssue {

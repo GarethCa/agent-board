@@ -113,6 +113,27 @@ describe('an agent asking the user through the board MCP', () => {
     await expect(client.call('plan.decide', { sessionId: agent.sessionId, planId: second.plan!.id, outcome: 'rejected' })).rejects.toThrow(/decided already/);
   });
 
+  it.each<Harness>(['claude', 'codex'])('lets a %s agent ask for a question card on the board, which only the user moves', async (harness) => {
+    const { daemon, client, recorder, start, until } = await askDaemon();
+    const agent = await start('Identify, then ask on the board: Which cache? | Redis | CDN only', harness);
+    const { ask } = await until(agent.sessionId, (seen) => seen.ask?.onBoard === true);
+    expect(ask).toMatchObject({ question: 'Which cache?', options: ['Redis', 'CDN only'], at: null });
+
+    const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
+    const asAgent = await connectTestClient(daemon);
+    await asAgent.call('board.identify', { token });
+    await expect(asAgent.call('ask.place', { sessionId: agent.sessionId, askId: ask!.id, at: { x: 0, y: 0 } })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+
+    await client.call('agent.markSeen', { sessionId: agent.sessionId });
+    await client.call('ask.place', { sessionId: agent.sessionId, askId: ask!.id, at: { x: 640, y: 120 } });
+    const moved = await until(agent.sessionId, (seen) => seen.ask?.at?.x === 640);
+    expect(moved.ask).toMatchObject({ id: ask!.id, at: { x: 640, y: 120 } });
+    expect(moved.seen).toBe(true);
+
+    await client.call('ask.answer', { sessionId: agent.sessionId, askId: ask!.id, answer: { option: 0 } });
+    await recorder.waitForText(agent.sessionId, 'The user answered: Redis');
+  });
+
   it('keeps the answering to the user: a connection holding the agent’s board token can’t answer, decide or read plans', async () => {
     const { daemon, client, recorder, start, until } = await askDaemon();
     const agent = await start('Identify, then ask: Which cache? | Redis | CDN only');

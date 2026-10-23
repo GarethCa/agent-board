@@ -10,6 +10,7 @@ import {
   expectCardBesideTile,
   launch,
   LINEAR_API_KEY,
+  listFinishedTurns,
   recordCharacters,
   recordedCharacters,
   recordedStates,
@@ -87,6 +88,7 @@ test('v1 definition of done: zones, tracker-linked Claude and Codex agents, inbo
   let outside: ChildProcessWithoutNullStreams | undefined;
   try {
     const first = await launch(dataDir, env);
+    await listFinishedTurns(first.window);
     apps.push(first.app);
     const { app, window } = first;
     const daemonPid = await connectedDaemonPid(window);
@@ -248,6 +250,7 @@ test('v1 definition of done: zones, tracker-linked Claude and Codex agents, inbo
     await test.step('quitting and relaunching the app finds every session still running', async () => {
       await app.close();
       const second = await launch(dataDir, env);
+      await listFinishedTurns(second.window);
       apps.push(second.app);
       const again = second.window;
       expect(await connectedDaemonPid(again)).toBe(daemonPid);
@@ -280,7 +283,7 @@ test('v1 definition of done: zones, tracker-linked Claude and Codex agents, inbo
       // The outside session too: answered in its own terminal, it finishes.
       outside!.stdin.write('SQLite\n');
       outside!.stdin.end();
-      await expect(again.getByTestId('external-tile')).toHaveAttribute('data-state', 'done');
+      await expect(again.getByTestId('external-tile')).toHaveAttribute('data-state', 'done', { timeout: TURN_MS });
     });
   } finally {
     outside?.kill();

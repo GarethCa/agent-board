@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Zone } from '@agent-board/daemon/protocol';
-import { withZone, withoutZone } from './zone-nodes';
+import { withSavedLayout, withZone, withoutZone } from './zone-nodes';
 import { zoneNode } from './ZoneNode';
 
 const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
@@ -50,5 +50,23 @@ describe('withoutZone', () => {
   it('drops the zone and the items drawn in it', () => {
     const nodes = [zoneNode(zone('z1')), { id: 'item:a', parentId: 'z1', position: { x: 0, y: 0 }, data: {} }, zoneNode(zone('z2'))];
     expect(withoutZone(nodes, 'z1').map((node) => node.id)).toEqual(['z2']);
+  });
+});
+
+describe('withSavedLayout', () => {
+  const node = { ...zoneNode(zone('z')), width: 900, height: 700 };
+  const layout = { x: 40, y: 60, width: 500, height: 300 };
+
+  it('draws the zone at the layout just saved, and keeps it as its saved size, which it is never drawn smaller than', () => {
+    const saved = withSavedLayout(node, layout);
+    expect(saved).toMatchObject({ position: { x: 40, y: 60 }, width: 500, height: 300 });
+    expect(saved.data.zone).toMatchObject(layout);
+    expect(saved.data.zone.name).toBe('z');
+  });
+
+  it('leaves its place be when asked to, for a resize whose node React Flow has already moved', () => {
+    const resized = withSavedLayout({ ...node, position: { x: 7, y: 9 } }, layout, { move: false });
+    expect(resized).toMatchObject({ position: { x: 7, y: 9 }, width: 500, height: 300 });
+    expect(resized.data.zone).toMatchObject(layout);
   });
 });

@@ -3,7 +3,8 @@
 // A named custom role shows its name on the chip and the badge.
 import { expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { agents, launch, pickInChip, screen, tile, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -122,6 +123,94 @@ test('an agent started in a named role shows the name on its badge, and its zone
     await expect(templates.getByRole('textbox', { name: 'designer template' })).toHaveValue('');
     await expect(templates).toContainText('Empty until saved');
     await expect(templates.getByRole('button', { name: "Reset to the app's" })).toBeDisabled();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the Orchestrator role in New agent adds a Checkout row and fills the task from its template; it starts in the main checkout, with the violet badge', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const zone = zoneNamed(window, 'monorepo');
+    await zone.getByRole('button', { name: 'New agent' }).click();
+    const form = window.getByRole('dialog', { name: 'New agent' });
+    await expect(form.getByRole('group', { name: 'Checkout' })).toHaveCount(0);
+
+    await pickInChip(form, 'Role', 'Orchestrator');
+    await expect(form.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'Main checkout' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(form.getByLabel('Task')).toHaveValue(/Orchestrate this zone/);
+    await form.getByRole('button', { name: 'Start' }).click();
+    await expect(form).toBeHidden();
+
+    await expect.poll(async () => (await agents(window)).length).toBe(1);
+    const [orchestrator] = await agents(window);
+    expect(orchestrator).toMatchObject({ roleName: 'orchestrator', orchestrate: 'zone', ownsWorktree: false, worktree: repo });
+    const badge = tile(window).getByTestId('tile-role');
+    await expect(badge).toHaveText('orchestrator');
+    await expect(badge).toHaveAttribute('data-orchestrator-role', 'true');
+
+    // The worktree option still gives it a worktree of its own.
+    await zone.getByRole('button', { name: 'New agent' }).click();
+    await pickInChip(form, 'Role', 'Orchestrator');
+    await form.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'New worktree' }).click();
+    await form.getByRole('button', { name: 'Start' }).click();
+    await expect.poll(async () => (await agents(window)).length).toBe(2);
+    expect((await agents(window))[1]).toMatchObject({ roleName: 'orchestrator', ownsWorktree: true });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an orchestrator in a dirty or off-branch main checkout warns in New agent and on its tile, and still starts; a clean default-branch checkout shows none', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    execFileSync('git', ['-C', repo, 'branch', '-M', 'main']);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const zone = zoneNamed(window, 'monorepo');
+    const open = async () => {
+      await zone.getByRole('button', { name: 'New agent' }).click();
+      const form = window.getByRole('dialog', { name: 'New agent' });
+      await pickInChip(form, 'Role', 'Orchestrator');
+      return form;
+    };
+
+    const clean = await open();
+    await expect(clean.getByRole('group', { name: 'Checkout' })).toBeVisible();
+    await expect(clean.getByTestId('checkout-warning')).toHaveCount(0);
+    await clean.getByRole('button', { name: 'Cancel' }).click();
+
+    writeFileSync(join(repo, 'wip.txt'), 'unsaved\n');
+    const dirty = await open();
+    await expect(dirty.getByTestId('checkout-warning')).toHaveText('main checkout has uncommitted changes');
+    // The worktree option has no main checkout to warn about.
+    await dirty.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'New worktree' }).click();
+    await expect(dirty.getByTestId('checkout-warning')).toHaveCount(0);
+    await dirty.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'Main checkout' }).click();
+    await dirty.getByRole('button', { name: 'Start' }).click();
+    await expect(dirty).toBeHidden();
+    await expect(tile(window).getByTestId('checkout-warning')).toHaveText('main checkout has uncommitted changes');
+
+    // Off the default branch, and clean again: the tile follows.
+    rmSync(join(repo, 'wip.txt'));
+    execFileSync('git', ['-C', repo, 'switch', '--quiet', '-c', 'fix-login-flake']);
+    await expect(tile(window).getByTestId('checkout-warning')).toHaveText('main checkout is on fix-login-flake', { timeout: 15_000 });
+    const offBranch = await open();
+    await expect(offBranch.getByTestId('checkout-warning')).toHaveText('main checkout is on fix-login-flake');
+    await offBranch.getByRole('button', { name: 'Cancel' }).click();
+    execFileSync('git', ['-C', repo, 'switch', '--quiet', 'main']);
+    await expect(tile(window).getByTestId('checkout-warning')).toHaveCount(0, { timeout: 15_000 });
+    expect(execFileSync('git', ['-C', repo, 'branch', '--show-current'], { encoding: 'utf8' }).trim()).toBe('main');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
