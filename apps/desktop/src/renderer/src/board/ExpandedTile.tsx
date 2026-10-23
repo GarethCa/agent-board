@@ -12,9 +12,11 @@ import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
 import { panesLabel } from '../session/panes';
 import { agentPill, STATE_LABELS } from '../states';
+import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
 import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, resizeAllowed, type ExpandedParent } from './expanded';
 import { HarnessMark } from './HarnessMark';
+import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './HybridTile';
 import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';
@@ -36,6 +38,7 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
 export function ExpandedTile({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
   const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
+  const shows = useNeedsYouShows();
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
   const { agent, shell, external } = tile;
@@ -82,7 +85,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
       <header className="session-window-head expanded-tile-head">
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
-        {agent && <StatusPill {...agentPill(agent)} />}
+        {agent && <StatusPill {...agentPill(agent, shows)} />}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
         <HeadFacts agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
         <span className="session-window-head-fill" />
@@ -104,6 +107,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
           <ExternalBody session={external} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} />
         ) : null}
       </div>
+      {agent && <CommandFigure agent={agent} />}
       {(agent ?? external) && <SubagentPerch harness={(agent ?? external)!.harness} subagents={(agent ?? external)!.subagents} />}
       {[...EDGES, ...CORNERS].map((position) => {
         const corner = CORNERS.includes(position);

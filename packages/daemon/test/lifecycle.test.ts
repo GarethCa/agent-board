@@ -64,7 +64,7 @@ describe('daemon lifetime', () => {
     expect(await stillRunningAfter(daemon, 600)).toBe(true);
   });
 
-  it('stays up while an agent has an enabled schedule, though its session has ended', async () => {
+  it('stays up while a clock is set to message an agent, though its session has ended', async () => {
     const dataDir = tempDataDir();
     insertFakeSession(dataDir, { id: 'scheduled', hookToken: 'token' }).end();
     const db = new DatabaseSync(daemonPaths(dataDir).database);
@@ -72,7 +72,18 @@ describe('daemon lifetime', () => {
     db.prepare(
       "INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state) VALUES ('scheduled', 'z', '/r', 1, 'a', '', 'b', '/w', 'done')",
     ).run();
-    db.prepare("INSERT INTO schedules (session_id, cron, prompt) VALUES ('scheduled', '@daily', 'Sweep')").run();
+    const data = {
+      cron: '@daily',
+      enabled: true,
+      does: 'message',
+      agent: 'scheduled',
+      prompt: 'Sweep',
+      fresh: { harness: 'claude', model: null, role: null, closeWhenDone: true },
+      result: 'history',
+      handoffTo: null,
+      folded: false,
+    };
+    db.prepare("INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, data) VALUES ('c', 'clock', 'z', 0, 0, 256, 76, 1, ?)").run(JSON.stringify(data));
     db.close();
 
     const daemon = await startTestDaemon({ dataDir, ...IDLE });

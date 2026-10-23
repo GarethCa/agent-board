@@ -23,6 +23,8 @@ interface BoardMenuOptions {
   tidyLoose(): void;
   /** Selects these nodes alone. */
   selectOnly(nodeIds: ReadonlySet<string>): void;
+  /** Puts a new clock at `at`, on the screen, and opens its editor. */
+  addClock(at: { x: number; y: number }): void;
 }
 
 /** Where a right-click was, on the screen. */
@@ -44,6 +46,7 @@ export function useBoardMenu({
   toggleGrid,
   tidyLoose,
   selectOnly,
+  addClock,
 }: BoardMenuOptions) {
   /** The context menu open, where it was asked for and on what: the selection, or empty board. */
   const [contextMenu, setContextMenu] = useState<{ at: { x: number; y: number }; on: 'selection' | 'board' }>();
@@ -68,6 +71,11 @@ export function useBoardMenu({
     grid,
     toggleGrid,
     tidyLoose,
+    // Where the menu was opened, once it has handed the focus back.
+    addClock: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => addClock(at), MENU_FOCUS_RETURN_MS);
+    },
   };
 
   const menu: ReactNode = contextMenu !== undefined && (

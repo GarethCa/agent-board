@@ -1,4 +1,4 @@
-import type { Agent, AgentState } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, NeedsYouShows } from '@agent-board/daemon/protocol';
 import { APP_NAME } from '../shared/brand';
 import { unseenCount } from '../shared/needs-you';
 
@@ -15,10 +15,10 @@ export type Colourway = 'blue' | 'dark';
 export type DockIcon = `dock-${Colourway}-${AppState}`;
 
 /**
- * States a live agent counts as working in: mid-turn, a rate-limited one included, as it carries on by itself. An
- * idle or scheduled agent sits at its prompt and is quiet.
+ * States a live agent counts as working in: mid-turn, a rate-limited one included, as it carries on by itself, or with
+ * a command it left running. An idle or scheduled agent sits at its prompt and is quiet.
  */
-const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off', 'starting']);
+const WORKING: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'rate-limited', 'handing-off', 'starting', 'on-command']);
 
 /** The app's state, and how many agents wait for the user (the needs-you inbox's unseen asks). */
 export interface AppStatus {
@@ -26,9 +26,9 @@ export interface AppStatus {
   waiting: number;
 }
 
-/** The app's status over `agents`. */
-export function appStateOf(agents: readonly Agent[]): AppStatus {
-  const waiting = unseenCount(agents);
+/** The app's status over `agents`, the needs-you inbox listing what `shows` says. */
+export function appStateOf(agents: readonly Agent[], shows: NeedsYouShows): AppStatus {
+  const waiting = unseenCount(agents, shows);
   if (waiting > 0) return { state: 'needs', waiting };
   const working = agents.some((agent) => agent.endedAt === null && WORKING.has(agent.state));
   return { state: working ? 'working' : 'quiet', waiting };

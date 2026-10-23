@@ -4,7 +4,6 @@ import { dropZoneAt, type DropZone, type Rect } from './pane-geometry';
 import { dropTaken, tabDrag, useTabDrag } from './shell-moves';
 import { TabStrip, type StripTab } from './TabStrip';
 import type { WindowSurface } from './tabs';
-import { OpenWebDialog } from './WebTab';
 import { Dividers, useDividerDrag } from './use-divider-drag';
 import type { PaneView, WindowPanesControl } from './use-window-panes';
 
@@ -30,6 +29,8 @@ interface WindowPanesProps {
   panelId(key: string): string;
   /** The one pane's strip is drawn by the window, in its own strip: only panes of a split have strips of their own. */
   inlineStrip: boolean;
+  /** What ends a pane's own strip (only a split's panes have one), if anything: the Terminal / Chat switch, in the agent's pane. */
+  trailingOf?(pane: PaneView): ReactNode;
 }
 
 /**
@@ -38,7 +39,7 @@ interface WindowPanesProps {
  * terminal; those not showing stay attached behind the one that is. A tab dragged over a pane shows where it would
  * land: in its strip from the middle, or in a new pane at an edge.
  */
-export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inlineStrip }: WindowPanesProps) {
+export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inlineStrip, trailingOf }: WindowPanesProps) {
   const container = useRef<HTMLDivElement>(null);
   const { dividers } = useDividerDrag(container, panes.layout, paneId, panes.resize);
   const dragging = useTabDrag();
@@ -65,7 +66,7 @@ export function WindowPanes({ panes, stripTab, renderSurface, here, panelId, inl
             style={boxStyle(pane.rect)}
             onMouseDownCapture={() => panes.focusPane(pane.id)}
           >
-            <PaneStrip panes={panes} pane={pane} stripTab={stripTab} here={here} panelId={panelId} focused={several && pane.id === panes.focusedPane.id} />
+            <PaneStrip panes={panes} pane={pane} stripTab={stripTab} here={here} panelId={panelId} focused={several && pane.id === panes.focusedPane.id} trailing={trailingOf?.(pane)} />
           </div>
         ))}
       {panes.surfaces.map((surface) => {
@@ -105,6 +106,7 @@ export function PaneStrip({
   here,
   panelId,
   focused,
+  trailing,
 }: {
   panes: WindowPanesControl;
   pane: PaneView;
@@ -112,10 +114,9 @@ export function PaneStrip({
   here: string;
   panelId(key: string): string;
   focused: boolean;
+  trailing?: ReactNode;
 }) {
-  const [askingWeb, setAskingWeb] = useState(false);
   return (
-    <>
     <TabStrip
       tabs={pane.surfaces.map(stripTab)}
       active={pane.active.key}
@@ -130,7 +131,7 @@ export function PaneStrip({
       scripts={panes.scripts}
       sessions={panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) }))}
       pullRequests={panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) }))}
-      onOpenWeb={() => setAskingWeb(true)}
+      onOpenWeb={() => panes.openBlankWeb(pane.id)}
       named={panes.surfaces.length === 1}
       shells={panes.holdsShells}
       onSplit={() => panes.split('horizontal', pane.id)}
@@ -139,9 +140,8 @@ export function PaneStrip({
         return surface === undefined ? undefined : panes.dragOf(surface);
       }}
       drop={{ accepts: panes.accepts, onDrop: (drag, index) => panes.drop(drag, { pane: pane.id, index }) }}
+      trailing={trailing}
     />
-    {askingWeb && <OpenWebDialog suggested={panes.webSuggestion} onOpen={(url) => panes.openWeb(url, pane.id)} onClose={() => setAskingWeb(false)} />}
-    </>
   );
 }
 

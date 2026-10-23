@@ -5,6 +5,7 @@ import { IconButton } from './Button';
 import { Input } from './Field';
 import { errorMessage } from '../../../shared/errors';
 import { cx } from './cx';
+import type { NameClicks } from './slow-click';
 
 /** One name being renamed in place: whether the field is open, and how it saves. */
 export interface Renaming {
@@ -72,13 +73,16 @@ interface EditableNameProps {
   /** What the field starts with, when it should not be `value` (a pane label starts empty when it has none). */
   initial?: string;
   placeholder?: string;
+  /** Renames on a slow click of a selected tile instead (see `useSlowClickRename`); a double-click then reaches whatever holds the name. */
+  clicks?: NameClicks;
 }
 
 /**
- * A name that becomes a field on a double-click (or when its `renaming` is started, by a pencil button, F2 or a menu).
+ * A name that becomes a field on a double-click, or on a slow click of a selected tile's name when it has `clicks` (or when
+ * its `renaming` is started, by a pencil button, F2 or a menu).
  * Enter or blur saves, Escape cancels. Capped to `MAX_NAME_LENGTH`.
  */
-export function EditableName({ value, renaming, as: Tag = 'span', className, title, shown = value, label, initial = value, placeholder }: EditableNameProps) {
+export function EditableName({ value, renaming, as: Tag = 'span', className, title, shown = value, label, initial = value, placeholder, clicks }: EditableNameProps) {
   if (renaming.editing) {
     const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
       // Not for the board or the window behind: Escape closes the field only, and letters are just letters.
@@ -111,10 +115,12 @@ export function EditableName({ value, renaming, as: Tag = 'span', className, tit
       className={cx('editable-name', className)}
       title={renaming.problem ?? title ?? (shown === value ? undefined : value)}
       data-problem={renaming.problem !== undefined || undefined}
-      onDoubleClick={(event: { stopPropagation(): void }) => {
-        event.stopPropagation();
-        renaming.start();
-      }}
+      {...(clicks ?? {
+        onDoubleClick: (event: { stopPropagation(): void }) => {
+          event.stopPropagation();
+          renaming.start();
+        },
+      })}
     >
       {shown}
     </Tag>

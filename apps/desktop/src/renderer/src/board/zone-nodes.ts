@@ -1,7 +1,7 @@
 // Keeping the board's zone nodes in step with the daemon's zone events: zones now change by themselves, as a
 // clone runs, finishes or fails.
 import type { Node } from '@xyflow/react';
-import type { Zone } from '@agent-board/daemon/protocol';
+import type { Zone, ZoneLayout } from '@agent-board/daemon/protocol';
 import { isZone } from './tiles';
 import { zoneNode, type ZoneNodeType } from './ZoneNode';
 
@@ -21,6 +21,21 @@ export function withZone<N extends Node>(nodes: N[], zone: Zone): N[] {
     ...(moving ? {} : { position: { x: zone.x, y: zone.y }, width: zone.width, height: zone.height }),
   };
   return nodes.with(index, node as unknown as N);
+}
+
+/**
+ * `node` at a layout this window has just saved, ahead of the daemon's echo of it: drawn at it, and with it as its saved
+ * size too, which the board never draws a zone smaller than (`withTiles`), so the next layout pass keeps it. Its place
+ * stays as React Flow has it with `move` off: a resize has moved it already.
+ */
+export function withSavedLayout(node: ZoneNodeType, layout: ZoneLayout, { move = true }: { move?: boolean } = {}): ZoneNodeType {
+  return {
+    ...node,
+    ...(move ? { position: { x: layout.x, y: layout.y } } : {}),
+    width: layout.width,
+    height: layout.height,
+    data: { ...node.data, zone: { ...node.data.zone, ...layout } },
+  };
 }
 
 /**

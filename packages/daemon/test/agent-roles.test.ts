@@ -103,8 +103,11 @@ describe('an agent started in a role', () => {
       ['reviewer', 'review-prompt.md', null],
       ['follow-up-reviewer', 'rereview-prompt.md', null],
       ['custom', null, null],
+      // Always listed, so New agent can fill its task from it in a zone that never ran one.
+      ['orchestrator', null, null],
     ]);
-    expect(templates.at(-1)!.body).toBe('');
+    expect(templates.find((each) => each.role === 'custom')!.body).toBe('');
+    expect(templates.at(-1)!.body).toContain('Orchestrate this zone');
     await expect(client.call('zone.setRoleTemplate', { id: zone.id, role: 'bo\nss', body: 'x' })).rejects.toMatchObject({
       code: RPC_ERROR.invalidParams,
     });
@@ -209,6 +212,7 @@ describe('an agent started in a named role', () => {
       ['follow-up-reviewer', expect.any(String), false],
       ['custom', '', false],
       ['designer', '', false],
+      ['orchestrator', expect.stringContaining('Orchestrate this zone'), false],
       ['release prep', 'Prep the release.', true],
     ]);
   });
@@ -456,5 +460,40 @@ describe('the model', () => {
     const agent = await client.call('agent.spawn', { zoneId: zone.id, model: 'sonnet', prompt: 'Go', ...SIZE });
 
     expect((await sessionStart(recorder, agent.sessionId)).payload.model).toBe('sonnet');
+  });
+});
+
+describe('an orchestrator started from New agent', () => {
+  it("works in the repo's own checkout with no worktree, on the app's template, and orchestrates its zone", async () => {
+    const { client, recorder } = await agentDaemon();
+    const repo = tempRepo('storefront');
+    const zone = await zoneFor(client, repo);
+    const before = branches(repo);
+
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', orchestrate: 'zone', checkout: 'main', ...SIZE });
+
+    expect(agent).toMatchObject({ role: 'custom', roleName: 'orchestrator', orchestrate: 'zone', ownsWorktree: false, worktree: zone.repoRoot });
+    expect(agent.branch).toBe('');
+    expect(branches(repo)).toEqual(before);
+    expect(await firstPrompt(recorder, agent.sessionId)).toContain('Orchestrate this zone');
+  });
+
+  it('takes a worktree of its own when asked for one, as any agent does', async () => {
+    const { client } = await agentDaemon();
+    const zone = await zoneFor(client, tempRepo('storefront'));
+
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', checkout: 'worktree', ...SIZE });
+
+    expect(agent.ownsWorktree).toBe(true);
+    expect(agent.worktree).not.toBe(zone.repoRoot);
+  });
+
+  it('refuses the main checkout for a reviewer, or with a branch of its own', async () => {
+    const { client } = await agentDaemon();
+    const zone = await zoneFor(client, tempRepo('storefront'));
+
+    await expect(client.call('agent.spawn', { zoneId: zone.id, role: 'reviewer', checkout: 'main', ...SIZE })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('agent.spawn', { zoneId: zone.id, checkout: 'main', branch: 'x', ...SIZE })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await expect(client.call('agent.spawn', { zoneId: zone.id, checkout: 'elsewhere' as 'main', ...SIZE })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
   });
 });

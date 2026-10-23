@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection', 'background'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -124,6 +124,28 @@ const scripts: Record<FakeScenario, Script> = {
     await session.submit(prompt);
     await session.say('I need to run a long command.');
     await session.runTool(session.shellTool, { command: prompt, description: 'Run it' }, { stdout: '', stderr: '', interrupted: false }, true);
+    await session.stop();
+  },
+
+  /**
+   * Leaves the prompt, a shell command, running in the background and ends its turn, with its idle prompt after
+   * `FAKE_HARNESS_IDLE_NOTIFY_MS`. Claude takes
+   * up a turn of its own when the command ends, as a background command reporting back, firing no hook for its first
+   * second, and ends on `The command finished.`; Codex stays at its prompt.
+   */
+  async background(session, prompt) {
+    await session.submit(prompt);
+    const { ended } = await session.runInBackground(prompt);
+    await session.say('The command is running in the background.');
+    await session.stop();
+    await new Promise((resolve) => setTimeout(resolve, session.idleNotifyMs));
+    await session.idlePrompt();
+    await ended;
+    if (!session.takesUpBackgroundResults) return;
+    session.resume();
+    // A moment to read the result before its first hook, as the model takes.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await session.say('The command finished.');
     await session.stop();
   },
 
@@ -248,7 +270,7 @@ const scripts: Record<FakeScenario, Script> = {
     await session.submit(prompt);
     const summary = prompt.split('\n', 1)[0]!;
     const instructions = await session.mcpInstructions('agent-board');
-    await session.say(instructions === undefined ? 'There is no agent-board MCP server here.' : `The board says: ${instructions}`);
+    await session.say(instructions === undefined ? 'There is no agent-board MCP server here.' : `The board says: ${instructions}`, true);
     await session.callMcpTool('agent-board', 'whoami', {});
     await session.callMcpTool('agent-board', 'set_status', { summary, progress: 10 });
     await session.runShell('agent-board identify');
@@ -261,12 +283,15 @@ const scripts: Record<FakeScenario, Script> = {
   /**
    * Asks the user and presents plans through the board MCP, by prompt, then ends its turn on what it was told.
    * `Ask: <question> | <option> | …` asks with those options and a reply field (`Ask only: …` without the field);
-   * `Ask in words: <question>` asks with no options; `Ask briefly: <question>` waits a minute at most; `Identify, then
-   * ask: …` prints its board token first; `Ask and give up: <question>` asks and, as a harness whose own tool timeout
+   * `Ask in words: <question>` asks with no options; `Ask briefly: <question>` waits a minute at most; `Ask on the board:
+   * …` asks for a question card too; `Identify, then ask: …` prints its board token first; `Ask and give up: <question>` asks and, as a harness whose own tool timeout
    * passes first, drops the call after half a second with no cancel and ends its turn. `Plan: <title>`
    * presents a Markdown plan and, if changes are asked for, a v2 with the comments in it, until a decision other than
    * changes. `Plan HTML: <url>` presents an HTML plan that tries to reach `<url>` (fetch, an image, a form, a navigation,
    * `window.open`) and the app, and says in its title what it could. `Plan file: <path>` presents the file at `<path>`.
+   * `Flag: <reason>` asks for a look with `needs_you` and ends its turn, nothing waiting. `Doc: <path>` writes a short
+   * release plan in Markdown to `<path>` (an `.html` path, a page) and shows it with `show_doc`; `Doc on the board:
+   * <path>` shows it as a card on the board too. Nothing waits on either.
    */
   async 'ask-plan'(session, prompt) {
     await session.submit(prompt);
@@ -275,16 +300,29 @@ const scripts: Record<FakeScenario, Script> = {
       await session.stop();
     };
     // Its board token on its screen first, for a test to act as the agent with.
-    if (prompt.startsWith('Identify, then ask: ')) await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+    if (prompt.startsWith('Identify, then ask')) await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
     const givenUp = /^Ask and give up: (.*)/.exec(prompt)?.[1];
     if (givenUp !== undefined) {
       return say(await session.callMcpTool('agent-board', 'ask', { question: givenUp }, { giveUpMs: 500 }));
     }
-    const ask = /^(?:Identify, then )?[Aa]sk( only| in words| briefly)?: (.*)/.exec(prompt);
+    const ask = /^(?:Identify, then )?[Aa]sk( only| in words| briefly| on the board)?: (.*)/.exec(prompt);
     if (ask !== null) {
       const [question, ...options] = ask[2]!.split(' | ');
       const args = ask[1] === ' in words' ? { question } : { question, options, free_text: ask[1] !== ' only' };
-      return say(await session.callMcpTool('agent-board', 'ask', ask[1] === ' briefly' ? { ...args, timeout_minutes: 1 } : args));
+      const how = ask[1] === ' briefly' ? { timeout_minutes: 1 } : ask[1] === ' on the board' ? { on_board: true } : {};
+      return say(await session.callMcpTool('agent-board', 'ask', { ...args, ...how }));
+    }
+    const flag = /^Flag: (.*)/.exec(prompt)?.[1];
+    if (flag !== undefined) return say(await session.callMcpTool('agent-board', 'needs_you', { reason: flag }));
+    const doc = /^Doc( on the board)?: (.*)/.exec(prompt);
+    if (doc !== null) {
+      const path = doc[2]!;
+      const text = /\.html?$/.test(path)
+        ? '<html><head><title>Cache benchmark</title></head><body><h1>Cache benchmark</h1><p>SQLite 41 ms.</p></body></html>\n'
+        : '# Release 1.4 plan\n\n## Order\nMerge the flake fix first, then the pin bump.\n';
+      // printf's %b turns each \n back into a line break; the text has no quote to escape.
+      await session.runShell(`mkdir -p "$(dirname '${path}')" && printf '%b' '${text.replaceAll('\n', '\\n')}' > '${path}'`);
+      return say(await session.callMcpTool('agent-board', 'show_doc', { path, ...(doc[1] === undefined ? {} : { on_board: true }) }));
     }
     const plan = /^Plan: (.*)/.exec(prompt)?.[1];
     if (plan !== undefined) {
@@ -315,8 +353,9 @@ const scripts: Record<FakeScenario, Script> = {
    * about its zone (`agent-board move`), joins them with an edge and runs `agent-board arrange`, ending on `Arranged.`.
    * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
-   * `Work slowly` runs `sleep 5`;
-   * `Ask permission` plays `permission`; `Ask: …` and `Plan: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
+   * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
+   * `Ask permission` plays `permission`; `Ask: …`, `Plan: …` and `Flag: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
@@ -396,8 +435,12 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Slow work done.');
       return session.stop();
     }
+    if (prompt === 'Work slowly, then fail' || prompt === 'Work slowly, then hit the rate limit') {
+      await session.runShell('sleep 5');
+      return prompt.endsWith('fail') ? session.failTurn('server_error', '500 Internal Server Error') : session.failTurn('rate_limit', '429 Too Many Requests');
+    }
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| briefly)?|Plan): /.test(prompt)) return scripts['ask-plan'](session, prompt);
+    if (/^(Ask( only| in words| briefly| on the board)?|Plan|Flag|Doc( on the board)?): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
     await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
     await session.say('Handover written.\nSTATUS: done');
@@ -498,7 +541,7 @@ export async function play(
   await session.start();
   // A conversation resumed with no new prompt carries on at the prompt: its scripted turn has been played already.
   if (!(session.resumed && prompt === undefined)) {
-    const firstPrompt = prompt ?? (await session.readLine());
+    const firstPrompt = prompt ?? (await session.readPrompt());
     if (firstPrompt === undefined) await session.end('prompt_input_exit');
     await session.interruptible(() => scripts[scenario](session, firstPrompt!));
     if (!session.interactive) await session.end('other');

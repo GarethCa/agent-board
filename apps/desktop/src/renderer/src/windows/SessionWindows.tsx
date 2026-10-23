@@ -6,11 +6,13 @@ import { WINDOW_QUERY, windowTargetFrom, type ScreenPoint, type WindowTarget } f
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { markSeen } from '../session/mark-seen';
 import { agentPill } from '../states';
+import { useNeedsYouShows } from '../needs-you-setting';
+import { tokenNumber } from '../theme';
 import { HeldPromptsNotice } from '../inbox/Inbox';
-import { ChevronDown, SquareArrowOutUpRight, X } from 'lucide-react';
+import { SquareArrowOutUpRight, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
 import { TileActionsContext } from '../board/tile';
-import { Button, IconButton, Island, Popover, StatusPill, useToast } from '../ui';
+import { Button, IconButton, Island, StatusPill, useSidewaysScroll, useToast } from '../ui';
 import { SessionWindow, type WindowNav } from '../session/SessionWindow';
 import type { WindowContent } from '../session/SessionBody';
 import {
@@ -188,15 +190,6 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
 const idAttributes = ({ kind, id }: WindowTarget) =>
   kind === 'shell' ? { 'data-shell-id': id } : kind === 'tabs' ? { 'data-tab-window-id': id } : { 'data-session-id': id };
 
-/** The space the dock keeps from the zones pill, the zoom bar and the minimap either side of it, and above them when it moves up a row. */
-const DOCK_GAP_PX = 12;
-
-/** The narrowest the dock's pills get (one and its arrows): with less room beside the islands they collapse into a count. */
-const DOCK_MIN_PX = 240;
-
-/** The room the collapsed dock's button needs: with less than that beside the islands it moves up a row, above everything. */
-const DOCK_COMPACT_PX = 140;
-
 /** What the dock keeps clear of, on the bottom of the board. */
 const DOCK_AVOIDS = '.island-bottom-left, .island-bottom-right, .board-minimap';
 
@@ -204,88 +197,56 @@ const DOCK_AVOIDS = '.island-bottom-left, .island-bottom-right, .board-minimap';
 const DOCK_CHROME = `${DOCK_AVOIDS}, .edge-rules`;
 
 /**
- * Makes the dock's track scroll sideways: a mouse wheel's vertical turn scrolls it (a trackpad's and shift-wheel's
- * sideways ones already do), `data-more` on the dock says which edges have more past them (for the fades), and the pill
- * that arrived in the dock last scrolls into view. It also sets `--dock-clear`, the room the dock leaves each side: the
- * wider of the zones pill (bottom left) and the zoom bar (bottom right) in the row it sits in, measured again whenever
- * the window, the board or any of them changes size, or the board's chrome mounts or unmounts (the zones pill when the
- * first zone is added, the Edge rules panel moving the zoom bar), so the dock stays centred between them. With less
- * than `DOCK_MIN_PX` left, the pills collapse into one button with their count (`data-compact`), which opens a list; with
- * not even `DOCK_COMPACT_PX`, that button moves up a row (`data-lifted`, `--dock-lift`), above everything at the bottom.
- * `compact` says whether it is the button now, and is false once the dock is gone.
+ * Keeps the dock on the bottom row between the zones pill (bottom left) and the zoom bar (bottom right), centred in the
+ * room between them and scrolling sideways when its pills do not fit (`useSidewaysScroll`). It sets `--dock-left` and
+ * `--dock-right` on the board, the room the dock leaves each side: what shows in its row at that side of the board, plus a gap,
+ * measured again whenever the window, the board or any of them changes size, or the board's chrome mounts or unmounts
+ * (the zones pill when the first zone is added, the Edge rules panel moving the zoom bar). The zones pill is capped, and gives
+ * way to the dock's minimum width (`.zone-jump`), so the dock keeps it however many zones there are; it never collapses or moves up a row. Also scrolls
+ * the pill that arrived in the dock last into view.
  */
-function useDockScroll(ids: readonly string[]): { track: RefObject<HTMLDivElement | null>; compact: boolean } {
+function useDockScroll(ids: readonly string[]): RefObject<HTMLDivElement | null> {
   const track = useRef<HTMLDivElement | null>(null);
   const known = useRef<ReadonlySet<string>>(new Set());
   const key = ids.join('\n');
   const drawn = ids.length > 0;
-  const [compact, setCompact] = useState(false);
+  useSidewaysScroll(track, drawn);
   useEffect(() => {
     const element = track.current;
     if (element === null) return;
     const dock = element.parentElement!;
-    const container = dock.offsetParent ?? dock.parentElement!;
+    const container = (dock.offsetParent ?? dock.parentElement!) as HTMLElement;
     const avoided = () => [...container.querySelectorAll<HTMLElement>(DOCK_AVOIDS)];
-    // The most of the board's width, from either side, that what shows in the dock's row takes.
-    const taken = (row: DOMRect, edge: DOMRect) =>
-      Math.max(
-        0,
-        ...avoided().map((thing) => {
-          const box = thing.getBoundingClientRect();
-          if (box.width === 0 || box.bottom <= row.top || box.top >= row.bottom) return 0;
-          return box.x < edge.x + edge.width / 2 ? box.right - edge.left : edge.right - box.left;
-        }),
-      );
-    const clear = () => {
-      delete dock.dataset.compact;
-      delete dock.dataset.lifted;
-      dock.style.removeProperty('--dock-lift');
+    // The most of the board's width, from one side, that what shows in the dock's row takes, and a gap.
+    const taken = (side: 'left' | 'right') => {
       const edge = container.getBoundingClientRect();
-      const room = taken(dock.getBoundingClientRect(), edge);
-      let beside = edge.width - 2 * (room + DOCK_GAP_PX);
-      if (beside < DOCK_MIN_PX) {
-        // Too little room for the pills: one button with their count, which opens the list.
-        dock.dataset.compact = '';
-        if (beside < DOCK_COMPACT_PX) {
-          // Not even room for that beside them: a row up, above everything on the board's bottom, where nothing is to keep clear of.
-          const things = avoided().map((thing) => thing.getBoundingClientRect()).filter((box) => box.width > 0);
-          const row = dock.getBoundingClientRect();
-          const top = Math.min(row.top, ...things.map((box) => box.top));
-          dock.dataset.lifted = '';
-          dock.style.setProperty('--dock-lift', `${Math.ceil(row.bottom - top) + DOCK_GAP_PX}px`);
-          beside = edge.width - 2 * DOCK_GAP_PX;
-        }
+      const row = dock.getBoundingClientRect();
+      let most = 0;
+      for (const thing of avoided()) {
+        const box = thing.getBoundingClientRect();
+        if (box.width === 0 || box.bottom <= row.top || box.top >= row.bottom) continue;
+        if ((box.x < edge.x + edge.width / 2) !== (side === 'left')) continue;
+        most = Math.max(most, side === 'left' ? box.right - edge.left : edge.right - box.left);
       }
-      dock.style.setProperty('--dock-clear', `${Math.round((edge.width - beside) / 2)}px`);
-      setCompact(dock.dataset.compact !== undefined);
+      return `${Math.round(most + tokenNumber('--size-dock-gap'))}px`;
     };
-    const mark = () => {
-      const [before, after] = [element.scrollLeft > 1, element.scrollLeft + element.clientWidth < element.scrollWidth - 1];
-      dock.dataset.more = before && after ? 'both' : before ? 'start' : after ? 'end' : 'none';
-    };
-    const wheel = (event: WheelEvent) => {
-      if (event.deltaX !== 0 || event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-      event.preventDefault();
-      element.scrollLeft += event.deltaY;
+    // Set on the board, where the zones pill reads the right one too: it gives way to the dock's minimum, so the right is
+    // measured first, and the left after the zones pill has settled to it.
+    const clear = () => {
+      container.style.setProperty('--dock-right', taken('right'));
+      container.style.setProperty('--dock-left', taken('left'));
     };
     clear();
-    mark();
-    element.addEventListener('scroll', mark, { passive: true });
-    element.addEventListener('wheel', wheel, { passive: false });
-    const measure = () => {
-      clear();
-      mark();
-    };
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(clear);
     const watched = new Set<Element>();
     // The islands and the minimap come and go, so what is watched is looked at again whenever the page's markup changes.
     const watch = () => {
-      for (const thing of [element, container, ...avoided()]) {
+      for (const thing of [container, ...avoided()]) {
         if (watched.has(thing)) continue;
         watched.add(thing);
         observer.observe(thing);
       }
-      measure();
+      clear();
     };
     watch();
     let frame = 0;
@@ -296,15 +257,14 @@ function useDockScroll(ids: readonly string[]): { track: RefObject<HTMLDivElemen
       frame = requestAnimationFrame(watch);
     });
     changed.observe(document.documentElement, { childList: true, subtree: true });
-    window.addEventListener('resize', measure);
+    window.addEventListener('resize', clear);
     return () => {
       cancelAnimationFrame(frame);
-      element.removeEventListener('scroll', mark);
-      element.removeEventListener('wheel', wheel);
-      window.removeEventListener('resize', measure);
+      window.removeEventListener('resize', clear);
       changed.disconnect();
       observer.disconnect();
-      setCompact(false);
+      container.style.removeProperty('--dock-left');
+      container.style.removeProperty('--dock-right');
     };
   }, [drawn]);
   // The newest arrival, else (nothing new) nothing moves.
@@ -316,7 +276,7 @@ function useDockScroll(ids: readonly string[]): { track: RefObject<HTMLDivElemen
     const pill = [...element.children].find((child) => (child as HTMLElement).dataset.dockId === arrived);
     pill?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [key]);
-  return { track, compact };
+  return track;
 }
 
 /**
@@ -343,6 +303,7 @@ export function SessionWindowsLayer({
   notice?: ReactNode;
 }) {
   const { windows, restored, show, minimise, close, popOut, switchTo } = useSessionWindows();
+  const shows = useNeedsYouShows();
   const toasts = useToast();
   const { deleteAgent, deleteShell } = useContext(TileActionsContext);
   // undefined until the saved frame has been read, so the window never draws maximised and then jumps to its size.
@@ -356,14 +317,7 @@ export function SessionWindowsLayer({
   }, []);
   const shown = shownWindow(windows);
   const docked = windows.filter((entry) => entry.placement !== 'shown');
-  const dock = useDockScroll(docked.map((entry) => entry.id));
-  const [listOpen, setListOpen] = useState(false);
-  // The list belongs to the button: it closes when the dock widens back to its pills, or is gone, so it is never open on a
-  // button that is not there (or there again later).
-  const listShown = listOpen && dock.compact;
-  useEffect(() => {
-    if (!dock.compact) setListOpen(false);
-  }, [dock.compact]);
+  const dockTrack = useDockScroll(docked.map((entry) => entry.id));
   const contentOf = ({ kind, id }: WindowTarget): WindowContent | undefined =>
     kind === 'shell'
       ? { kind, shellId: id, shell: shells?.find((shell) => shell.id === id) }
@@ -371,27 +325,24 @@ export function SessionWindowsLayer({
         ? { kind, sessionId: id, agent: agents.find((agent) => agent.sessionId === id) }
         : undefined;
   // A docked or popped-out session's pill: its name and state, to restore it, and a close for a docked one.
-  const dockItem = (entry: SessionWindowEntry, testId: string, after?: () => void) => {
+  const dockItem = (entry: SessionWindowEntry) => {
     const subject = contentOf(entry);
     const agent = subject?.kind === 'session' ? subject.agent : undefined;
     // The live name, so a rename shows in the dock.
     const name = agent?.name ?? (subject?.kind === 'shell' ? subject.shell?.name : undefined) ?? entry.title;
     return (
-      <span key={entry.id} className="session-dock-item" data-testid={testId} data-dock-id={entry.id} {...idAttributes(entry)} data-placement={entry.placement} data-attention={agent !== undefined && needsYouNow(agent)}>
+      <span key={entry.id} className="session-dock-item" data-testid="dock-item" data-dock-id={entry.id} {...idAttributes(entry)} data-placement={entry.placement} data-attention={agent !== undefined && needsYouNow(agent, shows)}>
         <Button
           size="sm"
           variant="ghost"
           className="session-dock-open"
           icon={entry.placement === 'popped' ? <SquareArrowOutUpRight /> : <HarnessMark harness={agent?.harness ?? 'shell'} />}
           tooltip={`${name}: ${entry.placement === 'popped' ? 'in its own window, bring it forward' : 'restore it'}`}
-          onClick={() => {
-            show(entry);
-            after?.();
-          }}
+          onClick={() => show(entry)}
         >
           <span className="session-dock-name">{name}</span>
         </Button>
-        {agent && <StatusPill {...agentPill(agent)} />}
+        {agent && <StatusPill {...agentPill(agent, shows)} />}
         {entry.placement === 'docked' && (
           <IconButton icon={<X />} size="xs" aria-label={`Close ${name}`} tooltip="Close; the session keeps running" onClick={() => close(entry.id)} />
         )}
@@ -473,23 +424,9 @@ export function SessionWindowsLayer({
           <span className="session-dock-label" aria-hidden>
             Dock
           </span>
-          <div className="session-dock-track" ref={dock.track} data-testid="session-dock-track">
-            {docked.map((entry) => dockItem(entry, 'dock-item'))}
+          <div className="session-dock-track" ref={dockTrack} data-testid="session-dock-track">
+            {docked.map(dockItem)}
           </div>
-          {/* With too little room beside the zones pill and the zoom bar for the pills, the dock is this one button (`useDockScroll`). */}
-          <Popover
-            aria-label="Docked sessions"
-            open={listShown}
-            onOpenChange={setListOpen}
-            side="top"
-            align="center"
-            className="session-dock-popover"
-            content={<ul className="session-dock-list">{docked.map((entry) => dockItem(entry, 'dock-list-item', () => setListOpen(false)))}</ul>}
-          >
-            <Button size="sm" variant="ghost" className="session-dock-compact" data-testid="session-dock-compact" trailingIcon={<ChevronDown />}>
-              {docked.length} {docked.length === 1 ? 'session' : 'sessions'}
-            </Button>
-          </Popover>
         </Island>
       )}
     </>

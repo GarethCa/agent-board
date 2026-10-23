@@ -27,7 +27,7 @@ import {
 import { themedColor } from '../board-colors';
 import { HarnessMark } from '../board/HarnessMark';
 import { RotateGrip } from '../board/items/Rotatable';
-import { ShapeBody, shapePaint } from '../board/items/ShapeNode';
+import { ShapeBody, ShapeText, shapePaint } from '../board/items/ShapeNode';
 import { SHAPE_GROUPS, SHAPES } from '../board/items/shapes/catalogue';
 import { iconSize, ShapeIcon } from '../board/items/shapes/ShapeArt';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
@@ -302,8 +302,7 @@ export function ComponentGallery() {
           </Tag>
         </Row>
         <Row label="Agent state pills">
-          {/* `starting` is drawn as running, so it has no pill of its own. */}
-          {AGENT_STATES.filter((state) => state !== 'starting').map((state) => (
+          {AGENT_STATES.map((state) => (
             <StatusPill key={state} state={state} />
           ))}
         </Row>
@@ -469,7 +468,7 @@ function GalleryShape({ shape }: { shape: ShapeType }) {
       <div style={{ width, height }}>
         <div className="shape" data-shape={shape} data-text-size="body" data-bold="false" style={shapePaint(style)}>
           <ShapeBody style={style} width={width} height={height}>
-            <div className="shape-text">{SHAPES[shape].name}</div>
+            <ShapeText style={{ ...style, text: SHAPES[shape].name }} />
           </ShapeBody>
         </div>
       </div>

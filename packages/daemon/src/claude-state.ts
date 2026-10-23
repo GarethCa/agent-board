@@ -32,7 +32,9 @@ export function claudeStateAfterHook(current: SessionState, payload: Record<stri
       switch (payload.notification_type) {
         case 'permission_prompt':
           return 'needs-permission';
+        // Its usage limit still stops it: Claude shows its rate-limit menu, or `continue` at its prompt, until a turn.
         case 'idle_prompt':
+          return current === 'rate-limited' ? current : 'waiting';
         case 'agent_needs_input':
           return 'waiting';
         default:

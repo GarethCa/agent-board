@@ -14,6 +14,7 @@ afterAll(() => {
 const NOW = new Date(2026, 9, 10, 7, 30);
 
 const schedule = (fields: Partial<AgentSchedule> = {}): AgentSchedule => ({
+  clockId: 'clock-1',
   cron: '0 9 * * *',
   prompt: 'Check the build',
   enabled: true,

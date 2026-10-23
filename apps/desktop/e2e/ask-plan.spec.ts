@@ -5,6 +5,7 @@ import { launch, screen, sessionWindow, spawnAgent, tile } from './agent-helpers
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
+import { drag } from './board-helpers.ts';
 
 // An agent asks the user and presents plans through the board MCP, and the user answers from the inbox and
 // the Plan tab. The fake claude's `ask-plan` scenario does the asking; nothing here answers for the user.
@@ -12,6 +13,7 @@ import { serveWebPages } from './web-server.ts';
 const item = (window: Page, agent: Agent) => window.locator(`[data-testid="inbox-item"][data-session-id="${agent.sessionId}"]`);
 const agentTile = (window: Page, agent: Agent) => tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
 const planView = (window: Page) => sessionWindow(window).getByTestId('plan-view');
+const questionCard = (window: Page, agent: Agent) => window.locator(`[data-testid="question-card"][data-session-id="${agent.sessionId}"]`);
 
 /** Opens the inbox from the Needs-you pill if it is closed. Dispatched: a session window's scrim may cover the pill. */
 async function openInbox(window: Page): Promise<void> {
@@ -91,6 +93,90 @@ test('a question answered in the user’s own words, and one skipped, each reach
     await window.keyboard.press('Escape');
     await agentTile(window, skipped).dispatchEvent('dblclick');
     await expect(screen(window)).toContainText('The user skipped the question');
+  });
+});
+
+test('a question asked on the board is a card beside its tile, which stays where it is dragged and goes once answered there or in the inbox', async () => {
+  await withApp(async (window) => {
+    const agent = await spawn(window, 'Ask on the board: Which cache should the product pages use? | Redis | CDN only');
+    const card = questionCard(window, agent);
+    await expect(card).toContainText('Which cache should the product pages use?');
+    await expect(card).toHaveAttribute('data-side', 'left');
+    // The tile points at the card rather than repeating the question.
+    await expect(agentTile(window, agent).getByTestId('tile-ask')).toHaveText('Asking you ↗');
+    const tileBox = (await agentTile(window, agent).boundingBox())!;
+    const cardBox = (await card.boundingBox())!;
+    expect(cardBox.x).toBeGreaterThan(tileBox.x + tileBox.width);
+
+    // Dragged by its head, it stays where it is dropped, tethered to its tile, and the question keeps its place.
+    const head = (await card.locator('.question-card-head').boundingBox())!;
+    const from = { x: head.x + 20, y: head.y + head.height / 2 };
+    await drag(window, from, { x: from.x + 160, y: from.y + 220 });
+    await expect(card).not.toHaveAttribute('data-side');
+    await expect.poll(async () => (await window.evaluate(() => globalThis.window.agentBoard.agents.list())).find((known) => known.sessionId === agent.sessionId)?.ask?.at).not.toBeNull();
+    const moved = (await card.boundingBox())!;
+    expect(moved.y).toBeGreaterThan(cardBox.y + 150);
+    await expect(window.getByTestId('agent-note-tether')).toHaveCount(1);
+
+    // Its options answer it from the card, as the inbox does, and the inbox item goes with the card.
+    await card.getByRole('button', { name: 'CDN only' }).click();
+    await expect(card).toHaveCount(0);
+    await openInbox(window);
+    await expect(item(window, agent)).toHaveCount(0);
+    await window.keyboard.press('Escape');
+
+    // Answered in the inbox instead, its card goes too.
+    const inboxed = await spawn(window, 'Ask on the board: What should the banner say? | Free shipping');
+    await expect(questionCard(window, inboxed)).toBeVisible();
+    await openInbox(window);
+    await item(window, inboxed).getByTestId('inbox-ask').getByRole('button', { name: 'Free shipping', exact: true }).click();
+    await expect(questionCard(window, inboxed)).toHaveCount(0);
+
+    // Selected by a click on its question, a card moves on the arrow keys, and the move is kept with its question.
+    const keyed = await spawn(window, 'Ask on the board: Which region? | eu-west-1 | us-east-1');
+    const keyedCard = questionCard(window, keyed);
+    await keyedCard.locator('.question-card-question').click();
+    await window.keyboard.press('ArrowDown');
+    await window.keyboard.press('ArrowDown');
+    await expect(keyedCard).not.toHaveAttribute('data-side');
+    await expect.poll(async () => (await window.evaluate(() => globalThis.window.agentBoard.agents.list())).find((known) => known.sessionId === keyed.sessionId)?.ask?.at).not.toBeNull();
+
+    // A digit typed into its reply is a word, and one pressed with a control elsewhere focused is that control's.
+    await keyedCard.getByLabel(`Reply to ${keyed.name}`).fill('');
+    await keyedCard.getByLabel(`Reply to ${keyed.name}`).pressSequentially('1');
+    await expect(keyedCard.getByLabel(`Reply to ${keyed.name}`)).toHaveValue('1');
+    await keyedCard.locator('.question-card-question').click();
+    await window.getByTestId('inbox-count').focus();
+    await window.keyboard.press('1');
+    await expect(keyedCard).toBeVisible();
+
+    // One key answers one question: picking another agent's in the inbox leaves the selected card alone.
+    const other = await spawn(window, 'Ask: Which queue? | SQS | Kafka');
+    await keyedCard.locator('.question-card-question').click();
+    await openInbox(window);
+    await item(window, other).getByTestId('inbox-ask').getByRole('button', { name: 'SQS', exact: true }).focus();
+    await window.keyboard.press('1');
+    await expect(item(window, other)).toHaveCount(0);
+    // That answer's round trip is done, so neither `1` (with the pill focused, nor here) could have answered this one.
+    expect((await window.evaluate(() => globalThis.window.agentBoard.agents.list())).find((known) => known.sessionId === keyed.sessionId)?.ask).not.toBeNull();
+    await expect(keyedCard).toBeVisible();
+    await window.keyboard.press('Escape');
+
+    // Escape lets go of the card: its keys no longer answer it.
+    await keyedCard.locator('.question-card-question').click();
+    await window.keyboard.press('Escape');
+    await expect.poll(() => window.evaluate(() => document.activeElement?.closest('.react-flow__node') ?? null)).toBeNull();
+
+    // With the card itself focused, its key answers it.
+    await keyedCard.locator('.question-card-question').click();
+    await window.keyboard.press('2');
+    await expect(keyedCard).toHaveCount(0);
+
+    await agentTile(window, keyed).dispatchEvent('dblclick');
+    await expect(screen(window)).toContainText('The user answered: us-east-1');
+    await window.keyboard.press('Escape');
+    await agentTile(window, agent).dispatchEvent('dblclick');
+    await expect(screen(window)).toContainText('The user answered: CDN only');
   });
 });
 

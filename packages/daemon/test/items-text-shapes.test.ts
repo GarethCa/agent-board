@@ -23,7 +23,12 @@ const shapeData: ShapeData = {
   dashed: false,
   text: 'CI green?',
   textSize: 'body',
+  fontSize: 14,
   bold: true,
+  align: 'left',
+  mono: true,
+  attributes: '',
+  methods: '',
   textColor: '#2b2a27',
 };
 const text = (data: Record<string, unknown> = { ...textData }): CreateItemParams => ({
@@ -108,11 +113,31 @@ describe('text and shape board items', () => {
     );
     await expect(client.call('item.create', shape({ ...shapeData, stroke: null }))).rejects.toMatchObject(invalid);
     await expect(client.call('item.create', shape({ ...shapeData, strokeWidth: -1 }))).rejects.toThrow('strokeWidth');
+    await expect(client.call('item.create', shape({ ...shapeData, align: 'justify' }))).rejects.toThrow('align must be one of');
+    await expect(client.call('item.create', shape({ ...shapeData, mono: 'yes' }))).rejects.toThrow('mono must be true or false');
+    await expect(client.call('item.create', shape({ ...shapeData, fontSize: 4 }))).rejects.toThrow('fontSize');
+    await expect(client.call('item.create', shape({ ...shapeData, attributes: ['id'] }))).rejects.toThrow('attributes must be a string');
+    // The text and its sections share one text's length, so a class is never too big to save.
+    const half = '漢'.repeat(12_000);
+    await expect(client.call('item.create', shape({ ...shapeData, shape: 'class', attributes: half, methods: half }))).rejects.toThrow(
+      'text and sections are over 20000 characters together',
+    );
+    // A shape saved before these existed has none of them, and a null font size is the size S, M or L stands for.
+    const old: Record<string, unknown> = { ...shapeData };
+    for (const key of ['align', 'mono', 'fontSize', 'attributes', 'methods']) delete old[key];
+    await client.call('item.create', shape(old));
+    expect((await client.call('item.create', shape({ ...shapeData, fontSize: null }))).data.fontSize).toBeNull();
     await expect(client.call('item.update', { id: item.id, data: { strokeWidth: '2' } })).rejects.toMatchObject(
       invalid,
     );
     expect((await client.call('item.update', { id: item.id, data: { fill: null } })).data).toMatchObject({
       fill: null,
+    });
+    // A section's save leaves the others be, so two windows typing in two sections keep both.
+    await client.call('item.update', { id: item.id, data: { shape: 'class', attributes: '+ id: string' } });
+    expect((await client.call('item.update', { id: item.id, data: { methods: '+ send(text)' } })).data).toMatchObject({
+      attributes: '+ id: string',
+      methods: '+ send(text)',
     });
   });
 

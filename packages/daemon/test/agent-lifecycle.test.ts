@@ -99,7 +99,6 @@ function setup(
       events.push('ensureHookShim');
     },
     env: { HOME: home },
-    schedules: { remove: (sessionId) => void events.push(`schedules.remove ${sessionId}`) },
     onRemoving: (sessionId) => void events.push(`onRemoving ${sessionId}`),
     endTabs: async (sessionId) => void events.push(`endTabs ${sessionId} deleting=${lifecycle.isDeleting(sessionId)}`),
     isRunningSomething: async (pid) => (events.push(`isRunningSomething ${pid}`), options.busy === true),
@@ -620,7 +619,6 @@ describe('deleting an agent', () => {
       'killed a',
       'endTabs a deleting=true',
       `removeWorktree ${row.worktree} review kept=true`,
-      'schedules.remove a',
       'onRemoving a',
       'forget a',
       'subagents.delete a',

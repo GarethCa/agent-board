@@ -4,7 +4,7 @@
 // board's own rules (`board-layout.ts`), so nothing here keeps a state of its own but who made a group or note.
 import type { DatabaseSync } from 'node:sqlite';
 import { agentNoteAuthor, agentNoteData, agentNoteSize } from './agent-notes.ts';
-import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_STICKY_SIZE, parkClusters, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
+import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, fittedSize, lanesOf, parkClusters, type ArrangeTile, type ArrangedCluster } from './board-arrange.ts';
 import {
   AGENT_TILE_SIZE,
   besideSpot,
@@ -26,6 +26,8 @@ import {
   slotUnplaced,
   snapToGrid,
   TILE_GAP,
+  EXPANDED_VIEW_KEY,
+  expandedSizesFrom,
   TILE_SIZES_VIEW_KEY,
   UNFOLDED_VIEW_KEY,
   CHIP_SIZE,
@@ -42,12 +44,13 @@ import { makeRoom } from './board-room.ts';
 import type { BoardConnection } from './board.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrators.ts';
-import { finiteNumberParam, invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   AGENT_STATES,
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
   BOARD_ERROR,
+  DEFAULT_ARRANGE_SETTINGS,
   DEFAULT_ZONE_SIZE,
   NOTE_KINDS,
   MAX_STICKY_TEXT,
@@ -61,7 +64,10 @@ import {
   type OrchestratorSpawned,
   type ArrangeBy,
   type ArrangeLayout,
+  type ArrangeResult,
+  type ArrangeSettings,
   type BoardItem,
+  type BoardPlace,
   type DaemonMethod,
   type DaemonMethods,
   type ExternalSession,
@@ -73,15 +79,18 @@ import {
   type Shell,
   type TileSide,
   type Zone,
+  type ZoneMapThing,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cutText } from './text-cut.ts';
 import { nameSlug } from './worktrees.ts';
+import { buildZoneMap } from './zone-map.ts';
 
 export type LayoutMethods = Pick<
   DaemonMethods,
   | 'orchestrator.move'
   | 'orchestrator.arrange'
+  | 'orchestrator.map'
   | 'orchestrator.addZone'
   | 'orchestrator.changeZone'
   | 'orchestrator.removeZone'
@@ -99,8 +108,23 @@ export interface LayoutHandlerOptions {
   call: DaemonCall;
   /** Starts an agent as an orchestrator (`orchestrators.ts`): a reviewer it starts then joins its implementer's cluster. */
   spawn: (params: unknown, connection: BoardConnection) => Promise<OrchestratorSpawned>;
+  /** Closes (or removes) an agent as an orchestrator (`orchestrators.ts`): its zone is then arranged, if its orchestrator arranges by itself. */
+  close: (params: unknown, connection: BoardConnection) => Promise<Agent | null>;
   /** Writes a line to the daemon's log: a reviewer that started but could not join its cluster. */
   warn?: (message: string) => void;
+}
+
+/** Where each orchestrator's arrange settings are kept (`ArrangeSettings`), by its session id. */
+const ARRANGE_SETTINGS_VIEW_KEY = 'arrangeSettings';
+
+/** Arrange settings as saved, each one not saved, or not one of its own, the default. */
+function settingsFrom(saved: unknown): ArrangeSettings {
+  const fields = typeof saved === 'object' && saved !== null ? (saved as Record<string, unknown>) : {};
+  return {
+    by: ARRANGE_BYS.includes(fields.by as ArrangeBy) ? (fields.by as ArrangeBy) : DEFAULT_ARRANGE_SETTINGS.by,
+    layout: ARRANGE_LAYOUTS.includes(fields.layout as ArrangeLayout) ? (fields.layout as ArrangeLayout) : DEFAULT_ARRANGE_SETTINGS.layout,
+    auto: typeof fields.auto === 'boolean' ? fields.auto : DEFAULT_ARRANGE_SETTINGS.auto,
+  };
 }
 
 /** Space kept between a new group and the zone it is stepped past, as the board's Zone tool keeps. */
@@ -314,6 +338,26 @@ function standingOf(name: string, agent: Agent | undefined): string {
   return `- **${name}**: ${cutText(standing, MAX_DOING)}${request}`;
 }
 
+/** The height an agent note needs to show `text`, if it is taller than `note` is: it only grows, keeping a size it was given. */
+function grownNote(note: BoardItem, text: string): { height?: number } {
+  const { height } = agentNoteSize(text, note.width, 0);
+  return height > note.height ? { height } : {};
+}
+
+/**
+ * The height a lane's agent note keeps over what an arrange would give it: one the board grew it to, to fit its text,
+ * or the user resized it to since an arrange last sized it (`arrangeHeight`), only while its text is still the text it
+ * was sized for (`sizedFor`) and the arrange keeps it (`keep`). Its text changed by anyone, it is sized afresh, so a
+ * note written shorter shrinks again.
+ */
+function heldHeight(note: BoardItem, keep: boolean): number | undefined {
+  const { arrangeHeight, sizedFor, text } = note.data;
+  return keep && note.kind === 'agent-note' && typeof arrangeHeight === 'number' && sizedFor === text && note.height > arrangeHeight ? note.height : undefined;
+}
+
+/** What a cluster's note says when an arrange writes it: a line for where each of its tiles stands (`standing`). */
+const noteSays = (cluster: ArrangedCluster, standing: (id: string) => string) => cutText(cluster.members.map(standing).join('\n'), MAX_UNIT_NOTE);
+
 /** `text` without the signature `stamped` put on it. */
 const unsigned = (text: string) => text.replace(SIGNATURE, '').trimEnd();
 
@@ -412,13 +456,60 @@ function optionalSizeParam(fields: Record<string, unknown>, name: 'width' | 'hei
   return fields[name] === undefined ? undefined : finiteNumberParam(fields, name);
 }
 
+/** Everything on the board a layout reads, through the daemon's own methods. */
+async function readLayoutBoard(call: DaemonCall): Promise<Board> {
+  const [zones, agents, shells, externals, items, sizes, unfolded, expanded] = await Promise.all([
+    call('zone.list', undefined),
+    call('agent.list', undefined),
+    call('shell.list', undefined),
+    call('external.list', undefined),
+    call('item.list', undefined),
+    call('view.get', { key: TILE_SIZES_VIEW_KEY }),
+    call('view.get', { key: UNFOLDED_VIEW_KEY }),
+    call('view.get', { key: EXPANDED_VIEW_KEY }),
+  ]);
+  const resized = typeof sizes === 'object' && sizes !== null ? (sizes as Record<string, Size>) : {};
+  const open = new Set(unfoldedFrom(unfolded));
+  // A closed agent the user hasn't unfolded is a chip on the board, so it takes a chip's room.
+  const chips = Object.fromEntries(agents.filter((agent) => isFolded(agent, open)).map((agent) => [tileSizeKey('agent', agent.sessionId), CHIP_SIZE]));
+  return {
+    zones,
+    agents,
+    shells: shells.filter((shell) => shell.owner === null),
+    externals,
+    items,
+    // A tile expanded in place takes its expanded size, so the rest are laid out clear of it.
+    sizes: { ...resized, ...chips, ...expandedSizesFrom(expanded) },
+  };
+}
+
+/**
+ * Where something of `size` goes beside the agent's tile, in its zone (or loose with it): to its right, else the
+ * nearest spot clear of everything else there. Undefined for an agent with no tile.
+ */
+export async function spotBesideAgent(call: DaemonCall, sessionId: string, size: Size): Promise<BoardPlace | undefined> {
+  const board = await readLayoutBoard(call);
+  const tile = placedOf(board).find((each) => each.kind === 'agent' && each.id === sessionId);
+  if (tile === undefined) return undefined;
+  const zone = board.zones.find((each) => each.id === tile.zoneId);
+  const blocking = placedOf(board)
+    .filter((each) => each.zoneId === tile.zoneId)
+    .map(takenBy);
+  if (zone === undefined) blocking.push(...board.zones);
+  const region =
+    zone === undefined ? { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity } : { left: ZONE_PADDING, top: ZONE_PADDING, right: Infinity, bottom: Infinity };
+  const spot = nearestFreeSpot(besideSpot(tile.rect, 'right', size), blocking, region, size)!;
+  return { zoneId: tile.zoneId, x: spot.x, y: spot.y };
+}
+
 export function layoutHandlers<Context extends BoardConnection>({
   db,
   access,
   call,
   spawn,
+  close,
   warn = () => {},
-}: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn'>, Context> {
+}: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
   const markZone = db.prepare('UPDATE zones SET made_by = ? WHERE id = ?');
   const itemMadeBy = db.prepare('SELECT made_by FROM board_items WHERE id = ?');
@@ -429,29 +520,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   const madeBy = (statement: typeof zoneMadeBy, id: string): string | null =>
     (statement.get(id) as { made_by: string | null } | undefined)?.made_by ?? null;
 
-  const readBoard = async (): Promise<Board> => {
-    const [zones, agents, shells, externals, items, sizes, unfolded] = await Promise.all([
-      call('zone.list', undefined),
-      call('agent.list', undefined),
-      call('shell.list', undefined),
-      call('external.list', undefined),
-      call('item.list', undefined),
-      call('view.get', { key: TILE_SIZES_VIEW_KEY }),
-      call('view.get', { key: UNFOLDED_VIEW_KEY }),
-    ]);
-    const resized = typeof sizes === 'object' && sizes !== null ? (sizes as Record<string, Size>) : {};
-    const open = new Set(unfoldedFrom(unfolded));
-    // A closed agent the user hasn't unfolded is a chip on the board, so it takes a chip's room.
-    const chips = Object.fromEntries(agents.filter((agent) => isFolded(agent, open)).map((agent) => [tileSizeKey('agent', agent.sessionId), CHIP_SIZE]));
-    return {
-      zones,
-      agents,
-      shells: shells.filter((shell) => shell.owner === null),
-      externals,
-      items,
-      sizes: { ...resized, ...chips },
-    };
-  };
+  const readBoard = () => readLayoutBoard(call);
 
   /** Whether `me` may lay out `zone`: in its scope, or a group it (or its crew) made. */
   const zoneInReach = (me: Orchestrator, zone: Zone): boolean =>
@@ -596,7 +665,7 @@ export function layoutHandlers<Context extends BoardConnection>({
     }
   };
 
-  /** Grows `zone` to `size`, if it is bigger. */
+  /** Resizes `zone` to `size`, if it differs: a move grows it, an arrange fits it (growing or shrinking it). */
   const growTo = async (zone: Zone | undefined, size: Size) => {
     if (zone !== undefined && (size.width !== zone.width || size.height !== zone.height)) {
       await call('zone.update', { id: zone.id, x: zone.x, y: zone.y, ...size });
@@ -684,7 +753,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       const label = parts.get(`${cluster.key}#label`);
       if (label !== undefined) used.add(label);
       await put(`${cluster.key}#label`, 'text', label, cluster.labelAt, CLUSTER_LABEL_SIZE, { ...textItemData(cluster.label, TEXT_COLORS[0].value), bold: true });
-      const said = cutText(cluster.members.map(standing).join('\n'), MAX_UNIT_NOTE);
+      const said = noteSays(cluster, standing);
       const slot = `${cluster.key}${CLUSTER_NOTE_SLOT}`;
       // Read afresh: the user may have edited it in the app since the arrange read the board.
       const earlier = parts.get(slot);
@@ -701,18 +770,41 @@ export function layoutHandlers<Context extends BoardConnection>({
       let data: Record<string, unknown>;
       // About its cluster's implementer, its first: the board tethers it there, never to its author.
       const about = members[0] === undefined ? {} : { about: members[0] };
-      if (known?.kind === 'agent-note') data = { ...(keep ? {} : saying('agent-note', said, me.name)), members, ...about };
+      // The height it is given and the text it is given it for, unless it keeps its own: the next arrange tells a height
+      // it grew to from this one, while its text stays.
+      const sized =
+        known !== undefined && heldHeight(known, keep) !== undefined ? {} : { arrangeHeight: cluster.noteSize.height, sizedFor: keep ? known?.data.text : said };
+      if (known?.kind === 'agent-note') data = { ...(keep ? {} : saying('agent-note', said, me.name)), members, ...about, ...sized };
       else if (known !== undefined) data = { ...(keep ? {} : saying('sticky', said, me.name)), color: typeof known.data.color === 'string' ? known.data.color : STICKY_COLORS[0].value, members };
-      else if (author !== undefined) data = { ...agentNoteData(author, said, about), arrangeText: said, members };
+      else if (author !== undefined) data = { ...agentNoteData(author, said, about), arrangeText: said, members, ...sized };
       else data = { text: stamped(said, me.name), arrangeText: said, color: STICKY_COLORS[0].value, members };
-      await put(slot, (known?.kind as 'sticky' | 'agent-note' | undefined) ?? (author === undefined ? 'sticky' : 'agent-note'), known, cluster.stickyAt, CLUSTER_STICKY_SIZE, data);
+      await put(slot, (known?.kind as 'sticky' | 'agent-note' | undefined) ?? (author === undefined ? 'sticky' : 'agent-note'), known, cluster.noteAt, cluster.noteSize, data);
     }
     return used;
   };
 
   /**
+   * How tall each of `clusters`' notes needs to be for its text to show (`notes`, by slot key, what fills them), by
+   * cluster key: what it says now if an arrange writes it again, else its own text, and a height it keeps
+   * (`heldHeight`). A sticky's text shrinks to fit its slot instead, so it needs nothing more.
+   */
+  const noteHeightsOf = (me: Orchestrator, clusters: readonly ArrangedCluster[], notes: ReadonlyMap<string, BoardItem>, standing: (id: string) => string) =>
+    new Map(
+      clusters.map((cluster) => {
+        const known = notes.get(`${cluster.key}${CLUSTER_NOTE_SLOT}`);
+        const said = noteSays(cluster, standing);
+        // As `placeClusters` makes it: a sticky of the old kind nobody edited gives way to an agent note.
+        const agentNote = known === undefined ? me.agent !== null : known.kind === 'agent-note' || (me.agent !== null && !edited(known));
+        if (!agentNote) return [cluster.key, 0] as const;
+        const keep = known !== undefined && (edited(known) || known.data.arrangeText === said);
+        const needs = agentNoteSize(keep ? String(known.data.text) : said, CLUSTER_NOTE_SIZE.width, 0).height;
+        return [cluster.key, Math.max(needs, (known && heldHeight(known, keep)) ?? 0)] as const;
+      }),
+    );
+
+  /**
    * The agent notes `me`'s crew put in a cluster's slot before an arrange, by that cluster's note slot key: one made
-   * by `note add --near` an agent of the cluster (its `about`), and left in the slot before that agent's tile. A cluster
+   * by `note add --near` an agent of the cluster (its `about`), and left beside that agent's tile, on any side. A cluster
    * that has a note from an arrange takes none, and takes one at most; the rest stay where they are, as obstacles.
    */
   const handPlaced = (me: Orchestrator, inZone: readonly Placed[], items: readonly BoardItem[], parts: ReadonlyMap<string, BoardItem>, clusters: readonly ArrangedCluster[]): Map<string, BoardItem> => {
@@ -731,9 +823,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         const rect = inZone.find((each) => each.key === `item:${item.id}`)?.rect;
         const tile = inZone.find((each) => each.kind === 'agent' && each.id === about)?.rect;
         if (rect === undefined || tile === undefined || !members.has(about) || [...adopted.values()].includes(item)) return false;
-        // In the slot before the tile: to its left, within a tile gap and a bit.
+        // Beside the tile, on any side, within a tile gap and a bit.
         const reach = 2 * TILE_GAP;
-        return rect.x < tile.x && overlaps({ x: rect.x - reach, y: rect.y - reach, width: rect.width + 2 * reach, height: rect.height + 2 * reach }, tile);
+        return overlaps({ x: rect.x - reach, y: rect.y - reach, width: rect.width + 2 * reach, height: rect.height + 2 * reach }, tile);
       });
       if (note !== undefined) adopted.set(slot, note);
     }
@@ -815,15 +907,232 @@ export function layoutHandlers<Context extends BoardConnection>({
     // Read afresh: the user may have edited it in the app since the join read the board.
     const now = await fresh(sticky);
     if (now === undefined) throw new Error('its cluster’s note has gone');
-    await call('item.update', { id: now.id, data: { members: joined, ...(edited(now) ? {} : saying(now.kind, said, me.name)) } });
+    // Written with the reviewer's line, an agent note grows to show it.
+    const rewrite = edited(now) ? {} : saying(now.kind, said, me.name);
+    const taller = now.kind === 'agent-note' && typeof rewrite.text === 'string' ? grownNote(now, rewrite.text) : {};
+    await call('item.update', { id: now.id, data: { members: joined, ...rewrite }, ...taller });
     return agents.find((each) => each.sessionId === reviewer.sessionId) ?? reviewer;
+  };
+
+  /** The tiles of `zone` that `me` arranges: the agents in its scope (itself the lead) and the shells. */
+  const crewOf = (me: Orchestrator, board: Board, zone: Zone): ArrangeTile[] => {
+    const agentsHere = board.agents.filter((agent) => agent.zoneId === zone.id && access.reachesAgent(me, agent));
+    const branches = new Map(agentsHere.filter((agent) => agent.branch !== '').map((agent) => [agent.branch, agent.sessionId]));
+    return [
+      ...agentsHere.map((agent): ArrangeTile => {
+        // A reviewer the user started reviews `reviewOf`; one an orchestrator started reviews a branch.
+        const reviewed = agent.reviewOf ?? (agent.reviews === null ? undefined : branches.get(agent.reviews.branch));
+        return {
+          id: tileSizeKey('agent', agent.sessionId),
+          name: agent.name,
+          kind: 'agent',
+          role: agent.role,
+          issue: agent.issue?.id ?? null,
+          issueTitle: agent.issue?.title ?? null,
+          state: agent.state,
+          reviewOf: reviewed === undefined ? null : tileSizeKey('agent', reviewed),
+          lead: agent.sessionId === me.agent?.sessionId,
+          branch: ticketBranch(board.agents, agent),
+          createdAt: agent.createdAt,
+          ...(board.sizes[tileSizeKey('agent', agent.sessionId)] === undefined ? {} : { size: board.sizes[tileSizeKey('agent', agent.sessionId)] }),
+        };
+      }),
+      ...board.shells
+        .filter((shell) => shell.zoneId === zone.id)
+        .map((shell): ArrangeTile => ({
+          id: tileSizeKey('shell', shell.id),
+          name: shell.name,
+          kind: 'shell',
+          role: null,
+          issue: null,
+          state: null,
+          reviewOf: null,
+          lead: false,
+          ...(board.sizes[tileSizeKey('shell', shell.id)] === undefined ? {} : { size: board.sizes[tileSizeKey('shell', shell.id)] }),
+        })),
+    ];
+  };
+
+  /** Every edge between two agents, as an arrange reads them. */
+  const linksOf = async () => (await call('flowEdge.list', undefined)).map((edge) => ({ from: tileSizeKey('agent', edge.from), to: tileSizeKey('agent', edge.to) }));
+
+  /** Each orchestrator's arrange settings, saved, one change at a time. */
+  const settingsQueue = keyedQueue();
+  const savedSettings = async (): Promise<Record<string, unknown>> => {
+    const saved = await call('view.get', { key: ARRANGE_SETTINGS_VIEW_KEY });
+    return typeof saved === 'object' && saved !== null && !Array.isArray(saved) ? (saved as Record<string, unknown>) : {};
+  };
+
+  /** `me`'s arrange settings: the defaults on the user's side, which keeps none. */
+  const settingsOf = async (me: Orchestrator): Promise<ArrangeSettings> =>
+    me.agent === null ? DEFAULT_ARRANGE_SETTINGS : settingsFrom((await savedSettings())[me.agent.sessionId]);
+
+  /** Changes `me`'s arrange settings by `changes`, keeping them for its next arrange; returns them. */
+  const keepSettings = (me: Orchestrator, changes: Partial<ArrangeSettings>): Promise<ArrangeSettings> =>
+    settingsQueue('settings', async () => {
+      if (me.agent === null) return { ...DEFAULT_ARRANGE_SETTINGS, ...changes };
+      const all = await savedSettings();
+      const was = settingsFrom(all[me.agent.sessionId]);
+      const now = { ...was, ...changes };
+      if (JSON.stringify(now) !== JSON.stringify(was)) await call('view.set', { key: ARRANGE_SETTINGS_VIEW_KEY, value: { ...all, [me.agent.sessionId]: now } });
+      return now;
+    });
+
+  /**
+   * Arranges `zoneId` for `me` as its settings say, with `changes` (read in the zone's layout queue, so a refusal is
+   * logged) kept once nothing can refuse it: its zone is in scope and may grow as it needs; `how` says in the activity log what moved it to. One arrange of a
+   * zone at a time: two at once would each make its lanes' labels and notes.
+   */
+  const arrangeIn = (me: Orchestrator, zoneId: string | null, changes: () => Partial<ArrangeSettings>, how = ''): Promise<ArrangeResult> => {
+    const entry: ActivityEntry = { detail: '' };
+    return access.logged(me, 'arrange', entry, () => arranging(zoneId ?? '', async () => {
+      const changed = changes();
+      if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to arrange`);
+      const board = await readBoard();
+      const zone = checkDestination(me, board, zoneId)!;
+      entry.on = { id: zone.id, name: zone.name };
+      // Kept only once the arrange is sure to go ahead: a refused one keeps nothing.
+      const { by, layout } = { ...(await settingsOf(me)), ...changed };
+      const inZone = placedOf(board).filter((each) => each.zoneId === zone.id);
+      const tiles = crewOf(me, board, zone);
+      const moving = new Set(tiles.map((tile) => tile.id));
+      // What an arrange of its crew made before (each cluster's label and note) it places again, in place.
+      const clusters = by === 'issue' && layout !== 'grid';
+      const { parts, stale } = clusterParts(me, zone.id, board.items);
+      const ownParts = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
+      const links = await linksOf();
+      const keep = (excluding: ReadonlySet<string>) => inZone.filter((each) => !moving.has(each.key) && !excluding.has(each.key)).map(takenBy);
+      const standing = (id: string) => {
+        const tile = tiles.find((each) => each.id === id)!;
+        const agent = board.agents.find((each) => tileSizeKey('agent', each.sessionId) === id);
+        return standingOf(tile.name, agent);
+      };
+      // An agent note its crew left in a cluster's slot (`note add --near`) is that cluster's note: not in the way of
+      // the layout. Who is in a cluster doesn't depend on where anything is, so the clusters are read from a first pass.
+      const first = clusters ? arrangeTiles(tiles, links, { by, layout, width: zone.width, obstacles: keep(ownParts), clusters }).clusters : [];
+      const byHand = clusters ? handPlaced(me, inZone, board.items, parts, first) : new Map<string, BoardItem>();
+      const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
+      // Each lane makes room for its note at the height its text needs.
+      // Read afresh, as `placeClusters` reads each: the user may have edited one in the app since the board was read.
+      const current = new Map((await call('item.list', undefined)).map((item) => [item.id, item]));
+      const filling = [...matchParts(first, parts).matched, ...byHand].map(([slot, item]) => [slot, current.get(item.id) ?? item] as const);
+      const noteHeights = noteHeightsOf(me, first, new Map(filling), standing);
+      // Laid out round `stay` too: the parts it could find no room to park, left where they are.
+      const plan = (stay: readonly Rect[]) => {
+        const arranged = arrangeTiles(tiles, links, { by, layout, width: zone.width, obstacles: [...obstacles, ...stay], clusters, noteHeights });
+        const { positions } = arranged;
+        // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
+        // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited
+        // whose cluster has gone. The rest of what is left over goes.
+        const { matched, left } = clusters ? matchParts(arranged.clusters, parts) : { matched: new Map<string, BoardItem>(), left: [...parts.values()] };
+        for (const cluster of arranged.clusters) {
+          const slot = `${cluster.key}${CLUSTER_NOTE_SLOT}`;
+          const note = byHand.get(slot);
+          if (!matched.has(slot) && note !== undefined) matched.set(slot, note);
+        }
+        const toPark = clusters ? left.filter((item) => String(item.data.arrange).endsWith(CLUSTER_NOTE_SLOT) && edited(item)) : left;
+        const parkKeys = [...new Set(toPark.map((item) => clusterKeyOf(String(item.data.arrange))))];
+        const placedRects = [
+          ...tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE)),
+          ...arranged.clusters.flatMap((cluster) => [
+            { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
+            { ...cluster.noteAt, ...cluster.noteSize },
+          ]),
+        ];
+        // The zone fits what it holds: grown or shrunk to the crew, what it parked and what stays put.
+        // A parked note keeps its own size.
+        const parkedNote = (key: string): Size => {
+          const item = toPark.find((each) => each.data.arrange === `${key}${CLUSTER_NOTE_SLOT}`);
+          return item === undefined ? CLUSTER_NOTE_SIZE : { width: item.width, height: item.height };
+        };
+        const sizeWith = (parked: ReturnType<typeof parkClusters>): Size =>
+          fittedSize(
+            [...placedRects, ...parked.flatMap((cluster) => [{ ...cluster.labelAt, ...CLUSTER_LABEL_SIZE }, { ...cluster.noteAt, ...parkedNote(cluster.key) }])],
+            [...obstacles, ...stay],
+          );
+        const park = (from: { column: number; row: number }) => parkClusters(parkKeys, from, [...obstacles, ...placedRects], parkedNote);
+        // Beside the crew; else, where that would grow the zone over another, below it; else nowhere, left as they are.
+        const right = Math.max(ZONE_PADDING, ...placedRects.map((rect) => rect.x + rect.width));
+        const bottom = Math.max(ZONE_PADDING, ...placedRects.map((rect) => rect.y + rect.height));
+        const parked =
+          parkKeys.length === 0 || stay.length > 0
+            ? []
+            : ([park({ column: gridColumnAtOrRight(right + TILE_GAP), row: 0 }), park({ column: 0, row: gridRowAtOrBelow(bottom + TILE_GAP) })].find(
+                (each) => coveredBy(board, zone, sizeWith(each)) === undefined,
+              ) ?? []);
+        return { arranged, positions, matched, left, toPark, parkKeys, parked, sizeWith };
+      };
+      let laid = plan([]);
+      // Nowhere to park them: the crew is laid out again round them where they are, never on top of them.
+      if (laid.parkKeys.length > 0 && laid.parked.length === 0) laid = plan(laid.toPark.map((item) => ({ x: item.x, y: item.y, width: item.width, height: item.height })));
+      const { arranged, positions, matched, left, toPark, parked, sizeWith } = laid;
+      const { width, height } = sizeWith(parked);
+      // Checked before anything moves, so a refused arrange leaves the zone as it was.
+      checkGrowth(board, zone, { width, height }, 'arranged,');
+      await keepSettings(me, changed);
+      for (const item of stale) await call('item.delete', { id: item.id });
+      const moved: LayoutMoved[] = [];
+      for (const tile of tiles) {
+        const spot = positions.get(tile.id)!;
+        const placed = inZone.find((each) => each.key === tile.id)!;
+        // A tile the board slotted is moved even to where it is drawn: it is saved there, so it stays.
+        if (placed.saved && placed.rect.x === spot.x && placed.rect.y === spot.y) continue;
+        await moveTo(placed, zone.id, spot);
+        moved.push({ target: { kind: placed.kind as 'agent' | 'shell', id: placed.id }, zoneId: zone.id, ...spot });
+      }
+      await growTo(zone, { width, height });
+      entry.detail = `${tiles.length} tile${tiles.length === 1 ? '' : 's'} by ${by}, in ${layout}${how}`;
+      if (clusters) {
+        const used = await placeClusters(me, zone.id, arranged.clusters, matched, standing);
+        // A part its cluster no longer has (another cluster's) goes.
+        for (const item of matched.values()) if (!used.has(item)) await call('item.delete', { id: item.id });
+        // A sticky someone edited is never deleted: parked if there is room, else left where it is.
+        for (const item of left) if (!toPark.includes(item)) await call('item.delete', { id: item.id });
+      }
+      for (const cluster of parked) {
+        const spots = { label: cluster.labelAt, note: cluster.noteAt };
+        for (const [part, at] of Object.entries(spots)) {
+          const item = toPark.find((each) => each.data.arrange === `${cluster.key}#${part}`);
+          if (item !== undefined && (item.x !== at.x || item.y !== at.y)) await call('item.update', { id: item.id, ...at });
+        }
+      }
+      return { zoneId: zone.id, width, height, moved };
+    }));
+  };
+
+  /**
+   * Arranges `zoneId` again for the orchestrator `caller` names, if it arranges by itself: after an agent it starts, a
+   * note it adds or an agent it closes. A failure is only warned of, as what came before it is done all the same.
+   * Returns whether it arranged.
+   */
+  const autoArrange = async (caller: () => Orchestrator, zoneId: string | null): Promise<boolean> => {
+    if (zoneId === null) return false;
+    try {
+      const me = caller();
+      if (!(await settingsOf(me)).auto) return false;
+      await arrangeIn(me, zoneId, () => ({}), ', by itself');
+      return true;
+    } catch (error) {
+      warn(`could not arrange by itself: ${(error as Error).message}`);
+      return false;
+    }
   };
 
   return {
     'orchestrator.spawn': async (params, connection) => {
       const { template, ...agent } = await spawn(params, connection);
-      const joined = await joinCluster(() => access.caller('orchestrator.spawn', paramsObject(params), connection), agent);
+      const caller = () => access.caller('orchestrator.spawn', paramsObject(params), connection);
+      // Arranging by itself, its zone is laid out afresh, the new agent in its lane; else a reviewer joins its cluster.
+      if (await autoArrange(caller, agent.zoneId)) return { ...((await call('agent.list', undefined)).find((each) => each.sessionId === agent.sessionId) ?? agent), template };
+      const joined = await joinCluster(caller, agent);
       return { ...joined, template };
+    },
+
+    'orchestrator.close': async (params, connection) => {
+      const zoneId = (await call('agent.list', undefined)).find((each) => each.sessionId === paramsObject(params).sessionId)?.zoneId ?? null;
+      const closed = await close(params, connection);
+      await autoArrange(() => access.caller('orchestrator.close', paramsObject(params), connection), zoneId);
+      return closed;
     },
 
     'orchestrator.move': async (params, connection) => {
@@ -867,152 +1176,42 @@ export function layoutHandlers<Context extends BoardConnection>({
     'orchestrator.arrange': async (params, connection) => {
       const p = paramsObject(params);
       const me = access.caller('orchestrator.arrange', p, connection);
-      const entry: ActivityEntry = { detail: '' };
-      // One arrange of a zone at a time: two at once would each make its units' labels and stickies.
-      const zoneKey = optionalStringParam(p, 'zoneId') ?? me.zoneId ?? '';
-      return access.logged(me, 'arrange', entry, () => arranging(zoneKey, async () => {
-        const by = (optionalStringParam(p, 'by') ?? 'issue') as ArrangeBy;
-        if (!ARRANGE_BYS.includes(by)) throw invalidParams(`by must be ${ARRANGE_BYS.join(', ')}`);
-        const layout = (optionalStringParam(p, 'layout') ?? 'rows') as ArrangeLayout;
-        if (!ARRANGE_LAYOUTS.includes(layout)) throw invalidParams(`layout must be ${ARRANGE_LAYOUTS.join(', ')}`);
-        const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
-        if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to arrange`);
-        const board = await readBoard();
-        const zone = checkDestination(me, board, zoneId)!;
-        entry.on = { id: zone.id, name: zone.name };
-        const inZone = placedOf(board).filter((each) => each.zoneId === zone.id);
-        const agentsHere = board.agents.filter((agent) => agent.zoneId === zone.id && access.reachesAgent(me, agent));
-        const moving = new Set([...agentsHere.map((agent) => tileSizeKey('agent', agent.sessionId)), ...board.shells.filter((shell) => shell.zoneId === zone.id).map((shell) => tileSizeKey('shell', shell.id))]);
-        // What an arrange of its crew made before (each cluster's label and sticky) it places again, in place.
-        const clusters = by === 'issue' && layout === 'rows';
-        const { parts, stale } = clusterParts(me, zone.id, board.items);
-        const ownParts = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
-        const branches = new Map(agentsHere.filter((agent) => agent.branch !== '').map((agent) => [agent.branch, agent.sessionId]));
-        const tiles: ArrangeTile[] = [
-          ...agentsHere.map((agent): ArrangeTile => {
-            // A reviewer the user started reviews `reviewOf`; one an orchestrator started reviews a branch.
-            const reviewed = agent.reviewOf ?? (agent.reviews === null ? undefined : branches.get(agent.reviews.branch));
-            return {
-              id: tileSizeKey('agent', agent.sessionId),
-              name: agent.name,
-              kind: 'agent',
-              role: agent.role,
-              issue: agent.issue?.id ?? null,
-              issueTitle: agent.issue?.title ?? null,
-              state: agent.state,
-              reviewOf: reviewed === undefined ? null : tileSizeKey('agent', reviewed),
-              lead: agent.sessionId === me.agent?.sessionId,
-              branch: ticketBranch(board.agents, agent),
-              createdAt: agent.createdAt,
-              ...(board.sizes[tileSizeKey('agent', agent.sessionId)] === undefined ? {} : { size: board.sizes[tileSizeKey('agent', agent.sessionId)] }),
-            };
-          }),
-          ...board.shells
-            .filter((shell) => shell.zoneId === zone.id)
-            .map((shell): ArrangeTile => ({
-              id: tileSizeKey('shell', shell.id),
-              name: shell.name,
-              kind: 'shell',
-              role: null,
-              issue: null,
-              state: null,
-              reviewOf: null,
-              lead: false,
-              ...(board.sizes[tileSizeKey('shell', shell.id)] === undefined ? {} : { size: board.sizes[tileSizeKey('shell', shell.id)] }),
-            })),
-        ];
-        const edges = await call('flowEdge.list', undefined);
-        const links = edges.map((edge) => ({ from: tileSizeKey('agent', edge.from), to: tileSizeKey('agent', edge.to) }));
-        const keep = (excluding: ReadonlySet<string>) => inZone.filter((each) => !moving.has(each.key) && !excluding.has(each.key)).map(takenBy);
-        // An agent note its crew left in a cluster's slot (`note add --near`) is that cluster's note: not in the way of
-        // the layout. Who is in a cluster doesn't depend on where anything is, so the clusters are read from a first pass.
-        const byHand = clusters ? handPlaced(me, inZone, board.items, parts, arrangeTiles(tiles, links, { by, layout, width: zone.width, obstacles: keep(ownParts), clusters }).clusters) : new Map<string, BoardItem>();
-        const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
-        // Laid out round `stay` too: the parts it could find no room to park, left where they are.
-        const plan = (stay: readonly Rect[]) => {
-          const arranged = arrangeTiles(tiles, links, { by, layout, width: zone.width, obstacles: [...obstacles, ...stay], clusters });
-          const { positions, size } = arranged;
-          // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
-          // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited
-          // whose cluster has gone. The rest of what is left over goes.
-          const { matched, left } = clusters ? matchParts(arranged.clusters, parts) : { matched: new Map<string, BoardItem>(), left: [...parts.values()] };
-          for (const cluster of arranged.clusters) {
-            const slot = `${cluster.key}${CLUSTER_NOTE_SLOT}`;
-            const note = byHand.get(slot);
-            if (!matched.has(slot) && note !== undefined) matched.set(slot, note);
-          }
-          const toPark = clusters ? left.filter((item) => String(item.data.arrange).endsWith(CLUSTER_NOTE_SLOT) && edited(item)) : left;
-          const parkKeys = [...new Set(toPark.map((item) => clusterKeyOf(String(item.data.arrange))))];
-          const placedRects = [
-            ...tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE)),
-            ...arranged.clusters.flatMap((cluster) => [
-              { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
-              { ...cluster.stickyAt, ...CLUSTER_STICKY_SIZE },
-            ]),
-          ];
-          const sizeWith = (parked: ReturnType<typeof parkClusters>): Size => {
-            const rects = parked.map((cluster) => ({ ...cluster.stickyAt, ...CLUSTER_STICKY_SIZE }));
-            return {
-              width: Math.max(zone.width, size.width, ...rects.map((rect) => rect.x + rect.width + ZONE_PADDING)),
-              height: Math.max(zone.height, size.height, ...rects.map((rect) => rect.y + rect.height + ZONE_PADDING)),
-            };
-          };
-          const park = (from: { column: number; row: number }) =>
-            parkClusters(
-              parkKeys,
-              from,
-              [...obstacles, ...placedRects],
-            );
-          // Beside the crew; else, where that would grow the zone over another, below it; else nowhere, left as they are.
-          const right = Math.max(ZONE_PADDING, ...placedRects.map((rect) => rect.x + rect.width));
-          const bottom = Math.max(ZONE_PADDING, ...placedRects.map((rect) => rect.y + rect.height));
-          const parked =
-            parkKeys.length === 0 || stay.length > 0
-              ? []
-              : ([park({ column: gridColumnAtOrRight(right + TILE_GAP), row: 0 }), park({ column: 0, row: gridRowAtOrBelow(bottom + TILE_GAP) })].find(
-                  (each) => coveredBy(board, zone, sizeWith(each)) === undefined,
-                ) ?? []);
-          return { arranged, positions, size, matched, left, toPark, parkKeys, parked, sizeWith };
-        };
-        let laid = plan([]);
-        // Nowhere to park them: the crew is laid out again round them where they are, never on top of them.
-        if (laid.parkKeys.length > 0 && laid.parked.length === 0) laid = plan(laid.toPark.map((item) => ({ x: item.x, y: item.y, width: item.width, height: item.height })));
-        const { arranged, positions, matched, left, toPark, parked, sizeWith } = laid;
-        const { width, height } = sizeWith(parked);
-        // Checked before anything moves, so a refused arrange leaves the zone as it was.
-        checkGrowth(board, zone, { width, height }, 'arranged,');
-        for (const item of stale) await call('item.delete', { id: item.id });
-        const moved: LayoutMoved[] = [];
-        for (const tile of tiles) {
-          const spot = positions.get(tile.id)!;
-          const placed = inZone.find((each) => each.key === tile.id)!;
-          // A tile the board slotted is moved even to where it is drawn: it is saved there, so it stays.
-          if (placed.saved && placed.rect.x === spot.x && placed.rect.y === spot.y) continue;
-          await moveTo(placed, zone.id, spot);
-          moved.push({ target: { kind: placed.kind as 'agent' | 'shell', id: placed.id }, zoneId: zone.id, ...spot });
-        }
-        await growTo(zone, { width, height });
-        entry.detail = `${tiles.length} tile${tiles.length === 1 ? '' : 's'} by ${by}, in ${layout}`;
-        if (clusters) {
-          const used = await placeClusters(me, zone.id, arranged.clusters, matched, (id) => {
-            const tile = tiles.find((each) => each.id === id)!;
-            const agent = board.agents.find((each) => tileSizeKey('agent', each.sessionId) === id);
-            return standingOf(tile.name, agent);
-          });
-          // A part its cluster no longer has (another cluster's) goes.
-          for (const item of matched.values()) if (!used.has(item)) await call('item.delete', { id: item.id });
-          // A sticky someone edited is never deleted: parked if there is room, else left where it is.
-          for (const item of left) if (!toPark.includes(item)) await call('item.delete', { id: item.id });
-        }
-        for (const cluster of parked) {
-          const spots = { label: cluster.labelAt, note: cluster.stickyAt };
-          for (const [part, at] of Object.entries(spots)) {
-            const item = toPark.find((each) => each.data.arrange === `${cluster.key}#${part}`);
-            if (item !== undefined && (item.x !== at.x || item.y !== at.y)) await call('item.update', { id: item.id, ...at });
-          }
-        }
-        return { zoneId: zone.id, width, height, moved };
-      }));
+      return arrangeIn(me, optionalStringParam(p, 'zoneId') ?? me.zoneId, () => {
+        const by = optionalStringParam(p, 'by') as ArrangeBy | undefined;
+        if (by !== undefined && !ARRANGE_BYS.includes(by)) throw invalidParams(`by must be ${ARRANGE_BYS.join(', ')}`);
+        const layout = optionalStringParam(p, 'layout') as ArrangeLayout | undefined;
+        if (layout !== undefined && !ARRANGE_LAYOUTS.includes(layout)) throw invalidParams(`layout must be ${ARRANGE_LAYOUTS.join(', ')}`);
+        const auto = optionalBooleanParam(p, 'auto');
+        return { ...(by === undefined ? {} : { by }), ...(layout === undefined ? {} : { layout }), ...(auto === undefined ? {} : { auto }) };
+      });
+    },
+
+    'orchestrator.map': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.map', p, connection);
+      const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
+      if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to map`);
+      const board = await readBoard();
+      const zone = checkDestination(me, board, zoneId)!;
+      const things = placedOf(board)
+        .filter((each) => each.zoneId === zone.id)
+        .map((each): ZoneMapThing => {
+          const item = each.kind === 'item' ? board.items.find((one) => one.id === each.id) : undefined;
+          const agent = each.kind === 'agent' ? board.agents.find((one) => one.sessionId === each.id) : undefined;
+          return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null, ...each.rect };
+        });
+      const { parts } = clusterParts(me, zone.id, board.items);
+      const lanes = lanesOf(crewOf(me, board, zone), await linksOf());
+      const arrange = await settingsOf(me);
+      return {
+        zoneId: zone.id,
+        name: zone.name,
+        width: zone.width,
+        height: zone.height,
+        arrange,
+        things,
+        ...buildZoneMap({ lanes, things, parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])), arrange }),
+      };
     },
 
     'orchestrator.addZone': async (params, connection) => {
@@ -1113,7 +1312,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       const p = paramsObject(params);
       const me = access.caller('orchestrator.addNote', p, connection);
       const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
-      return access.logged(me, 'add-note', entry, async () => {
+      const added = await access.logged(me, 'add-note', entry, async () => {
         const text = stringParam(p, 'text');
         const given = optionalStringParam(p, 'kind');
         const asked = (given ?? 'sticky') as NoteKind;
@@ -1155,7 +1354,7 @@ export function layoutHandlers<Context extends BoardConnection>({
             const data = onAgentNote
               ? { text: added, ...(me.agent === null ? { editedByUser: true } : { writtenAt: new Date().toISOString(), editedByUser: false }) }
               : { text: me.agent === null ? added : stamped(added, me.name), ...(given === undefined ? {} : { color: noteColor('sticky', given) }) };
-            return call('item.update', { id: clusterSticky.id, data });
+            return call('item.update', { id: clusterSticky.id, data, ...(onAgentNote ? grownNote(clusterSticky, added) : {}) });
           }
           // Else in the slot before the agent, which moves along: only one it may move, else beside it as asked.
           const slotOf = nearAgent !== undefined && mayMove(me, board, nearAgent) ? nearAgent : undefined;
@@ -1179,13 +1378,17 @@ export function layoutHandlers<Context extends BoardConnection>({
           return item;
         });
       });
+      // Arranging by itself, its zone is laid out afresh: a note beside an agent of a lane with none becomes its note.
+      if (!(await autoArrange(() => me, added.zoneId))) return added;
+      return (await call('item.list', undefined)).find((each) => each.id === added.id) ?? added;
     },
 
     'orchestrator.editNote': async (params, connection) => {
       const p = paramsObject(params);
       const me = access.caller('orchestrator.editNote', p, connection);
       const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
-      return access.logged(me, 'edit-note', entry, async () => {
+      let grew = false;
+      const edited = await access.logged(me, 'edit-note', entry, async () => {
         const found = (await call('item.list', undefined)).find((each) => each.id === p.id);
         // In its zone's layout queue: an arrange or join under way can't write over the edit.
         return arranging(found?.zoneId ?? '', async () => {
@@ -1200,7 +1403,9 @@ export function layoutHandlers<Context extends BoardConnection>({
             checkNoteText(text, 'sticky', 0);
             // Written again by an agent, it is its own again; by the user's side, the user's edit.
             const data = me.agent === null ? { text, editedByUser: true } : { text, writtenAt: new Date().toISOString(), editedByUser: false };
-            return call('item.update', { id: item.id, data });
+            const grown = grownNote(item, text);
+            grew = grown.height !== undefined;
+            return call('item.update', { id: item.id, data, ...grown });
           }
           const kind = item.kind as NoteKind;
           if (text !== undefined) checkNoteText(text, kind, me.agent === null ? 0 : signatureLength(me.name));
@@ -1212,6 +1417,9 @@ export function layoutHandlers<Context extends BoardConnection>({
           return call('item.update', { id: item.id, data, ...size });
         });
       });
+      // Grown taller, it may reach what is below it: arranging by itself, its zone makes room for it.
+      if (!grew || !(await autoArrange(() => me, edited.zoneId))) return edited;
+      return (await call('item.list', undefined)).find((each) => each.id === edited.id) ?? edited;
     },
 
     'orchestrator.removeNote': async (params, connection) => {

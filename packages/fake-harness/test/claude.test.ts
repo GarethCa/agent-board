@@ -98,6 +98,44 @@ describe('fake claude', () => {
     expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').at(-1)).toMatchObject({ prompt: 'line one\nline two' });
   });
 
+  it('fires no UserPromptSubmit for the first prompts typed at it with FAKE_HARNESS_LOSE_PROMPT_HOOKS, and runs their turns', async () => {
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: ['SQLite'],
+      env: { FAKE_HARNESS_LOSE_PROMPT_HOOKS: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt)).toEqual(['set up storage']);
+    expect(result.stdout).toContain('Going with SQLite.');
+  });
+
+  it('ignores Enter at an empty prompt, as the real TUI does', async () => {
+    const result = await runFake('claude', { scenario: 'waiting', args: ['--settings', settings(), 'set up storage'], input: ['', '  ', 'SQLite'] });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt)).toEqual([
+      'set up storage',
+      'SQLite',
+    ]);
+  });
+
+  it('loses the first Enters after text with FAKE_HARNESS_LOSE_ENTERS, as a slow TUI does: the next one submits it', async () => {
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: ['SQLite', '', ''],
+      env: { FAKE_HARNESS_LOSE_ENTERS: '2' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt)).toEqual([
+      'set up storage',
+      'SQLite',
+    ]);
+  });
+
   it('waiting: exits when stdin closes at the prompt', async () => {
     const result = await runFake('claude', { scenario: 'waiting', args: ['--settings', settings(), 'set up storage'] });
 

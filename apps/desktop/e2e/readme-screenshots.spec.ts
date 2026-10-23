@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { agents, launch, screen, sessionWindow, setClickOpens, tile, tileAction } from './agent-helpers.ts';
+import { agents, launch, listFinishedTurns, screen, sessionWindow, setClickOpens, tile, tileAction } from './agent-helpers.ts';
 import { openAddZone, removeDataDir, tempDataDir, test } from './launch.ts';
 import { ignorePointer, pinRandomText, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
 import { scratch } from './scratch.ts';
@@ -91,10 +91,12 @@ case "$*" in
   *"Prune old jobs"*) FAKE_HARNESS_SCENARIO=subagent-ask FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
   *"reviewer for round"*) FAKE_HARNESS_SCENARIO=review ;;
   *"Lead two"*) FAKE_HARNESS_SCENARIO=orchestrate ;;
+  *"on the board:"*) FAKE_HARNESS_SCENARIO=orchestrate ;;
+  *"Hit the rate limit"*) FAKE_HARNESS_SCENARIO=orchestrate FAKE_HARNESS_RATE_LIMIT_SCREEN=menu-credits-first ;;
   *"Trace session store"* | *"Resize images"*) FAKE_HARNESS_SCENARIO=subagents-working FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
   *) FAKE_HARNESS_SCENARIO=output FAKE_HARNESS_IDLE_NOTIFY_MS=600000 ;;
 esac
-export FAKE_HARNESS_SCENARIO FAKE_HARNESS_SUBAGENT_WORK_MS FAKE_HARNESS_IDLE_NOTIFY_MS
+export FAKE_HARNESS_SCENARIO FAKE_HARNESS_SUBAGENT_WORK_MS FAKE_HARNESS_IDLE_NOTIFY_MS FAKE_HARNESS_RATE_LIMIT_SCREEN
 exec "${join(fakeBinDir, 'claude')}" "$@"
 `;
   writeFileSync(join(bin, 'claude'), script);
@@ -140,6 +142,8 @@ async function pinRandomLooks(page: Page): Promise<void> {
     }
     // The time a review round came in is the clock's: drawn as a fixed one.
     for (const when of document.querySelectorAll('.review-round-when')) when.textContent = when.textContent!.replace(/\d{1,2}:\d{2} [AP]M/, '9:41 AM');
+    // The times an edge's history lists are the clock's too.
+    for (const when of document.querySelectorAll('.edge-rules-history time')) when.textContent = when.textContent!.replace(/\d{1,2}:\d{2}/, '9:41');
     const hash = (text: string) => {
       let value = 0;
       for (const char of text) value = (value * 31 + char.charCodeAt(0)) >>> 0;
@@ -267,9 +271,10 @@ async function demoReady(page: Page): Promise<void> {
   const named = (name: string) => tile(page).filter({ has: page.getByText(name, { exact: true }) });
   const within = { timeout: 30_000 };
   await expect(named('Fix checkout flake')).toHaveAttribute('data-state', 'idle', within);
-  await expect(named('Pick a cache')).toContainText('Which database should I use, Postgres or SQLite?', within);
-  await expect(named('Clear build output')).toContainText('Bash rm -rf dist', within);
-  await expect(named('Prune old jobs')).toContainText('Bash rm -rf build', within);
+  // A tile says what its agent is doing, not the question or command it is stuck on: those are in the inbox below.
+  await expect(named('Pick a cache')).toHaveAttribute('data-needs-you', 'true', within);
+  await expect(named('Clear build output')).toHaveAttribute('data-needs-you', 'true', within);
+  await expect(named('Prune old jobs')).toHaveAttribute('data-needs-you', 'true', within);
   await expect(named('Prune old jobs').getByTestId('character')).toHaveCount(2, within);
   await expect(named('Resize images').getByTestId('character')).toHaveCount(3, within);
   await expect(named('Trace session store').getByTestId('character')).toHaveCount(3, within);
@@ -292,6 +297,7 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, AGENT_BOARD_GH: github.gh, SHELL: '/bin/sh' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await seedBoard(window, dir);
@@ -320,7 +326,7 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     await window.keyboard.press('Escape');
 
     // A double-click opens the session window; Expand in place is the setting that opens the tile where it sits instead.
-    const waiting = tile(window).filter({ hasText: 'Which database' });
+    const waiting = tile(window).filter({ has: window.getByText('Pick a cache', { exact: true }) });
     await waiting.dblclick();
     await expect(sessionWindow(window)).toBeVisible();
     await expect(screen(window)).toContainText('Which database should I use');
@@ -350,6 +356,7 @@ test('the README screenshots: the board in the dark theme', async () => {
     { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: 'dark', PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     // Playwright pins the page to light; the setting has the window in dark mode, as macOS would.
@@ -373,6 +380,7 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
+  await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
     const zone = await page.evaluate(async (path) => {
@@ -486,6 +494,7 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
+  await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
     const zone = await page.evaluate(async (path) => {
@@ -521,6 +530,115 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
     await pinRandomLooks(page);
     await pinPaths(page);
     await shoot(page, 'orchestrator-crew');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the README screenshots: a board in use, with a question, a document, a clock, a paused agent and the View popover', async () => {
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, SHELL: '/bin/sh' }, RENDER_ARGS);
+  await listFinishedTurns(page);
+  try {
+    await page.setViewportSize(VIEWPORT);
+    const zone = await page.evaluate(async (path) => {
+      const result = await window.agentBoard.zones.addFolder(path, { x: 0, y: 0, width: 1700, height: 700, color: '#4c6ef5' });
+      if (result.status !== 'added') throw new Error(result.message);
+      return result.zone;
+    }, makeRepo(dir, 'storefront'));
+    // Each agent is named for its work; the fake claude is steered by the words of its first prompt, which the tiles' task lines show until the shot pins them.
+    const spawn = (name: string, prompt: string, x: number, y: number) =>
+      page.evaluate(
+        async (params) => {
+          const result = await window.agentBoard.agents.spawn(params);
+          if (result.status !== 'started') throw new Error(result.message);
+          return result.agent;
+        },
+        { zoneId: zone.id, name, prompt, position: { x, y }, cols: 100, rows: 30 },
+      );
+    const asking = await spawn('Pick a cache', 'Ask on the board: Which cache should the product pages use? | Redis | In-memory LRU | CDN only', 400, 40);
+    const writing = await spawn('Write the release plan', 'Doc on the board: docs/release-plan.md', 1000, 40);
+    const limited = await spawn('Migrate the orders table', 'Hit the rate limit', 40, 330);
+    const scheduled = await spawn('Check the build', 'Check the build', 760, 330);
+    const resting = await spawn('Tidy the changelog', 'Tidy the changelog', 1200, 330);
+    const taskLines: Record<string, string> = {
+      'Ask on the board: Which cache should the product pages use? | Redis | In-memory LRU | CDN only': 'Decide the cache for the product pages',
+      'Doc on the board: docs/release-plan.md': 'Write docs/release-plan.md',
+      'Hit the rate limit': 'Add the orders migration',
+    };
+
+    const card = page.getByTestId('question-card');
+    await expect(card).toContainText('Which cache should the product pages use?', { timeout: 60_000 });
+    await expect(page.getByTestId('doc-card')).toContainText('Release 1.4 plan', { timeout: 60_000 });
+    await expect(tile(page).filter({ has: page.getByText('Migrate the orders table', { exact: true }) })).toHaveAttribute('data-state', 'rate-limited', { timeout: 60_000 });
+    await expect(page.getByTestId('continue-on-credits')).toBeVisible();
+    for (const name of ['Check the build', 'Tidy the changelog']) {
+      await expect(tile(page).filter({ hasText: name })).toHaveAttribute('data-state', 'idle', { timeout: 60_000 });
+    }
+    await page.evaluate(
+      async ({ scheduledId, restingId, limitedId, askingId }) => {
+        const board = window.agentBoard;
+        await board.agents.setSchedule(scheduledId, { cron: '30 6 * * *', prompt: 'Check last night’s build' });
+        await board.agents.pause(restingId);
+        await board.connectors.create({ from: { type: 'agent', id: limitedId, side: 'top' }, to: { type: 'agent', id: askingId, side: 'left' }, style: 'elbow' });
+      },
+      { scheduledId: scheduled.sessionId, restingId: resting.sessionId, limitedId: limited.sessionId, askingId: asking.sessionId },
+    );
+    await page.evaluate(
+      async ({ zoneId, sessionId, name }) => {
+        const board = window.agentBoard;
+        await board.items.create({
+          kind: 'agent-note',
+          zoneId,
+          x: 760,
+          y: 520,
+          width: 240,
+          height: 150,
+          data: {
+            text: '**Round 2 of 3**\n\n- implementer: fixes in\n- reviewer: idle',
+            agent: { sessionId, name, harness: 'claude', role: 'orchestrator' },
+            about: sessionId,
+            writtenAt: '2026-10-01T09:41:00Z',
+            editedByUser: false,
+          },
+        });
+        await board.items.create({
+          kind: 'shape',
+          zoneId,
+          x: 40,
+          y: 540,
+          width: 300,
+          height: 60,
+          data: { shape: 'rounded', fill: '#d0ebff', stroke: '#3b5bdb', strokeWidth: 2.5, dashed: false, text: 'Release 1.4: ship on Friday', textSize: 'body', bold: true, textColor: '#2b2a27' },
+        });
+      },
+      { zoneId: zone.id, sessionId: writing.sessionId, name: writing.name },
+    );
+    await expect(page.getByTestId('clock')).toHaveCount(1);
+    await expect(tile(page).filter({ hasText: 'Tidy the changelog' })).toHaveAttribute('data-state', 'hibernated');
+    await page.getByRole('button', { name: 'Fit View' }).click();
+    const pinTasks = () =>
+      page.evaluate((lines) => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode as Text;
+          const shown = lines[node.data.trim()];
+          if (shown !== undefined) node.data = shown;
+        }
+      }, taskLines);
+    await pinRandomLooks(page);
+    await pinPaths(page);
+    await pinTasks();
+    await shoot(page, 'board-in-use');
+
+    await page.getByRole('button', { name: 'View', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'View', exact: true })).toBeVisible();
+    await pinRandomLooks(page);
+    await pinTasks();
+    await shoot(page, 'view-popover');
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -569,9 +687,10 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
   const dataDir = tempDataDir();
   const { app, window: page } = await launch(
     dataDir,
-    { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, AGENT_BOARD_GH: github.gh, SHELL: '/bin/sh' },
+    { ...env, ...RENDER_ENV, PATH: `${scenarioPicker(dir)}:${env.PATH}`, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200', SHELL: '/bin/sh' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(page);
   try {
     await page.setViewportSize(VIEWPORT);
     // gh finds the agent's pull requests in the repo its worktree's remote names.
@@ -648,10 +767,10 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
     // A web tab from + › Web…, showing the agent's dev server.
     await panes.nth(0).getByRole('button', { name: 'New tab' }).click();
     await page.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = page.getByRole('dialog', { name: 'Open a web tab' });
-    await ask.getByRole('textbox', { name: 'Address' }).fill(devUrl);
-    await ask.getByRole('button', { name: 'Open' }).click();
-    await expect(ask).toBeHidden();
+    const address = page.getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await address.fill(devUrl);
+    await address.press('Enter');
     const webPage = app.windows().find((candidate) => candidate.url().startsWith(devUrl)) ?? (await app.waitForEvent('window', (candidate) => candidate.url().startsWith(devUrl)));
     await expect(webPage.locator('h1')).toHaveText('Checkout, fixed.');
     await webPage.evaluate(() => document.fonts.ready);
@@ -697,6 +816,7 @@ test('the README screenshots: first-run onboarding', async () => {
     { ...env, ...RENDER_ENV, PATH: `${fakeBinDir}:${env.PATH}`, AGENT_BOARD_GH: github.gh, AGENT_BOARD_ONBOARDING: '1', SHELL: '/bin/sh' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await expect(window.getByRole('dialog', { name: 'Welcome to agent-board' })).toBeVisible();
@@ -718,12 +838,20 @@ test('the README screenshots: first-run onboarding', async () => {
 test('the README screenshots: Add zone from a Linear team', async () => {
   // The key goes to a throwaway keychain file, which only macOS has (as in add-zone.spec.ts).
   test.skip(process.platform !== 'darwin', 'needs a throwaway macOS keychain: this shot is only made on a Mac');
-  // A Linear that knows one invented team: every query gets the same answer, which is all the Linear tab asks for.
+  // A Linear that knows three invented teams and no projects or issues. It answers each query with the field that
+  // query asks for: a connection the app reads (`projects.nodes`) but finds missing is an error in the popover.
+  const connections = {
+    teams: [{ key: 'WEB', name: 'Storefront' }, { key: 'PAY', name: 'Payments' }, { key: 'DSN', name: 'Design system' }],
+  };
   const linear = createServer((request, response) => {
-    request.resume();
+    let body = '';
+    request.on('data', (chunk) => (body += String(chunk)));
     request.on('end', () => {
+      const { query } = JSON.parse(body) as { query: string };
+      const field = /{\s*(\w+)/.exec(query.slice(query.indexOf('{')))?.[1] ?? '';
+      const nodes = connections[field as keyof typeof connections] ?? [];
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ data: { teams: { nodes: [{ key: 'WEB', name: 'Storefront' }, { key: 'PAY', name: 'Payments' }, { key: 'DSN', name: 'Design system' }] } } }));
+      response.end(JSON.stringify({ data: { [field]: { nodes } } }));
     });
   });
   await new Promise<void>((resolve) => linear.listen(0, '127.0.0.1', resolve));
@@ -741,6 +869,7 @@ test('the README screenshots: Add zone from a Linear team', async () => {
     },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     const popover = await openAddZone(window, 'Linear');

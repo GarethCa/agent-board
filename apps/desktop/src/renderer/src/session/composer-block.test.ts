@@ -23,6 +23,10 @@ describe('composerBlock', () => {
     });
   });
 
+  it('takes a message for a paused agent, which wakes with it', () => {
+    expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'hibernated' })).toBeUndefined();
+  });
+
   it('offers to restart an agent that ended', () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done' })).toEqual({ reason: 'The agent has ended', action: 'restart' });
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'failed' })).toEqual({ reason: 'The agent has ended', action: 'restart' });

@@ -1,7 +1,8 @@
 // Agent worktrees (ADR-0007): one git worktree and branch per agent, outside the repo.
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runGit } from './git.ts';
 
@@ -109,6 +110,23 @@ export async function checkedOutBranch(repoRoot: string): Promise<string> {
 }
 
 /**
+ * The repo's default branch: what `origin/HEAD` points at. Without it, `main` or `master` when exactly one exists and the
+ * repo has no remote branches (a local-only repo): with remote branches, a stale local `main` could be the wrong guess.
+ * Otherwise null. Only reads.
+ */
+export async function defaultBranchOf(repoRoot: string): Promise<string | null> {
+  const remote = await runGit(repoRoot, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (remote.ok && remote.stdout.startsWith('origin/')) return remote.stdout.slice('origin/'.length);
+  const remotes = await runGit(repoRoot, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/remotes']);
+  if (!remotes.ok || remotes.stdout !== '') return null;
+  const found: string[] = [];
+  for (const name of ['main', 'master']) {
+    if ((await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).ok) found.push(name);
+  }
+  return found.length === 1 ? found[0]! : null;
+}
+
+/**
  * Why removing the worktree and branch would lose work, or undefined if it wouldn't: uncommitted changes (untracked
  * files included) in the worktree, commits on its HEAD that no branch has (a detached HEAD after a rebase, bisect or
  * checkout of a commit), or commits on the branch that no other branch or remote-tracking branch has.
@@ -141,11 +159,62 @@ function commits(count: number): string {
   return `${count} commit${count === 1 ? '' : 's'}`;
 }
 
-/** Removes the worktree, changes and all, then deletes its branch unless `keepBranch`. Either may already be gone. */
-export async function removeWorktree(repoRoot: string, worktree: string, branch: string, keepBranch = false): Promise<void> {
+/** Whether `path` is the folder of a worktree git lists for the repo; throws if git can't say. */
+async function isRegistered(repoRoot: string, path: string): Promise<boolean> {
+  const listed = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
+  if (!listed.ok) throw new Error(`could not list the worktrees of ${repoRoot}: ${listed.stderr}`);
+  // `realpath`: git lists the resolved path, and a temp or home folder may be a symlink.
+  const target = existsSync(path) ? realpathSync(path) : path;
+  return listed.stdout.split('\n').some((line) => line.startsWith('worktree ') && line.slice('worktree '.length) === target);
+}
+
+/** Whether `worktree` lies below the `<repo name>-<hash>` folder that `agentWorktreePath` puts a repo's worktrees in. */
+function isAgentWorktreePath(repoRoot: string, worktree: string): boolean {
+  const hash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
+  const folder = `${basename(repoRoot)}-${hash}`;
+  const parts = resolve(worktree).split(sep);
+  // A branch name can hold `/`, so the folder is any ancestor, never the path itself.
+  return parts.slice(0, -1).includes(folder);
+}
+
+/** Waits between the attempts to delete a worktree's folder that git has already let go of: a process may still write to it. */
+const REMOVE_RETRY_DELAYS_MS = [50, 100, 200, 400, 800];
+
+/**
+ * Removes the worktree, changes and all, then deletes its branch unless `keepBranch`. Either may already be gone.
+ *
+ * Git deregisters a worktree before it deletes its files, so when a process writes into the folder meanwhile, `git
+ * worktree remove` fails with "Directory not empty" and leaves a folder git no longer knows. That folder alone is then
+ * deleted, trying again after each of `retryDelaysMs`, but only when git positively lists it as not a worktree and it is
+ * below this repo's worktrees folder. Any other git failure throws and deletes nothing.
+ */
+export async function removeWorktree(
+  repoRoot: string,
+  worktree: string,
+  branch: string,
+  keepBranch = false,
+  { retryDelaysMs = REMOVE_RETRY_DELAYS_MS, onFolderRetry }: { retryDelaysMs?: readonly number[]; onFolderRetry?: (error: Error) => void } = {},
+): Promise<void> {
+  // The repo's own checkout is never a worktree to remove: nothing here may touch it.
+  if (resolve(worktree) === resolve(repoRoot)) throw new Error(`${worktree} is the repo's own checkout, not a worktree: it is left as it is`);
   if (existsSync(worktree)) {
     const removed = await runGit(repoRoot, ['worktree', 'remove', '--force', worktree]);
-    if (!removed.ok) throw new Error(`could not remove the worktree ${worktree}: ${removed.stderr}`);
+    if (!removed.ok) {
+      const failure = (reason: string) => new Error(`could not remove the worktree ${worktree}: ${reason}`);
+      if (await isRegistered(repoRoot, worktree)) throw failure(removed.stderr);
+      if (!isAgentWorktreePath(repoRoot, worktree)) throw failure(`${removed.stderr} (and it is not in this repo's worktrees folder)`);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rm(worktree, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          const delay = retryDelaysMs[attempt];
+          if (delay === undefined) throw failure((error as Error).message);
+          onFolderRetry?.(error as Error);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
   }
   // Forget a worktree whose folder was deleted by hand, so its branch is free to delete.
   await runGit(repoRoot, ['worktree', 'prune']);

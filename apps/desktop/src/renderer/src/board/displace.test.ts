@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, BoardItem, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { rotatedBounds, type Rect } from '../geometry';
-import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, type Movable } from './displace';
+import { apart, clearOfExpanded, displaced, droppedOnto, heldFrom, pushedAside, type Movable } from './displace';
 import { bringToFront, EXPANDED_SIZE, expandTile, resizeExpanded } from './expanded';
 import { AGENT_TILE_SIZE, CREW_GAP, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { CREW_PADDING, crewFrames } from './crews';
@@ -174,6 +174,76 @@ describe('clearOfExpanded', () => {
   });
 });
 
+describe('pushedAside', () => {
+  // A 3×3 grid as an arrange lays it out: tiles with the room above them for their subagents, a tile gap apart. The
+  // middle tile (B2) opens from 256 × 136 to 600 × 380, which is 344 wider and 244 taller.
+  const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
+  const cell = (id: string, jitter = { x: 0, y: 0 }) => {
+    const column = 'ABC'.indexOf(id[0]!);
+    const row = Number(id[1]) - 1;
+    return tile(id, column * step.x + jitter.x, row * step.y + jitter.y, AGENT_TILE_SIZE.width, PERCH_ROOM + AGENT_TILE_SIZE.height);
+  };
+  const grid = ['A1', 'B1', 'C1', 'A2', 'C2', 'A3', 'B3', 'C3'].map((id) => cell(id));
+  const compact = { x: step.x, y: step.y + PERCH_ROOM, ...AGENT_TILE_SIZE };
+  const open = { ...compact, width: 600, height: 380 };
+  const grown = [{ compact, open }];
+  const grow = { x: 600 - AGENT_TILE_SIZE.width, y: 380 - AGENT_TILE_SIZE.height };
+  const shift = (moved: Map<string, { x: number; y: number }>, movables: readonly Movable[], id: string) => {
+    const was = movables.find((each) => each.id === id)!.rect;
+    return { dx: (moved.get(id)?.x ?? was.x) - was.x, dy: (moved.get(id)?.y ?? was.y) - was.y };
+  };
+
+  it('moves the tiles right of the tile, and the rows below it, as blocks, and leaves the rest', () => {
+    const moved = pushedAside(grown, grid);
+    for (const id of ['C1', 'C2']) expect(shift(moved, grid, id), id).toEqual({ dx: grow.x, dy: 0 });
+    // Whole rows below it: C3 goes down only.
+    for (const id of ['A3', 'B3', 'C3']) expect(shift(moved, grid, id), id).toEqual({ dx: 0, dy: grow.y });
+    for (const id of ['A1', 'B1', 'A2']) expect(moved.has(id), id).toBe(false);
+  });
+
+  it('keeps a row that is a little out of line one row, and moves it down whole', () => {
+    for (const lift of [20, 40, 60]) {
+      const row = [cell('A3', { x: 0, y: -lift }), cell('B3', { x: 0, y: 0 }), cell('C3', { x: 0, y: -lift / 2 })];
+      const movables = [...grid.filter((each) => each.id[1] !== '3'), ...row];
+      const moved = pushedAside(grown, movables);
+      const dys = row.map(({ id }) => shift(moved, movables, id));
+      for (const each of dys) expect(each.dx, `lift ${lift}`).toBe(0);
+      expect(new Set(dys.map((each) => each.dy)).size, `lift ${lift}`).toBe(1);
+      expect(dys[0]!.dy).toBeGreaterThan(0);
+    }
+  });
+
+  it('moves by the largest shift of the tiles grown, not the sum, so two grown in a column keep column C whole', () => {
+    // B3 expanded too, already moved down clear of B2 as the zone keeps expanded tiles apart.
+    const lower = { compact: { ...compact, y: compact.y + step.y + grow.y }, open: { ...open, y: open.y + step.y + grow.y } };
+    const movables = ['A1', 'C1', 'C2', 'C3'].map((id) => cell(id));
+    const moved = pushedAside([...grown, lower], movables);
+    const xs = ['C1', 'C2', 'C3'].map((id) => shift(moved, movables, id).dx);
+    expect(xs).toEqual([grow.x, grow.x, grow.x]);
+  });
+
+  it('moves only by what is needed, so a layout already made for the expanded size is not pushed twice', () => {
+    const roomy = grid.map(({ id, rect }) => ({
+      id,
+      rect: { ...rect, x: rect.x + (id[0] === 'C' ? grow.x : 0), y: rect.y + (id[1] === '3' ? grow.y : 0) },
+    }));
+    expect(pushedAside(grown, roomy).size).toBe(0);
+  });
+
+  it('moves a crew frame, framed as one movable, and any far-off tile below as part of its row', () => {
+    const far = tile('far', 5000, step.y * 2, 100, 100);
+    const frame = tile('\0block crew', 0, step.y * 2, 2 * step.x, 180);
+    const movables = [...grid, far, frame];
+    const moved = pushedAside(grown, movables);
+    expect(shift(moved, movables, 'far')).toEqual({ dx: 0, dy: grow.y });
+    expect(shift(moved, movables, '\0block crew')).toEqual({ dx: 0, dy: grow.y });
+  });
+
+  it('moves nothing when the tile has not grown past its neighbours', () => {
+    expect(pushedAside([{ compact, open: compact }], grid).size).toBe(0);
+  });
+});
+
 const zone = (id: string, x: number, y: number, width = 800, height = 300) =>
   zoneNode({ id, x, y, width, height, repoRoot: null, folder: '', name: id, color: '#4c6ef5' } as Zone);
 const shell = (id: string, zoneId: string | null, position: TilePosition) =>
@@ -281,6 +351,159 @@ describe('displaced', () => {
       expect(rect.x + rect.width + ZONE_PADDING, id).toBeLessThanOrEqual(holder.x + holder.width + 1e-6);
       expect(rect.y + rect.height + ZONE_PADDING, id).toBeLessThanOrEqual(holder.y + holder.height + 1e-6);
     }
+  });
+
+  it("pushes a zone's 3×3 grid as blocks when the middle tile expands: the rows right of it right, the rows below it down", () => {
+    const zones = [zone('z', 0, 0, 900, 700)];
+    const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
+    const origin = { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+    const cells = ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'];
+    const place = (cell: string) => ({ x: origin.x + 'ABC'.indexOf(cell[0]!) * step.x, y: origin.y + (Number(cell[1]) - 1) * step.y });
+    const shells = cells.map((cell) => shell(cell, 'z', at(place(cell).x, place(cell).y)));
+    const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+    const nodes = withTiles(zones, [], shells, [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+
+    const grew = { x: 640 - AGENT_TILE_SIZE.width, y: 380 - AGENT_TILE_SIZE.height };
+    const expectedAt = (cell: string) => {
+      const { x, y } = place(cell);
+      return { x: cell === 'C1' || cell === 'C2' ? x + grew.x : x, y: cell[1] === '3' ? y + grew.y : y };
+    };
+    for (const cell of cells) expect(shown.find((node) => node.id === s(cell))!.position, cell).toEqual(expectedAt(cell));
+    // The zone grows to hold them, and collapsing puts everything back: nothing was saved.
+    const grown = shown.find((node) => node.id === 'z')!;
+    const lowest = boardRect(shown, shown.find((node) => node.id === s('C3'))!);
+    expect(grown.height!).toBeGreaterThanOrEqual(lowest.y + lowest.height + ZONE_PADDING);
+    expect(displaced(nodes, []).map((node) => node.position)).toEqual(nodes.map((node) => node.position));
+  });
+
+  it('moves a block it pushed onto a tile that stayed clear of it: the pushed tile gives way', () => {
+    // A sparse layout found by search: pushing t0's neighbours as blocks lands one on another that stayed; without the
+    // give-way step two end up crowded.
+    const places = { t0: at(136, 270), t1: at(408, 270), t2: at(408, 90), t3: at(952, 270) };
+    const expanded = resizeExpanded(expandTile([], s('t0')), s('t0'), { width: 640, height: 380 });
+    const nodes = withTiles([], [], Object.entries(places).map(([id, place]) => shell(id, null, place)), [], new Map(), expanded);
+    const shown = displaced(nodes, expanded);
+    const rects = Object.keys(places).map((id) => boardRect(shown, shown.find((node) => node.id === s(id))!));
+    for (const [i, a] of rects.entries()) for (const [j, b] of rects.entries()) if (j > i) expect(crowded(a, b), `t${i} on t${j}`).toBe(false);
+  });
+
+  describe.each(['in a zone', 'loose on the board'] as const)('in a 3×3 grid %s', (where) => {
+    const loose = where !== 'in a zone';
+    const parent = loose ? null : 'z';
+    const zoneList = () => (loose ? [] : [zone('z', 0, 0, 900, 700)]);
+    const step = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
+    const origin = loose ? { x: 1000, y: 1000 + PERCH_ROOM } : { x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM };
+    const cells = ['A1', 'B1', 'C1', 'A2', 'B2', 'C2', 'A3', 'B3', 'C3'];
+    const grid = (jitter: Record<string, number> = {}) =>
+      cells.map((cell) => shell(cell, parent, at(origin.x + 'ABC'.indexOf(cell[0]!) * step.x, origin.y + (Number(cell[1]) - 1) * step.y - (jitter[cell] ?? 0))));
+    const shifts = (shown: BoardNode[], nodes: BoardNode[]) =>
+      Object.fromEntries(
+        cells.map((cell) => {
+          const was = nodes.find((node) => node.id === s(cell))!.position;
+          const now = shown.find((node) => node.id === s(cell))!.position;
+          return [cell, { dx: now.x - was.x, dy: now.y - was.y }];
+        }),
+      );
+    const s = (id: string) => tileNodeId('shell', id);
+    const place = (cell: string) => ({ x: origin.x + 'ABC'.indexOf(cell[0]!) * step.x, y: origin.y + (Number(cell[1]) - 1) * step.y });
+
+    it('moves a row placed a little high as a whole row, C3 included, and none of it sideways', () => {
+      const zones = zoneList();
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+      const nodes = withTiles(zones, [], grid({ A3: 20, B3: 0, C3: 40 }), [], new Map(), expanded);
+      const moved = shifts(displaced(nodes, expanded), nodes);
+      expect(new Set(['A3', 'B3', 'C3'].map((cell) => moved[cell]!.dy)).size).toBe(1);
+      for (const cell of ['A3', 'B3', 'C3']) expect(moved[cell]!.dx, cell).toBe(0);
+      expect(moved.A3!.dy).toBeGreaterThan(0);
+    });
+
+    it('pushes column C once, not twice, with B2 and B3 both expanded', () => {
+      const zones = zoneList();
+      const expanded = ['B2', 'B3'].reduce((open, cell) => resizeExpanded(expandTile(open, s(cell)), s(cell), { width: 640, height: 360 }), [] as ReturnType<typeof expandTile>);
+      const nodes = withTiles(zones, [], grid(), [], new Map(), expanded);
+      const moved = shifts(displaced(nodes, expanded), nodes);
+      expect([moved.C1!.dx, moved.C2!.dx, moved.C3!.dx]).toEqual([384, 384, 384]);
+    });
+
+    it('moves a tall tile beside the expanded one right, not down, and its row below only as far as it needs', () => {
+      const zones = zoneList();
+      const sizes = { [s('A2')]: { width: 256, height: 300 }, [s('C2')]: { width: 256, height: 300 } };
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+      const nodes = withTiles(zones, [], grid(), [], new Map(), expanded, sizes);
+      const moved = shifts(displaced(nodes, expanded, new Map(), new Map(), [], sizes), nodes);
+      expect(moved.A2).toEqual({ dx: 0, dy: 0 });
+      expect(moved.C2).toEqual({ dx: 384, dy: 0 });
+      expect(moved.C1).toEqual({ dx: 384, dy: 0 });
+      expect(new Set(['A3', 'B3', 'C3'].map((cell) => moved[cell]!.dy)).size).toBe(1);
+    });
+
+    it('keeps column C whole with A2 and B2 expanded side by side', () => {
+      const zones = zoneList();
+      const expanded = ['A2', 'B2'].reduce((open, cell) => resizeExpanded(expandTile(open, s(cell)), s(cell), { width: 640, height: 380 }), [] as ReturnType<typeof expandTile>);
+      const nodes = withTiles(zones, [], grid(), [], new Map(), expanded);
+      const shown = displaced(nodes, expanded);
+      const moved = shifts(shown, nodes);
+      expect(moved.C1!.dx).toBe(moved.C2!.dx);
+      expect(moved.C1!.dy).toBe(0);
+      expect(moved.C2!.dy).toBe(0);
+      const rects = cells.map((cell) => boardRect(shown, shown.find((node) => node.id === s(cell))!));
+      for (const [i, a] of rects.entries()) for (const [j, b] of rects.entries()) if (j > i) expect(crowded(a, b), `${cells[i]} on ${cells[j]}`).toBe(false);
+    });
+
+    it('grows a tile from the size it was resized to while compact', () => {
+      const zones = zoneList();
+      // B2 is 256 × 300 compact, so a tile beside its lower half is in its row, and moves right.
+      const sizes = { [s('B2')]: { width: 256, height: 300 } };
+      const shells = grid().map((each) => (each.id === 'C2' ? { ...each, position: at(origin.x + 2 * step.x, origin.y + step.y + 100) } : each));
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 600 });
+      const nodes = withTiles(zones, [], shells, [], new Map(), expanded, sizes);
+      const moved = shifts(displaced(nodes, expanded, new Map(), new Map(), [], sizes), nodes);
+      expect(moved.C2!.dx).toBeGreaterThan(0);
+      expect(moved.C2!.dy).toBe(0);
+    });
+    it.runIf(loose)('keeps two grids far apart from pushing each other', () => {
+      const other = (cell: string) => shell(`q${cell}`, parent, at(origin.x + 4000 + 'ABC'.indexOf(cell[0]!) * step.x, origin.y + (Number(cell[1]) - 1) * step.y));
+      const q = (cell: string) => s(`q${cell}`);
+      const expanded = ['B2', 'qB2'].reduce((open, cell) => resizeExpanded(expandTile(open, s(cell)), s(cell), { width: 640, height: 380 }), [] as ReturnType<typeof expandTile>);
+      const nodes = withTiles(zoneList(), [], [...grid(), ...cells.map(other)], [], new Map(), expanded);
+      const shown = displaced(nodes, expanded);
+      const moved = (id: string) => {
+        const was = nodes.find((node) => node.id === id)!.position;
+        const now = shown.find((node) => node.id === id)!.position;
+        return { dx: now.x - was.x, dy: now.y - was.y };
+      };
+      // Each grid moves the same: the second is the first, 4000 px along.
+      for (const cell of cells) expect(moved(q(cell)), cell).toEqual(moved(s(cell)));
+    });
+
+    it.runIf(loose)('pushes the plain B2 layout: column C right, row 3 down, the rest where they were', () => {
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+      const nodes = withTiles([], [], grid(), [], new Map(), expanded);
+      const moved = shifts(displaced(nodes, expanded), nodes);
+      const grew = { x: 640 - AGENT_TILE_SIZE.width, y: 380 - AGENT_TILE_SIZE.height };
+      for (const cell of cells) expect(moved[cell], cell).toEqual({ dx: cell === 'C1' || cell === 'C2' ? grew.x : 0, dy: cell[1] === '3' ? grew.y : 0 });
+    });
+
+    it.runIf(loose)('leaves a stray tile far from the grid alone', () => {
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+      const nodes = withTiles([], [], [...grid(), shell('far', null, at(origin.x + 2 * step.x + 900, origin.y + step.y))], [], new Map(), expanded);
+      const shown = displaced(nodes, expanded);
+      expect(shown.find((node) => node.id === s('far'))).toBe(nodes.find((node) => node.id === s('far')));
+      expect(shown.find((node) => node.id === s('C2'))!.position.x).toBeGreaterThan(place('C2').x);
+    });
+
+    it.runIf(loose)('does not push a note or a zone near the grid with its rows: only tiles form the grid', () => {
+      const expanded = resizeExpanded(expandTile([], s('B2')), s('B2'), { width: 640, height: 380 });
+      // Beside A3, within a tile gap or two: in row 3's block, it would go down with it.
+      const left = { x: origin.x - TILE_GAP - 200, y: origin.y + 2 * step.y };
+      const note = { id: 'note', kind: 'sticky', zoneId: null, ...left, width: 200, height: 200, z: 0, rotation: 0, data: {}, createdAt: '', updatedAt: '' } as BoardItem;
+      const beside = zone('beside', left.x, left.y + 300, 200, 200);
+      const nodes = withTiles([itemNode(note), beside], [], grid(), [], new Map(), expanded);
+      const shown = displaced(nodes, expanded);
+      expect(shown.find((node) => node.id === itemNode(note).id)).toBe(nodes.find((node) => node.id === itemNode(note).id));
+      expect(shown.find((node) => node.id === 'beside')).toBe(nodes.find((node) => node.id === 'beside'));
+    });
   });
 
   it('rearranges first: a zone with room for its tiles beside the expanded one does not grow', () => {

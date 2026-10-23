@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { neighbourOf, paneIds } from '@agent-board/daemon/pane-layout';
-import { INTERRUPT_KEY, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
-import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen, RotateCw } from 'lucide-react';
+import { INTERRUPT_KEY, roleLabel, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
+import type { Surface } from '@agent-board/daemon/window-layout';
+import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen, RotateCw, X } from 'lucide-react';
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
 import { agentSetupLine, branchLine } from '../board/AgentSetup';
 import { useNow } from '../inbox/use-now';
+import { shortWhen } from '../when';
 import { errorMessage } from '../../../shared/errors';
 import { keyText } from '../keys/registry';
 import { STATE_LABELS } from '../states';
-import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
+import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill, useToast } from '../ui';
 import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
 import { useGateRun } from '../gate/GatesProvider';
 import { gated } from '../gate/gate-view';
 import { requestTab } from './tab-request';
-import { gateSurfaceOf } from './tabs';
+import { docName, docSurfaceOf, gateSurfaceOf } from './tabs';
+import { crewSection, docSection, pullRequestSection, sectionCount, subagentSection, type SidebarRow, type SidebarSection } from './sidebar-records';
+import { useLiveAgents } from './use-live-board';
+import { recordDeleter, type RecordDeleter } from './record-deletes';
 import { runGateShortcut } from './window-keys';
 import { useAction } from '../use-action';
 import { sessionControls, type Control, type ControlId } from './controls';
@@ -45,16 +50,18 @@ export interface SessionDetailsProps {
   /** Opens a link in the OS browser: an issue, or a pull request with no PR tab to open. */
   onOpenLink(url: string): void;
   /** Opens one of the agent's pull requests in a PR tab. */
-  onOpenPullRequest?(pr: PullRequest): void;
+  onOpenPullRequest?(pr: Pick<PullRequest, 'url'>): void;
+  /** Shows a surface as a tab of the window: a hand-off doc, or an agent of its crew. */
+  onOpenSurface?(surface: Surface): void;
 }
 
 /**
  * The session window's details, on its LEFT (V and W): a strip of sections (controls, a shell's panes, the agent's
- * issue, worktree, pull requests, subagents and schedule) in the board menu's section style, or the
+ * issue, worktree, pull requests, crew, hand-off docs, subagents and schedule) in the board menu's section style, or the
  * same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
  */
 export function SessionDetails(props: SessionDetailsProps) {
-  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest } = props;
+  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest, onOpenSurface } = props;
   // In an agent's window, the agent's own pane, unless a shell pane in one of its tabs has the keyboard.
   const agentFocused = agent !== undefined && (focusedPane === undefined || focusedPane === agent.sessionId);
   const width = useDetailsWidth();
@@ -117,6 +124,8 @@ export function SessionDetails(props: SessionDetailsProps) {
             {fact('worktree', 'Worktree and branch')}
             {fact('pulls', pullsLabel(agent))}
             {gated(agent) && fact('gate', 'Merge gate')}
+            {fact('crew', 'Crew')}
+            {fact('docs', 'Hand-off docs')}
             {fact('subagents', subagentsLabel(agent))}
             {fact('schedule', 'Schedule')}
           </>
@@ -176,7 +185,16 @@ export function SessionDetails(props: SessionDetailsProps) {
             onProblem={onProblem}
           />
         )}
-        {agent && <AgentSections agent={agent} sectionProps={sectionProps} onOpenLink={onOpenLink} onOpenPullRequest={onOpenPullRequest ?? ((pr) => onOpenLink(pr.url))} />}
+        {agent && (
+          <AgentSections
+            agent={agent}
+            sectionProps={sectionProps}
+            onOpenLink={onOpenLink}
+            onOpenPullRequest={onOpenPullRequest ?? ((pr) => onOpenLink(pr.url))}
+            onOpenSurface={onOpenSurface}
+            onProblem={onProblem}
+          />
+        )}
         {external && <ExternalSections session={external} sectionProps={sectionProps} />}
       </div>
     </aside>
@@ -236,9 +254,9 @@ function LiveFolder({
             <IconButton
               icon={<FolderOpen />}
               size="sm"
-              aria-label="Open folder in Finder"
-              tooltip="Open in Finder"
-              onClick={() => void window.agentBoard.sessions.openFolder(folder).catch((error: unknown) => onProblem(`could not open the folder: ${errorMessage(error)}`))}
+              aria-label="Reveal folder in Finder"
+              tooltip="Reveal in Finder"
+              onClick={() => void window.agentBoard.sessions.revealFolder(folder).catch((error: unknown) => onProblem(`could not reveal the folder: ${errorMessage(error)}`))}
             />
           </div>
         </>
@@ -252,16 +270,25 @@ function AgentSections({
   sectionProps,
   onOpenLink,
   onOpenPullRequest,
+  onOpenSurface,
+  onProblem,
 }: {
   agent: Agent;
   sectionProps(id: SectionId): { open?: boolean; onOpenChange?(open: boolean): void };
   onOpenLink(url: string): void;
-  onOpenPullRequest(pr: PullRequest): void;
+  onOpenPullRequest(pr: Pick<PullRequest, 'url'>): void;
+  onOpenSurface: ((surface: Surface) => void) | undefined;
+  onProblem(problem: string | undefined): void;
 }) {
-  const { issue, pullRequests, subagents, schedule } = agent;
+  const { issue, schedule } = agent;
   const now = useNow(schedule !== null);
   const badge = schedule && clockBadge(schedule, agent.endedAt !== null, new Date(now));
-  const active = subagents.filter((subagent) => subagent.state !== 'done' && subagent.state !== 'failed').length;
+  const { agents } = useLiveAgents();
+  const records = useRecordDeletes(agent.sessionId, onProblem);
+  const pulls = pullRequestSection(agent, records.fading);
+  const crew = crewSection(agent, agents ?? [], records.fading);
+  const docs = docSection(agent, records.fading);
+  const subagents = subagentSection(agent);
   return (
     <>
       <Section label="Issue" icon={<SectionIcon id="issue" />} meta={issue === null ? 'None' : TRACKER_PROVIDERS[issue.provider].name} {...sectionProps('issue')}>
@@ -294,50 +321,69 @@ function AgentSections({
           {agent.worktree}
         </p>
       </Section>
-      <Section label="PR and checks" icon={<SectionIcon id="pulls" />} meta={pullRequests.length === 0 ? 'None' : String(pullRequests.length)} {...sectionProps('pulls')}>
-        {pullRequests.length === 0 ? (
-          <Hint>No pull request from its branch yet.</Hint>
-        ) : (
-          <ul className="details-list">
-            {pullRequests.map((pr) => (
-              <li key={pr.number}>
-                <PanelRow
-                  as="button"
-                  title="Open it in a PR tab"
-                  onClick={() => onOpenPullRequest(pr)}
-                  mark={<SectionIcon id="pulls" className="details-row-icon" />}
-                  name={`#${pr.number} ${pr.title}`}
-                  meta={`${pr.state} · ${checksLabel(pr)}`}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
+      <Section label="PR and checks" icon={<SectionIcon id="pulls" />} meta={sectionCount(pulls.rows)} {...sectionProps('pulls')}>
+        <RecordList
+          section={pulls}
+          empty="No pull request from it yet."
+          records={records}
+          what={(row) => `#${row.item.number}`}
+          row={(each) => ({
+            name: `#${each.item.number}${each.item.title === null ? '' : ` ${each.item.title}`}`,
+            meta: [each.item.pr && `${each.item.pr.state} · ${checksLabel(each.item.pr)}`, recordedWhen(each)].filter(Boolean).join(' · '),
+            mark: <SectionIcon id="pulls" className="details-row-icon" />,
+            title: 'Open it in a PR tab',
+            onClick: () => onOpenPullRequest(each.item),
+          })}
+        />
       </Section>
       {gated(agent) && <GateSection agent={agent} sectionProps={sectionProps} />}
-      <Section
-        label="Subagents"
-        icon={<SectionIcon id="subagents" />}
-        meta={subagents.length === 0 ? 'None' : `${active} active · ${subagents.length - active} done`}
-        {...sectionProps('subagents')}
-      >
-        {subagents.length === 0 ? (
-          <Hint>None</Hint>
-        ) : (
-          <ul className="details-list">
-            {subagents.map((subagent) => (
-              <PanelRow
-                key={subagent.id}
-                as="li"
-                data-testid="session-subagent"
-                title={subagent.result ?? undefined}
-                mark={<SectionIcon id="subagents" className="details-row-icon" />}
-                name={subagent.type}
-                end={<StatusPill state={subagent.state} label={STATE_LABELS[subagent.state]} />}
-              />
-            ))}
-          </ul>
-        )}
+      <Section label="Crew" icon={<SectionIcon id="crew" />} meta={sectionCount(crew.rows)} {...sectionProps('crew')}>
+        <RecordList
+          section={crew}
+          empty="It hasn’t started any agents."
+          records={records}
+          what={(row) => row.item.name}
+          row={({ item }) => ({
+            name: item.name,
+            meta: [roleLabel(item), item.endedAt === null ? STATE_LABELS[item.state].toLowerCase() : 'done'].filter(Boolean).join(' · '),
+            mark: <SectionIcon id="crew" className="details-row-icon" />,
+            end: <StatusPill state={item.endedAt === null ? item.state : 'done'} />,
+            title: 'Show it in a tab here',
+            onClick: onOpenSurface && (() => onOpenSurface({ kind: 'session', target: { kind: 'agent', id: item.sessionId } })),
+          })}
+        />
+      </Section>
+      <Section label="Hand-off docs" icon={<SectionIcon id="docs" />} meta={sectionCount(docs.rows)} {...sectionProps('docs')}>
+        <RecordList
+          section={docs}
+          empty="No hand-off docs yet."
+          records={records}
+          what={(row) => docName(row.item.path)}
+          row={(each) => ({
+            name: docName(each.item.path),
+            meta: [each.item.from === null ? 'its own' : `from ${each.item.from.name}, for this orchestrator`, recordedWhen(each)].filter(Boolean).join(' · '),
+            guess: 'its worktree’s handover',
+            mark: <SectionIcon id="docs" className="details-row-icon" />,
+            title: `${each.item.path}: opens in a Doc tab`,
+            onClick: onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, each.item.path))),
+          })}
+        />
+      </Section>
+      <Section label="Subagents" icon={<SectionIcon id="subagents" />} meta={sectionCount(subagents.rows)} {...sectionProps('subagents')}>
+        <RecordList
+          section={subagents}
+          empty="None"
+          records={records}
+          what={(row) => row.item.type}
+          row={({ item }) => ({
+            name: item.type,
+            guess: 'from hooks',
+            mark: <SectionIcon id="subagents" className="details-row-icon" />,
+            end: <StatusPill state={item.state} label={STATE_LABELS[item.state]} />,
+            title: item.result ?? undefined,
+            testId: 'session-subagent',
+          })}
+        />
       </Section>
       <Section label="Schedule" icon={<SectionIcon id="schedule" />} meta={badge === null ? 'None' : badge.label} defaultOpen={false} {...sectionProps('schedule')}>
         {schedule === null ? (
@@ -349,6 +395,128 @@ function AgentSections({
           </>
         )}
       </Section>
+    </>
+  );
+}
+
+/** When a recorded row was recorded, as its meta ends: `recorded 10:12`; nothing for a guess. */
+const recordedWhen = (row: SidebarRow<unknown>): string | undefined => (row.source === 'recorded' ? `recorded ${shortWhen(row.record.recordedAt)}` : undefined);
+
+/** How long a deleted record's row stays, fading out struck through, while its Undo is up. */
+const FADE_MS = 5000;
+
+interface RecordDeletes extends RecordDeleter {
+  /** The records just deleted, still shown as gone. */
+  fading: ReadonlySet<string>;
+}
+
+/** Deleting the agent's records from its sidebar, each with Undo in a toast, and bringing them back. */
+function useRecordDeletes(sessionId: string, onProblem: (problem: string | undefined) => void): RecordDeletes {
+  const toasts = useToast();
+  const [fading, setFading] = useState<ReadonlySet<string>>(new Set());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach((timer) => clearTimeout(timer));
+  }, []);
+  const unfade = (key: string) => {
+    clearTimeout(timers.current.get(key));
+    timers.current.delete(key);
+    setFading((current) => new Set([...current].filter((each) => each !== key)));
+  };
+  const deleter = recordDeleter({
+    set: (record, deleted) =>
+      window.agentBoard.agents.setRecordDeleted(sessionId, record.kind, record.key, deleted).then(
+        () => {},
+        (error: unknown) => onProblem(`could not ${deleted ? 'delete' : 'bring back'} the record: ${errorMessage(error)}`),
+      ),
+    toast: (options) => void toasts.show(options),
+    fade(key) {
+      setFading((current) => new Set([...current, key]));
+      clearTimeout(timers.current.get(key));
+      timers.current.set(key, setTimeout(() => unfade(key), FADE_MS));
+    },
+    unfade,
+  });
+  return { fading, ...deleter };
+}
+
+/** What a row of a section shows: drawn as a recorded or a guessed row by `RecordList`. */
+interface RecordRowView {
+  name: ReactNode;
+  meta?: ReactNode;
+  /** What a guessed row says after its "guessed" tag, in place of `meta`: what it was guessed from. */
+  guess?: string;
+  mark: ReactNode;
+  end?: ReactNode;
+  title?: string;
+  onClick?: (() => void) | undefined;
+  testId?: string;
+}
+
+/**
+ * A section's rows: a recorded row with a solid rule and a × on hover that deletes it (with Undo), a guessed one with a
+ * dotted rule, lighter, tagged "guessed", and no ×. Under them, what deleted records hide, and Show to bring them back.
+ */
+function RecordList<T>({
+  section,
+  empty,
+  records,
+  what,
+  row,
+}: {
+  section: SidebarSection<T>;
+  empty: string;
+  records: RecordDeletes;
+  what(row: SidebarRow<T>): string;
+  row(row: SidebarRow<T>): RecordRowView;
+}) {
+  const { rows, hidden } = section;
+  return (
+    <>
+      {rows.length === 0 ? (
+        <Hint>{empty}</Hint>
+      ) : (
+        <ul className="details-list">
+          {rows.map((each) => {
+            const view = row(each);
+            const gone = each.source === 'recorded' && each.gone === true;
+            const meta = each.source === 'guessed' ? <><em className="details-guessed">guessed</em> {view.guess ?? view.meta}</> : gone ? 'deleted' : view.meta;
+            return (
+              <li key={each.key} className="details-record" data-source={each.source} data-gone={gone || undefined} data-testid={view.testId ?? 'details-record'}>
+                <PanelRow
+                  as={view.onClick && !gone ? 'button' : 'div'}
+                  title={view.title}
+                  onClick={gone ? undefined : view.onClick}
+                  mark={view.mark}
+                  name={view.name}
+                  meta={meta}
+                  end={view.end}
+                />
+                {each.source === 'recorded' && !gone && (
+                  <IconButton
+                    className="details-record-delete"
+                    icon={<X />}
+                    size="sm"
+                    variant="danger"
+                    aria-label="Delete record"
+                    tooltip="Delete record"
+                    onClick={() => records.remove(each.record, what(each))}
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {hidden.length > 0 && (
+        <p className="details-hidden" data-testid="details-hidden">
+          {hidden.length} hidden ·{' '}
+          <button type="button" className="details-hidden-show" title="Bring back what was deleted here" onClick={() => records.restore(hidden)}>
+            Show
+          </button>
+        </p>
+      )}
     </>
   );
 }
@@ -455,7 +623,7 @@ function ControlButton({ control, busy, onClick }: { control: Control; busy: boo
   return (
     <Button
       size="sm"
-      variant={control.id === 'stop' ? 'danger' : 'secondary'}
+      variant={control.id === 'stop' ? 'danger' : control.id === 'wake' ? 'primary' : 'secondary'}
       className="session-control"
       icon={CONTROL_ICONS[control.id]}
       disabled={!control.enabled || busy}
@@ -495,6 +663,10 @@ function actionFor(id: ControlId, sessionId: string, agent: Agent | undefined): 
   switch (id) {
     case 'interrupt':
       return failing('interrupt', agent ? () => agents.interrupt(sessionId) : async () => sessions.write(sessionId, INTERRUPT_KEY));
+    case 'pause':
+      return failing('pause', () => agents.pause(sessionId));
+    case 'wake':
+      return failing('wake', () => agents.resume(sessionId));
     case 'stop':
       return failing('stop', agent ? () => agents.stop(sessionId) : () => sessions.kill(sessionId));
   }

@@ -233,6 +233,16 @@ export interface GitHubRepoSource {
   onBoard: boolean;
 }
 
+/** What a repo's own checkout is on, and whether it holds uncommitted changes. */
+export interface CheckoutState {
+  /** The branch checked out, or null on a detached HEAD. */
+  branch: string | null;
+  /** The repo's default branch, or null when it can't be told. */
+  defaultBranch: string | null;
+  /** Whether the checkout has uncommitted changes, untracked files included. */
+  dirty: boolean;
+}
+
 /** A folder the user picked, once the daemon has looked at it. */
 export interface CheckedFolder {
   /** The folder, resolved: a repo's root, or a folder inside it. */
@@ -379,9 +389,9 @@ export interface ZoneLayout {
 
 /**
  * The kinds of board item. Each is drawn by its own node type on the board. An `agent-note` is a note an agent wrote
- * never one of the user's stickies.
+ * never one of the user's stickies. A `clock` is a schedule (`ClockData`).
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -449,6 +459,8 @@ export interface StickyData {
 
 /** A new agent note's width, and the least height it starts at. */
 export const AGENT_NOTE_SIZE = { width: 272, height: 120 };
+/** The tallest an agent note grows to show its text: past it, it scrolls. The user can resize it taller. */
+export const MAX_AGENT_NOTE_HEIGHT = 480;
 
 /** The agent that wrote an agent note, as it was then: the note still says who wrote it once its tile has gone. */
 export interface AgentNoteAuthor {
@@ -558,6 +570,12 @@ export interface BoardPlace {
   zoneId: string | null;
   x: number;
   y: number;
+}
+
+/** `master.start`'s: the harness (`claude` by default) and model (`opus` for Claude by default) of a new master. */
+export interface StartMasterParams extends TerminalSize {
+  harness?: Harness;
+  model?: string;
 }
 
 /**
@@ -745,6 +763,7 @@ export const SHAPE_TYPES = [
   'container',
   'note',
   'class',
+  'interface-box',
   'component',
   'package',
   'interface',
@@ -792,10 +811,26 @@ export interface ShapeData {
   dashed: boolean;
   text: string;
   textSize: TextSize;
+  /** The font size in px, or null for the one `textSize` stands for. */
+  fontSize: number | null;
   bold: boolean;
+  /** Which side the text lines up to. */
+  align: TextAlign;
+  /** Set in the mono font, for code. */
+  mono: boolean;
+  /**
+   * A class's (or a box interface's) sections under its name, which is `text`, each divided from the one above by a
+   * rule. Empty for a kind of shape without them.
+   */
+  attributes: string;
+  methods: string;
   /** `#rrggbb`. */
   textColor: string;
 }
+
+/** The sections a shape may have under its text, as keys of its data, in the order they are drawn. */
+export const SHAPE_SECTIONS = ['attributes', 'methods'] as const;
+export type ShapeSection = (typeof SHAPE_SECTIONS)[number];
 
 /**
  * A new board item. Its `z` is above every other item's. A client may pick its `id` (letters, digits and `-`, at most
@@ -828,9 +863,13 @@ export const CONNECTOR_SIDES = ['top', 'right', 'bottom', 'left'] as const;
 export type ConnectorSide = (typeof CONNECTOR_SIDES)[number];
 export const CONNECTOR_STYLES = ['straight', 'elbow', 'curved'] as const;
 export type ConnectorStyle = (typeof CONNECTOR_STYLES)[number];
-export const CONNECTOR_LINE_ENDS = ['none', 'arrow', 'dot'] as const;
+/**
+ * What a line can end in: nothing, an open arrow, a dot, or one of a class diagram's ends (a hollow triangle, a hollow
+ * diamond, a filled diamond).
+ */
+export const CONNECTOR_LINE_ENDS = ['none', 'arrow', 'dot', 'triangle', 'diamond', 'filled-diamond'] as const;
 export type ConnectorLineEnd = (typeof CONNECTOR_LINE_ENDS)[number];
-/** The most characters a connector's label may have. */
+/** The most characters a connector's label, or a label at one of its ends, may have. */
 export const MAX_CONNECTOR_LABEL = 500;
 
 /**
@@ -869,40 +908,44 @@ export interface Connector {
   /** What the line ends in at `from`, and at `to`. */
   startEnd: ConnectorLineEnd;
   endEnd: ConnectorLineEnd;
+  /** Whether the line is drawn dashed; its ends stay solid. */
+  dashed: boolean;
   /** `#rrggbb`, or null for the theme's neutral line. */
   color: string | null;
   /** The text on the middle of the line; empty for none. */
   label: string;
+  /** The text by the line's `from` end, and by its `to` end, such as a multiplicity (`0..*`) or a role; empty for none. */
+  startLabel: string;
+  endLabel: string;
   /** The bends its line passes through, from `from` to `to`; none for the style's own path between its ends. */
   points: EdgePoint[];
   createdAt: string;
   updatedAt: string;
 }
 
-/** What a connector is drawn as when made without a say in its look: a curved line, an arrow at `to`, the theme's neutral. */
+/** The fields of a connector that are its look and its labels: what a client can give it beyond its ends and bends. */
+export type ConnectorLook = Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'dashed' | 'color' | 'label' | 'startLabel' | 'endLabel'>;
+
+/**
+ * What a connector is drawn as when made without a say in its look: a solid curved line, an arrow at `to`, the theme's
+ * neutral, and no labels.
+ */
 export const DEFAULT_CONNECTOR_LOOK = {
   style: 'curved',
   startEnd: 'none',
   endEnd: 'arrow',
+  dashed: false,
   color: null,
   label: '',
-} as const satisfies Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label'>;
+  startLabel: '',
+  endLabel: '',
+} as const satisfies ConnectorLook;
 
 /**
  * A new connector. A client may pick its `id` (letters, digits and `-`, at most 64), so it can show the connector before
  * the daemon answers. What is left out is the default: a curved line with an arrow at `to`, in the theme's neutral.
  */
-export interface CreateConnectorParams {
-  id?: string;
-  from: ConnectorEnd;
-  to: ConnectorEnd;
-  style?: ConnectorStyle;
-  startEnd?: ConnectorLineEnd;
-  endEnd?: ConnectorLineEnd;
-  color?: string | null;
-  label?: string;
-  points?: EdgePoint[];
-}
+export type CreateConnectorParams = { id?: string; from: ConnectorEnd; to: ConnectorEnd; points?: EdgePoint[] } & Partial<ConnectorLook>;
 
 /**
  * A change to a connector's look, label or shape: only the fields given change. Either end can move to another side
@@ -910,7 +953,7 @@ export interface CreateConnectorParams {
  * given with it overrides.
  */
 export type UpdateConnectorParams = { id: string } & Partial<
-  Pick<Connector, 'style' | 'startEnd' | 'endEnd' | 'color' | 'label' | 'points' | 'from' | 'to'> & { fromSide: ConnectorSide; toSide: ConnectorSide }
+  ConnectorLook & Pick<Connector, 'points' | 'from' | 'to'> & { fromSide: ConnectorSide; toSide: ConnectorSide }
 >;
 
 /**
@@ -1174,6 +1217,12 @@ export interface DaemonSettings {
    * default) passes nothing, leaving Claude Code's own choice. Codex has no equivalent.
    */
   compactWindow: number;
+  /** What the needs-you inbox lists: explicit requests only (the default), or every finished turn too. */
+  needsYouShows: NeedsYouShows;
+  /** Whether the app raises an OS notification for each new request in the needs-you inbox. On by default. */
+  notifications: boolean;
+  /** Whether it does so while the app is in front, too. Off by default: only the pill changes then. */
+  notifyInFront: boolean;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1289,10 +1338,32 @@ export type SessionState = (typeof SESSION_STATES)[number];
  * An agent with an enabled schedule is never `stopped-by-restart`: its schedule relaunches it. `handing-off` is a
  * live agent delivering its payload along its flow edges, whatever its hooks say, until every delivery has landed.
  * `starting` is a live agent started with a first prompt whose session has sent no hook yet: its turn has not begun, so
- * it is neither `idle` (it would take a message) nor mid-turn.
+ * it is neither `idle` (it would take a message) nor mid-turn. `on-command` is a live agent at its prompt, asking
+ * nothing, while a command it left running in the background still runs (`Agent.commands`): its work goes on, so it
+ * neither looks finished nor waits for you. `hibernated` is an ended agent someone paused (`Agent.hibernated`) to free
+ * what its harness held, until it is woken: by `agent.resume`, a message, a hand-off or a scheduled run, each of which
+ * carries on its conversation. It wins over `scheduled` and `stopped-by-restart`.
  */
-export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off', 'starting'] as const;
+export const AGENT_STATES = [...SESSION_STATES, 'scheduled', 'stopped-by-restart', 'handing-off', 'starting', 'on-command', 'hibernated'] as const;
 export type AgentState = (typeof AGENT_STATES)[number];
+
+/** The states a live agent may be paused in: between turns, at its prompt. */
+const PAUSABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'failed', 'scheduled']);
+
+/**
+ * Why the agent can't be paused (hibernated) now, or undefined if it can: only a live agent between turns, asking the
+ * user nothing, pauses. The daemon checks its prompt too (the user typing there, a message never sent).
+ */
+export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'plan' | 'permissions'>): string | undefined {
+  if (agent.state === 'hibernated') return 'it is already paused';
+  if (agent.endedAt !== null) return 'it has ended';
+  if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent)) return 'it is waiting on you';
+  if (agent.state === 'rate-limited') return 'it is rate-limited';
+  // A pause would end the command with its session.
+  if (agent.state === 'on-command') return 'a command it left running still runs';
+  if (!PAUSABLE_STATES.has(agent.state)) return 'it is mid-turn: finish its turn first';
+  return undefined;
+}
 
 /** States an agent is mid-turn in, which `agent.interrupt` accepts; as does an agent waiting on the user mid-call (`isMidTurn`). */
 export const INTERRUPTIBLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission']);
@@ -1303,16 +1374,54 @@ export function isMidTurn(agent: Pick<Agent, 'state' | 'ask' | 'plan'>): boolean
 }
 
 /**
- * Whether an agent waits for the user: live, and waiting for input or needing permission, or with any permission
- * prompt pending. The app's needs-you inbox holds these, and the daemon's start banner counts them.
+ * Whether the agent can continue on credits now (`agent.continueOnCredits`): a live Claude agent its usage limit stopped,
+ * Claude's rate-limit screen up. Never offered otherwise, and never done by itself.
  */
-export function waitsForYou(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions'>): boolean {
-  return agent.endedAt === null && (agent.state === 'waiting' || agent.state === 'needs-permission' || agent.permissions.length > 0);
+export function continuesOnCredits(agent: Pick<Agent, 'harness' | 'state' | 'endedAt'>): boolean {
+  return agent.harness === 'claude' && agent.state === 'rate-limited' && agent.endedAt === null;
 }
 
-/** Whether an agent that waits for the user has not been seen since it began asking: it still counts, and shows needs-you. */
-export function needsYouNow(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'seen'>): boolean {
-  return !agent.seen && waitsForYou(agent);
+/**
+ * What reaches the needs-you inbox (`DaemonSettings.needsYouShows`): `explicit`, only what an agent asks for (a
+ * permission prompt, a question or plan, or a flag); `turns` also every agent waiting at its prompt, its turn ended.
+ */
+export const NEEDS_YOU_SHOWS = ['explicit', 'turns'] as const;
+export type NeedsYouShows = (typeof NEEDS_YOU_SHOWS)[number];
+
+/**
+ * Why an agent is in the needs-you inbox, the first that holds: a permission prompt, a question, a plan to review, a
+ * flag to the user (`Agent.flag`), or (with `turns`) its turn ended at its prompt.
+ */
+export type NeedsYouKind = 'permission' | 'asks' | 'plan' | 'flagged' | 'turn';
+
+/** The agent fields the needs-you rule reads. */
+export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'flag'>;
+
+/** Why the live agent is in the needs-you inbox under `shows`, or null if it isn't. */
+export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsYouKind | null {
+  if (agent.endedAt !== null) return null;
+  if (agent.state === 'needs-permission' || agent.permissions.length > 0) return 'permission';
+  if (agent.ask !== null) return 'asks';
+  if (planPending(agent)) return 'plan';
+  if (agent.flag?.to === 'user') return 'flagged';
+  return shows === 'turns' && agent.state === 'waiting' ? 'turn' : null;
+}
+
+/**
+ * Whether an agent waits for the user (`needsYouKind`): the app's needs-you inbox holds these, and the daemon's start
+ * banner counts them. A crew member's flag goes to its orchestrator, so never counts here.
+ */
+export function waitsForYou(agent: NeedsYouFacts, shows: NeedsYouShows): boolean {
+  return needsYouKind(agent, shows) !== null;
+}
+
+/**
+ * Whether an agent that waits for the user still needs them now: it has not been seen since it began asking, or it
+ * flags them (opening its session clears a flag, so one still standing is unread). It counts, and shows needs-you.
+ */
+export function needsYouNow(agent: NeedsYouFacts & Pick<Agent, 'seen'>, shows: NeedsYouShows): boolean {
+  if (agent.endedAt === null && agent.flag?.to === 'user') return true;
+  return needsYouKind(agent, shows) !== null && !agent.seen;
 }
 
 /**
@@ -1375,6 +1484,12 @@ export interface Agent {
   state: AgentState;
   /** What the user should know about how it ran, e.g. why agent-board stopped it; null when there is nothing. */
   notice: string | null;
+  /**
+   * When it was paused (`agent.pause`, `orchestrator.pause`) and by whom: the orchestrator's name as it is now and its
+   * session id, or both null for the user. Set while it is `hibernated`; null once it wakes or is closed, and for an
+   * agent never paused.
+   */
+  hibernated: { at: string; by: string | null; byId: string | null } | null;
   /** The conversations it had before a fresh restart started a new one in its tile, oldest first; their transcripts stay on disk. */
   earlierConversations: EarlierConversation[];
   /** The tracker issue it works on, or null. */
@@ -1409,6 +1524,8 @@ export interface Agent {
    * its tile alone: they are not its own, so nothing merges, gates or cleans them up from it.
    */
   pushedPullRequests: PullRequest[];
+  /** The pull requests it recorded (`records`) that are neither of those, as gh last saw them: for its sidebar alone. */
+  recordedPullRequests: PullRequest[];
   createdAt: string;
   /** Set once its process has ended. */
   endedAt: string | null;
@@ -1423,6 +1540,11 @@ export interface Agent {
   shellHarness: Harness | null;
   /** The subagents it has spawned that are still running, or finished a moment ago; oldest first. */
   subagents: Subagent[];
+  /**
+   * The commands it left running in the background that still run, longest-running first, while it is `on-command`;
+   * empty otherwise.
+   */
+  commands: BackgroundCommand[];
   /**
    * What it last said to the user, the context for answering it: its final message from the turn it last finished
    * (`Stop`), or the message of a mid-turn request for input. Null before then, and from each new prompt until then.
@@ -1448,6 +1570,8 @@ export interface Agent {
    * still to make, it waits on it and is `waiting`. Null before its first; `plan.list` has them all, with their bodies.
    */
   plan: PlanSummary | null;
+  /** The documents it has shown the user (`board.showDoc`), first shown first. */
+  docs: DocumentSummary[];
   /** Its cron schedule, which makes it a long-lived agent; null for none. */
   schedule: AgentSchedule | null;
   /** For a reviewer, the agent whose work it reviews, its implementer; null for any other agent. */
@@ -1459,6 +1583,8 @@ export interface Agent {
    * in its own folder (`external.resume`): deleting it only takes it off the board.
    */
   ownsWorktree: boolean;
+  /** Whether it is the board master (ADR-0019): the one agent the user asks for work, at most one per board. */
+  master: boolean;
   /**
    * Whether it may start, message and watch other agents through the board CLI and MCP, and where: its scope,
    * or null while it may not. Only the user sets it (`agent.setOrchestrate`); an agent an orchestrator starts never has it.
@@ -1466,7 +1592,112 @@ export interface Agent {
   orchestrate: OrchestrateScope | null;
   /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is deleted). */
   spawnedBy: string | null;
+  /** What it flagged for attention (`board.needsYou`) and hasn't cleared; null for none. */
+  flag: AgentFlag | null;
+  /**
+   * What it recorded about its own work (`board.record`), for its sidebar: the pull requests it opened, its hand-off
+   * docs (and those its crew recorded for it), and the agents it started; oldest first. Deleted ones stay, with
+   * `deletedAt`, so what gh or hooks guess of the same entry stays hidden too.
+   */
+  records: AgentRecord[];
+  /** Its worktree's `.agent-board/handover.md`, absolute, while that file is there: a hand-off doc guessed, not recorded; else null. */
+  guessedDoc: string | null;
+  /**
+   * What was typed at its prompt and never sent, or null: a hand-off, a scheduled run or a message the board typed
+   * there, whose Enter, pressed again, started no turn (`Hand-off from impl`). Nothing more is typed at it until it is
+   * sent (`agent.sendUnsent`) or cleared (`agent.clearUnsent`), a hook of its turn says it was taken, Enter, Ctrl-C or
+   * Ctrl-U is typed in its terminal, or its session ends.
+   */
+  unsent: string | null;
+  /**
+   * Its harness starting: while it is `starting`, and kept once it ended before its session's first hook (it never
+   * came up). Null otherwise.
+   */
+  startup: AgentStartup | null;
 }
+
+/** An agent's harness starting, as its tile shows it (`Agent.startup`). */
+export interface AgentStartup {
+  /** The last line its terminal showed, or null before it showed any. */
+  output: string | null;
+  /** It ended before its session's first hook: its start failed, and Restart retries it in the same worktree. */
+  failed: boolean;
+}
+
+/** What starting an agent does before its session runs, in order (`AgentStart`). */
+export const START_STEP_KINDS = ['issue', 'worktree', 'launch'] as const;
+export type StartStepKind = (typeof START_STEP_KINDS)[number];
+
+/** One step of starting an agent: done, under way, or what it failed at. */
+export interface StartStep {
+  kind: StartStepKind;
+  state: 'done' | 'now' | 'failed';
+  /** What it made, once done: the issue's short id, or the new worktree's branch (its folder, with no branch). */
+  detail: string | null;
+}
+
+/**
+ * An agent being started, before it is an agent (`agent.starts`): its tile is on the board from the moment it is asked
+ * for, showing each step as it happens, and turns into the agent's own, under the same session id, once its session
+ * runs. One that failed stays with its error, for Retry (`agent.retryStart`) or Delete (`agent.dismissStart`); what
+ * it made before it failed is undone. Kept in the daemon's memory only.
+ */
+export interface AgentStart {
+  /** The session id its agent will have. */
+  sessionId: string;
+  zoneId: string | null;
+  /** Where its tile was put, relative to its zone; null to be laid out there. */
+  position: { x: number; y: number } | null;
+  name: string;
+  harness: Harness;
+  model: string | null;
+  /** The orchestrator starting it, whose crew its tile sits in; null for the user's. */
+  spawnedBy: string | null;
+  steps: StartStep[];
+  /** Why it failed, or null while it is still going. */
+  error: string | null;
+  /**
+   * The error is the warning a Codex agent's worktree has Codex config of its own (`AGENT_ERROR.projectCodexConfig`):
+   * a retry must confirm it (`allowProjectCodexConfig`).
+   */
+  confirm: boolean;
+}
+
+/**
+ * An agent's "please look" (`board.needsYou`): no question, nothing held. It goes to the agent's orchestrator while
+ * that one is live, else to the user, in the needs-you inbox. The agent clears it, or the user by opening its session;
+ * its orchestrator by sending it a message. Its session ending clears it. Kept in memory only.
+ */
+export interface AgentFlag {
+  /** Names this flag: a new one, even with the same reason, has a new id. */
+  id: number;
+  /** Why, in the agent's words: one line, at most `MAX_FLAG_LENGTH`. */
+  reason: string;
+  at: string;
+  /** Who it reaches: the user, or the live orchestrator that started the agent. */
+  to: 'user' | 'orchestrator';
+  /** For an orchestrator's flag, the crew member it passes on, by name; else null. */
+  via: string | null;
+}
+
+/** Longest reason a flag takes. */
+export const MAX_FLAG_LENGTH = 300;
+
+/**
+ * What `board.ask` and `board.presentPlan` answer a crew member whose orchestrator is live: its question or plan went to
+ * that orchestrator as its flag, and nothing waits. The orchestrator answers with its next message.
+ */
+export interface SentToOrchestrator {
+  sentTo: 'orchestrator';
+  /** The orchestrator's name. */
+  name: string;
+}
+
+/** Where in its worktree a crew member's question too long for a flag is written in full, with its options, for its orchestrator to read. */
+export const CREW_QUESTION_PATH = '.agent-board/question-for-review.md';
+
+/** Where in its worktree a crew member's plan is written for its orchestrator to read, by format. */
+export const CREW_PLAN_PATH: Record<PlanFormat, string> = { markdown: '.agent-board/plan-for-review.md', html: '.agent-board/plan-for-review.html' };
 
 /** The branch a reviewer reviews, and the commit of it its detached checkout is at. */
 export interface ReviewedBranch {
@@ -1475,11 +1706,14 @@ export interface ReviewedBranch {
 }
 
 /**
- * A long-lived agent's cron schedule. At each fire time the daemon starts a run: it sends `prompt` to the agent as its
- * next message, relaunching the agent first if its session has ended. A fire time at which the agent is still
- * working, rate-limited, waiting for you, or has a draft typed at its prompt, is skipped. One after a failed turn runs.
+ * A long-lived agent's cron schedule: the clock joined to it that messages it (`ClockData`), the soonest of them if it
+ * has more. At each fire time the daemon starts a run: it sends `prompt` to the agent as its next message, relaunching
+ * the agent first if its session has ended. A fire time at which the agent is still working, rate-limited, waiting for
+ * you, or has a draft typed at its prompt, is skipped. One after a failed turn runs.
  */
 export interface AgentSchedule {
+  /** The clock's board item id. */
+  clockId: string;
   /** Five fields (minute, hour, day of month, month, day of week) or a macro such as `@daily`, in the daemon's local time. */
   cron: string;
   prompt: string;
@@ -1498,16 +1732,95 @@ export interface ScheduleSpec {
   enabled?: boolean;
 }
 
+/**
+ * How a clock's run went: `started` (its message was sent), `skipped` (`reason` says why), `running` (its fresh agent
+ * is at work), `done` (its fresh agent finished) or `failed`.
+ */
+export const CLOCK_RUN_OUTCOMES = ['started', 'skipped', 'running', 'done', 'failed'] as const;
+export type ClockRunOutcome = (typeof CLOCK_RUN_OUTCOMES)[number];
+
 /** One time a schedule fired: the run it started, or why it skipped. */
 export interface ScheduleRun {
   /** The fire time it was due at. */
   dueAt: string;
   /** When it went off: later than `dueAt` if the machine slept through it. */
   firedAt: string;
-  outcome: 'started' | 'skipped';
-  /** Why it skipped, e.g. `it was still running`; null for a started run. */
+  outcome: ClockRunOutcome;
+  /** Why it skipped or failed, e.g. `it was still running`; null otherwise. */
   reason: string | null;
 }
+
+/** What a clock does when it fires: messages the agent it is joined to, or starts a fresh agent for the run. */
+export const CLOCK_ACTIONS = ['message', 'fresh'] as const;
+export type ClockAction = (typeof CLOCK_ACTIONS)[number];
+
+/**
+ * Where a fresh agent's result goes: the clock's run history alone, the history and an agent note where its tile was,
+ * or the history and a hand-off to another agent (`handoffTo`).
+ */
+export const CLOCK_RESULTS = ['history', 'note', 'handoff'] as const;
+export type ClockResult = (typeof CLOCK_RESULTS)[number];
+
+/** How a clock starts a fresh agent: its harness, model and role (null for the defaults). */
+export interface ClockFreshAgent {
+  harness: Harness;
+  model: string | null;
+  role: string | null;
+  /** Whether the agent is removed once its run finishes. */
+  closeWhenDone: boolean;
+}
+
+/**
+ * A clock's `data`: a schedule on the board. It fires on `cron` while `enabled`, and either messages `agent` with
+ * `prompt`, or starts a fresh agent in its own zone with `prompt` as its task, waits for its turn to end, routes its
+ * final message by `result`, and closes it. A clock that can't fire (no agent, no zone for a fresh one, no prompt) is
+ * not set, and never planned.
+ */
+export interface ClockData {
+  cron: string;
+  enabled: boolean;
+  does: ClockAction;
+  /** The agent it messages (`message`); null while unjoined. */
+  agent: string | null;
+  /** What it sends the agent, or a fresh agent's task. */
+  prompt: string;
+  fresh: ClockFreshAgent;
+  result: ClockResult;
+  /** The agent a fresh agent's result is handed to (`result` `handoff`). */
+  handoffTo: string | null;
+  /** Whether it is drawn folded to a pill. */
+  folded: boolean;
+}
+
+/** A clock's size as a card, and folded to a pill. */
+export const CLOCK_SIZE = { width: 256, height: 76 };
+export const CLOCK_FOLDED_SIZE = { width: 200, height: 34 };
+
+/** How many of a clock's runs its status carries, newest first. */
+export const CLOCK_RUNS_KEPT = 20;
+
+/** One time a clock fired. */
+export interface ClockRun extends ScheduleRun {
+  id: number;
+  /** The agent the run messaged or started; null when it skipped before that. */
+  sessionId: string | null;
+  /** That agent's name, as it was: a fresh one is gone once its run is over. */
+  agentName: string | null;
+  /** When a fresh agent's run finished or failed. */
+  finishedAt: string | null;
+  /** A fresh agent's final message. */
+  result: string | null;
+}
+
+/** What a clock is doing: when it next fires (null while not planned) and its latest runs, newest first. */
+export interface ClockStatus {
+  id: string;
+  nextRunAt: string | null;
+  runs: ClockRun[];
+}
+
+/** Where `clock.add` puts a new clock: beside an agent's tile (on its left, joined to it), or at a place. */
+export type ClockPlace = { beside: string } | { zoneId: string | null; x: number; y: number };
 
 /**
  * A tool call waiting for the user's permission, from the harness's `PermissionRequest` hook. While the daemon holds
@@ -1550,6 +1863,10 @@ export interface AgentAsk {
   askedAt: string;
   /** When it stops waiting, with no answer. */
   expiresAt: string;
+  /** Whether the agent asked for a question card on the board, beside its tile, as well as the inbox item. */
+  onBoard: boolean;
+  /** Where the user moved its card to (its top-left on the board), or null while it sits beside the tile. */
+  at: { x: number; y: number } | null;
 }
 
 /** The user's answer to an agent's question: one of its options (by index), their own words, or skipping it. */
@@ -1633,6 +1950,55 @@ export const planPending = <T extends Pick<Agent, 'plan'>>(agent: T): agent is T
 /** Whether the agent's call waits on the user: a question it asks, or its latest plan. */
 export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'plan'>): boolean => agent.ask !== null || planPending(agent);
 
+/** The kinds of file an agent shows as a document, by their extensions. */
+export const DOCUMENT_EXTENSIONS: Record<PlanFormat, readonly string[]> = { markdown: ['.md', '.markdown'], html: ['.html', '.htm'] };
+
+/** Who last wrote a document: its agent, or the user from its Document tab. */
+export type DocumentWriter = 'agent' | 'user';
+
+/**
+ * A document an agent shows the user (`board.showDoc`): a Markdown or HTML file of its, shown as a Document tab in its
+ * window or a card on the board, read from the file each time so it stays live. Without its text.
+ */
+export interface DocumentSummary {
+  id: string;
+  /** The agent that showed it. */
+  sessionId: string;
+  /** The file, its real path: a link the agent named is shown as the file it leads to. */
+  path: string;
+  /** As the agent named it; else the first heading (or an HTML page's title), else the file's name. */
+  title: string;
+  format: PlanFormat;
+  /** 1 as it is first shown, then one more for each write seen, the agent's or the user's. */
+  version: number;
+  writtenAt: string;
+  writtenBy: DocumentWriter;
+  /** Whether the user may edit it: Markdown, inside its agent's worktree. */
+  editable: boolean;
+  /** When the agent last showed it. */
+  shownAt: string;
+}
+
+/** A document with its text as the file holds it now; null with a problem when the file can't be read. */
+export interface DocumentContent extends DocumentSummary {
+  text: string | null;
+  problem?: string;
+}
+
+/** A document card's size, open, and its height as a slim bar. */
+export const DOCUMENT_CARD_SIZE = { width: 256, height: 208 };
+export const DOCUMENT_BAR_HEIGHT = 76;
+
+/** A document card's `data`: which document it shows, and who showed it, as they were then. */
+export interface DocumentCardData {
+  documentId: string;
+  agent: AgentNoteAuthor;
+  title: string;
+  format: PlanFormat;
+  /** Drawn as a slim bar (type, title and author) instead of a page with a preview. */
+  collapsed: boolean;
+}
+
 /**
  * An agent spawned by an agent inside the same harness process (e.g. Claude's Agent tool), drawn as a character on
  * its parent's tile. Known only from its parent's hooks, and only while the daemon runs.
@@ -1649,6 +2015,14 @@ export interface Subagent {
   endedAt: string | null;
   /** Its final message, once it has finished. */
   result: string | null;
+}
+
+/** A command an agent left running in the background, as long as a process of it still runs under the agent. */
+export interface BackgroundCommand {
+  /** The command line, as the agent ran it. */
+  command: string;
+  /** When it started. */
+  startedAt: string;
 }
 
 /**
@@ -1763,11 +2137,41 @@ export const MAX_DESCRIPTION_LENGTH = 500;
 /** Longest status summary an agent can set: a line or two on its tile. */
 export const MAX_STATUS_LENGTH = 200;
 
+/** What an agent may record about its own work: a pull request, a hand-off doc, an agent it started. */
+export const AGENT_RECORD_KINDS = ['pr', 'doc', 'crew'] as const;
+export type AgentRecordKind = (typeof AGENT_RECORD_KINDS)[number];
+
+/**
+ * One entry an agent recorded (`Agent.records`), by its kind and `key`: a pull request's `owner/repo#n`, a doc's
+ * absolute path, a crew member's session. Recording the same entry again replaces it, and brings it back once deleted.
+ */
+export type AgentRecord = {
+  key: string;
+  recordedAt: string;
+  /** When the user deleted it from the sidebar; null while it shows. */
+  deletedAt: string | null;
+} & (
+  | { kind: 'pr'; url: string; title: string | null }
+  /** `from` the crew member that recorded it for this orchestrator; null for its own. */
+  | { kind: 'doc'; path: string; from: { sessionId: string; name: string } | null }
+  | { kind: 'crew' }
+);
+
+/** What `board.record` takes besides the token: a pull request by its URL, or a doc by its path, for the caller or its orchestrator. */
+export type RecordParams =
+  | { kind: 'pr'; url: string; title?: string }
+  | { kind: 'doc'; path: string; forOrchestrator?: boolean };
+
+/** The most a hand-off doc may hold for its tab to show it, in bytes. */
+export const MAX_DOC_BYTES = 1024 * 1024;
+
 /** What an agent says it is doing now: a short summary, and how far through it is (0-100) if it says. */
 export interface AgentStatus {
   summary: string;
   progress: number | null;
   updatedAt: string;
+  /** The orchestrator's name when it, not the agent, set this line (`orchestrator.setStatus`); null when the agent did. */
+  setBy: string | null;
 }
 
 /**
@@ -1886,7 +2290,10 @@ export const ORCHESTRATOR_ACTIONS = [
   'spawn',
   'send',
   'interrupt',
+  'continue',
   'restart',
+  'pause',
+  'wake',
   'close',
   'remove',
   'add-edge',
@@ -1900,8 +2307,11 @@ export const ORCHESTRATOR_ACTIONS = [
   'add-note',
   'edit-note',
   'remove-note',
+  'add-clock',
+  'remove-clock',
   'set-role',
   'remove-role',
+  'set-status',
 ] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
 
@@ -1983,8 +2393,11 @@ export interface LayoutMoved {
 /** What `orchestrator.arrange` groups a row by: an issue (the default), a role or a state. */
 export const ARRANGE_BYS = ['issue', 'role', 'state'] as const;
 export type ArrangeBy = (typeof ARRANGE_BYS)[number];
-/** How it lays the rows out: one each (the default), or filling the zone's width as Tidy does. */
-export const ARRANGE_LAYOUTS = ['rows', 'grid'] as const;
+/**
+ * How it lays the groups out: a row each (the default; by issue, lanes with a column per slot), a column each, a card
+ * each (flowed two or three across), or filling the zone's width as Tidy does.
+ */
+export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid'] as const;
 export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
 /** What `orchestrator.arrange` did: the zone, its size now, and where each tile it moved went. */
@@ -1994,6 +2407,62 @@ export interface ArrangeResult {
   height: number;
   moved: LayoutMoved[];
 }
+
+/** One thing in a zone, as its map shows it: a tile (`agent:<id>`, `shell:<id>`) or an item (`item:<id>`), relative to the zone. */
+export interface ZoneMapThing {
+  key: string;
+  /** An item's kind (`sticky`, `agent-note`, `text`…); null for a tile. */
+  itemKind: string | null;
+  name: string;
+  /** An agent's state; null for a shell or an item. */
+  state: AgentState | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A lane of a zone's map: its tiles by slot, by key, and its label's and note's (null for none). */
+export interface ZoneMapLane {
+  key: string;
+  label: string;
+  slots: { implementer: string[]; reviewer: string[]; 'follow-up': string[] };
+  labelItem: string | null;
+  note: string | null;
+}
+
+/**
+ * What `orchestrator.map` reads of a zone: its lanes as an arrange by issue sees them, where everything in it is, and
+ * what is amiss: things on top of each other, the widest gap in a lane (in grid columns), and the tiles off the grid
+ * or out of their lane's row.
+ */
+export interface ZoneMap {
+  zoneId: string;
+  name: string;
+  width: number;
+  height: number;
+  /** The caller's arrange settings, which its next arrange (and auto-arrange) uses. */
+  arrange: ArrangeSettings;
+  /** The lead and the shells, then whatever is in no lane (notes, cards, tiles out of scope). */
+  top: string[];
+  lanes: ZoneMapLane[];
+  things: ZoneMapThing[];
+  overlaps: [string, string][];
+  widestGap: number;
+  offGrid: string[];
+}
+
+/**
+ * An orchestrator's arrange settings (`orchestrator.arrange` takes and keeps them): what it groups by, how it lays the
+ * groups out, and whether it arranges by itself, after every agent it starts, note it adds and agent it closes.
+ */
+export interface ArrangeSettings {
+  by: ArrangeBy;
+  layout: ArrangeLayout;
+  auto: boolean;
+}
+
+export const DEFAULT_ARRANGE_SETTINGS: ArrangeSettings = { by: 'issue', layout: 'rows', auto: false };
 
 /** The kinds of note an orchestrator makes (`orchestrator.addNote`): a sticky note (the default) or a text item. */
 export const NOTE_KINDS = ['sticky', 'text'] as const;
@@ -2028,11 +2497,12 @@ export function isWaitState(value: unknown): value is WaitState {
 
 /**
  * What happened to an agent of a crew, once each: its turn ended, it finished (`Agent.workFinishedAt`), it needs
- * the user (a permission prompt, a question or a plan), its turn failed, it was rate-limited, its session ended, or a
- * pull request was opened from its branch. Its idle prompt (Claude's `idle_prompt`, idle to waiting a minute after a
- * turn) is none, and a turn that ends finished is only `finished`.
+ * the user (a permission prompt, a question or a plan), a message typed at its prompt was never sent (`Agent.unsent`),
+ * it flagged its orchestrator (`Agent.flag`), its turn failed, it was rate-limited, it was paused (by whom: no end,
+ * as a message wakes it), its session ended, or a pull request was opened from its branch. Its idle prompt (Claude's
+ * `idle_prompt`, idle to waiting a minute after a turn) is none, and a turn that ends finished is only `finished`.
  */
-export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'failed', 'rate-limited', 'ended', 'pr-opened'] as const;
+export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened'] as const;
 export type CrewEventKind = (typeof CREW_EVENT_KINDS)[number];
 
 export interface CrewEvent {
@@ -2255,6 +2725,19 @@ export function parseRole(text: string): { role: AgentRole; name: string | null 
   return { role: 'custom', name };
 }
 
+/**
+ * The named role New agent offers for a zone's orchestrator: a custom role like any other (a zone or the app may keep a
+ * template of its own for it), with a template of the app's own when neither does. Matched in ASCII case, as role names are.
+ */
+export const ORCHESTRATOR_ROLE = 'orchestrator';
+
+/** Whether `role` (as typed, or an agent's custom role name) is the orchestrator role. */
+export function isOrchestratorRole(role: string | null): boolean {
+  if (role === null) return false;
+  const read = parseRole(role);
+  return !('error' in read) && read.name !== null && read.name.toLowerCase() === ORCHESTRATOR_ROLE;
+}
+
 /** An agent's role as the board names it: a custom role's own name, else the role; null for none. */
 export function roleLabel(agent: Pick<Agent, 'role' | 'roleName'>): string | null {
   return agent.roleName ?? agent.role;
@@ -2321,6 +2804,12 @@ export type SpawnAgentParams = TerminalSize & {
    * without), the branch it reviews, and takes no `branch` of its own.
    */
   role?: string;
+  /**
+   * Where it works: `worktree` (the default) in a worktree and branch of its own, or `main` in the repo's own checkout,
+   * on the branch checked out there, with no worktree made (deleting it leaves the checkout as it is). Only the user's
+   * own spawn takes `main`; an orchestrator's agents each get a worktree. A reviewer, `branch` and `baseBranch` don't go with it.
+   */
+  checkout?: 'main' | 'worktree';
   /** Start it without its role's template: its first message is the issue and `prompt` alone. */
   noTemplate?: boolean;
   /** Its first message. Empty or missing starts it at its prompt, named `new-agent-N`; no message is sent. */
@@ -2561,6 +3050,11 @@ export interface DaemonMethods {
   'zone.clone': { params: { repo: string } & NewZoneParams; result: Zone };
   /** Stops the zone's clone, as a failed one. Fails with `invalidParams` for a zone that isn't cloning. */
   'zone.cancelClone': { params: { id: string }; result: null };
+  /**
+   * Reads the checkout of the git repo `path` is in: its branch, default branch and whether it has uncommitted changes.
+   * Only reads; never touches the checkout. Fails with `invalidParams` for a `path` that is not absolute or not in a git repo.
+   */
+  'zone.checkoutState': { params: { path: string }; result: CheckoutState };
   /** The folders zones were made for, most recently first, while they are still folders in a git repo. At most 20. */
   'zone.recentFolders': { params: undefined; result: RecentFolder[] };
   /**
@@ -2656,6 +3150,29 @@ export interface DaemonMethods {
    * `allowProjectCodexConfig`.
    */
   'agent.spawn': { params: SpawnAgentParams; result: Agent };
+  /**
+   * Starts an agent as `agent.spawn` does, but answers as soon as its tile is on the board (an `agent.starting`
+   * event), with the session id it will have. Fails as `agent.spawn` does for what is checked before that; what fails
+   * after stays on its tile (`AgentStart.error`).
+   */
+  'agent.start': { params: SpawnAgentParams; result: { sessionId: string } };
+  /** The agents being started, and those whose start failed, oldest first. */
+  'agent.starts': { params: undefined; result: AgentStart[] };
+  /**
+   * Starts a failed start again: from the beginning, `allowProjectCodexConfig` confirming its `confirm` warning; or, for an
+   * agent whose harness exited before its first hook (`AgentStartup.failed`), in its worktree with its first message.
+   */
+  'agent.retryStart': { params: { sessionId: string; allowProjectCodexConfig?: boolean }; result: null };
+  /**
+   * Renames or moves a start's tile while it starts (`move` relative to its zone, as `agent.move`): its agent takes the
+   * name and place the tile has when its session runs. Once it is an agent, renames or moves the agent.
+   */
+  'agent.updateStart': { params: { sessionId: string; name?: string; move?: TileMove }; result: null };
+  /**
+   * Takes a start off the board: a failed one, or one still going, which stops before its session would run. One the
+   * daemon doesn't know (it restarted since) is told over all the same.
+   */
+  'agent.dismissStart': { params: { sessionId: string }; result: null };
   /** The name an agent started now with no task would get, the lowest free `new-agent-N`, for a picker to show. */
   'agent.nextName': { params: undefined; result: { name: string } };
   /** Every agent, running or ended, oldest first, with its current state. */
@@ -2695,13 +3212,47 @@ export interface DaemonMethods {
    */
   'agent.interrupt': { params: SessionRef; result: Agent };
   /**
+   * Resumes the turn of a Claude agent its usage limit stopped (`rate-limited`) on usage credits, as the user asked:
+   * never done by itself. It takes the step Claude Code offers for it: the menu Claude opens there is closed with
+   * Escape, its cancel, which picks no row (so never one that opens a billing page) and leaves Claude's own continue at
+   * the reset armed; then `continue` at its prompt, as Claude puts there itself to carry on at the reset; Enter is
+   * pressed again while no turn starts. Resolves with the agent once its turn starts. Fails with `invalidParams`,
+   * saying why, for a Codex agent, one not rate-limited (checked again once its turn to be typed at comes, and before each further Escape), ended, with
+   * a message never sent, the user typing at its prompt or other text there, or showing neither screen, and when no
+   * turn starts.
+   */
+  'agent.continueOnCredits': { params: SessionRef; result: Agent };
+  /**
+   * Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`), as a delivery does: again
+   * while no turn starts, never once the user types there. It stays unsent, so nothing is typed onto it, until its
+   * turn starts or no Enter starts one (the prompt holds nothing to send), and then resolves with the agent, `unsent`
+   * cleared; still set only if the user typed at its prompt meanwhile. Fails with `invalidParams` for an unknown or
+   * ended agent, one with no unsent message or one already being sent, or one not at its prompt (a turn under way, a
+   * permission prompt) or with the user typing there.
+   */
+  'agent.sendUnsent': { params: SessionRef; result: Agent };
+  /**
+   * Clears the message typed at the agent's prompt and never sent (`Agent.unsent`): clears its lines at the prompt
+   * (Ctrl-U, and Backspace to join each line above), with anything the user typed there, and resolves with the agent,
+   * `unsent` cleared, so deliveries type at it again. Fails as `agent.sendUnsent` does, but for the user typing there.
+   */
+  'agent.clearUnsent': { params: SessionRef; result: Agent };
+  /**
    * Ends the agent's session and resolves with it `done` (not `failed`: the user stopped it). Its worktree and branch
    * stay. Fails with `invalidParams` for an unknown or ended agent.
    */
   'agent.stop': { params: SessionRef; result: Agent };
   /**
-   * Starts an ended agent (`stopped-by-restart`, or one that exited) again in its worktree, carrying on its
-   * conversation with no new prompt (Claude `--resume`, Codex `codex resume`, or a new Codex conversation if it can't).
+   * Pauses the agent (`hibernated`): ends its session as `agent.stop` does, keeping its tile, worktree, branch and
+   * conversation, to free what its harness held. Its pane keeps its last screen, dropping into no shell. Fails with
+   * `invalidParams` unless it is live, between turns and asking you nothing (`pauseRefusal`), with no message typed at
+   * its prompt. `agent.resume`, a message, a hand-off or a scheduled run wakes it.
+   */
+  'agent.pause': { params: SessionRef; result: Agent };
+  /**
+   * Starts an ended agent (`stopped-by-restart`, `hibernated`, or one that exited) again in its worktree, carrying on
+   * its conversation with no new prompt (Claude `--resume`, Codex `codex resume`, or a new Codex conversation if it
+   * can't).
    * Ends the shell its pane dropped into first: while that shell runs something it fails with `shellBusy`, unless
    * `force`. Resolves with it live, `idle` until its SessionStart. Fails with `invalidParams` for a running or unknown
    * agent, or when its worktree is gone.
@@ -2735,6 +3286,17 @@ export interface DaemonMethods {
    */
   'agent.markSeen': { params: SessionRef; result: Agent };
   /**
+   * Deletes one of the agent's records (`Agent.records`), or with `deleted` false brings it back. A deleted record also
+   * hides what is guessed of the same entry, until the agent records it again. The user's alone. Fails with
+   * `invalidParams` for an unknown agent or record.
+   */
+  'agent.setRecordDeleted': { params: SessionRef & { kind: AgentRecordKind; key: string; deleted: boolean }; result: Agent };
+  /**
+   * Reads one of the agent's hand-off docs: a path it recorded, and hasn't had deleted, or its `guessedDoc`. Fails with
+   * `invalidParams` for any other path, a file that is gone or one over `MAX_DOC_BYTES`.
+   */
+  'agent.readDoc': { params: SessionRef & { path: string }; result: { path: string; text: string } };
+  /**
    * Lets the agent orchestrate in `scope` (ADR-0011), or stops it with null. Takes effect on its next call. The
    * user's alone: a board token is refused it, an orchestrator's too. Fails with `invalidParams` for an unknown agent
    * or scope.
@@ -2758,6 +3320,12 @@ export interface DaemonMethods {
    * that is working, needs permission or has ended is refused with `invalidParams`.
    */
   'orchestrator.send': { params: { token?: string; sessionId: string; text: string }; result: Agent };
+  /**
+   * Sets the status line of an agent in the caller's crew (the agents it started, and theirs), as the agent's own
+   * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator
+   * of wider scope or the caller itself is refused with `outOfScope`.
+   */
+  'orchestrator.setStatus': { params: { token?: string; sessionId: string; summary: string; progress?: number }; result: Agent };
   /**
    * Waits until every agent (or, with `any`, one) is in one of `states` (`SETTLED_STATES` by default), or `timeoutMs`
    * passes (`DEFAULT_ORCHESTRATOR_WAIT_MS`, at most `MAX_ORCHESTRATOR_WAIT_MS`). An agent sent a message or started
@@ -2792,6 +3360,8 @@ export interface DaemonMethods {
   'orchestrator.read': { params: { token?: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
   /** Interrupts the agent's turn (`agent.interrupt`). */
   'orchestrator.interrupt': { params: { token?: string; sessionId: string }; result: Agent };
+  /** Resumes a rate-limited agent's turn on usage credits (`agent.continueOnCredits`). */
+  'orchestrator.continueOnCredits': { params: { token?: string; sessionId: string }; result: Agent };
   /**
    * Starts an ended agent again in place, as the tile's Restart does (`agent.resume`): the same tile, worktree and
    * branch, carrying on its conversation (Claude `--resume`, `codex resume`). Never forced: while the shell its pane
@@ -2806,6 +3376,10 @@ export interface DaemonMethods {
    * orchestrator started may be. Resolves with the agent, or null once removed.
    */
   'orchestrator.close': { params: { token?: string; sessionId: string; remove?: boolean }; result: Agent | null };
+  /** Pauses the agent, as `agent.pause` does, marked as paused by the orchestrator. */
+  'orchestrator.pause': { params: { token?: string; sessionId: string }; result: Agent };
+  /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
+  'orchestrator.wake': { params: { token?: string; sessionId: string }; result: Agent };
   /**
    * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
    * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
@@ -2824,12 +3398,17 @@ export interface DaemonMethods {
    */
   'orchestrator.move': { params: { token?: string; target: LayoutTarget } & LayoutPlace; result: LayoutMoved };
   /**
-   * Lays out the tiles in a zone in its scope (its own by default) that it may move: itself first, then a row per
-   * issue (or role, or state), each agent beside the ones its edges join it to (`board-arrange.ts`). What it may not
-   * move (other tiles, notes, cards) stays put, and the rows keep clear of it; the zone grows to hold them, never
-   * shrinking. The same board arranges the same way.
+   * Lays out the tiles in a zone in its scope (its own by default) that it may move: itself first, then a lane per
+   * issue (or a row per role, or state), each agent beside the ones its edges join it to (`board-arrange.ts`). What it
+   * may not move (other tiles, notes, cards) stays put, and the rows keep clear of it; the zone then fits what it holds,
+   * growing or shrinking. The same board arranges the same way.
    */
-  'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout }; result: ArrangeResult };
+  'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean }; result: ArrangeResult };
+  /**
+   * A zone in its scope (its own by default) as a map: its lanes, where everything is and what is amiss
+   * (`ZoneMap`). It moves nothing.
+   */
+  'orchestrator.map': { params: { token?: string; zoneId?: string }; result: ZoneMap };
   /**
    * Makes a group (an unbound zone) marked as made by it, as `zone.addUnbound` does: at `x`, `y` if given (stepped right
    * past any zone or loose tile there, as a new zone is), else beside its own zone; at `DEFAULT_ZONE_SIZE` without a
@@ -2859,6 +3438,14 @@ export interface DaemonMethods {
   'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string }; result: BoardItem };
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
+  /**
+   * Puts a clock on the board (`ClockData` over a new clock's), marked as made by it: one that messages an agent in its
+   * scope goes on that agent's tile's left; one that starts a fresh agent goes in a zone in its scope (`zoneId`, its own
+   * by default). A hand-off's agent must be in its scope too.
+   */
+  'orchestrator.addClock': { params: { token?: string; data: Partial<ClockData>; zoneId?: string }; result: BoardItem };
+  /** Deletes a clock it (or its crew) made; a user-side caller any. */
+  'orchestrator.removeClock': { params: { token?: string; id: string }; result: null };
   /** The app's default roles, by name. */
   'orchestrator.roles': { params: { token?: string }; result: DefaultRole[] };
   /**
@@ -2894,6 +3481,23 @@ export interface DaemonMethods {
    */
   'board.setStatus': { params: { token: string; summary: string; progress?: number; done?: boolean }; result: Agent };
   /**
+   * Records an entry on the sidebar of the agent holding `token` (`Agent.records`): a pull request by its GitHub URL,
+   * with its title if known, or a hand-off doc by its path (relative to where the session started, or absolute), which
+   * must be a file. With `forOrchestrator`, the doc goes on the orchestrator that started it instead, saying who
+   * recorded it. Recording an entry again replaces it, and brings it back if the user deleted it. Fails with
+   * `invalidParams` for a shell's token, a URL that names no pull request, a missing file, or `forOrchestrator` from an
+   * agent no orchestrator started.
+   */
+  'board.record': { params: { token: string } & RecordParams; result: AgentRecord };
+  /**
+   * The agent holding `token` flags that it wants a look (`Agent.flag`): blocked, its work ready for review, or a
+   * decision needed. `reason` is one line, at most `MAX_FLAG_LENGTH`; it replaces any flag it had. A crew member's flag
+   * goes to its live orchestrator: typed at that one's prompt once it is there, and heard as a `flagged` crew event.
+   * `via` names, for an orchestrator's flag, the crew member it passes on. With `clear`, it drops its flag instead.
+   * Only a live agent, from its own session. Fails as `board.setStatus` does.
+   */
+  'board.needsYou': { params: { token: string; reason?: string; via?: string; clear?: boolean }; result: Agent };
+  /**
    * The agent holding `token` hands `payload` over its own outgoing edges, or with `to` over its edge to that
    * agent alone, each as its auto hand-off would go: its conditions checked first, held while any fails, skipped while
    * paused. A manual edge is left for the user to send. Resolves with how it went along each edge, once each is
@@ -2906,30 +3510,37 @@ export interface DaemonMethods {
   'board.handoff': { params: { token: string; to?: string } & HandoffPayload; result: HandoffOutcome[] };
   /**
    * The live agent holding `token` asks the user `question`, with `options` as buttons and, with `freeText`
-   * (always with no options), a reply field. Resolves once the user answers or skips it, or after `timeoutMs`
+   * (always with no options), a reply field, and with `onBoard` a question card beside its tile too. Resolves once the user answers or skips it, or after `timeoutMs`
    * (`DEFAULT_ASK_WAIT_MS`, at most `MAX_ASK_WAIT_MS`) with no answer. It goes, unanswered, when the connection closes
    * (the harness cancelled the call) or the agent's turn ends. Fails with `invalidParams` for a shell's token, a caller
-   * that already asks or waits on a plan, or a bad question.
+   * that already asks or waits on a plan, or a bad question. A crew member's question goes to its live orchestrator
+   * instead (`SentToOrchestrator`), at once.
    */
   'board.ask': {
-    params: { token: string; question: string; options?: string[]; freeText?: boolean; timeoutMs?: number };
-    result: AskResult;
+    params: { token: string; question: string; options?: string[]; freeText?: boolean; onBoard?: boolean; timeoutMs?: number };
+    result: AskResult | SentToOrchestrator;
   };
   /**
    * The live agent holding `token` presents a plan, its next version, and waits for the user to approve it,
    * request changes or reject it, with comments. Kept in its history whatever happens. Resolves with the decision, or
    * `timed-out` after `timeoutMs` (`DEFAULT_PLAN_WAIT_MS`, at most `MAX_ASK_WAIT_MS`); `withdrawn` once the connection
-   * closes or its turn ends. Fails as `board.ask` does, and for an empty or too long plan.
+   * closes or its turn ends. Fails as `board.ask` does, and for an empty or too long plan. A crew member's plan goes
+   * to its live orchestrator instead (`SentToOrchestrator`), at once, written to `CREW_PLAN_PATH` in its worktree.
    */
   'board.presentPlan': {
     params: { token: string; title: string; body: string; format: PlanFormat; timeoutMs?: number };
-    result: PlanResult;
+    result: PlanResult | SentToOrchestrator;
   };
   /**
    * Answers the agent's question `askId`. Fails with `invalidParams` once it no longer asks it (answered, timed out or
    * gone), or for an answer it doesn't take: an option it doesn't have, or words to a question without `freeText`.
    */
   'ask.answer': { params: SessionRef & { askId: string; answer: AskAnswer }; result: null };
+  /**
+   * Moves the card of the agent's question `askId` to `at` on the board, where it stays until the question goes. Fails
+   * with `invalidParams` once it no longer asks it, or for a question with no card.
+   */
+  'ask.place': { params: SessionRef & { askId: string; at: { x: number; y: number } }; result: null };
   /** The agent's plans, oldest first, with their bodies and decisions. */
   'plan.list': { params: SessionRef; result: Plan[] };
   /**
@@ -2937,6 +3548,23 @@ export interface DaemonMethods {
    * out or withdrawn).
    */
   'plan.decide': { params: SessionRef & { planId: string; outcome: PlanOutcome; comments?: string }; result: PlanSummary };
+  /**
+   * The live agent holding `token` shows the user one of its files, Markdown or HTML (by its extension), as a document:
+   * a Document tab in its window, and with `onBoard` a card beside its tile too. `path` is absolute. Showing the same file
+   * again shows the same document, a card added if asked for and none is there. Returns at once: nothing waits.
+   */
+  'board.showDoc': { params: { token: string; path: string; title?: string; onBoard?: boolean }; result: DocumentSummary };
+  /** The document with its text as the file holds it now, line breaks as `\n`. Fails with `invalidParams` for an unknown document. */
+  'doc.read': { params: { documentId: string }; result: DocumentContent };
+  /**
+   * The user saves `text` over a Markdown document: written to its file in the file's own line breaks, and its agent
+   * told what changed, typed at its prompt once it is ready for its next message. Fails with `invalidParams` for a
+   * document that isn't `editable`, a file gone or made a link since it was shown, and, unless `force`, when the file
+   * changed since `baseVersion`, the version the user edited.
+   */
+  'doc.save': { params: { documentId: string; text: string; baseVersion: number; force?: boolean }; result: DocumentSummary };
+  /** The user's comments on a document, typed at its agent's prompt as `doc.save`'s changes are. */
+  'doc.comment': { params: { documentId: string; text: string }; result: null };
   /**
    * Moves the agent's tile within its zone, into any other (another repo's, or an unbound one) or out onto the board
    * (`zoneId` null). Only its tile moves. Fails with `invalidParams` for an unknown zone or agent.
@@ -2995,6 +3623,13 @@ export interface DaemonMethods {
   'item.update': { params: UpdateItemParams; result: BoardItem };
   /** Fails with `invalidParams` for an unknown item. */
   'item.delete': { params: { id: string }; result: null };
+  /** Every clock's status. */
+  'clock.list': { params: undefined; result: ClockStatus[] };
+  /**
+   * Adds a clock (`ClockData`, filled in from defaults) at `place`: beside an agent's tile, on its left in its zone, or
+   * where asked. Fails with `invalidParams` for an unknown agent or zone, or data a clock can't have.
+   */
+  'clock.add': { params: { data: Partial<ClockData>; place: ClockPlace }; result: BoardItem };
   /** Every connector. */
   'connector.list': { params: undefined; result: Connector[] };
   /** Fails with `invalidParams` for an end that doesn't exist, both ends the same, or a value that isn't allowed. */
@@ -3156,6 +3791,12 @@ export interface DaemonMethods {
    * with `invalidParams` for a picture that isn't a PNG in `images/incoming`, or a diagram too large to send.
    */
   'selection.ask': { params: AskSelectionParams; result: Agent };
+  /**
+   * The board master (ADR-0019): the board's master, live or ended, or, with none, starts one at `board` scope, loose on
+   * the board left of the zones, in a folder of its own with no repo, with the master's prompt as its first message.
+   * The app's alone: a board token's connection is refused it.
+   */
+  'master.start': { params: StartMasterParams; result: Agent };
   'tracker.status': { params: { provider: TrackerProvider }; result: TrackerStatus };
   /**
    * Checks the credential (an API key or OAuth token) with the tracker, then keeps it in the OS keychain, never in
@@ -3214,23 +3855,28 @@ export const BOARD_ERROR = {
 
 /**
  * What a connection that has presented a session's board token (`board.identify`, `board.setStatus`) may call: the
- * board's reads, its own status and hand-offs, and asking the user a question or presenting a plan (ADR-0014); nothing
+ * board's reads, its own status, records and hand-offs, and asking the user a question or presenting a plan (ADR-0014); nothing
  * that starts, steers, answers for or stops a session, or changes a setting (ADR-0010). A connection that never presents one is the user's, with the whole API.
  */
 export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
   'daemon.health',
   'zone.list',
   'agent.list',
+  'agent.starts',
   'agent.refreshBranches',
   'shell.list',
   'flowEdge.list',
   'item.list',
+  'clock.list',
   'connector.list',
   'board.identify',
   'board.setStatus',
+  'board.record',
+  'board.needsYou',
   'board.handoff',
   'board.ask',
   'board.presentPlan',
+  'board.showDoc',
   'board.openPullRequest',
   'orchestrator.activity',
 ]);
@@ -3242,21 +3888,28 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
 export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
   'orchestrator.spawn',
   'orchestrator.send',
+  'orchestrator.setStatus',
   'orchestrator.wait',
   'orchestrator.read',
   'orchestrator.interrupt',
+  'orchestrator.continueOnCredits',
   'orchestrator.restart',
+  'orchestrator.pause',
+  'orchestrator.wake',
   'orchestrator.close',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',
   'orchestrator.move',
   'orchestrator.arrange',
+  'orchestrator.map',
   'orchestrator.addZone',
   'orchestrator.changeZone',
   'orchestrator.removeZone',
   'orchestrator.addNote',
   'orchestrator.editNote',
   'orchestrator.removeNote',
+  'orchestrator.addClock',
+  'orchestrator.removeClock',
   'orchestrator.roles',
   'orchestrator.setRole',
   'orchestrator.removeRole',
@@ -3381,6 +4034,24 @@ export interface AgentUpdatedEvent {
   agent: Agent;
 }
 
+/** Sent to every client when an agent's start begins or changes (`AgentStart`): a step, its name, or its failure. */
+export interface AgentStartingEvent {
+  type: 'agent.starting';
+  start: AgentStart;
+}
+
+/** Sent to every client when a start is over: its agent's session runs (its `agent.updated` came first), or it was dismissed. */
+export interface AgentStartEndedEvent {
+  type: 'agent.startEnded';
+  sessionId: string;
+}
+
+/** Sent to every client when a setting changes (`settings.set`), with all of them as they are now. */
+export interface SettingsUpdatedEvent {
+  type: 'settings.updated';
+  settings: DaemonSettings;
+}
+
 /** Sent to every client when an agent is deleted. */
 export interface AgentRemovedEvent {
   type: 'agent.removed';
@@ -3415,6 +4086,12 @@ export interface ItemUpdatedEvent {
 export interface ItemRemovedEvent {
   type: 'item.removed';
   id: string;
+}
+
+/** Sent to every client when a clock is planned again or fires, or a run of it ends. */
+export interface ClockUpdatedEvent {
+  type: 'clock.updated';
+  status: ClockStatus;
 }
 
 
@@ -3501,6 +4178,7 @@ export type DaemonEvent =
   | ZoneRemovedEvent
   | ItemUpdatedEvent
   | ItemRemovedEvent
+  | ClockUpdatedEvent
   | ConnectorUpdatedEvent
   | ConnectorRemovedEvent
   | FlowEdgeUpdatedEvent
@@ -3518,6 +4196,9 @@ export type DaemonEvent =
   | SessionExitedEvent
   | AgentUpdatedEvent
   | AgentRemovedEvent
+  | AgentStartingEvent
+  | AgentStartEndedEvent
+  | SettingsUpdatedEvent
   | OrchestratorActivityEvent;
 
 export const EVENT_METHOD = 'event';

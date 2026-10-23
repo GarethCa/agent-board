@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { CLIENT_ID, invalidParams, oneOf, paramsObject, pointsParam, stringParam } from './params.ts';
+import { CLIENT_ID, invalidParams, oneOf, optionalBooleanParam, paramsObject, pointsParam, stringParam } from './params.ts';
 import {
   CONNECTOR_END_TYPES,
   CONNECTOR_LINE_ENDS,
@@ -11,6 +11,7 @@ import {
   type Connector,
   type ConnectorEnd,
   type ConnectorEndType,
+  type ConnectorLook,
   type DaemonEvent,
   type DaemonMethods,
 } from './protocol.ts';
@@ -40,8 +41,11 @@ interface ConnectorRow {
   style: Connector['style'];
   start_end: Connector['startEnd'];
   end_end: Connector['endEnd'];
+  dashed: number;
   color: string | null;
   label: string;
+  start_label: string;
+  end_label: string;
   points: string;
   created_at: string;
   updated_at: string;
@@ -55,8 +59,11 @@ function toConnector(row: ConnectorRow): Connector {
     style: row.style,
     startEnd: row.start_end,
     endEnd: row.end_end,
+    dashed: row.dashed === 1,
     color: row.color,
     label: row.label,
+    startLabel: row.start_label,
+    endLabel: row.end_label,
     points: JSON.parse(row.points) as Connector['points'],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -70,11 +77,30 @@ function colorParam(fields: Record<string, unknown>): string | null {
   return color;
 }
 
-function labelParam(fields: Record<string, unknown>): string {
-  const label = stringParam(fields, 'label');
-  if (label.length > MAX_CONNECTOR_LABEL) throw invalidParams(`label is over ${MAX_CONNECTOR_LABEL} characters`);
+function labelParam(fields: Record<string, unknown>, name: 'label' | 'startLabel' | 'endLabel'): string {
+  const label = stringParam(fields, name);
+  if (label.length > MAX_CONNECTOR_LABEL) throw invalidParams(`${name} is over ${MAX_CONNECTOR_LABEL} characters`);
   return label;
 }
+
+/** The look and labels `fields` give a connector, each one left out as it is in `base`. */
+function lookParams(fields: Record<string, unknown>, base: ConnectorLook): ConnectorLook {
+  const given = (name: keyof ConnectorLook) => fields[name] !== undefined;
+  return {
+    style: given('style') ? oneOf(fields, 'style', CONNECTOR_STYLES) : base.style,
+    startEnd: given('startEnd') ? oneOf(fields, 'startEnd', CONNECTOR_LINE_ENDS) : base.startEnd,
+    endEnd: given('endEnd') ? oneOf(fields, 'endEnd', CONNECTOR_LINE_ENDS) : base.endEnd,
+    dashed: optionalBooleanParam(fields, 'dashed') ?? base.dashed,
+    color: given('color') ? colorParam(fields) : base.color,
+    label: given('label') ? labelParam(fields, 'label') : base.label,
+    startLabel: given('startLabel') ? labelParam(fields, 'startLabel') : base.startLabel,
+    endLabel: given('endLabel') ? labelParam(fields, 'endLabel') : base.endLabel,
+  };
+}
+
+/** A look's columns, in the order the statements below name them. */
+const lookColumns = (look: ConnectorLook) =>
+  [look.style, look.startEnd, look.endEnd, look.dashed ? 1 : 0, look.color, look.label, look.startLabel, look.endLabel] as const;
 
 function endParam(fields: Record<string, unknown>, name: 'from' | 'to'): ConnectorEnd {
   const end = paramsObject(fields[name]);
@@ -119,11 +145,12 @@ export function connectorHandlers<Context>(
   const selectAll = db.prepare('SELECT * FROM connectors ORDER BY created_at, rowid');
   const selectOne = db.prepare('SELECT * FROM connectors WHERE id = ?');
   const insert = db.prepare(
-    `INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side, style, start_end, end_end, color, label, points)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO connectors (id, from_type, from_id, from_side, to_type, to_id, to_side,
+     style, start_end, end_end, dashed, color, label, start_label, end_label, points)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, color = ?, label = ?, points = ?,
+    `UPDATE connectors SET style = ?, start_end = ?, end_end = ?, dashed = ?, color = ?, label = ?, start_label = ?, end_label = ?, points = ?,
      from_type = ?, from_id = ?, from_side = ?, to_type = ?, to_id = ?, to_side = ?,
      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
   );
@@ -168,11 +195,7 @@ export function connectorHandlers<Context>(
         to.type,
         to.id,
         to.side,
-        given('style') ? oneOf(fields, 'style', CONNECTOR_STYLES) : DEFAULT_CONNECTOR_LOOK.style,
-        given('startEnd') ? oneOf(fields, 'startEnd', CONNECTOR_LINE_ENDS) : DEFAULT_CONNECTOR_LOOK.startEnd,
-        given('endEnd') ? oneOf(fields, 'endEnd', CONNECTOR_LINE_ENDS) : DEFAULT_CONNECTOR_LOOK.endEnd,
-        given('color') ? colorParam(fields) : DEFAULT_CONNECTOR_LOOK.color,
-        given('label') ? labelParam(fields) : DEFAULT_CONNECTOR_LOOK.label,
+        ...lookColumns(lookParams(fields, DEFAULT_CONNECTOR_LOOK)),
         JSON.stringify(given('points') ? pointsParam(fields, 'points') : []),
       );
       return announce(get(id));
@@ -190,11 +213,7 @@ export function connectorHandlers<Context>(
       if (given('from')) checkEndExists(from);
       if (given('to')) checkEndExists(to);
       update.run(
-        given('style') ? oneOf(fields, 'style', CONNECTOR_STYLES) : connector.style,
-        given('startEnd') ? oneOf(fields, 'startEnd', CONNECTOR_LINE_ENDS) : connector.startEnd,
-        given('endEnd') ? oneOf(fields, 'endEnd', CONNECTOR_LINE_ENDS) : connector.endEnd,
-        given('color') ? colorParam(fields) : connector.color,
-        given('label') ? labelParam(fields) : connector.label,
+        ...lookColumns(lookParams(fields, connector)),
         JSON.stringify(given('points') ? pointsParam(fields, 'points') : connector.points),
         from.type,
         from.id,

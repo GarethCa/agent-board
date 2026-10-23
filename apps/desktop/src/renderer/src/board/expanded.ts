@@ -54,6 +54,12 @@ export function resizeAllowed(next: { x: number; y: number }, start: { x: number
   return next.x >= Math.min(start.x, ZONE_PADDING) && next.y >= Math.min(start.y, ZONE_PADDING + PERCH_ROOM);
 }
 
+/** What a tile takes up in a tidy: an expanded tile its expanded size, so the rest are laid out clear of it; else `compact`. */
+export function tidySize(expanded: ExpandedTiles, id: string, compact: { width: number; height: number }): { width: number; height: number } {
+  const open = expanded.find((entry) => entry.id === id);
+  return open === undefined ? compact : { width: open.width, height: open.height };
+}
+
 /** Expands the tile, at the size it was last let go at if `sizes` has one, or brings it to the front if it already is. */
 export function expandTile(expanded: ExpandedTiles, id: string, sizes: ExpandedSizes = {}): ExpandedTiles {
   if (expanded.some((entry) => entry.id === id)) return bringToFront(expanded, id);
@@ -97,6 +103,43 @@ export function keepSizes(sizes: ExpandedSizes, present: ReadonlySet<string>): E
 /** Only the expanded tiles still on the board, by node id. */
 export function keepExpanded(expanded: ExpandedTiles, present: ReadonlySet<string>): ExpandedTiles {
   return expanded.every((entry) => present.has(entry.id)) ? expanded : expanded.filter((entry) => present.has(entry.id));
+}
+
+/** Where the session windows are, by the node id of the tile each one belongs to. */
+export interface WindowedTiles {
+  /** The tiles whose session is shown on the board or popped out: not also expanded, one terminal sizes it. */
+  open: ReadonlySet<string>;
+  /** Every tile with a window, docked ones too. */
+  all: ReadonlySet<string>;
+}
+
+const sameEntries = (a: ExpandedTiles, b: ExpandedTiles) => a.length === b.length && a.every((entry, index) => entry === b[index]);
+
+/**
+ * Keeps an expanded tile out of the way while its session window is open, and gives it back, at its size, once the
+ * window is closed. `hidden` holds the tiles a window took: a docked window leaves them compact, and one expanded by
+ * hand meanwhile is the state to come back to. Tiles no longer `present` are forgotten rather than brought back.
+ * Returns the same arrays when nothing changes.
+ */
+export function windowedExpanded(
+  expanded: ExpandedTiles,
+  hidden: ExpandedTiles,
+  windowed: WindowedTiles,
+  present: ReadonlySet<string>,
+): { expanded: ExpandedTiles; hidden: ExpandedTiles } {
+  let held = hidden.filter((entry) => present.has(entry.id));
+  for (const entry of expanded) {
+    if (windowed.open.has(entry.id)) held = [...held.filter((known) => known.id !== entry.id), entry];
+    else if (windowed.all.has(entry.id)) held = held.filter((known) => known.id !== entry.id);
+  }
+  const back = held.filter((entry) => !windowed.all.has(entry.id) && !expanded.some((known) => known.id === entry.id));
+  held = held.filter((entry) => windowed.all.has(entry.id));
+  const kept = expanded.filter((entry) => !windowed.open.has(entry.id));
+  const next = back.length === 0 ? kept : [...kept, ...back];
+  return {
+    expanded: sameEntries(expanded, next) ? expanded : next,
+    hidden: sameEntries(hidden, held) ? hidden : held,
+  };
 }
 
 /**

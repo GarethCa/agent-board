@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { checksState, findPushedPullRequests, listPullRequests, mergePullRequest } from '../src/index.ts';
+import { checksState, findPushedPullRequests, listPullRequests, mergePullRequest, viewPullRequest } from '../src/index.ts';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '../src/testing.ts';
 
 const checkRun = (status: string, conclusion = '') => ({ __typename: 'CheckRun', name: 'check', status, conclusion });
@@ -207,5 +207,21 @@ describe('mergePullRequest', () => {
     await expect(mergePullRequest(41, { gh: github.gh, cwd: repoWithRemotes({}), repo: 'acme/app' })).rejects.toMatchObject({
       message: expect.stringContaining('was already merged'),
     });
+  });
+});
+
+describe('viewPullRequest', () => {
+  it('reads one pull request by its repo and number, and takes one GitHub has no such of as none', async () => {
+    const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [pr({ number: 12, state: 'MERGED' })] });
+    onTestFinished(github.dispose);
+    expect(await viewPullRequest({ repo: 'Acme/App', number: 12 }, { gh: github.gh })).toMatchObject({ number: 12, state: 'merged', url: 'https://github.com/acme/app/pull/12' });
+    expect(await viewPullRequest({ repo: 'acme/app', number: 13 }, { gh: github.gh })).toBeUndefined();
+    expect(await viewPullRequest({ repo: 'acme/nothing', number: 1 }, { gh: github.gh })).toBeUndefined();
+  });
+
+  it('fails, rather than calling it gone, when gh can’t read it', async () => {
+    const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, unreadableRepos: ['acme/app'], pullRequests: [pr({ number: 12 })] });
+    onTestFinished(github.dispose);
+    await expect(viewPullRequest({ repo: 'acme/app', number: 12 }, { gh: github.gh })).rejects.toThrow(/SAML/);
   });
 });

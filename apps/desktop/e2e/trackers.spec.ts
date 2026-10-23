@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
-import { agents, expectCardBesideTile, LINEAR_API_KEY, serveLinearFixtures, setZoneTracker, tileAction } from './agent-helpers.ts';
+import { agents, expectCardBesideTile, LINEAR_API_KEY, listFinishedTurns, serveLinearFixtures, setZoneTracker, tileAction, untilStarted } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
 
 const tile = (window: Page, sessionId: string) =>
@@ -91,6 +91,7 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
     await expect(newAgent.getByTestId('selected-issue')).toContainText(knownIssue.id);
     await newAgent.getByRole('button', { name: 'Start' }).click();
     await expect(newAgent).toBeHidden();
+    await untilStarted(window);
 
     const [fromIssue] = await agents(window);
     expect(fromIssue!.branch).toBe(branch);
@@ -110,6 +111,7 @@ test('a zone connects to Linear, an agent starts from an issue on its branch, an
     await newAgent.getByLabel('Task').fill('Look around');
     await newAgent.getByRole('button', { name: 'Start' }).click();
     await expect(newAgent).toBeHidden();
+    await untilStarted(window);
     const second = (await agents(window)).find((agent) => agent.sessionId !== fromIssue!.sessionId)!;
     const secondTile = tile(window, second.sessionId);
     await expect(secondTile.getByTestId('tile-issue')).toHaveCount(0);
@@ -138,6 +140,8 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
   try {
     const window = await app.firstWindow();
     await connectedDaemonPid(window);
+    // Its waiting pill, which sets how many PR chips fold, reads as needing you once Needs you lists finished turns.
+    await listFinishedTurns(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
 
@@ -159,6 +163,7 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
     await issues.getByRole('option').filter({ hasText: '#34' }).click();
     await newAgent.getByRole('button', { name: 'Start' }).click();
     await expect(newAgent).toBeHidden();
+    await untilStarted(window);
 
     const [agent] = await agents(window);
     expect(agent!.branch).toBe('gh-34-fix-the-login-redirect');

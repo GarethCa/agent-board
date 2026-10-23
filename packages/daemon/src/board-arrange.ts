@@ -62,20 +62,26 @@ export interface ArrangeOptions {
   /** What it may not move (notes, cards, tiles out of scope), relative to the zone: every tile keeps a gap from them. */
   obstacles?: readonly Rect[];
   /**
-   * Lay each group out as a cluster: a label above it, a sticky at its start, then its tiles. Only in rows.
+   * Lay each issue's lane out as a cluster: its label in the first column, then its tiles, then its note. Only by issue,
+   * in rows.
    */
   clusters?: boolean;
+  /** How tall each cluster's note needs to be to show its text, by the cluster's key: its lane makes room for it. */
+  noteHeights?: ReadonlyMap<string, number>;
 }
 
-/** The parts of a cluster, as `arrangeTiles` places them: its label and sticky share the column before its tiles. */
+/** The parts of a cluster, as `arrangeTiles` places them: its label in the column before its tiles, its note after them. */
 export const CLUSTER_LABEL_SIZE = { width: AGENT_TILE_SIZE.width, height: 28 };
-/** Between a cluster's label and its sticky, below it in their cell: the gap kept between any two things. */
-const CLUSTER_PART_GAP = TILE_GAP;
-export const CLUSTER_STICKY_SIZE = { width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height - CLUSTER_LABEL_SIZE.height - CLUSTER_PART_GAP };
+/** A tile's size, so a lane's note takes a slot of its own as its tiles do: the least it is, taller for more text. */
+export const CLUSTER_NOTE_SIZE = AGENT_TILE_SIZE;
+/** In columns and cards, a lane's note shares its head cell with its label, below it: together a tile's size at least. */
+const HEAD_NOTE_SIZE = { width: AGENT_TILE_SIZE.width, height: AGENT_TILE_SIZE.height - CLUSTER_LABEL_SIZE.height - TILE_GAP };
+/** A lane's head cell with its label over a note `note` big. */
+const headSize = (note: Size): Size => ({ width: note.width, height: CLUSTER_LABEL_SIZE.height + TILE_GAP + note.height });
 /** The most characters of a cluster's label: about as many as fit its column on one line. */
 const MAX_LABEL = 28;
 
-/** One unit of work laid out as a cluster: what it is, and where its label and sticky go. */
+/** One unit of work laid out as a cluster (a lane): what it is, and where its label and note go. */
 export interface ArrangedCluster {
   /** Stable across arranges: `issue:<id>` for its issue or the ticket in its branch, else its first tile's id (`agent:<session id>`). */
   key: string;
@@ -84,7 +90,8 @@ export interface ArrangedCluster {
   /** Its tiles, in the order they go: an implementer before its reviewer. */
   members: string[];
   labelAt: Point;
-  stickyAt: Point;
+  noteAt: Point;
+  noteSize: Size;
 }
 
 /**
@@ -110,8 +117,10 @@ const STATE_ORDER: readonly AgentState[] = [
   'thinking',
   'handing-off',
   'starting',
+  'on-command',
   'idle',
   'scheduled',
+  'hibernated',
   'stopped-by-restart',
   'done',
 ];
@@ -211,6 +220,30 @@ interface Row {
   unit: boolean;
 }
 
+/** A lane's slots, left to right: what does its work, what reviews it, what reviews it again. */
+export const LANE_SLOTS = ['implementer', 'reviewer', 'follow-up'] as const;
+export type LaneSlot = (typeof LANE_SLOTS)[number];
+
+/** The slot of a lane a tile goes in: a reviewer's (or whatever reviews another), a follow-up reviewer's, else the work's. */
+const slotOf = (tile: Pick<ArrangeTile, 'role' | 'reviewOf'>): LaneSlot =>
+  tile.role === 'follow-up-reviewer' ? 'follow-up' : tile.role === 'reviewer' || tile.reviewOf !== null ? 'reviewer' : 'implementer';
+
+/**
+ * Lanes as rows: each unit's tiles in its slots' columns, every slot as many columns wide as its fullest lane needs and
+ * none for a slot no lane uses, so every lane's tiles line up. Its note goes right after its own last tile, so a short
+ * lane leaves no run of free slots before it.
+ */
+function laneRows(units: readonly ArrangeTile[][]): Row[] {
+  const slotted = units.map((unit) => LANE_SLOTS.map((slot) => unit.filter((tile) => slotOf(tile) === slot)));
+  const widths = LANE_SLOTS.map((_, index) => Math.max(0, ...slotted.map((slots) => slots[index]!.length)));
+  const starts = widths.map((_, index) => widths.slice(0, index).reduce((sum, width) => sum + width, 0));
+  return slotted.map((slots) => ({
+    tiles: slots.flat(),
+    columns: slots.flatMap((tiles, index) => tiles.map((_, at) => starts[index]! + at)),
+    unit: true,
+  }));
+}
+
 /** Columns for the tiles of each role in `chain`, from 0: a reviewer in the column of what it reviews where it can. */
 function roleColumns(chain: readonly ArrangeTile[]): Map<string, number> {
   const at = new Map<string, number>();
@@ -245,22 +278,30 @@ function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by
   const add = (row: ArrangeTile[], columns: number[] = row.map((_, index) => index), unit = false) => {
     if (row.length > 0) rows.push({ tiles: row, columns, unit });
   };
-  add(lead);
   if (by === 'issue') {
+    // The lead and the shells share the top row, above the lanes.
+    add([...lead, ...shells]);
     const units = new Map<string, ArrangeTile[]>();
     for (const chain of chains) {
       const unit = unitOf(chain);
       if (unit !== null) units.set(unit, [...(units.get(unit) ?? []), ...chain]);
     }
+    const lanes: ArrangeTile[][] = [];
     for (const chain of chains) {
       const unit = unitOf(chain);
-      if (unit === null) add(chain, undefined, true);
+      if (unit === null) lanes.push(chain);
       else if (units.has(unit)) {
-        add(units.get(unit)!, undefined, true);
+        lanes.push(units.get(unit)!);
         units.delete(unit);
       }
     }
-  } else if (by === 'role') {
+    // In the order their work started, so a new lane goes last and the others stay put.
+    const started = (lane: readonly ArrangeTile[]) => lane.map((tile) => tile.createdAt ?? '').reduce((first, at) => (at !== '' && (first === '' || at < first) ? at : first), '');
+    rows.push(...laneRows(lanes.toSorted((a, b) => byText(started(a), started(b)))));
+    return rows;
+  }
+  add(lead);
+  if (by === 'role') {
     // Each chain takes as many columns as its roles need, side by side.
     const columns = new Map<string, number>();
     let next = 0;
@@ -304,6 +345,33 @@ function labelOf(row: readonly ArrangeTile[]): string {
   const ticket = unitOf(row);
   if (ticket !== null) return ticket;
   return cutText(commonStart(row.map((tile) => tile.name)) || row[0]!.name, MAX_LABEL);
+}
+
+/** A lane's key, stable across arranges: `issue:<id>` for its issue or the ticket in its branch, else its first tile's id. */
+function laneKey(tiles: readonly ArrangeTile[]): string {
+  const unit = tiles.find((tile) => tile.issue !== null)?.issue ?? unitOf(tiles);
+  return unit === null ? tiles[0]!.id : `issue:${unit}`;
+}
+
+/** A zone's crew as lanes, by issue: what the top row holds (the lead, then the shells), and each lane's tiles by slot. */
+export interface Lanes {
+  top: ArrangeTile[];
+  lanes: { key: string; label: string; slots: Record<LaneSlot, ArrangeTile[]> }[];
+}
+
+/** `tiles` as an arrange by issue puts them in lanes, whatever their places. */
+export function lanesOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[]): Lanes {
+  const rows = rowsOf(tiles, links, 'issue');
+  return {
+    top: rows.filter((row) => !row.unit).flatMap((row) => row.tiles),
+    lanes: rows
+      .filter((row) => row.unit)
+      .map((row) => ({
+        key: laneKey(row.tiles),
+        label: labelOf(row.tiles),
+        slots: Object.fromEntries(LANE_SLOTS.map((slot) => [slot, row.tiles.filter((tile) => slotOf(tile) === slot)])) as Record<LaneSlot, ArrangeTile[]>,
+      })),
+  };
 }
 
 /**
@@ -375,9 +443,22 @@ export function arrangeTiles(
 ): { positions: Map<string, Point>; clusters: ArrangedCluster[]; size: Size } {
   const obstacles = options.obstacles ?? [];
   const clusters: ArrangedCluster[] = [];
+  // A lane's note is as tall as its text needs, and never less than its slot (`least`).
+  const noteSizeOf = (key: string, least: Size): Size => ({ width: least.width, height: Math.max(least.height, options.noteHeights?.get(key) ?? 0) });
   const rows = rowsOf(tiles, links, options.by);
   let positions: Map<string, Point>;
-  if (options.layout === 'grid') {
+  if (options.layout === 'columns' || options.layout === 'cards') {
+    const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
+    const headOf = (row: Row) => headSize(noteSizeOf(laneKey(row.tiles), HEAD_NOTE_SIZE));
+    const cells = (options.layout === 'columns' ? columnCells : cardCells)(rows, isCluster, headOf);
+    positions = placeCells(cells, links, obstacles);
+    for (const row of rows.filter(isCluster)) {
+      const key = laneKey(row.tiles);
+      const labelAt = positions.get(headId(key))!;
+      positions.delete(headId(key));
+      clusters.push({ key, label: labelOf(row.tiles), members: row.tiles.map((tile) => tile.id), labelAt, noteAt: noteBelow(labelAt), noteSize: noteSizeOf(key, HEAD_NOTE_SIZE) });
+    }
+  } else if (options.layout === 'grid') {
     // A unit joined by edges goes as rows lay it out, from the top, and only the tiles no edge joins fill the grid, round
     // it: clear of its tiles and of the box round each two its rails join, where its rails and their tokens are.
     const inRows = joinedUnits(tiles, links, rows, options.by);
@@ -392,9 +473,10 @@ export function arrangeTiles(
     for (const [id, spot] of gridFill(rest, [...obstacles, ...block.map(footprint), ...railed], options.width)) positions.set(id, spot);
   } else {
     positions = new Map();
-    // A cluster's label and sticky take the column before its tiles.
+    // A cluster's label takes the column before its tiles.
     const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
     const columnsOf = (row: Row) => row.columns.map((column) => column + (isCluster(row) ? 1 : 0));
+    const noteColumn = (row: Row) => Math.max(-1, ...row.columns) + 2;
     // Every column as many grid columns wide as its widest tile, in every row, so columns line up; and a rail's room
     // wider than a tile of a row a rail runs past the right of, in every row too: past each tile from either end of the
     // rail to the tile before the other, so its token has room whichever end it is at, never on a tile between them.
@@ -424,15 +506,16 @@ export function arrangeTiles(
     for (const [rowIndex, row] of rows.entries()) {
       const cluster = isCluster(row);
       const columns = columnsOf(row).map(gridColumn);
+      const noteSize = noteSizeOf(laneKey(row.tiles), CLUSTER_NOTE_SIZE);
       if (railAbove(rowIndex)) next += RAIL_ROWS;
       const labelAt = (at: number) => gridPoint(0, at);
-      const stickyAt = (at: number) => stickyBelow(labelAt(at));
+      const noteAt = (at: number) => gridPoint(gridColumn(noteColumn(row)), at);
       const parts = (at: number): Rect[] => [
         ...row.tiles.map((tile, index) => sizedFootprint(gridPoint(columns[index]!, at), sizeOf(tile))),
         ...(cluster
           ? [
               { ...labelAt(at), ...CLUSTER_LABEL_SIZE },
-              { ...stickyAt(at), ...CLUSTER_STICKY_SIZE },
+              { ...noteAt(at), ...noteSize },
             ]
           : []),
       ];
@@ -446,60 +529,165 @@ export function arrangeTiles(
       if (blockedAt(at).length > 0) at = gridRowAtOrBelow(Math.max(...obstacles.map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM);
       row.tiles.forEach((tile, index) => positions.set(tile.id, gridPoint(columns[index]!, at)));
       if (cluster) {
-        const linked = row.tiles.find((tile) => tile.issue !== null);
-        const unit = linked?.issue ?? unitOf(row.tiles);
         clusters.push({
-          key: unit === null ? row.tiles[0]!.id : `issue:${unit}`,
+          key: laneKey(row.tiles),
           label: labelOf(row.tiles),
           members: row.tiles.map((tile) => tile.id),
           labelAt: labelAt(at),
-          stickyAt: stickyAt(at),
+          noteAt: noteAt(at),
+          noteSize,
         });
       }
-      next = at + Math.max(...row.tiles.map((tile) => gridSpan(sizeOf(tile)).rows));
+      // As many grid rows as its tallest tile, or its note.
+      next = at + Math.max(...row.tiles.map((tile) => gridSpan(sizeOf(tile)).rows), cluster ? gridSpan(noteSize).rows : 1);
     }
   }
   const placed = [
     ...tiles.map((tile) => ({ ...positions.get(tile.id)!, ...sizeOf(tile) })),
     ...clusters.flatMap((cluster) => [
       { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
-      { ...cluster.stickyAt, ...CLUSTER_STICKY_SIZE },
+      { ...cluster.noteAt, ...cluster.noteSize },
     ]),
   ];
-  const width = Math.max(options.width, MIN_ZONE_SIZE.width, ...placed.map((rect) => rect.x + rect.width + ZONE_PADDING));
+  return { positions, clusters, size: fittedSize(placed, obstacles) };
+}
+
+/** Something put in a cell of a layout's own grid, before sizes and rails widen its columns and rows: a tile, or a lane's head. */
+interface Cell {
+  id: string;
+  size: Size;
+  column: number;
+  row: number;
+}
+
+/** A lane's head cell's id among the tiles' (where its label and note go). */
+const headId = (key: string) => `#head:${key}`;
+/** Where a lane's note goes in its head cell: below its label. */
+const noteBelow = (labelAt: Point): Point => ({ x: labelAt.x, y: labelAt.y + CLUSTER_LABEL_SIZE.height + TILE_GAP });
+
+/** A row's tiles in the order a lane takes them: by slot (implementer, reviewer, follow-up), or as they are for a row by role or state. */
+const inSlotOrder = (row: Row): ArrangeTile[] => (row.unit ? LANE_SLOTS.flatMap((slot) => row.tiles.filter((tile) => slotOf(tile) === slot)) : row.tiles);
+
+/** Lanes as columns: the lead and shells stacked in the first, then a column per lane, its head cell first, its tiles under it. */
+function columnCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headOf: (row: Row) => Size): Cell[] {
+  return rows.flatMap((row, column) => {
+    const head = isCluster(row) ? [{ id: headId(laneKey(row.tiles)), size: headOf(row) }] : [];
+    return [...head, ...inSlotOrder(row).map((tile) => ({ id: tile.id, size: sizeOf(tile) }))].map((cell, index) => ({ ...cell, column, row: index }));
+  });
+}
+
+/**
+ * A card per lane, flowed two across (three past four lanes) below the lead's row: on its first row its head cell, its
+ * implementer and its reviewers; on its second, under them, its follow-up reviewers. Every card as wide as the widest,
+ * an empty grid column between cards and an empty grid row between their rows, so each reads as a block of its own.
+ */
+function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headOf: (row: Row) => Size): Cell[] {
+  const top = rows.filter((row) => !row.unit);
+  const lanes = rows.filter((row) => row.unit);
+  const cards = lanes.map((row) => {
+    const head = isCluster(row) ? [{ id: headId(laneKey(row.tiles)), size: headOf(row) }] : [];
+    const tiles = inSlotOrder(row).map((tile) => ({ id: tile.id, size: sizeOf(tile), slot: row.unit ? slotOf(tile) : 'implementer' }));
+    const first = [...head, ...tiles.filter((tile) => tile.slot !== 'follow-up')];
+    const second = tiles.filter((tile) => tile.slot === 'follow-up');
+    return [first.map((cell, column) => ({ ...cell, column, row: 0 })), second.map((cell, column) => ({ ...cell, column: head.length + column, row: 1 }))].flat();
+  });
+  const across = lanes.length > 4 ? 3 : 2;
+  const width = Math.max(1, ...cards.flat().map((cell) => cell.column + 1));
+  const cells: Cell[] = top.flatMap((row, index) => row.tiles.map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: index })));
+  let row = top.length;
+  for (let start = 0; start < cards.length; start += across) {
+    const line = cards.slice(start, start + across);
+    line.forEach((card, index) => cells.push(...card.map(({ id, size, column, row: within }) => ({ id, size, column: index * (width + 1) + column, row: row + within }))));
+    row += Math.max(...line.flat().map((cell) => cell.row + 1)) + 1;
+  }
+  return cells;
+}
+
+/**
+ * Where `cells` go on the zone's grid: every column as many grid columns wide as its widest cell, and a rail's room past
+ * each column a rail runs along within a row; every row as tall as its tallest, and a rail's room above each row a rail
+ * crosses; each row pushed down whole past what it may not move (`obstacles`).
+ */
+function placeCells(cells: readonly Cell[], links: readonly ArrangeLink[], obstacles: readonly Rect[]): Map<string, Point> {
+  const byId = new Map(cells.map((cell) => [cell.id, cell]));
+  const railAfter = new Set<number>();
+  const railAbove = new Set<number>();
+  for (const { from, to } of links) {
+    const [a, b] = [byId.get(from), byId.get(to)];
+    if (a === undefined || b === undefined || a === b) continue;
+    if (a.row === b.row) for (let column = Math.min(a.column, b.column); column < Math.max(a.column, b.column); column++) railAfter.add(column);
+    else for (let row = Math.min(a.row, b.row) + 1; row <= Math.max(a.row, b.row); row++) railAbove.add(row);
+  }
+  const columns = Math.max(0, ...cells.map((cell) => cell.column + 1));
+  const spans = Array.from({ length: columns }, (_, column) =>
+    Math.max(1, ...cells.filter((cell) => cell.column === column).map((cell) => gridSpan(cell.size).columns)) + (railAfter.has(column) ? RAIL_COLUMNS : 0),
+  );
+  const gridColumn = (column: number) => spans.slice(0, column).reduce((sum, span) => sum + span, 0);
+  const positions = new Map<string, Point>();
+  const rows = Math.max(0, ...cells.map((cell) => cell.row + 1));
+  let next = 0;
+  for (let row = 0; row < rows; row++) {
+    const inRow = cells.filter((cell) => cell.row === row);
+    // An empty row is a grid row of space.
+    if (inRow.length === 0) {
+      next += 1;
+      continue;
+    }
+    if (railAbove.has(row)) next += RAIL_ROWS;
+    const parts = (at: number) => inRow.map((cell) => sizedFootprint(gridPoint(gridColumn(cell.column), at), cell.size));
+    const blockedAt = (at: number) => obstacles.filter((obstacle) => parts(at).some((rect) => !clearOf(rect, [obstacle])));
+    let at = next;
+    // Down past the lowest obstacle in the way, a whole row at a time, until nothing is: each step passes one.
+    for (let step = 0; step <= obstacles.length && blockedAt(at).length > 0; step++) {
+      at = Math.max(at + 1, gridRowAtOrBelow(Math.max(...blockedAt(at).map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM));
+    }
+    if (blockedAt(at).length > 0) at = gridRowAtOrBelow(Math.max(...obstacles.map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM);
+    for (const cell of inRow) positions.set(cell.id, gridPoint(gridColumn(cell.column), at));
+    next = at + Math.max(...inRow.map((cell) => gridSpan(cell.size).rows));
+  }
+  return positions;
+}
+
+/**
+ * The size a zone fits what it holds at: what was laid out in it (`placed`) and what stays put (`fixed`), with its
+ * padding and a tile's gap below; never less than a zone's least size. Smaller than it was, it shrinks.
+ */
+export function fittedSize(placed: readonly Rect[], fixed: readonly Rect[]): Size {
+  const width = Math.max(MIN_ZONE_SIZE.width, ...[...placed, ...fixed].map((rect) => rect.x + rect.width + ZONE_PADDING));
   const height = Math.max(
     MIN_ZONE_SIZE.height,
     zoneHeightFor(0, width),
     ...placed.map((rect) => rect.y + rect.height + TILE_GAP + ZONE_PADDING),
+    ...fixed.map((rect) => rect.y + rect.height + ZONE_PADDING),
   );
-  return { positions, clusters, size: { width, height } };
+  return { width, height };
 }
-
-/** Where a cluster's sticky goes: below its label, in their cell. */
-const stickyBelow = (labelAt: Point): Point => ({ x: labelAt.x, y: labelAt.y + CLUSTER_LABEL_SIZE.height + CLUSTER_PART_GAP });
 
 /**
  * Where the parts of `clusters` (an arrange by issue's, by key) go when the crew is arranged another way, so none is
- * lost: each cluster a grid row of its own from the cell `from` down, its label and sticky in `from`'s column, each row
- * clear of `obstacles`.
+ * lost: each cluster a grid row of its own (more for a tall note, `noteSize` by its key) from the cell `from` down, its
+ * label in `from`'s column and its note in the next, each row clear of `obstacles`.
  */
 export function parkClusters(
   clusters: readonly string[],
   from: { column: number; row: number },
   obstacles: readonly Rect[],
-): Pick<ArrangedCluster, 'key' | 'labelAt' | 'stickyAt'>[] {
+  noteSize: (key: string) => Size = () => CLUSTER_NOTE_SIZE,
+): Pick<ArrangedCluster, 'key' | 'labelAt' | 'noteAt'>[] {
   const { column } = from;
   let row = from.row;
   return clusters.map((key) => {
+    const note = noteSize(key);
     const parts = (at: number): Rect[] => [
       { ...gridPoint(column, at), ...CLUSTER_LABEL_SIZE },
-      { ...stickyBelow(gridPoint(column, at)), ...CLUSTER_STICKY_SIZE },
+      { ...gridPoint(column + 1, at), ...note },
     ];
     const start = row;
     while (row - start < MAX_SEARCH_STEPS && !parts(row).every((rect) => clearOf(rect, obstacles))) row++;
     // Past the cap, on the first row below everything in the way: never on top of it.
     if (row - start >= MAX_SEARCH_STEPS) row = gridRowAtOrBelow(Math.max(...obstacles.map((rect) => rect.y + rect.height)) + TILE_GAP);
-    const labelAt = gridPoint(column, row++);
-    return { key, labelAt, stickyAt: stickyBelow(labelAt) };
+    const at = row;
+    row += gridSpan(note).rows;
+    return { key, labelAt: gridPoint(column, at), noteAt: gridPoint(column + 1, at) };
   });
 }

@@ -59,6 +59,8 @@ interface TabStripProps {
   dragOf?(tabId: string): TabDrag | undefined;
   /** What the strip does with a tab or pane dropped on it at `index` among its tabs, if it would take it. */
   drop?: { accepts(drag: TabDrag): boolean; onDrop(drag: TabDrag, index: number): void };
+  /** Whatever sits at the strip's right end, after Split: the agent's Terminal / Chat switch. */
+  trailing?: ReactNode;
 }
 
 /**
@@ -87,6 +89,7 @@ export function TabStrip({
   panelId,
   dragOf,
   drop,
+  trailing,
 }: TabStripProps) {
   const list = useRef<HTMLDivElement>(null);
   // A tab or pane held over the strip that would land here shows a slot where it would go.
@@ -266,6 +269,7 @@ export function TabStrip({
         onClick={onSplit}
       />
       )}
+      {trailing}
     </div>
   );
 }

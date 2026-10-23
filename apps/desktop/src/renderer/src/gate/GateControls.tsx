@@ -5,6 +5,8 @@ import {
   ALL_CLEANUP,
   gateBadge,
   githubBlocked,
+  inCheckoutWhy,
+  inRepoCheckout,
   isOpenPullRequest,
   mergeGateBlocked,
   NO_GATE,
@@ -69,6 +71,16 @@ export function GateControls({ agent, visible }: { agent: Agent; visible: boolea
 
   if (status === undefined) return null;
   const gatedZone = status.command !== null;
+  // In the repo's own checkout, an agent never opens or merges a pull request: nothing here may reach its branch.
+  if (inRepoCheckout(agent)) {
+    return (
+      <span className="gate-controls" role="group" aria-label="Merge gate">
+        <Button size="sm" variant="ghost" disabled tooltip={inCheckoutWhy(agent.name)} data-testid="header-no-merge">
+          No PR or merge
+        </Button>
+      </span>
+    );
+  }
   return (
     <span className="gate-controls" role="group" aria-label="Merge gate">
       {run !== undefined && run.status !== 'stopped' ? (

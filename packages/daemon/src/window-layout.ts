@@ -16,9 +16,11 @@ export interface SessionTarget {
  * What a tab shows. `own` is the window's own session (an agent's, or a shell tile's own panes), `shell` one of its
  * shell tabs (a row of `shells` it owns), `session` another agent or shell tile, shown here and still its own, `pr`
  * a GitHub pull request (`repo` is its `owner/repo`), read from GitHub by the daemon, and `web` a web page, kept
- * by the URL it was last at (`isWebTabUrl`) and named by an `id` of its own, so it stays one tab as its page changes.
+ * by the URL it was last at (`isWebTabUrl`; empty for a new tab nothing has been typed in yet) and named by an `id` of its own, so it stays one tab as its page changes.
  * `gate` is an agent's merge gate: its latest run's steps and logs, named by the agent's session. `plan`
- * is an agent's plans: their versions, the one picked rendered, and the decision on the latest.
+ * is an agent's plans: their versions, the one picked rendered, and the decision on the latest. `doc` is one of
+ * an agent's hand-off docs, by its absolute `path`, read through that agent. `document` is a document an agent showed
+ * (`board.showDoc`), named by its id, with its agent's session.
  */
 export type Surface =
   | { kind: 'own' }
@@ -27,7 +29,9 @@ export type Surface =
   | { kind: 'pr'; repo: string; number: number }
   | { kind: 'web'; id: string; url: string }
   | { kind: 'gate'; sessionId: string }
-  | { kind: 'plan'; sessionId: string };
+  | { kind: 'plan'; sessionId: string }
+  | { kind: 'doc'; sessionId: string; path: string }
+  | { kind: 'document'; sessionId: string; documentId: string };
 
 /** A pull request's surface. */
 export type PullRequestSurface = Extract<Surface, { kind: 'pr' }>;
@@ -41,15 +45,21 @@ export type GateSurface = Extract<Surface, { kind: 'gate' }>;
 /** An agent's plans' surface. */
 export type PlanSurface = Extract<Surface, { kind: 'plan' }>;
 
-/** A surface that moves between windows by itself (slice 4): a pull request, a web page, a gate, plans or another session. */
-export type LooseSurface = Extract<Surface, { kind: 'pr' | 'web' | 'session' | 'gate' | 'plan' }>;
+/** An agent's hand-off doc's surface. */
+export type DocSurface = Extract<Surface, { kind: 'doc' }>;
+
+/** A document's surface. */
+export type DocumentSurface = Extract<Surface, { kind: 'document' }>;
+
+/** A surface that moves between windows by itself (slice 4): a pull request, a web page, a gate, plans, a doc, a document or another session. */
+export type LooseSurface = Extract<Surface, { kind: 'pr' | 'web' | 'session' | 'gate' | 'plan' | 'doc' | 'document' }>;
 
 /**
  * Whether the surface is only a place in a window, which moves between windows by itself and is all a tab window holds:
  * not a window's own session, nor a shell tab, which its owner holds.
  */
 export const isLooseSurface = (surface: Surface): surface is LooseSurface =>
-  surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'session' || surface.kind === 'gate' || surface.kind === 'plan';
+  surface.kind === 'pr' || surface.kind === 'web' || surface.kind === 'session' || surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'doc' || surface.kind === 'document';
 
 /** The key of the window's own surface: an agent's session, or a shell tile's own panes. */
 export const OWN_SURFACE = 'own';
@@ -72,6 +82,10 @@ export function surfaceKey(surface: Surface): string {
       return `gate:${surface.sessionId}`;
     case 'plan':
       return `plan:${surface.sessionId}`;
+    case 'doc':
+      return `doc:${surface.sessionId}:${surface.path}`;
+    case 'document':
+      return `document:${surface.documentId}`;
   }
 }
 
@@ -285,9 +299,17 @@ export function parseSurface(raw: unknown): Surface | undefined {
   if (fields.kind === 'gate' || fields.kind === 'plan') {
     return typeof fields.sessionId === 'string' && fields.sessionId !== '' ? { kind: fields.kind, sessionId: fields.sessionId } : undefined;
   }
+  if (fields.kind === 'document') {
+    const { sessionId, documentId } = fields;
+    return typeof sessionId === 'string' && sessionId !== '' && typeof documentId === 'string' && documentId !== '' ? { kind: 'document', sessionId, documentId } : undefined;
+  }
+  if (fields.kind === 'doc') {
+    const { sessionId, path } = fields;
+    return typeof sessionId === 'string' && sessionId !== '' && typeof path === 'string' && path.startsWith('/') ? { kind: 'doc', sessionId, path } : undefined;
+  }
   if (fields.kind === 'web') {
     const { id, url } = fields;
-    return typeof id === 'string' && id !== '' && typeof url === 'string' && isWebTabUrl(url) ? { kind: 'web', id, url } : undefined;
+    return typeof id === 'string' && id !== '' && typeof url === 'string' && (url === '' || isWebTabUrl(url)) ? { kind: 'web', id, url } : undefined;
   }
   if (fields.kind !== 'session' || typeof fields.target !== 'object' || fields.target === null) return undefined;
   const { kind, id } = fields.target as Record<string, unknown>;

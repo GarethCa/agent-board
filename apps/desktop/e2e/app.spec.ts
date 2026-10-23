@@ -28,7 +28,7 @@ test('the app runs under the harness guard, so a spawned claude would hit a trip
   }
 });
 
-test('the character gallery shows all nine poses, in a bean body for Claude and a block body for Codex', async () => {
+test('the character gallery shows all ten poses, in a bean body for Claude and a block body for Codex', async () => {
   const dataDir = tempDataDir();
   const app = await launchApp(dataDir);
   try {
@@ -40,7 +40,7 @@ test('the character gallery shows all nine poses, in a bean body for Claude and 
     });
     const gallery = window.getByTestId('character-gallery');
     await expect(gallery).toBeVisible();
-    const poses = ['running', 'thinking', 'waiting', 'needs-permission', 'idle', 'rate-limited', 'failed', 'done', 'handing-off'];
+    const poses = ['running', 'thinking', 'waiting', 'needs-permission', 'idle', 'rate-limited', 'failed', 'done', 'handing-off', 'on-command'];
     for (const pose of poses) {
       const characters = gallery.locator(`[data-testid="character"][data-pose="${pose}"]`);
       await expect(characters.and(window.locator('[data-body="bean"]'))).toBeVisible();

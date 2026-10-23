@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Connector } from '@agent-board/daemon/protocol';
-import { autoEnds, autoSides, connectorEdges, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
+import { DEFAULT_CONNECTOR_LOOK, type Connector } from '@agent-board/daemon/protocol';
+import { autoEnds, autoSides, connectorEdges, createParamsOf, endOfNode, withConnectorParams, nearestSide, newEndAt, nodeIdOf, shapeOf, withConnector, withConnectorChange } from './endpoints';
 
 const connector = (overrides: Partial<Connector> = {}): Connector => ({
   id: 'c1',
   from: { type: 'item', id: 'a', side: 'right' },
   to: { type: 'agent', id: 's1', side: 'left' },
-  style: 'curved',
-  startEnd: 'none',
-  endEnd: 'arrow',
-  color: null,
-  label: '',
+  ...DEFAULT_CONNECTOR_LOOK,
   points: [],
   createdAt: '',
   updatedAt: '',
@@ -20,6 +16,16 @@ const connector = (overrides: Partial<Connector> = {}): Connector => ({
 describe('shapeOf', () => {
   it('is how the connector is drawn, as a hand-off made from it is', () => {
     expect(shapeOf(connector({ style: 'elbow', points: [{ x: 3, y: 4 }] }))).toEqual({ fromSide: 'right', toSide: 'left', style: 'elbow', points: [{ x: 3, y: 4 }] });
+  });
+});
+
+describe('createParamsOf', () => {
+  it('makes the connector again with all of its look and labels, without the daemon’s times', () => {
+    const made = connector({ endEnd: 'triangle', dashed: true, label: 'is a', startLabel: '1', endLabel: '0..*', createdAt: 'then', updatedAt: 'now' });
+    const params = createParamsOf(made);
+    expect(params).toEqual({ ...made, createdAt: undefined, updatedAt: undefined });
+    expect(Object.keys(params)).not.toContain('createdAt');
+    expect(Object.keys(params)).not.toContain('updatedAt');
   });
 });
 

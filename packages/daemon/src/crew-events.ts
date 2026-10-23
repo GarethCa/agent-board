@@ -8,7 +8,7 @@ import { oneLine } from './terminal-input.ts';
 const TURN_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission', 'handing-off']);
 
 /** States of an agent at its prompt, between turns. */
-const AT_PROMPT: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'scheduled']);
+const AT_PROMPT: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'scheduled', 'on-command']);
 
 /** Longest detail an event keeps: one line of what it asks, cut short. */
 const MAX_DETAIL_LENGTH = 200;
@@ -95,8 +95,13 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
   const changes = (before: Agent, after: Agent): { kind: CrewEventKind; detail: string | null }[] => {
     const found: { kind: CrewEventKind; detail: string | null }[] = [];
     if (before.workFinishedAt === null && after.workFinishedAt !== null) found.push({ kind: 'finished', detail: after.status?.summary ?? null });
+    // A new flag (or a new reason): one an orchestrator passes on is the user's, not news to its own lead.
+    if (after.flag !== null && after.flag.id !== before.flag?.id && after.flag.to === 'orchestrator') {
+      found.push({ kind: 'flagged', detail: after.flag.reason });
+    }
     const asking = after.endedAt === null && !needsUser(before) && needsUser(after);
     if (asking) found.push({ kind: 'needs-you', detail: askedFor(after) });
+    if (after.endedAt === null && before.unsent === null && after.unsent !== null) found.push({ kind: 'not-sent', detail: after.unsent });
     // A turn that ends finished, or on asking the user, says so instead.
     if (!asking && after.workFinishedAt === null && TURN_STATES.has(before.state) && AT_PROMPT.has(after.state)) {
       found.push({ kind: 'turn-ended', detail: null });
@@ -104,7 +109,9 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
     for (const kind of ['failed', 'rate-limited'] as const) {
       if (before.state !== kind && after.state === kind) found.push({ kind, detail: null });
     }
-    if (after.endedAt !== null) found.push({ kind: 'ended', detail: howEnded(after) });
+    // A pause is no end: the agent wakes on its next message, so its orchestrator hears who paused it.
+    if (after.endedAt !== null && after.hibernated !== null) found.push({ kind: 'paused', detail: `by ${after.hibernated.by ?? 'the user'}` });
+    else if (after.endedAt !== null) found.push({ kind: 'ended', detail: howEnded(after) });
     return found;
   };
 
@@ -130,9 +137,12 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
       const leads = options.leads(agent);
       last.set(agent.sessionId, agent);
       leadsOf.set(agent.sessionId, leads);
-      // An ended agent's later updates (its `done`, a rename) are no news; a relaunch starts it over.
+      // An ended agent's later updates (its `done`, a rename) are no news; a relaunch starts it over. A paused one that
+      // is closed as it is has ended now.
       if (before !== undefined && before.endedAt === null) {
         for (const { kind, detail } of changes(before, agent)) log(agent, leads, kind, detail);
+      } else if (before?.hibernated != null && agent.endedAt !== null && agent.hibernated === null) {
+        log(agent, leads, 'ended', howEnded(agent));
       }
     },
 
@@ -155,7 +165,7 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
 
     forget(sessionId) {
       const before = last.get(sessionId);
-      if (before !== undefined && before.endedAt === null) log(before, leadsOf.get(sessionId) ?? [], 'ended', 'removed');
+      if (before !== undefined && (before.endedAt === null || before.hibernated !== null)) log(before, leadsOf.get(sessionId) ?? [], 'ended', 'removed');
       last.delete(sessionId);
       leadsOf.delete(sessionId);
       pullRequestsKnown.delete(sessionId);

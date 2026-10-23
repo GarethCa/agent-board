@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
-import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, listFinishedTurns, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch, type Scratch } from './scratch.ts';
 
@@ -30,15 +30,21 @@ async function spawn(page: Page, prompt: string): Promise<Agent> {
   return after.find((agent) => !before.some((known) => known.sessionId === agent.sessionId))!;
 }
 
-/** Runs `body` with the app open on a fresh repo zone, its agents running the fake claude with `scratch`'s scenario. */
+/**
+ * Runs `body` with the app open on a fresh repo zone, its agents running the fake claude with `scratch`'s scenario, and
+ * Needs you listing every finished turn, as most of these tests are of an agent waiting at its prompt; with
+ * `explicitOnly`, as by default.
+ */
 async function withApp(
   setup: Scratch,
   body: (window: Page, app: ElectronApplication) => Promise<void>,
   env: Record<string, string> = {},
+  explicitOnly = false,
 ): Promise<void> {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...setup.env, ...env });
   try {
+    if (!explicitOnly) await listFinishedTurns(window);
     await pickFolderNext(app, setup.repo);
     await browseForZone(window);
     await body(window, app);
@@ -48,6 +54,35 @@ async function withApp(
     rmSync(setup.dir, { recursive: true, force: true });
   }
 }
+
+test('by default, an agent whose turn ended stays out of Needs you, and one that flags is listed with its reason until it is opened', async () => {
+  await withApp(
+    scratch('orchestrate'),
+    async (window) => {
+      const done = await spawn(window, 'Write the handover');
+      await expect(tile(window).and(window.locator(`[data-session-id="${done.sessionId}"]`))).toHaveAttribute('data-state', /idle|waiting/);
+      const flagged = await spawn(window, 'Flag: PR #12 is ready for review.');
+      const flaggedTile = tile(window).and(window.locator(`[data-session-id="${flagged.sessionId}"]`));
+      await expect(flaggedTile.getByTestId('tile-flag')).toHaveText('⚑ PR #12 is ready for review.');
+      await expect(flaggedTile).toHaveAttribute('data-needs-you', 'true');
+      await expect(count(window)).toHaveAttribute('data-count', '1');
+
+      await openInbox(window);
+      await expect(item(window, done.sessionId)).toHaveCount(0);
+      const row = item(window, flagged.sessionId);
+      await expect(row.getByTestId('inbox-kind')).toHaveText('flagged');
+      await expect(row.getByTestId('inbox-flag')).toHaveText('PR #12 is ready for review.');
+      await expect(window.getByTestId('inbox-foot')).toContainText('Explicit requests only');
+
+      // Opening its session is the look it asked for: the flag goes.
+      await row.getByRole('button', { name: `Open ${flagged.name}` }).click();
+      await expect(count(window)).toHaveAttribute('data-count', '0');
+      await expect(flaggedTile.getByTestId('tile-flag')).toHaveCount(0);
+    },
+    {},
+    true,
+  );
+});
 
 test('answering a waiting agent from the inbox delivers the text and it resumes; answered in its terminal instead, it leaves the inbox too', async () => {
   await withApp(scratch('waiting'), async (window) => {

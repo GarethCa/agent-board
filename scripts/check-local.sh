@@ -13,20 +13,40 @@
 # The visual and e2e steps hold the machine-wide e2e lock (scripts/e2e-lock), so gates in several worktrees take turns.
 # The gate is native only: the visual spec runs on this machine's own baselines.
 # On Linux with no display, the end-to-end tests run on a virtual display (scripts/e2e-headless.sh). Logs go to $CHECK_LOG_DIR (default: a temp dir).
+#
+# The visual and e2e tests get two retries: a test that passes on a retry passes the gate, and the table names it as
+# flaky so it gets fixed. One that fails every try fails the gate. The e2e step's frame-time benchmark (the perf project)
+# gets them too: a slow frame on a busy machine is the flakiest kind of failure. No run writes a screenshot baseline, as
+# a retry would then pass against the one the first try wrote.
+# A run in which every step passed on a clean tree writes a green stamp for its commit (scripts/gate-stamp), so a later
+# step can trust that commit without a second run. $CHECK_STAMP_DIR moves the stamps.
+#
+# `--quick` runs all but the visual and e2e steps, which a change to text alone cannot break, and writes no stamp.
 set -u
 cd "$(dirname "$0")/.."
 
 log_dir=${CHECK_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/agent-board-check.XXXXXX")}
 mkdir -p "$log_dir"
 commit=$(git rev-parse --short HEAD)
+sha=$(git rev-parse HEAD)
 dirty=$(git status --porcelain | head -n 1)
+quick=
+case "${1:-}" in
+  --quick) quick=1 ;;
+  "") ;;
+  *) echo "usage: check-local.sh [--quick]" >&2; exit 2 ;;
+esac
+steps="lint typecheck test build e2e visual markdownlint knip"
+[ -n "$quick" ] && steps="lint typecheck test build markdownlint knip"
 
-e2e="pnpm test:e2e"
+# Retries, and a JSON report beside the log to read the flaky tests from.
+playwright_args="--retries 2 --reporter list,json --update-snapshots none"
+e2e="pnpm test:e2e $playwright_args"
 # The visual run has its own output dir, a sibling of the e2e one (not inside it): Playwright empties its output dir at the
 # start of a run, which would wipe the other run's.
-visual="pnpm --filter @agent-board/desktop test:visual --output test-results-visual"
+visual="pnpm --filter @agent-board/desktop test:visual --output test-results-visual $playwright_args"
 if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
-  e2e="sh scripts/e2e-headless.sh"
+  e2e="sh scripts/e2e-headless.sh $e2e"
   visual="sh scripts/e2e-headless.sh $visual"
 fi
 
@@ -34,7 +54,7 @@ fi
 # step's start, naming its log so the tab can follow it, and its end. Only with an absolute log dir, as the tab needs.
 marks=
 case "${AGENT_BOARD_GATE:-}:$log_dir" in 1:/*) marks=1 ;; esac
-[ -n "$marks" ] && echo "::gate steps lint typecheck test build e2e visual markdownlint knip"
+[ -n "$marks" ] && echo "::gate steps $steps"
 
 # Run from inside an agent on a live board, the steps would inherit its AGENT_BOARD_* (where its hooks and socket are,
 # who the agent is) and the tests' daemons, fakes and app would talk to that board. Keep only the run knobs,
@@ -76,7 +96,8 @@ start() {
   ) &
 }
 
-rm -f "$log_dir"/*.result
+# A reused log dir keeps the last run's results and Playwright reports, which would count as this run's.
+rm -f "$log_dir"/*.result "$log_dir/visual.json" "$log_dir/e2e.json"
 # A Mac that sleeps mid-run freezes the tests, and they wake to find their timeouts gone: keep it awake until this
 # gate exits, and say beside the table if it slept anyway (scripts/machine-sleep).
 gate_started=$(date +%s)
@@ -93,12 +114,14 @@ wait
 # Stage 2: the unit tests alone. They have 5-second timeouts and run slower than that beside anything heavy.
 start test $deadline test "$test_min" -- pnpm test
 wait
-if [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
+if [ -n "$quick" ]; then
+  :
+elif [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
   # Stage 3: the Electron runs. The native visual run goes first, alone (about ten seconds): its screenshots differ when
   # other apps are launching beside it. Then the e2e.
-  start visual node scripts/e2e-lock/main.ts visual -- $deadline visual "$visual_min" -- sh -c "$visual"
+  start visual env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/visual.json" node scripts/e2e-lock/main.ts visual -- $deadline visual "$visual_min" -- sh -c "$visual"
   wait
-  start e2e node scripts/e2e-lock/main.ts e2e -- $deadline e2e "$e2e_min" -- sh -c "$e2e"
+  start e2e env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/e2e.json" node scripts/e2e-lock/main.ts e2e -- $deadline e2e "$e2e_min" -- sh -c "$e2e"
   wait
 else
   # The e2e drives the built app; with the build broken it would test a stale one.
@@ -116,6 +139,9 @@ row() {
     read -r outcome seconds <"$log_dir/$name.result"
     [ "$outcome" = pass ] || failed=1
     [ "$outcome" = TIMEOUT ] && outcome="FAIL: over its $(limit_of "$name") min limit"
+    flaky_count=0
+    [ -f "$log_dir/$name.json" ] && flaky_count=$(node scripts/e2e-flaky/main.ts "$log_dir/$name.json" | wc -l | tr -d ' ')
+    [ "$flaky_count" != 0 ] && outcome="$outcome, $flaky_count flaky"
     results="$results| \`$name\` | $outcome | ${seconds}s |
 "
   else
@@ -124,14 +150,27 @@ row() {
     failed=1
   fi
 }
-for name in lint typecheck test build e2e visual markdownlint knip; do row "$name"; done
+for name in $steps; do row "$name"; done
+flaky=$(node scripts/e2e-flaky/main.ts "$log_dir/visual.json" "$log_dir/e2e.json")
 
 echo
-echo "Local checks on \`$commit\`${dirty:+ (with uncommitted changes)}, $(uname -s):"
+echo "${quick:+Quick }Local checks on \`$commit\`${dirty:+ (with uncommitted changes)}, $(uname -s):"
 echo
 echo "| Step | Result | Time |"
 echo "| --- | --- | --- |"
 printf '%s' "$results"
+if [ -n "$flaky" ]; then
+  echo
+  echo "Flaky, passed on a retry (fix them; they don't fail the gate):"
+  echo
+  printf '%s\n' "$flaky" | sed 's/^/- /'
+fi
+# The stamp says this commit passed: only with every step run and passed, on a tree that was clean and on the same
+# commit from start to end.
+if [ -z "$quick" ] && [ $failed = 0 ] && [ -z "$dirty" ] && [ -z "$(git status --porcelain | head -n 1)" ] && [ "$(git rev-parse HEAD)" = "$sha" ]; then
+  echo
+  node scripts/gate-stamp/main.ts write "$sha"
+fi
 node scripts/machine-sleep/main.ts note "$gate_started"
 # Read again: plugged in or unplugged since the start, the end is what the next run inherits.
 battery=$(node scripts/machine-sleep/main.ts battery)

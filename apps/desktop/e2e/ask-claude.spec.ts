@@ -1,16 +1,17 @@
 import { expect } from '@playwright/test';
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, tile, zones } from './agent-helpers.ts';
+import { agents, launch, tile, TURN_MS, zones } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-/** Three shapes and the two arrows between them, in reading order, each `width` wide: a diagram to ask about. */
+/** Three shapes and the two arrows between them, in reading order, made `SHAPE_SIZE`: a diagram to ask about. */
 const SHAPES = [
   { shape: 'rounded', text: 'API gateway', x: 20, y: 60 },
   { shape: 'service', text: 'Orders service', x: 200, y: 60 },
   { shape: 'database', text: 'Postgres', x: 380, y: 50 },
 ];
+/** The size each shape is made at; it grows taller to fit its text. */
 const SHAPE_SIZE = { width: 120, height: 70 };
 
 test('Ask Claude about a selection: the agent gets its picture and diagram, and its answer lands beside it with a suggested edit', async () => {
@@ -46,6 +47,11 @@ test('Ask Claude about a selection: the agent gets its picture and diagram, and 
     await shapes.nth(1).click({ modifiers: ['Shift'] });
     await shapes.nth(2).click({ modifiers: ['Shift'] });
     await expect(window.getByTestId('selection-label')).toHaveText('3 selected · 3 shapes');
+    // Each shape as drawn on the board, grown to fit its text: its node's own size, which the view's zoom leaves be.
+    const drawnHeights = () =>
+      shapes.evaluateAll((elements) => elements.map((element) => element.closest<HTMLElement>('.react-flow__node')!.offsetHeight));
+    await expect.poll(drawnHeights).not.toContain(0);
+    const heights = await drawnHeights();
 
     // It is offered in the selection's menu and on ⌘⇧A, and nothing is sent until Ask.
     await shapes.nth(1).click({ button: 'right' });
@@ -78,11 +84,13 @@ test('Ask Claude about a selection: the agent gets its picture and diagram, and 
     await expect(asked).toHaveCount(1);
     const [agent] = await agents(window);
     expect(agent).toMatchObject({ roleName: 'architect' });
+    // The note is written when its turn ends: wait for that, not for a clock.
+    await expect(asked).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     const note = window.getByTestId('agent-note');
     await expect(note).toContainText('Saw 3 shapes and 2 arrows');
     // The picture is the selection drawn at 2×: its width is twice the selection's on the board.
     const width = 2 * (SHAPES[2]!.x + SHAPE_SIZE.width - SHAPES[0]!.x);
-    const height = 2 * (Math.max(...SHAPES.map((each) => each.y)) + SHAPE_SIZE.height - Math.min(...SHAPES.map((each) => each.y)));
+    const height = 2 * (Math.max(...SHAPES.map((each, index) => each.y + heights[index]!)) - Math.min(...SHAPES.map((each) => each.y)));
     await expect(note).toContainText(`The picture is a PNG, ${width}×${height} px`);
     // It holds the selected objects alone: no pixel of the sticky between them, which isn't selected.
     const [folder] = readdirSync(join(dataDir, 'selection-asks'));

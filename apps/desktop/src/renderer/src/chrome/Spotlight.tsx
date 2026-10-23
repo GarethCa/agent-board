@@ -8,6 +8,7 @@ import { agentTitle, shellTitle } from '../board/use-board-windows';
 import { inOverlay } from '../keys';
 import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
+import { useNeedsYouShows } from '../needs-you-setting';
 import { Kbd, StatusPill, Tag } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
 import { spotlightGroups, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
@@ -118,7 +119,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
 
-  const groups = useMemo(() => spotlightGroups(query, { agents, shells: shells ?? [], zones }), [query, agents, shells, zones]);
+  const shows = useNeedsYouShows();
+  const groups = useMemo(() => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows }), [query, agents, shells, zones, shows]);
   const rows = groups.flatMap((group) => group.rows);
   // Kept by key as the rows change under it; the first once it has gone.
   const active = rows.find((row) => row.key === activeKey) ?? rows[0];
@@ -266,6 +268,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
 
 function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; onHover(): void; onPick(): void }) {
   const { subject } = row;
+  const shows = useNeedsYouShows();
   return (
     <div
       id={id}
@@ -295,7 +298,7 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
         <span className="spotlight-sub">{row.sub}</span>
       </span>
       {subject.kind === 'agent' ? (
-        <StatusPill {...agentPill(subject.agent, TILE_STATE_LABELS)} title={STATE_LABELS[subject.agent.state]} />
+        <StatusPill {...agentPill(subject.agent, shows, TILE_STATE_LABELS)} title={STATE_LABELS[subject.agent.state]} />
       ) : subject.kind === 'shell' ? (
         <Tag>shell</Tag>
       ) : (

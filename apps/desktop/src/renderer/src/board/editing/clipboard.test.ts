@@ -85,6 +85,17 @@ describe('placed', () => {
     const older = JSON.stringify({ ...copy, connectors: copy.connectors.map((connector) => ({ ...connector, points: undefined })) });
     expect(parseCopied(older)?.connectors[0]!.points).toEqual([]);
   });
+
+  it('keeps a connector’s dash and end labels, and takes one copied before them as solid with none', () => {
+    const copy = { ...twoNotes() };
+    copy.connectors = copy.connectors.map((connector) => ({ ...connector, endEnd: 'triangle', dashed: true, startLabel: '1', endLabel: '0..*' }));
+    expect(parseCopied(serialiseCopied(copy))?.connectors[0]).toMatchObject({ endEnd: 'triangle', dashed: true, startLabel: '1', endLabel: '0..*' });
+    const older = JSON.stringify({
+      ...copy,
+      connectors: copy.connectors.map((connector) => Object.fromEntries(Object.entries(connector).filter(([key]) => !['dashed', 'startLabel', 'endLabel'].includes(key)))),
+    });
+    expect(parseCopied(older)?.connectors[0]).toMatchObject({ endEnd: 'triangle', label: 'next', dashed: false, startLabel: '', endLabel: '' });
+  });
 });
 
 describe('serialising', () => {

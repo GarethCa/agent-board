@@ -1,9 +1,10 @@
 import { expect } from '@playwright/test';
-import { appendFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, screen, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { clickClosing } from './windows.ts';
 
 /** The one transcript a fake harness wrote under `home`: Claude's under `.claude/projects`, Codex's rollout under `.codex/sessions`. */
 function transcriptIn(home: string, harness: 'Claude' | 'Codex'): string {
@@ -220,5 +221,108 @@ test('a run of tool calls is one collapsed row that opens on a click; Expand all
   } finally {
     await app.close();
     await removeDataDir(dataDir);
+  }
+});
+
+test("an expanded tile shows the chat from the switch in its pane strip, and the choice is the session window's too", async () => {
+  const { repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveCount(1);
+    await setClickOpens(window, 'Expand in place');
+    await tile(window).dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    const view = expanded.locator('.session-window-strip').getByRole('group', { name: 'View' });
+    const chat = expanded.getByTestId('chat-view');
+    await expect(view.getByRole('button', { name: 'Terminal' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(chat).toBeHidden();
+
+    await view.getByRole('button', { name: 'Chat' }).click();
+    await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+    const composer = expanded.getByRole('textbox', { name: 'Message to the agent' });
+    await composer.fill('Postgres');
+    await composer.press('Enter');
+    await expect(chat.getByTestId('chat-user')).toHaveText(['Pick a database', 'Postgres']);
+
+    // Maximised, the same session is already in its chat, with the switch in the same place.
+    await expanded.getByRole('button', { name: /^Maximise/ }).click();
+    const maximised = sessionWindow(window).locator('.session-window-strip').getByRole('group', { name: 'View' });
+    await expect(maximised.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(sessionWindow(window).getByTestId('chat-view')).toBeVisible();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test("an expanded tile's chat renders the agent's Markdown and opens its links without collapsing; the choice outlasts a pop-out and a relaunch", async () => {
+  const { dir, repo, env } = scratch('markdown');
+  const dataDir = tempDataDir();
+  const first = await launch(dataDir, env);
+  let second: Awaited<ReturnType<typeof launch>> | undefined;
+  try {
+    const { app, window } = first;
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Find the TODOs');
+    await setClickOpens(window, 'Expand in place');
+    await tile(window).dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    const view = expanded.locator('.session-window-strip').getByRole('group', { name: 'View' });
+    const chat = expanded.getByTestId('chat-view');
+    await view.getByRole('button', { name: 'Chat' }).click();
+    const reply = chat.getByTestId('chat-assistant').last();
+    await expect(reply).toContainText('Found one TODO', { timeout: TURN_MS });
+    await expect(reply.locator('strong')).toHaveText('one');
+    await expect(reply.locator('code')).toHaveText('src/cli.ts');
+
+    // A link in a reply goes to the OS browser (here, recorded) and leaves the tile open.
+    await app.evaluate(({ shell }) => {
+      const opened: string[] = [];
+      (globalThis as { __opened?: string[] }).__opened = opened;
+      shell.openExternal = async (url: string) => void opened.push(url);
+    });
+    const box = expanded.getByRole('textbox', { name: 'Message to the agent' });
+    await box.fill('https://example.com/docs');
+    await box.press('Enter');
+    const link = chat.getByTestId('chat-assistant').last().getByRole('link', { name: 'https://example.com/docs' });
+    await expect(link).toBeVisible({ timeout: TURN_MS });
+    await link.click();
+    await expect.poll(() => app.evaluate(() => (globalThis as { __opened?: string[] }).__opened)).toEqual(['https://example.com/docs']);
+    await expect(expanded).toHaveCount(1);
+    await expect(chat).toBeVisible();
+
+    // Popped out, it is still in Chat; Terminal there carries back to the tile.
+    const [popped] = await Promise.all([app.waitForEvent('window'), expanded.getByRole('button', { name: 'Pop out' }).click()]);
+    const popView = popped.getByRole('group', { name: 'View' });
+    await expect(popView.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    await popView.getByRole('button', { name: 'Terminal' }).click();
+    await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
+    // Back on the board it is a session window, which the board's window read fresh: Terminal, as picked outside.
+    const windowView = sessionWindow(window).getByRole('group', { name: 'View' });
+    await expect(windowView.getByRole('button', { name: 'Terminal' })).toHaveAttribute('aria-pressed', 'true');
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(sessionWindow(window)).toBeHidden();
+    // Closed, the window gives the tile back expanded, as it was before it opened: in Terminal too.
+    await expect(expanded).toHaveCount(1);
+    await expect(view.getByRole('button', { name: 'Terminal' })).toHaveAttribute('aria-pressed', 'true');
+
+    // Chat again, and a relaunch on the same data: still Chat.
+    await view.getByRole('button', { name: 'Chat' }).click();
+    await expect(view.getByRole('button', { name: 'Chat' })).toHaveAttribute('aria-pressed', 'true');
+    await app.close();
+    second = await launch(dataDir, env);
+    // The relaunched app, on the same data, still holds the session's choice.
+    const [agent] = await agents(second.window);
+    await expect.poll(() => second!.window.evaluate(() => localStorage.getItem('agent-board.chat-sessions'))).toBe(JSON.stringify([agent!.sessionId]));
+  } finally {
+    await first.app.close().catch(() => {});
+    await second?.app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

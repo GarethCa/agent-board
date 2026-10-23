@@ -9,6 +9,9 @@ const SPACING = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomW
  * the element to them so no part of the next line shows. Where not one line fits with its padding it drops it
  * (`data-tight`), and where still none fits it hides (the full text is in the tooltip). It fits again whenever the tile,
  * or any part of it, changes size: resized, or a footer that wraps.
+ *
+ * A `data-yields` element right after it (a byline under its text) comes second: it shows only in the room the lines
+ * that fit leave over, so it never takes a line from the text.
  */
 export function useFittedLines(): RefCallback<HTMLElement> {
   const observer = useRef<ResizeObserver | undefined>(undefined);
@@ -28,7 +31,10 @@ export function useFittedLines(): RefCallback<HTMLElement> {
       const spacing = SPACING.reduce((sum, side) => sum + parseFloat(style[side]), 0);
       return { line, spacing, fits: Math.floor((element.clientHeight - spacing) / line) };
     };
+    const yielding = element.nextElementSibling instanceof HTMLElement && element.nextElementSibling.hasAttribute('data-yields') ? element.nextElementSibling : undefined;
     const fit = () => {
+      // Without what yields, so the text is fitted in all the room there is.
+      if (yielding !== undefined) yielding.style.display = 'none';
       // Back to the stylesheet's ceiling and untrimmed, so what is measured is the room the tile leaves.
       element.removeAttribute('data-tight');
       text.style.removeProperty('-webkit-line-clamp');
@@ -36,6 +42,11 @@ export function useFittedLines(): RefCallback<HTMLElement> {
       element.style.maxHeight = 'none';
       let measured = measure();
       if (measured === undefined) return;
+      const available = element.clientHeight;
+      // The lines the whole text takes (clamp lifted), before the element is trimmed to those that fit.
+      const contents = document.createRange();
+      contents.selectNodeContents(text);
+      const wanted = contents.getBoundingClientRect().height;
       if (measured.fits < 1) {
         element.setAttribute('data-tight', '');
         measured = measure()!;
@@ -45,6 +56,14 @@ export function useFittedLines(): RefCallback<HTMLElement> {
       text.style.maxHeight = `${lines * measured.line}px`;
       element.style.maxHeight = `${lines * measured.line + measured.spacing}px`;
       element.style.visibility = measured.fits < 1 ? 'hidden' : '';
+      if (yielding === undefined) return;
+      // What the lines left over, with the yielding element shown, still has to hold it.
+      yielding.style.display = '';
+      // The text may need fewer lines than fit: the element gives the rest up too, so the yielding one has it.
+      const used = Math.min(lines, Math.max(1, Math.ceil((wanted - 1) / measured.line)));
+      element.style.maxHeight = `${used * measured.line + measured.spacing}px`;
+      const room = available - (used * measured.line + measured.spacing);
+      if (measured.fits < 1 || room < yielding.offsetHeight) yielding.style.display = 'none';
     };
     fit();
     observer.current = new ResizeObserver(fit);

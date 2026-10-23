@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getBezierPath, getSmoothStepPath, getStraightPath, Position } from '@xyflow/react';
 import type { ConnectorSide } from '@agent-board/daemon/protocol';
-import { bendsFromBoard, bendsOnBoard, lineShape, pointAlong, samplePath, withoutPoint, withPointOn } from './geometry';
+import { bendsFromBoard, bendsOnBoard, distanceAlong, endLabelAt, lineShape, pointAlong, samplePath, withoutPoint, withPointOn } from './geometry';
 
 const ends = { source: { x: 0, y: 0 }, sourceSide: 'right', target: { x: 200, y: 100 }, targetSide: 'left' } as const;
 
@@ -240,5 +240,70 @@ describe('a curve kept with one bend, from before it could be bowed', () => {
 
   it('has its bow handle on its bend', () => {
     for (const { ends, bend } of KEPT) expect(lineShape('curved', ends, [bend]).bow).toEqual(bend);
+  });
+});
+
+describe('a label at an end', () => {
+  const size = { width: 20, height: 14 };
+  const near = (point: { x: number; y: number }, x: number, y: number) => {
+    expect(point.x).toBeCloseTo(x, 1);
+    expect(point.y).toBeCloseTo(y, 1);
+  };
+
+  it('sits just along the line from its end, clear of the end, to the line’s right going from `from` to `to`', () => {
+    const across = samplePath('M0,0 L200,0');
+    near(endLabelAt(across, 'from', size), 26, 13);
+    near(endLabelAt(across, 'to', size), 174, 13);
+    const down = samplePath('M0,0 L0,200');
+    near(endLabelAt(down, 'from', size), -16, 23);
+    near(endLabelAt(down, 'to', size), -16, 177);
+  });
+
+  it('follows the way the line goes near its end, such as a route round an object', () => {
+    const routed = samplePath('M0,0 L100,0 L100,100');
+    near(endLabelAt(routed, 'from', size), 26, 13);
+    near(endLabelAt(routed, 'to', size), 84, 77);
+  });
+
+  /** Whether the box of `size` centred on `at` is clear of every stretch of `samples`, by the gap a label keeps. */
+  const clearOfLine = (samples: readonly { x: number; y: number }[], at: { x: number; y: number }, box: { width: number; height: number }) => {
+    const [left, right, top, bottom] = [at.x - box.width / 2, at.x + box.width / 2, at.y - box.height / 2, at.y + box.height / 2];
+    return samples.slice(1).every((to, index) => {
+      const from = samples[index]!;
+      // Fine steps along each stretch: none of them inside the box.
+      return Array.from({ length: 51 }, (_, step) => ({ x: from.x + ((to.x - from.x) * step) / 50, y: from.y + ((to.y - from.y) * step) / 50 })).every(
+        (point) => point.x < left || point.x > right || point.y < top || point.y > bottom,
+      );
+    });
+  };
+
+  it('keeps off the line where its last stretch is too short to sit beside, on the outside of the corner', () => {
+    const box = { width: 30, height: 16 };
+    for (const path of ['M0,0 L100,0 L100,20', 'M0,0 L100,0 L100,30', 'M0,0 L100,0 L100,-20', 'M0,0 L0,100 L20,100', 'M0,0 L100,0 L100,8', 'M0,0 L100,0 L100,60']) {
+      const samples = samplePath(path);
+      const at = endLabelAt(samples, 'to', box);
+      expect(clearOfLine(samples, at, box), `${path}: ${at.x},${at.y}`).toBe(true);
+    }
+    // Its start too, on a line that turns soon after it.
+    const turning = samplePath('M100,20 L100,0 L0,0');
+    expect(clearOfLine(turning, endLabelAt(turning, 'from', box), box)).toBe(true);
+  });
+
+  it('keeps each end’s label to its own half of a short line, so the two never pass each other', () => {
+    const short = samplePath('M0,0 L40,0');
+    const [from, to] = [endLabelAt(short, 'from', size), endLabelAt(short, 'to', size)];
+    expect(from.x).toBeLessThanOrEqual(to.x);
+    expect(from.x + size.width / 2).toBeLessThanOrEqual(20.01);
+    expect(to.x - size.width / 2).toBeGreaterThanOrEqual(19.99);
+  });
+});
+
+describe('how far along a line a point is', () => {
+  it('is measured along the line to the nearest point on it, round its corners', () => {
+    const routed = samplePath('M0,0 L100,0 L100,100 L0,100');
+    expect(distanceAlong(routed, { x: 50, y: -4 })).toBeCloseTo(50, 1);
+    expect(distanceAlong(routed, { x: 104, y: 50 })).toBeCloseTo(150, 1);
+    // Near its start in space, but at the far end of a U along it.
+    expect(distanceAlong(routed, { x: 2, y: 103 })).toBeCloseTo(298, 1);
   });
 });

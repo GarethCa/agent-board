@@ -47,6 +47,29 @@ function setup(start: HookStateRow) {
 }
 
 describe('a starting agent', () => {
+  it('failed to start when its process exits while it is starting, until it is started again or deleted', () => {
+    const { states, hook } = setup(row('a'));
+    states.promptQueued('a');
+    states.ended('a');
+    expect(states.startFailed('a')).toBe(true);
+    expect(states.isStarting('a')).toBe(false);
+    states.promptQueued('a');
+    expect(states.startFailed('a')).toBe(false);
+    states.ended('a');
+    states.relaunched('a');
+    expect(states.startFailed('a')).toBe(false);
+    states.promptQueued('a');
+    states.ended('a');
+    states.deleted('a');
+    expect(states.startFailed('a')).toBe(false);
+
+    // One that came up first, and exited later, did not fail to start.
+    states.promptQueued('a');
+    hook({ hook_event_name: 'SessionStart' });
+    states.ended('a');
+    expect(states.startFailed('a')).toBe(false);
+  });
+
   it('is starting from its first prompt until its first hook', () => {
     const { states, hook, row: now } = setup(row('a'));
     states.promptQueued('a');
@@ -101,6 +124,24 @@ describe('a starting agent', () => {
     const { hook, row: now } = setup(row('a', { description: '' }));
     hook({ hook_event_name: 'SessionStart' });
     expect(now().state).toBe('idle');
+  });
+  it('resumed (woken, or after a restart) with no new prompt, stays idle at its prompt on its SessionStart', () => {
+    const { hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(now().state).toBe('idle');
+    // The prompt it was resumed with moves it on at its own hook.
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Now run the linter' });
+    expect(now().state).toBe('thinking');
+  });
+
+  it('resumed with a queued prompt, or started afresh on its task, runs from its SessionStart', () => {
+    const resumed = setup(row('a'));
+    resumed.states.promptQueued('a');
+    resumed.hook({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(resumed.row().state).toBe('running');
+    const fresh = setup(row('b'));
+    fresh.hook({ hook_event_name: 'SessionStart', source: 'startup' });
+    expect(fresh.row().state).toBe('running');
   });
 });
 
@@ -272,5 +313,76 @@ describe('hook states', () => {
     // Pins today's behaviour (the settled set is never cleaned up on delete), not intent: the echo is still dropped.
     hook({ hook_event_name: 'Notification', notification_type: 'permission_prompt' });
     expect(now().state).toBe('idle');
+  });
+});
+
+describe('where a prompt stands, for pressing Enter on what was typed there', () => {
+  it('is at its prompt while idle, idle-prompted, after a failed turn, and a failed turn its idle prompt fired after', () => {
+    const idle = setup(row('a'));
+    expect(idle.states.promptNow(idle.row())).toBe('at-prompt');
+    idle.hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' });
+    expect(idle.row().state).toBe('waiting');
+    expect(idle.states.promptNow(idle.row())).toBe('at-prompt');
+
+    const failed = setup(row('a', { state: 'thinking' }));
+    failed.hook({ hook_event_name: 'StopFailure', error: 'server_error', last_assistant_message: 'API Error' });
+    expect(failed.row().state).toBe('failed');
+    expect(failed.states.promptNow(failed.row())).toBe('at-prompt');
+    failed.hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' });
+    expect(failed.row().state).toBe('waiting');
+    expect(failed.states.promptNow(failed.row())).toBe('at-prompt');
+  });
+
+  it('is at its prompt after a turn that ended on a question: a hand-off is its next input either way', () => {
+    const { states, hook, row: now } = setup(row('a', { state: 'thinking' }));
+    hook({ hook_event_name: 'Stop', last_assistant_message: 'Postgres or SQLite?' });
+    expect(states.promptNow(now())).toBe('at-prompt');
+  });
+
+  it('is working through its turn, and has moved on on a permission prompt, its own question, a rate limit, or once ended', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'go' });
+    expect(states.promptNow(now())).toBe('working');
+    hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' });
+    expect(states.promptNow(now())).toBe('working');
+    void hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } });
+    expect(now().state).toBe('needs-permission');
+    expect(states.promptNow(now())).toBe('moved-on');
+    // A subagent's prompt pending holds it too, whatever its own state says.
+    expect(states.promptNow({ ...now(), state: 'idle' })).toBe('moved-on');
+
+    const asking = setup(row('b', { state: 'thinking' }));
+    asking.hook({ hook_event_name: 'Notification', notification_type: 'agent_needs_input', message: 'Which branch?' });
+    expect(asking.row().state).toBe('waiting');
+    expect(asking.states.promptNow(asking.row())).toBe('moved-on');
+
+    const limited = setup(row('c', { state: 'thinking' }));
+    limited.hook({ hook_event_name: 'StopFailure', error: 'rate_limit', last_assistant_message: 'API Error: 429' });
+    expect(limited.row().state).toBe('rate-limited');
+    expect(limited.states.promptNow(limited.row())).toBe('moved-on');
+    // Its harness may still show a menu of what to do about the limit, where Enter would pick one: it is still limited.
+    limited.hook({ hook_event_name: 'Notification', notification_type: 'idle_prompt' });
+    expect(limited.row().state).toBe('rate-limited');
+    expect(limited.states.promptNow(limited.row())).toBe('moved-on');
+
+    const ended = setup(row('d'));
+    expect(ended.states.promptNow({ ...ended.row(), ended_at: '2026-01-01T00:00:00Z' })).toBe('moved-on');
+  });
+
+  it('is being typed at while the user has a draft there, until they submit it', () => {
+    const { states, hook, row: now } = setup(row('a'));
+    states.typed('a', 'half a th');
+    expect(states.promptNow(now())).toBe('typing');
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'half a thought' });
+    expect(states.promptNow(now())).toBe('working');
+  });
+
+  it("tells a stale hook of an interrupted turn from news of a new one", () => {
+    const { states, hook } = setup(row('a'));
+    states.interrupted('a');
+    expect(states.isStale('a', { hook_event_name: 'PostToolUse' })).toBe(true);
+    expect(states.isStale('a', { hook_event_name: 'UserPromptSubmit' })).toBe(false);
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'again' });
+    expect(states.isStale('a', { hook_event_name: 'PostToolUse' })).toBe(false);
   });
 });

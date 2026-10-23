@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
-import { AGENT_ROLES, MAX_ROLE_NAME_LENGTH, parseRole, REVIEWER_ROLES, type Agent, type AgentRole, type Harness } from '@agent-board/daemon/protocol';
+import { AGENT_ROLES, isOrchestratorRole, MAX_ROLE_NAME_LENGTH, ORCHESTRATOR_ROLE, parseRole, REVIEWER_ROLES, type Agent, type AgentRole, type Harness } from '@agent-board/daemon/protocol';
 import { shortCommit } from '@agent-board/daemon/gate-rules';
 import { HARNESSES } from '../harness';
 import { Button, Input, Menu, type MenuEntry } from '../ui';
@@ -105,8 +105,9 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
   const roles: MenuEntry[] = [
     choice('No role', read === null, () => set({ role: null })),
     ...AGENT_ROLES.map((each) => choice(ROLE_LABELS[each], read?.role === each && named === null, () => set({ role: each }))),
+    choice('Orchestrator', isOrchestratorRole(role), () => set({ role: ORCHESTRATOR_ROLE })),
     'separator',
-    choice(named === null ? 'Named role…' : `Named: ${named}`, named !== null, () => setNaming(named ?? '')),
+    choice(named === null || isOrchestratorRole(role) ? 'Named role…' : `Named: ${named}`, named !== null && !isOrchestratorRole(role), () => setNaming(named ?? '')),
   ];
 
   return (

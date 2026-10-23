@@ -1,6 +1,7 @@
 // One pull request read whole for its PR tab: its description, checks, changed files with their diffs,
 // reviews and comments, and whether the user may merge or approve it, through the user's own `gh` login.
 import { runGh, type GhOptions } from './gh.ts';
+import { listOf, objectOf, parseJson } from './shape.ts';
 import { TrackerError } from './tracker.ts';
 import type { PullRequestRef } from './pull-request-ref.ts';
 import { checksState, pullRequestState, type ChecksState, type PullRequestState } from './pull-requests.ts';
@@ -193,19 +194,27 @@ const GHOST = 'ghost';
  * are `TrackerError`s, GitHub's rate limit among them (`unavailable`).
  */
 export async function pullRequestDetails(ref: PullRequestRef, options: GhOptions & { cwd?: string } = {}): Promise<PullRequestDetails> {
-  const json = async <T>(args: string[]) => JSON.parse(await runGh(args, options)) as T;
+  const json = async <T>(args: string[]) => parseJson(await runGh(args, options), 'GitHub') as T;
   const pulls = `repos/${ref.repo}/pulls/${ref.number}`;
-  const [view, files, inline, { viewerPermission, squashMergeAllowed }, { login }] = await firstFailure([
+  const [view, files, inline, viewer, user] = await firstFailure([
     json<GhPullRequestView>(['pr', 'view', String(ref.number), '--repo', ref.repo, '--json', VIEW_FIELDS]),
     json<RestFile[]>(['api', `${pulls}/files?per_page=${MAX_FILES}`]),
     json<RestReviewComment[]>(['api', `${pulls}/comments?per_page=${MAX_FILES}`]),
     json<{ viewerPermission: string; squashMergeAllowed: boolean }>(['repo', 'view', ref.repo, '--json', 'viewerPermission,squashMergeAllowed']),
     json<{ login: string }>(['api', 'user']),
   ] as const);
+  // gh's answers are read as typed below: check the parts a partial answer would leave undefined.
+  objectOf(view, 'the pull request', 'GitHub');
+  const viewComments = listOf<GhPullRequestView['comments'][number]>(view.comments, 'the comments', 'GitHub');
+  const viewReviews = listOf<GhPullRequestView['reviews'][number]>(view.reviews, 'the reviews', 'GitHub');
+  listOf(files, 'the changed files', 'GitHub');
+  listOf(inline, 'the review comments', 'GitHub');
+  const { viewerPermission, squashMergeAllowed } = objectOf(viewer, 'the repo', 'GitHub') as typeof viewer;
+  const { login } = objectOf(user, 'the GitHub user', 'GitHub') as typeof user;
   const author = view.author?.login ?? GHOST;
-  const rollup = view.statusCheckRollup ?? [];
+  const rollup = view.statusCheckRollup == null ? [] : listOf<Record<string, unknown>>(view.statusCheckRollup, 'the checks', 'GitHub');
   const comments: PullRequestComment[] = [
-    ...view.comments.map((comment) => ({ author: comment.author?.login ?? GHOST, body: comment.body, at: comment.createdAt })),
+    ...viewComments.map((comment) => ({ author: comment.author?.login ?? GHOST, body: comment.body, at: comment.createdAt })),
     ...inline.map((comment) => ({
       author: comment.user?.login ?? GHOST,
       body: comment.body,
@@ -233,7 +242,7 @@ export async function pullRequestDetails(ref: PullRequestRef, options: GhOptions
     changedFiles: view.changedFiles,
     additions: view.additions,
     deletions: view.deletions,
-    reviews: view.reviews
+    reviews: viewReviews
       .filter((review) => review.state !== 'PENDING')
       .map((review) => ({ author: review.author?.login ?? GHOST, state: review.state, body: review.body, at: review.submittedAt })),
     comments,

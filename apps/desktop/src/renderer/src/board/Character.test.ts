@@ -27,7 +27,7 @@ const pick = (characters: Drawn[], ...names: string[]) => characters.map((c) => 
 describe('the character gallery', () => {
   const gallery = charactersIn(renderToStaticMarkup(createElement(CharacterGallery)));
 
-  it('shows all nine poses', () => {
+  it('shows all ten poses', () => {
     expect(CHARACTER_POSES).toEqual([
       'running',
       'thinking',
@@ -38,6 +38,7 @@ describe('the character gallery', () => {
       'failed',
       'done',
       'handing-off',
+      'on-command',
     ]);
     expect(new Set(pick(gallery, 'data-pose').flat())).toEqual(new Set(CHARACTER_POSES));
   });
@@ -103,6 +104,7 @@ describe('subagents on a Hybrid tile', () => {
         state: 'running',
         notice: null,
         earlierConversations: [],
+        hibernated: null,
         muted: false,
         seen: false,
         issue: null,
@@ -112,21 +114,30 @@ describe('subagents on a Hybrid tile', () => {
         shellSessionId: null,
         shellHarness: null,
         subagents,
+        commands: [],
         pullRequests: [],
         pushedPullRequests: [],
+        records: [],
+        recordedPullRequests: [],
+        guessedDoc: null,
         lastMessage: null,
         finishedAt: null,
         permissions: [],
         ask: null,
         plan: null,
+        docs: [],
         schedule: null,
         reviewOf: null,
         reviewCap: 3,
         ownsWorktree: true,
+        master: false,
         orchestrate: null,
         spawnedBy: null,
+        startup: null,
+        unsent: null,
         status: null,
         workFinishedAt: null,
+        flag: null,
         ...fields,
       },
     };
@@ -157,7 +168,7 @@ describe('subagents on a Hybrid tile', () => {
 
   it('carries a clock badge with its next run while it has a schedule, and none while it has none (its More menu schedules it)', () => {
     const nextRunAt = new Date(Date.now() + 60 * 60_000);
-    const schedule = { cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null };
+    const schedule = { clockId: 'clock-1', cron: '0 * * * *', prompt: 'Sweep', enabled: true, nextRunAt: nextRunAt.toISOString(), lastRun: null };
     const time = `${String(nextRunAt.getHours()).padStart(2, '0')}:${String(nextRunAt.getMinutes()).padStart(2, '0')}`;
 
     const scheduled = tile([], 'claude', { state: 'scheduled', schedule });

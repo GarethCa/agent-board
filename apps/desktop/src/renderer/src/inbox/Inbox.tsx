@@ -1,30 +1,39 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react';
-import { planPending, waitsOnUser, type Agent, type AgentAsk, type AskAnswer, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
+import { useState, type FormEvent } from 'react';
+import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
 import { ClipboardList, SquareArrowOutUpRight, Timer } from 'lucide-react';
-import { Button, EmptyState, ErrorText, Input, Kbd, StatusPill } from '../ui';
+import { Button, EmptyState, ErrorText, Input, Kbd } from '../ui';
 import { useAction } from '../use-action';
-import { heldPrompts, needsYou, secondsLeft, toolSummary, waitLeft } from '../../../shared/needs-you';
+import { KIND_TAGS } from './kind-tags';
+import { HarnessMark } from '../board/HarnessMark';
+import { HARNESSES } from '../harness';
+import { heldPrompts, needsYouEntries, secondsLeft, sinceText, toolSummary, waitLeft } from '../../../shared/needs-you';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { planSurfaceOf } from '../session/tabs';
 import { requestTab } from '../session/tab-request';
-import { agentPill } from '../states';
+import { useNeedsYouShows } from '../needs-you-setting';
 import { useNow } from './use-now';
+import { useAskAnswer } from './use-ask-answer';
 
 interface InboxProps {
   agents: readonly Agent[];
   /** Opens the agent's session window. */
   onOpen(agent: Agent): void;
+  /** Opens the settings, where what it lists is picked. */
+  onSettings?(): void;
 }
 
 /**
- * The needs-you inbox: every agent waiting for input or needing permission, with what it last said or each tool call
- * it wants to make, answerable without opening its shell. It follows the agents live, so an item goes as soon as the
- * agent moves on, however it was answered. An item whose session was opened since it began asking is read: it stays
- * while the agent waits, but no longer counts.
+ * The needs-you inbox, oldest first: what agents asked of the user (a permission prompt, a question, a plan, or a flag
+ * with its reason) and, if the settings say so, every agent whose turn ended, each row tagged with its kind and
+ * answerable without opening its shell. It follows the agents live, so an item goes as soon as the agent moves on,
+ * however it was answered. An item whose session was opened since it began asking is read: it stays while the agent
+ * waits, but no longer counts. A flag goes once its session is opened.
  */
-export function Inbox({ agents, onOpen }: InboxProps) {
-  const items = needsYou(agents);
-  const now = useNow(items.some((agent) => heldPrompts(agent).length > 0 || waitsOnUser(agent)));
+export function Inbox({ agents, onOpen, onSettings }: InboxProps) {
+  const shows = useNeedsYouShows();
+  const entries = needsYouEntries(agents, shows);
+  const items = entries.map((entry) => entry.agent);
+  const now = useNow(items.some((agent) => heldPrompts(agent).length > 0 || waitsOnUser(agent) || agent.flag !== null));
   return (
     <section className="inbox" data-testid="needs-you-inbox" aria-label="Needs you">
       <header className="inbox-head">
@@ -33,31 +42,59 @@ export function Inbox({ agents, onOpen }: InboxProps) {
       </header>
       {items.length === 0 ? (
         <EmptyState framed={false} title="Nothing needs you.">
-          Agents waiting for an answer or a permission show here.
+          {shows === 'explicit'
+            ? 'Questions, permission prompts and agents that flag you show here.'
+            : 'Agents waiting for an answer or a permission show here.'}
         </EmptyState>
       ) : (
         <ul className="inbox-items">
-          {items.map((agent) => (
-            <InboxItem key={agent.sessionId} agent={agent} now={now} onOpen={onOpen} />
+          {entries.map(({ agent, kind }) => (
+            <InboxItem key={agent.sessionId} agent={agent} kind={kind} lead={agents.find((each) => each.sessionId === agent.spawnedBy)} now={now} onOpen={onOpen} />
           ))}
         </ul>
       )}
+      <footer className="inbox-foot" data-testid="inbox-foot">
+        <span>{shows === 'explicit' ? 'Explicit requests only' : 'Explicit requests and finished turns'}</span>
+        {onSettings && (
+          <>
+            <span aria-hidden>·</span>
+            <button type="button" className="inbox-foot-settings" onClick={onSettings}>
+              Settings
+            </button>
+          </>
+        )}
+      </footer>
     </section>
   );
 }
 
-function InboxItem({ agent, now, onOpen }: { agent: Agent; now: number; onOpen(agent: Agent): void }) {
+function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: NeedsYouKind; lead: Agent | undefined; now: number; onOpen(agent: Agent): void }) {
   const asking = agent.permissions.length > 0;
+  const tag = KIND_TAGS[kind];
+  // A flag stands until its session is opened, so a row with one is never read while it is listed.
+  const flag = agent.flag?.to === 'user' ? agent.flag : null;
+  const read = flag === null && agent.seen;
   return (
-    <li className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state} data-read={agent.seen}>
+    <li className="inbox-item" data-testid="inbox-item" data-session-id={agent.sessionId} data-state={agent.state} data-kind={kind} data-read={read}>
       <div className="inbox-item-head">
+        <HarnessMark className="inbox-item-mark" harness={agent.harness} />
         <span className="inbox-item-name">{agent.name}</span>
-        <StatusPill {...agentPill(agent, undefined, asking ? 'needs-permission' : agent.state)} />
+        <span className="inbox-kind" data-testid="inbox-kind" data-kind={kind}>
+          {tag.icon}
+          {tag.label}
+        </span>
         <Button size="sm" variant="ghost" className="inbox-item-open" icon={<SquareArrowOutUpRight />} aria-label={`Open ${agent.name}`} onClick={() => onOpen(agent)}>
           Open
         </Button>
       </div>
-      {asking ? (
+      {kind === 'permission' && lead !== undefined && (
+        <p className="inbox-item-meta">
+          crew of <span className="inbox-crew">◆ {lead.name}</span> · permission prompts always reach you
+        </p>
+      )}
+      {/* A flag shows whatever else the agent asks, so a seen question never hides it. */}
+      {flag !== null && <FlagRow agent={agent} flag={flag} now={now} />}
+      {kind === 'flagged' ? null : asking ? (
         agent.permissions.map((prompt) => (
           // Keyed by request, so a new request never inherits an old one's error.
           <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} />
@@ -91,21 +128,7 @@ function InboxItem({ agent, now, onOpen }: { agent: Agent; now: number; onOpen(a
  * that it carries on without an answer, with Skip.
  */
 function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number }) {
-  const [text, setText] = useState('');
-  const { busy, error, run } = useAction();
-  const answer = (given: AskAnswer) => run(() => window.agentBoard.asks.answer(agent.sessionId, ask.id, given));
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (text.trim() !== '') answer({ text });
-  };
-  const pick = (event: KeyboardEvent) => {
-    // Digits typed into the reply field are words, not picks.
-    if (event.target instanceof HTMLInputElement || event.metaKey || event.ctrlKey || event.altKey) return;
-    const option = Number(event.key) - 1;
-    if (!Number.isInteger(option) || option < 0 || option >= ask.options.length) return;
-    event.preventDefault();
-    answer({ option });
-  };
+  const { text, setText, busy, error, answer, submit, pick } = useAskAnswer(agent.sessionId, ask);
   return (
     <form className="inbox-ask" data-testid="inbox-ask" onSubmit={submit} onKeyDown={pick}>
       <p className="inbox-ask-question">{ask.question}</p>
@@ -143,6 +166,25 @@ function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number 
       </p>
       {error && <ErrorText>{error}</ErrorText>}
     </form>
+  );
+}
+
+/** A flag an agent raised for a look: its reason, and who it came through. It has nothing to answer: Open is the action. */
+function FlagRow({ agent, flag, now }: { agent: Agent; flag: AgentFlag; now: number }) {
+  return (
+    <>
+      <blockquote className="inbox-item-message" data-testid="inbox-flag" title={flag.reason}>
+        {flag.reason}
+      </blockquote>
+      <p className="inbox-item-meta">
+        {flag.via !== null && (
+          <>
+            via <span className="inbox-crew">{flag.via}</span> ·
+          </>
+        )}{' '}
+        {HARNESSES[agent.harness].label} · {sinceText(flag.at, now)} · clears when you open it
+      </p>
+    </>
   );
 }
 

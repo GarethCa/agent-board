@@ -39,13 +39,13 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
 
 **Update**:
 
-- An agent can start from a repo it is given rather than its zone's: one picked in the repo picker (a repo, or a folder
+- An agent can start from a repo it is given rather than its zone's: one picked in New agent's Repo field (a repo, or a folder
   in one, which it then starts in), a group's default repo, or a new **scratch repo** the daemon makes for it, with an
   empty first commit as a new project gets. A scratch repo goes in `~/.agent-board/scratch` (`$AGENT_BOARD_SCRATCH_DIR`
   overrides the root, for tests), in a folder named by the agent's name as a slug, with `-2`, `-3`… if that is taken. A
   spawn that fails removes the scratch repo it made. Its worktree goes where every agent's does.
 - The worktree can be cut from a named base branch of the repo instead of its HEAD.
-- A branch name can be given: the repo picker prefills `agent/<agent name>`. It must be a name git accepts and one the
+- A branch name can be given: a typed branch is checked; left empty, the branch is made from the agent's name (`agent/<agent name>`). It must be a name git accepts and one the
   repo doesn't have yet; the daemon refuses it otherwise rather than adding a suffix. Without one, the rules above hold.
 
 **Update**:

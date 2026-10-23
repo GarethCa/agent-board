@@ -180,7 +180,7 @@ describe('the shipped migrations', () => {
     expect(db.prepare(`SELECT ${columnsBefore.join(', ')} FROM zones`).all()).toEqual(before);
     expect(db.prepare('SELECT zone_id FROM agents').all()).toEqual([{ zone_id: 'z' }]);
     expect(db.prepare('SELECT zone_id FROM shells').all()).toEqual([{ zone_id: 'z' }]);
-    expect(db.prepare('SELECT session_id FROM schedules').all()).toEqual([{ session_id: 's' }]);
+    expect(db.prepare("SELECT kind, zone_id, json_extract(data, '$.agent') AS agent FROM board_items").all()).toEqual([{ kind: 'clock', zone_id: 'z', agent: 's' }]);
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     db.exec(`INSERT INTO zones (id, repo_root, name, color, x, y, width, height)
       VALUES ('u', NULL, 'Ideas', '#12b886', 0, 0, 300, 200)`);
@@ -395,5 +395,88 @@ describe('the auto edge sides migration', () => {
     const now = new Map(before.map((row) => [row.id, row]));
     for (const id of ['orchestrated', 'one-off']) now.set(id, { ...now.get(id)!, from_side: 'auto', to_side: 'auto' });
     expect(sides()).toEqual([...now.values()]);
+  });
+
+  it('record the agents each orchestrator started as its crew, when agents get records', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const added = MIGRATIONS.findIndex((m) => m.name === 'agent_records');
+    expect(added).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, added));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd)
+        VALUES ('lead', 'claude', 'h1', '/a'), ('impl', 'claude', 'h2', '/b'), ('orphan', 'claude', 'h3', '/c');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, spawned_by)
+        VALUES ('lead', 'z', '/code/app', 1, 'Lead', '', 'lead', '/a', 'idle', NULL),
+          ('impl', 'z', '/code/app', 1, 'Impl', '', 'impl', '/b', 'idle', 'lead'),
+          ('orphan', 'z', '/code/app', 1, 'Orphan', '', 'orphan', '/c', 'idle', 'gone')`);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT session_id, kind, key, data, deleted_at FROM agent_records').all()).toEqual([
+      { session_id: 'lead', kind: 'crew', key: 'impl', data: '{}', deleted_at: null },
+    ]);
+  });
+});
+
+describe('the clocks migration', () => {
+  it("makes each agent's schedule a clock beside its tile, joined to it, with its runs, and keeps nothing else of it", () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const clocks = MIGRATIONS.findIndex((m) => m.name === 'clocks');
+    expect(clocks).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, clocks));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 900, 400);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd) VALUES ('a', 'claude', 'ha', '/a'), ('b', 'claude', 'hb', '/b'), ('c', 'claude', 'hc', '/c'), ('d', 'claude', 'hd', '/d');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, x, y)
+        VALUES ('a', 'z', '/code/app', 1, 'Ada', 'Do it', 'ada', '/a', 'idle', 400, 40), ('b', 'z', '/code/app', 1, 'Bo', 'Do it', 'bo', '/b', 'idle', 16, 200),
+          ('c', NULL, '/code/app', 1, 'Cy', 'Do it', 'cy', '/c', 'idle', 16, 600),
+          ('d', NULL, '/code/app', 1, 'Di', 'Do it', 'di', '/d', 'idle', NULL, NULL);
+      INSERT INTO board_items (id, kind, zone_id, x, y, width, height, z, data) VALUES ('n', 'sticky', 'z', 0, 0, 200, 200, 5, '{}');
+      INSERT INTO schedules (session_id, cron, prompt, enabled) VALUES ('a', '0 9 * * 1-5', 'Morning', 1), ('b', '@hourly', 'Sweep', 0), ('c', '@daily', 'Tidy', 1), ('d', '@daily', 'Tidy up', 1);
+      INSERT INTO schedule_runs (session_id, due_at, fired_at, outcome, reason)
+        VALUES ('a', '2026-10-12T08:00:00.000Z', '2026-10-12T08:00:01.000Z', 'started', NULL),
+               ('a', '2026-10-13T08:00:00.000Z', '2026-10-13T08:00:00.000Z', 'skipped', 'it was still running');`);
+
+    migrate(db, MIGRATIONS.slice(0, clocks + 1));
+
+    const items = db.prepare("SELECT id, zone_id, x, y, width, height, z, data FROM board_items WHERE kind = 'clock' ORDER BY id").all() as { data: string }[];
+    expect(items.map((item) => ({ ...item, data: JSON.parse(item.data) as unknown }))).toEqual([
+      {
+        id: 'clock-a',
+        zone_id: 'z',
+        // 60 px left of its tile.
+        x: 84,
+        y: 40,
+        width: 256,
+        height: 76,
+        z: 6,
+        data: {
+          cron: '0 9 * * 1-5',
+          enabled: true,
+          does: 'message',
+          agent: 'a',
+          prompt: 'Morning',
+          fresh: { harness: 'claude', model: null, role: null, closeWhenDone: true },
+          result: 'history',
+          handoffTo: null,
+          folded: false,
+        },
+      },
+      // No room on its left in the zone: on its right.
+      expect.objectContaining({ id: 'clock-b', x: 332, y: 200, z: 7, data: expect.objectContaining({ agent: 'b', enabled: false, cron: '@hourly' }) }),
+      // Loose on the board, its left is always room.
+      expect.objectContaining({ id: 'clock-c', zone_id: null, x: -300, y: 600, z: 8 }),
+      // Not placed yet: beside the board's origin, as the app puts one.
+      expect.objectContaining({ id: 'clock-d', zone_id: null, x: -316, y: 0, z: 9 }),
+    ]);
+    expect(db.prepare('SELECT clock_id, due_at, outcome, reason, session_id, agent_name FROM clock_runs ORDER BY id').all()).toEqual([
+      { clock_id: 'clock-a', due_at: '2026-10-12T08:00:00.000Z', outcome: 'started', reason: null, session_id: 'a', agent_name: 'Ada' },
+      { clock_id: 'clock-a', due_at: '2026-10-13T08:00:00.000Z', outcome: 'skipped', reason: 'it was still running', session_id: 'a', agent_name: 'Ada' },
+    ]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('schedules', 'schedule_runs')").all()).toEqual([]);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });

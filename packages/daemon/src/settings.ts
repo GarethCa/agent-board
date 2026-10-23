@@ -1,13 +1,24 @@
 import { isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { invalidParams, oneOf, paramsObject, stringParam } from './params.ts';
-import { COMPACT_WINDOW_RANGE, HELD_PAYLOAD_STORAGE, type DaemonMethods, type DaemonSettings } from './protocol.ts';
+import { invalidParams, oneOf, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
+import { COMPACT_WINDOW_RANGE, HELD_PAYLOAD_STORAGE, NEEDS_YOU_SHOWS, type DaemonMethods, type DaemonSettings } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 
 type SettingsMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `settings.${string}`>>;
 
 /** Each setting until it is changed. */
-const DEFAULT_SETTINGS: DaemonSettings = { heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0 };
+const DEFAULT_SETTINGS: DaemonSettings = {
+  heldPayloads: 'copy',
+  claudePath: '',
+  codexPath: '',
+  compactWindow: 0,
+  needsYouShows: 'explicit',
+  notifications: true,
+  notifyInFront: false,
+};
+
+/** The settings that are switches. */
+const SWITCHES = ['notifications', 'notifyInFront'] as const;
 
 export interface SettingsHost {
   get(): DaemonSettings;
@@ -28,6 +39,8 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       if (key === 'heldPayloads' && HELD_PAYLOAD_STORAGE.includes(JSON.parse(value))) settings.heldPayloads = JSON.parse(value);
       if (key === 'compactWindow' && isCompactWindow(JSON.parse(value))) settings.compactWindow = JSON.parse(value);
       if ((key === 'claudePath' || key === 'codexPath') && typeof JSON.parse(value) === 'string') settings[key] = JSON.parse(value);
+      if (key === 'needsYouShows' && NEEDS_YOU_SHOWS.includes(JSON.parse(value))) settings.needsYouShows = JSON.parse(value);
+      for (const name of SWITCHES) if (key === name && typeof JSON.parse(value) === 'boolean') settings[name] = JSON.parse(value);
     }
     return settings;
   };
@@ -44,6 +57,11 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
           if (fields[key] !== undefined) upsert.run(key, JSON.stringify(harnessPathParam(fields, key)));
         }
         if (fields.compactWindow !== undefined) upsert.run('compactWindow', JSON.stringify(compactWindowParam(fields)));
+        if (fields.needsYouShows !== undefined) upsert.run('needsYouShows', JSON.stringify(oneOf(fields, 'needsYouShows', NEEDS_YOU_SHOWS)));
+        for (const name of SWITCHES) {
+          const on = optionalBooleanParam(fields, name);
+          if (on !== undefined) upsert.run(name, JSON.stringify(on));
+        }
         const now = get();
         changed(now, was);
         return now;

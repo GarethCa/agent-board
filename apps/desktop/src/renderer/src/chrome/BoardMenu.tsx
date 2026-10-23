@@ -12,7 +12,7 @@ import { Settings, type SettingsProps } from './Settings';
 /** Whether the board menu is open, and where it put the focus as it opened: its search field, or its settings. */
 export type BoardMenuState = { open: false } | { open: true; at?: 'search' | 'settings'; asked?: number };
 
-export interface BoardMenuProps extends SettingsProps {
+export interface BoardMenuProps extends Omit<SettingsProps, 'muted'> {
   menu: BoardMenuState;
   onMenu(menu: BoardMenuState): void;
   status: DaemonStatusValue;
@@ -118,7 +118,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         </Section>
         <Sessions agents={agents} shells={shells} filter={filter} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
         <Section ref={settingsSection} label="Settings">
-          <Settings status={status} {...settings} />
+          <Settings status={status} muted={agents.filter((agent) => agent.muted).length} {...settings} />
         </Section>
         {onGettingStarted !== undefined && (
           <Section label="Help">

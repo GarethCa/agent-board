@@ -217,6 +217,16 @@ export interface SessionHost {
   folderOf(sessionId: string): Promise<string>;
   /** What the session's terminal last showed, as saved: its scrollback and screen, serialized, and its size. */
   savedScreen(sessionId: string): SavedScreen | undefined;
+  /**
+   * The last line with text on the session's screen, once what it printed so far is parsed, less the box drawing a TUI
+   * frames it with: null for none, or for a session that is no longer live.
+   */
+  screenLine(sessionId: string): Promise<string | null>;
+  /**
+   * The lines on the session's screen, top to bottom, once what it printed so far is parsed, less the box drawing a TUI
+   * frames them with: null for a session that is no longer live.
+   */
+  screenLines(sessionId: string): Promise<string[] | null>;
   /** The live session holding the board token, if any (ADR-0010). */
   sessionForBoardToken(token: string): string | undefined;
 }
@@ -562,6 +572,18 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   }
 
   return {
+    screenLine(sessionId) {
+      const session = sessions.get(sessionId) ?? exiting.get(sessionId);
+      if (session === undefined) return Promise.resolve(null);
+      return new Promise((resolve) => session.model.write('', () => resolve(lastScreenLine(session.model))));
+    },
+
+    screenLines(sessionId) {
+      const session = sessions.get(sessionId);
+      if (session === undefined) return Promise.resolve(null);
+      return new Promise((resolve) => session.model.write('', () => resolve(visibleLines(session.model))));
+    },
+
     createShell({ cols, rows, cwd = options.homeDir ?? homedir(), id = randomUUID(), restore, zoneId }) {
       // Shell sessions get no harness hooks, but every row carries a token; this one is never handed out.
       const hookTokenSha256 = hashToken(newToken());
@@ -738,4 +760,26 @@ function isDirectory(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Box drawing, which frames a TUI's prompt and panels: no part of what a line says. */
+const BOX_DRAWING = /[\u2500-\u257f]/g;
+
+/** Line `y` of `model`'s buffer as text, box drawing taken out and its runs of spaces joined. */
+const lineText = (model: xtermHeadless.Terminal, y: number) =>
+  model.buffer.active.getLine(y)?.translateToString(true).replace(BOX_DRAWING, ' ').replace(/\s+/g, ' ').trim() ?? '';
+
+/** The last line of `model`'s screen with text on it once box drawing is taken out, or null for none. */
+function lastScreenLine(model: xtermHeadless.Terminal): string | null {
+  for (let y = model.buffer.active.baseY + model.rows - 1; y >= 0; y--) {
+    const text = lineText(model, y);
+    if (text) return text;
+  }
+  return null;
+}
+
+/** The lines of `model`'s screen, top to bottom, box drawing taken out. */
+function visibleLines(model: xtermHeadless.Terminal): string[] {
+  const top = model.buffer.active.baseY;
+  return Array.from({ length: model.rows }, (_, row) => lineText(model, top + row));
 }

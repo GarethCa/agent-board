@@ -437,7 +437,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
     await window.keyboard.press('Enter');
     await window.getByRole('menuitem', { name: 'Schedule…' }).focus();
     await window.keyboard.press('Enter');
-    await expect(window.getByRole('dialog', { name: 'Schedule' })).toBeVisible();
+    await expect(window.getByRole('dialog', { name: 'Clock' })).toBeVisible();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

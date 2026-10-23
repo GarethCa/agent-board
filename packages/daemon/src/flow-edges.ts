@@ -20,6 +20,7 @@ import {
   FLOW_EDGE_PAYLOADS,
   FLOW_EDGE_SHAPE_KEYS,
   FLOW_EDGE_TRIGGERS,
+  type AgentState,
   type DaemonEvent,
   type DaemonMethods,
   type FlowCommandApproval,
@@ -57,6 +58,8 @@ export interface FlowAgent {
   worktree: string;
   /** When its session ended; null while it runs. */
   endedAt: string | null;
+  /** `hibernated` while it is paused, which a hand-off wakes. */
+  state: AgentState;
 }
 
 export interface FlowEdgeHostOptions {
@@ -436,6 +439,10 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     announceId(id);
   };
 
+  /** What a delivery's history says of how it went: what it carried, and whether it sat unsent; or why it was skipped. */
+  const outcomeDetail = (payload: Payload, result: RunStart): string =>
+    result.started ? `${payload.name} (${size(payload.bytes)})${result.unsent === true ? ', typed at its prompt but not sent' : ''}` : result.reason;
+
   /**
    * Tries `payload` along the edge to its `to` agent: how it went. An ended `to` starts again, along any edge, whoever
    * made it (ADR-0012).
@@ -469,7 +476,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     if (!result.started) options.log(`flow edge ${row.id} skipped delivering to ${row.to_session_id}: ${result.reason}`);
     // Either agent may have gone meanwhile, and the edge with it.
     if (updateDelivery.run(result.started ? null : result.reason, row.id).changes === 0) return undefined;
-    record(row.id, result.started ? 'delivered' : 'skipped', result.started ? `${payload.name} (${size(payload.bytes)})` : result.reason);
+    record(row.id, result.started ? 'delivered' : 'skipped', outcomeDetail(payload, result));
     const outcome: Outcome = result.started
       ? { outcome: 'delivered', name: payload.name, reason: null }
       : { outcome: 'skipped', name: payload.name, reason: result.reason };
@@ -647,7 +654,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
       if (!result.started && result.busy === true) return announceId(now.id);
       if (clearQueue.run(now.id, now.queued_since).changes === 0) return;
       if (updateDelivery.run(result.started ? null : result.reason, now.id).changes === 0) return;
-      record(now.id, result.started ? 'delivered' : 'skipped', result.started ? `${payload.name} (${size(payload.bytes)})` : result.reason);
+      record(now.id, result.started ? 'delivered' : 'skipped', outcomeDetail(payload, result));
       announceId(now.id);
     }).catch((error: Error) => options.log(`could not deliver along flow edge ${row.id}: ${error.message}`));
 
@@ -744,12 +751,13 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
 
   /**
    * Delivers a named hand-off along its one-off edge at once: it has no conditions, and is the agent's own to send. It
-   * never starts an ended agent again: the user ended it, and only the user's Send along the edge does.
+   * never starts an ended agent again: the user ended it, and only the user's Send along the edge does. A paused one
+   * it wakes, as any message does.
    */
   const handOffOnce = (row: FlowEdgeRow, given: (() => Promise<PayloadOrProblem>) | undefined) =>
     serially(row.id, async (): Promise<Outcome | undefined> => {
       const to = options.agent(row.to_session_id);
-      if (to !== undefined && to.endedAt !== null) {
+      if (to !== undefined && to.endedAt !== null && to.state !== 'hibernated') {
         const reason = `${to.name} has ended: a named hand-off never starts it again, the user's Send or an edge the user drew does`;
         skip(row.id, reason);
         return { outcome: 'skipped', name: payloadName(row.payload, row.path), reason };

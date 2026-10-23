@@ -1283,7 +1283,8 @@ describe('long-lived agents', () => {
     clock.advance(1_000);
     await recorder.waitFor(isRunPrompt('Check the nightly build'));
     await recorder.waitForText(agent.sessionId, 'Done: Check the nightly build.');
-    const after = await untilState(recorder, agent.sessionId, 'scheduled', fired + 1);
+    await untilState(recorder, agent.sessionId, 'thinking', fired);
+    const after = await untilState(recorder, agent.sessionId, 'scheduled', recorder.events.length);
     expect(statesOf(recorder.events.slice(fired), agent.sessionId)).toEqual(['scheduled', 'thinking', 'scheduled']);
     expect(after.schedule).toMatchObject({
       nextRunAt: new Date(2026, 9, 11, 9, 0).toISOString(),
@@ -1498,17 +1499,18 @@ describe('long-lived agents', () => {
     await untilState(second.recorder, agent.sessionId, 'scheduled');
   });
 
-  it('loses its schedule when deleted', async () => {
-    const { client, dataDir } = await agentDaemon('output');
+  it("leaves its clock on the board, joined to nothing, when it is deleted", async () => {
+    const { client } = await agentDaemon('output');
     const zone = await addZone(client, tempRepo());
     const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
-    await client.call('agent.setSchedule', { sessionId: agent.sessionId, schedule: { cron: '@hourly', prompt: 'Sweep' } });
+    const { schedule } = await client.call('agent.setSchedule', { sessionId: agent.sessionId, schedule: { cron: '@hourly', prompt: 'Sweep' } });
 
     await client.call('agent.delete', { sessionId: agent.sessionId, force: true });
 
-    const db = new DatabaseSync(daemonPaths(dataDir).database, { readOnly: true });
-    expect(db.prepare('SELECT count(*) AS n FROM schedules').get()).toEqual({ n: 0 });
-    db.close();
+    await expect
+      .poll(async () => (await client.call('item.list')).find((item) => item.id === schedule!.clockId)?.data)
+      .toMatchObject({ agent: null, cron: '@hourly', prompt: 'Sweep' });
+    expect((await client.call('clock.list')).find((status) => status.id === schedule!.clockId)).toMatchObject({ nextRunAt: null });
   });
 });
 

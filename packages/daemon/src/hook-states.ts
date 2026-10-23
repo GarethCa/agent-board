@@ -4,6 +4,7 @@ import { stateAfterHook } from './harness-state.ts';
 import { stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
 import type { AgentState, Harness, SessionState, Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
+import type { PromptNow } from './deliveries.ts';
 import { draftAfterInput } from './terminal-input.ts';
 
 /**
@@ -42,6 +43,8 @@ interface HookStateOptions<Row extends HookStateRow> {
   /** Marks the agent's state as not yet seen: a new ask. */
   unsee(sessionId: string): void;
   clock?: Clock;
+  /** Whether a command the agent left running in the background still runs. */
+  onCommand?(sessionId: string): boolean;
   /** The agent left `starting` without a hook: its output came, or it gave up waiting. */
   startingEnded(sessionId: string): void;
   /** The agent's own turn ended with `finalMessage`. */
@@ -49,6 +52,14 @@ interface HookStateOptions<Row extends HookStateRow> {
   recordFinal(sessionId: string, finalMessage: string): void;
   /** The agent's own turn ended with `finalMessage`, saved and announced: hands it off. */
   finished(sessionId: string, finalMessage: string): void;
+}
+
+/**
+ * Whether a message asks the user something: its last paragraph has a question mark. A turn that ends on a question
+ * leaves Claude only `idle_prompt`, as a turn that ends on an answer does.
+ */
+export function asksSomething(message: string | undefined): boolean {
+  return message !== undefined && message.trim().split(/\n\s*\n/).at(-1)!.includes('?');
 }
 
 /**
@@ -63,6 +74,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
    * question. A scheduled agent like that is waiting for its next run, not for you.
    */
   const idlePrompted = new Set<string>();
+  /** Agents waiting only because their idle prompt fired after a failed turn: still at their prompt. */
+  const idleAfterFailure = new Set<string>();
   /** What each agent last said to the user (`lastMessageAfterHook`). */
   const lastMessages = new Map<string, string>();
   /** Agents interrupted since their last prompt: hooks still landing from that turn's work are ignored. */
@@ -86,6 +99,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
    * drawing but its hooks aren't arriving), or after `STARTING_MAX_MS` whatever happens, so it never sticks.
    */
   const starting = new Map<string, { since: number; cancel: () => void }>();
+  /** Agents whose process exited while they were `starting`: their start failed, until they are relaunched. */
+  const startFailed = new Set<string>();
   const stopStarting = (sessionId: string): boolean => {
     const entry = starting.get(sessionId);
     if (entry === undefined) return false;
@@ -97,14 +112,10 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     if (stopStarting(sessionId)) options.startingEnded(sessionId);
   };
 
-  /**
-   * Whether the agent's last message asks the user something: its last paragraph has a question mark. A turn that ends
-   * on a question leaves Claude only `idle_prompt`, as a turn that ends on an answer does.
-   */
-  const asking = (sessionId: string) => {
-    const message = lastMessages.get(sessionId);
-    return message !== undefined && message.trim().split(/\n\s*\n/).at(-1)!.includes('?');
-  };
+  /** Whether the agent's last message asks the user something (`asksSomething`). */
+  const asking = (sessionId: string) => asksSomething(lastMessages.get(sessionId));
+  /** Whether the live agent sits at its prompt after a turn that ended asking the user something. */
+  const askingAtPrompt = (row: Row) => row.ended_at === null && row.state === 'idle' && asking(row.session_id);
 
   /**
    * Whether the agent sits at its prompt between turns, ready for its next message and, unless `evenAsking`, not asking
@@ -120,6 +131,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     /** The agent was started with a first prompt: it shows `starting` until its session's first hook. */
     promptQueued(sessionId: string) {
       stopStarting(sessionId);
+      startFailed.delete(sessionId);
       starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS) });
     },
 
@@ -129,8 +141,14 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       if (entry !== undefined && clock.now() - entry.since >= STARTING_OUTPUT_GRACE_MS) giveUpStarting(sessionId);
     },
 
+    /** Whether the live agent sits at its prompt between turns, asking you nothing. */
+    isAtPrompt: (row: Row) => atPrompt(row),
+
     /** Whether the agent's session has yet to send its first hook, with a first prompt queued. */
     isStarting: (sessionId: string) => starting.has(sessionId),
+
+    /** Whether the agent's process exited while it was `starting`, before its session's first hook. */
+    startFailed: (sessionId: string) => startFailed.has(sessionId),
 
     /** What the agent last said to the user, if anything. */
     lastMessage: (sessionId: string) => lastMessages.get(sessionId),
@@ -147,9 +165,12 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
      */
     scheduledState(row: Row): AgentState {
       if (atPrompt(row)) return 'scheduled';
-      if (row.ended_at === null && row.state === 'idle' && asking(row.session_id)) return 'waiting';
+      if (askingAtPrompt(row)) return 'waiting';
       return row.state;
     },
+
+    /** Whether the live agent sits at its prompt after a turn that ended asking the user something. */
+    askingAtPrompt,
 
     /**
      * Why a scheduled run can't start in the live agent now, or undefined if it can. With `evenAsking`, as for a hand-off,
@@ -169,6 +190,23 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       if (drafting.has(sessionId)) return 'you were typing in its terminal';
       return undefined;
     },
+
+    /**
+     * Where the live agent's prompt stands after something was typed at it: the user typing there too, still at it as
+     * a hand-off finds it (`whyNotReady` with `evenAsking`), or after a failed turn (which leaves it there, waiting
+     * once its idle prompt fires); working through a turn with nothing of its own up; or moved on.
+     */
+    promptNow(row: Row): PromptNow {
+      if (drafting.has(row.session_id)) return 'typing';
+      const pending = permissions.prompts(row.session_id).length > 0;
+      const failed = row.ended_at === null && !pending && (row.state === 'failed' || (row.state === 'waiting' && idleAfterFailure.has(row.session_id)));
+      if (atPrompt(row, true) || failed) return 'at-prompt';
+      const working = row.ended_at === null && !pending && (row.state === 'running' || row.state === 'thinking');
+      return working ? 'working' : 'moved-on';
+    },
+
+    /** Whether `payload` is a hook from the agent's interrupted turn, landing after the interrupt: no news of a new one. */
+    isStale: (sessionId: string, payload: Record<string, unknown>) => interrupted.has(sessionId) && isStaleAfterInterrupt(payload),
 
     /**
      * Moves the live agent `row` on by one of its hooks, and hands off its final message when its own turn ends.
@@ -207,12 +245,19 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       else lastMessages.set(sessionId, lastMessage);
       const next = subagentsAfterHook(subagents.of(sessionId), payload, new Date());
       const pending = permissions.prompts(sessionId).length;
-      // An agent started with no task has nothing to run yet: its session starting leaves it idle for its first message.
-      const awaitingTask = payload.hook_event_name === 'SessionStart' && row.state === 'idle' && row.description === '' && !prompted;
-      const state = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
+      // An agent started with no task, or resumed (woken, restarted) with no new prompt, has nothing to run yet: its
+      // session starting leaves it idle for its next message. A prompt it was resumed with moves it on at its own hook.
+      const awaitingTask =
+        payload.hook_event_name === 'SessionStart' && row.state === 'idle' && !prompted && (row.description === '' || payload.source === 'resume');
       const idlePrompt = payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt';
+      const hooked = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
+      // Its idle prompt while a command it left runs says nothing of you: it stays idle, so the command's end, before the
+      // harness takes up its result, never shows it waiting for you.
+      const state = idlePrompt && row.state === 'idle' && hooked === 'waiting' && options.onCommand?.(sessionId) === true ? 'idle' : hooked;
       if (idlePrompt && row.state === 'idle' && state === 'waiting') idlePrompted.add(sessionId);
       else if (state !== row.state) idlePrompted.delete(sessionId);
+      if (idlePrompt && row.state === 'failed' && state === 'waiting') idleAfterFailure.add(sessionId);
+      else if (state !== row.state) idleAfterFailure.delete(sessionId);
       // Its own turn ended with a final message (a subagent's Stop is SubagentStop): it is kept before the state is saved,
       // so what that announces already carries it, and hands it off.
       const finalMessage = payload.last_assistant_message;
@@ -245,13 +290,16 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
     /** The agent was relaunched: what it last said and any draft at its old prompt are gone. */
     relaunched(sessionId: string) {
+      startFailed.delete(sessionId);
       lastMessages.delete(sessionId);
       drafting.delete(sessionId);
     },
 
     /** The agent's process exited. Its tile still shows what it last said. */
     ended(sessionId: string) {
+      if (starting.has(sessionId)) startFailed.add(sessionId);
       stopStarting(sessionId);
+      idleAfterFailure.delete(sessionId);
       permissionSettled.delete(sessionId);
       interrupted.delete(sessionId);
       idlePrompted.delete(sessionId);
@@ -261,6 +309,8 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     /** The agent was deleted. */
     deleted(sessionId: string) {
       stopStarting(sessionId);
+      startFailed.delete(sessionId);
+      idleAfterFailure.delete(sessionId);
       noMessage.delete(sessionId);
       idlePrompted.delete(sessionId);
       drafting.delete(sessionId);

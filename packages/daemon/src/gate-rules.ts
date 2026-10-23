@@ -322,3 +322,17 @@ export function failurePaste(run: GateRun, step: string, log: string): string {
   const text = `The gate \`${run.command.replace(CONTROLS, '')}\` failed on ${shortCommit(run.commit)}: ${step.replace(CONTROLS, '')}. Its last lines:\n\n\`\`\`\n${lines}\n\`\`\`\n`;
   return `\u001b[200~${text}\u001b[201~`;
 }
+
+/**
+ * Whether the agent works in its repo's own checkout, with no worktree of its own: on whatever branch is checked out
+ * there, usually the default one. It never opens a pull request, merges or pushes (`inCheckoutWhy`), so nothing it does
+ * through the app can reach that branch.
+ */
+export function inRepoCheckout(agent: { ownsWorktree: boolean; worktree: string; repoRoot: string }): boolean {
+  return !agent.ownsWorktree && agent.worktree === agent.repoRoot;
+}
+
+/** Why an agent in the repo's own checkout can't open a pull request or merge one, for the app, the CLI and the MCP tool. */
+export function inCheckoutWhy(name: string): string {
+  return `${name} works in the repo's own checkout, on the branch checked out there, so it never opens a pull request or merges. Make a branch in a worktree first, or have an agent it starts do the work.`;
+}

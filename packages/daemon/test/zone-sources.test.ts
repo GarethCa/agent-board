@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { gitHubRepoOf, isSafeRepo, scanForCopies, shortFailure } from '../src/zone-sources.ts';
@@ -636,5 +636,76 @@ describe('deleting a zone made from a GitHub clone', () => {
     await client.call('zone.dissolve', { id: zone.id });
     expect(await client.call('zone.list')).toEqual([]);
     expect(existsSync(join(repo, '.git'))).toBe(true);
+  });
+});
+
+describe('reading the state of a repo’s own checkout', () => {
+  /** A repo on `main`, as a clone of one whose default branch is `main` would be. */
+  const mainRepo = () => {
+    const repo = tempRepo();
+    git(repo, 'branch', '-M', 'main');
+    return repo;
+  };
+
+  it('says a clean checkout of the default branch is clean and on it', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+
+    expect(await client.call('zone.checkoutState', { path: repo })).toEqual({ branch: 'main', defaultBranch: 'main', dirty: false });
+  });
+
+  it('sees uncommitted changes, untracked files included, from a subfolder, without touching them', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+    writeFileSync(join(repo, 'wip.txt'), 'unsaved\n');
+    const before = git(repo, 'status', '--porcelain');
+
+    expect(await client.call('zone.checkoutState', { path: join(repo, 'apps', 'web') })).toMatchObject({ branch: 'main', dirty: true });
+    expect(git(repo, 'status', '--porcelain')).toBe(before);
+  });
+
+  it('never writes the index or takes its lock, even when a tracked file’s stat info is stale', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+    // Same content, new mtime: a plain `git status` would refresh the index for it.
+    const file = join(repo, 'apps', 'web', 'index.ts');
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(file, later, later);
+    const index = join(repo, '.git', 'index');
+    const before = statSync(index).mtimeMs;
+
+    await client.call('zone.checkoutState', { path: repo });
+
+    expect(statSync(index).mtimeMs).toBe(before);
+    expect(existsSync(`${index}.lock`)).toBe(false);
+  });
+
+  it('does not guess a default branch from a local main when the repo has remote branches but no origin/HEAD', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+    git(repo, 'update-ref', 'refs/remotes/origin/develop', 'HEAD');
+    git(repo, 'switch', '--quiet', '-c', 'develop');
+
+    expect(await client.call('zone.checkoutState', { path: repo })).toEqual({ branch: 'develop', defaultBranch: null, dirty: false });
+  });
+
+  it('names the branch it is on when that is not the default, and takes the default from origin/HEAD', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+    git(repo, 'branch', 'trunk');
+    git(repo, 'update-ref', 'refs/remotes/origin/trunk', 'HEAD');
+    git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    git(repo, 'switch', '--quiet', '-c', 'fix-login-flake');
+
+    expect(await client.call('zone.checkoutState', { path: repo })).toEqual({ branch: 'fix-login-flake', defaultBranch: 'trunk', dirty: false });
+  });
+
+  it('has no branch on a detached HEAD, and rejects a folder outside git', async () => {
+    const { client } = await sourcesDaemon();
+    const repo = mainRepo();
+    git(repo, 'checkout', '--quiet', '--detach');
+
+    expect(await client.call('zone.checkoutState', { path: repo })).toMatchObject({ branch: null, defaultBranch: 'main' });
+    await expect(client.call('zone.checkoutState', { path: tempDataDir() })).rejects.toThrow(/not inside a git repository/);
   });
 });

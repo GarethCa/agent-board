@@ -88,6 +88,7 @@ export function registerZoneIpc(daemon: DaemonLink): void {
       throw error;
     }
   });
+  ipcMain.handle(ZONE_IPC.checkoutState, (_event, path: string) => daemon.call('zone.checkoutState', { path }));
   ipcMain.handle(ZONE_IPC.findCopies, async () => (await daemon.call('zone.findCopies')).found);
   ipcMain.handle(ZONE_IPC.bind, async (event, id: string, as: ZoneBinding): Promise<BindZoneResult> => {
     const result = await withPickedFolder(event, as === 'project' ? BIND_PROJECT : BIND_REPO, (path) =>

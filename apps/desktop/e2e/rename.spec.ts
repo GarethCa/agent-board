@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile, zoneNamed, zones } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
@@ -15,7 +15,21 @@ async function focusBoard(page: Page): Promise<void> {
 
 const field = (page: Page) => page.getByTestId('rename-field');
 
-test('renames an agent by double-click and the pencil, a shell with F2 and its panes by double-click, and undoes it', async () => {
+/**
+ * Clicks the name; the field opens after the rename's own pause. A tile not selected yet is selected by the first click, which
+ * renames nothing: it waits, then clicks again.
+ */
+async function slowClickRename(page: Page, name: Locator, selected = false): Promise<void> {
+  if (!selected) {
+    await name.click();
+    await page.waitForTimeout(800);
+    await expect(field(page)).toHaveCount(0);
+  }
+  await name.click();
+  await expect(field(page)).toBeFocused();
+}
+
+test('renames an agent by a slow click on its name and the pencil, a shell with F2 and its panes by double-click, and undoes it', async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
@@ -26,8 +40,8 @@ test('renames an agent by double-click and the pencil, a shell with F2 and its p
     await expect(tile(window)).toHaveCount(1);
     const [original] = await agents(window);
 
-    // A double-click on the tile's name edits it in place; it doesn't open the session window.
-    await tile(window).locator('.hybrid-tile-name').dblclick();
+    // A click on the name of the selected tile edits it in place, after a pause; it doesn't open the session window.
+    await slowClickRename(window, tile(window).locator('.hybrid-tile-name'));
     await expect(field(window)).toBeFocused();
     await field(window).fill('Fix the login');
     await field(window).press('Enter');
@@ -42,7 +56,7 @@ test('renames an agent by double-click and the pencil, a shell with F2 and its p
     await field(window).fill('Never saved');
     await field(window).press('Escape');
     await expect(tile(window).locator('.hybrid-tile-name')).toHaveText('Fix the login');
-    await tile(window).locator('.hybrid-tile-name').dblclick();
+    await slowClickRename(window, tile(window).locator('.hybrid-tile-name'), true);
     await field(window).fill('   ');
     await field(window).press('Enter');
     await expect(tile(window).locator('.hybrid-tile-name')).toHaveText('Fix the login');

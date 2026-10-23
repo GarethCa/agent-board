@@ -12,6 +12,8 @@ import { AgentSetupChips, type AgentSetup } from '../AgentSetup';
 import { CONNECTOR_EDGE_PREFIX, endOfNode, nodeIdOf } from '../connectors/endpoints';
 import { selectedNodes } from '../editing/selection';
 import { boundsOnBoard, isItemNode, placeOnBoard } from '../items/items';
+import { shapeData } from '../items/text-style';
+import { shapeWords } from '../items/shapes/sections';
 import { isSessionTile, isZone, repoName, type BoardNode } from '../tiles';
 import { isTyping } from '../use-tile-moves';
 import { answerSpots, captureZoom, selectionAsk, selectionSummary, type DiagramObject, type SelectionAsk } from './selection-diagram';
@@ -41,6 +43,8 @@ function itemText(item: BoardItem): string | undefined {
   const text = typeof data.text === 'string' ? data.text : undefined;
   if (item.kind === 'link') return typeof data.title === 'string' && data.title !== '' ? data.title : (data.url as string | undefined);
   if (item.kind === 'issue') return [data.id, data.title].filter((part) => typeof part === 'string' && part !== '').join(' ');
+  // A class says its attributes and methods too.
+  if (item.kind === 'shape') return shapeWords(shapeData(data));
   return text;
 }
 

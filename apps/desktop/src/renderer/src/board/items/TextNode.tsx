@@ -4,17 +4,16 @@ import {
   MAX_TEXT_LENGTH,
   TEXT_ALIGNS,
   TEXT_COLORS,
-  TEXT_FONT_SIZES,
   TEXT_PRESET_FONT_SIZES,
   TEXT_SIZES,
   type TextData,
   type TextSize,
 } from '@agent-board/daemon/protocol';
-import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Minus, Plus, Trash2 } from 'lucide-react';
-import { BarButton, BarRow, BarSeparator, BarSwatch, ItemStyleBar } from './ItemStyleBar';
+import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Trash2 } from 'lucide-react';
+import { BarButton, BarRow, BarSeparator, BarSwatch, FontSizeControl, ItemStyleBar } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { clampTextHeight, resizedText, textItemSize } from './text-layout';
-import { clampFontSize, stepFontSize, textData, textMetrics } from './text-style';
+import { clampFontSize, textData, textMetrics } from './text-style';
 import { themedColor } from '../../board-colors';
 import { useDraftText } from './useDraftText';
 
@@ -195,26 +194,7 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
             </BarButton>
           ))}
           <BarSeparator />
-          <BarButton name="Smaller text" onClick={() => restyle({ fontSize: stepFontSize(style.fontSize, -1) })}>
-            <Minus />
-          </BarButton>
-          <select
-            className="item-bar-select"
-            aria-label="Font size"
-            value={style.fontSize}
-            onChange={(event) => restyle({ fontSize: Number(event.target.value) })}
-          >
-            {[...new Set([...TEXT_FONT_SIZES, style.fontSize])]
-              .sort((a, b) => a - b)
-              .map((px) => (
-                <option key={px} value={px}>
-                  {px}
-                </option>
-              ))}
-          </select>
-          <BarButton name="Larger text" onClick={() => restyle({ fontSize: stepFontSize(style.fontSize, 1) })}>
-            <Plus />
-          </BarButton>
+          <FontSizeControl px={style.fontSize} onChange={(fontSize) => restyle({ fontSize })} />
           <BarSeparator />
           <BarButton name="Bold" pressed={style.bold} onClick={() => restyle({ bold: !style.bold })}>
             <Bold />

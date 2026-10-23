@@ -43,6 +43,11 @@ export function answerInput(text: string, paste = false): string {
   return `\x1b[200~${message.replaceAll('\n', '\r')}\x1b[201~`;
 }
 
+/** What a harness submits of `input` written at its prompt (`answerInput`): a paste comes without its marks. */
+export function submittedText(input: string): string {
+  return input.replace(/\x1b\[20[01]~/g, '');
+}
+
 /** Text as one line at a prompt: a line break would submit what came before it on its own. */
 export function oneLine(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, ' ').trim();

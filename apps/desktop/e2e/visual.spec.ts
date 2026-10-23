@@ -4,10 +4,11 @@ import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, closeAgent, launch, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, closeAgent, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from './render.ts';
 import { scratch } from './scratch.ts';
+import { untilStill, viewTransform } from './board-helpers.ts';
 
 // Visual regression for the Workbench theme. Baselines are per platform (`-linux`, `-darwin`) and both are committed;
 // a test runs against the ones for the platform it is on, and fails, never skips, if they are missing. `pnpm visual:update`
@@ -32,6 +33,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -124,6 +126,7 @@ test('a crowded tile at its narrowest, and New agent with a long model id: nothi
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -163,6 +166,7 @@ test('a tile with model and role badges gains two PR chips, which stay while the
   execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git']);
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0', AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -205,6 +209,7 @@ test('a finished agent keeps the summary it set and shows no percentage from mid
   const { dir, repo, env } = scratch('board');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -235,6 +240,7 @@ test('a dock of fifteen sessions scrolls with a fade at its edge', async () => {
   needsBaselines('session-dock-overflow');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -261,6 +267,7 @@ test("a shell tile's session window with tabs, split into two panes each with it
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -295,6 +302,7 @@ test('a session window resized up to the board\'s top edge clears the macOS traf
   needsBaselines('session-window-top-edge', 'session-window-top-edge-full-screen');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -340,6 +348,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -391,6 +400,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -442,6 +452,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -485,6 +496,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -517,6 +529,7 @@ test('the board menu with a dozen zones in a short window stays inside it and sc
   const { dir, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize({ width: VIEWPORT.width, height: 700 });
     await pinFonts(window);
@@ -560,6 +573,7 @@ test('the compact window setting: Off by default, then a custom window with its 
   const { dir, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -591,18 +605,17 @@ test('the compact window setting: Off by default, then a custom window with its 
 });
 
 /** Waits until the board's view stops moving: after a fit or a jump, which animate. */
-async function viewSettled(window: Page): Promise<void> {
-  const viewport = () => window.locator('.react-flow__viewport').evaluate((element) => (element as HTMLElement).style.transform);
-  let last = '';
-  await expect
-    .poll(async () => {
-      const now = await viewport();
-      const still = now === last;
-      last = now;
-      return still;
-    })
-    .toBe(true);
-}
+const viewSettled = (window: Page): Promise<void> => untilStill(() => viewTransform(window));
+
+/** Waits until every node on the board (tiles, zones, notes) holds its place and size: after an arrange or a zone growing round its crew. */
+const nodesStill = (window: Page): Promise<void> =>
+  untilStill(
+    () =>
+      window.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>('.react-flow__node')].map((node) => `${node.dataset.id} ${node.style.transform} ${node.offsetWidth}x${node.offsetHeight}`).join('|'),
+      ),
+    { timeout: 4 * TURN_MS },
+  );
 
 /**
  * Two waiting agents in a zone, with what a theme redraws by name: two notes, Ink text, a filled shape and a flow edge
@@ -668,6 +681,7 @@ for (const { theme, scheme } of PACK_SHOTS) {
       { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
       RENDER_ARGS,
     );
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: scheme });
@@ -696,6 +710,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -729,6 +744,56 @@ for (const { theme, suffix } of [
       await removeDataDir(dataDir);
     }
   });
+
+  test(`a class diagram's relations: their ends, a dashed one, labels by each end, one routed round a note, and one selected, ${theme}`, async () => {
+    needsBaselines(`relations${suffix}`);
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await window.evaluate(async () => {
+        const { items, connectors } = globalThis.window.agentBoard;
+        const note = (text: string, x: number, y: number, height = 100) =>
+          items.create({ kind: 'sticky', zoneId: null, x, y, width: 160, height, data: { text, color: '#ffd43b' } });
+        const [board, zone, tile, agentTile, session, iface] = [
+          await note('Board', 0, 0),
+          await note('Zone', 360, 0),
+          await note('Tile', 360, 320),
+          await note('AgentTile', 760, 320),
+          await note('Session', 760, 0),
+          await note('Startable', 1380, 160),
+        ];
+        const join = (from: { id: string }, fromSide: 'top' | 'right' | 'bottom' | 'left', to: { id: string }, toSide: typeof fromSide, look: object) =>
+          connectors.create({ from: { type: 'item', id: from.id, side: fromSide }, to: { type: 'item', id: to.id, side: toSide }, style: 'straight', ...look });
+        await join(board, 'right', zone, 'left', { startEnd: 'diamond', endEnd: 'none', label: 'holds', startLabel: '1', endLabel: '0..*' });
+        await join(zone, 'bottom', tile, 'top', { startEnd: 'filled-diamond', endEnd: 'none', label: 'owns', startLabel: '1', endLabel: '0..*' });
+        await join(agentTile, 'left', tile, 'right', { endEnd: 'triangle', label: 'is a' });
+        await join(agentTile, 'top', session, 'bottom', { endEnd: 'arrow', dashed: true, label: '«uses»' });
+        // The elbow from Session goes round this one.
+        await note('in the way', 1080, -20, 160);
+        await join(session, 'right', iface, 'top', { style: 'elbow', endEnd: 'triangle', dashed: true, endLabel: 'role' });
+      });
+      await expect(window.locator('.react-flow__edge-path.connector-line')).toHaveCount(5);
+      await expect(window.locator('.react-flow__edge-path.connector-line[data-routed]')).toHaveCount(1);
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      // The composition selected by its label: its bar names the relation.
+      await window.getByTestId('connector-label').filter({ hasText: 'owns' }).click();
+      await expect(window.getByRole('button', { name: 'Relation' })).toHaveText('Composition');
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`relations${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
 }
 
 test('the dark theme: a busy board with notes, text, a shape and a flow edge, its Edge rules, and the session window in both views', async () => {
@@ -740,6 +805,7 @@ test('the dark theme: a busy board with notes, text, a shape and a flow edge, it
     { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: 'dark', SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     // Playwright pins the page to light; the setting has the window in dark mode, as macOS would.
@@ -792,6 +858,7 @@ test('a hand-off between agents bent through a point to the top of the other til
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -848,11 +915,187 @@ test('a hand-off between agents bent through a point to the top of the other til
   }
 });
 
+test('a hand-off between the ends of a row of three agents goes round the tile between them, as an elbow and as a curve; straight, or bent by hand, it goes where it is put, until Route automatically; an arrow routes too; and both go straight again once that tile moves away', async () => {
+  needsBaselines('edge-routed', 'edge-routed-curved');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Fix checkout flake');
+    await spawnAgent(window, 'monorepo', 'Pick a cache');
+    await spawnAgent(window, 'monorepo', 'Review checkout fix');
+    await expect(tile(window)).toHaveCount(3);
+    for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    // In a row, the first handing off to the third, past the second, with room between them for the rail's token.
+    const [fixer, cache, reviewer] = await agents(window);
+    const [zone] = await zones(window);
+    await window.evaluate(
+      async ({ zoneId, from, between, to }) => {
+        const { agents, flowEdges } = globalThis.window.agentBoard;
+        await agents.move(from, { zoneId, x: 40, y: 120 });
+        await agents.move(between, { zoneId, x: 560, y: 120 });
+        await agents.move(to, { zoneId, x: 1080, y: 120 });
+        await flowEdges.create({ from, to, trigger: 'manual', fromSide: 'right', toSide: 'left', style: 'elbow' });
+      },
+      { zoneId: zone!.id, from: fixer!.sessionId, between: cache!.sessionId, to: reviewer!.sessionId },
+    );
+    const edge = window.getByTestId('flow-edge');
+    const restyle = (changes: { style?: 'straight' | 'elbow' | 'curved'; points?: { x: number; y: number }[] }) =>
+      window.evaluate(async (shape) => {
+        const { flowEdges } = globalThis.window.agentBoard;
+        const [made] = await flowEdges.list();
+        await flowEdges.update({ id: made!.id, ...shape });
+      }, changes);
+    /** The board as it is, with nothing hovered: the pointer off the Fit view button it pressed, which keeps its hover. */
+    const shoot = async (name: string) => {
+      await window.mouse.move(VIEWPORT.width - 4, VIEWPORT.height / 2);
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(name, SHOT);
+      await restorePointer();
+    };
+    await expect(edge).toHaveAttribute('data-routed', 'true');
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    await shoot('edge-routed.png');
+
+    await restyle({ style: 'curved' });
+    await expect(edge).toHaveAttribute('data-routed', 'true');
+    await shoot('edge-routed-curved.png');
+
+    // A straight line is always straight, across the tile in its way.
+    await restyle({ style: 'straight' });
+    await expect(edge).not.toHaveAttribute('data-routed');
+    await expect(edge).toHaveAttribute('d', /^M ?[\d.]+,[\d.]+ ?L ?[\d.]+,[\d.]+$/);
+
+    // Bent by hand, an elbow goes through its bend, 150 above the middle of its ends, and isn't routed.
+    await restyle({ style: 'elbow', points: [{ x: 0, y: -150 }] });
+    await expect(edge).not.toHaveAttribute('data-routed');
+    const drawn = (await edge.getAttribute('d'))!;
+    const startY = Number(/^M ?[\d.]+,([\d.]+)/.exec(drawn)![1]);
+    expect(drawn).toContain(`,${startY - 150} `);
+
+    // Route automatically, on its style bar, takes the bend out: it routes again.
+    await window.getByTestId('rail-token').locator('.rail-token-open').click();
+    await window.getByRole('button', { name: 'Route automatically' }).click();
+    await expect(edge).toHaveAttribute('data-routed', 'true');
+    await expect(window.getByRole('button', { name: 'Route automatically' })).toHaveCount(0);
+    await window.getByRole('complementary', { name: 'Edge rules' }).getByRole('button', { name: 'Close edge rules' }).click();
+
+    // An arrow between the same two goes round the tile in its way as well.
+    await window.evaluate(
+      async ({ from, to }) => {
+        await globalThis.window.agentBoard.connectors.create({ from: { type: 'agent', id: from, side: 'bottom' }, to: { type: 'agent', id: to, side: 'bottom' }, style: 'elbow' });
+      },
+      { from: fixer!.sessionId, to: reviewer!.sessionId },
+    );
+    const arrow = window.locator('.react-flow__edge-path.connector-line');
+    await expect(arrow).toHaveCount(1);
+    // Bottom to bottom, an unrouted elbow runs just under the row: clear of the middle tile, so it isn't routed yet.
+    await expect(arrow).not.toHaveAttribute('data-routed');
+    await window.evaluate(async () => {
+      const [made] = await globalThis.window.agentBoard.connectors.list();
+      await globalThis.window.agentBoard.connectors.update({ id: made!.id, from: { ...made!.from, side: 'right' }, to: { ...made!.to, side: 'left' } });
+    });
+    await expect(arrow).toHaveAttribute('data-routed', 'true');
+
+    // With the second tile moved out of the row, nothing is in the way: both lines are drawn as they always were.
+    await window.evaluate(
+      async ({ zoneId, between }) => {
+        await globalThis.window.agentBoard.agents.move(between, { zoneId, x: 560, y: 600 });
+      },
+      { zoneId: zone!.id, between: cache!.sessionId },
+    );
+    await expect(edge).not.toHaveAttribute('data-routed');
+    await expect(arrow).not.toHaveAttribute('data-routed');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an agent note's tether goes round the tile between the note and its agent, and is straight again once that tile moves away", async () => {
+  needsBaselines('tether-routed');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Fix checkout flake');
+    await spawnAgent(window, 'monorepo', 'Pick a cache');
+    await expect(tile(window)).toHaveCount(2);
+    for (const at of [0, 1]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    const [fixer, cache] = await agents(window);
+    const [zone] = await zones(window);
+    // A note on the left about the fixer on the right, with the second agent's tile between them.
+    await window.evaluate(
+      async ({ zoneId, fixerId, fixerName, between }) => {
+        const board = globalThis.window.agentBoard;
+        await board.agents.move(between, { zoneId, x: 420, y: 120 });
+        await board.agents.move(fixerId, { zoneId, x: 900, y: 120 });
+        await board.items.create({
+          kind: 'agent-note',
+          zoneId,
+          x: 40,
+          y: 120,
+          width: 240,
+          height: 150,
+          data: {
+            text: '**Round 2 of 3**\n\n- implementer: `2 of 3` done\n- reviewer: idle',
+            agent: { sessionId: fixerId, name: fixerName, harness: 'claude', role: 'orchestrator' },
+            about: fixerId,
+            writtenAt: '2026-01-01T00:00:00.000Z',
+            editedByUser: false,
+          },
+        });
+      },
+      { zoneId: zone!.id, fixerId: fixer!.sessionId, fixerName: fixer!.name, between: cache!.sessionId },
+    );
+    const tether = window.getByTestId('agent-note-tether');
+    await expect(tether).toHaveCount(1);
+    await expect(tether).toHaveAttribute('data-routed', 'true');
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    await window.mouse.move(VIEWPORT.width - 4, VIEWPORT.height / 2);
+    await pinRandomText(window);
+    const restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('tether-routed.png', SHOT);
+    await restorePointer();
+
+    // Out of its way, it is the straight line again.
+    await window.evaluate(
+      async ({ zoneId, between }) => {
+        await globalThis.window.agentBoard.agents.move(between, { zoneId, x: 420, y: 600 });
+      },
+      { zoneId: zone!.id, between: cache!.sessionId },
+    );
+    await expect(tether).not.toHaveAttribute('data-routed');
+    await expect(tether).toHaveAttribute('d', /^M[\d.\s,]+L[\d.\s,]+$/);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('two agents stacked one above the other, joined both ways by edges made without sides: one rail between the sides facing each other', async () => {
   needsBaselines('edges-stacked');
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -896,6 +1139,7 @@ test('linked sessions as one rail: a pair waiting for Send beside a one-way link
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -985,6 +1229,7 @@ for (const { theme, suffix } of [
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
     const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -1031,6 +1276,7 @@ test('connections hidden: the hand-off and the arrow between two agents are not 
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -1077,6 +1323,7 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -1085,10 +1332,22 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
     await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
-    for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).not.toHaveAttribute('data-state', 'working', { timeout: 2 * TURN_MS });
+    // Waiting, not just done working: an agent still thinking, or idle before it asks, redraws its tile.
+    for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: 2 * TURN_MS });
     await expect(window.getByTestId('crew-frame')).toHaveCount(1);
     await tileAction(window.locator('[data-testid="agent-tile"][data-orchestrator]'), 'Expand in place');
     await expect(window.getByTestId('expanded-tile')).toHaveCount(1);
+    // Its pane in view marks the orchestrator seen, but only while the app has the focus, which a background run may
+    // not: mark it seen as its pane would, so only its crew still needs the user.
+    await window.evaluate(async () => {
+      const { agents } = globalThis.window.agentBoard;
+      const lead = (await agents.list()).find((agent) => agent.spawnedBy === null);
+      await agents.markSeen(lead!.sessionId);
+    });
+    await expect(window.getByTestId('inbox-count')).toContainText('2 need you');
+    // The crew is pushed aside and the zone grows to hold it, over a few frames: fit only once all of it holds still.
+    await expect(window.locator('[data-testid="expanded-tile"][data-opening]')).toHaveCount(0);
+    await nodesStill(window);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
     await pinRandomText(window);
@@ -1108,6 +1367,7 @@ test('an orchestrator arranges its crew: its implementer and reviewer a rail apa
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
@@ -1117,11 +1377,17 @@ test('an orchestrator arranges its crew: its implementer and reviewer a rail apa
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     // Each CLI command starts the app's executable as Node: a turn's worth of time each.
     await expect(tile(window)).toHaveCount(3, { timeout: 4 * TURN_MS });
-    await expect(window.getByTestId('agent-note')).toHaveCount(1, { timeout: 4 * TURN_MS });
     for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).not.toHaveAttribute('data-state', 'working', { timeout: 2 * TURN_MS });
     const token = window.getByTestId('rail-token');
-    await expect(token).toHaveCount(1);
+    // The rail comes from a CLI command too, and holds the fit back until the crew is arranged.
+    await expect(token).toHaveCount(1, { timeout: 4 * TURN_MS });
     const named = (name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    // The lane's note, past its reviewer: drawn once the view fits the zone, as the board draws only what is in view.
+    await expect(window.getByTestId('agent-note')).toHaveCount(1, { timeout: 4 * TURN_MS });
+    // The first fit can land while the arrange is still moving the crew: fit again once every node holds still.
+    await nodesStill(window);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
     // The token, and the line under it, lie between the implementer and its reviewer, touching neither.
@@ -1165,6 +1431,7 @@ for (const { theme, scheme } of [{ theme: 'light', scheme: 'light' }, { theme: '
       { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
       RENDER_ARGS,
     );
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: scheme });
@@ -1204,6 +1471,7 @@ test("the dark theme: a review doc in its implementer's session window", async (
     { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: 'dark', SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
     RENDER_ARGS,
   );
+  await listFinishedTurns(window);
   try {
     await window.setViewportSize(VIEWPORT);
     await window.emulateMedia({ colorScheme: 'dark' });
@@ -1287,6 +1555,7 @@ const THEMES = [
 /** Launches on the gallery (`#gallery`) in `theme`. */
 async function launchGallery(dataDir: string, theme: 'light' | 'dark') {
   const launched = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS);
+  await listFinishedTurns(launched.window);
   const { window } = launched;
   await window.setViewportSize(VIEWPORT);
   // Playwright pins the page to light; the setting has the window in its mode, as macOS would.
@@ -1355,6 +1624,7 @@ for (const { theme, suffix } of THEMES) {
       { ...RENDER_ENV, ...(theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {}), SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
       RENDER_ARGS,
     );
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       if (theme === 'dark') await window.emulateMedia({ colorScheme: 'dark' });
@@ -1399,6 +1669,7 @@ for (const { theme, suffix } of [
       { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
       RENDER_ARGS,
     );
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -1505,6 +1776,7 @@ for (const { theme, suffix } of [
       { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
       RENDER_ARGS,
     );
+    await listFinishedTurns(window);
     try {
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
@@ -1517,7 +1789,7 @@ for (const { theme, suffix } of [
       const [lead] = await agents(window);
       const [zone] = await zones(window);
       await window.evaluate(
-        async ({ zoneId, sessionId }) => {
+        async ({ zoneId, sessionId, below }) => {
           const board = globalThis.window.agentBoard;
           const agent = { sessionId, name: 'Master Orchestrator', harness: 'claude', role: 'orchestrator' };
           // A time of its own, in the render's UTC, so the shot doesn't change with the clock.
@@ -1539,13 +1811,26 @@ for (const { theme, suffix } of [
             x: 580,
             y: 40,
             width: 272,
-            height: 200,
-            data: { text: '**3 risks, 1 gap**\n\n1. Orders writes Postgres, then the queue: use an *outbox*.\n2. Cache tokens at the gateway.', agent, writtenAt, editedByUser: false, asked: "What's risky here?" },
+            // Made too short for its text: it grows to show it all.
+            height: 120,
+            data: {
+              text: '**3 risks, 1 gap**\n\n1. Orders writes Postgres, then the queue: use an *outbox*.\n2. Cache tokens at the gateway.\n3. Retries on the payment call are not idempotent.\n\n**Gap:** no load test for the checkout path.',
+              agent,
+              writtenAt,
+              editedByUser: false,
+              asked: "What's risky here?",
+            },
           });
+          // A zone in Yellow, the colour that read worst under the tab's text, and a note outside every zone: both
+          // tab tints, beside the first zone's.
+          const yellow = await board.zones.addUnbound({ name: 'Docs', color: '#fcc419', x: below.x, y: below.y, width: 560, height: 160 });
+          const short = { text: '**Docs pass** is waiting on the API names.', agent, writtenAt, editedByUser: false };
+          await board.items.create({ kind: 'agent-note', zoneId: yellow.id, x: 30, y: 20, width: 272, height: 100, data: short });
+          await board.items.create({ kind: 'agent-note', zoneId: null, x: below.x + 600, y: below.y + 20, width: 272, height: 100, data: short });
         },
-        { zoneId: zone!.id, sessionId: lead!.sessionId },
+        { zoneId: zone!.id, sessionId: lead!.sessionId, below: { x: zone!.x, y: zone!.y + zone!.height + 56 } },
       );
-      await expect(window.getByTestId('agent-note')).toHaveCount(2);
+      await expect(window.getByTestId('agent-note')).toHaveCount(4);
       await window.getByRole('button', { name: /^Fit view/ }).click();
       await viewSettled(window);
       await pinRandomText(window);
@@ -1566,6 +1851,101 @@ for (const { theme, suffix } of [
       await settle(window);
       await expect.soft(window.locator('.board')).toHaveScreenshot(`agent-notes-terminal${suffix}.png`, SHOT);
       await restoreAgain();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`a question asked on the board: its card beside the asking agent's tile, its tail at the tile, ${theme}`, async () => {
+    needsBaselines(`question-card${suffix}`);
+    const { dir, repo, env } = scratch('ask-plan');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+    );
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Ask on the board: Which database should I use for the job cache? | SQLite | Postgres');
+      await expect(window.getByTestId('question-card')).toBeVisible({ timeout: TURN_MS });
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`question-card${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`a document an agent shows: its card beside the tile, open and as a slim bar, and its Document tab, read and in Edit, ${theme}`, async () => {
+    needsBaselines(`doc-card${suffix}`, `doc-card-bar${suffix}`, `doc-tab${suffix}`, `doc-tab-edit${suffix}`);
+    const { dir, repo, env } = scratch('ask-plan');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+    );
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Doc on the board: docs/release-plan.md');
+      const card = window.getByTestId('doc-card');
+      await expect(card.getByTestId('doc-card-preview')).toContainText('Merge the flake fix first', { timeout: TURN_MS });
+      await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await pinRandomText(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`doc-card${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await card.click();
+      await window.getByRole('button', { name: 'Collapse to a bar' }).click();
+      await expect(card).toHaveAttribute('data-collapsed', 'true');
+      // Nothing selected: a click on bare board below the zone.
+      await window.mouse.click(VIEWPORT.width / 2, VIEWPORT.height - 90);
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`doc-card-bar${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await card.dispatchEvent('dblclick');
+      const doc = window.getByTestId('session-window').getByTestId('document-view');
+      await expect(doc.getByTestId('doc-body')).toContainText('Merge the flake fix first');
+      await pinRandomText(window);
+      // Its line under the title names a time and a temporary folder.
+      const meta = { ...SHOT, mask: [doc.getByTestId('doc-meta')] };
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`doc-tab${suffix}.png`, meta);
+      await restorePointer();
+
+      await doc.getByRole('button', { name: 'Edit' }).click();
+      await doc.getByLabel('Markdown of Release 1.4 plan').fill('# Release 1.4 plan\n\n## Order\nHold the pin bump to 1.5, then merge the flake fix.\n');
+      await doc.getByLabel('Markdown of Release 1.4 plan').evaluate((field) => (field as HTMLTextAreaElement).blur());
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`doc-tab-edit${suffix}.png`, meta);
+      await restorePointer();
     } finally {
       await app.close();
       await removeDataDir(dataDir);

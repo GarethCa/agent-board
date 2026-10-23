@@ -9,11 +9,14 @@ import {
   BoardError,
   BoardRefs,
   closeAgent,
+  pauseAgent,
+  wakeAgent,
   defaultRolesView,
   edgesView,
   handOff,
   identifyView,
   interruptAgent,
+  continueAgent,
   restartAgent,
   newAgent,
   openBoardSession,
@@ -25,8 +28,13 @@ import {
   sendToAgent,
   setDefaultRole,
   setOrchestrate,
+  setCrewStatus,
   setOwnStatus,
+  recordEntry,
+  flagLine,
+  flagOwn,
   openOwnPullRequest,
+  showDoc,
   shellsView,
   showView,
   treeView,
@@ -37,7 +45,8 @@ import {
   type BoardView,
 } from './board-ops.ts';
 import { DaemonRpcError } from './client.ts';
-import { addGroup, addNote, arrangeZone, changeGroup, checkArrange, checkNote, checkPlace, editNote, moveTile, pointOf, removeGroup, removeNote, sizeOf } from './layout-ops.ts';
+import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
+import { addGroup, addNote, arrangeZone, changeGroup, checkArrange, checkNote, checkPlace, editNote, moveTile, pointOf, removeGroup, removeNote, sizeOf, zoneMap } from './layout-ops.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
@@ -51,6 +60,7 @@ import {
   MAX_ACTIVITY_LIMIT,
   ORCHESTRATE_SETTING,
   MAX_ORCHESTRATOR_WAIT_MS,
+  MAX_FLAG_LENGTH,
   MAX_STATUS_LENGTH,
   ORCHESTRATE_SCOPES,
   ORCHESTRATOR_METHODS,
@@ -59,6 +69,7 @@ import {
   WAIT_STATES,
   type CrewEventKind,
   type OrchestrateScope,
+  type RecordParams,
   type WaitState,
 } from './protocol.ts';
 
@@ -99,16 +110,26 @@ COMMANDS
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
+  needs-you [--] <reason> [--via <ref>] | --clear
+                        Ask for a look: blocked, ready for review, or a decision needed. A
+                        turn ending tells no one. See \`needs-you --help\`.
   open-pr               Open a draft pull request of your branch (agents only).
+  doc <path> [--title <text>] [--board]
+                        Show the user a Markdown or HTML file of yours as a document: a Doc
+                        tab in your window (agents only). See \`doc --help\`.
+  record pr <url> | record doc <path> [--for orchestrator]
+                        Put a pull request you opened, or a hand-off doc you wrote, on your
+                        sidebar (agents only). See \`record --help\`.
   handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
                         Hand your finished work to the next agent over your own outgoing
                         edges, once it is ready, and say it is finished. See \`handoff --help\`.
   mcp                   Serve these as MCP tools on stdio, for a harness. Two are MCP tools
                         alone, as they wait on the user longer than a shell command runs:
                         ask (a question in the user's Needs you inbox) and present_plan (a
-                        plan for them to approve, send back with changes, or reject).
+                        plan for them to approve, send back with changes, or reject). An
+                        agent an orchestrator started puts both to that orchestrator instead.
   rpc <method> [json]   Call a daemon method directly and print its JSON result. In an agent's
-                        session, only the reads above and your own status (and, for an
+                        session, only the reads above, your own status and records (and, for an
                         orchestrator, the orchestrator commands).
 
   Read commands take --json. \`agent-board <command> --help\` says more about one.
@@ -119,8 +140,8 @@ ORCHESTRATING
   and always the agents it started. \`identify\` says whether you may. The agents you start are
   linked to you on the board, and orchestrate as their zone lets them, up to three deep. In a
   shell, or a terminal outside agent-board, these act for the user on any agent. Each start,
-  message, interrupt, restart and close is logged for the user. \`agent-board help
-  orchestrate\` shows the loop.
+  message, interrupt, continue, restart, pause, wake and close is logged for the user.
+  \`agent-board help orchestrate\` shows the loop.
 
   new [options] [--] <prompt>
                         Start an agent with <prompt> as its first message.
@@ -131,13 +152,16 @@ ORCHESTRATING
                         the user, or has stopped; or until it says its work is finished.
   watch [<ref>...] [--crew]
                         Print a line as each thing happens to your crew: a turn ended, it
-                        finished, needs the user, failed, was rate-limited, ended, or a pull
-                        request was opened. Each once.
+                        finished, needs the user, failed, was rate-limited, was paused, ended,
+                        or a pull request was opened. Each once.
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
+  continue <ref>        Continue on credits: resume a turn its usage limit stopped.
   restart <ref> [--fresh [--] [<prompt>]]
                         Start an ended agent again in its tile, worktree and branch, carrying
                         on its conversation; --fresh starts a new one instead.
+  pause <ref>           Hibernate an idle agent to free its memory; a message wakes it.
+  wake <ref>            Start a paused agent again, carrying on its conversation.
   close <ref> [--remove]
                         End an agent's session. --remove deletes it with its worktree and
                         branch: only an agent you started (any, from a shell), with nothing
@@ -151,15 +175,25 @@ ORCHESTRATING
   the way moving aside:
   move <ref> [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]]
                         Move a tile (an agent, a shell) or a note.
-  arrange [<zone ref>] [--by issue|role|state] [--layout rows|grid]
-                        Lay out your zone's tiles: you first, then a cluster per issue, its
-                        agent note first, then its implementer and its reviewer.
+  arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off]
+                        Lay out your zone's tiles: you first, then a lane per issue, its
+                        implementer, reviewer and follow-up in columns, then its note.
+                        --auto on arranges by itself as you start agents and add notes.
+  zone map [<zone ref>] [--boxes]
+                        Your zone as a table of its lanes and what is amiss, to check a
+                        layout; --boxes draws it in characters.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.
   note add [--] <text> [--near <ref> [--side <s>]] [--color <c>] [--kind sticky|text]
                         Put a note on the board: --near an agent, in its cluster.
                         \`note edit|remove\` change yours.
+
+  Schedules, each a clock on the board:
+  schedule add '<cron>' (--to <ref> | --fresh [--role <r>]) [--] <prompt>
+                        Message an agent at each fire time, or start a fresh agent with the
+                        task, wait for its turn to end, keep its result and close it.
+                        \`schedule list\` lists them; \`schedule remove <ref>\` removes yours.
 
   The app's default roles, for \`new --role <name>\` in any zone with no template of its own
   for the name:
@@ -251,8 +285,24 @@ commit. Marking it ready, running the gate and merging stay the user's.
 
   --json           Print the pull request as JSON.`,
   },
+  doc: {
+    usage: 'agent-board doc <path> [--title <text>] [--board]',
+    text: `Shows the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read
+than your terminal: a Document tab in your window, and with --board a card beside your tile too. Nothing
+waits. Showing the same file again shows the same document.
+
+It stays live: write the file again and the user sees the new version. They may edit a Markdown
+document there; their edit is written to the file, and you are told what changed, typed at your
+prompt once your turn is over. An HTML document is view-only (sandboxed, offline), and the user
+may send you comments on it. For a plan to approve, use the MCP tool \`show_doc\` with plan (or
+\`present_plan\`), which waits for the decision.
+
+  --title <text>   What it is, in a line; else its first heading (or page title).
+  --board          Also put it on the board, beside your tile.
+  --json           Print the document as JSON.`,
+  },
   status: {
-    usage: 'agent-board status set <summary> [--progress <0-100>] [--done]',
+    usage: 'agent-board status set <summary> [--agent <ref>] [--progress <0-100>] [--done]',
     text: `Sets your own tile's status: one line, at most ${MAX_STATUS_LENGTH} characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
 given. Your tile shows it in place of your task. Set it once you understand the work, and again
@@ -267,16 +317,60 @@ waiting with \`wait --until finished\` or watching with \`watch\` hears it once.
 says so too. A turn that ends while your background work runs is not finished. Your next
 prompt clears it.
 
+As an orchestrator, --agent <ref> sets the line of an agent in your crew (the agents you started,
+and theirs) instead of your own, and its tile says who set it. Keep your crew's lines current: what
+each is doing now, from what you see of it. The latest write wins, its own or yours. An agent
+outside your crew is refused.
+
+  --agent <ref>    Set this crew member's line, not your own.
   --progress <n>   0 to 100.
-  --done           Your work is finished.
+  --done           Your work is finished (not with --agent).
+  --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).`,
+  },
+  record: {
+    usage: 'agent-board record pr <url> [--title <title>] | record doc <path> [--for orchestrator]',
+    text: `Puts an entry on your sidebar, the details beside your terminal in your session window, as you
+make it: the board's own guesses (gh, hooks) only fill the gaps, and what you record wins.
+
+  record pr <url>       A pull request you opened, by its GitHub URL, on any branch, not only
+                        yours. Record it as soon as you open it. \`open-pr\` records its own.
+  record doc <path>     A hand-off doc you wrote: a handover, findings, a plan. The user opens it
+                        in a Doc tab. A relative path is from where you are.
+
+Recording an entry again replaces it, and brings it back if the user deleted it. The user may
+delete a record, not edit it.
+
+  --title <title>       The pull request's title, shown until gh is asked.
+  --for orchestrator    Record the doc on the orchestrator that started you instead, saying you
+                        wrote it: do that for what your orchestrator should read.
+  --json                Print the record as JSON.`,
+  },
+  'needs-you': {
+    usage: "agent-board needs-you [--via <ref>] [--] <reason> | agent-board needs-you --clear",
+    text: `Asks for a look, without a question: nothing waits, and your turn goes on. A turn ending tells
+no one, so say so when you are blocked, your work is ready for review, or you need a decision.
+<reason> is one line, at most ${MAX_FLAG_LENGTH} characters: "PR #12 is ready for review".
+
+An agent the user started is listed in their Needs you with the reason (and gets an OS
+notification), until they open your session or you run \`needs-you --clear\`. Flagging again
+replaces the reason.
+
+An agent an orchestrator started flags that orchestrator instead, never the user: the reason is
+typed at its prompt once its turn ends, and \`agent-board send\` from it clears the flag. An
+orchestrator that can't settle it passes it on to the user with --via, naming the crew member.
+
+For a question with answers to pick from, use the MCP tool \`ask\`, which waits for the answer.
+
+  --via <ref>      Orchestrators: the crew member whose flag you pass on.
+  --clear          Drop your flag: you no longer need a look.
   --json           Print the agent as JSON.`,
   },
   mcp: {
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
-set_status and open_pr, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
-interrupt, restart, close, add_edge, remove_edge, move, arrange, add_note, edit_note, remove_note,
-roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
+show_doc, set_status, needs_you, open_pr, record_pr and record_doc, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
+interrupt, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
+add_note, edit_note, remove_note, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
   claude mcp add agent-board -- agent-board mcp`,
@@ -301,9 +395,9 @@ as that shell (or as you). The agents they start are the user's own.
   repo    the agents of its repo, in any zone of it
   board   any agent, in any zone
 It may always act on the agents it started, wherever they are, and never on itself. It may
-read and wait for another orchestrator, but not steer one (send, interrupt, restart, close, or
-wire an edge into it) whose scope is wider than its own (board > repo > zone): a message runs
-under the permissions of the agent that gets it.
+read and wait for another orchestrator, but not steer one (send, interrupt, restart, pause, wake,
+close, or wire an edge into it) whose scope is wider than its own (board > repo > zone): a message
+runs under the permissions of the agent that gets it.
 
 As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board new --name impl -- 'Fix the flaky login test. Commit on your branch, write
@@ -316,6 +410,19 @@ As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board wait review && agent-board read review
   agent-board send impl -- 'Fix the review points: ...'
   agent-board close review --remove
+
+Keep your crew's tile lines current: a tile shows one status line (or else its task), and the
+agent's last message is only a hover away. Set a crew member's with \`agent-board status set
+--agent impl 'Retry fix in; waiting on review round 1'\` as its work moves on; its tile says you
+set it. Only for agents you started, and theirs; the agent's own \`status set\` replaces yours.
+
+Your sidebar, and each crew member's, lists what was recorded on it: pull requests, hand-off docs,
+and the agents you started (recorded as you start them). Record each pull request you open with
+\`agent-board record pr <url>\`, and each doc you write for the user with \`agent-board record doc
+<path>\`; ask your crew to record theirs, their handovers \`--for orchestrator\` so they land on
+your sidebar:
+  agent-board new --name impl -- '... Record your PR with agent-board record pr <url>, and
+    your handover with agent-board record doc .agent-board/handover.md --for orchestrator.'
 
 Or watch the whole crew, a line as each finishes, needs the user, fails or opens a pull request:
   agent-board watch --crew --count 1 --since <c>   one line at a time, from the last line's [c]
@@ -338,12 +445,13 @@ by themselves with edge add, reviewer to impl (findings back) and impl to review
 keep one of the two manual: two auto edges in a loop re-trigger each other, and a loop of them is
 refused. Never join them to your own tile: lines from you to every agent you start only clutter the board.
 
-Keep the crew tidy as it grows: arrange lays out your zone, you first, then one cluster per
-issue (or unit of work): its label, an agent note saying where each agent stands,
-then the implementer and its reviewer, left to right. Send fix rounds back
+Keep the crew tidy as it grows: arrange lays out your zone, you and the shells on the top row,
+then a lane per issue (or unit of work): its label, its implementer, its reviewer, its follow-up
+reviewer, then an agent note saying where each agent stands, each slot a column that lines up
+down the lanes. Send fix rounds back
 to the same implementer and reviewer, so each unit stays one pair. move, zone and note do the
 rest:
-  agent-board arrange                        or: --by role, --by state, --layout grid
+  agent-board arrange                        or: --by role, --by state, --layout columns
   agent-board move review --near impl --side right
   agent-board zone add --group --name 'Done'
   agent-board move impl --to Done
@@ -441,9 +549,11 @@ Each comes once, however often the agent's state flips:
 turn-ended is a turn ending at its prompt (its idle prompt a minute later is none); finished
 is the agent saying its work is done (\`handoff\`, \`status set --done\`), in place of
 turn-ended for that turn, and for the turns after it until its next prompt; needs-you is a
-permission prompt, or a question or plan of its own; pr-opened an open pull request new since
-the daemon started; ended is its session ending: closed, exited <code>, or removed. A removed
-agent's last lines still come.
+permission prompt, or a question or plan of its own; flagged is it asking you for a look
+(\`needs-you\`, also typed at your prompt); not-sent a message typed at its prompt (a hand-off,
+a run) that started no turn and waits for Send; pr-opened an open pull request new since the
+daemon started; paused is someone pausing it (by whom): no end, as a message wakes it; ended is
+its session ending: closed, exited <code>, or removed. A removed agent's last lines still come.
 
 It runs until --count lines or --timeout, else until stopped. Run it in the background, or
 with --count 1 in a loop: the cursor in [ ] is each line's place, and --since <cursor> prints
@@ -473,6 +583,18 @@ ${READ_FLAGS}`,
 
   --json   Print the agent as JSON.`,
   },
+  continue: {
+    usage: 'agent-board continue <ref> [--json]',
+    text: `Continue on credits: resumes the turn of a Claude agent its usage limit stopped (rate-limited),
+for its usage credits to pay for, as the user would in its terminal. It closes the menu Claude
+opens there with Escape, picking no row (so never one that opens a billing page), then submits
+\`continue\` at the prompt, as Claude does by itself at the reset; text already there is refused.
+Only while it is rate-limited, and never by itself: an orchestrator or the user chooses it. Waits
+until its turn starts. If the limit stops it again at once, its usage credits are spent too: tell
+the user.
+
+  --json   Print the agent as JSON.`,
+  },
   restart: {
     usage: 'agent-board restart <ref> [--fresh [--] [<prompt>] | --file <path>] [--json]',
     text: `Starts an ended agent again, as its tile's Restart does: in the same tile, worktree and branch,
@@ -488,6 +610,28 @@ that is the user's to end.
             held to the same rules as \`send\` and \`new\`; with none, it starts on its task, if it
             had one. Without --fresh a prompt is refused.
   --json    Print the agent as JSON.`,
+  },
+  pause: {
+    usage: 'agent-board pause <ref> [--json]',
+    text: `Pauses an idle agent to free what its harness holds (its memory, mostly): its session ends,
+keeping its tile, worktree, branch and conversation, and its tile shows it paused, by you. Only
+an agent between turns that waits on no one: refused mid-turn, while it waits on the user, while
+a message sits unsent at its prompt, and while one is being sent to it. Any background command
+it started ends with it. Nothing pauses an agent by itself. Its orchestrator's \`watch\` hears
+paused, not ended; \`close\` leaves it a plain closed agent, without waking it.
+
+\`agent-board wake\`, the user's Wake, a message (\`send\`), a hand-off or a scheduled run wakes it,
+carrying on its conversation (Claude with --resume, Codex with codex resume). A message waits
+for it to start, as its first message.
+
+  --json   Print the agent as JSON.`,
+  },
+  wake: {
+    usage: 'agent-board wake <ref> [--json]',
+    text: `Wakes a paused agent: starts it again in its tile, worktree and branch, carrying on its
+conversation, as its tile's Wake does. Refused for an agent that is not paused.
+
+  --json   Print the agent as JSON.`,
   },
   close: {
     usage: 'agent-board close <ref> [--remove] [--json]',
@@ -605,19 +749,22 @@ the zone over another zone is refused.
   --json           Print where it went as JSON.`,
   },
   arrange: {
-    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|grid] [--json]',
+    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off] [--json]',
     text: `Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
 orchestrator: you first, then
 
-  --by issue   a cluster per issue (the default), a row each: its label and an agent
-               note by you saying where each of its agents stands (its status line, else
-               its latest STATUS, else its state, and its PR; never its task), in the
-               first column; then its agents as their
-               work flows (an implementer, then its reviewer: a reviewer always after what it
-               reviews, whatever their roles); no card for its pull request, as each tile shows
-               its own, and any an earlier arrange made go. Arranging again moves the label
-               and sticky with it; a sticky anyone has edited keeps its text. One whose unit
-               has gone is removed.
+  --by issue   a lane per issue (the default), a row each, below you and the shells: its
+               label in the first column; then a column per slot, the same in every lane:
+               the implementer (and the others doing the work), the reviewer (anything that
+               reviews another), the follow-up reviewer, a second of one slot in a column
+               of its own and no column for a slot no lane uses. Lanes go in the order their
+               work started. Right after its last tile, an agent note by you saying where
+               each of its agents stands (its status line, else its latest STATUS, else its
+               state, and its PR; never its task). No card for its pull
+               request, as each tile shows its own, and any an earlier arrange made go.
+               Arranging again moves the label and note with it; a note anyone has edited
+               keeps its text. One whose unit has gone is removed. An agent note you put
+               beside one of its agents (note add --near) becomes its note.
                Without an issue, a unit is the agents joined by edges or sharing a ticket in
                their branch (acme-199-… is ACME-199), labelled by that ticket, else the words
                its agents' names start with, else its implementer's name.
@@ -625,27 +772,42 @@ orchestrator: you first, then
                reviewers), each reviewer under the agent it reviews
   --by state   a row per state, the ones needing the user first
 
-and shells last. --layout grid fills the zone's width in the same order instead of a row each,
-but only with the tiles no edge joins: a unit whose tiles an edge joins (you too, if one joins
-you) is laid out exactly as rows lay it out, from the top, and the grid fills round it, clear
-of its rails. By role or state, or as a grid, an arrange by issue's labels and stickies line
-up beside the crew until you arrange by issue again. Agents joined by an edge get a grid
+and, by role or state, shells last. --layout columns turns each row into a column instead:
+you and the shells stacked first, then a column per lane, its label with its note below it on
+top, then its tiles under them in slot order. --layout cards makes each lane a card instead,
+two across (three past four lanes), a free column and row between them: its label and note,
+implementer and reviewers on one row, its follow-up reviewers under them. --layout grid fills
+the zone's width in the same order
+instead of a row each, but only with the tiles no edge joins: a unit whose tiles an edge joins
+(you too, if one joins you) is laid out exactly as rows lay it out, from the top, and the grid
+fills round it, clear of its rails. By role or state, or as a grid, an arrange by issue's
+labels and notes line up beside the crew until you arrange by issue again. Agents joined by an edge get a grid
 column's room (or a row's) past every tile and row the rail between them runs by, so the rail
 has room for its document and label at either end.
 Every tile lands on the zone's grid, so rows and columns line up across clusters. What it may
 not move (the user's notes and cards, tiles outside your scope) stays put, and the rows keep
-clear of it. The zone grows to hold them, never shrinking. The same board always arranges the
+clear of it. The zone then fits what it holds, growing or shrinking to it (and what stays put)
+plus its margin, never over another zone. A tile expanded in place counts at its expanded size,
+so its lane is taller and its column wider. The same board always arranges the
 same way, so arranging again moves nothing. A reviewer you start on a clustered agent's branch
-(--base agent:<ref> --role reviewer) joins its cluster, after it.
+(--base agent:<ref> --role reviewer) joins its cluster, after it. After it arranges, it prints
+the zone's map (\`zone map\`), so you can check the layout at once.
+
+--by, --layout and --auto are kept as your settings: a bare arrange arranges as you last asked
+(by issue, in rows, until you ask otherwise). With --auto on, your zone is arranged by itself
+after every agent you start, note you add and agent you close, the new one in its lane, so you
+need not call arrange; --auto off stops it.
 
   --by <b>         ${ARRANGE_BYS.join(', ')}.
-  --layout <l>     ${ARRANGE_LAYOUTS.join(' or ')}.
-  --json           Print what moved as JSON.`,
+  --layout <l>     ${ARRANGE_LAYOUTS.join(', ')}.
+  --auto on|off    Arrange by itself as the crew changes, or not (off at first).
+  --json           Print what moved, and the map, as JSON.`,
   },
   zone: {
     usage:
       'agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | ' +
-      'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref>',
+      'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | ' +
+      'zone map [<ref>] [--boxes]',
     text: `Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
 
@@ -661,12 +823,23 @@ zone; shrinking it past its tiles moves the ones its edge cuts through, as the a
 does, and is refused when they have nowhere to go. Removing it leaves its tiles and notes
 loose on the board, where they were.
 
+\`zone map\` reads your zone (or <ref>, in your scope) as \`arrange\` sees it, moving nothing: a
+line per lane with a cell per slot (implementer, reviewer, follow-up, notes), each tile's ref,
+name and state, a free slot as ·, and you, the shells and what is in no lane on the top line;
+then where the next lane goes, which lanes are all done, and a lint line: things on top of
+each other, the widest gap in a lane (in slots), and the tiles off the grid or out of their
+lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
+prints it after every arrange. --boxes draws the zone in characters instead, about one to
+40 px, a key on each tile and note and a legend below: overlaps (#) and gaps show where they
+really are, whatever the layout, at about three times the length.
+
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
   --color <c>      #rrggbb.
   --at <x>,<y>     Where its top-left goes on the board.
   --size <w>,<h>   Its size: 720,480 by default.
-  --json           Print the zone as JSON.`,
+  --boxes          zone map: draw the zone as boxes.
+  --json           Print the zone (or map) as JSON.`,
   },
   note: {
     usage:
@@ -698,6 +871,37 @@ it yours again. \`note remove\` removes such a link card too.
   --to, --at, --near, --side
                    Where, as for \`agent-board move\`.
   --json           Print the note as JSON.`,
+  },
+  schedule: {
+    usage:
+      "agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] " +
+      '[--result history|note|handoff [--handoff-to <ref>]]) [--file <path> | [--] <prompt>] | schedule list | schedule remove <ref>',
+    text: `Schedules for an orchestrator (\`agent-board help orchestrate\`): each is a clock on the board,
+marked as made by you, that fires on a five-field cron expression (minute hour day month
+weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
+
+With --to, it sends <prompt> to that agent at each fire time, as its next message (relaunching
+it if its session has ended; a time at which it is busy is skipped). The clock goes on the
+agent's tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
+default) with <prompt> as its task, waits for its turn to end, keeps its final message in the
+clock's run history, and closes it (--keep leaves it open); a time at which the last run is
+still going is skipped. --result note also leaves the result as a note where its tile was;
+--result handoff hands it to --handoff-to's agent.
+
+\`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
+its last run went. \`schedule remove\` removes only a clock you, or an agent you started, made;
+in a shell, or outside agent-board, any.
+
+  --to <ref>         The agent it messages, in your scope.
+  --fresh            Start a fresh agent each run instead.
+  --zone <ref>       A fresh agent's zone, in your scope.
+  --harness, --model, --role
+                     A fresh agent's, as for \`agent-board new\`.
+  --keep             Leave a fresh agent open once its run is over.
+  --result <r>       history (the default), note or handoff.
+  --handoff-to <ref> The agent a fresh agent's result is handed to, in your scope.
+  --file <path>      Read the prompt from a file.
+  --json             Print the clock and its status as JSON.`,
   },
   rpc: {
     usage: "agent-board rpc <method> ['<json params>']",
@@ -795,6 +999,9 @@ const WAIT_TIMED_OUT = 3;
 const OPTIONS = {
   json: { type: 'boolean' },
   progress: { type: 'string' },
+  title: { type: 'string' },
+  for: { type: 'string' },
+  agent: { type: 'string' },
   zone: { type: 'string' },
   name: { type: 'string' },
   harness: { type: 'string' },
@@ -831,18 +1038,29 @@ const OPTIONS = {
   side: { type: 'string' },
   by: { type: 'string' },
   layout: { type: 'string' },
+  auto: { type: 'string' },
+  boxes: { type: 'boolean' },
   group: { type: 'boolean' },
   color: { type: 'string' },
   size: { type: 'string' },
   text: { type: 'string' },
+  board: { type: 'boolean' },
   kind: { type: 'string' },
+  via: { type: 'string' },
+  clear: { type: 'boolean' },
+  keep: { type: 'boolean' },
+  result: { type: 'string' },
+  'handoff-to': { type: 'string' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
 
 /** The options each command takes beyond `--json` (which every one but `status`'s set, `rpc` and `mcp` takes too). */
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
-  status: ['progress', 'done'],
+  status: ['progress', 'done', 'agent'],
+  record: ['title', 'for'],
+  'needs-you': ['via', 'clear'],
+  doc: ['title', 'board'],
   new: ['zone', 'name', 'harness', 'model', 'role', 'no-template', 'branch', 'base', 'issue', 'file'],
   roles: ['file', 'zone'],
   send: ['file'],
@@ -855,9 +1073,10 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   handoff: ['to', 'message', 'handover', 'data'],
   edge: ['carries', 'path', 'trigger', 'condition'],
   move: ['to', 'at', 'near', 'side'],
-  arrange: ['by', 'layout'],
-  zone: ['group', 'name', 'color', 'at', 'size'],
+  arrange: ['by', 'layout', 'auto'],
+  zone: ['group', 'name', 'color', 'at', 'size', 'boxes'],
   note: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'],
+  schedule: ['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
 };
 
 /** A command's result: what it prints, and its exit code (0 for a bare string). */
@@ -876,7 +1095,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
   for (const option of Object.keys(values) as Option[]) {
     if (!takes.has(option)) {
       throw new UsageError(
-        option === 'progress' || option === 'done' ? `--${option} is only for \`status set\`` : `--${option} is not an option of ${command}`,
+        option === 'progress' || option === 'done' || option === 'agent' ? `--${option} is only for \`status set\`` : `--${option} is not an option of ${command}`,
       );
     }
   }
@@ -947,6 +1166,19 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       noPositionals();
       return async (session) => print(await openOwnPullRequest(session));
     }
+    case 'record': {
+      const [kind, target, ...rest] = positionals;
+      if (kind !== 'pr' && kind !== 'doc') throw new UsageError('record what: `record pr <url>` or `record doc <path>`');
+      if (target === undefined || rest.length > 0) throw new UsageError(kind === 'pr' ? 'give one pull request URL' : 'give one file');
+      if (kind === 'pr' && string('for') !== undefined) throw new UsageError('--for is only for `record doc`');
+      if (kind === 'doc' && string('title') !== undefined) throw new UsageError('--title is only for `record pr`');
+      const forWhom = string('for');
+      if (forWhom !== undefined && forWhom !== 'orchestrator') throw new UsageError('--for takes only orchestrator');
+      const title = string('title');
+      const params: RecordParams =
+        kind === 'pr' ? { kind, url: target, ...(title === undefined ? {} : { title }) } : { kind, path: target, forOrchestrator: forWhom === 'orchestrator' };
+      return async (session) => print(await recordEntry(session, params, process.cwd()));
+    }
     case 'status': {
       if (positionals[0] !== 'set') throw new UsageError('the only status command is `status set`');
       const summary = positionals.slice(1).join(' ');
@@ -955,10 +1187,26 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (progress !== undefined && !isStatusProgress(progress)) {
         throw new UsageError('--progress must be a whole number from 0 to 100');
       }
+      const crewMember = string('agent');
+      if (crewMember !== undefined && values.done === true) throw new UsageError('--done is for your own status: a crew member says it is finished itself');
       return async (session) => {
+        if (crewMember !== undefined) {
+          const view = await setCrewStatus(session, crewMember, summary, progress);
+          return values.json ? JSON.stringify(view.json, null, 2) : view.text;
+        }
         const agent = await setOwnStatus(session, summary, progress, values.done === true);
         if (values.json) return JSON.stringify(agent, null, 2);
         return `status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`;
+      };
+    }
+    case 'needs-you': {
+      const reason = positionals.join(' ');
+      if (values.clear === true) {
+        if (reason.trim() !== '' || string('via') !== undefined) throw new UsageError('--clear takes no reason and no --via');
+      } else if (reason.trim() === '') throw new UsageError('give a reason, or --clear');
+      return async (session) => {
+        const agent = await flagOwn(session, values.clear === true ? undefined : reason, string('via'));
+        return values.json ? JSON.stringify(agent, null, 2) : flagLine(agent);
       };
     }
     case 'new': {
@@ -1043,6 +1291,10 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const ref = oneRef();
       return async (session) => print(await interruptAgent(session, ref));
     }
+    case 'continue': {
+      const ref = oneRef();
+      return async (session) => print(await continueAgent(session, ref));
+    }
     case 'restart': {
       const ref = positionals[0];
       if (ref === undefined) throw new UsageError('give one agent ref');
@@ -1050,6 +1302,14 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (prompt.trim() !== '' && values.fresh !== true) throw new UsageError('a prompt needs --fresh: a restart that carries on its conversation takes none');
       return async (session) =>
         print(await restartAgent(session, ref, values.fresh === true ? { prompt: prompt.trim() === '' ? undefined : prompt } : undefined));
+    }
+    case 'pause': {
+      const ref = oneRef();
+      return async (session) => print(await pauseAgent(session, ref));
+    }
+    case 'wake': {
+      const ref = oneRef();
+      return async (session) => print(await wakeAgent(session, ref));
     }
     case 'close': {
       const ref = oneRef();
@@ -1062,6 +1322,10 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (!ORCHESTRATE_SCOPES.includes(scope as OrchestrateScope)) throw new UsageError(`--scope must be ${ORCHESTRATE_SCOPES.join(', ')}`);
       if (onOff === 'off' && string('scope') !== undefined) throw new UsageError('--scope is only for `orchestrate on`');
       return async (session) => print(await setOrchestrate(session, ref, onOff === 'on' ? (scope as OrchestrateScope) : null));
+    }
+    case 'doc': {
+      if (positionals.length !== 1) throw new UsageError('give the path of one .md or .html file');
+      return async (session) => print(await showDoc(session, { path: positionals[0]!, title: string('title'), onBoard: values.board === true }, process.cwd()));
     }
     case 'handoff': {
       noPositionals();
@@ -1109,13 +1373,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'arrange': {
       if (positionals.length > 1) throw new UsageError('give at most one zone ref');
-      const options = { by: string('by'), layout: string('layout') };
+      const options = { by: string('by'), layout: string('layout'), auto: string('auto') };
       checked(() => checkArrange(options));
       return async (session) => print(await arrangeZone(session, positionals[0], options));
     }
     case 'zone': {
       const [sub, ref, ...rest] = positionals;
-      const given = (['group', 'name', 'color', 'at', 'size'] as const).filter((option) => values[option] !== undefined);
+      const given = (['group', 'name', 'color', 'at', 'size', 'boxes'] as const).filter((option) => values[option] !== undefined);
       const only = (allowed: readonly Option[]) => {
         const stray = given.find((option) => !allowed.includes(option));
         if (stray !== undefined) throw new UsageError(`--${stray} is not an option of \`zone ${sub}\``);
@@ -1149,7 +1413,12 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (ref === undefined || rest.length > 0) throw new UsageError('give one group ref');
         return async (session) => print(await removeGroup(session, ref));
       }
-      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize` and `zone remove`');
+      if (sub === 'map') {
+        only(['boxes']);
+        if (rest.length > 0) throw new UsageError('give at most one zone ref');
+        return async (session) => print(await zoneMap(session, ref, { boxes: values.boxes === true }));
+      }
+      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove` and `zone map`');
     }
     case 'note': {
       const [sub, ...rest] = positionals;
@@ -1176,6 +1445,40 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeNote(session, rest[0]!));
       }
       throw new UsageError('the note commands are `note add`, `note edit` and `note remove`');
+    }
+    case 'schedule': {
+      const [sub, ...rest] = positionals;
+      if (sub === 'add') {
+        const [cron, ...words] = rest;
+        if (cron === undefined) throw new UsageError("give the schedule's cron expression, quoted: '0 9 * * 1-5'");
+        positionals = words;
+        const options = {
+          cron,
+          prompt: text(0),
+          to: string('to'),
+          fresh: values.fresh === true ? true : undefined,
+          zone: string('zone'),
+          harness: string('harness'),
+          model: string('model'),
+          role: string('role'),
+          keep: values.keep === true ? true : undefined,
+          result: string('result'),
+          handoffTo: string('handoff-to'),
+        };
+        checked(() => checkSchedule(options));
+        return async (session) => print(await addSchedule(session, options));
+      }
+      const added = (['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'] as const).find((option) => values[option] !== undefined);
+      if (added !== undefined) throw new UsageError(`--${added} is only for \`schedule add\``);
+      if (sub === 'list') {
+        if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+        return async (session) => print(await listSchedules(session));
+      }
+      if (sub === 'remove') {
+        if (rest.length !== 1) throw new UsageError('give one schedule ref');
+        return async (session) => print(await removeSchedule(session, rest[0]!));
+      }
+      throw new UsageError('the schedule commands are `schedule add`, `schedule list` and `schedule remove`');
     }
     case 'roles': {
       const [sub = 'list', ...rest] = positionals;

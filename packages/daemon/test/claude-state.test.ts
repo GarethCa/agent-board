@@ -27,6 +27,11 @@ describe('Claude hook → agent state (ADR-0004)', () => {
     expect(claudeStateAfterHook('thinking', hook(event, { agent_id: 'a1', agent_type: 'Explore' }))).toBe('thinking');
   });
 
+  it('keeps a rate-limited agent so through its idle prompt: its limit still stops it until a turn starts', () => {
+    expect(claudeStateAfterHook('rate-limited', hook('Notification', { notification_type: 'idle_prompt' }))).toBe('rate-limited');
+    expect(claudeStateAfterHook('rate-limited', hook('UserPromptSubmit', { prompt: 'continue' }))).toBe('thinking');
+  });
+
   it('ignores notifications it has no state for, and events it does not know', () => {
     expect(claudeStateAfterHook('idle', hook('Notification', { notification_type: 'auth_success' }))).toBe('idle');
     expect(claudeStateAfterHook('running', hook('PreCompact'))).toBe('running');

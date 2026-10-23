@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
+import type { Agent, AgentStart, ExternalSession, Shell, TilePosition, Zone } from '@agent-board/daemon/protocol';
 import { AGENT_TILE_SIZE, CHIP_SIZE, freeTileSlot, tileSlot, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { DRAGGED_TILE_Z_INDEX, EXPANDED_DRAG_HANDLE, holdsTiles, savedMove, savedPlace, shellWithPane, tileNodeId, tileSubject, withTiles, type BoardNode } from './tiles';
 import { EXPANDED_SIZE, expandTile } from './expanded';
@@ -17,10 +17,48 @@ const shell = (id: string, zoneId: string | null, position: TilePosition | null 
 const external = (id: string, zoneId: string | null, position: TilePosition | null = null) =>
   ({ id, zoneId, position, name: id, harness: 'claude' }) as ExternalSession;
 
+const start = (sessionId: string, zoneId: string | null, position: { x: number; y: number } | null = null): AgentStart => ({
+  sessionId,
+  zoneId,
+  position,
+  name: sessionId,
+  harness: 'claude',
+  model: null,
+  spawnedBy: null,
+  steps: [{ kind: 'worktree', state: 'now', detail: null }],
+  error: null,
+  confirm: false,
+});
+
 const tiles = (nodes: BoardNode[]) => nodes.filter((node): node is TileNodeType => node.type === 'tile');
 const tile = (nodes: BoardNode[], id: string) => tiles(nodes).find((node) => node.id === id)!;
 
 describe('withTiles', () => {
+  it("gives an agent being started a tile in its zone's next slot, which its agent takes once it is listed", () => {
+    const starting = withTiles([zone('z')], [agent('a', 'z')], [shell('s', 'z')], [], new Map(), [], {}, new Set(), [start('b', 'z')]);
+
+    expect(tiles(starting).map((node) => [node.id, node.position])).toEqual([
+      ['agent:a', tileSlot(0, 800)],
+      ['start:b', tileSlot(1, 800)],
+      ['shell:s', tileSlot(2, 800)],
+    ]);
+    // It can be moved and renamed while it starts.
+    expect(tile(starting, 'start:b')).toMatchObject({ parentId: 'z', draggable: true, data: { label: 'b', start: start('b', 'z') } });
+
+    const started = withTiles(starting, [agent('a', 'z'), agent('b', 'z')], [shell('s', 'z')], [], new Map(), [], {}, new Set(), [start('b', 'z')]);
+    expect(tiles(started).map((node) => [node.id, node.position])).toEqual([
+      ['agent:a', tileSlot(0, 800)],
+      ['agent:b', tileSlot(1, 800)],
+      ['shell:s', tileSlot(2, 800)],
+    ]);
+  });
+
+  it('puts a loose start where it was asked for, and drops its tile once the start is over', () => {
+    const starting = withTiles([], [], [], [], new Map(), [], {}, new Set(), [start('b', null, { x: 40, y: 60 })]);
+    expect(tile(starting, 'start:b')).toMatchObject({ position: { x: 40, y: 60 } });
+    expect(tiles(withTiles(starting, [], [], []))).toEqual([]);
+  });
+
   it("gives an agent's tabs to its tile, never tiles of their own", () => {
     const tab = { ...shell('tab', null), owner: { kind: 'agent', id: 'a' } } as Shell;
     const nodes = withTiles([zone('z')], [agent('a', 'z'), agent('b', 'z')], [shell('s', 'z'), tab], []);
@@ -130,6 +168,16 @@ describe('withTiles', () => {
     expect(grown!.width).toBe(far.x + AGENT_TILE_SIZE.width + ZONE_PADDING);
     expect(grown!.height).toBeGreaterThan(far.y + AGENT_TILE_SIZE.height);
     expect(grown!.data.covers).toMatchObject({ right: grown!.width, bottom: grown!.height, left: far.x - ZONE_PADDING });
+  });
+
+  it('grows a zone only as far as its tiles need now: grown round where they were, it shrinks back to its own size once they move in', () => {
+    const far = { x: 900, y: 500, z: 1 };
+    const [grown] = withTiles([zone('z')], [agent('a', 'z', far)], [], []) as ZoneNodeType[];
+    // Its tile moves back in, while the zone keeps the size it was saved at: the size it was grown to goes.
+    const near = { x: 20, y: 44, z: 1 };
+    const [after] = withTiles([grown!], [agent('a', 'z', near)], [], []) as ZoneNodeType[];
+    expect(after!.width).toBe(grown!.data.zone.width);
+    expect(after!.height).toBe(grown!.data.zone.height);
   });
 
   it('draws a resized tile at its own size, grows its zone to hold it and slots the others clear of it', () => {

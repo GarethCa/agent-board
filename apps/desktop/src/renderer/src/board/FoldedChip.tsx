@@ -12,7 +12,8 @@ import { TileActionsContext } from './tile';
  */
 export function chipPill(agent: Agent): { state: Agent['state']; label: string } {
   if (agent.pullRequests.length > 0 && agent.pullRequests.every((pr) => pr.state === 'merged')) return { state: 'done', label: 'merged' };
-  return agentPill(agent, TILE_STATE_LABELS);
+  // Its agent has ended, so its pill says how, whatever Needs you lists.
+  return agentPill(agent, 'explicit', TILE_STATE_LABELS);
 }
 
 /**

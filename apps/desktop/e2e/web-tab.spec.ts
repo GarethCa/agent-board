@@ -1,5 +1,8 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -55,6 +58,15 @@ async function stubBrowser(app: ElectronApplication): Promise<void> {
 }
 const opened = (app: ElectronApplication) => app.evaluate(() => (globalThis as { opened?: string[] }).opened);
 
+/** A port nothing listens on now. */
+async function freePort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
+
 /** Types `typed` into the web tab's address row and goes there. */
 async function goTo(window: Page, typed: string): Promise<void> {
   const address = webView(window).getByTestId('web-address');
@@ -62,7 +74,7 @@ async function goTo(window: Page, typed: string): Promise<void> {
   await address.press('Enter');
 }
 
-test("a web tab from + Web… shows a local dev server's page, locked down: no file, data or javascript, no redirect away, no window, permission, download or devtools; it follows its pane as it splits, hides behind a dialog, is kept across a restart by its URL and goes with its data when closed", async () => {
+test("a web tab from + Web… shows a local dev server's page, locked down: no file, data or javascript, no redirect away, no window, permission, download or devtools; it follows its pane as it splits, hides behind another tab, is kept across a restart by its URL and goes with its data when closed", async () => {
   const server = await serveWebPages();
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
@@ -74,18 +86,33 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
     await expect(tabs(window)).toHaveCount(1);
 
-    // + › Web… asks where, with localhost filled in, and checks the answer with the rule the page is held to.
+    // + › Web… opens a tab at once with no page and its address bar focused, saying how to start a server while none runs;
+    // what is typed there is checked with the rule the page is held to.
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
-    const ask = window.getByRole('dialog', { name: 'Open a web tab' });
-    const address = ask.getByRole('textbox', { name: 'Address' });
-    await expect(address).toHaveValue('http://localhost:3000/');
+    const address = webView(window).getByTestId('web-address');
+    await expect(address).toBeFocused();
+    await expect(address).toHaveValue('');
+    await expect(webView(window).getByTestId('web-blank')).toContainText('No local servers running');
     await address.fill('file:///etc/passwd');
-    await ask.getByRole('button', { name: 'Open' }).click();
-    await expect(ask.getByRole('alert')).toContainText('A web tab shows https pages');
-    await address.fill(server.url);
-    await ask.getByRole('button', { name: 'Open' }).click();
-    await expect(ask).toBeHidden();
+    await address.press('Enter');
+    await expect(webView(window).getByTestId('web-problem')).toContainText('A web tab shows https pages');
+    // A shell of the window listening on a port is offered on the blank page; picking it loads it, and clears the rejected address.
+    const port = await freePort();
+    await tabNamed(window, 'Shell 1').getByRole('tab').click();
+    await sessionWindow(window).locator('[data-testid="session-tab-view"]:not([hidden])').getByTestId('session-terminal').click();
+    await window.keyboard.type(`node -e "require('http').createServer((q, s) => s.end('<h1>Shell dev</h1>')).listen(${port}, '127.0.0.1')"`);
+    await window.keyboard.press('Enter');
+    await tabNamed(window, 'New tab').getByRole('tab').click();
+    const offered = webView(window).getByTestId('web-server');
+    await expect(offered).toHaveCount(1, { timeout: 20_000 });
+    await expect(offered).toContainText(`localhost:${port}`);
+    await offered.click();
+    await expect(webView(window).getByTestId('web-blank')).toHaveCount(0);
+    await expect(webView(window).getByTestId('web-problem')).toHaveCount(0);
+    await expect(webView(window).getByTestId('web-address')).toHaveValue(`http://localhost:${port}/`);
+    await expect((await webPage(app, `http://localhost:${port}/`)).locator('h1')).toHaveText('Shell dev');
+    await goTo(window, server.url);
 
     // A tab named after its host, showing the page over its area of the window.
     const host = new URL(server.url).host;
@@ -214,11 +241,11 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     await webView(window).getByRole('button', { name: 'Forward' }).click();
     await expect(webView(window).getByTestId('web-address')).toHaveValue(`${server.url}next?code=secret#access_token=t`);
 
-    // A dialog over the window hides the page, and it comes back as it closes; so does another tab showing.
+    // A new tab showing hides the page, and it comes back as that tab closes; so does another tab showing.
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: 'Web…' }).click();
     await expect.poll(async () => (await theWebView(app)).visible).toBe(false);
-    await window.getByRole('dialog', { name: 'Open a web tab' }).getByRole('button', { name: 'Cancel' }).click();
+    await window.getByRole('button', { name: 'Close New tab' }).click();
     await expectDrawnOver(app, window);
     await tabNamed(window, 'Shell 1').getByRole('tab').click();
     await expect.poll(async () => (await theWebView(app)).visible).toBe(false);
@@ -318,5 +345,127 @@ test("a local address in a shell's output opens in a web tab of its window on a 
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
     await server.close();
+  }
+});
+
+test("an https address in a shell's output, wrapped over rows, opens in the OS browser on a ⌘⇧-click on any of its rows, and a local one does not", async () => {
+  const server = await serveWebPages();
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await stubBrowser(app);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    const terminal = sessionWindow(window).getByTestId('session-terminal');
+    await terminal.click();
+    // Longer than a row of the terminal, so the terminal wraps it.
+    const url = `https://example.com/${'a'.repeat(400)}`;
+    await window.keyboard.type(`printf '%s\\n' ${url} ${server.url}`);
+    await window.keyboard.press('Enter');
+    const first = terminal.locator('.xterm-rows > div').filter({ hasText: /^https:/ });
+    await expect(first).toHaveCount(1);
+    const second = first.locator('xpath=following-sibling::div[1]');
+    const secondBox = (await second.boundingBox())!;
+    const onSecondRow = { x: secondBox.x + 30, y: secondBox.y + secondBox.height / 2 };
+    const command = process.platform === 'darwin' ? 'Meta' : 'Control';
+    const click = async (at: { x: number; y: number }, ...keys: string[]) => {
+      await window.mouse.move(at.x, at.y);
+      for (const key of keys) await window.keyboard.down(key);
+      await window.mouse.click(at.x, at.y);
+      for (const key of keys.reverse()) await window.keyboard.up(key);
+    };
+
+    // A plain click is the terminal's. (A ⌘-click would open a web tab on the page, which this test keeps off the network.)
+    await click(onSecondRow);
+    expect(await opened(app)).toEqual([]);
+
+    // ⌘⇧-click on the wrapped second row opens the whole address.
+    await click(onSecondRow, command, 'Shift');
+    await expect.poll(() => opened(app)).toEqual([url]);
+    await expect(tabs(window)).toHaveCount(1);
+
+    // ⌘⇧-click on a local address opens nothing: the browser is only for https.
+    const local = terminal.locator('.xterm-rows > div').filter({ hasText: new RegExp('^' + server.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) });
+    await expect(local).toHaveCount(1);
+    const localBox = (await local.boundingBox())!;
+    const onLocal = { x: localBox.x + 30, y: localBox.y + localBox.height / 2 };
+    // The hover says the address is found and offers a web tab only: no browser for it.
+    await window.mouse.move(onLocal.x, onLocal.y);
+    await expect(terminal).toHaveAttribute('title', /to open in a web tab$/);
+    await click(onLocal, command, 'Shift');
+    await expect(tabs(window)).toHaveCount(1);
+    expect(await opened(app)).toEqual([url]);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+    await server.close();
+  }
+});
+
+/** What Claude Code writes for links (BEL-terminated, a span per row, the label coloured): see fixtures/claude/README.md. */
+const CLAUDE_OSC8 = fileURLToPath(new URL('../../../fixtures/claude/osc8/links.bin', import.meta.url));
+
+test("OSC 8 hyperlinks as Claude Code writes them open whole in the OS browser on a ⌘⇧-click on any row, and say where they go on hover; one the terminal may not open says so", async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await stubBrowser(app);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    const terminal = sessionWindow(window).getByTestId('session-terminal');
+    await terminal.click();
+    await window.keyboard.type(`cat '${CLAUDE_OSC8}'`);
+    await window.keyboard.press('Enter');
+    const row = (text: RegExp) => terminal.locator('.xterm-rows > div').filter({ hasText: text });
+    // An address with brackets and an apostrophe in it, hard-wrapped by Claude over two rows; one the terminal may not
+    // open (http, and not on this machine); one ending in a full stop.
+    const first = row(/^https:\/\/github\.com\/acme\/widget/);
+    const second = row(/^s\/issues\?q=label/);
+    const refused = row(/^docs/);
+    const dotted = row(/^dotted/);
+    for (const locator of [first, second, refused, dotted]) await expect(locator).toHaveCount(1);
+    const target = "https://github.com/acme/widgets/issues?q=label:[bug]+it's+open";
+    // What is opened is the parsed address (an apostrophe in a query is percent-encoded); the hover shows that same parsed address, not the target as written.
+    const wrapped = new URL(target).href;
+    const command = process.platform === 'darwin' ? 'Meta' : 'Control';
+    const hover = async (locator: typeof first) => {
+      const box = (await locator.boundingBox())!;
+      await window.mouse.move(box.x + 30, box.y + box.height / 2);
+      return { x: box.x + 30, y: box.y + box.height / 2 };
+    };
+    const clickIn = async (locator: typeof first) => {
+      const at = await hover(locator);
+      await window.keyboard.down(command);
+      await window.keyboard.down('Shift');
+      await window.mouse.click(at.x, at.y);
+      await window.keyboard.up('Shift');
+      await window.keyboard.up(command);
+    };
+
+    // The second row holds no address of its own: the link there is the sequence's, and the hover says where it goes (the parsed address).
+    await hover(second);
+    await expect(terminal).toHaveAttribute('title', new RegExp(`^${wrapped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — .*for the browser`));
+    await clickIn(second);
+    await expect.poll(() => opened(app)).toEqual([wrapped]);
+    // On the first row the sequence's address wins over the text's own, which is cut short.
+    await clickIn(first);
+    await expect.poll(() => opened(app)).toEqual([wrapped, wrapped]);
+
+    // A labelled link to an address the terminal may not open shows its target and says it can't be opened, and opens
+    // nothing: the click after it, which does open, finds the browser asked for that alone.
+    await hover(refused);
+    await expect(terminal).toHaveAttribute('title', "http://example.com/docs — can't be opened from here: only https, or http on this machine");
+    await clickIn(refused);
+    await clickIn(dotted);
+    await expect.poll(() => opened(app)).toEqual([wrapped, wrapped, 'https://example.com/a.']);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

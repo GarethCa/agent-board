@@ -4,8 +4,11 @@ import { finiteNumberParam, invalidParams, paramsObject, stringParam } from './p
 import type { ImageStore } from './image-store.ts';
 import { imagesOf, type ImageSweeper } from './image-sweeper.ts';
 import { isObject } from './json.ts';
+import { CronError, parseCron } from './cron.ts';
 import {
   BOARD_ITEM_KINDS,
+  CLOCK_ACTIONS,
+  CLOCK_RESULTS,
   HARNESSES,
   IMAGE_EXTENSIONS,
   issueCardProblem,
@@ -20,7 +23,9 @@ import {
   MAX_TEXT_FONT_SIZE,
   MAX_TEXT_LENGTH,
   MIN_TEXT_FONT_SIZE,
+  PLAN_FORMATS,
   normalisedAngle,
+  SHAPE_SECTIONS,
   SHAPE_TYPES,
   TEXT_ALIGNS,
   TEXT_SIZES,
@@ -118,6 +123,16 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
       if (!ok) throw invalidParams(`an agent note's suggestions must be at most ${MAX_SUGGESTIONS} of { id, title, shapes, arrows }`);
     }
   },
+  document: (data) => {
+    if (typeof data.documentId !== 'string') throw invalidParams("a document card's documentId must be a string");
+    const agent = data.agent as Record<string, unknown> | undefined;
+    if (!isObject(agent) || typeof agent.sessionId !== 'string' || typeof agent.name !== 'string' || !isOneOf(HARNESSES, agent.harness)) {
+      throw invalidParams("a document card's agent must be { sessionId, name, harness, role }");
+    }
+    checkText('a document card', data, 'title');
+    checkOneOf('a document card', data, 'format', PLAN_FORMATS);
+    checkBoolean('a document card', data, 'collapsed');
+  },
   image: (data) => {
     if (!isImageRef(data, IMAGE_ITEM_EXTENSIONS)) throw invalidParams("an image's data must be a stored image's sha256 and ext");
   },
@@ -159,6 +174,33 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkBoolean(owner, data, 'wrap');
     checkColor(owner, data, 'color');
   },
+  clock: (data) => {
+    const owner = 'a clock';
+    if (typeof data.cron !== 'string') throw invalidParams("a clock's cron must be a string");
+    try {
+      parseCron(data.cron);
+    } catch (error) {
+      if (error instanceof CronError) throw invalidParams(`a clock's cron can't be used: ${error.message}`);
+      throw error;
+    }
+    checkBoolean(owner, data, 'enabled');
+    checkBoolean(owner, data, 'folded');
+    checkOneOf(owner, data, 'does', CLOCK_ACTIONS);
+    checkOneOf(owner, data, 'result', CLOCK_RESULTS);
+    if (typeof data.prompt !== 'string') throw invalidParams("a clock's prompt must be a string");
+    if (data.prompt.length > MAX_STICKY_TEXT) throw invalidParams(`a clock's prompt is over ${MAX_STICKY_TEXT} characters`);
+    for (const key of ['agent', 'handoffTo']) {
+      if (data[key] !== null && typeof data[key] !== 'string') throw invalidParams(`a clock's ${key} must be a session id or null`);
+    }
+    const fresh = data.fresh;
+    const ok =
+      isObject(fresh) &&
+      isOneOf(HARNESSES, fresh.harness) &&
+      (fresh.model === null || typeof fresh.model === 'string') &&
+      (fresh.role === null || typeof fresh.role === 'string') &&
+      typeof fresh.closeWhenDone === 'boolean';
+    if (!ok) throw invalidParams("a clock's fresh must be { harness, model, role, closeWhenDone }");
+  },
   shape: (data) => {
     const owner = 'a shape';
     checkOneOf(owner, data, 'shape', SHAPE_TYPES);
@@ -172,6 +214,20 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkBoolean(owner, data, 'bold');
     checkText(owner, data, 'text');
     checkOneOf(owner, data, 'textSize', TEXT_SIZES);
+    // Shapes saved before these existed have none: the board draws them with the defaults.
+    if (data.align !== undefined) checkOneOf(owner, data, 'align', TEXT_ALIGNS);
+    if (data.mono !== undefined) checkBoolean(owner, data, 'mono');
+    // Shapes saved before sections existed have none. The text and the sections share one text's length, so a shape
+    // always fits an item's data.
+    for (const section of SHAPE_SECTIONS) if (data[section] !== undefined) checkText(owner, data, section);
+    const length = [data.text, ...SHAPE_SECTIONS.map((section) => data[section])].reduce<number>(
+      (total, text) => total + (typeof text === 'string' ? text.length : 0),
+      0,
+    );
+    if (length > MAX_TEXT_LENGTH) throw invalidParams(`a shape's text and sections are over ${MAX_TEXT_LENGTH} characters together`);
+    if (data.fontSize !== undefined && data.fontSize !== null && !(typeof data.fontSize === 'number' && data.fontSize >= MIN_TEXT_FONT_SIZE && data.fontSize <= MAX_TEXT_FONT_SIZE)) {
+      throw invalidParams(`a shape's fontSize must be null, or a number from ${MIN_TEXT_FONT_SIZE} to ${MAX_TEXT_FONT_SIZE}`);
+    }
   },
 };
 

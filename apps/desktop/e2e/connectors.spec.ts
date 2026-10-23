@@ -81,6 +81,9 @@ test('draws connectors between notes, labels and restyles them, follows a moved 
     // Selected, it can be restyled.
     await window.getByTestId('connector-label').click();
     await window.getByRole('button', { name: 'Elbow' }).click();
+    // Its ends one by one are behind Custom ends…, as an arrow is a relation (Directed).
+    await window.getByRole('button', { name: 'Relation' }).click();
+    await window.getByRole('menuitem', { name: 'Custom ends…' }).click();
     await window.getByRole('button', { name: 'End: dot' }).click();
     await window.getByRole('button', { name: 'Blue' }).click();
     await expect.poll(async () => (await stored(dataDir)).connectors[0]).toMatchObject({ style: 'elbow', endEnd: 'dot', color: '#3b5bdb' });
@@ -88,7 +91,8 @@ test('draws connectors between notes, labels and restyles them, follows a moved 
     // It follows an end that moves.
     const pathBefore = await first.getAttribute('d');
     const box = await settledBox(right);
-    await drag(window, { x: box.x + box.width / 2, y: box.y + 20 }, { x: box.x + box.width / 2 + 60, y: box.y + 120 });
+    // By its lower part: the selected connector's bar is over its top.
+    await drag(window, { x: box.x + box.width / 2, y: box.y + box.height - 20 }, { x: box.x + box.width / 2 + 60, y: box.y + box.height + 80 });
     await expect.poll(() => first.getAttribute('d')).not.toBe(pathBefore);
 
     // Deleting a note deletes the connectors on it; the other stays.

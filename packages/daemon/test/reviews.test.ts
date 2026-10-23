@@ -1,7 +1,9 @@
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import type { DaemonOptions } from '../src/daemon.ts';
+import { daemonPaths } from '../src/paths.ts';
 import { parseReviewDoc } from '../src/review-doc.ts';
 import {
   DEFAULT_REVIEW_CAP,
@@ -186,6 +188,23 @@ describe('review rounds', { timeout: ROUNDS_MS }, () => {
     expect(failed).toMatchObject({ reviewer: null, doc: null, failedBecause: expect.any(String) });
     // A failed round doesn't hold up the next.
     expect((await client.call('review.start', { sessionId: implementer.sessionId })).round).toBe(2);
+  });
+
+  it("keeps a paused reviewer's round open when its session ends, as the pause ended it", async () => {
+    const dataDir = tempDataDir();
+    const agentEnv = fakeHarnessEnv({ scenario: 'review', home: tempDataDir(), idleNotifyMs: 200, stepDelayMs: 500 });
+    const { client, recorder, implementer } = await reviewDaemon({ dataDir, agentEnv });
+    const round = await client.call('review.start', { sessionId: implementer.sessionId });
+    await untilAgent(recorder, round.reviewer!, (agent) => agent.state === 'running' || agent.state === 'thinking');
+
+    // As a pause marks it before ending its session (the fakes' reviewer leaves no stretch between turns to pause in).
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare("UPDATE agents SET hibernated_at = '2026-10-23T08:00:00.000Z' WHERE session_id = ?").run(round.reviewer!);
+    db.close();
+    await client.call('agent.stop', { sessionId: round.reviewer! });
+
+    expect(await untilAgent(recorder, round.reviewer!, (agent) => agent.endedAt !== null)).toMatchObject({ state: 'hibernated' });
+    expect((await client.call('review.list'))[0]).toMatchObject({ id: round.id, status: round.status, failedBecause: null });
   });
 
   it("dismisses a round: its reviewer and that one's worktree go, its doc stays", async () => {

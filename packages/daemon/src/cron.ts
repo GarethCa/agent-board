@@ -202,3 +202,59 @@ function isRepeatedWallTime(t: number): boolean {
   const shift = date.getTimezoneOffset() - new Date(t - 3 * 60 * MINUTE_MS).getTimezoneOffset();
   return shift > 0 && wallTime(new Date(t - shift * MINUTE_MS)) === wallTime(date);
 }
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAYS_PLURAL = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+
+/** `n` as an English ordinal: 1st, 2nd, 3rd, 11th, 22nd. */
+function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${n}${suffix}`;
+}
+
+const only = (set: ReadonlySet<number>): number | undefined => (set.size === 1 ? [...set][0] : undefined);
+const sameSet = (set: ReadonlySet<number>, values: readonly number[]) => set.size === values.length && values.every((value) => set.has(value));
+
+/**
+ * A cron expression in words, as a clock shows it: `Weekdays 09:00`, `Sundays 02:00`, `Every hour`, `Every 15 min`.
+ * One it has no words for, or can't read, is the expression itself.
+ */
+export function cronWords(expression: string): string {
+  let cron: Cron;
+  try {
+    cron = parseCron(expression);
+  } catch {
+    return expression.trim();
+  }
+  const fallback = cron.expression;
+  if (cron.months.size !== 12) return fallback;
+  const everyDay = !cron.daysOfMonthRestricted && !cron.daysOfWeekRestricted;
+  const minute = only(cron.minutes);
+  // Within the hour.
+  if (!cron.hoursRestricted && everyDay) {
+    if (cron.minutes.size === 60) return 'Every minute';
+    if (minute === 0) return 'Every hour';
+    if (minute !== undefined) return `Hourly at :${String(minute).padStart(2, '0')}`;
+    const step = [...cron.minutes][1];
+    const evenly = step !== undefined && [...cron.minutes].every((value, i) => value === i * step) && 60 % step === 0;
+    return evenly && cron.minutes.has(0) ? `Every ${step} min` : fallback;
+  }
+  const hour = only(cron.hours);
+  if (minute === undefined || hour === undefined) return fallback;
+  const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  if (everyDay) return `Daily ${time}`;
+  if (cron.daysOfMonthRestricted && !cron.daysOfWeekRestricted) {
+    const day = only(cron.daysOfMonth);
+    return day === undefined ? fallback : `Monthly on the ${ordinal(day)}, ${time}`;
+  }
+  if (cron.daysOfMonthRestricted) return fallback;
+  const days = cron.daysOfWeek;
+  if (sameSet(days, [1, 2, 3, 4, 5])) return `Weekdays ${time}`;
+  if (sameSet(days, [0, 6])) return `Weekends ${time}`;
+  const day = only(days);
+  if (day !== undefined) return `${DAYS_PLURAL[day]} ${time}`;
+  // Monday first, as a week is read.
+  const listed = [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((each) => DAY_NAMES[each]);
+  return `${listed.join(', ')} ${time}`;
+}

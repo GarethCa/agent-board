@@ -1,5 +1,6 @@
 // The board as the agent-facing CLI and MCP see it (ADR-0010): one module both call, over the daemon methods the app
 // uses (plus `board.identify` and `board.setStatus`). Refs, resolving them, and each view as text and as JSON.
+import { cronWords } from './cron.ts';
 import { readFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
@@ -14,7 +15,9 @@ import {
   DEFAULT_PLAN_WAIT_MS,
   type Agent,
   type PlanDecision,
+  type SentToOrchestrator,
   type PlanFormat,
+  type RecordParams,
   roleLabel,
   type BoardCaller,
   type CrewEvent,
@@ -280,6 +283,7 @@ function itemText(item: BoardItem): string {
   const data = item.data as Record<string, unknown>;
   if (item.kind === 'link') return String(data.title ?? data.url ?? '');
   if (item.kind === 'issue') return `${String(data.id ?? '')} ${String(data.title ?? '')}`.trim();
+  if (item.kind === 'clock') return `${cronWords(String(data.cron ?? ''))}: ${String(data.prompt ?? '')}`;
   return typeof data.text === 'string' ? data.text : '';
 }
 
@@ -733,6 +737,42 @@ export async function setOwnStatus(session: BoardSession, summary: string, progr
   });
 }
 
+/**
+ * Flags the caller for a look (`board.needsYou`): the user, or its orchestrator if one started it. `via`, a ref, names
+ * the crew member whose flag an orchestrator passes on. With `reason` undefined, clears its flag instead. Throws
+ * `BoardError` outside an agent-board session.
+ */
+export async function flagOwn(session: BoardSession, reason: string | undefined, via?: string): Promise<Agent> {
+  if (session.token === undefined || session.caller === null) {
+    throw new BoardError(`Only an agent in an agent-board session can ask for a look: there is no ${BOARD_TOKEN_ENV} here.`);
+  }
+  if (reason === undefined) return session.client.call('board.needsYou', { token: session.token, clear: true });
+  const crew = via === undefined ? undefined : resolveAgent(new BoardRefs(await readBoard(session.client)), via, session.caller);
+  return session.client.call('board.needsYou', { token: session.token, reason, ...(crew === undefined ? {} : { via: crew.sessionId }) });
+}
+
+/** What flagging (`flagOwn`) did, in a line: who it reaches, or that it was cleared. */
+export function flagLine(agent: Agent): string {
+  const { flag } = agent;
+  if (flag === null) return 'Your flag is cleared.';
+  if (flag.to === 'orchestrator') return `Flagged for the agent that started you: "${flag.reason}". It hears it at its prompt, and its reply clears it.`;
+  const via = flag.via === null ? '' : ` (passing on ${flag.via})`;
+  return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or \`agent-board needs-you --clear\`, clears it.`;
+}
+
+/** `status set --agent`: the line of an agent in the caller's crew, which its tile says the caller set. */
+export async function setCrewStatus(session: BoardSession, ref: string, summary: string, progress: number | undefined): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.setStatus', {
+    token,
+    sessionId: agent.sessionId,
+    summary,
+    ...(progress === undefined ? {} : { progress }),
+  });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Set the status of ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
 /** The orchestrator commands' options for a new agent, as typed: refs and names, not ids. */
 export interface NewAgentOptions {
   prompt: string;
@@ -767,7 +807,7 @@ async function orchestratingCaller(session: BoardSession): Promise<{ caller: Boa
 }
 
 /** The agent `text` names, as a ref resolves it. */
-function resolveAgent(refs: BoardRefs, text: string, caller: BoardCaller | null): Agent {
+export function resolveAgent(refs: BoardRefs, text: string, caller: BoardCaller | null): Agent {
   const object = refs.resolve(text, caller);
   if (object.kind !== 'agent') throw new BoardError(`${text} is a ${object.kind}, not an agent`);
   return object.agent;
@@ -980,6 +1020,14 @@ export async function interruptAgent(session: BoardSession, ref: string): Promis
   return { text: `Interrupted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
+/** `continue`: resumes a rate-limited agent's turn on usage credits, as its harness offers. */
+export async function continueAgent(session: BoardSession, ref: string): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.continueOnCredits', { token, sessionId: agent.sessionId });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Continued on credits ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
 /**
  * `restart`: starts an ended agent again in place, carrying on its conversation; with `fresh`, a new conversation
  * (on `prompt`, if any) in the same tile, worktree and branch.
@@ -993,6 +1041,24 @@ export async function restartAgent(session: BoardSession, ref: string, anew?: { 
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
   return { text: `Restarted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+}
+
+/** `pause`: hibernates an idle agent, ending its session to free what it held, its conversation kept for its wake. */
+export async function pauseAgent(session: BoardSession, ref: string): Promise<BoardView> {
+  const { token, refs, agent } = await orchestratorTarget(session, ref);
+  const paused = await session.client.call('orchestrator.pause', { token, sessionId: agent.sessionId });
+  return {
+    text: `Paused ${refs.of('agent', agent.sessionId)} ${agent.name}: hibernated. \`agent-board wake\`, a message or a hand-off wakes it.`,
+    json: agentJson(refs, paused, session.caller),
+  };
+}
+
+/** `wake`: starts a paused agent again, carrying on its conversation. */
+export async function wakeAgent(session: BoardSession, ref: string): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  await session.client.call('orchestrator.wake', { token, sessionId: agent.sessionId });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return { text: `Woke ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
 /** `close`: ends the agent's session, or with `remove` deletes it with its worktree and branch. */
@@ -1169,8 +1235,29 @@ export async function openOwnPullRequest(session: BoardSession): Promise<BoardVi
   return { text: `Opened #${pr.number} as a draft: ${pr.url}\nMarking it ready, and merging, are the user's.`, json: pr };
 }
 
+/**
+ * `record`: puts an entry on the caller's sidebar (a pull request it opened, a hand-off doc), or with a doc
+ * `forOrchestrator`, on its orchestrator's. A doc's relative path is from `cwd`.
+ */
+export async function recordEntry(session: BoardSession, params: RecordParams, cwd: string): Promise<BoardView> {
+  const token = agentToken(session, 'record an entry on its sidebar');
+  const sent = params.kind === 'doc' ? { ...params, path: resolvePath(cwd, params.path) } : params;
+  const record = await session.client.call('board.record', { token, ...sent });
+  const where = record.kind === 'doc' && record.from !== null ? "your orchestrator's sidebar, and on yours" : 'your sidebar';
+  const what = record.kind === 'pr' ? `${record.key}${record.title === null ? '' : ` (${record.title})`}` : record.kind === 'doc' ? record.path : record.key;
+  return { text: `Recorded ${what} on ${where}.`, json: record };
+}
+
 /** A wait in minutes, as a model reads it. */
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? '' : 's'}`;
+
+/** What a crew member is told when its question or plan went to its orchestrator instead of the user. */
+function sentToLead({ name }: SentToOrchestrator, what: 'question' | 'plan'): string {
+  return (
+    `You were started by ${name}, so your ${what} went to it, not to the user: it hears it at its prompt. Nothing waits ` +
+    `on it. End your turn now: its answer comes as your next message.`
+  );
+}
 
 /** `ask`: asks the user a question in the needs-you inbox and waits for the answer. */
 export async function askUser(
@@ -1179,6 +1266,7 @@ export async function askUser(
 ): Promise<BoardView> {
   const token = agentToken(session, 'ask the user');
   const result = await session.client.call('board.ask', { token, ...question });
+  if ('sentTo' in result) return { text: sentToLead(result, 'question'), json: result };
   const waited = minutes(question.timeoutMs ?? DEFAULT_ASK_WAIT_MS);
   const text =
     result.outcome === 'answered'
@@ -1218,7 +1306,9 @@ export async function presentPlan(
   plan: PlanSpec,
 ): Promise<BoardView> {
   const token = agentToken(session, 'present a plan');
-  const { version, decision } = await session.client.call('board.presentPlan', { token, ...plan });
+  const result = await session.client.call('board.presentPlan', { token, ...plan });
+  if ('sentTo' in result) return { text: sentToLead(result, 'plan'), json: result };
+  const { version, decision } = result;
   const comments = decision.comments === '' ? '' : `\n\nTheir comments:\n${decision.comments}`;
   const said: Record<PlanDecision['outcome'], string> = {
     approved: `The user approved plan v${version}. Go ahead with it.${comments}`,
@@ -1228,4 +1318,31 @@ export async function presentPlan(
     withdrawn: `Plan v${version} was withdrawn before the user decided.`,
   };
   return { text: said[decision.outcome], json: { version, decision } };
+}
+
+/** A document as an agent shows it: one of its files, relative to `cwd`, with a title, on the board too if asked. */
+export interface DocSpec {
+  path: string;
+  title?: string;
+  onBoard?: boolean;
+}
+
+/** `show_doc`: shows the user one of the agent's Markdown or HTML files as a document, a Document tab in its window. */
+export async function showDoc(session: BoardSession, doc: DocSpec, cwd: string): Promise<BoardView> {
+  const token = agentToken(session, 'show the user a document');
+  const shown = await session.client.call('board.showDoc', {
+    token,
+    path: resolvePath(cwd, doc.path),
+    ...(doc.title === undefined ? {} : { title: doc.title }),
+    ...(doc.onBoard === true ? { onBoard: true } : {}),
+  });
+  const where = doc.onBoard === true ? 'a Document tab in your window and a card beside your tile' : 'a Document tab in your window';
+  const editing =
+    shown.format === 'markdown'
+      ? 'The user may edit it there: their edit is written to the file, and you are told what changed at your prompt.'
+      : 'An HTML document is view-only (offline, sandboxed); the user may send you comments on it.';
+  return {
+    text: `Showing “${shown.title}” (v${shown.version}) to the user as ${where}. It stays live: when you write the file again, they see the new version. ${editing}`,
+    json: shown,
+  };
 }

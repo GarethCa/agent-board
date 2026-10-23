@@ -15,8 +15,9 @@ const START = new Date('2026-10-14T14:00:00.000Z');
 function asks(db = memoryDb()) {
   const clock = createFakeClock(START);
   const changes: [string, boolean][] = [];
-  const host = createAskHost({ db, clock, changed: (sessionId, began) => changes.push([sessionId, began]) });
-  return { db, clock, changes, host };
+  const placed: string[] = [];
+  const host = createAskHost({ db, clock, changed: (sessionId, began) => changes.push([sessionId, began]), placed: (sessionId) => placed.push(sessionId) });
+  return { db, clock, changes, placed, host };
 }
 
 function memoryDb(): DatabaseSync {
@@ -95,6 +96,30 @@ describe('questions an agent asks the user', () => {
     expect(() => host.ask('s2', { question: 'Which?', options: Array.from({ length: MAX_ASK_OPTIONS + 1 }, (_, i) => `${i}`) }, never())).toThrow(/at most 9 options/);
     expect(() => host.ask('s2', { question: 'Which?', options: ['Redis', ''] }, never())).toThrow(/option 2 must not be empty/);
   });
+
+  it('shows a question on the board only when the agent asks for its card, beside its tile until the user moves it', async () => {
+    const { host, changes, placed } = asks();
+    void host.ask('s1', { question: 'Which cache?' }, never());
+    expect(host.pendingAsk('s1')).toMatchObject({ onBoard: false, at: null });
+
+    const answered = host.ask('s2', { question: 'Which cache?', options: ['Redis'], onBoard: true }, never());
+    const { id } = host.pendingAsk('s2')!;
+    expect(host.pendingAsk('s2')).toMatchObject({ onBoard: true, at: null });
+
+    host.place('s2', id, { x: 420, y: -80 });
+    expect(host.pendingAsk('s2')).toMatchObject({ id, onBoard: true, at: { x: 420, y: -80 } });
+    // A move is no new question: the agent's tile and the inbox follow, and what the user saw of it stays seen.
+    expect(placed).toEqual(['s2']);
+    expect(changes).toEqual([['s1', true], ['s2', true]]);
+
+    expect(() => host.place('s2', 'another', { x: 0, y: 0 })).toThrow(/no longer asks/);
+    expect(() => host.place('s1', host.pendingAsk('s1')!.id, { x: 0, y: 0 })).toThrow(/not on the board/);
+    expect(() => host.place('s2', id, { x: Number.NaN, y: 0 })).toThrow(/point/);
+
+    host.answer('s2', id, { option: 0 });
+    expect(await answered).toEqual({ outcome: 'answered', answer: 'Redis' });
+    expect(() => host.place('s2', id, { x: 0, y: 0 })).toThrow(/no longer asks/);
+  });
 });
 
 describe('plans an agent presents', () => {
@@ -119,7 +144,7 @@ describe('plans an agent presents', () => {
     expect((await second).version).toBe(2);
 
     // The history outlives the host: a restarted daemon reads it back.
-    const again = createAskHost({ db, changed: () => {} });
+    const again = createAskHost({ db, changed: () => {}, placed: () => {} });
     expect(again.plans('s1').map((each) => [each.version, each.format, each.body, each.decision?.outcome])).toEqual([
       [1, 'markdown', '# Goal\n\nFast pages', 'changes-requested'],
       [2, 'html', '<h1>v2</h1>', 'approved'],
@@ -142,7 +167,7 @@ describe('plans an agent presents', () => {
 
     // A plan still waiting as the daemon goes has no one to tell: it is withdrawn as the next one starts.
     void host.presentPlan('s1', { title: 'Plan', body: 'Steps', format: 'markdown' }, never());
-    expect(createAskHost({ db, changed: () => {} }).latestPlan('s1')).toMatchObject({ version: 3, decision: { outcome: 'withdrawn' } });
+    expect(createAskHost({ db, changed: () => {}, placed: () => {} }).latestPlan('s1')).toMatchObject({ version: 3, decision: { outcome: 'withdrawn' } });
   });
 
   it('waits on one thing at a time, and refuses an empty plan', () => {

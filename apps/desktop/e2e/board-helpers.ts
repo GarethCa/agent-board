@@ -46,3 +46,35 @@ export async function run(page: Page, line: string): Promise<void> {
   await page.keyboard.type(line);
   await page.keyboard.press('Enter');
 }
+
+/**
+ * Waits until `read` gives the same answer twice running, `every` ms apart: until what it reads (the view, the board's
+ * layout) has stopped moving.
+ */
+export async function untilStill(read: () => Promise<string>, { every = 400, timeout }: { every?: number; timeout?: number } = {}): Promise<void> {
+  let last: string | undefined;
+  await expect
+    .poll(
+      async () => {
+        const now = await read();
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { intervals: [every], ...(timeout === undefined ? {} : { timeout }) },
+    )
+    .toBe(true);
+}
+
+/** The board's view, as React Flow transforms it: a pan or zoom changes it. */
+export const viewTransform = (page: Page): Promise<string> =>
+  page.locator('.react-flow__viewport').evaluate((viewport) => (viewport as HTMLElement).style.transform);
+
+/**
+ * Waits for the view to stop moving once tiles have expanded: it follows a tile that opened past the edge when its
+ * opening time is over, so a click or a measure before then can land where the view is about to leave.
+ */
+export async function viewSettled(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid="expanded-tile"][data-opening]')).toHaveCount(0);
+  await untilStill(() => viewTransform(page));
+}

@@ -2,8 +2,8 @@
 // shell tabs, each a pane tree that can be split. Pure, so the rules are unit-tested; SessionBody and the agent tile's
 // shells chip draw them.
 import { paneIds, type PaneLayout } from '@agent-board/daemon/pane-layout';
-import { inTabOrder, isOwnedBy, isOwnTab, pullRequestOfUrl, type Agent, type PullRequest, type Shell, type ShellOwner, type WindowOwner } from '@agent-board/daemon/protocol';
-import { OWN_SURFACE, surfaceKey, type GateSurface, type PlanSurface, type PullRequestSurface, type Surface, type WebSurface } from '@agent-board/daemon/window-layout';
+import { inTabOrder, isOwnedBy, isOwnTab, pullRequestOfUrl, type Agent, type DocumentSummary, type PullRequest, type Shell, type ShellOwner, type WindowOwner } from '@agent-board/daemon/protocol';
+import { OWN_SURFACE, surfaceKey, type DocSurface, type DocumentSurface, type GateSurface, type PlanSurface, type PullRequestSurface, type Surface, type WebSurface } from '@agent-board/daemon/window-layout';
 import { webTabLabel } from '@agent-board/daemon/web-url';
 import { paneLabel } from '../board/rename';
 
@@ -104,6 +104,25 @@ export function windowShells(owner: TabOwner, shells: readonly Shell[]): WindowS
   });
 }
 
+/** The ids of the blank web tabs the user has just opened (+ › Web…), until the tab takes the keyboard: unlike one restored with its window, it asks for it. */
+export const newWebTabs = new Set<string>();
+
+/** A dev server on this machine a blank web tab offers: where it is, and the shell that runs it. */
+export interface LocalServer {
+  port: number;
+  url: string;
+  /** The label of the shell pane listening on it. */
+  shell: string;
+}
+
+/** The ports the shells listen on, once each, as `http://localhost:<port>/`, in the order the shells are in. */
+export function localServersOf(shells: readonly WindowShell[]): LocalServer[] {
+  const seen = new Set<number>();
+  return shells.flatMap((shell) =>
+    (shell.ports ?? []).filter((port) => !seen.has(port) && seen.add(port)).map((port) => ({ port, url: `http://localhost:${port}/`, shell: shell.label })),
+  );
+}
+
 /** Which of several shells' states a dot shows: a failure first, then one running; undefined for none. */
 export function worstState(states: readonly ShellState[]): ShellState | undefined {
   return (['failed', 'running', 'idle'] as const).find((state) => states.includes(state));
@@ -143,7 +162,7 @@ export interface SessionTargets {
 /**
  * What one of a window's tabs shows, named as its tab is: one of `windowTabs` (its own, or a shell
  * tab), another agent's session, a shell tile's panes, a pull request, a web page, an agent's gate
- * or its plans.
+ * or its plans, or one of its hand-off docs.
  */
 export type WindowSurface = { key: string; surface: Surface; label: string } & (
   | { kind: 'tab'; tab: WindowTab }
@@ -153,6 +172,8 @@ export type WindowSurface = { key: string; surface: Surface; label: string } & (
   | { kind: 'web'; web: WebSurface }
   | { kind: 'gate'; gate: GateSurface; agent: Agent }
   | { kind: 'plan'; plan: PlanSurface; agent: Agent }
+  | { kind: 'doc'; doc: DocSurface; agent: Agent }
+  | { kind: 'document'; agent: Agent; document: DocumentSummary }
 );
 
 /** The surface of an agent's gate. */
@@ -161,18 +182,44 @@ export const gateSurfaceOf = (sessionId: string): GateSurface => ({ kind: 'gate'
 /** The surface of an agent's plans. */
 export const planSurfaceOf = (sessionId: string): PlanSurface => ({ kind: 'plan', sessionId });
 
+/** The surface of a document an agent showed. */
+export const documentSurfaceOf = (document: Pick<DocumentSummary, 'sessionId' | 'id'>): DocumentSurface => ({ kind: 'document', sessionId: document.sessionId, documentId: document.id });
+
 /**
- * An agent's gate's or plans' surface, named as its tab is: Gate or Plan, in its own window; else after its agent.
- * Undefined once its agent has gone.
+ * A document's surface, named as its tab is: by its file's name, after its agent outside the agent's own window.
+ * Undefined once its agent, or the document, has gone.
+ */
+function documentSurface(owner: TabOwner, surface: Surface, agents: readonly Agent[]): WindowSurface | undefined {
+  if (surface.kind !== 'document') return undefined;
+  const agent = agents.find((each) => each.sessionId === surface.sessionId);
+  const document = agent?.docs.find((each) => each.id === surface.documentId);
+  if (agent === undefined || document === undefined) return undefined;
+  const own = owner.kind === 'agent' && owner.agent.sessionId === agent.sessionId;
+  const name = documentTabName(document);
+  return { key: surfaceKey(surface), surface, label: own ? name : `${name} · ${agent.name}`, kind: 'document', agent, document };
+}
+
+/** A document's tab's name: its file's name. */
+const documentTabName = (document: Pick<DocumentSummary, 'path'>): string => document.path.split(/[\\/]/).at(-1) ?? document.path;
+/** The surface of one of an agent's hand-off docs. */
+export const docSurfaceOf = (sessionId: string, path: string): DocSurface => ({ kind: 'doc', sessionId, path });
+
+/** A doc's file name, as its tab is called. */
+export const docName = (path: string): string => path.split('/').filter(Boolean).at(-1) ?? path;
+
+/**
+ * An agent's gate's, plans' or doc's surface, named as its tab is: Gate, Plan or the doc's file name, in its own window;
+ * else after its agent. Undefined once its agent has gone.
  */
 function agentToolSurface(owner: TabOwner, surface: Surface, agents: readonly Agent[]): WindowSurface | undefined {
-  if (surface.kind !== 'gate' && surface.kind !== 'plan') return undefined;
+  if (surface.kind !== 'gate' && surface.kind !== 'plan' && surface.kind !== 'doc') return undefined;
   const agent = agents.find((each) => each.sessionId === surface.sessionId);
   if (agent === undefined) return undefined;
   const own = owner.kind === 'agent' && owner.agent.sessionId === agent.sessionId;
-  const name = surface.kind === 'gate' ? 'Gate' : 'Plan';
+  const name = surface.kind === 'gate' ? 'Gate' : surface.kind === 'plan' ? 'Plan' : docName(surface.path);
   const base = { key: surfaceKey(surface), label: own ? name : `${name} · ${agent.name}`, agent };
-  return surface.kind === 'gate' ? { ...base, surface, kind: 'gate', gate: surface } : { ...base, surface, kind: 'plan', plan: surface };
+  if (surface.kind === 'gate') return { ...base, surface, kind: 'gate', gate: surface };
+  return surface.kind === 'plan' ? { ...base, surface, kind: 'plan', plan: surface } : { ...base, surface, kind: 'doc', doc: surface };
 }
 
 /** A pull request's surface, named as its tab is. */
@@ -217,6 +264,7 @@ export function windowSurfaces(owner: TabOwner, shells: readonly Shell[], shown:
     ...shown.flatMap((surface) => sessionSurface(owner, surface, targets) ?? []),
     ...shown.flatMap((surface) => (surface.kind === 'pr' ? [pullRequestSurface(surface)] : surface.kind === 'web' ? [webSurface(surface)] : [])),
     ...shown.flatMap((surface) => agentToolSurface(owner, surface, targets.agents) ?? []),
+    ...shown.flatMap((surface) => documentSurface(owner, surface, targets.agents) ?? []),
   ];
 }
 
@@ -226,6 +274,8 @@ export function tabWindowTitle(surface: Surface): string {
   if (surface.kind === 'web') return webTabLabel(surface.url);
   if (surface.kind === 'gate') return 'Gate';
   if (surface.kind === 'plan') return 'Plan';
+  if (surface.kind === 'doc') return docName(surface.path);
+  if (surface.kind === 'document') return 'Document';
   return 'Tabs';
 }
 

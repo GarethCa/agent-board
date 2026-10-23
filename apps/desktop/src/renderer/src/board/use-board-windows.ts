@@ -21,7 +21,7 @@ export function agentTitle(agent: Agent): string {
  * window, and the windows a shell change closes.
  */
 export function useBoardWindows() {
-  const { windows, show: showWindow, close: closeWindow, popOut } = useSessionWindows();
+  const { windows, restored: windowsRestored, show: showWindow, close: closeWindow, popOut } = useSessionWindows();
   const windowsRef = useRef(windows);
   windowsRef.current = windows;
   /** Pops out the tab window a tab went into, if it isn't out already (a redo of its pop-out). */
@@ -50,5 +50,5 @@ export function useBoardWindows() {
     [closeWindow],
   );
 
-  return { windows, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange };
+  return { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange };
 }

@@ -2,6 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
+import { viewSettled } from './board-helpers.ts';
 import { clickClosing } from './windows.ts';
 import { scratch } from './scratch.ts';
 
@@ -134,7 +135,7 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await showDetails(sessionWindow(window));
       const controls = sessionWindow(window).getByRole('navigation', { name: 'Session controls' });
       // Only controls that work: nothing says "Not built yet", and no Connections placeholder.
-      for (const later of ['Pause', 'Hand off', 'Fork']) await expect(controls.getByRole('button', { name: later })).toHaveCount(0);
+      for (const later of ['Hand off', 'Fork']) await expect(controls.getByRole('button', { name: later })).toHaveCount(0);
       await expect(sessionWindow(window)).not.toContainText('Not built yet');
       await expect(sessionWindow(window)).not.toContainText('Flows between agents come with M2');
 
@@ -147,6 +148,8 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await expect(tile(window)).toHaveAttribute('data-state', 'idle');
       await expect(controls.getByRole('button', { name: 'Interrupt' })).toBeDisabled();
       await expect(screen(window)).not.toContainText('All tests pass.');
+      // Between turns, it may be paused.
+      await expect(controls.getByRole('button', { name: 'Pause' })).toBeEnabled();
 
       // The composer sends the next message, and another while the agent works on that one, which it takes next.
       const view = sessionWindow(window).getByRole('group', { name: 'View' });
@@ -289,7 +292,7 @@ test('splitting stops when a pane would be left too small to use, and says why',
   }
 });
 
-test('fifteen docked sessions in a narrow window scroll sideways inside the dock, fade at its edges, keep the newest pill in view, and move nothing else, and never reach the zones pill or the zoom bar', async () => {
+test('fifteen docked sessions and ten zones share the bottom bar: both scroll sideways and fade at their edges, the dock keeps its row and its room down to 640px, and neither reaches the other or the zoom bar', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
@@ -310,7 +313,8 @@ test('fifteen docked sessions in a narrow window scroll sideways inside the dock
       const { width } = window.viewportSize()!;
       const problems: string[] = [];
       if (dockNow.x < 0 || dockNow.x + dockNow.width > width) problems.push(`the dock leaves the window: ${JSON.stringify(dockNow)}`);
-      if (dockNow.width < 239 && (await dock.getAttribute('data-compact')) === null) problems.push(`the dock is only ${dockNow.width}px wide`);
+      if (width >= 640 && dockNow.width < 199) problems.push(`the dock is only ${dockNow.width}px wide`);
+      if ((await dock.getAttribute('data-compact')) !== null || (await dock.getAttribute('data-lifted')) !== null) problems.push('the dock collapsed or lifted');
       for (const [name, selector] of [['the zones pill', '.island-bottom-left'], ['the zoom bar', '.island-bottom-right'], ['the minimap', '.board-minimap']] as const) {
         const other = window.locator(selector);
         if ((await other.count()) === 0 || !(await other.first().isVisible())) continue;
@@ -356,21 +360,13 @@ test('fifteen docked sessions in a narrow window scroll sideways inside the dock
     await first.hover();
     await expect(window.getByRole('tooltip')).toContainText('Shell');
 
-    // The list is not left open when the dock widens back to its pills, nor opens again when it narrows (no zones yet: the zoom
-    // bar alone leaves room for the pills at 900px and not at 520px).
-    const compactButton = window.getByTestId('session-dock-compact');
-    await window.setViewportSize({ width: 520, height: 700 });
-    await expect(compactButton).toBeVisible();
-    await compactButton.click();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(15);
-    await window.setViewportSize({ width: 900, height: 700 });
-    await expect(compactButton).toBeHidden();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
-    await window.setViewportSize({ width: 520, height: 700 });
-    await expect(compactButton).toBeVisible();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
-    await window.setViewportSize({ width: 900, height: 700 });
-    await expect(compactButton).toBeHidden();
+    // With no zones it is just the help button, not an empty pill.
+    const emptyPill = await box(window.locator('.island-bottom-left'));
+    expect(emptyPill.width).toBeLessThan(60);
+    await expect(window.getByTestId('zone-jump-track')).toHaveCount(0);
+
+    // The board window cannot be narrowed past the width the bottom bar fits in.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMinimumSize())).toEqual([640, 480]);
 
     // The zones pill mounts with the first zone, and grows wide with each one after it.
     await window.evaluate(async () => {
@@ -380,37 +376,77 @@ test('fifteen docked sessions in a narrow window scroll sideways inside the dock
       }
     });
     await expect(window.locator('.island-bottom-left')).toBeVisible();
-    // However narrow it gets, it never reaches them: with less than a pill's room it is one button with the count, which opens
-    // the list, and with less than that again, a row up.
-    for (const width of [1400, 900, 640, 520, 380, 1400]) {
+    // At every width down to the narrowest window (640px) the dock stays on its row, at least 200px wide, clear of the zones pill and
+    // the zoom bar; the zones pill takes at most a third of the bar and 340px, gives way to the dock's 200px, and both scroll.
+    const zones = window.locator('.island-bottom-left');
+    const zoneTrack = window.getByTestId('zone-jump-track');
+    const row = (await box(dock)).y;
+    for (const width of [1400, 900, 640, 1400]) {
       await window.setViewportSize({ width, height: 700 });
       await expect.poll(overlaps, { message: `${width}px wide` }).toBe('apart');
-      const compactButton = window.getByTestId('session-dock-compact');
-      await expect
-        .poll(async () => {
-          const compact = (await dock.getAttribute('data-compact')) !== null;
-          const shown = [await compactButton.isVisible(), await track.isVisible()];
-          if (shown[0] !== compact || shown[1] === compact) return `compact ${compact}, but the button shows ${shown[0]} and the pills ${shown[1]}`;
-          return compact ? await compactButton.innerText() : 'pills';
-        }, { message: `${width}px wide` })
-        .toMatch(/^(pills|15 sessions)$/);
+      expect((await box(dock)).y, `${width}px wide: the dock stays on its row`).toBe(row);
+      expect((await box(zones)).width, `${width}px wide: the zones pill is capped`).toBeLessThanOrEqual(Math.min(width * 0.32, 340) + 1);
+      expect((await box(zones)).width, `${width}px wide: the zones pill keeps its room`).toBeGreaterThanOrEqual(117);
+      await expect(dockItem(window)).toHaveCount(15);
     }
-    // Collapsed, the button opens every docked session, and restoring one closes the list.
-    await window.setViewportSize({ width: 520, height: 700 });
-    await expect(window.getByTestId('session-dock-compact')).toBeVisible();
-    await window.getByTestId('session-dock-compact').click();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(15);
-    await window.getByTestId('dock-list-item').first().getByRole('button', { name: /^Shell/ }).click();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(0);
-    await expect(sessionWindow(window)).toBeVisible();
+    await window.setViewportSize({ width: 900, height: 700 });
+    await expect.poll(overlaps).toBe('apart');
 
-    // Clicking inside the list, off its buttons, leaves the window that is shown showing, and the list open.
-    await compactButton.click();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(14);
-    const card = (await window.locator('.session-dock-popover').boundingBox())!;
-    await window.mouse.click(card.x + 2, card.y + 2);
-    await expect(sessionWindow(window)).toBeVisible();
-    await expect(window.getByTestId('dock-list-item')).toHaveCount(14);
+    // The zones pill scrolls on its own, with the same wheel and fade, and the zone jumped to scrolls into view.
+    const zoneScrolls = () => zoneTrack.evaluate((element) => ({ left: element.scrollLeft, max: element.scrollWidth - element.clientWidth }));
+    expect((await zoneScrolls()).max).toBeGreaterThan(0);
+    await expect(zones).toHaveAttribute('data-more', 'end');
+    const zoneBox = await box(zones);
+    await window.mouse.move(zoneBox.x + 40, zoneBox.y + zoneBox.height / 2);
+    await window.mouse.wheel(0, 200);
+    await expect.poll(async () => (await zoneScrolls()).left).toBeGreaterThan(0);
+    await expect(zones).toHaveAttribute('data-more', /^(start|both)$/);
+    await window.mouse.wheel(0, 5000);
+    await expect(zones).toHaveAttribute('data-more', 'start');
+
+    // The current zone (the one last jumped to) is kept in view without Playwright scrolling: jump to the last in the pill (the oldest zone: they run newest first) at 1400px, scroll the
+    // pills back to the start, then narrow the window, and it comes back into view.
+    const current = zones.locator('[aria-current="true"]');
+    const inTrack = async (zone: Locator) => {
+      const [z, t] = [await box(zone), await box(zoneTrack)];
+      // In view: as much of it shows as the track can hold (a long name is wider than the narrowest pill).
+      const shown = Math.min(z.x + z.width, t.x + t.width) - Math.max(z.x, t.x);
+      return shown >= Math.min(z.width, t.width) - 2;
+    };
+    await window.setViewportSize({ width: 1400, height: 700 });
+    const lastZone = zones.getByRole('button', { name: /rather long name 1$/ });
+    await lastZone.scrollIntoViewIfNeeded();
+    await lastZone.click();
+    await expect(current).toHaveText(/name 1$/);
+    await zoneTrack.evaluate((element) => void (element.scrollLeft = 0));
+    await expect.poll(() => inTrack(current)).toBe(false);
+    await window.setViewportSize({ width: 640, height: 700 });
+    await expect.poll(() => inTrack(current), { message: 'the current zone scrolls back into view as the pill narrows' }).toBe(true);
+    await expect.poll(overlaps).toBe('apart');
+
+    // A change on the board (a note made, which rebuilds the zones) leaves the pill where it was scrolled to.
+    await zoneTrack.evaluate((element) => void (element.scrollLeft = 0));
+    await window.evaluate(() => globalThis.window.agentBoard.items.create({ kind: 'sticky', zoneId: null, x: 40, y: 40, width: 160, height: 120, data: { text: 'note', color: '#fff3a3' } }));
+    await expect(window.getByTestId('sticky')).toHaveCount(1);
+    expect((await zoneScrolls()).left).toBe(0);
+
+    // Zooming leaves the pill where it was scrolled to, though the zoom island beside it changes width from 100% to two digits.
+    const zoomLevel = window.getByRole('button', { name: /^Fit view/ });
+    // One step of zoom from about 100% crosses between three digits and two.
+    const threeDigits = /^\d{3}%$/.test((await zoomLevel.textContent()) ?? '');
+    await window.getByRole('button', { name: threeDigits ? 'Zoom out' : 'Zoom in' }).click();
+    await expect(zoomLevel).toHaveText(threeDigits ? /^\d\d%$/ : /^\d{3}%$/);
+    await viewSettled(window);
+    expect((await zoneScrolls()).left).toBe(0);
+
+    // A ⌘K jump makes its zone current too, and scrolls it into view.
+    await zoneTrack.evaluate((element) => void (element.scrollLeft = 0));
+    await expect.poll(() => inTrack(zones.getByRole('button', { name: /rather long name 7$/ }))).toBe(false);
+    await window.keyboard.press(windowKey('k'));
+    await window.keyboard.type('name 7');
+    await window.keyboard.press('Enter');
+    await expect(current).toHaveText(/name 7$/);
+    await expect.poll(() => inTrack(current)).toBe(true);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

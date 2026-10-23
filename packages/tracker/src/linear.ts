@@ -6,6 +6,7 @@ import {
   type TrackerProject,
   type TrackerScope,
 } from './tracker.ts';
+import { nodesOf, objectOf, stringOf } from './shape.ts';
 
 export const LINEAR_API_URL = 'https://api.linear.app/graphql';
 
@@ -13,6 +14,7 @@ export const LINEAR_API_URL = 'https://api.linear.app/graphql';
 const MAX_PAGE = 250;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_LIMIT = 50;
+const SOURCE = 'Linear';
 
 export interface LinearTrackerOptions {
   /** A personal API key (`lin_api_…`) or an OAuth access token. */
@@ -44,24 +46,6 @@ const QUERIES = {
   }`,
   comment: `mutation Comment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }`,
 } as const;
-
-interface LinearIssue {
-  identifier: string;
-  title: string;
-  description: string | null;
-  url: string;
-  state: { name: string };
-  team: { key: string };
-  project: { id: string } | null;
-}
-
-interface LinearProject {
-  id: string;
-  name: string;
-  description: string | null;
-  progress: number;
-  status: { name: string };
-}
 
 interface GraphQlError {
   message: string;
@@ -105,19 +89,22 @@ export function createLinearTracker(options: LinearTrackerOptions): Tracker {
     ...(project === undefined ? {} : { project: { id: { eq: project } } }),
   });
   const projectsOf = async (scope: string, filter: Record<string, unknown>) => {
-    const data = await request<{ projects: { nodes: LinearProject[] } }>(QUERIES.projects, {
+    const data = await request<unknown>(QUERIES.projects, {
       // accessibleTeams is a collection filter: it takes `some` (or `every`) of the teams, not a team's fields.
       filter: { accessibleTeams: { some: { key: { eq: scope } } }, ...filter },
       first: MAX_PAGE,
     });
-    return data.projects.nodes.map(toProject);
+    return nodesOf(data, 'projects', SOURCE).map(toProject);
   };
 
   return {
     provider: 'linear',
     async scopes(): Promise<TrackerScope[]> {
-      const data = await request<{ teams: { nodes: TrackerScope[] } }>(QUERIES.teams);
-      return data.teams.nodes.map(({ key, name }) => ({ key, name }));
+      const data = await request<unknown>(QUERIES.teams);
+      return nodesOf(data, 'teams', SOURCE).map((team) => {
+        const fields = objectOf(team, 'a team', SOURCE);
+        return { key: stringOf(fields, 'key', 'a team key', SOURCE), name: stringOf(fields, 'name', 'a team name', SOURCE) };
+      });
     },
     async getScope(key) {
       // Teams are few: one page of them holds every team.
@@ -131,20 +118,20 @@ export function createLinearTracker(options: LinearTrackerOptions): Tracker {
     },
     async listIssues(scope, { limit, project } = {}) {
       const filter = { ...teamFilter(scope, project), state: { type: { nin: ['completed', 'canceled'] } } };
-      const data = await request<{ issues: { nodes: LinearIssue[] } }>(QUERIES.issues, { filter, first: page(limit) });
-      return data.issues.nodes.map(toIssue);
+      const data = await request<unknown>(QUERIES.issues, { filter, first: page(limit) });
+      return nodesOf(data, 'issues', SOURCE).map(toIssue);
     },
     async searchIssues(scope, text, { limit, project } = {}) {
-      const data = await request<{ searchIssues: { nodes: LinearIssue[] } }>(QUERIES.search, {
+      const data = await request<unknown>(QUERIES.search, {
         term: text,
         filter: teamFilter(scope, project),
         first: page(limit),
       });
-      return data.searchIssues.nodes.map(toIssue);
+      return nodesOf(data, 'searchIssues', SOURCE).map(toIssue);
     },
     async getIssue(id) {
       try {
-        return toIssue((await request<{ issue: LinearIssue }>(QUERIES.issue, { id })).issue);
+        return toIssue(objectOf(await request<unknown>(QUERIES.issue, { id }), 'the issue', SOURCE).issue);
       } catch (error) {
         if (error instanceof LinearGraphQlError && error.notFound) return undefined;
         throw error;
@@ -152,8 +139,9 @@ export function createLinearTracker(options: LinearTrackerOptions): Tracker {
     },
     async issueLabels(id) {
       try {
-        const { issue } = await request<{ issue: { labels: { nodes: { name: string }[] } } }>(QUERIES.labels, { id });
-        return issue.labels.nodes.map((label) => label.name);
+        const data = objectOf(await request<unknown>(QUERIES.labels, { id }), 'the issue', SOURCE);
+        const labels = nodesOf(objectOf(data.issue, 'the issue', SOURCE), 'labels', SOURCE);
+        return labels.map((label) => stringOf(objectOf(label, 'a label', SOURCE), 'name', 'a label name', SOURCE));
       } catch (error) {
         if (error instanceof LinearGraphQlError && error.notFound) return undefined;
         throw error;
@@ -185,25 +173,28 @@ async function mutate(result: Promise<Record<string, { success: boolean }>>): Pr
   if (payload?.success !== true) throw new TrackerError('rejected', 'Linear did not apply the change');
 }
 
-function toProject(project: LinearProject): TrackerProject {
+function toProject(node: unknown): TrackerProject {
+  const project = objectOf(node, 'a project', SOURCE);
   return {
-    id: project.id,
-    name: project.name,
-    description: project.description ?? '',
-    state: project.status.name,
-    progress: project.progress,
+    id: stringOf(project, 'id', 'a project id', SOURCE),
+    name: stringOf(project, 'name', 'a project name', SOURCE),
+    description: typeof project.description === 'string' ? project.description : '',
+    state: stringOf(objectOf(project.status, 'a project status', SOURCE), 'name', 'a project status', SOURCE),
+    progress: typeof project.progress === 'number' ? project.progress : 0,
   };
 }
 
-function toIssue(issue: LinearIssue): TrackerIssue {
+function toIssue(node: unknown): TrackerIssue {
+  const issue = objectOf(node, 'an issue', SOURCE);
+  const project = issue.project == null ? undefined : objectOf(issue.project, 'an issue project', SOURCE);
   return {
     provider: 'linear',
-    id: issue.identifier,
-    scope: issue.team.key,
-    title: issue.title,
-    description: issue.description ?? '',
-    url: issue.url,
-    state: issue.state.name,
-    ...(issue.project == null ? {} : { project: issue.project.id }),
+    id: stringOf(issue, 'identifier', 'an issue identifier', SOURCE),
+    scope: stringOf(objectOf(issue.team, 'an issue team', SOURCE), 'key', 'an issue team', SOURCE),
+    title: stringOf(issue, 'title', 'an issue title', SOURCE),
+    description: typeof issue.description === 'string' ? issue.description : '',
+    url: stringOf(issue, 'url', 'an issue url', SOURCE),
+    state: stringOf(objectOf(issue.state, 'an issue state', SOURCE), 'name', 'an issue state', SOURCE),
+    ...(project === undefined ? {} : { project: stringOf(project, 'id', 'an issue project', SOURCE) }),
   };
 }

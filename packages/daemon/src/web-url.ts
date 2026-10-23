@@ -61,8 +61,8 @@ export function webTabUrl(typed: string): string | undefined {
   return parsed.href;
 }
 
-/** What a web tab is called: its URL's host, with the port where it has one (`localhost:5173`). */
-export const webTabLabel = (url: string): string => parse(url)?.host || url;
+/** What a web tab is called: its URL's host, with the port where it has one (`localhost:5173`); a new tab with no URL yet, "New tab". */
+export const webTabLabel = (url: string): string => parse(url)?.host || url || 'New tab';
 
 /** A local web address in a line of output, and where it is in the line. */
 export interface LocalWebLink {

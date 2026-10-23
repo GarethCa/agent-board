@@ -23,14 +23,17 @@ describe('dropPlace', () => {
 describe('agentStartIn', () => {
   const unbound = { repoRoot: null, clone: null, defaultRepo: null, name: 'Ideas' };
 
-  it('starts at once in a bound zone, or a group with a default repo', () => {
+  it('starts at once in a bound zone', () => {
     expect(agentStartIn({ ...unbound, repoRoot: '/code/app' })).toEqual({ kind: 'start' });
-    expect(agentStartIn({ ...unbound, defaultRepo: '/code/app' })).toEqual({ kind: 'start' });
   });
 
-  it('asks for a repo on bare board, or in a group with no default', () => {
-    expect(agentStartIn(undefined)).toEqual({ kind: 'pick' });
-    expect(agentStartIn(unbound)).toEqual({ kind: 'pick' });
+  it('opens the New agent dialog in a group, with or without a default repo', () => {
+    expect(agentStartIn(unbound)).toEqual({ kind: 'dialog' });
+    expect(agentStartIn({ ...unbound, defaultRepo: '/code/app' })).toEqual({ kind: 'dialog' });
+  });
+
+  it('opens the dialog on bare board too, to ask for a repo', () => {
+    expect(agentStartIn(undefined)).toEqual({ kind: 'dialog' });
   });
 
   it('refuses while the zone clones its repo', () => {
@@ -82,12 +85,15 @@ describe('issues and the zones that track them', () => {
     expect(trackerZoneFor({ provider: 'linear', id: 'OPS-1' }, [planning, app])).toBeUndefined();
   });
 
-  it('starts from the New agent dialog where the zone gives a repo, else from the picker, the issue from its tracker', () => {
-    expect(issueStartIn(gh, app, [app])).toEqual({ kind: 'dialog', zone: app });
+  it('starts from the New agent dialog, the issue taken from the zone that tracks it, the card’s own first', () => {
+    expect(issueStartIn(gh, app, [app])).toEqual({ kind: 'dialog', zone: app, issueZoneId: 'app' });
     const withDefault = zoneOf('d', { defaultRepo: '/code/app', tracker: planning.tracker });
-    expect(issueStartIn(jar, withDefault, [withDefault])).toEqual({ kind: 'dialog', zone: withDefault });
-    expect(issueStartIn(jar, planning, [planning])).toEqual({ kind: 'pick', zone: planning, issueZoneId: 'planning' });
-    expect(issueStartIn(jar, undefined, [app, planning])).toEqual({ kind: 'pick', zone: undefined, issueZoneId: 'planning' });
+    expect(issueStartIn(jar, withDefault, [withDefault])).toEqual({ kind: 'dialog', zone: withDefault, issueZoneId: 'd' });
+    expect(issueStartIn(jar, planning, [planning])).toEqual({ kind: 'dialog', zone: planning, issueZoneId: 'planning' });
+    // A group that neither tracks the issue nor has a repo asks all the same, for its repo.
+    const elsewhere = zoneOf('e');
+    expect(issueStartIn(jar, elsewhere, [elsewhere, planning])).toEqual({ kind: 'dialog', zone: elsewhere, issueZoneId: 'planning' });
+    expect(issueStartIn(jar, undefined, [app, planning])).toEqual({ kind: 'dialog', zone: undefined, issueZoneId: 'planning' });
   });
 
   it('refuses when no zone tracks the issue, or while the zone clones', () => {

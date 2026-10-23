@@ -24,7 +24,7 @@ describe('searchShapes', () => {
   });
 
   it('gives every shape in its order for an empty query, and none for nonsense', () => {
-    expect(names('')).toHaveLength(42);
+    expect(names('')).toHaveLength(43);
     expect(names('')[0]).toBe('rectangle');
     expect(names('zzzq')).toEqual([]);
   });

@@ -257,16 +257,37 @@ kbd {
   transition: outline-color var(--motion-base) var(--ease-out);
 }
 
-/* Seen (its session was opened since it began asking) is still waiting, but with no orange outline until it asks again. */
-.hybrid-tile-agent[data-state='waiting']:not([data-seen]),
-.hybrid-tile-agent[data-state='needs-permission']:not([data-seen]) {
-  outline-color: var(--tile-state);
+/* While it needs you now, as the needs-you inbox lists it: seen (its session was opened since it began asking) is still
+   in the inbox, but with no orange outline until it asks again. */
+.hybrid-tile-agent[data-needs-you] {
+  outline-color: var(--state-waiting);
 }
 
 /* An orchestrator: an accent edge and halo, and how many agents it started in a badge on its corner. */
 .hybrid-tile-agent[data-orchestrator] {
   border-color: var(--accent);
   box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--crew-halo);
+}
+
+/* The board master: a teal edge and halo, and a MASTER badge on its top edge. */
+.hybrid-tile-agent[data-master] {
+  border-color: var(--master);
+  box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--master-halo);
+}
+
+.hybrid-tile-master-badge {
+  position: absolute;
+  z-index: 1;
+  top: calc(-1 * var(--space-2));
+  left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--master);
+  color: var(--master-soft);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  line-height: var(--space-4);
 }
 
 /* At the bottom-left of any node: the crew count is at a tile's top-right and a zone's tab at its top-left. */
@@ -348,6 +369,55 @@ kbd {
 .hybrid-tile-agent[data-state='stopped-by-restart'] {
   outline: 1.5px dashed var(--state-stopped-by-restart);
   outline-offset: -1px;
+}
+
+/* Paused (hibernated) by the user or an orchestrator: a solid slate border over faint stripes, never dashed (that is
+   stopped, and starting). Its name and line stay readable, greyed; who paused it sits under them, and Wake in its
+   footer. */
+.hybrid-tile-agent[data-state='hibernated'] {
+  outline: 1.5px solid color-mix(in srgb, var(--state-hibernated) 55%, var(--border));
+  background: repeating-linear-gradient(
+    135deg,
+    var(--raised) 0 var(--space-2-5),
+    color-mix(in srgb, var(--state-hibernated) 5%, var(--raised)) var(--space-2-5) calc(2 * var(--space-2-5))
+  );
+}
+
+.hybrid-tile-agent[data-state='hibernated'] :is(.hybrid-tile-name, .hybrid-tile-description) {
+  color: var(--muted);
+}
+
+.hybrid-tile-agent[data-state='hibernated'] .hybrid-tile-icon {
+  opacity: 0.6;
+  filter: grayscale(1);
+}
+
+.hybrid-tile-paused {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--state-hibernated-ink);
+}
+
+.hybrid-tile-paused-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hybrid-tile-paused-when {
+  flex: none;
+  white-space: pre;
+}
+
+.hybrid-tile-paused svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.hybrid-tile-wake {
+  margin-left: auto;
 }
 
 .hybrid-tile-resume {
@@ -467,6 +537,25 @@ kbd {
   white-space: nowrap;
 }
 
+.hybrid-tile-warning {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-25);
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--warning-ink);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hybrid-tile-warning svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
 .hybrid-tile-branch svg {
   flex: none;
   width: var(--icon-xs);
@@ -546,6 +635,55 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+/* Who set the line, when it was not the agent: its orchestrator, under the line. */
+.hybrid-tile-byline {
+  flex: none;
+  overflow: hidden;
+  color: var(--accent-ink);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What an agent on a command runs, and for how long: a teal row of its own under its status, never wrapping. */
+.hybrid-tile-command {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--state-on-command-soft);
+  color: var(--state-on-command-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
+.hybrid-tile-command svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.hybrid-tile-command-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hybrid-tile-command-more {
+  flex: none;
+}
+
+.hybrid-tile-command-time {
+  flex: none;
+  margin-left: auto;
+  font-weight: var(--weight-semibold);
+}
+
 .hybrid-tile-description[data-empty] {
   font-style: italic;
   opacity: 0.7;
@@ -586,8 +724,55 @@ kbd {
   white-space: pre-line;
 }
 
+/* What it flagged for a look: the needs-you orange while it reaches you, the crew's violet while it reaches its orchestrator. */
+.hybrid-tile-flag {
+  display: block;
+  flex: 0 1 auto;
+  padding: var(--space-1) var(--space-1-5);
+  border-radius: var(--radius-md);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+  font-size: var(--font-size-xs);
+}
+
+.hybrid-tile-flag[data-to='orchestrator'] {
+  background: var(--crew-flag-soft);
+  color: var(--crew-flag);
+}
+
+.hybrid-tile-flag .hybrid-tile-text {
+  -webkit-line-clamp: 2;
+}
+
+/* On an orchestrator's footer: how many of its crew wait for its answer, in the crew's violet. */
+.hybrid-tile-crew-flags {
+  flex: none;
+  background: var(--crew-flag-soft);
+  color: var(--crew-flag);
+  font-weight: var(--weight-bold);
+}
+
 .hybrid-tile-notice .hybrid-tile-text {
   -webkit-line-clamp: 3;
+}
+
+/* What was typed at its prompt and never sent, with Send. */
+.hybrid-tile-unsent {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1-25) var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: var(--font-size-xs);
+}
+
+.hybrid-tile-unsent .hybrid-tile-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  -webkit-line-clamp: 2;
 }
 
 /* Why the agent stopped, or what is wrong with it. */
@@ -600,6 +785,94 @@ kbd {
   color: var(--danger);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
+}
+
+/* An agent starting (a start's tile, or the agent's until its session's first hook): dashed, a little sunk into the
+   desk, with its steps where its task goes and the last line of its terminal under them. A failed start is outlined
+   red, with why under its steps and Retry and Delete for its footer. */
+.hybrid-tile-agent[data-start] {
+  outline: 1.5px dashed var(--tile-starting-edge);
+  outline-offset: -1px;
+  border-color: transparent;
+  background: var(--tile-starting);
+}
+
+.hybrid-tile-agent[data-start] .hybrid-tile-name {
+  color: var(--text-soft);
+}
+
+.hybrid-tile-agent[data-start='failed'] {
+  outline: 1.5px solid var(--tile-start-failed-edge);
+  background: var(--raised);
+}
+
+.hybrid-tile-steps {
+  display: grid;
+  flex: none;
+  gap: var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.hybrid-tile-step {
+  display: flex;
+  gap: var(--space-1-25);
+  align-items: center;
+  min-width: 0;
+}
+
+.hybrid-tile-step > svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.hybrid-tile-step-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hybrid-tile-step[data-state='done'] {
+  color: var(--success);
+}
+
+.hybrid-tile-step[data-state='now'] {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.hybrid-tile-step[data-state='failed'] {
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+
+/* The last line its terminal showed, as the terminal shows it. */
+.hybrid-tile-start-output {
+  flex: none;
+  overflow: hidden;
+  padding: var(--space-1) var(--space-1-25);
+  border-radius: var(--radius-sm);
+  background: var(--window-bg);
+  color: var(--window-ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Why its start failed. */
+.hybrid-tile-start-error {
+  display: -webkit-box;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* The footer: its badges wrap, and what doesn't fit folds into "+N", so the name keeps its width. */
@@ -630,6 +903,27 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* The rate-limited pill's Continue on credits button: the pill's own end, in its amber. */
+.hybrid-tile-footer > .ui-pill:has(+ .hybrid-tile-continue) {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.hybrid-tile-footer > .hybrid-tile-continue {
+  height: var(--size-pill);
+  margin-inline-start: calc(-1 * var(--space-1-25));
+  padding: 0 var(--space-1-25);
+  border-inline-start: 1px solid color-mix(in srgb, var(--state-rate-limited-ink) 25%, transparent);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--state-rate-limited-soft);
+  color: var(--state-rate-limited-ink);
+}
+
+.hybrid-tile-footer > .hybrid-tile-continue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--state-rate-limited-ink) 18%, var(--state-rate-limited-soft));
+  color: var(--state-rate-limited-ink);
+}
+
 .hybrid-tile-folded {
   cursor: default;
 }
@@ -638,6 +932,12 @@ kbd {
 .hybrid-tile-setup svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
+}
+
+/* The orchestrator role's badge is violet, so a zone's orchestrator reads at a glance, with crew frames off too. */
+.hybrid-tile-setup[data-orchestrator-role] {
+  border-color: var(--paint-violet);
+  color: var(--paint-violet);
 }
 
 /* An agent's shells chip: "2 shells", one dot per shell, and the list it opens. */
@@ -1061,6 +1361,46 @@ kbd {
   color: var(--accent-ink);
 }
 
+/* The Repo field of New agent in a group: the repo, with its base and new branch folded in one quiet line under it. */
+.repo-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ui-button.repo-field-button {
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.repo-field-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-semibold);
+}
+
+.repo-field-tag {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.repo-field-branches {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.repo-field-branches .ui-input-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* Issue picker, in the new-agent and link-issue dialogs */
 
 .issue-picker {
@@ -1182,6 +1522,93 @@ kbd {
 
 .inbox-item[data-read='true'] .inbox-item-name {
   font-weight: var(--weight-regular);
+}
+
+/* Unread: a faint wash of the needs-you orange. */
+.inbox-item[data-read='false'] {
+  background: color-mix(in srgb, var(--state-waiting) 4%, transparent);
+}
+
+.inbox-item-mark {
+  flex: none;
+}
+
+/* Why the row is there: asks, permission, plan, flagged or (with finished turns listed) turn ended. */
+.inbox-kind {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.inbox-kind svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.inbox-kind[data-kind='permission'] {
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+}
+
+.inbox-kind[data-kind='flagged'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.inbox-kind[data-kind='turn'] {
+  background: var(--state-idle-soft);
+  color: var(--state-idle-ink);
+}
+
+/* Who it came through, or whose crew it is: the time, and when it clears. */
+.inbox-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+/* An orchestrator, or the crew member a flag came through: the crew's violet chip. */
+.inbox-crew {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--crew-flag-soft);
+  color: var(--crew-flag);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+
+/* What the inbox lists, and the way to Settings, where that is picked. */
+.inbox-foot {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3-5);
+  border-top: 1px solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.inbox-foot-settings {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
 }
 
 .inbox-item + .inbox-item {
@@ -1799,6 +2226,95 @@ kbd {
   color: var(--muted);
 }
 
+/* A row an agent recorded has a solid rule and a × on hover; one the board guessed, a dotted rule and lighter text. */
+.details-record {
+  display: flex;
+  align-items: center;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-item) var(--radius-item) 0;
+}
+
+.details-record > .ui-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.details-record[data-source='recorded'] {
+  border-left-color: var(--success);
+}
+
+.details-record[data-source='guessed'] {
+  border-left-style: dotted;
+  border-left-color: var(--neutral-edge);
+}
+
+.details-record[data-source='guessed'] .ui-row-name {
+  color: var(--text-soft);
+  font-weight: var(--weight-medium);
+}
+
+.details-guessed {
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+.details-record-delete {
+  flex: none;
+  margin-right: var(--space-1);
+  opacity: 0;
+}
+
+.details-record:is(:hover, :focus-within) .details-record-delete {
+  opacity: 1;
+}
+
+.details-record[data-gone] {
+  text-decoration: line-through;
+  animation: details-record-fade var(--motion-record-fade) var(--ease-linear) forwards;
+}
+
+/* A deleted row fades out while its Undo is up. */
+@keyframes details-record-fade {
+  from {
+    opacity: 0.6;
+  }
+
+  to {
+    opacity: 0.1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .details-record[data-gone] {
+    animation: none;
+    opacity: 0.45;
+  }
+}
+
+.details-hidden {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.details-hidden-show {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.doc-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* The terminal column, dark in every theme */
 
 .session-window-main {
@@ -1811,6 +2327,7 @@ kbd {
 }
 
 .session-window-strip {
+  container-type: inline-size;
   display: flex;
   flex: none;
   align-items: center;
@@ -2087,6 +2604,11 @@ kbd {
 }
 
 .session-window-status {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   margin-left: auto;
   color: var(--window-ink-soft);
   font-size: var(--font-size-sm);
@@ -2133,9 +2655,33 @@ kbd {
   display: none;
 }
 
-.ui-segmented.session-window-view-switch {
+/* In a split pane's strip it ends the strip, after + and Split. */
+.session-tabs > .ui-segmented.session-view-switch {
+  margin-left: auto;
+}
+
+/* The Terminal / Chat switch at the right of the dark pane strip, in the window's own colours. */
+.ui-segmented.session-view-switch {
   flex: none;
-  background: var(--tag);
+  margin-left: var(--space-2);
+  height: var(--control-sm);
+  box-sizing: content-box;
+  background: var(--window-line);
+}
+
+.ui-segmented.session-view-switch button {
+  height: calc(var(--control-sm) - 2 * var(--space-0-5));
+  color: var(--window-ink-soft);
+}
+
+.ui-segmented.session-view-switch button:is(:hover, [data-preview='hover']) {
+  color: var(--window-ink);
+}
+
+.ui-segmented.session-view-switch button[aria-pressed='true'] {
+  background: var(--window-edge);
+  color: var(--window-ink);
+  box-shadow: none;
 }
 
 .chat-view {
@@ -2548,6 +3094,13 @@ kbd {
   margin-left: var(--space-2);
 }
 
+/* A strip short of room folds Expand all and Collapse all to their icons, which keep their tooltips and names. */
+@container (max-width: 520px) {
+  .chat-runs-label {
+    display: none;
+  }
+}
+
 .composer-field {
   display: flex;
   align-items: flex-end;
@@ -2607,50 +3160,21 @@ kbd {
 .session-dock {
   position: absolute;
   bottom: var(--space-3);
-  left: 50%;
   z-index: var(--layer-dock);
   gap: var(--space-1-5);
-  /* Between the zones pill and the zoom bar, which `useDockScroll` measures (--dock-clear); the token is the first paint's. */
-  min-width: min(var(--size-dock-min), calc(100% - 2 * var(--space-3)));
-  max-width: calc(100% - 2 * var(--dock-clear, var(--size-dock-clear)));
+  /* In the room between the zones pill and the zoom bar, which `useDockScroll` measures (--dock-left, --dock-right; the token is the first paint's): centred there, at least its minimum wide, and scrolling when full. */
+  right: var(--dock-right, var(--size-dock-clear));
+  left: var(--dock-left, var(--size-dock-clear));
+  /* Its pills' min-content is all of them (the track only scrolls once it is narrower), so the width is capped to the room explicitly. */
+  --dock-room: calc(100% - var(--dock-left, var(--size-dock-clear)) - var(--dock-right, var(--size-dock-clear)));
+  width: fit-content;
+  min-width: min(var(--size-dock-min), var(--dock-room));
+  max-width: var(--dock-room);
+  margin-inline: auto;
   padding: var(--space-1-25) var(--space-1-5) var(--space-1-25) var(--space-3);
-  translate: -50% 0;
 }
 
-/* Not even room for the count beside the zones pill and the zoom bar: a row up, above everything at the bottom. */
-.session-dock[data-lifted] {
-  bottom: calc(var(--space-3) + var(--dock-lift, 0px));
-}
-
-/* Too little room for the pills (`useDockScroll`): the dock is one button with their count, which opens the list. */
-.session-dock[data-compact] {
-  min-width: 0;
-}
-
-.session-dock-compact {
-  display: none;
-}
-
-.session-dock[data-compact] :is(.session-dock-track, .session-dock-label) {
-  display: none;
-}
-
-.session-dock[data-compact] .session-dock-compact {
-  display: inline-flex;
-}
-
-.session-dock-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  max-height: 50vh;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-/* The pills scroll sideways inside the dock (wheel, trackpad, shift-wheel) and never widen it past its max-width, so it
+/* The pills scroll sideways inside the dock (wheel, trackpad, shift-wheel) and never widen it past the room it has, so it
    pushes and clips nothing; the fades at its edges (`data-more`, from `useDockScroll`) show there is more. */
 .session-dock-track {
   display: flex;
@@ -2859,37 +3383,63 @@ kbd {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--agent-note-bar);
-  border-radius: var(--agent-note-radius);
-  background: var(--raised);
-  box-shadow: var(--shadow-tile);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   line-height: var(--leading-roomy);
   overflow-wrap: anywhere;
+  /* --agent-note-zone is the colour of the zone the note sits in, set on the note; loose, it falls back to neutral. */
+  --agent-note-edge: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-edge-mix), var(--border));
 }
 
-.agent-note-head,
+/* The tab sits on the card's top-left corner: a tint of the note's zone colour that reads NOTE and names the agent. */
+.agent-note-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  align-self: flex-start;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--agent-note-tab-height);
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border: 1.5px dashed var(--agent-note-edge);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-tab-mix), var(--panel));
+  color: color-mix(in srgb, var(--agent-note-zone, var(--agent-note-loose)) var(--agent-note-tab-ink-mix), var(--text));
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+}
+
+.agent-note-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1.5px dashed var(--agent-note-edge);
+  border-radius: 0 var(--agent-note-radius) var(--agent-note-radius) var(--agent-note-radius);
+  background: var(--panel);
+  box-shadow: var(--shadow-tile);
+}
+
+.agent-note-foot > :not(time) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .agent-note-foot {
   display: flex;
   flex: none;
   gap: var(--space-1-5);
   align-items: center;
+  min-height: var(--size-chip);
   padding: var(--space-1-5) var(--space-2-25);
   color: var(--muted);
   font-size: var(--font-size-2xs);
-}
-
-.agent-note-head {
-  border-bottom: 1px solid var(--separator);
-}
-
-.agent-note-foot {
-  min-height: var(--size-chip);
-  border-top: 1px solid var(--separator);
 }
 
 .agent-note-badge {
@@ -2897,15 +3447,22 @@ kbd {
   gap: var(--space-1);
   align-items: center;
   min-width: 0;
-  padding: var(--space-px) var(--space-2) var(--space-px) var(--space-1);
+  max-width: 100%;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--agent-note-badge);
-  color: var(--agent-note-badge-ink);
+  background: none;
+  color: inherit;
   font: inherit;
-  font-weight: var(--weight-semibold);
   white-space: nowrap;
   cursor: pointer;
+}
+
+.agent-note-label {
+  flex: none;
+}
+
+.agent-note-label::after {
+  content: ' ·';
 }
 
 .agent-note-badge:hover:enabled .agent-note-name {
@@ -2923,17 +3480,23 @@ kbd {
 }
 
 .agent-note-name {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .agent-note-role {
+  flex: 0 100000 auto;
+  min-width: 0;
+  overflow: hidden;
   font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
   opacity: 0.8;
 }
 
 .agent-note-time {
   flex: none;
+  order: 1;
   margin-left: auto;
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -2995,7 +3558,6 @@ kbd {
 }
 
 .agent-note-show {
-  margin-left: auto;
   padding: 0;
   border: 0;
   background: none;
@@ -3039,47 +3601,362 @@ kbd {
 }
 
 /* The tether from a note to its agent's tile. */
+/* A clock: a tile-wide card with a face on its rounded left end, or folded to a pill. */
+.clock {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  gap: var(--space-2-5);
+  border: 1px solid var(--border);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.clock-card {
+  padding: var(--space-2) var(--space-2-5) var(--space-2) var(--space-2);
+  border-radius: var(--clock-radius);
+}
+
+.clock-pill {
+  padding: var(--space-1) var(--space-2-5) var(--space-1) var(--space-1);
+  border-radius: var(--radius-pill);
+  gap: var(--space-1-5);
+}
+
+.react-flow__node.selected > .clock {
+  box-shadow: var(--shadow-tile), var(--shadow-picked);
+}
+
+.clock[data-off='true'] {
+  color: var(--muted);
+}
+
+.clock-face {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--clock-face);
+  height: var(--clock-face);
+  border: var(--clock-face-edge) solid var(--clock-face-ring);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+}
+
+.clock[data-running='true'] .clock-face {
+  border-color: var(--accent);
+}
+
+.clock-face-small {
+  width: var(--clock-face-folded);
+  height: var(--clock-face-folded);
+  border-width: var(--clock-face-edge-folded);
+}
+
+.clock-hand {
+  position: absolute;
+  bottom: 50%;
+  left: 50%;
+  width: var(--clock-hand-width);
+  border-radius: var(--clock-hand-width);
+  background: currentcolor;
+  transform-origin: 50% 100%;
+}
+
+.clock-hand-hour {
+  height: var(--clock-hand-hour);
+}
+
+.clock-hand-minute {
+  height: var(--clock-hand-minute);
+  background: var(--clock-face-ring);
+}
+
+.clock-face-small .clock-hand-hour {
+  height: var(--clock-hand-hour-folded);
+}
+
+.clock-face-small .clock-hand-minute {
+  height: var(--clock-hand-minute-folded);
+}
+
+.clock-text,
+.clock-pill-text {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+
+.clock-pill-text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  white-space: nowrap;
+}
+
+.clock-words {
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clock-pill .clock-words {
+  font-size: var(--font-size-sm);
+}
+
+.clock-detail,
+.clock-soon {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clock[data-running='true'] .clock-detail,
+.clock[data-running='true'] .clock-soon {
+  color: var(--accent-ink);
+}
+
+.clock-runs {
+  display: flex;
+  gap: var(--space-0-5);
+  margin-top: var(--space-0-5);
+}
+
+.clock-run {
+  width: var(--clock-run);
+  height: var(--clock-run);
+  border-radius: var(--radius-xs);
+}
+
+.clock-run[data-mark='ok'] {
+  background: var(--clock-run-ok);
+}
+
+.clock-run[data-mark='fail'] {
+  background: var(--clock-run-fail);
+}
+
+.clock-run[data-mark='skip'] {
+  background: var(--clock-run-skip);
+}
+
+.clock-run[data-mark='run'] {
+  background: var(--clock-run-run);
+}
+
+.react-flow__edge-path.clock-tether {
+  stroke: var(--clock-tether);
+  stroke-width: var(--connector-width);
+  stroke-dasharray: var(--agent-note-tether-dash);
+}
+
+/* The clock editor's When row, fresh-agent fields and run history. */
+.clock-fresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.clock-fresh > * {
+  flex: 1;
+}
+
+.clock-history {
+  display: grid;
+  max-height: var(--space-30);
+  overflow-y: auto;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.clock-history-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.clock-history-row time,
+.clock-history-took {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.clock-history-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .react-flow__edge-path.agent-note-tether {
   stroke: var(--agent-note-tether);
   stroke-width: var(--connector-width);
   stroke-dasharray: var(--agent-note-tether-dash);
 }
 
+/* The board master's rail to each zone lead it watches: a tether in its teal. */
+.react-flow__edge-path.master-rail {
+  stroke: color-mix(in srgb, var(--master) 60%, transparent);
+  stroke-width: var(--connector-width);
+  stroke-dasharray: 6 5;
+}
+
+/* A question card: a speech bubble beside its agent's tile, its tail pointing at the tile from `data-side`. */
+.question-card {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-2-5) var(--space-3);
+  border: var(--question-card-edge-width) solid var(--question-card-edge);
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+}
+
+.question-card[data-selected] {
+  box-shadow: var(--shadow-tile), var(--shadow-picked);
+}
+
+.question-card[data-side]::before {
+  content: '';
+  position: absolute;
+  width: var(--question-card-tail);
+  height: var(--question-card-tail);
+  box-sizing: border-box;
+  border-bottom: var(--question-card-edge-width) solid var(--question-card-edge);
+  border-left: var(--question-card-edge-width) solid var(--question-card-edge);
+  background: var(--raised);
+}
+
+.question-card[data-side='left']::before {
+  top: var(--question-card-tail-at);
+  left: calc(var(--question-card-tail) / -2 - var(--question-card-edge-width));
+  transform: rotate(45deg);
+}
+
+.question-card[data-side='top']::before {
+  top: calc(var(--question-card-tail) / -2 - var(--question-card-edge-width));
+  left: var(--question-card-tail-at);
+  transform: rotate(135deg);
+}
+
+.question-card[data-side='right']::before {
+  top: var(--question-card-tail-at);
+  right: calc(var(--question-card-tail) / -2 - var(--question-card-edge-width));
+  transform: rotate(225deg);
+}
+
+.question-card[data-side='bottom']::before {
+  bottom: calc(var(--question-card-tail) / -2 - var(--question-card-edge-width));
+  left: var(--question-card-tail-at);
+  transform: rotate(-45deg);
+}
+
+.question-card-head {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  color: var(--question-card-head);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.question-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-card-age {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.question-card-question {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.question-card-options {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.question-card-option {
+  justify-content: flex-start;
+  width: 100%;
+  font-weight: var(--weight-semibold);
+}
+
+.question-card-option-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-card-reply {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.question-card-reply .ui-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Where a moved card's tether starts: never shown, never a connector's end. */
+.question-card-handle {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* The agent's terminal, cut out and pinned. */
 .agent-note[data-look='terminal'] {
-  border: 1px solid var(--window-edge);
-  border-radius: var(--radius-lg);
-  background: var(--window-bg);
-  color: var(--window-ink);
   font-family: var(--font-mono);
   font-size: var(--font-size-badge);
 }
 
-.agent-note[data-look='terminal'] .agent-note-head {
-  border-bottom-color: var(--window-line);
-  background: var(--window-chrome);
-  color: var(--window-ink-soft);
-}
-
-.agent-note[data-look='terminal'] .agent-note-badge {
-  padding: 0;
-  background: none;
+.agent-note[data-look='terminal'] .agent-note-card {
+  background: var(--window-bg);
   color: var(--window-ink);
-  font-weight: var(--weight-regular);
-}
-
-.agent-note[data-look='terminal'] .agent-note-name {
-  font-weight: var(--weight-semibold);
-}
-
-.agent-note[data-look='terminal'] .agent-note-role {
-  color: var(--window-ink-soft);
-  opacity: 1;
 }
 
 .agent-note[data-look='terminal'] .agent-note-foot,
-.agent-note[data-look='terminal'] .agent-note-edits,
 .agent-note[data-look='terminal'] .agent-note-dismiss {
+  color: var(--window-ink-soft);
+}
+
+.agent-note[data-look='terminal'] .agent-note-edits {
   border-top-color: var(--window-line);
   color: var(--window-ink-soft);
 }
@@ -3333,6 +4210,10 @@ kbd {
   font-weight: var(--weight-bold);
 }
 
+.shape[data-mono="true"] {
+  font-family: var(--font-mono);
+}
+
 .shape-art {
   position: absolute;
   inset: 0;
@@ -3363,8 +4244,8 @@ kbd {
 }
 
 .shape-text {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  text-align: center;
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -3372,9 +4253,59 @@ kbd {
 
 .shape-editor {
   field-sizing: content;
-  min-width: 2ch;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  overflow: hidden;
+  resize: none;
+  text-align: center;
+}
+
+.shape[data-align="left"] .shape-text,
+.shape[data-align="left"] .shape-editor {
+  text-align: left;
+}
+
+.shape[data-align="right"] .shape-text,
+.shape[data-align="right"] .shape-editor {
+  text-align: right;
+}
+
+/*
+ * A shape with sections (a class): its name, then each section under a rule drawn as its outline is, the name sized to
+ * what it holds and the sections sharing the height to spare. The sections are code: left-aligned and regular, in mono
+ * while the shape is (by default); the name keeps the sans.
+ */
+.shape-sections {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.shape-section {
+  box-sizing: border-box;
+  min-height: calc(1lh + 2 * var(--shape-section-padding-block));
+  padding: var(--shape-section-padding-block) var(--shape-section-padding-inline);
+}
+
+.shape-section[data-section="name"] {
+  font-family: var(--font-sans);
+}
+
+.shape-section:not([data-section="name"]) {
+  flex: 1 0 auto;
+  border-top: var(--shape-stroke-width) var(--shape-stroke-style) var(--shape-stroke);
+  font-weight: var(--weight-regular);
+}
+
+.shape .shape-section:not([data-section="name"]) :is(.shape-text, .shape-editor) {
+  text-align: left;
+}
+
+.shape-stereotype {
+  display: block;
+  font-size: var(--shape-stereotype-scale);
+  font-weight: var(--weight-regular);
 }
 
 /* The bar above a selected text item or shape */
@@ -3443,6 +4374,14 @@ kbd {
   stroke-linejoin: round;
 }
 
+.item-bar-sample-fill {
+  fill: currentcolor;
+}
+
+.item-bar-sample[data-mirrored] {
+  transform: scaleX(-1);
+}
+
 .ui-swatch.item-bar-swatch {
   width: var(--size-swatch-lg);
   height: var(--size-swatch-lg);
@@ -3495,157 +4434,7 @@ kbd {
   pointer-events: none;
 }
 
-/* A new agent waiting on the repo picker, and the picker beside it */
-.pending-tile {
-  position: absolute;
-  box-sizing: border-box;
-  padding: var(--space-2-5) var(--space-3);
-  border: 1.5px solid var(--accent);
-  border-radius: var(--radius-lg);
-  background: var(--raised);
-  box-shadow: var(--shadow-control);
-  pointer-events: none;
-}
-
-.pending-tile-head {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.pending-tile-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: var(--weight-bold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.repo-picker.ui-popover {
-  display: flex;
-  width: var(--size-repo-picker);
-  max-width: calc(100vw - var(--space-8));
-  max-height: var(--radix-popover-content-available-height);
-  padding: 0;
-  overflow: hidden;
-}
-
-.repo-picker-form {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.repo-picker-head {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-2-5) var(--space-2) 0 var(--space-3-5);
-  font-weight: var(--weight-bold);
-}
-
-.repo-picker-head-icon {
-  width: var(--icon-md);
-  height: var(--icon-md);
-  color: var(--accent-ink);
-}
-
-.repo-picker-title {
-  flex: 1;
-}
-
-.repo-picker-body {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  min-height: 0;
-  padding: var(--space-2) var(--space-2-5) var(--space-2-5);
-  overflow-y: auto;
-}
-
-.repo-picker-browse {
-  display: flex;
-  gap: var(--space-2-5);
-  align-items: center;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: none;
-  color: var(--accent-ink);
-  font: inherit;
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-}
-
-.repo-picker-browse:hover {
-  background: var(--hover);
-}
-
-.repo-picker-browse svg {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-
-.repo-picker-browse-label {
-  flex: 1;
-  text-align: start;
-}
-
-.repo-picker-meta {
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-  font-weight: var(--weight-regular);
-}
-
-.repo-picker-rule {
-  width: 100%;
-  margin: 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-}
-
-.repo-picker-scratch-icon {
-  color: var(--accent-ink);
-}
-
-.repo-picker-branches {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: var(--space-2);
-  padding: 0 var(--space-0-5);
-}
-
-.repo-picker-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.repo-picker-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  align-items: flex-start;
-}
-
-.repo-picker-foot {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  min-width: 0;
-  padding: var(--space-2) var(--space-2-5);
-  border-top: 1px solid var(--border);
-  background: var(--raised);
-}
-
-/* The harness, model and role chips, in the repo picker's and New agent's footers. */
+/* The harness, model and role chips, in New agent's footer. */
 .agent-setup {
   display: flex;
   flex: 0 1 auto;
@@ -3865,7 +4654,8 @@ kbd {
   height: 0;
 }
 
-.connector-arrow {
+.connector-arrow,
+.connector-hollow {
   fill: none;
   stroke: context-stroke;
   stroke-width: var(--connector-width);
@@ -3875,6 +4665,27 @@ kbd {
 
 .connector-dot {
   fill: context-stroke;
+}
+
+.connector-filled {
+  fill: context-stroke;
+  stroke: context-stroke;
+  stroke-width: var(--connector-width);
+  stroke-linejoin: round;
+}
+
+/* A label at one end of a line: a multiplicity or a role, plain beside the line, not boxed as its middle label is. */
+.connector-end-label {
+  position: absolute;
+  pointer-events: all;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--connector-end-label-height);
+  white-space: nowrap;
 }
 
 .react-flow__edge-path.connector-line {
@@ -5639,6 +6450,11 @@ kbd {
   outline-color: var(--flow-target-edge);
 }
 
+/* Needing you outranks a hand-off: the orange outline stays. */
+.hybrid-tile-agent[data-handoff][data-needs-you] {
+  outline-color: var(--state-waiting);
+}
+
 .hybrid-tile-agent[data-handoff='receiving'] {
   box-shadow: 0 0 0 var(--space-1) var(--flow-receiving-ring), var(--shadow-tile);
 }
@@ -5654,6 +6470,11 @@ kbd {
   bottom: calc(100% - var(--space-1-5));
   line-height: 0;
   animation: handoff-bob var(--motion-handoff) var(--ease-in-out) infinite;
+}
+
+/* Waiting on its command, it stands still. */
+.hybrid-tile-handoff[data-pose='on-command'] {
+  animation: none;
 }
 
 @keyframes handoff-bob {
@@ -6913,6 +7734,79 @@ tr[data-status='running'] .gate-step-icon {
   height: var(--icon-xs);
 }
 
+/* A web tab with no page yet: what shows in its area, where its address is focused, until a URL is sent. */
+.web-blank {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  width: 100%;
+  padding: var(--space-5);
+  color: var(--muted);
+  text-align: center;
+}
+
+.web-blank-globe {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+  opacity: 0.35;
+}
+
+.web-blank-title,
+.web-blank-hint,
+.web-blank-rule {
+  margin: 0;
+}
+
+.web-blank-title {
+  color: var(--text-soft);
+}
+
+.web-blank-hint,
+.web-blank-rule {
+  font-size: var(--font-size-xs);
+}
+
+.web-servers {
+  display: grid;
+  gap: var(--space-1);
+  width: min(100%, 280px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.web-server {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.web-server::before {
+  content: '●';
+  color: var(--state-running);
+  font-size: var(--font-size-3xs);
+}
+
+.web-server:hover,
+.web-server:focus-visible {
+  border-color: var(--accent);
+}
+
+.web-server small {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-sans);
+}
+
 /* A tile ⌘K showed: ringed in the accent, pulsing twice; held still with reduced motion. */
 .react-flow__node[data-pulse] {
   border-radius: var(--radius-xl);
@@ -7226,4 +8120,300 @@ tr[data-status='running'] .gate-step-icon {
 .folded-chip .ui-pill {
   flex: none;
   margin-left: auto;
+}
+
+/* A document an agent showed, on the board: a white page with a folded top-right corner and a type tag, its title and
+   first lines fading out, its agent and version at its foot; collapsed, a slim bar of type, title and author. */
+.doc-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md) 0 var(--radius-md) var(--radius-md);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+/* The folded corner: the desk showing through, and the fold's underside. */
+.doc-card::after {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-sm);
+  background: linear-gradient(225deg, var(--surface) 50%, var(--panel) 50%);
+  content: '';
+}
+
+.doc-card[data-gone] {
+  opacity: 0.7;
+}
+
+.doc-card-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-2) var(--space-5) 0 var(--space-2-5);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.doc-card-type {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: var(--weight-bold);
+}
+
+.doc-card-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-card-edited {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--agent-note-edited-soft);
+  color: var(--agent-note-edited);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.doc-card-title {
+  flex: none;
+  padding: var(--space-1) var(--space-2-5) var(--space-1-5);
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-card-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 var(--space-2-5);
+  overflow: hidden;
+  color: var(--text-soft);
+  mask-image: linear-gradient(to bottom, var(--text) 55%, transparent);
+}
+
+.doc-card-body p,
+.doc-card-body ul,
+.doc-card-body ol {
+  margin: 0 0 var(--space-1);
+}
+
+.doc-card-foot {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-height: var(--size-chip);
+  margin-top: auto;
+  padding: var(--space-1-5) var(--space-2-5);
+  border-top: 1px solid var(--separator);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.doc-card-agent,
+.doc-card-open {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.doc-card-agent span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-card-agent:hover:enabled span,
+.doc-card-open:hover:enabled {
+  text-decoration: underline;
+}
+
+.doc-card-agent:disabled,
+.doc-card-open:disabled {
+  cursor: default;
+}
+
+.doc-card-mark {
+  flex: none;
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.doc-card-version {
+  flex: none;
+  font-family: var(--font-mono);
+}
+
+.doc-card-open {
+  flex: none;
+  margin-left: auto;
+  color: var(--accent-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.hybrid-tile-docs {
+  --chip: var(--tag);
+  --chip-ink: var(--muted);
+
+  font-family: var(--font-mono);
+}
+
+/* The Document tab: the document read, or in Edit its Markdown beside the live render, with Save under them. */
+.doc-viewer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--raised);
+  font-size: var(--font-size-sm-plus);
+  line-height: var(--leading-body);
+}
+
+.doc-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--separator);
+}
+
+.doc-title {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.doc-title svg {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  color: var(--muted);
+}
+
+.doc-title h4 {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.doc-meta code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.doc-markdown {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+}
+
+.doc-reading {
+  padding: var(--space-3) var(--space-4);
+}
+
+.doc-split {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.doc-source {
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-right: 1px solid var(--separator);
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  resize: none;
+}
+
+.doc-split .doc-render {
+  background: var(--surface);
+}
+
+.doc-edit-bar {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  justify-content: flex-end;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--separator);
+  background: var(--surface);
+}
+
+.doc-edit-bar > .review-meta {
+  margin-right: auto;
+}
+
+.doc-banner {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--separator);
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+
+.doc-banner > span {
+  margin-right: auto;
 }

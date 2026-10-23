@@ -1,4 +1,4 @@
-import { AGENT_STATES, type Agent, type AgentState, type Harness, type Shell } from '@agent-board/daemon/protocol';
+import { AGENT_STATES, type Agent, type AgentStart, type AgentState, type Harness, type Shell } from '@agent-board/daemon/protocol';
 import { HandoffsContext } from './flow-edges';
 import { GitBranch } from 'lucide-react';
 import { HarnessMark } from './HarnessMark';
@@ -9,8 +9,10 @@ import { StatusPill } from '../ui';
 const AT = '2026-01-01T00:00:00.000Z';
 /** Far enough ahead that the clock badge reads the same date whenever the gallery is shown. */
 const NEXT_RUN = new Date(2099, 0, 1, 9, 0).toISOString();
+/** Half a minute into "22 min", so the command's time reads the same while the gallery is looked at. */
+const GATE_STARTED = new Date(Date.now() - 22.5 * 60_000).toISOString();
 
-/** The states the gallery shows: `starting` is drawn as `running`, so it has no tile of its own. */
+/** The states the gallery shows in its first rows: `starting` has its own, with a start's tiles (`STARTS`). */
 type GalleryState = Exclude<AgentState, 'starting'>;
 const GALLERY_STATES = AGENT_STATES.filter((state): state is GalleryState => state !== 'starting');
 
@@ -45,6 +47,8 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
   idle: {
     harness: 'codex',
     name: 'Write the README',
+    // A line its orchestrator set for it: the tile says who.
+    status: { summary: 'Docs in; awaiting review', progress: null, updatedAt: AT, setBy: 'web-app orchestrator' },
     pullRequests: [
       { number: 43, title: 'README', url: '', state: 'merged', checks: 'passing' },
       { number: 44, title: 'README again', url: '', state: 'closed', checks: 'failing' },
@@ -54,16 +58,34 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
   'rate-limited': {
     harness: 'claude',
     name: 'Review the diff',
-    schedule: { cron: '@daily', prompt: 'Review the diff', enabled: false, nextRunAt: null, lastRun: null },
+    schedule: { clockId: 'clock-1', cron: '@daily', prompt: 'Review the diff', enabled: false, nextRunAt: null, lastRun: null },
   },
   failed: { harness: 'codex', name: 'Migrate the schema', notice: 'Its process crashed (exit code 1).' },
   scheduled: {
     harness: 'claude',
     name: 'Triage new issues',
-    schedule: { cron: '0 9 * * *', prompt: 'Triage new issues', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+    schedule: { clockId: 'clock-1', cron: '0 9 * * *', prompt: 'Triage new issues', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
   },
   'stopped-by-restart': { harness: 'codex', name: 'Port the scheduler', endedAt: AT },
   'handing-off': { harness: 'claude', name: 'Write the review', lastMessage: 'The diff looks good: two nits inline.' },
+  hibernated: {
+    harness: 'claude',
+    name: 'Pick a cache',
+    endedAt: AT,
+    status: { summary: 'Picked SQLite, wrote the note', progress: null, updatedAt: AT, setBy: null },
+    // Paused a while before now, so its line reads the same whenever the gallery is shown.
+    hibernated: { at: new Date(Date.now() - 14 * 60_000).toISOString(), by: 'Release orchestrator', byId: 'gallery-orchestrator' },
+  },
+  'on-command': {
+    harness: 'claude',
+    name: 'Fix checkout flake',
+    status: { summary: 'Retry fix in; running the gate', progress: null, updatedAt: AT, setBy: null },
+    commands: [
+      { command: 'pnpm check:pr', startedAt: GATE_STARTED },
+      { command: 'pnpm dev --port 5173', startedAt: new Date(Date.now() - 60_000).toISOString() },
+    ],
+    pullRequests: [{ number: 241, title: 'Fix checkout flake', url: '', state: 'open', checks: 'pending' }],
+  },
   done: {
     harness: 'claude',
     name: 'Fix the flaky test',
@@ -90,30 +112,40 @@ export const galleryAgent = (state: AgentState): Agent => ({
   state,
   notice: null,
   earlierConversations: [],
+  hibernated: null,
   issue: null,
   muted: false,
   seen: false,
   pullRequests: [],
   pushedPullRequests: [],
+  records: [],
+  recordedPullRequests: [],
+  guessedDoc: null,
   createdAt: AT,
   endedAt: null,
   exitCode: null,
   shellSessionId: null,
   shellHarness: null,
   subagents: [],
+  commands: [],
   lastMessage: null,
   finishedAt: null,
   permissions: [],
   ask: null,
   plan: null,
+  docs: [],
   schedule: null,
   reviewOf: null,
   reviewCap: 3,
   ownsWorktree: true,
+  master: false,
   orchestrate: null,
   spawnedBy: null,
+  unsent: null,
   status: null,
   workFinishedAt: null,
+  startup: null,
+  flag: null,
   ...EXTRAS[state === 'starting' ? 'running' : state],
 });
 
@@ -129,7 +161,7 @@ const CROWDED: Agent = {
     { number: 215, title: 'Movable sessions, part two', url: '', state: 'open', checks: 'failing' },
     { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
   ],
-  schedule: { cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
 };
 
 /** Names of 10, 30 and 60 characters, on tiles that are not crowded, and a reviewer's: none is cut off before its second line. */
@@ -161,6 +193,50 @@ const LONG_DESCRIPTION: Agent = {
   sessionId: 'gallery-long-description',
   name: 'Long description',
   description: `${'A task described at great length, over several sentences. '.repeat(4)}\n\nSecond paragraph.\n\n/code/gallery/${'a-very-long-unbroken-path-segment/'.repeat(5)}file.ts`,
+};
+
+/**
+ * An agent starting: its start's tile making its worktree, the agent's tile with its harness's last line once its
+ * session runs, and a start that failed, both before its agent was made and as its harness started.
+ */
+const START: AgentStart = {
+  sessionId: 'gallery-start',
+  zoneId: 'gallery',
+  position: null,
+  name: 'Pick a cache',
+  harness: 'claude',
+  model: 'opus',
+  spawnedBy: null,
+  steps: [{ kind: 'worktree', state: 'now', detail: null }],
+  error: null,
+  confirm: false,
+};
+const START_FAILED: AgentStart = {
+  ...START,
+  sessionId: 'gallery-start-failed',
+  name: 'Prune old jobs',
+  steps: [{ kind: 'worktree', state: 'failed', detail: null }],
+  error: 'fatal: invalid reference: release-2',
+};
+const STARTING: Agent = {
+  ...galleryAgent('starting'),
+  sessionId: 'gallery-starting',
+  name: 'Pick a cache',
+  model: 'opus',
+  branch: 'pick-a-cache-80c2e9',
+  subagents: [],
+  pullRequests: [],
+  startup: { output: '✻ Welcome to Claude Code · loading MCP…', failed: false },
+};
+const START_EXITED: Agent = {
+  ...galleryAgent('failed'),
+  sessionId: 'gallery-start-exited',
+  name: 'Pick a cache',
+  branch: 'pick-a-cache-80c2e9',
+  notice: null,
+  endedAt: AT,
+  exitCode: 1,
+  startup: { output: 'ANTHROPIC_API_KEY not set', failed: true },
 };
 
 /** A shell tile split in two, one of its panes ended. */
@@ -219,7 +295,7 @@ function HeaderCases() {
   );
 }
 
-/** An agent tile in every agent state, a crowded one, two ended ones, one with a long description, one receiving a hand-off, and a shell tile, for checking how they look. The app shows it at `#gallery`. */
+/** An agent tile in every agent state, a crowded one, two ended ones, one with a long description, one receiving a hand-off, a shell tile, and an agent starting, for checking how they look. The app shows it at `#gallery`. */
 export function TileGallery() {
   return (
     <HandoffsContext value={HANDOFFS}>
@@ -257,6 +333,16 @@ export function TileGallery() {
         <div style={AGENT_TILE_SIZE}>
           <HybridTile id={SHELL.id} tile={{ label: SHELL.name, harness: null, shell: SHELL }} />
         </div>
+        {[START, START_FAILED].map((start) => (
+          <div key={start.sessionId} style={AGENT_TILE_SIZE}>
+            <HybridTile id={`start:${start.sessionId}`} tile={{ label: start.name, harness: start.harness, start }} />
+          </div>
+        ))}
+        {[STARTING, START_EXITED].map((agent) => (
+          <div key={agent.sessionId} style={AGENT_TILE_SIZE}>
+            <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />
+          </div>
+        ))}
         <HeaderCases />
       </div>
     </HandoffsContext>

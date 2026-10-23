@@ -59,8 +59,8 @@ const bare = (key: string, text = key.toUpperCase()): Chord => ({ key, text, shi
 
 export const KEYS = [
   // The tile selected on the board.
-  { id: 'tile.open', label: 'Open it', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
-  { id: 'tile.rename', label: 'Rename', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
+  { id: 'tile.open', label: 'Open it, or type in a shape', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'Enter', text: '↵' }] },
+  { id: 'tile.rename', label: 'Rename (or click its name, then pause)', section: 'tile', scope: 'tile', status: 'today', keys: [{ key: 'F2', shift: 'any' }] },
   { id: 'tile.delete', label: 'Delete or close (asks first)', section: 'tile', scope: 'tile', status: 'today', keys: [{ text: '⌫' }] },
 
   // Getting round the board, and the keys that work anywhere.
@@ -70,7 +70,9 @@ export const KEYS = [
   { id: 'move.box', label: 'Box select', section: 'move', scope: 'board', status: 'today', keys: [bare('b')] },
   { id: 'move.hand', label: 'Pan the board', section: 'move', scope: 'board', status: 'today', keys: [bare('h')] },
   { id: 'move.connections', label: 'Cycle which connections are drawn', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'e', text: 'E', shift: true }] },
+  { id: 'move.crews', label: 'Cycle how an orchestrator’s crew is shown', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'c', text: 'C', shift: true }] },
   { id: 'move.cheatSheet', label: 'Keyboard shortcuts', section: 'move', scope: 'board', status: 'new', keys: [{ key: '?', shift: 'any' }] },
+  { id: 'move.master', label: 'Open the board master, its message box focused', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
   { id: 'move.cheatSheetAnywhere', label: 'Keyboard shortcuts, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'Slash', text: '/' }] },
 
   // Putting things on the board.
@@ -97,6 +99,7 @@ export const KEYS = [
   { id: 'edit.forward', label: 'Bring forward', section: 'edit', scope: 'board', status: 'today', keys: [{ mod: 'command', key: ']' }] },
   { id: 'edit.backward', label: 'Send backward', section: 'edit', scope: 'board', status: 'today', keys: [{ mod: 'command', key: '[' }] },
   { id: 'edit.nudge', label: 'Nudge 1px (⇧ 10px)', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '←↑→↓' }] },
+  { id: 'edit.swapDirection', label: 'Swap the direction of the arrow selected', section: 'edit', scope: 'board', status: 'new', keys: [{ key: 's', text: 'S', shift: true }] },
   { id: 'edit.resetRotation', label: 'Reset the rotation of what is selected', section: 'edit', scope: 'board', status: 'today', keys: [{ key: 'r', text: 'R', shift: true }] },
   { id: 'edit.snapTurn', label: `Hold while turning: ${ROTATION_SNAP}° steps`, section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⇧' }] },
   { id: 'edit.handOffDrag', label: 'Hold while drawing an edge between agents: a hand-off', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⌥' }] },
@@ -135,7 +138,10 @@ export const KEYS = [
   },
   { id: 'window.newLine', label: 'New line to the agent, in its terminal or message box', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ shift: true, text: '↵' }] },
   { id: 'window.openLink', label: 'Open a link in the terminal in a web tab', section: 'window', scope: 'window', status: 'today', keys: [{ mod: 'command', text: 'click' }] },
+  { id: 'window.openLinkBrowser', label: 'Open an https link in the terminal in the browser', section: 'window', scope: 'window', status: 'today', keys: [{ mod: 'command', shift: true, text: 'click' }] },
   { id: 'window.send', label: 'Send the message box to the agent', section: 'window', scope: 'window', status: 'today', keys: [{ text: '↵' }] },
+  { id: 'window.saveDoc', label: 'Save the document you are editing, and tell its agent', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'command', key: 's', text: 'S' }] },
+  { id: 'window.leaveDocEdit', label: 'Leave Edit in a document, dropping what is unsaved', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Escape', text: 'esc' }] },
 
   // The dialog, menu or popover with the focus: its own keys, matched where it is drawn.
   { id: 'dialog.move', label: 'Move between the rows', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '↑' }, { text: '↓' }] },

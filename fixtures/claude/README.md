@@ -11,3 +11,12 @@ For the chat view's Claude adapter (`packages/daemon/src/transcript-adapters.ts`
 
 They are **hand-written** in the entry shapes of real Claude Code 2.1.296 transcripts, not copied from one: real
 transcripts hold the user's prompts and code. IDs, paths and texts are made up and `usage` is trimmed.
+
+## OSC 8 hyperlinks
+
+`osc8/links.bin`: what Claude Code 2.1.309 writes for links when it believes the terminal supports hyperlinks
+(`FORCE_HYPERLINK=1`, or a known `TERM_PROGRAM`). **Hand-built** from the bundle, not captured from a session: its link
+writer prints `ESC ] 8 ; ; <url> BEL`, the label in `blueBright` (`ESC [ 94 m … ESC [ 39 m`), then `ESC ] 8 ; ; BEL`, and its
+screen renderer writes one such span per drawn segment, so each row of a wrapped address carries the whole URL. The file
+holds: an address with `[`, `]` and `'` in it, hard-wrapped over two rows; a labelled link to `http://example.com/docs`
+(which the terminal view may not open); and one whose address ends in `.`. Used by the terminal link e2e (`web-tab.spec.ts`).

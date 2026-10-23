@@ -110,12 +110,12 @@ describe('reading the board', () => {
     const lines = out.trimEnd().split('\n');
     expect(lines).toEqual([
       `${ref('zone', web.id)}  web  (repo ${repo})`,
-      `  ${ref('agent', fixTests.sessionId)}  fix-tests  [waiting]  Which database should I use, Postgres or SQLite?`,
+      `  ${ref('agent', fixTests.sessionId)}  fix-tests  [waiting]  task: Fix the flaky tests`,
       `  ${ref('shell', shell.id)}  ${shell.name}  [shell]  in ${repo}`,
       `${ref('zone', ideas.id)}  Ideas  (group)`,
       `  ${ref('item', note.id)}  sticky  "Ship by Friday"`,
       'loose on the board',
-      `  ${ref('agent', webAgent.sessionId)}  web  [waiting]  Which database should I use, Postgres or SQLite?`,
+      `  ${ref('agent', webAgent.sessionId)}  web  [waiting]  task: Polish the web app`,
       `  ${ref('shell', loose.id)}  ${loose.name}  [shell]  in ${loose.cwd}`,
     ]);
 
@@ -130,7 +130,7 @@ describe('reading the board', () => {
       kind: 'agent',
       name: 'fix-tests',
       state: 'waiting',
-      status: { summary: 'Which database should I use, Postgres or SQLite?', progress: null, updatedAt: expect.any(String) },
+      status: null,
       task: 'Fix the flaky tests',
       zone: ref('zone', web.id),
       you: false,
@@ -162,7 +162,7 @@ describe('reading the board', () => {
 
     const byRef = await run(env, 'show', ref('agent', fixTests.sessionId));
     expect(byRef.code).toBe(0);
-    expect(byRef.out).toContain(`${ref('agent', fixTests.sessionId)}  fix-tests\n  state      waiting\n  status     Which database should I use, Postgres or SQLite?\n`);
+    expect(byRef.out).toContain(`${ref('agent', fixTests.sessionId)}  fix-tests\n  state      waiting\n  status     not set\n  task       Fix the flaky tests\n`);
     expect(byRef.out).toContain(`  branch     ${fixTests.branch}\n`);
     expect(byRef.out).toContain(`    ${ref('edge', edge.id)}  ${ref('agent', fixTests.sessionId)} fix-tests [waiting] → ${ref('agent', webAgent.sessionId)} web [waiting]\n`);
     expect(byRef.out).toContain('      carries its final message when it hands off, or else as its turn ends; never delivered');
@@ -194,7 +194,7 @@ describe('reading the board', () => {
 
     expect((await run(env, 'zones')).out).toBe(`${ref('zone', web.id)}  web  (repo ${web.repoRoot})  2 tiles\n${ref('zone', ideas.id)}  Ideas  (group)  0 tiles\n`);
     expect((await run(env, 'ls')).out).toBe((await run(env, 'agents')).out);
-    expect((await run(env, 'agents')).out).toContain(`fix-tests  [waiting]  Which database should I use, Postgres or SQLite?  (in ${ref('zone', web.id)} web)\n`);
+    expect((await run(env, 'agents')).out).toContain(`fix-tests  [waiting]  task: Fix the flaky tests  (in ${ref('zone', web.id)} web)\n`);
     expect((await run(env, 'edges')).out).toBe(
       `${ref('edge', edge.id)}  ${ref('agent', fixTests.sessionId)} fix-tests [waiting] → ${ref('agent', webAgent.sessionId)} web [waiting]\n` +
         '  carries its final message when it hands off, or else as its turn ends; never delivered\n',
@@ -403,7 +403,7 @@ describe('laying out the board from the command line', () => {
     await usage(['move', 'a', '--near', 'b', '--side', 'under'], '--side must be below, right, left, above');
     await usage(['move', 'a', '--near', 'b', '--at', '1,2'], 'give --at or --near, not both');
     await usage(['arrange', '--by', 'mood'], '--by must be issue, role, state');
-    await usage(['arrange', '--layout', 'spiral'], '--layout must be rows or grid');
+    await usage(['arrange', '--layout', 'spiral'], '--layout must be rows, columns, cards, grid');
     await usage(['arrange', 'a', 'b'], 'give at most one zone ref');
     await usage(['zone', 'add', '--name', 'x'], 'give --group');
     await usage(['zone', 'add', '--group'], 'give the group --name');
@@ -437,6 +437,46 @@ describe('laying out the board from the command line', () => {
     expect((await client.call('shell.list')).find((each) => each.id === shell.id)).toMatchObject({ zoneId: null });
     expect(await run(env, 'zone', 'remove', 'zone:web')).toMatchObject({ code: 1, err: expect.stringContaining('only groups') });
     expect((await run(env, 'activity')).out).toMatch(/you {2}remove-zone Shipped work.*you {2}add-zone Done/s);
+  });
+});
+
+describe('schedules from the command line', () => {
+  it('checks the schedule commands’ arguments before it connects', async () => {
+    const usage = async (args: string[], message: string) =>
+      expect(await run({}, 'schedule', ...args)).toMatchObject({ code: 2, err: expect.stringContaining(message) });
+    await usage(['add'], "give the schedule's cron expression");
+    await usage(['add', '61 * * * *', '--to', 'a', '--', 'Go'], 'bad minute field');
+    await usage(['add', '@daily', '--to', 'a'], 'give the schedule its prompt');
+    await usage(['add', '@daily', '--', 'Go'], 'give --to <agent> to message one, or --fresh');
+    await usage(['add', '@daily', '--to', 'a', '--fresh', '--', 'Go'], 'give --to <agent> to message one, or --fresh');
+    await usage(['add', '@daily', '--to', 'a', '--role', 'x', '--', 'Go'], '--role is only for --fresh');
+    await usage(['add', '@daily', '--fresh', '--result', 'email', '--', 'Go'], '--result must be history, note, handoff');
+    await usage(['add', '@daily', '--fresh', '--result', 'handoff', '--', 'Go'], '--result handoff goes with --handoff-to');
+    await usage(['list', '--to', 'a'], '--to is only for `schedule add`');
+    await usage(['remove'], 'give one schedule ref');
+    await usage(['pause', 'item:1'], 'the schedule commands are');
+  });
+
+  it('adds a clock that messages an agent beside its tile and one that starts fresh agents, lists them and removes them, as the user', async () => {
+    const { env, client, fixTests, web } = await board();
+
+    const message = await run(env, 'schedule', 'add', '0 9 * * 1-5', '--to', 'fix-tests', '--', 'Check the nightly build');
+    expect(message).toMatchObject({ code: 0, out: expect.stringMatching(/^Added item:\S+ {2}Weekdays 09:00 \(0 9 \* \* 1-5\) {2}messages agent:\S+ fix-tests {2}next \S+/) });
+    expect((await client.call('agent.list')).find((agent) => agent.sessionId === fixTests.sessionId)!.schedule).toMatchObject({ cron: '0 9 * * 1-5', prompt: 'Check the nightly build' });
+    const fresh = await run(env, 'schedule', 'add', '@daily', '--fresh', '--zone', 'web', '--role', 'reviewer', '--keep', '--json', '--', 'Sweep the logs');
+    expect(fresh.code).toBe(0);
+    const { item } = JSON.parse(fresh.out) as { item: { id: string; zoneId: string; data: unknown } };
+    expect(item).toMatchObject({ zoneId: web.id, data: { does: 'fresh', agent: null, fresh: { role: 'reviewer', closeWhenDone: false }, result: 'history' } });
+
+    const listed = await run(env, 'schedule', 'list');
+    expect(listed.out).toContain('messages agent:');
+    expect(listed.out).toMatch(/Daily 00:00 \(@daily\) {2}starts a fresh reviewer {2}next /);
+    expect(listed.out).toContain('"Sweep the logs"');
+
+    expect(await run(env, 'schedule', 'remove', ref('item', item.id))).toMatchObject({ code: 0, out: expect.stringContaining('Removed item:') });
+    expect(await run(env, 'schedule', 'remove', 'fix-tests')).toMatchObject({ code: 1, err: expect.stringContaining('is not a schedule') });
+    expect((await client.call('item.list')).filter((each) => each.kind === 'clock')).toHaveLength(1);
+    expect((await run(env, 'activity')).out).toMatch(/you {2}remove-clock clock Daily 00:00.*you {2}add-clock clock Daily 00:00.*you {2}add-clock clock Weekdays 09:00/s);
   });
 });
 

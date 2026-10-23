@@ -3,7 +3,7 @@ import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
-import { localWebLinks } from '@agent-board/daemon/web-url';
+import { bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, type BufferRow } from './terminal-links';
 import { commandKey, isMac } from '../keys';
 import { keyText } from '../keys/registry';
 import { token, tokenNumber } from '../theme';
@@ -63,7 +63,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   /** Read at each key, so the agent arriving after the pane mounts doesn't re-attach it. */
   const harnessRef = useRef(harness);
   harnessRef.current = harness;
-  /** Opens a local address ⌘-clicked in the output in a web tab, in a window that has tabs; read at the click. */
+  /** Opens an address ⌘-clicked in the output in a web tab, in a window that has tabs; read at the click. */
   const webOpener = useWebLinkOpener();
   const openWeb = useRef(webOpener);
   openWeb.current = webOpener;
@@ -104,26 +104,56 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     };
     element.addEventListener('keydown', keyDown, true);
     element.addEventListener('wheel', wheel, { passive: false });
-    // A dev server's local address in the output opens in a web tab of the window on a ⌘-click (Ctrl off
-    // macOS): a plain click stays the terminal's.
+    // An address in the output (also one wrapped over rows) opens on a ⌘-click (Ctrl off macOS), a plain click staying
+    // the terminal's: in a web tab of the window, or with Shift in the OS browser (https only), as Chat opens its links.
+    const rowAt = (y: number): BufferRow | undefined => {
+      const row = terminal.buffer.active.getLine(y - 1);
+      if (row === undefined) return undefined;
+      const cells = Array.from({ length: row.length }, (_, x) => {
+        const cell = row.getCell(x);
+        return cell === undefined || cell.getWidth() === 0 ? undefined : cell.getChars();
+      });
+      return { cells, wrapped: row.isWrapped };
+    };
+    const openLink = (url: string, event: MouseEvent) => {
+      if (!commandKey(event)) return;
+      const target = linkTarget(url, event.shiftKey, openWeb.current !== undefined);
+      // Shift-click extends the terminal's selection, which is not what a click on a link means.
+      if (event.shiftKey) terminal.clearSelection();
+      if (target === 'web-tab') openWeb.current?.(url);
+      else if (target === 'browser') void window.agentBoard.trackers.openLink(url).catch(() => {});
+    };
+    const hint = (url: string) => (element.title = linkHint(url, openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') }));
+    const leave = () => element.removeAttribute('title');
     const links = terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        const line = terminal.buffer.active.getLine(y - 1)?.translateToString(true);
-        if (openWeb.current === undefined || line === undefined) return callback(undefined);
+        const found = bufferLinks(rowAt, y, terminal.cols).filter(({ url }) => linkTarget(url, false, openWeb.current !== undefined) !== undefined || linkTarget(url, true, false) !== undefined);
         callback(
-          localWebLinks(line).map(({ url, start, end }) => ({
-            range: { start: { x: start + 1, y }, end: { x: end, y } },
-            text: url,
-            decorations: { underline: true, pointerCursor: true },
-            activate: (event) => {
-              if (commandKey(event)) openWeb.current?.(url);
-            },
-            hover: () => (element.title = `${keyText('window.openLink')} to open in a web tab`),
-            leave: () => element.removeAttribute('title'),
-          })),
+          found.length === 0
+            ? undefined
+            : found.map(({ url, start, end }) => ({
+                range: { start, end },
+                text: url,
+                decorations: { underline: true, pointerCursor: true },
+                activate: (event) => openLink(url, event),
+                hover: () => hint(url),
+                leave,
+              })),
         );
       },
     });
+    // An OSC 8 hyperlink (Claude Code writes its long addresses so, whole, however it wraps them) opens the same way,
+    // by the same address rules. Without a handler of ours xterm would confirm and open a window of its own.
+    terminal.options.linkHandler = {
+      activate(event, text) {
+        const url = hyperlinkAddress(text);
+        if (url !== undefined) openLink(url, event);
+      },
+      hover(_event, text) {
+        element.title = hyperlinkHint(text, openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') });
+      },
+      leave,
+    };
     terminalRef.current = terminal;
     terminal.open(element);
     // The board's zoom scales the terminal, which xterm's mouse mapping doesn't know.

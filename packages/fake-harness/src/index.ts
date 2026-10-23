@@ -9,6 +9,15 @@ export { installHarnessGuard, harnessGuardGlobalSetup, guardChildProcess, realHa
 export { BOARD_SESSION_VARS, RUN_KNOBS, scrubBoardSessionEnv, scrubBoardEnv } from './board-guard.ts';
 export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
+export {
+  RATE_LIMIT_CONTINUE,
+  RATE_LIMIT_CREDITS_ROW,
+  RATE_LIMIT_MENU_TITLE,
+  RATE_LIMIT_STOP_ROW,
+  RATE_LIMIT_UPGRADE_ROW,
+  drawRateLimitMenu,
+  rateLimitMenuRows,
+} from './rate-limit-menu.ts';
 
 export interface FakeHarnessEnvOptions {
   scenario: FakeScenario;
@@ -25,6 +34,25 @@ export interface FakeHarnessEnvOptions {
    * expected to. Defaults to true; false plays a harness that just drops the call.
    */
   mcpCancel?: boolean;
+  /** How long the TUI takes to start before its first hook, as on a slow machine. Defaults to 0. */
+  startDelayMs?: number;
+  /** A line the TUI prints before exiting 1 as it starts, before its first hook: a start that fails. None by default. */
+  startFailure?: string;
+  /**
+   * How many Enters typed after text to lose, as a slow machine's TUI loses one that lands before it has taken the text
+   * in: the text stays at the prompt until the next Enter. Defaults to 0.
+   */
+  loseEnters?: number;
+  /**
+   * How many prompts typed at the fake (not given on its command line) fire no `UserPromptSubmit`, as a hook that timed
+   * out on a loaded machine; the turn runs all the same. Defaults to 0.
+   */
+  losePromptHooks?: number;
+  /**
+   * What Claude shows once a turn hits its usage limit: `continue` at its prompt (`prompt`), or its menu (`menu`, or
+   * `menu-credits-first` with its usage-credits row first). None by default: just the error.
+   */
+  rateLimitScreen?: 'prompt' | 'menu' | 'menu-credits-first';
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
@@ -43,6 +71,11 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_IDLE_NOTIFY_MS: String(options.idleNotifyMs ?? 0),
     FAKE_HARNESS_REPEAT: options.repeat ? '1' : '0',
     FAKE_HARNESS_MCP_CANCEL: options.mcpCancel === false ? '0' : '1',
+    FAKE_HARNESS_START_DELAY_MS: String(options.startDelayMs ?? 0),
+    FAKE_HARNESS_START_FAIL: options.startFailure ?? '',
+    FAKE_HARNESS_LOSE_ENTERS: String(options.loseEnters ?? 0),
+    FAKE_HARNESS_LOSE_PROMPT_HOOKS: String(options.losePromptHooks ?? 0),
+    FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
   };
 }
 

@@ -1,4 +1,5 @@
 import { CONNECTOR_STYLES, type ConnectorStyle } from '@agent-board/daemon/protocol';
+import { Route } from 'lucide-react';
 import { BarButton, BarSample } from '../items/ItemStyleBar';
 import { upperFirst } from '../../upper-first';
 
@@ -16,4 +17,17 @@ export function LineStyleButtons({ current, onPick }: { current: ConnectorStyle;
       <BarSample path={STYLE_SAMPLES[style]} />
     </BarButton>
   ));
+}
+
+/**
+ * A style bar's button that takes out a line's bends, so it routes round the objects between its ends again: shown on
+ * an elbow or curve the user bent, the only lines that don't route on their own.
+ */
+export function RouteButton({ style, bent, onRoute }: { style: ConnectorStyle; bent: boolean; onRoute(): void }) {
+  if (style === 'straight' || !bent) return null;
+  return (
+    <BarButton name="Route automatically" onClick={onRoute}>
+      <Route />
+    </BarButton>
+  );
 }

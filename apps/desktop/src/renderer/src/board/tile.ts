@@ -1,8 +1,9 @@
 import { createContext } from 'react';
 import type { Node } from '@xyflow/react';
-import type { Agent, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
+import type { Agent, DocumentSummary, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
 import type { ClickOpens } from './click-opens';
 import { renameDirect, type RenameTarget } from './rename';
+import type { ShownStart } from './use-agent-starts';
 
 /** What a tile shows, whatever representation draws it. */
 export type TileData = {
@@ -19,6 +20,8 @@ export type TileData = {
   external?: ExternalSession;
   /** The shell tile the tile stands for, instead of an agent. */
   shell?: Shell;
+  /** The agent being started the tile stands for, until it is an agent: its tile is `StartTile`'s. */
+  start?: ShownStart;
   /** Expanded in place: drawn by `ExpandedTile` rather than the representation. */
   expanded?: true;
   /** A closed agent shrunk to a chip: drawn by `FoldedChip`, at `CHIP_SIZE`. */
@@ -29,6 +32,8 @@ export type TileData = {
   from?: { sessionId: string; name: string };
   /** How many agents on the board the agent started, as an orchestrator. */
   crew?: number;
+  /** How many of those flag it for a look (`AgentFlag.to`), waiting for its answer. */
+  crewFlags?: number;
   /** The tabs of the agent's session window, when it has any: its shells chip lists their shells. */
   tabs?: Shell[];
 };
@@ -39,6 +44,8 @@ export type TileNodeType = Node<TileData, 'tile'>;
 export interface TileProps {
   id: string;
   tile: TileData;
+  /** Whether it is the one thing selected on the board: a click on its name then starts a rename, as in Finder. */
+  selected?: boolean;
 }
 
 /** What a tile can ask the board to do with its agent. */
@@ -93,8 +100,16 @@ export interface TileActions {
   dismissExternal(id: string): void;
   /** Asks to resume an external session in agent-board as an agent, in its tile's place. */
   resumeExternal(session: ExternalSession): void;
-  /** Starts an agent stopped by a restart again; settles once it has (or failing that, said why). */
+  /** Starts an agent stopped by a restart, or paused, again; settles once it has (or failing that, said why). */
   resumeAgent(sessionId: string): Promise<void>;
+  /** Resumes the rate-limited agent's turn on usage credits; settles once its turn starts (or failing that, said why). */
+  continueOnCredits(sessionId: string): Promise<void>;
+  /** Pauses the idle agent (hibernates it) to free what it holds; settles once it has (or failing that, said why). */
+  pauseAgent(sessionId: string): Promise<void>;
+  /** Presses Enter on the message typed at the agent's prompt and never sent; settles once done (or failing that, said why). */
+  sendUnsent(sessionId: string): Promise<void>;
+  /** Clears the message typed at the agent's prompt and never sent; settles once done (or failing that, said why). */
+  clearUnsent(sessionId: string): Promise<void>;
   /** Restarts an ended agent, asking first if the shell its pane dropped into is running something. */
   restartAgent(sessionId: string): void;
   /** Starts a shell tile's panes stopped by a restart again; settles once it has (or failing that, said why). */
@@ -120,6 +135,16 @@ export interface TileActions {
   openGate(agent: Agent, run: boolean): void;
   /** Opens the agent's Plan tab where a PR tab would open. */
   openPlan(agent: Agent): void;
+  /** Opens a document the agent showed as its Document tab, where a PR tab would open. */
+  openDoc(agent: Agent, document: DocumentSummary): void;
+  /** Starts a failed start again, asking first when its warning must be confirmed (`AgentStart.confirm`). */
+  retryStart(start: ShownStart): void;
+  /** Starts again an agent whose harness exited before its first hook, with the first message it was started with. */
+  retryAgentStart(sessionId: string): void;
+  /** Takes an agent being started off the board, stopping it if it is still going. */
+  dismissStart(sessionId: string): void;
+  /** Renames an agent being started; rejects if it could not (after saying why), so the field can stay as it was. */
+  renameStart(sessionId: string, name: string): Promise<void>;
 }
 
 /** What a double-click on an agent's or shell tile opens: its tiles' tooltips and ⋯ menus say so. */
@@ -147,6 +172,10 @@ export const TileActionsContext = createContext<TileActions>({
   dismissExternal: () => {},
   resumeExternal: () => {},
   resumeAgent: async () => {},
+  continueOnCredits: async () => {},
+  pauseAgent: async () => {},
+  sendUnsent: async () => {},
+  clearUnsent: async () => {},
   restartAgent: () => {},
   resumeShell: async () => {},
   startReview: () => {},
@@ -154,7 +183,12 @@ export const TileActionsContext = createContext<TileActions>({
   openTab: () => {},
   openGate: () => {},
   openPlan: () => {},
+  openDoc: () => {},
   openPullRequest: () => {},
+  retryStart: () => {},
+  retryAgentStart: () => {},
+  dismissStart: () => {},
+  renameStart: async () => {},
 });
 
 /** What a shell tile's folder chip needs: home, to show it as `~`, and where to open a new pane. */

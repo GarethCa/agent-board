@@ -66,6 +66,10 @@ describe("a web tab's name", () => {
     expect(webTabLabel('https://docs.example.com/a')).toBe('docs.example.com');
     expect(webTabLabel('not a url')).toBe('not a url');
   });
+
+  it('is "New tab" while it has no page', () => {
+    expect(webTabLabel('')).toBe('New tab');
+  });
 });
 
 describe('the local web links in a line of output', () => {

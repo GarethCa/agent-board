@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { displaced, heldFrom, type Held } from './displace';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
+import type { TileSizes } from './tile-size';
 import type { BoardNode } from './tiles';
 
 /** The class of a node moved clear of an expanded tile, or going back: it eases there (app.css). */
@@ -15,6 +16,9 @@ const AT_REST: Held = new Map();
 /** No crew to move as one. */
 const NO_CREWS: readonly (readonly string[])[] = [];
 
+/** No tile resized while compact. */
+const NO_SIZES: TileSizes = {};
+
 /**
  * `nodes` as the board draws them with `expanded` open, each pair in `overlapsAllowed` free to overlap and each of
  * `crews` moved as one (`displaced`), the ones moved, and for a moment the ones going back, marked to ease there. While a drag or resize
@@ -27,6 +31,7 @@ export function useDisplaced(
   expanded: ExpandedTiles,
   overlapsAllowed: OverlapsAllowed,
   crews: readonly (readonly string[])[] = NO_CREWS,
+  compactSizes: TileSizes = NO_SIZES,
 ): BoardNode[] {
   const changing = nodes.some((node) => node.dragging === true || node.resizing === true);
   /** The nodes, and where they were drawn, as last rendered with nothing changing: what a change starts from. */
@@ -42,8 +47,8 @@ export function useDisplaced(
     setHeld(undefined);
   }
   const shown = useMemo(
-    () => displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST, crews),
-    [nodes, expanded, overlapsAllowed, holding, crews],
+    () => displaced(nodes, expanded, overlapsAllowed, holding ?? AT_REST, crews, compactSizes),
+    [nodes, expanded, overlapsAllowed, holding, crews, compactSizes],
   );
   // Kept as it renders, not after an effect: a change in the very next render starts from this one.
   if (!changing) rest.current = { nodes, shown };

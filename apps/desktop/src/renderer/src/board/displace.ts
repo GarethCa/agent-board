@@ -6,6 +6,7 @@ import type { ExpandedTiles, OverlapsAllowed } from './expanded';
 import { boundsOnBoard } from './items/items';
 import { clearOf, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { CREW_PADDING } from './crews';
+import { tileSizeOf, type TileSizes } from './tile-size';
 import { isSessionTile, isZone, type BoardNode } from './tiles';
 
 /** Something an expanded tile may push: a tile, an item or a zone, by its id and where it is. */
@@ -91,6 +92,57 @@ export function clearOfExpanded(
   return result;
 }
 
+/** A tile that has grown: the rect it had compact, and the one it has now, with its top-left kept. */
+export interface Grown {
+  compact: Rect;
+  open: Rect;
+}
+
+/**
+ * Where `movables` go to make room for the tiles in `grown`: the rows that lie below one move down as whole rows, and
+ * the rest of what is right of it moves right as a block, so rows and columns stay whole. A movable is in a row below
+ * when its top is past the tile's middle, so a row a little out of line still moves as one, and a tall tile beside it
+ * stays in its row. Each block moves by the
+ * one shift that takes its nearest member in the way a gap clear of the open tile: the width and height it grew when
+ * the layout was made for its compact size, and nothing when it was made for the expanded one (or when none is in the
+ * way, so pushing what is already pushed moves nothing more). Every tile is worked out against the same layout, and a
+ * movable in the blocks of several moves by the largest of their shifts, not the sum. Only the movables that move are
+ * in the result, by id.
+ */
+export function pushedAside(grown: readonly Grown[], movables: readonly Movable[]): Map<string, { x: number; y: number }> {
+  const inTheWay = (block: readonly Movable[], open: Rect) => block.filter(({ rect }) => !clearOf(rect, [open]));
+  /** The movables in the block `blockOf` makes, by id, for each of `grown`. */
+  const below = (tile: Grown) => new Set(movables.filter(({ rect }) => rect.y >= tile.compact.y + tile.compact.height / 2).map(({ id }) => id));
+  const right = (tile: Grown) => {
+    const down = below(tile);
+    return new Set(movables.filter(({ id, rect }) => !down.has(id) && rect.x >= tile.compact.x + tile.compact.width - EPSILON).map(({ id }) => id));
+  };
+  /** The largest shift along `axis` of the blocks, by id, with the nearest member in the way judged in `layout`. */
+  const largest = (layout: readonly Movable[], axis: 'x' | 'y', blockOf: (tile: Grown) => ReadonlySet<string>) => {
+    const shifts = new Map<string, number>();
+    for (const tile of grown) {
+      const ids = blockOf(tile);
+      const nearest = inTheWay(layout.filter(({ id }) => ids.has(id)), tile.open);
+      if (nearest.length === 0) continue;
+      const edge = axis === 'x' ? tile.open.x + tile.open.width : tile.open.y + tile.open.height;
+      const by = Math.max(0, edge + TILE_GAP - Math.min(...nearest.map(({ rect }) => rect[axis])));
+      if (by > 0) for (const id of ids) shifts.set(id, Math.max(shifts.get(id) ?? 0, by));
+    }
+    return shifts;
+  };
+  // Who is in each block is judged where the movables are, as is the room the rows below need. What is right of a tile
+  // is then judged with those rows moved, so a tile that has gone down beside another expanded one is seen there.
+  const down = largest(movables, 'y', below);
+  const lowered = movables.map(({ id, rect }) => ({ id, rect: { ...rect, y: rect.y + (down.get(id) ?? 0) } }));
+  const aside = largest(lowered, 'x', right);
+  return new Map(
+    lowered.flatMap(({ id, rect }, index) => {
+      const x = rect.x + (aside.get(id) ?? 0);
+      return x === movables[index]!.rect.x && rect.y === movables[index]!.rect.y ? [] : [[id, { x, y: rect.y }] as const];
+    }),
+  );
+}
+
 /** By top, then left, then id: so the same layout, however it is listed, moves the same way. */
 const inReadingOrder = (a: Movable, b: Movable) => a.rect.y - b.rect.y || a.rect.x - b.rect.x || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
@@ -136,25 +188,111 @@ export function apart(
 
 /**
  * `clearOfExpanded`, but each movable whose `partner` is one of the `fixed` rects (it was dropped onto that one, or
- * that one onto it) is left free to overlap that one only: moved, after the others, clear of everything else.
+ * that one onto it) is left free to overlap that one only: moved, after the others, clear of everything else. Where
+ * `compactOf` says what a fixed rect grew from, its neighbours are first pushed aside as blocks (`pushedAside`), and
+ * only what is still in the way after that is moved clear one by one.
  */
-function clearOfFixed(fixed: readonly Movable[], movables: readonly Movable[], bounds: Bounds | undefined, partner: Partner) {
+function clearOfFixed(
+  fixed: readonly Movable[],
+  movables: readonly Movable[],
+  bounds: Bounds | undefined,
+  partner: Partner,
+  compactOf: (id: string) => Rect | undefined = () => undefined,
+  gridsOf: (grown: readonly Grown[], movables: readonly Movable[]) => readonly Grid[] = (grown, movables) => [{ grown, movables }],
+) {
   const exempt = (movable: Movable) => fixed.some((rect) => partner(movable.id).includes(rect.id));
+  const grown = fixed.flatMap((rect) => {
+    const compact = compactOf(rect.id);
+    return compact === undefined ? [] : [{ compact, open: rect.rect }];
+  });
+  const free = movables.filter((movable) => !exempt(movable));
+  // Each grid is pushed on its own; a tile in several moves by the largest of their shifts.
+  const shifts = new Map<string, { x: number; y: number }>();
+  for (const grid of gridsOf(grown, free)) {
+    const before = new Map(grid.movables.map(({ id, rect }) => [id, rect]));
+    for (const [id, spot] of pushedAside(grid.grown, grid.movables)) {
+      const from = before.get(id)!;
+      const now = shifts.get(id) ?? { x: 0, y: 0 };
+      shifts.set(id, { x: Math.max(now.x, spot.x - from.x), y: Math.max(now.y, spot.y - from.y) });
+    }
+  }
+  for (const [id, by] of shifts) {
+    const from = free.find((movable) => movable.id === id)!.rect;
+    shifts.set(id, { x: from.x + by.x, y: from.y + by.y });
+  }
+  const pushed = free.map((movable) => (shifts.has(movable.id) ? { id: movable.id, rect: { ...movable.rect, ...shifts.get(movable.id)! } } : movable));
   const moves = clearOfExpanded(
     fixed.map((rect) => rect.rect),
-    movables.filter((movable) => !exempt(movable)),
+    pushed,
     bounds,
   );
-  const placed = (movable: Movable): Rect => ({ ...movable.rect, ...moves.get(movable.id) });
+  const original = new Map(movables.map((movable) => [movable.id, movable.rect]));
+  const result = new Map<string, { x: number; y: number }>();
+  // A block pushed aside may land on tiles that stayed (beside a tall one, in a sparse row): those that were pushed
+  // give way to everything that was not, the rest keeping their place.
+  const settled = new Map(pushed.map(({ id, rect }) => [id, { ...rect, ...moves.get(id) }]));
+  if (shifts.size > 0) {
+    const unpushed = new Set([...fixed.map(({ id }) => id), ...free.filter(({ id }) => !shifts.has(id)).map(({ id }) => id)]);
+    const together = [...fixed, ...[...settled].map(([id, rect]) => ({ id, rect }))];
+    for (const [id, spot] of apart(together, bounds, unpushed, partner)) settled.set(id, { ...settled.get(id)!, ...spot });
+  }
+  for (const { id } of pushed) {
+    const spot = settled.get(id)!;
+    const first = original.get(id)!;
+    if (spot.x !== first.x || spot.y !== first.y) result.set(id, { x: spot.x, y: spot.y });
+  }
+  const placed = (movable: Movable): Rect => ({ ...movable.rect, ...result.get(movable.id) });
   for (const movable of movables.filter(exempt).toSorted(inReadingOrder)) {
     const others = [
       ...fixed.filter((rect) => !partner(movable.id).includes(rect.id)).map((rect) => rect.rect),
       ...movables.filter((other) => other !== movable).map(placed),
     ];
     const own = clearOfExpanded(others, [movable], bounds).get(movable.id);
-    if (own !== undefined) moves.set(movable.id, own);
+    if (own !== undefined) result.set(movable.id, own);
   }
-  return moves;
+  return result;
+}
+
+/** How near a loose tile must be to the tile expanded, or to a neighbour of it, to be part of its grid, px. */
+const GRID_REACH = 2 * TILE_GAP;
+
+/** Expanded tiles and the movables that make up the grid they are pushed in. */
+interface Grid {
+  grown: readonly Grown[];
+  movables: readonly Movable[];
+}
+
+/**
+ * The grids of the expanded tiles on the bare board, from the movables that are `gridded` (tiles: not zones, notes or
+ * other items). A tile's grid is those within `GRID_REACH` of its compact rect, or of another such movable. Tiles whose
+ * grids meet share one, so they are pushed together as in a zone (column C once, not twice); grids that don't meet are
+ * pushed apart from each other, so an expanded tile moves nothing but its own neighbours.
+ */
+function looseGrids(gridded: (movable: Movable) => boolean) {
+  return (grown: readonly Grown[], movables: readonly Movable[]): Grid[] => {
+    const near = (a: Rect, b: Rect) =>
+      a.x < b.x + b.width + GRID_REACH && b.x < a.x + a.width + GRID_REACH && a.y < b.y + b.height + GRID_REACH && b.y < a.y + a.height + GRID_REACH;
+    const candidates = movables.filter(gridded);
+    const gridOf = (tile: Grown) => {
+      const grid = new Set<Movable>();
+      let frontier: Rect[] = [tile.compact];
+      while (frontier.length > 0) {
+        const found = candidates.filter((movable) => !grid.has(movable) && frontier.some((rect) => near(rect, movable.rect)));
+        for (const movable of found) grid.add(movable);
+        frontier = found.map((movable) => movable.rect);
+      }
+      return grid;
+    };
+    const groups: { grown: Grown[]; members: Set<Movable> }[] = [];
+    for (const tile of grown) {
+      const members = gridOf(tile);
+      const meeting = groups.filter((group) => [...members].some((movable) => group.members.has(movable)) || group.grown.some((other) => near(other.compact, tile.compact)));
+      const merged = { grown: [tile, ...meeting.flatMap((group) => group.grown)], members: new Set([...members, ...meeting.flatMap((group) => [...group.members])]) };
+      for (const group of meeting) groups.splice(groups.indexOf(group), 1);
+      groups.push(merged);
+    }
+    return groups.map((group) => ({ grown: group.grown, movables: candidates.filter((movable) => group.members.has(movable)) }));
+  };
 }
 
 /** Where `rect` goes to be pushed `direction` until it is a gap clear of `from`. */
@@ -240,6 +378,7 @@ export function heldFrom(nodes: readonly BoardNode[], shown: readonly BoardNode[
  * unchanged.
  * Each of `crews` (the tiles of a crew frame, by node id) moves as one, its frame with it, by one shift that keeps its
  * layout, unless one of them is expanded, changing or dropped onto a tile (`overlaps`), when each moves on its own.
+ * `compactSizes` are the sizes compact tiles were resized to (an expanded tile grows from its own).
  */
 export function displaced(
   nodes: BoardNode[],
@@ -247,6 +386,7 @@ export function displaced(
   overlaps: OverlapsAllowed = new Map(),
   held: Held = new Map(),
   crews: readonly (readonly string[])[] = [],
+  compactSizes: TileSizes = {},
 ): BoardNode[] {
   if (expanded.length === 0) return nodes;
   const open = new Map(expanded.map((entry) => [entry.id, entry]));
@@ -306,6 +446,8 @@ export function displaced(
     const openChildren = children.filter((node) => open.has(node.id));
     const resizing = new Set(openChildren.filter((node) => node.resizing === true).map((node) => node.id));
     const apartInZone = toKeepApart(openChildren);
+    // Where each expanded tile was before the zone kept them apart: its neighbours are sorted into blocks from there.
+    const placed = new Map(openChildren.map((node) => [node.id, at(node)]));
     move(apart(apartInZone, inside, resizing, partner), apartInZone);
     // First grown to hold the expanded tiles themselves; then its own tiles and items rearranged in that, and grown
     // further only for what had to go past its edges.
@@ -323,7 +465,12 @@ export function displaced(
       ...children.filter((node) => movable(node) && !inBlock.has(node.id)).map((node) => ({ id: node.id, rect: rectOf(node) })),
       ...together.map(({ id, tiles }) => ({ id, rect: framed(tiles.map(rectOf)) })),
     ];
-    const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - ZONE_PADDING, bottom: room.height - ZONE_PADDING }, partner);
+    // What an expanded tile grew from: its neighbours are pushed aside as blocks, right and down, before any is moved clear alone.
+    const compact = (id: string): Rect | undefined => {
+      const node = byId.get(id);
+      return node === undefined ? undefined : { ...(placed.get(id) ?? at(node)), ...tileSizeOf(compactSizes, id) };
+    };
+    const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - ZONE_PADDING, bottom: room.height - ZONE_PADDING }, partner, compact);
     move(moves, movables);
     // No smaller than it was drawn as a change under way began: what is dragged out of it doesn't shrink it meanwhile.
     const was = parent.resizing === true ? undefined : held.get(parent.id)?.size;
@@ -348,6 +495,8 @@ export function displaced(
     if (own.length > 0) return [...own, ...own.flatMap((other) => (byId.get(id)?.parentId === undefined ? (zoneOf(other) ?? []) : []))];
     return nodes.filter((node) => node.parentId === undefined && partner(node.id).some((other) => zoneOf(other) === id)).map((node) => node.id);
   };
+  // Where each loose expanded tile was before they were kept apart: its neighbours are sorted into blocks from there.
+  const placedLoose = new Map(looseOpen.map((node) => [node.id, at(node)]));
   move(apart(blocks, undefined, anchored, onBoard), blocks);
   const absolute = (node: BoardNode): Rect => {
     const parent = node.parentId === undefined ? undefined : byId.get(node.parentId);
@@ -361,7 +510,17 @@ export function displaced(
   const loose = nodes
     .filter((node) => node.parentId === undefined && movable(node) && !parents.includes(node))
     .map((node) => ({ id: node.id, rect: rectOf(node) }));
-  move(clearOfFixed(fixed, loose, undefined, onBoard), loose);
+  // What a loose expanded tile grew from: the loose tiles round it are pushed aside as blocks, as in a zone.
+  const looseCompact = (id: string): Rect | undefined => {
+    const node = byId.get(id);
+    const place = placedLoose.get(id);
+    return node === undefined || place === undefined ? undefined : { ...place, ...tileSizeOf(compactSizes, id) };
+  };
+  const tiles = (movable: Movable) => {
+    const node = byId.get(movable.id);
+    return node !== undefined && isSessionTile(node);
+  };
+  move(clearOfFixed(fixed, loose, undefined, onBoard, looseCompact, looseGrids(tiles)), loose);
 
   const changed = (node: BoardNode) => {
     const position = positions.get(node.id);

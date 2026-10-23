@@ -1,6 +1,6 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
-import { needsYouNow, planPending, type Agent, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, planPending, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
 
 /** What a row of the switcher is about. */
 export type SpotlightSubject = { kind: 'agent'; agent: Agent } | { kind: 'shell'; shell: Shell } | { kind: 'zone'; zone: Zone };
@@ -25,6 +25,8 @@ export interface SpotlightSources {
   agents: readonly Agent[];
   shells: readonly Shell[];
   zones: readonly Zone[];
+  /** What the needs-you inbox lists: the agents in it lead, as there. */
+  shows: NeedsYouShows;
 }
 
 /** How many sessions Recent lists before anything is typed: the rest are a few letters away. */
@@ -35,20 +37,20 @@ export const RECENT_LIMIT = 6;
  * recently active, then the zones, leaving out an empty group. Once something is: the sessions and zones that match,
  * best first, ranked on the name, then the issue, the branch, the zone and what the agent asks, in that order.
  */
-export function spotlightGroups(query: string, { agents, shells, zones }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
   const wanted = query.trim();
   if (wanted === '') {
-    const needing = agents.filter((agent) => needsYouNow(agent));
+    const needing = agents.filter((agent) => needsYouNow(agent, shows));
     const rest = [
-      ...agents.filter((agent) => !needsYouNow(agent)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, zoneName, []) })),
+      ...agents.filter((agent) => !needsYouNow(agent, shows)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, zoneName, [], shows) })),
       ...tiles.map((shell) => ({ at: shell.createdAt, row: shellRow(shell, zoneName, []) })),
     ];
     const recent = rest.sort((a, b) => b.at.localeCompare(a.at)).slice(0, RECENT_LIMIT);
     const groups: SpotlightGroup[] = [
-      { label: 'Needs you', rows: needing.map((agent) => agentRow(agent, zoneName, [])) },
+      { label: 'Needs you', rows: needing.map((agent) => agentRow(agent, zoneName, [], shows)) },
       { label: 'Recent', rows: recent.map(({ row }) => row) },
       { label: 'Zones', rows: [...zones].sort((a, b) => a.name.localeCompare(b.name)).map((zone) => zoneRow(zone, agents, tiles, [])) },
     ];
@@ -73,7 +75,7 @@ export function spotlightGroups(query: string, { agents, shells, zones }: Spotli
         // Prose holds most letters somewhere: only a whole run of them counts.
         [agent.ask?.question ?? agent.lastMessage, FIELD_WEIGHTS.asks, true],
       ],
-      (marks) => agentRow(agent, zoneName, marks),
+      (marks) => agentRow(agent, zoneName, marks, shows),
     );
   }
   for (const shell of tiles) {
@@ -97,8 +99,8 @@ type Field = readonly [text: string | null | undefined, weight: number, runOnly?
 /** How much a match in each field counts against one in the name. */
 const FIELD_WEIGHTS = { issue: 0.9, branch: 0.8, zone: 0.7, asks: 0.5 };
 
-function agentRow(agent: Agent, zoneName: (zoneId: string | null) => string, marks: readonly number[]): SpotlightRow {
-  const detail = needsYouNow(agent) ? askOf(agent) : agent.branch;
+function agentRow(agent: Agent, zoneName: (zoneId: string | null) => string, marks: readonly number[], shows: NeedsYouShows): SpotlightRow {
+  const detail = needsYouNow(agent, shows) ? askOf(agent) : agent.branch;
   return { key: `agent:${agent.sessionId}`, subject: { kind: 'agent', agent }, name: agent.name, sub: joined(zoneName(agent.zoneId), detail), marks };
 }
 
@@ -119,6 +121,7 @@ function askOf(agent: Agent): string {
   if (prompt !== undefined) return `permission: ${prompt.toolName}`;
   if (agent.ask !== null) return `asks: ${agent.ask.question}`;
   if (planPending(agent)) return 'plan to review';
+  if (agent.flag !== null) return `flagged: ${agent.flag.reason}`;
   return agent.lastMessage?.replace(/\s+/g, ' ').trim() || 'waiting for you';
 }
 

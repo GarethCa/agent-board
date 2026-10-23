@@ -364,13 +364,14 @@ test('a group holds shells, asks for a repo for an agent until it is bound as a 
     const zone = zoneNamed(window, 'Ideas');
     await expect(zone).toHaveAttribute('data-kind', 'unbound');
     await expect(zone.getByTestId('zone-tab')).toContainText('group');
-    // With no repo of its own, its New agent asks for one with the repo picker.
+    // With no repo of its own, its New agent is the repo zone's dialog plus a Repo field.
     await zone.getByRole('button', { name: 'New agent' }).click();
-    const picker = window.getByRole('dialog', { name: 'Choose where the agent works' });
-    await expect(picker).toBeVisible();
-    await picker.getByRole('button', { name: 'Cancel' }).click();
-    await expect(picker).toHaveCount(0);
-    await expect(window.getByRole('dialog', { name: 'New agent' })).toHaveCount(0);
+    const dialog = window.getByRole('dialog', { name: 'New agent' });
+    await expect(dialog.getByRole('group', { name: 'Repo' })).toBeVisible();
+    await expect(dialog.getByLabel('Task')).toBeVisible();
+    await expect(dialog.getByLabel('Name (optional)')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
     expect(await storedZones(dataDir)).toMatchObject([{ name: 'Ideas', color: '#7950f2', repoRoot: null }]);
 
     // A shell in it starts in the home directory, as the zone has no folder of its own.

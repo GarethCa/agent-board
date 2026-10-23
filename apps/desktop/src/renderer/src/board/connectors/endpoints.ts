@@ -1,5 +1,5 @@
 import type { Edge } from '@xyflow/react';
-import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide, EdgePoint, FlowEdgeShape, FlowEdgeSide, UpdateConnectorParams } from '@agent-board/daemon/protocol';
+import type { Connector, ConnectorEnd, ConnectorEndType, ConnectorSide, CreateConnectorParams, EdgePoint, FlowEdgeShape, FlowEdgeSide, UpdateConnectorParams } from '@agent-board/daemon/protocol';
 import type { ConnectorChange } from '../../../../preload/api';
 import { ITEM_NODE_PREFIX } from '../items/items';
 import { AGENT_NODE_PREFIX, EXTERNAL_NODE_PREFIX, SHELL_NODE_PREFIX } from '../tiles';
@@ -83,6 +83,22 @@ export const shapeOf = (connector: Connector): FlowEdgeShape & { fromSide: Conne
   toSide: connector.to.side,
   style: connector.style,
   points: connector.points,
+});
+
+/** What makes `connector` again as it is, under its own id: everything but the daemon's times. */
+export const createParamsOf = ({ id, from, to, points, style, startEnd, endEnd, dashed, color, label, startLabel, endLabel }: Connector): Required<CreateConnectorParams> => ({
+  id,
+  from,
+  to,
+  points,
+  style,
+  startEnd,
+  endEnd,
+  dashed,
+  color,
+  label,
+  startLabel,
+  endLabel,
 });
 
 /** `connector` as `params` change it: its look, label or bends, the side of an end, or an end moved onto another object. */

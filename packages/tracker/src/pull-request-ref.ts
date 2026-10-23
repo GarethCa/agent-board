@@ -15,6 +15,12 @@ const REPO = String.raw`[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.\.?(?:[/?#]|$))[\w.-]+`;
 /** Whether `repo` is a GitHub `owner/repo`: nothing gh could read as a flag, or a path of its own. */
 export const isGitHubRepo = (repo: string): boolean => new RegExp(`^${REPO}$`).test(repo);
 
+/**
+ * A pull request's key, `owner/repo#n` in lower case: GitHub's names are the same in any case, so every spelling of one
+ * pull request is one key.
+ */
+export const pullRequestKey = (ref: PullRequestRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
+
 /** The pull request a GitHub pull request URL names, if it names one. */
 export function pullRequestOfUrl(url: string): PullRequestRef | undefined {
   const match = new RegExp(String.raw`^https:\/\/github\.com\/(${REPO})\/pull\/(\d+)(?:[/?#]|$)`).exec(url);

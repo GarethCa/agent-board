@@ -10,12 +10,13 @@ import { keyedQueue } from './keyed-queue.ts';
 import { invalidParams, paramsObject, stringParam } from './params.ts';
 import type { DaemonMethods, GitHubRepoSource, RecentFolder, Zone } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
+import { defaultBranchOf } from './worktrees.ts';
 import { zoneTrackerParam, type TrackerHost } from './trackers.ts';
 import { newZoneParams, type CloneFolders, type ZoneTable } from './zones.ts';
 
 type SourceMethods = Pick<
   DaemonMethods,
-  'zone.clone' | 'zone.cancelClone' | 'zone.recentFolders' | 'zone.githubRepos' | 'zone.checkFolder' | 'zone.findCopies'
+  'zone.clone' | 'zone.cancelClone' | 'zone.recentFolders' | 'zone.githubRepos' | 'zone.checkFolder' | 'zone.checkoutState' | 'zone.findCopies'
 >;
 
 /** Clones a repo into a folder: `cloneRepo` through gh outside tests. */
@@ -46,6 +47,9 @@ export interface ZoneSources {
   /** Cancels every running clone and waits for each to be cleared up. */
   close(): Promise<void>;
 }
+
+/** How long each git read of `zone.checkoutState` may take: a checkout it can't read in time shows no warning. */
+const CHECKOUT_READ_MS = 10_000;
 
 /** Most recent folders `zone.recentFolders` lists. */
 const MAX_RECENT = 20;
@@ -268,6 +272,18 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
         const repoRoot = await realpath(top.stdout);
         const folder = relative(repoRoot, path);
         return { path, repoRoot, gitHubRepo, name: folder === '' ? basename(repoRoot) : `${basename(repoRoot)}/${folder}` };
+      },
+      'zone.checkoutState': async (params) => {
+        const path = stringParam(paramsObject(params), 'path');
+        if (!isAbsolute(path)) throw invalidParams(`path must be absolute, got ${path}`);
+        const top = await runGit(path, ['rev-parse', '--show-toplevel'], CHECKOUT_READ_MS);
+        if (!top.ok) throw invalidParams(`${path} is not inside a git repository`);
+        const [head, status, defaultBranch] = await Promise.all([
+          runGit(top.stdout, ['symbolic-ref', '--quiet', '--short', 'HEAD'], CHECKOUT_READ_MS),
+          runGit(top.stdout, ['status', '--porcelain'], CHECKOUT_READ_MS),
+          defaultBranchOf(top.stdout),
+        ]);
+        return { branch: head.ok && head.stdout !== '' ? head.stdout : null, defaultBranch, dirty: status.ok && status.stdout !== '' };
       },
       'zone.findCopies': () => {
         scanning ??= scanForCopies(options.copyRoots)

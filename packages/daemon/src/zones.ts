@@ -265,6 +265,8 @@ export function zoneHandlers<Context>(
   zones: ZoneTable,
   trackers: Pick<TrackerHost, 'checkScope'>,
   onOrchestrateChanged: (zoneId: string, on: boolean) => void,
+  /** The zone is being removed: the agents being started in it are dismissed, so none runs on with no tile. */
+  onRemoving: (zoneId: string) => void = () => {},
 ): RpcHandlers<ZoneMethods, Context> {
   const updateLayout = db.prepare('UPDATE zones SET x = ?, y = ?, width = ?, height = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE zones SET name = ? WHERE id = ?');
@@ -456,6 +458,7 @@ export function zoneHandlers<Context>(
       if (zone?.clone != null) throw invalidParams(`zone ${id} is still cloning; cancel the clone first`);
       if ((agentCount.get(id) as { n: number }).n > 0) throw invalidParams(`zone ${id} still has agents; move them out or delete them first`);
       if (zoneHasShells(db, id)) throw invalidParams(`zone ${id} still has shells; delete them first`);
+      if (zone !== undefined) onRemoving(id);
       if (!zones.remove(id)) throw noZone(id);
       return null;
     },

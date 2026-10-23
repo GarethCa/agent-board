@@ -40,6 +40,7 @@
 
 <p align="center">
   <img src="docs/assets/screenshots/add-zone.png" alt="The Add zone popover on its GitHub tab, listing repositories that will be cloned" width="440">
+  <img src="docs/assets/screenshots/add-zone-linear.png" alt="The Add zone popover on its Linear tab, listing teams" width="440">
 </p>
 
 **A session window for every tile.** The live terminal or a chat view.

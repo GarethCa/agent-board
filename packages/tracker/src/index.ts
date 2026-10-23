@@ -20,6 +20,7 @@ export {
   deleteRemoteBranch,
   findPushedPullRequests,
   listPullRequests,
+  viewPullRequest,
   mergePullRequest,
   type ChecksState,
   type PullRequest,
@@ -36,6 +37,6 @@ export {
   type PullRequestFile,
   type PullRequestReview,
 } from './pull-request-details.ts';
-export { isGitHubRepo, pullRequestOfUrl, type PullRequestRef } from './pull-request-ref.ts';
+export { isGitHubRepo, pullRequestKey, pullRequestOfUrl, type PullRequestRef } from './pull-request-ref.ts';
 export { createLinearTracker, LINEAR_API_URL, type LinearTrackerOptions } from './linear.ts';
 export { createKeychainStore, KEYCHAIN_SERVICE, type CredentialStore, type KeychainOptions } from './credentials.ts';

@@ -15,6 +15,7 @@ const agent = (name: string, more: Partial<Agent> = {}): Agent =>
     exitCode: null,
     permissions: [],
     seen: false,
+    flag: null,
     ask: null,
     plan: null,
     issue: null,
@@ -35,7 +36,7 @@ describe('spotlightGroups before anything is typed', () => {
     const asking = agent('Review 202', { state: 'waiting', ask: { question: 'Approve the push?' } as Agent['ask'] });
     const older = agent('Theme packs', { createdAt: '2026-10-01T08:00:00.000Z' });
     const newer = agent('Master', { finishedAt: '2026-10-02T08:00:00.000Z' });
-    const groups = spotlightGroups('', { agents: [older, asking, newer], shells: [], zones });
+    const groups = spotlightGroups('', { agents: [older, asking, newer], shells: [], zones, shows: 'turns' });
 
     expect(groups.map((group) => group.label)).toEqual(['Needs you', 'Recent', 'Zones']);
     expect(names(groups[0]!.rows)).toEqual(['Review 202']);
@@ -46,14 +47,14 @@ describe('spotlightGroups before anything is typed', () => {
 
   it('says what a waiting agent last asked in its terminal, on one line', () => {
     const asking = agent('Pick a database', { state: 'waiting', lastMessage: 'Which database should I use,\nPostgres or SQLite?' });
-    const [needing] = spotlightGroups('', { agents: [asking], shells: [], zones });
+    const [needing] = spotlightGroups('', { agents: [asking], shells: [], zones, shows: 'turns' });
     expect(needing!.rows[0]!.sub).toBe('agent-board · Which database should I use, Postgres or SQLite?');
   });
 
   it('leaves out a seen ask, empty groups, and a shell that is another window’s tab', () => {
     const seen = agent('Seen ask', { state: 'waiting', seen: true });
     const tab = shell('Tab', { owner: { kind: 'agent', id: 's-x' } as Shell['owner'] });
-    const groups = spotlightGroups('', { agents: [seen], shells: [tab, shell('Loose dev', { zoneId: null })], zones: [] });
+    const groups = spotlightGroups('', { agents: [seen], shells: [tab, shell('Loose dev', { zoneId: null })], zones: [], shows: 'turns' });
     expect(groups.map((group) => group.label)).toEqual(['Recent']);
     expect(names(groups[0]!.rows)).toEqual(['Seen ask', 'Loose dev']);
     expect(groups[0]!.rows[1]!.sub).toBe('Loose · /code/web');
@@ -61,7 +62,7 @@ describe('spotlightGroups before anything is typed', () => {
 
   it(`keeps Recent to the ${RECENT_LIMIT} most recent`, () => {
     const many = Array.from({ length: RECENT_LIMIT + 3 }, (_, index) => agent(`Agent ${index}`, { createdAt: `2026-10-0${index + 1}T00:00:00.000Z` }));
-    const [recent] = spotlightGroups('', { agents: many, shells: [], zones: [] });
+    const [recent] = spotlightGroups('', { agents: many, shells: [], zones: [], shows: 'turns' });
     expect(recent!.rows).toHaveLength(RECENT_LIMIT);
     expect(recent!.rows[0]!.name).toBe(`Agent ${RECENT_LIMIT + 2}`);
   });
@@ -71,14 +72,14 @@ describe('spotlightGroups once something is typed', () => {
   it('flattens into one ranked list of sessions and zones, a match in the name first', () => {
     const byName = agent('Docs revisions', { zoneId: 'z2' });
     const byBranch = agent('Nightly', { branch: 'rev-cleanup' });
-    const groups = spotlightGroups('rev', { agents: [byBranch, byName, agent('Other')], shells: [shell('review-tools')], zones });
+    const groups = spotlightGroups('rev', { agents: [byBranch, byName, agent('Other')], shells: [shell('review-tools')], zones, shows: 'turns' });
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBeUndefined();
     expect(names(groups[0]!.rows)).toEqual(['review-tools', 'Docs revisions', 'Nightly']);
   });
 
   it('marks where the name matched', () => {
-    const [group] = spotlightGroups('rev', { agents: [agent('Docs revisions')], shells: [], zones });
+    const [group] = spotlightGroups('rev', { agents: [agent('Docs revisions')], shells: [], zones, shows: 'turns' });
     expect(group!.rows[0]!.marks).toEqual([5, 6, 7]);
   });
 
@@ -92,6 +93,7 @@ describe('spotlightGroups once something is typed', () => {
       ],
       shells: [],
       zones,
+      shows: 'turns' as const,
     };
     const found = (query: string) => names(spotlightGroups(query, sources)[0]?.rows ?? []);
     expect(found('abc-211')).toEqual(['One']);
@@ -102,12 +104,12 @@ describe('spotlightGroups once something is typed', () => {
 
   it('finds what an agent says only by a whole run of letters, not scattered ones', () => {
     const chatty = agent('One', { lastMessage: 'Refactored the event loop, then verified it' });
-    expect(spotlightGroups('rev', { agents: [chatty], shells: [], zones })).toEqual([]);
-    expect(names(spotlightGroups('event loop', { agents: [chatty], shells: [], zones })[0]!.rows)).toEqual(['One']);
+    expect(spotlightGroups('rev', { agents: [chatty], shells: [], zones, shows: 'turns' })).toEqual([]);
+    expect(names(spotlightGroups('event loop', { agents: [chatty], shells: [], zones, shows: 'turns' })[0]!.rows)).toEqual(['One']);
   });
 
   it('is empty when nothing matches', () => {
-    expect(spotlightGroups('zzzz', { agents: [agent('One')], shells: [], zones })).toEqual([]);
+    expect(spotlightGroups('zzzz', { agents: [agent('One')], shells: [], zones, shows: 'turns' })).toEqual([]);
   });
 });
 

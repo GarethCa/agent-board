@@ -140,7 +140,12 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'board', command: 'tree' },
     { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
     { tool: 'set_status', command: 'status', positional: ['summary'] },
+    { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
     { tool: 'open_pr', command: 'open-pr' },
+    // With plan, it is present_plan, which waits on the user longer than a shell command runs: the tool's alone.
+    { tool: 'show_doc', command: 'doc', positional: ['path'], renamed: { on_board: 'board' }, options: ['title', 'board', 'plan', 'timeout_minutes'] },
+    { tool: 'record_pr', command: 'record', positional: ['url'], options: ['title'] },
+    { tool: 'record_doc', command: 'record', positional: ['path'], renamed: { for_orchestrator: 'for' }, options: ['for'] },
     { tool: 'new_agent', command: 'new', renamed: { prompt: 'file', template: 'no-template' } },
     { tool: 'send', command: 'send', positional: ['agent'], renamed: { text: 'file' } },
     // With since, the tool is one round of `watch`, so it takes watch's --since and --only too.
@@ -153,16 +158,24 @@ describe('the board MCP tools and the agent-board CLI', () => {
     },
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
+    { tool: 'continue_on_credits', command: 'continue', positional: ['agent'] },
     { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },
+    { tool: 'pause', command: 'pause', positional: ['agent'] },
+    { tool: 'wake', command: 'wake', positional: ['agent'] },
     { tool: 'close', command: 'close', positional: ['agent'] },
     { tool: 'add_edge', command: 'edge', positional: ['from', 'to'], renamed: { conditions: 'condition' } },
     { tool: 'list_edges', command: 'edges' },
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
     { tool: 'move', command: 'move', positional: ['tile'] },
     { tool: 'arrange', command: 'arrange', positional: ['zone'] },
+    // `zone map` alone: the other zone commands change groups, the CLI's alone.
+    { tool: 'map', command: 'zone', positional: ['zone'], options: ['boxes'] },
     { tool: 'add_note', command: 'note' },
     { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
+    { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' } },
+    { tool: 'list_schedules', command: 'schedule', options: [] },
+    { tool: 'remove_schedule', command: 'schedule', positional: ['schedule'], options: [] },
     { tool: 'roles', command: 'roles', options: [] },
     { tool: 'set_role', command: 'roles', positional: ['name'], renamed: { template: 'file' } },
     { tool: 'remove_role', command: 'roles', positional: ['name'], options: ['zone'] },
@@ -170,9 +183,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
   /** Tools with no command of their own, and commands with no tool, each for a reason. */
   // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
   const MCP_ONLY = ['connections', 'ask', 'present_plan'];
-  // Groups are the CLI's alone: making and changing zones is rarer than a tool's worth for every orchestrator.
   // `watch` prints as things happen, as no tool call can: the wait tool with since is one round of it.
-  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'zone', 'watch'];
+  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'watch'];
 
   const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];
   const toolProperties = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema.properties as object | undefined) ?? {});

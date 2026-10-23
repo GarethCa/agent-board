@@ -4,10 +4,10 @@ import postcss from 'postcss';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { RAIL_TOKEN_ROOM } from '@agent-board/daemon/board-layout';
-import { SHAPE_FILLS, STICKY_COLORS, TEXT_COLORS } from '@agent-board/daemon/protocol';
+import { SHAPE_FILLS, STICKY_COLORS, TEXT_COLORS, ZONE_COLORS } from '@agent-board/daemon/protocol';
 import { boardPaint } from './board-colors';
-import { contrast } from '../../shared/colour';
-import { themePacksCss } from '../../shared/theme-pack-tokens';
+import { contrast, mix } from '../../shared/colour';
+import { NOTE_TAB_ROOM, themePacksCss } from '../../shared/theme-pack-tokens';
 import { THEMES } from '../../shared/themes';
 
 /*
@@ -165,15 +165,19 @@ const readsIn = (source: string) =>
  * those a library sets on its own elements, such as how much room Radix leaves a popover.
  */
 const LOCAL = [
-  // The dock sets how much room it leaves each side, and how far it lifts, from script (`useDockScroll`).
-  '--dock-clear',
-  '--dock-lift',
+  // The dock sets how much room it leaves each side from script (`useDockScroll`).
+  '--dock-left',
+  '--dock-right',
+  '--dock-room',
   '--radix-popover-content-available-height',
   '--pane-top',
   '--pane-height',
   '--pane-strip',
   '--zone-color',
   '--zone-fill-pct',
+  // The colour of the zone a note sits in, set on the note, and the edge colour derived from it.
+  '--agent-note-zone',
+  '--agent-note-edge',
   '--rename-gap',
   '--sticky-color',
   '--sticky-ink',
@@ -181,6 +185,8 @@ const LOCAL = [
   '--text-font-size',
   '--shape-fill',
   '--shape-stroke',
+  '--shape-stroke-width',
+  '--shape-stroke-style',
   '--connector-color',
   '--swatch',
   '--chip',
@@ -382,7 +388,7 @@ const TEXT_PAIRS: [text: string, background: string][] = [
   ['--pr-draft', '--pr-draft-soft'],
   ['--pr-merged', '--pr-merged-soft'],
   ['--pr-closed', '--pr-closed-soft'],
-  ...['running', 'thinking', 'waiting', 'needs-permission', 'idle', 'rate-limited', 'failed', 'done', 'scheduled', 'stopped-by-restart', 'handing-off'].flatMap(
+  ...['running', 'thinking', 'waiting', 'needs-permission', 'idle', 'rate-limited', 'failed', 'done', 'scheduled', 'stopped-by-restart', 'handing-off', 'on-command', 'hibernated'].flatMap(
     (state): [string, string][] => [
       [`--state-${state}-ink`, `--state-${state}-soft`],
       [`--state-${state}-ink`, '--raised'],
@@ -481,7 +487,7 @@ const SHAPE_TEXT_PAIRS = TEXT_COLORS.flatMap(({ name: ink }) =>
   ]),
 );
 
-describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ scope }) => {
+describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) => {
   it.each(TEXT_PAIRS)('%s on %s meets WCAG AA', (text, background) => {
     expect(contrast(hexOf(text, scope), hexOf(background, scope))).toBeGreaterThanOrEqual(4.5);
   });
@@ -514,6 +520,17 @@ describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ scope }) => {
 
   it.each(STICKY_TONES)("a %s sticky note's ink meets WCAG AA on it", (tone) => {
     expect(contrast(hexOf(`--sticky-${tone}-ink`, scope), hexOf(`--sticky-${tone}`, scope))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
+  // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
+  it.each([...ZONE_COLORS, 'loose'])("an agent note's tab text meets WCAG AA on a %s tab, or nearly as well as the theme's text on its panel", (zone) => {
+    const share = (name: string) => Number.parseFloat([scope, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
+    const [panel, text] = [hexOf('--panel', scope), hexOf('--text', scope)];
+    const tint = zone === 'loose' ? hexOf('--agent-note-loose', scope) : zone;
+    const tab = mix(tint, panel, share('--agent-note-tab-mix'));
+    const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
+    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(id === 'light' || id === 'dark' ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
   });
 
   // The light theme's are the stored colours, as picked; a theme that redraws them must not read worse.

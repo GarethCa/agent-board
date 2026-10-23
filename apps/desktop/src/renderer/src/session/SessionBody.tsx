@@ -1,35 +1,37 @@
-import { useCallback, useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronsDownUp, ChevronsUpDown, ClipboardList, GitPullRequest, Globe } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { ChevronsDownUp, ChevronsUpDown, ClipboardList, FileText, GitPullRequest, Globe } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import type { Agent, Shell, ShellOwner } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
-import { Button, Dialog, ErrorText, Kbd, Tag, Textarea } from '../ui';
+import { Button, Dialog, ErrorText, Segmented, Tag, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
 import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
 import { ChatView } from './ChatView';
+import { Composer } from './Composer';
 import type { RunsChoice, RunsMode } from './chat';
 import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
-import { composerKey, droppedPath, insertAt } from './composer-input';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
 import { HARNESS_COMMANDS, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
 import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
 import type { StripTab } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
 import { PaneStrip, WindowPanes } from './WindowPanes';
+import { chosenView, useSessionView, type SessionView } from './session-view';
 import { PullRequestTab } from './PullRequestTab';
 import { WebTab } from './WebTab';
 import { GateTab } from '../gate/GateTab';
 import { PlanTab } from '../plan/PlanTab';
+import { DocumentTab } from '../doc/DocumentTab';
+import { DocTab } from './DocTab';
 import { gateDot } from '../gate/gate-view';
 import { useGateRuns } from '../gate/GatesProvider';
 import { WebLinkContext } from './web-links';
 import { useSeenWhileShown } from './mark-seen';
-import { keyText } from '../keys/registry';
 
 /**
  * What a session window or an expanded tile shows: one session's terminal (with its agent, live, for an agent's
@@ -52,16 +54,9 @@ interface SessionBodyProps {
   onAttachState?(state: AttachState): void;
   /** Whether the terminal takes the keyboard as it opens. True by default. */
   autoFocus?: boolean;
-  /** An agent's terminal, or its chat view; the terminal stays attached behind the chat. */
-  view?: SessionView;
-  /** Shows the terminal again, from a chat that can't read the agent's transcript. */
-  onShowTerminal?(): void;
   /** Whether the window shows this body at all: false while its Review or Activity tab covers it. True by default. */
   shown?: boolean;
 }
-
-/** What an agent's session window shows of it: its terminal (the harness's own TUI) or its conversation as a chat. */
-export type SessionView = 'terminal' | 'chat';
 
 /**
  * The body shared by the session window and the expanded tile: the details strip
@@ -75,8 +70,6 @@ export function SessionBody({
   notice,
   onAttachState,
   autoFocus = true,
-  view = 'terminal',
-  onShowTerminal,
   shown = true,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
@@ -128,22 +121,32 @@ export function SessionBody({
   );
   useEffect(() => onAttachState?.(own.state), [own.state, onAttachState]);
   // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
-  const chatPicked = view === 'chat' && agent !== undefined;
+  const [pickedView, pickView] = useSessionView(agent?.sessionId);
+  const chatPicked = pickedView === 'chat' && agent !== undefined;
+  const onShowTerminal = () => switchView('terminal');
   const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
   // Expand all and Collapse all, kept while the window is open, through switches to the terminal and back.
   const [runs, setRuns] = useState<RunsChoice>({ mode: 'auto', at: 0 });
   const pressRuns = (mode: RunsMode) => setRuns((current) => ({ mode, at: current.at + 1 }));
   const terminalView = useRef<HTMLDivElement>(null);
   const wasChat = useRef(chatPicked);
+  // Set by a pick made in this body: one heard from another window of the session moves neither tab nor keyboard here.
+  const pickedHere = useRef(false);
   const select = panes?.select;
   useEffect(() => {
-    // Picked while a shell tab shows, the chat brings the agent's own tab forward. Only on a change: a tab asked for as
-    // the window opens (a row of the shells chip) still shows.
-    if (!wasChat.current && chatPicked) select?.(OWN_SURFACE);
-    // Back from the chat, the terminal takes the keyboard again: it lost it when it was hidden.
-    if (wasChat.current && !chatPicked) terminalView.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus();
+    // Back from the chat picked here, the terminal takes the keyboard again: it lost it when it was hidden.
+    if (pickedHere.current && wasChat.current && !chatPicked) terminalView.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus();
+    pickedHere.current = false;
     wasChat.current = chatPicked;
-  }, [chatPicked, select]);
+  }, [chatPicked]);
+  const switchView = (next: SessionView) => {
+    // A pick that changes nothing sets no flag: the next change heard from elsewhere is still not this body's.
+    pickedHere.current = chosenView(agent?.sessionId) !== next;
+    pickView(next);
+    // Chat picked while a shell tab shows brings the agent's own tab forward. Only on a pick: a tab asked for as the
+    // window opens (a row of the shells chip) still shows.
+    if (next === 'chat') select?.(OWN_SURFACE);
+  };
 
   // An agent's terminal, with its chat view over it when that is picked: in its own tab, or the whole window.
   const sessionView = content.kind === 'session' && (
@@ -168,7 +171,7 @@ export function SessionBody({
             key={agent.sessionId}
             agent={agent}
             active={chatPicked}
-            onShowTerminal={() => onShowTerminal?.()}
+            onShowTerminal={onShowTerminal}
             runs={runs}
             onOpenLink={openLink}
           />
@@ -177,6 +180,11 @@ export function SessionBody({
     </>
   );
 
+  // How the agent's pane shows it, over the pane it changes: the same in a session window and an expanded tile. Over a
+  // shell tab it reads Terminal, which is what shows; pressing Chat brings the agent's own tab forward.
+  const viewSwitch = agent && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
+  // A split window's panes have strips of their own; the switch ends the one holding the agent's own tab.
+  const split = panes !== undefined && panes.panes.length > 1;
   const here = agent ? 'in this worktree' : 'in this folder';
   /** A surface's tab: an agent's own dot is its attachment unless a shell split beside it failed; a shell's, its shells'. */
   const stripTabOf = (surface: WindowSurface): StripTab => {
@@ -184,8 +192,10 @@ export function SessionBody({
     const base = { id: surface.key, label: surface.label, closable };
     if (surface.kind === 'agent') return { ...base, dot: paneStatuses[surface.agent.sessionId]?.state ?? 'attaching', closeHint: 'Close the tab; the session keeps running' };
     if (surface.kind === 'pr') return { ...base, icon: <GitPullRequest />, title: `${surface.pr.repo}#${surface.pr.number}`, closeHint: 'Close the tab' };
-    if (surface.kind === 'web') return { ...base, icon: <Globe />, title: surface.web.url, closeHint: 'Close the tab and forget its cookies' };
+    if (surface.kind === 'web') return { ...base, icon: <Globe />, title: surface.web.url || 'New tab', closeHint: 'Close the tab and forget its cookies' };
     if (surface.kind === 'plan') return { ...base, icon: <ClipboardList />, title: `${surface.agent.name}'s plans`, closeHint: 'Close the tab; its plans stay in its history' };
+    if (surface.kind === 'doc') return { ...base, icon: <FileText />, title: surface.doc.path, closeHint: 'Close the tab; the doc stays in its sidebar' };
+    if (surface.kind === 'document') return { ...base, icon: <FileText />, title: surface.document.path, closeHint: 'Close the tab; the document stays on its agent' };
     if (surface.kind === 'gate') return { ...base, dot: gateDot(gateRuns.get(surface.gate.sessionId)), title: `${surface.agent.name}'s merge gate`, closeHint: 'Close the tab; the gate keeps its last run' };
     if (surface.kind === 'tile') return { ...base, dot: worstState(windowShells({ kind: 'shell', shell: surface.shell }, [surface.shell]).map((each) => each.state)) ?? 'idle', closeHint: 'Close the tab; its shells keep running' };
     const dots = panes?.dots.get(surface.key);
@@ -236,6 +246,7 @@ export function SessionBody({
             else panes.open(surface);
           })
         }
+        onOpenSurface={panes && ((surface) => panes.open(surface))}
       />
       )}
       {content.kind !== 'tabs' && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
@@ -253,11 +264,11 @@ export function SessionBody({
           )}
           {chat && (
             <span className="chat-runs-actions">
-              <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every run of tool calls">
-                Expand all
+              <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every run of tool calls" aria-label="Expand all">
+                <span className="chat-runs-label">Expand all</span>
               </Button>
-              <Button variant="ghost" size="xs" icon={<ChevronsDownUp />} onClick={() => pressRuns('collapsed')} tooltip="Close every run of tool calls">
-                Collapse all
+              <Button variant="ghost" size="xs" icon={<ChevronsDownUp />} onClick={() => pressRuns('collapsed')} tooltip="Close every run of tool calls" aria-label="Collapse all">
+                <span className="chat-runs-label">Collapse all</span>
               </Button>
             </span>
           )}
@@ -271,9 +282,10 @@ export function SessionBody({
             {content.kind !== 'tabs' || otherFocused ? statusText(pane, tabShellFocused || otherFocused ? undefined : agent) : null}
             {problem && `${content.kind !== 'tabs' || otherFocused ? ' · ' : ''}${problem}`}
           </span>
+          {!split && viewSwitch}
         </div>
         {notice}
-        {agent && <BlockedBanner agent={agent} chat={chat} onShowTerminal={() => onShowTerminal?.()} />}
+        {agent && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (
           <div className="agent-exit-banner" role="status" data-testid="agent-exit-banner">
             {exitText(agent)}
@@ -282,7 +294,7 @@ export function SessionBody({
         )}
         <div className="session-panes">
           {panes ? (
-            <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} />
+            <WindowPanes panes={panes} stripTab={stripTabOf} renderSurface={renderSurface} here={here} panelId={tabPanel} inlineStrip={panes.panes.length === 1} trailingOf={(pane) => (pane.surfaces.some((surface) => surface.key === OWN_SURFACE) ? viewSwitch : undefined)} />
           ) : content.kind === 'session' ? (
             sessionView
           ) : content.kind === 'tabs' ? null : (
@@ -296,6 +308,11 @@ export function SessionBody({
     </WebLinkContext.Provider>
   );
 }
+
+const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
+  { id: 'terminal', label: 'Terminal' },
+  { id: 'chat', label: 'Chat' },
+];
 
 /**
  * Asks before closing a shell tab whose shells still run, as deleting a shell tile does: here, in the window, which a
@@ -414,11 +431,24 @@ function SurfaceView({
   }
   if (surface.kind === 'pr') return <PullRequestTab pr={surface.pr} visible={shown && visible} />;
   if (surface.kind === 'gate') return <GateTab sessionId={surface.gate.sessionId} agent={surface.agent} visible={shown && visible} />;
+  if (surface.kind === 'doc') return <DocTab doc={surface.doc} agent={surface.agent} visible={shown && visible} />;
   if (surface.kind === 'plan') {
     const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
     return (
       <PlanTab
         agent={surface.agent}
+        visible={shown && visible}
+        onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
+        onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
+      />
+    );
+  }
+  if (surface.kind === 'document') {
+    const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
+    return (
+      <DocumentTab
+        agent={surface.agent}
+        document={surface.document}
         visible={shown && visible}
         onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
         onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
@@ -431,6 +461,9 @@ function SurfaceView({
       <WebTab
         web={surface.web}
         visible={shown && visible}
+        servers={panes.localServers}
+        keyboard={keyboard}
+        autoFocus={autoFocus}
         onNavigate={(url) => panes.navigated({ ...surface.web, url })}
         onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
         onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
@@ -488,6 +521,7 @@ function statusText({ state, ended, problem }: PaneStatus, agent: Agent | undefi
       return agent ? STATE_LABELS[agent.state] : 'running';
     case 'exited':
       // An agent's own state says how it went: a stop and a clean exit are both just ended.
+      if (agent?.state === 'hibernated') return 'paused';
       if (agent?.state === 'done') return 'ended';
       if (agent?.state === 'stopped-by-restart' || ended?.stoppedByRestart) return 'stopped by a restart';
       return `exited${ended?.exitCode == null ? '' : ` (${ended.exitCode})`}`;
@@ -496,98 +530,4 @@ function statusText({ state, ended, problem }: PaneStatus, agent: Agent | undefi
     case 'unavailable':
       return `could not open the session: ${problem}`;
   }
-}
-
-/**
- * Sends the agent a message, as the needs-you inbox answers it: typed at its prompt and submitted. Enter sends;
- * Shift+Enter or Option+Enter make a new line, as in its terminal, and the lines reach it as one message. A pasted
- * image is kept where the agent can read it and its path put in the message, which is then pasted, as a terminal
- * pastes a dropped file.
- */
-function Composer({ agent }: { agent: Agent }) {
-  const [text, setText] = useState('');
-  const [images, setImages] = useState<string[]>([]);
-  const [pasting, setPasting] = useState(false);
-  const [pasteError, setPasteError] = useState<string>();
-  const field = useRef<HTMLTextAreaElement>(null);
-  const { busy, error, run } = useAction();
-  const blocked = composerBlock(agent);
-  const send = () => {
-    if (text.trim() === '' || blocked !== undefined || pasting) return;
-    const withImage = images.some((path) => text.includes(path));
-    run(
-      () => window.agentBoard.agents.answer(agent.sessionId, text, withImage),
-      () => {
-        setText('');
-        setImages([]);
-      },
-    );
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const action = composerKey(event.nativeEvent);
-    if (action === undefined) return;
-    event.preventDefault();
-    if (action === 'send') return send();
-    const box = event.currentTarget;
-    box.setRangeText('\n', box.selectionStart, box.selectionEnd, 'end');
-    setText(box.value);
-  };
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...event.clipboardData.files].filter((file) => file.type.startsWith('image/'));
-    if (files.length === 0) return;
-    event.preventDefault();
-    setPasting(true);
-    setPasteError(undefined);
-    void Promise.all(files.map(async (file) => droppedPath(await window.agentBoard.agents.pasteImage(await file.arrayBuffer()))))
-      .then((paths) => {
-        // Where the caret is now: the user may have typed on while the image was kept.
-        const box = field.current;
-        if (box === null) return;
-        const placed = insertAt(box.value, box.selectionStart, box.selectionEnd, paths.join(' '));
-        setText(placed.text);
-        setImages((current) => [...current, ...paths]);
-        requestAnimationFrame(() => field.current?.setSelectionRange(placed.caret, placed.caret));
-      })
-      .catch((problem: unknown) => setPasteError(`could not paste the image: ${errorMessage(problem)}`))
-      .finally(() => setPasting(false));
-  };
-  return (
-    <form
-      className="composer"
-      onSubmit={(event) => {
-        event.preventDefault();
-        send();
-      }}
-    >
-      <label className="composer-field">
-        <span className="composer-prompt" aria-hidden>
-          &gt;
-        </span>
-        <Textarea
-          ref={field}
-          className="composer-input"
-          aria-label="Message to the agent"
-          placeholder={blocked?.reason ?? `Message ${agent.name}…`}
-          rows={1}
-          value={text}
-          disabled={blocked !== undefined}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
-        {blocked === undefined && (
-          <Button type="submit" size="sm" variant="primary" loading={busy || pasting} disabled={text.trim() === ''}>
-            Send
-            <Kbd className="composer-key">{keyText('window.send')}</Kbd>
-          </Button>
-        )}
-      </label>
-      {blocked === undefined && (
-        <p className="composer-hint">
-          <Kbd>{keyText('window.newLine')}</Kbd> new line · paste an image to attach it
-        </p>
-      )}
-      {(error ?? pasteError) && <ErrorText className="composer-error">{error ?? pasteError}</ErrorText>}
-    </form>
-  );
 }

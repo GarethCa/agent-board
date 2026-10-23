@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, type TabOwner } from './tabs';
+import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -84,6 +84,17 @@ describe("an agent's shells", () => {
       // Running again, it is running: the failure was the command before.
       { tab: 'rerun', sessionId: 'p3', label: 'rerun', state: 'running' },
     ]);
+  });
+
+  it('offers each port its shells listen on once, as a local address, with the shell that runs it', () => {
+    const dev = shell('dev', split(pane('p1'), pane('p2', 'api')), { busyPanes: ['p1', 'p2'], panePorts: { p1: [5173], p2: [3000, 5173] } });
+    const idle = shell('idle', pane('p3'));
+
+    expect(localServersOf(windowShells(byAgent, [dev, idle]))).toEqual([
+      { port: 5173, url: 'http://localhost:5173/', shell: 'dev' },
+      { port: 3000, url: 'http://localhost:3000/', shell: 'api' },
+    ]);
+    expect(localServersOf(windowShells(byAgent, [idle]))).toEqual([]);
   });
 
   it('calls a shell ended by a signal failed', () => {

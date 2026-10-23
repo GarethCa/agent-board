@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_STICKY_SIZE, parkClusters, ticketOfBranch, type ArrangeTile } from '../src/board-arrange.ts';
+import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, parkClusters, ticketOfBranch, type ArrangeTile } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, clearOf, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, TILE_GAP, ZONE_PADDING, type Point, type Rect } from '../src/board-layout.ts';
 
 const COLUMN = AGENT_TILE_SIZE.width + TILE_GAP;
@@ -69,17 +69,17 @@ const edges = [
 ];
 
 describe('arrangeTiles', () => {
-  it('by issue, in rows: the lead first, then a row per issue with the implementer and its reviewer to its right, then the rest', () => {
+  it('by issue, in rows: the lead and the shells first, then a row per issue with the implementer and its reviewer to its right', () => {
     const { positions } = arrangeTiles(crew, edges, { by: 'issue', layout: 'rows', width: 900 });
     // The rail between impl-b and review-b takes a column, in every row; the lead's into impl-a a row.
     expect(cells(positions)).toEqual({
       lead: [0, 0],
+      notes: [2, 0],
       'impl-a': [0, 2],
       'review-a': [2, 2],
       'impl-b': [0, 3],
       'review-b': [2, 3],
       loner: [0, 4],
-      notes: [0, 5],
     });
   });
 
@@ -274,15 +274,15 @@ describe('arrangeTiles', () => {
   it('as a grid, fills the zone row by row in the same order', () => {
     const { positions } = arrangeTiles(crew, edges, { by: 'issue', layout: 'grid', width: 2 * ZONE_PADDING + 3 * COLUMN - TILE_GAP });
     // The units edges join (the lead's with impl-a, and both issues') as rows lay them out; the rest fill the grid
-    // round them, clear of their rails.
+    // round them, clear of their rails, the shells first as they share the lead's row.
     expect(cells(positions)).toEqual({
       lead: [0, 0],
       'impl-a': [0, 2],
       'review-a': [2, 2],
       'impl-b': [0, 3],
       'review-b': [2, 3],
-      loner: [1, 0],
-      notes: [2, 0],
+      notes: [1, 0],
+      loner: [2, 0],
     });
     expect(railTrouble(positions, crew, edges)).toEqual([]);
   });
@@ -320,9 +320,21 @@ describe('arrangeTiles', () => {
     const note: Rect = { x: 333, y: 91, width: 157, height: 211 };
     const big = agent('big', { size: { width: 301, height: 180 } });
     for (const by of ['issue', 'role', 'state'] as const) {
-      for (const layout of ['rows', 'grid'] as const) {
-        const { positions } = arrangeTiles([...crew, big], edges, { by, layout, width: 1000, obstacles: [note], clusters: true });
+      for (const layout of ['rows', 'columns', 'cards', 'grid'] as const) {
+        const tiles = [...crew, big];
+        const { positions, clusters } = arrangeTiles(tiles, edges, { by, layout, width: 1000, obstacles: [note], clusters: true });
         expect([...positions.values()].filter((point) => !onGrid(point))).toEqual([]);
+        expect(positions.size).toBe(tiles.length);
+        // Nothing on top of another, nor of what it may not move: the tiles, and each lane's label and note.
+        const parts = [
+          ...tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE)),
+          ...clusters.flatMap((cluster) => [
+            { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
+            { ...cluster.noteAt, ...cluster.noteSize },
+          ]),
+        ];
+        parts.forEach((rect, index) => expect(clearOf(rect, [...parts.filter((_, other) => other !== index), note]), `${by} ${layout}`).toBe(true));
+        expect(railTrouble(positions, tiles, edges), `${by} ${layout}`).toEqual([]);
       }
     }
   });
@@ -380,7 +392,7 @@ describe('arranging as clusters', () => {
     agent('loner', { role: 'custom' }),
   ];
 
-  it('gives each unit of work a label and a sticky in the column before its tiles, then its tiles, left to right', () => {
+  it('gives each unit of work a label in the column before its tiles, then its tiles, left to right, then its note', () => {
     const { positions, clusters, size } = arrangeTiles(work, [], { by: 'issue', layout: 'rows', width: 600, clusters: true });
     expect(clusters.map(({ key, label, members }) => ({ key, label, members }))).toEqual([
       { key: 'issue:ACME-9', label: 'ACME-9 Menu scroll', members: ['impl-a', 'review-a'] },
@@ -391,12 +403,10 @@ describe('arranging as clusters', () => {
     expect(cells(positions)['impl-a']).toEqual([1, 1]);
     expect(cells(positions)['review-a']).toEqual([2, 1]);
     expect(menu!.labelAt).toEqual({ x: FIRST.x, y: impl.y });
-    expect(menu!.stickyAt.x).toBe(FIRST.x);
-    // The sticky is within one grid cell of its implementer: in the column before it, in its row.
-    expect(Math.abs(menu!.stickyAt.y - impl.y)).toBeLessThan(ROW_STEP);
-    expect(impl.x - menu!.stickyAt.x).toBe(COLUMN);
-    // Nothing after its tiles: the zone ends at its reviewer.
-    expect(size.width).toBe(positions.get('review-a')!.x + AGENT_TILE_SIZE.width + ZONE_PADDING);
+    // The note is in its row, in the column after its reviewer.
+    expect(menu!.noteAt).toEqual({ x: positions.get('review-a')!.x + COLUMN, y: impl.y });
+    // Nothing after its note: the zone ends there.
+    expect(size.width).toBe(menu!.noteAt.x + CLUSTER_NOTE_SIZE.width + ZONE_PADDING);
     // The lead keeps its own row, unlabelled, above them all.
     expect(cells(positions).lead).toEqual([0, 0]);
   });
@@ -424,7 +434,7 @@ describe('arranging as clusters', () => {
       agent('docs', { name: 'docs', role: 'custom', branch: 'acme-199-docs', createdAt: '3' }),
     ];
     const { clusters } = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 900, clusters: true });
-    expect(clusters.map(({ key, label, members }) => ({ key, label, members }))).toEqual([{ key: 'issue:ACME-199', label: 'ACME-199', members: ['impl', 'review', 'docs'] }]);
+    expect(clusters.map(({ key, label, members }) => ({ key, label, members }))).toEqual([{ key: 'issue:ACME-199', label: 'ACME-199', members: ['impl', 'docs', 'review'] }]);
   });
 
   it('labels one without a ticket by the words its agents’ names start with, else by its implementer’s name', () => {
@@ -448,16 +458,195 @@ describe('arranging as clusters', () => {
       ...work.map((tile) => sizedFootprint(positions.get(tile.id)!, AGENT_TILE_SIZE)),
       ...clusters.flatMap((cluster) => [
         { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
-        { ...cluster.stickyAt, ...CLUSTER_STICKY_SIZE },
+        { ...cluster.noteAt, ...CLUSTER_NOTE_SIZE },
       ]),
     ];
     parts.forEach((rect, index) => expect(clearOf(rect, [...parts.filter((_, other) => other !== index), note])).toBe(true));
   });
 
   it('lays out no clusters by role or state, nor as a grid', () => {
+    expect(arrangeTiles(work, [], { by: 'issue', layout: 'columns', width: 900, clusters: true }).clusters).toHaveLength(2);
     for (const options of [{ by: 'role', layout: 'rows' }, { by: 'state', layout: 'rows' }, { by: 'issue', layout: 'grid' }] as const) {
       expect(arrangeTiles(work, [], { ...options, width: 900, clusters: true }).clusters).toEqual([]);
     }
+  });
+});
+
+describe('arranging in lanes', () => {
+  const lanes: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    { ...agent('gate'), kind: 'shell', state: null },
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9' }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a' }),
+    agent('again-a', { role: 'follow-up-reviewer', reviewOf: 'impl-a' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-12' }),
+  ];
+  const arranged = (tiles: readonly ArrangeTile[], options: Partial<Parameters<typeof arrangeTiles>[2]> = {}) =>
+    arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 600, clusters: true, ...options });
+  const column = (point: Point) => (point.x - FIRST.x) / COLUMN;
+
+  it('gives a lane with a tall note as many grid rows as its note takes, the next lane below it', () => {
+    const { positions, clusters } = arranged(lanes, { noteHeights: new Map([['issue:ACME-9', 300]]) });
+    const a = clusters.find((cluster) => cluster.key === 'issue:ACME-9')!;
+    expect(a.noteSize).toEqual({ width: CLUSTER_NOTE_SIZE.width, height: 300 });
+    // 300 px takes two grid rows: the next lane starts on the third.
+    expect(cells(positions)['impl-b']![1] - cells(positions)['impl-a']![1]).toBe(2);
+    expect(positions.get('impl-b')!.y - PERCH_ROOM).toBeGreaterThanOrEqual(a.noteAt.y + 300 + TILE_GAP);
+    // A short note keeps its slot's size.
+    expect(clusters.find((cluster) => cluster.key === 'issue:ACME-12')!.noteSize).toEqual(CLUSTER_NOTE_SIZE);
+  });
+
+  it('puts the lead and the shells on the top row, then a lane per issue', () => {
+    const at = cells(arranged(lanes).positions);
+    expect(at.lead).toEqual([0, 0]);
+    expect(at.gate).toEqual([1, 0]);
+    expect(at['impl-a']![1]).toBe(1);
+    expect(at['impl-b']![1]).toBe(2);
+  });
+
+  it('gives each lane its label, then a column per slot (implementer, reviewer, follow-up), then its note after its last tile', () => {
+    const { positions, clusters } = arranged(lanes);
+    const at = cells(positions);
+    expect([at['impl-a']![0], at['review-a']![0], at['again-a']![0]]).toEqual([1, 2, 3]);
+    const [a, b] = clusters;
+    expect(column(a!.labelAt)).toBe(0);
+    expect(column(a!.noteAt)).toBe(4);
+    expect(a!.noteAt.y).toBe(positions.get('impl-a')!.y);
+    // A short lane keeps its tiles in their slots' columns, its note right after its last tile: no run of free slots before it.
+    expect(at['impl-b']![0]).toBe(1);
+    expect(column(b!.noteAt)).toBe(2);
+  });
+
+  it('keeps lanes in the order their work started, so a lower-numbered ticket started later goes last', () => {
+    const tiles = [
+      agent('impl-b', { role: 'implementer', issue: 'ACME-12', createdAt: '1' }),
+      agent('impl-a', { role: 'implementer', issue: 'ACME-9', createdAt: '2' }),
+      agent('late', { role: 'implementer', issue: 'ACME-5', createdAt: '3' }),
+      agent('review-late', { role: 'reviewer', reviewOf: 'late', createdAt: '4' }),
+    ];
+    expect(arranged(tiles).clusters.map((cluster) => cluster.key)).toEqual(['issue:ACME-12', 'issue:ACME-9', 'issue:ACME-5']);
+  });
+
+  it('drops a slot no lane uses, so no lane has a hole there', () => {
+    const { clusters } = arranged(lanes.filter((tile) => tile.id !== 'again-a'));
+    expect(clusters.map((cluster) => column(cluster.noteAt))).toEqual([3, 2]);
+  });
+
+  it('gives a second reviewer of one lane a column of its own in the reviewer slot, before the follow-up', () => {
+    const at = cells(arranged([...lanes, agent('review-a2', { role: 'reviewer', reviewOf: 'impl-a', createdAt: '9' })]).positions);
+    expect([at['review-a']![0], at['review-a2']![0], at['again-a']![0]]).toEqual([2, 3, 4]);
+  });
+
+  it('measures a resized or expanded tile at its size: its lane is taller and its column wider', () => {
+    const big = { width: 2 * COLUMN + AGENT_TILE_SIZE.width, height: 2 * ROW_STEP + AGENT_TILE_SIZE.height };
+    const tiles = lanes.map((tile) => (tile.id === 'impl-a' ? { ...tile, size: big } : tile));
+    const { positions, clusters } = arranged(tiles);
+    const at = cells(positions);
+    expect(at['review-a']![0]).toBe(4);
+    expect(at['impl-b']![0]).toBe(1);
+    expect(at['impl-b']![1]).toBe(4);
+    expect(column(clusters[1]!.noteAt)).toBe(4);
+    expectClear(positions, tiles);
+  });
+
+  it('fits the zone to what it laid out, shrinking it as well as growing it', () => {
+    const { clusters, size } = arranged(lanes, { width: 4000 });
+    expect(size.width).toBe(clusters[0]!.noteAt.x + CLUSTER_NOTE_SIZE.width + ZONE_PADDING);
+    const bottom = Math.max(...clusters.map((cluster) => cluster.noteAt.y + CLUSTER_NOTE_SIZE.height));
+    expect(size.height).toBe(bottom + TILE_GAP + ZONE_PADDING);
+  });
+
+  it('keeps the zone big enough for what it may not move', () => {
+    const note: Rect = { x: 3000, y: 20, width: 200, height: 200 };
+    expect(arranged(lanes, { width: 4000, obstacles: [note] }).size.width).toBe(3200 + ZONE_PADDING);
+  });
+});
+
+describe('arranging lanes as columns or cards', () => {
+  const lanes: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    { ...agent('gate'), kind: 'shell', state: null },
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9' }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a' }),
+    agent('again-a', { role: 'follow-up-reviewer', reviewOf: 'impl-a' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-12' }),
+    agent('impl-c', { role: 'implementer', issue: 'ACME-14' }),
+  ];
+  const arranged = (layout: 'columns' | 'cards', tiles: readonly ArrangeTile[] = lanes, links: { from: string; to: string }[] = []) =>
+    arrangeTiles(tiles, links, { by: 'issue', layout, width: 600, clusters: true });
+
+  it('as columns: the lead and shells stacked first, then a column per lane, its label and note on top, its tiles under them in slot order', () => {
+    const { positions, clusters } = arranged('columns');
+    const at = cells(positions);
+    expect([at.lead, at.gate]).toEqual([
+      [0, 0],
+      [0, 1],
+    ]);
+    expect([at['impl-a'], at['review-a'], at['again-a']]).toEqual([
+      [1, 1],
+      [1, 2],
+      [1, 3],
+    ]);
+    expect([at['impl-b'], at['impl-c']]).toEqual([
+      [2, 1],
+      [3, 1],
+    ]);
+    expect(clusters.map((cluster) => cells(new Map([['label', cluster.labelAt]])).label)).toEqual([
+      [1, 0],
+      [2, 0],
+      [3, 0],
+    ]);
+    // The note below its label, both in the head cell.
+    const [a] = clusters;
+    expect(a!.noteAt.y + a!.noteSize.height).toBe(a!.labelAt.y + AGENT_TILE_SIZE.height);
+  });
+
+  it('as columns or cards, makes a lane’s head as tall as its label and a note as tall as its text needs', () => {
+    for (const layout of ['columns', 'cards'] as const) {
+      const { positions, clusters } = arrangeTiles(lanes, [], { by: 'issue', layout, width: 1000, clusters: true, noteHeights: new Map([['issue:ACME-9', 300]]) });
+      const a = clusters.find((cluster) => cluster.key === 'issue:ACME-9')!;
+      expect(a.noteSize, layout).toEqual({ width: AGENT_TILE_SIZE.width, height: 300 });
+      expect(a.noteAt.y, layout).toBe(a.labelAt.y + CLUSTER_LABEL_SIZE.height + TILE_GAP);
+      // Nothing under it, nor in its row, comes before its note's end.
+      const below = lanes.map((tile) => positions.get(tile.id)!).filter((point) => point.y > a.labelAt.y);
+      for (const point of below) expect(point.y - PERCH_ROOM, layout).toBeGreaterThanOrEqual(a.noteAt.y + 300 + TILE_GAP);
+      // A lane with a short note keeps the head a tile's size.
+      expect(clusters.find((cluster) => cluster.key !== 'issue:ACME-9')!.noteSize.height, layout).toBe(AGENT_TILE_SIZE.height - CLUSTER_LABEL_SIZE.height - TILE_GAP);
+    }
+  });
+
+  it('as columns, leaves a rail’s room between an implementer and the reviewer under it that an edge joins', () => {
+    const links = [{ from: 'impl-a', to: 'review-a' }];
+    const { positions } = arranged('columns', lanes, links);
+    expect(cells(positions)['review-a']![1] - cells(positions)['impl-a']![1]).toBe(2);
+    expect(railTrouble(positions, lanes, links)).toEqual([]);
+  });
+
+  it('as cards: two across below the lead’s row, the head, implementer and reviewer on the first row, the follow-up under them', () => {
+    const { positions, clusters } = arranged('cards');
+    const at = cells(positions);
+    expect([at.lead, at.gate]).toEqual([
+      [0, 0],
+      [1, 0],
+    ]);
+    // ACME-9's card: head, impl, reviewer; its follow-up under the implementer. Three columns wide, as every card.
+    expect(cells(new Map([['label', clusters[0]!.labelAt]])).label).toEqual([0, 1]);
+    expect([at['impl-a'], at['review-a'], at['again-a']]).toEqual([
+      [1, 1],
+      [2, 1],
+      [1, 2],
+    ]);
+    // ACME-12 beside it, past a free column; ACME-14 on the next row of cards, past a free row.
+    expect(cells(new Map([['label', clusters[1]!.labelAt]])).label).toEqual([4, 1]);
+    expect(at['impl-b']).toEqual([5, 1]);
+    expect(cells(new Map([['label', clusters[2]!.labelAt]])).label).toEqual([0, 4]);
+    expect(at['impl-c']).toEqual([1, 4]);
+  });
+
+  it('as cards, flows three across past four lanes', () => {
+    const many = [...lanes, ...['ACME-20', 'ACME-21'].map((issue) => agent(issue, { role: 'implementer', issue }))];
+    const { clusters } = arranged('cards', many);
+    expect(clusters.map((cluster) => cells(new Map([['label', cluster.labelAt]])).label![1])).toEqual([1, 1, 1, 4, 4]);
   });
 });
 
@@ -485,12 +674,19 @@ describe('parking the clusters of an arrange by issue', () => {
     for (const cluster of parked) {
       expect(onGrid(cluster.labelAt)).toBe(true);
       expect(cluster.labelAt.x).toBe(FIRST.x + COLUMN);
-      const parts = [{ ...cluster.labelAt, ...CLUSTER_LABEL_SIZE }, { ...cluster.stickyAt, ...CLUSTER_STICKY_SIZE }];
+      // Its note beside its label, in the next column of its row.
+      expect(cluster.noteAt).toEqual({ x: cluster.labelAt.x + COLUMN, y: cluster.labelAt.y });
+      const parts = [{ ...cluster.labelAt, ...CLUSTER_LABEL_SIZE }, { ...cluster.noteAt, ...CLUSTER_NOTE_SIZE }];
       expect(parts.every((rect) => clearOf(rect, [wall]))).toBe(true);
     }
     // The wall takes the first row's cell: the first cluster goes a row down.
     expect(parked[0]!.labelAt.y).toBe(FIRST.y + ROW_STEP);
     expect(parked[1]!.labelAt.y).toBeGreaterThan(parked[0]!.labelAt.y);
+  });
+
+  it('parks a tall note in as many grid rows as it takes, the next cluster below it', () => {
+    const parked = parkClusters(['tall', 'next'], { column: 0, row: 0 }, [], (key) => (key === 'tall' ? { width: 256, height: 300 } : CLUSTER_NOTE_SIZE));
+    expect(parked[1]!.labelAt.y - parked[0]!.labelAt.y).toBe(2 * ROW_STEP);
   });
 
   it('parks from a row below the crew as readily as beside it', () => {

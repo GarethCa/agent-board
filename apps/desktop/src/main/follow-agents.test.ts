@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent, AgentState, DaemonEvent } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, DaemonEvent, DaemonSettings } from '@agent-board/daemon/protocol';
 import type { AgentAlerts } from './alerts';
 import { followAgents, type FollowedLink } from './follow-agents';
 
 const agent = (sessionId: string, state: AgentState) => ({ sessionId, state }) as Agent;
 
+const SETTINGS = { needsYouShows: 'explicit', notifications: true, notifyInFront: false } as DaemonSettings;
+
 /**
- * A daemon link whose `agent.list` answers from `listings` in turn (an Error rejects), and that connects on a call
- * when it is not connected, as the real link does.
+ * A daemon link whose `agent.list` answers from `listings` in turn (an Error rejects), and its `settings.get` with
+ * `SETTINGS`, and that connects on a call when it is not connected, as the real link does. `calls` are its listings.
  */
 function fakeLink(listings: (Agent[] | Error)[]) {
   const events = new Set<(event: DaemonEvent) => void>();
@@ -17,6 +19,7 @@ function fakeLink(listings: (Agent[] | Error)[]) {
   const calls: string[] = [];
   const link: FollowedLink = {
     call: (async (method: string) => {
+      if (method === 'settings.get') return SETTINGS;
       calls.push(method);
       if (!up) {
         up = true;
@@ -45,9 +48,10 @@ function fakeLink(listings: (Agent[] | Error)[]) {
 function recordingAlerts() {
   const log: unknown[] = [];
   const alerts: AgentAlerts = {
-    reset: (agents) => log.push(['reset', agents.map((a) => a.sessionId)]),
+    reset: (agents, settings) => log.push(['reset', agents.map((a) => a.sessionId), settings?.needsYouShows]),
     updated: (a) => log.push(['updated', a.sessionId]),
     removed: (sessionId) => log.push(['removed', sessionId]),
+    settingsChanged: (settings) => log.push(['settings', settings.needsYouShows]),
   };
   return { alerts, log };
 }
@@ -58,7 +62,7 @@ describe('following the agents', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('lists the agents once at start, then follows their events', async () => {
+  it('lists the agents and reads the settings once at start, then follows their events', async () => {
     const { link, calls, emit } = fakeLink([[agent('a', 'idle')]]);
     const { alerts, log } = recordingAlerts();
 
@@ -66,10 +70,11 @@ describe('following the agents', () => {
     await vi.runAllTimersAsync();
     emit({ type: 'agent.updated', agent: agent('a', 'waiting') });
     emit({ type: 'agent.removed', sessionId: 'a' });
+    emit({ type: 'settings.updated', settings: { ...SETTINGS, needsYouShows: 'turns' } });
 
     // One listing, though the call that made it also connected the link.
     expect(calls).toEqual(['agent.list']);
-    expect(log).toEqual([['reset', ['a']], ['updated', 'a'], ['removed', 'a']]);
+    expect(log).toEqual([['reset', ['a'], 'explicit'], ['updated', 'a'], ['removed', 'a'], ['settings', 'turns']]);
   });
 
   it('retries a failed listing, backing off, until one succeeds', async () => {
@@ -84,7 +89,7 @@ describe('following the agents', () => {
     await vi.advanceTimersByTimeAsync(200);
 
     expect(calls).toHaveLength(3);
-    expect(log).toEqual([['reset', ['a']]]);
+    expect(log).toEqual([['reset', ['a'], 'explicit']]);
   });
 
   it('reconnects after a drop, without waiting for anything else to call, and lists the agents again', async () => {
@@ -97,7 +102,7 @@ describe('following the agents', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(calls).toEqual(['agent.list', 'agent.list']);
-    expect(log).toEqual([['reset', ['a']], ['reset', ['a', 'b']]]);
+    expect(log).toEqual([['reset', ['a'], 'explicit'], ['reset', ['a', 'b'], 'explicit']]);
   });
 
   it('lists the agents again when something else reconnects the link first', async () => {
@@ -112,7 +117,7 @@ describe('following the agents', () => {
     await vi.runAllTimersAsync();
 
     expect(calls).toEqual(['agent.list', 'agent.list', 'agent.list']);
-    expect(log).toEqual([['reset', ['a']], ['reset', ['a']]]);
+    expect(log).toEqual([['reset', ['a'], 'explicit'], ['reset', ['a'], 'explicit']]);
   });
 
   it('stops retrying once stopped', async () => {

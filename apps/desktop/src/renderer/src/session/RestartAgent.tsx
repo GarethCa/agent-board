@@ -5,11 +5,15 @@ import { errorMessage } from '../../../shared/errors';
 import { Button, ErrorText } from '../ui';
 
 /**
- * Whether the agent ended on its own or was stopped (not by a restart, which has its own Resume): it can restart. Not
- * a reviewer, whose round ended with it.
+ * Whether the agent ended on its own or was stopped (not by a restart, which has its own Resume, nor paused, which has
+ * Wake): it can restart. Not a reviewer, whose round ended with it.
  */
 export const canRestart = (agent: Agent): boolean =>
-  agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.reviewOf === null && agent.shellHarness === null;
+  agent.endedAt !== null &&
+  agent.state !== 'stopped-by-restart' &&
+  agent.state !== 'hibernated' &&
+  agent.reviewOf === null &&
+  agent.shellHarness === null;
 
 /** How an ended agent's process went, for its pane's banner: `claude exited (code 0)`. */
 export function exitText(agent: Agent): string {

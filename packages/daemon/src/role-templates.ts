@@ -11,6 +11,8 @@ import { invalidParams, optionalStringParam, paramsObject, stringParam } from '.
 import {
   AGENT_ROLES,
   BOARD_ERROR,
+  isOrchestratorRole,
+  ORCHESTRATOR_ROLE,
   MAX_ROLE_TEMPLATE_LENGTH,
   orchestratorTextRefusal,
   parseRole,
@@ -93,7 +95,9 @@ const BUILT_IN: Partial<Record<AgentRole, string>> = {
 - Worktree: \`{{worktree}}\` (your current directory). Branch: \`{{branch}}\`.
 
 Read the issue and the repo's own instructions first. Work test-first, commit in small steps on \`{{branch}}\`, and
-write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish.`,
+write what you did, how to verify it and anything left over in \`.agent-board/handover.md\` before you finish.
+Record each pull request you open with \`agent-board record pr <url>\`, and the handover with \`agent-board record doc
+.agent-board/handover.md\` (add \`--for orchestrator\` when an orchestrator started you).`,
   reviewer: `You are an adversarial reviewer for {{issue}}, review round {{round}}.
 
 - Worktree: \`{{worktree}}\` (your current directory), a detached checkout of branch \`{{branch}}\`.
@@ -101,17 +105,20 @@ write what you did, how to verify it and anything left over in \`.agent-board/ha
 
 Find what is wrong, not confirm it works. Read the whole diff and the code around it, run the checks, and try to break
 it. Every finding names a file:line, says why it is wrong and what should change, tagged [blocker], [major] or [minor].
-Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`.
-Do not edit code and do not push.`,
+Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`,
+and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.`,
   'follow-up-reviewer': `You are the follow-up reviewer for {{issue}}, review round {{round}}.
 
 - Worktree: \`{{worktree}}\` (your current directory), a detached checkout of branch \`{{branch}}\`.
 - Previous review: \`{{prev_review}}\`, of commit \`{{prev_sha}}\`.
 
 Check each blocker and major of the previous review is fixed, and that the commits since \`{{prev_sha}}\` break nothing.
-Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`.
-Do not edit code and do not push.`,
+Write the review to \`.agent-board/review.md\`, its first line \`VERDICT: approve\` or \`VERDICT: changes-requested\`,
+and record it with \`agent-board record doc .agent-board/review.md\`. Do not edit code and do not push.`,
 };
+
+/** The orchestrator role's template when neither the zone nor the app keeps one: what New agent offers as its task. */
+const ORCHESTRATOR_TEMPLATE = `Orchestrate this zone's open issues: start an agent for each one, start a reviewer on its branch when it is done, and merge on a green gate. Use \`agent-board help orchestrate\` for the commands. Record each pull request you open with \`agent-board record pr <url>\`, and ask each agent you start to record its own and its handover \`--for orchestrator\`. Keep going until the issues are done or you need the user.`;
 
 type RoleTemplateMethods = Pick<DaemonMethods, 'zone.roleTemplates' | 'zone.setRoleTemplate' | 'zone.resetRoleTemplate'>;
 type DefaultRoleMethods = Pick<DaemonMethods, 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole'>;
@@ -227,7 +234,9 @@ export function createRoleTemplates(db: DatabaseSync): RoleTemplates {
       return { role: choice.role, body: seed.body, seed: seed.source, appDefault: false };
     }
     const fallback = appDefault(choice.name);
-    return { role: fallback?.name ?? choice.name, body: fallback?.body ?? '', seed: null, appDefault: fallback !== undefined };
+    // The orchestrator role has a template of the app's own until one is saved for the zone or the app.
+    const own = fallback === undefined && isOrchestratorRole(choice.name) ? ORCHESTRATOR_TEMPLATE : '';
+    return { role: fallback?.name ?? choice.name, body: fallback?.body ?? own, seed: null, appDefault: fallback !== undefined };
   };
 
   const template = (zoneId: string, repo: string | null, choice: RoleChoice): RoleTemplate => {
@@ -289,6 +298,8 @@ export function createRoleTemplates(db: DatabaseSync): RoleTemplates {
             (selectNamed.all(id) as { role: string }[]).map(({ role }) => role).filter((role) => !AGENT_ROLES.includes(role as AgentRole)),
             (selectUsedNames.all(id) as { role_name: string }[]).map(({ role_name }) => role_name),
             (selectDefaults.all() as unknown as DefaultRoleRow[]).map(({ name }) => name),
+            // Always offered, so New agent can fill its task from the template in a zone that never ran one.
+            [ORCHESTRATOR_ROLE],
           );
           return [
             ...AGENT_ROLES.map((role) => template(id, repo, { role, name: null })),

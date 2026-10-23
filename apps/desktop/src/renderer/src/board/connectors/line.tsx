@@ -1,15 +1,19 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { EdgeLabelRenderer, Position, useInternalNode, useReactFlow, type EdgeProps, type InternalNode } from '@xyflow/react';
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { EdgeLabelRenderer, Position, useInternalNode, useReactFlow, useStore, type EdgeProps, type InternalNode, type ReactFlowState } from '@xyflow/react';
 import type { ConnectorSide, ConnectorStyle, EdgePoint, FlowEdgeSide } from '@agent-board/daemon/protocol';
 import { tokenNumber } from '../../theme';
-import { bendsFromBoard, bendsOnBoard, lineShape, withoutPoint, withPointOn, type LabelSize, type LineEnds, type LineShape } from './geometry';
+import { bendsFromBoard, bendsOnBoard, lineShape, samplePath, withoutPoint, withPointOn, type LabelSize, type LineEnds, type LineShape, type RoutePoint } from './geometry';
+import { routeLine, routes, type OwnObjects } from './route';
+import { boundsOnBoard } from '../items/items';
+import { isZone } from '../tiles';
 import { autoEnds } from './endpoints';
 import { bowDragged, endDragged, endTarget, isDrag, letGo, type LineDraft, type LineGeometry } from './drag';
 import { setNearNode, useFindNear } from './near';
 
 export type { LineGeometry } from './drag';
 
-const SIDES: Record<Position, ConnectorSide> = {
+/** The side of an object a handle at each React Flow position is on. */
+export const SIDES: Record<Position, ConnectorSide> = {
   [Position.Top]: 'top',
   [Position.Right]: 'right',
   [Position.Bottom]: 'bottom',
@@ -38,6 +42,68 @@ const rectOf = (node: InternalNode | undefined): Rect | undefined =>
   node === undefined
     ? undefined
     : { ...node.internals.positionAbsolute, width: node.measured.width ?? node.width ?? 0, height: node.measured.height ?? node.height ?? 0 };
+
+/**
+ * What a line between nodes `source` and `target` goes round (`routeLine`): every other object on the board but a
+ * zone, which holds them, or one hidden; and the objects at its ends, as they take up the board (a rotated item's
+ * upright box).
+ */
+function obstaclesOf(state: ReactFlowState, source: string, target: string): { others: Rect[]; own: OwnObjects } {
+  const others: Rect[] = [];
+  const own: OwnObjects = {};
+  for (const node of state.nodeLookup.values()) {
+    if (isZone(node) || node.hidden === true) continue;
+    const rect = rectOf(node)!;
+    if (rect.width === 0 || rect.height === 0) continue;
+    const bounds = boundsOnBoard(node, rect);
+    if (node.id === source) own.source = bounds;
+    if (node.id === target) own.target = bounds;
+    if (node.id !== source && node.id !== target) others.push(bounds);
+  }
+  return { others, own };
+}
+
+const sameRect = (a: Rect | undefined, b: Rect | undefined) =>
+  a === b || (a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
+const sameRects = (a: readonly Rect[], b: readonly Rect[]) => a.length === b.length && a.every((rect, index) => sameRect(rect, b[index]));
+const sameRoute = (a: readonly EdgePoint[] | undefined, b: readonly EdgePoint[] | undefined) =>
+  a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((point, index) => point.x === b[index]!.x && point.y === b[index]!.y));
+
+/** What a line that doesn't route selects from the board: nothing, so no other object's move draws it again. */
+const noRoute = () => undefined;
+
+/**
+ * The store selector for the way round of a line drawn plain as `path` between `ends`, on nodes `source` and `target`.
+ * It routes again only when an object has moved or resized since it last did, and with `sameRoute` the line draws again
+ * only when its route changes, not on every frame of another object's drag.
+ */
+export function routeSelector(ends: LineEnds, path: string, source: string, target: string): (state: ReactFlowState) => RoutePoint[] | undefined {
+  const samples = samplePath(path);
+  let last: { others: Rect[]; own: OwnObjects; route: RoutePoint[] | undefined } | undefined;
+  return (state) => {
+    const { others, own } = obstaclesOf(state, source, target);
+    if (last !== undefined && sameRects(last.others, others) && sameRect(last.own.source, own.source) && sameRect(last.own.target, own.target)) {
+      return last.route;
+    }
+    last = { others, own, route: routeLine(ends, samples, others, own) };
+    return last.route;
+  };
+}
+
+/**
+ * The way round the objects between nodes `source` and `target` for a line drawn plain as `path` between `ends`, when
+ * `routable` (`routes`) and it crosses any; else undefined. The line selects its route from the board, so it draws
+ * again only when its route changes, and one that can't route selects nothing.
+ */
+export function useRoute(routable: boolean, ends: LineEnds, path: string, source: string, target: string): RoutePoint[] | undefined {
+  const { source: from, target: to, sourceSide, targetSide } = ends;
+  const selectRoute = useMemo(
+    () => (routable ? routeSelector({ source: from, target: to, sourceSide, targetSide }, path, source, target) : noRoute),
+    // Its plain path stands for its ends and its style.
+    [routable, path, sourceSide, targetSide, source, target],
+  );
+  return useStore(selectRoute, sameRoute);
+}
 
 /** The middle of `side` of `rect`. */
 function sideMiddle(rect: Rect, side: ConnectorSide): EdgePoint {
@@ -97,7 +163,12 @@ export function useLine<Side extends FlowEdgeSide>(
   const [draft, setDraft] = useState<LineDraft<Side>>();
   const geometry: LineDraft<Side> = draft ?? { fromSide: saved.fromSide, toSide: saved.toSide, points: bendsOnBoard(saved.points, endsOf(saved)) };
   const ends = withMovedEnd(endsOf(geometry), geometry, (nodeId) => rectOf(getInternalNode(nodeId)));
-  const shape = lineShape(style, ends, geometry.points, label);
+  const plain = lineShape(style, ends, geometry.points, label);
+  // An elbow or curve with no bends of the user's goes round the objects its line would cross, unless an end is being
+  // dragged; one the user bent goes where they put it, and a straight line is always straight.
+  const routable = routes(style, geometry.points, geometry.moved !== undefined);
+  const route = useRoute(routable, ends, plain.path, props.source, props.target);
+  const shape = route === undefined ? plain : lineShape(style, ends, route.slice(1, -1), label, true);
   const handles = (
     <LineHandles
       style={style}
@@ -120,7 +191,7 @@ export function useLine<Side extends FlowEdgeSide>(
       }}
     />
   );
-  return { shape, ends, handles };
+  return { shape, ends, handles, routed: route !== undefined };
 }
 
 /** `ends` with the end being dragged off its object where it is: on the side of the object it is over, or at the pointer. */

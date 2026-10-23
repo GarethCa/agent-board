@@ -27,8 +27,15 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet keys new so far: the rest were in the app before it', () => {
-    expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual(['move.cheatSheet', 'move.cheatSheetAnywhere']);
+  it('marks only the cheat sheet, master, document editing and arrow-swapping keys new so far: the rest were in the app before it', () => {
+    expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
+      'move.cheatSheet',
+      'move.master',
+      'move.cheatSheetAnywhere',
+      'edit.swapDirection',
+      'window.saveDoc',
+      'window.leaveDocEdit',
+    ]);
   });
 
   it('writes each key as the platform presses it', () => {
@@ -37,6 +44,7 @@ describe('the key registry', () => {
     expect([keyText('move.spotlight', true), keyText('move.spotlight', false)]).toEqual(['⌘K', 'Ctrl+Shift+K']);
     expect([keyText('window.splitBelow', true), keyText('window.splitBelow', false)]).toEqual(['⌘⇧D', 'Ctrl+Shift+Alt+D']);
     expect([keyText('window.runGate', true), keyText('window.runGate', false)]).toEqual(['⌘⇧G', 'Ctrl+Shift+G']);
+    expect([keyText('move.master', true), keyText('move.master', false)]).toEqual(['⌘⇧M', 'Ctrl+Shift+M']);
     expect([keyText('window.paneFocus', true), keyText('window.paneFocus', false)]).toEqual(['⌘⌥←↑→↓', 'Ctrl+Shift+Alt+←↑→↓']);
     expect(keysText('edit.redo', true)).toEqual(['⌘⇧Z', '⌘Y']);
     expect([keyText('make.note'), keyText('move.connections'), keyText('edit.resetRotation'), keyText('tile.open')]).toEqual(['N', '⇧E', '⇧R', '↵']);
@@ -53,6 +61,9 @@ describe('pressing a key', () => {
     // ⇧E asks for Shift; plain E is nothing.
     expect(pressed('move.connections', press('E', 'KeyE', { shiftKey: true }), MAC)).toBe(true);
     expect(pressed('move.connections', press('e', 'KeyE'), MAC)).toBe(false);
+    // ⇧C cycles the crew look; plain C is nothing.
+    expect(pressed('move.crews', press('C', 'KeyC', { shiftKey: true }), MAC)).toBe(true);
+    expect(pressed('move.crews', press('c', 'KeyC'), MAC)).toBe(false);
   });
 
   it('takes the command key as ⌘ on macOS and Ctrl elsewhere, Shift told apart', () => {
@@ -109,6 +120,12 @@ describe('the Extended keyboard shortcuts setting', () => {
     expect(pressed('move.cheatSheet', press('?', 'Slash', { shiftKey: true }), { isMac: true, extended: false })).toBe(false);
     expect(pressed('move.cheatSheetAnywhere', press('/', 'Slash', { metaKey: true }), { isMac: true, extended: false })).toBe(false);
     expect(pressed('make.note', press('n', 'KeyN'), { isMac: true, extended: false })).toBe(true);
+    // Saving a document with ⌘S, and esc leaving Edit, are new: off, the Save and Cancel buttons still do it.
+    expect(pressed('window.saveDoc', press('s', 'KeyS', { metaKey: true }), MAC)).toBe(true);
+    expect(pressed('window.saveDoc', press('s', 'KeyS', { ctrlKey: true }), OTHER)).toBe(true);
+    expect(pressed('window.saveDoc', press('s', 'KeyS', { metaKey: true }), { isMac: true, extended: false })).toBe(false);
+    expect(pressed('window.leaveDocEdit', press('Escape', 'Escape'), MAC)).toBe(true);
+    expect(pressed('window.leaveDocEdit', press('Escape', 'Escape'), { isMac: true, extended: false })).toBe(false);
   });
 });
 
@@ -121,7 +138,10 @@ describe('the cheat sheet', () => {
     const off = ids(cheatSheet('board', { extended: false }));
     expect(off).not.toContain('move.cheatSheet');
     expect(off).not.toContain('move.cheatSheetAnywhere');
-    expect(off).toHaveLength(on.length - 2);
+    expect(off).not.toContain('move.master');
+    expect(off).not.toContain('window.saveDoc');
+    expect(off).not.toContain('edit.swapDirection');
+    expect(off).toHaveLength(on.length - 6);
   });
 
   it('puts the sections for where it opened first, marked here', () => {
@@ -138,7 +158,7 @@ describe('the cheat sheet', () => {
       ['Split beside', ['⌘D']],
       ['Split below', ['⌘⇧D']],
     ]);
-    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate']);
+    expect(ids(cheatSheet('board', { extended: true, filter: '⌘⇧', isMac: true }))).toEqual(['move.master', 'make.askClaude', 'edit.redo', 'window.splitBelow', 'window.runGate', 'window.openLinkBrowser']);
     expect(cheatSheet('board', { extended: true, filter: 'nothing like this' })).toEqual([]);
   });
 });
