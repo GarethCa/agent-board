@@ -9,6 +9,7 @@
     "./agent-notes": "./src/agent-notes.ts",
     "./board-layout": "./src/board-layout.ts",
     "./board-tidy": "./src/board-tidy.ts",
+    "./arrange-board": "./src/arrange-board.ts",
     "./cli-install": "./src/cli-install.ts",
     "./client": "./src/client.ts",
     "./cron": "./src/cron.ts",

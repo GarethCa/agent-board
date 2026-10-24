@@ -58,6 +58,19 @@ describe("the board's single-key shortcuts", () => {
     }
   });
 
+  it('arrange the board with ⇧L, not L alone, only while the extended keys are on', () => {
+    vi.stubGlobal('window', { agentBoard: { view: { set: async () => {} } } });
+    try {
+      expect(boardShortcut(press('L', { shiftKey: true }))).toEqual({ kind: 'arrangeBoard' });
+      expect(boardShortcut(press('l'))).toBeUndefined();
+      setExtendedShortcuts(false);
+      expect(boardShortcut(press('L', { shiftKey: true }))).toBeUndefined();
+    } finally {
+      setExtendedShortcuts(true);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('pick select with V, box select with B and the hand with H', () => {
     expect(boardShortcut(press('v'))).toEqual({ kind: 'mode', mode: 'select' });
     expect(boardShortcut(press('b'))).toEqual({ kind: 'mode', mode: 'box' });

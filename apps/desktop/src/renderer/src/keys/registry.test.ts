@@ -27,12 +27,13 @@ describe('the key registry', () => {
     }
   });
 
-  it('marks only the cheat sheet, master, document editing and arrow-swapping keys new so far: the rest were in the app before it', () => {
+  it('marks only the cheat sheet, master, document editing, arrow-swapping and board-arranging keys new so far: the rest were in the app before it', () => {
     expect(KEYS.filter((entry) => entry.status === 'new').map((entry) => entry.id)).toEqual([
       'move.cheatSheet',
       'move.master',
       'move.cheatSheetAnywhere',
       'edit.swapDirection',
+      'edit.arrangeBoard',
       'window.saveDoc',
       'window.leaveDocEdit',
     ]);
@@ -141,7 +142,8 @@ describe('the cheat sheet', () => {
     expect(off).not.toContain('move.master');
     expect(off).not.toContain('window.saveDoc');
     expect(off).not.toContain('edit.swapDirection');
-    expect(off).toHaveLength(on.length - 6);
+    expect(off).not.toContain('edit.arrangeBoard');
+    expect(off).toHaveLength(on.length - 7);
   });
 
   it('puts the sections for where it opened first, marked here', () => {

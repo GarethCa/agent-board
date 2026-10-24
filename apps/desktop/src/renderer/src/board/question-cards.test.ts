@@ -44,7 +44,7 @@ describe('questionCardNodes', () => {
   });
 
   it('measures a tile in a zone from the zone’s corner', () => {
-    const zone = zoneNode({ id: 'z', x: 1000, y: 500, width: 900, height: 600, repoRoot: '/code', folder: '', name: 'z', color: '#4c6ef5' } as Zone);
+    const zone = zoneNode({ id: 'z', x: 1000, y: 500, width: 900, height: 600, repoRoot: '/code', folder: '', name: 'z', color: '#4c6ef5', spacing: 'normal' } as Zone);
     const [card] = questionCardNodes([agent('a1', ask())], [zone, tile('a1', 40, 60, 'z')]);
     expect(card!.position).toEqual({ x: 1040 + AGENT_TILE_SIZE.width + CARD_GAP, y: 560 });
   });

@@ -21,6 +21,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   handoff: { done: 'handed off to', tried: 'hand off to' },
   move: { done: 'moved', tried: 'move', nothing: 'a tile' },
   arrange: { done: 'arranged', tried: 'arrange', nothing: 'a zone' },
+  'arrange-board': { done: 'arranged', tried: 'arrange', nothing: 'the board' },
   'add-zone': { done: 'made', tried: 'make', of: 'the group ', nothing: 'a group' },
   'change-zone': { done: 'changed', tried: 'change', of: 'the group ', nothing: 'a group' },
   'remove-zone': { done: 'removed', tried: 'remove', of: 'the group ', nothing: 'a group' },

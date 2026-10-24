@@ -12,11 +12,8 @@ import { daemonPaths, defaultDataDir } from './paths.ts';
 import {
   BOARD_ERROR,
   DEFAULT_ASK_WAIT_MS,
-  DEFAULT_PLAN_WAIT_MS,
   type Agent,
   type AgentRecord,
-  type PlanEdits,
-  type PlanEnd,
   type SentToOrchestrator,
   type PlanFormat,
   type PinRef,
@@ -50,7 +47,7 @@ import {
   type Zone,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
-import { toldDiff } from './text-diff.ts';
+import { minutes, planDecisionText } from './plan-told.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
 export class BoardError extends Error {}
@@ -1433,9 +1430,6 @@ function pinName(record: AgentRecord): string {
   return record.label === null ? where : `${record.label} (${where})`;
 }
 
-/** A wait in minutes, as a model reads it. */
-const minutes = (ms: number) => `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? '' : 's'}`;
-
 /** What a crew member is told when its question or plan went to its orchestrator instead of the user. */
 function sentToLead({ name }: SentToOrchestrator, what: 'question' | 'plan'): string {
   return (
@@ -1496,36 +1490,28 @@ export async function presentPlan(
   const token = agentToken(session, 'present a plan');
   const result = await session.client.call('board.presentPlan', { token, ...plan });
   if ('sentTo' in result) return { text: sentToLead(result, 'plan'), json: result };
-  const { version, decision, edits } = result;
-  const comments = decision.comments === '' ? '' : `\n\nTheir comments:\n${decision.comments}`;
-  const said: Record<PlanEnd['outcome'], string> =
-    edits === null
-      ? {
-          approved: `The user approved plan v${version}. Go ahead with it.${comments}`,
-          'changes-requested': `The user asked for changes to plan v${version}.${comments}\n\nRevise the plan and present it again.`,
-          rejected: `The user rejected plan v${version}. Don't carry it out.${comments}`,
-          'timed-out': `No decision on plan v${version} came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
-          withdrawn: `Plan v${version} was withdrawn before the user decided.`,
-        }
-      : {
-          approved:
-            `The user approved plan v${version}, their edit of your v${edits.from}. ${editedFile(plan.path, edits)}\n\n` +
-            `Their changes to your v${edits.from}:\n${toldDiff(edits.diff)}\n\nGo ahead with their version.${comments}`,
-          'changes-requested':
-            `The user asked for changes to plan v${edits.from}, and edited it (v${version}):\n${toldDiff(edits.diff)}${comments}\n\n` +
-            'Revise the plan with their changes and present it again.',
-          rejected: `The user rejected plan v${version}, their edit of your v${edits.from}. Don't carry it out.${comments}`,
-          'timed-out': `No decision on plan v${version}, the user's edit of your v${edits.from}, came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
-          withdrawn: `Plan v${version}, the user's edit of your v${edits.from}, was withdrawn before the user decided.`,
-        };
-  return { text: said[decision.outcome], json: { version, decision, edits } };
+  if ('left' in result) throw new Error('the daemon answered a plan to wait on with one left');
+  return { text: planDecisionText(result, plan), json: result };
 }
 
-/** Where the user's approved version of a plan is now: its file, if it was written; else for the agent to apply. */
-function editedFile(path: string | undefined, edits: PlanEdits): string {
-  if (edits.written) return `${path} now holds their version.`;
-  if (path === undefined) return 'Carry out their version, not yours.';
-  return `${path} still holds yours (${edits.problem}): apply their changes to it.`;
+/**
+ * `agent-board doc --plan`: shows the user a plan, as `presentPlan` does, but returns at once: a shell command can't
+ * wait the hour a user may take. The decision is typed at the agent's prompt later, as a document's edit is.
+ */
+export async function leavePlan(session: BoardSession, plan: PlanSpec & { onBoard?: boolean }): Promise<BoardView> {
+  const token = agentToken(session, 'present a plan');
+  const result = await session.client.call('board.presentPlan', { token, ...plan, detached: true });
+  if ('sentTo' in result) return { text: sentToLead(result, 'plan'), json: result };
+  if (!('left' in result)) throw new Error('the daemon waited on a plan to leave');
+  const { version } = result.left;
+  const where = plan.onBoard === true ? 'in their Needs you inbox and the Plan tab, and on the board beside your tile' : 'in their Needs you inbox and the Plan tab';
+  return {
+    text:
+      `Plan v${version} shown to the user, ${where}. Nothing waits here: their decision (approved, changes asked for with their comments, or rejected, ` +
+      `with any edits of theirs) comes to your prompt as a message, however long it takes. ` +
+      'End your turn and wait for it; don\'t start the plan before.',
+    json: result.left,
+  };
 }
 
 /** A document as an agent shows it: one of its files, relative to `cwd`, with a title, on the board too if asked. */

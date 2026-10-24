@@ -4,7 +4,7 @@
 import type { Rect } from '../geometry';
 import type { ExpandedTiles, OverlapsAllowed } from './expanded';
 import { boundsOnBoard } from './items/items';
-import { clearOf, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { clearOf, PERCH_ROOM, SPACING_GAPS, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
 import { CREW_PADDING } from './crews';
 import { tileSizeOf, type TileSizes } from './tile-size';
 import { isSessionTile, isZone, type BoardNode } from './tiles';
@@ -434,15 +434,17 @@ export function displaced(
     const parent = id === undefined ? undefined : byId.get(id);
     return parent === undefined ? [] : [parent];
   });
-  // Grown, as `withTiles` grows a zone, right and down to hold `rects` (relative to it).
-  const holding = (size: { width: number; height: number }, rects: readonly Rect[]) => ({
-    width: Math.max(size.width, ...rects.map((rect) => rect.x + rect.width + ZONE_PADDING)),
-    height: Math.max(size.height, ...rects.map((rect) => rect.y + rect.height + TILE_GAP + ZONE_PADDING)),
-  });
   for (const parent of parents) {
+    // Its spacing's padding and tile gap: a group of an expanded tile's (no zone) keeps a normal zone's.
+    const { padding, tile: gap } = isZone(parent) ? SPACING_GAPS[parent.data.zone.spacing] : { padding: ZONE_PADDING, tile: TILE_GAP };
+    // Grown, as `withTiles` grows a zone, right and down to hold `rects` (relative to it).
+    const holding = (size: { width: number; height: number }, rects: readonly Rect[]) => ({
+      width: Math.max(size.width, ...rects.map((rect) => rect.x + rect.width + padding)),
+      height: Math.max(size.height, ...rects.map((rect) => rect.y + rect.height + gap + padding)),
+    });
     const children = nodes.filter((node) => node.parentId === parent.id);
     const size = sizeOf(parent);
-    const inside = { left: ZONE_PADDING, top: ZONE_PADDING, right: size.width - ZONE_PADDING, bottom: size.height - ZONE_PADDING };
+    const inside = { left: padding, top: padding, right: size.width - padding, bottom: size.height - padding };
     const openChildren = children.filter((node) => open.has(node.id));
     const resizing = new Set(openChildren.filter((node) => node.resizing === true).map((node) => node.id));
     const apartInZone = toKeepApart(openChildren);
@@ -470,7 +472,7 @@ export function displaced(
       const node = byId.get(id);
       return node === undefined ? undefined : { ...(placed.get(id) ?? at(node)), ...tileSizeOf(compactSizes, id) };
     };
-    const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - ZONE_PADDING, bottom: room.height - ZONE_PADDING }, partner, compact);
+    const moves = clearOfFixed(fixed, movables, { ...inside, right: room.width - padding, bottom: room.height - padding }, partner, compact);
     move(moves, movables);
     // No smaller than it was drawn as a change under way began: what is dragged out of it doesn't shrink it meanwhile.
     const was = parent.resizing === true ? undefined : held.get(parent.id)?.size;

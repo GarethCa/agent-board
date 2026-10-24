@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import type { AgentHostOptions, ZoneRow } from '../src/agents.ts';
-import { claudeSettings, codexLaunch, createAgentSpawns, defaultName, harnessLaunch, type LaunchSpec } from '../src/agent-spawns.ts';
+import { claudeSettings, codexLaunch, createAgentSpawns, defaultName, FORCED_HYPERLINK_ENV, harnessLaunch, type LaunchSpec } from '../src/agent-spawns.ts';
 import { projectCodexConfig } from '../src/codex-config-guard.ts';
 import { CODEX_HOOK_TIMEOUTS, HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { migrate } from '../src/migrate.ts';
@@ -17,11 +17,12 @@ const HOOK_URL = 'http://127.0.0.1:4242/hook';
 const MCP_URL = 'http://127.0.0.1:4242/mcp';
 
 /** Agent spawns over a fresh database, harnesses in /bin, recording the sessions they start. */
-function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
+function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks = true, env = {} as NodeJS.ProcessEnv } = {}) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   onTestFinished(() => db.close());
   const started: SessionSpec[] = [];
+  const typed: { sessionId: string; prompt: string }[] = [];
   const unused = (): never => {
     throw new Error('not used by a launch');
   };
@@ -51,7 +52,8 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
     ensureHookShim() {},
     boardCliPath: '/bin/agent-board',
     compactWindow: () => compactWindow,
-    env: { PATH: '/bin', CLAUDECODE: '1' },
+    clickableLinks: () => clickableLinks,
+    env: { PATH: '/bin', CLAUDECODE: '1', ...env },
     shell: '/bin/zsh',
     shellArgs: [],
     hookUrl: () => HOOK_URL,
@@ -68,9 +70,10 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
     repoZoneFor: unused,
     announce: unused,
     promptQueued: () => {},
+    typeFirstPrompt: (sessionId, prompt) => void typed.push({ sessionId, prompt }),
     watch: unused,
   });
-  return { spawns, started };
+  return { spawns, started, typed };
 }
 
 describe("launching an agent's harness", () => {
@@ -91,8 +94,8 @@ describe("launching an agent's harness", () => {
     };
   };
 
-  it('starts claude on a new conversation with hooks to the daemon, the board MCP server, its model and its task', () => {
-    const { spawns, started } = setup();
+  it('starts claude on a new conversation with hooks to the daemon, the board MCP server and its model, its task typed at its prompt', () => {
+    const { spawns, started, typed } = setup();
     const launching = spec();
     expect(spawns.launch(launching)).toBe(false);
     const [session] = started;
@@ -107,9 +110,9 @@ describe("launching an agent's harness", () => {
       JSON.stringify({ mcpServers: { 'agent-board': { type: 'http', url: MCP_URL, headers: { Authorization: 'Bearer ${AGENT_BOARD_IDENTITY}' } } } }),
       '--model',
       'opus',
-      '--',
-      '-fix it',
     ]);
+    // Not on its command line, where a `pkill -f` naming a word of it would end the agent.
+    expect(typed).toEqual([{ sessionId: 'a', prompt: '-fix it' }]);
     // A daemon started from inside Claude Code doesn't make its agents think they are nested in it.
     expect(session!.env.CLAUDECODE).toBeUndefined();
     expect(session!.env[HOOK_URL_ENV]).toBe(HOOK_URL);
@@ -128,6 +131,60 @@ describe("launching an agent's harness", () => {
     expect(on.started[1]!.env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
     // Nothing else about the launch differs.
     expect(on.started[0]!.args).toEqual(off.started[0]!.args);
+  });
+
+  it("gives claude FORCE_HYPERLINK=1 while clickable links are on, leaving codex's env alone and the user's own value as it is", () => {
+    const on = setup();
+    on.spawns.launch(spec({ harness: 'claude' }));
+    on.spawns.launch(spec({ harness: 'codex' }));
+    expect(on.started[0]!.env.FORCE_HYPERLINK).toBe('1');
+    expect(on.started[1]!.env).not.toHaveProperty('FORCE_HYPERLINK');
+
+    const off = setup({}, 0, { clickableLinks: false });
+    off.spawns.launch(spec({ harness: 'claude' }));
+    expect(off.started[0]!.env).not.toHaveProperty('FORCE_HYPERLINK');
+
+    for (const links of [true, false]) {
+      const own = setup({}, 0, { clickableLinks: links, env: { FORCE_HYPERLINK: '0' } });
+      own.spawns.launch(spec({ harness: 'claude' }));
+      expect(own.started[0]!.env.FORCE_HYPERLINK).toBe('0');
+    }
+  });
+
+  it("treats a FORCE_HYPERLINK that carries agent-board's marker as its own leaked value, not the user's", () => {
+    const leaked = { FORCE_HYPERLINK: '1', [FORCED_HYPERLINK_ENV]: '1' };
+    // Turned off, an agent-board started inside a Claude agent hands on no link variable, and neither does it to codex.
+    const off = setup({}, 0, { clickableLinks: false, env: leaked });
+    off.spawns.launch(spec({ harness: 'claude' }));
+    off.spawns.launch(spec({ harness: 'codex' }));
+    for (const env of [off.started[0]!.env, off.started[1]!.env]) {
+      expect(env).not.toHaveProperty('FORCE_HYPERLINK');
+      expect(env).not.toHaveProperty(FORCED_HYPERLINK_ENV);
+    }
+    // Turned on, it sets them afresh, and marks them again for the next board down.
+    const on = setup({}, 0, { env: leaked });
+    on.spawns.launch(spec({ harness: 'claude' }));
+    expect(on.started[0]!.env.FORCE_HYPERLINK).toBe('1');
+    expect(on.started[0]!.env[FORCED_HYPERLINK_ENV]).toBe('1');
+    // A user's own value, with no marker, still wins.
+    const own = setup({}, 0, { env: { FORCE_HYPERLINK: '0' } });
+    own.spawns.launch(spec({ harness: 'claude' }));
+    expect(own.started[0]!.env.FORCE_HYPERLINK).toBe('0');
+    expect(own.started[0]!.env).not.toHaveProperty(FORCED_HYPERLINK_ENV);
+  });
+
+  it('remembers which claude sessions it gave FORCE_HYPERLINK=1, and forgets a deleted agent', () => {
+    const on = setup();
+    on.spawns.launch(spec({ harness: 'claude', id: 'a' }));
+    on.spawns.launch(spec({ harness: 'codex', id: 'b' }));
+    expect(on.spawns.hyperlinked('a')).toBe(true);
+    expect(on.spawns.hyperlinked('b')).toBeUndefined();
+    on.spawns.forget('a');
+    expect(on.spawns.hyperlinked('a')).toBeUndefined();
+
+    const own = setup({}, 0, { env: { FORCE_HYPERLINK: '0' } });
+    own.spawns.launch(spec({ harness: 'claude', id: 'c' }));
+    expect(own.spawns.hyperlinked('c')).toBe(false);
   });
 
   it('gives a claude agent the board MCP over HTTP and a codex agent the stdio server', () => {

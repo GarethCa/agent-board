@@ -30,11 +30,13 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
     expect(existsSync(agent!.worktree)).toBe(true);
     await expect(tile(first.window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     await expect(tile(first.window)).toHaveCSS('outline-color', 'rgb(247, 103, 7)');
-    // Spawned starting, its first prompt queued; running came from its SessionStart hook, before it waited.
+    // Spawned starting, its first prompt queued; starting until that prompt, typed at it once its session was up, went
+    // up, before it waited.
     const before = await recordedStates(first.window);
     expect(before[0]).toBe('starting');
-    expect(before.indexOf('running')).toBeGreaterThan(0);
-    expect(before.indexOf('running')).toBeLessThan(before.indexOf('waiting'));
+    expect(before).not.toContain('running');
+    expect(before.indexOf('thinking')).toBeGreaterThan(0);
+    expect(before.indexOf('thinking')).toBeLessThan(before.indexOf('waiting'));
 
     // Quit with the agent still waiting: it keeps running in the daemon.
     await first.app.close();
@@ -76,8 +78,13 @@ test('a Claude agent runs in its own worktree, its tile follows it running → w
 test("a message whose Enter the agent's harness keeps losing shows on its tile as not sent, and the tile's Send sends it", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
-  // Its harness loses three Enters: the first and both pressed again; the tile's Send is its fourth.
-  const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_LOSE_ENTERS: '3', AGENT_BOARD_SUBMIT_CONFIRM_MS: '300' });
+  // Its harness loses three Enters after its first prompt: the first and both pressed again; the tile's Send is its fourth.
+  const { app, window } = await launch(dataDir, {
+    ...env,
+    FAKE_HARNESS_LOSE_ENTERS: '3',
+    FAKE_HARNESS_LOSE_ENTERS_AFTER: '1',
+    AGENT_BOARD_SUBMIT_CONFIRM_MS: '300',
+  });
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
@@ -93,6 +100,40 @@ test("a message whose Enter the agent's harness keeps losing shows on its tile a
     await expect(unsent).toBeHidden();
     await tile(window).dblclick();
     await expect(screen(window)).toContainText('Going with SQLite.', { timeout: TURN_MS });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Claude agent whose session never says it is up offers its task on its tile, untyped, and Send types it", async () => {
+  // Given up on a minute after it starts: past the default limit.
+  test.setTimeout(120_000);
+  const { dir, repo, env } = scratch('waiting');
+  // Its hooks never run, as with Claude Code's `disableAllHooks`.
+  mkdirSync(join(env.HOME!, '.claude'), { recursive: true });
+  writeFileSync(join(env.HOME!, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    const untyped = tile(window).getByTestId('tile-untyped');
+    await expect(untyped).toHaveText(/^Answer its terminal first: Pick a database/, { timeout: 80_000 });
+    // What to do shows whole, even with the row fitted to one line, never cut off by its clamp.
+    const hintClipped = await untyped.locator('.hybrid-tile-text').evaluate((text) => {
+      const hint = text.querySelector('strong')!.getBoundingClientRect();
+      const shown = text.getBoundingClientRect();
+      return hint.bottom > shown.bottom + 0.5 || hint.right > shown.right + 0.5;
+    });
+    expect(hintClipped).toBe(false);
+
+    await untyped.getByRole('button', { name: 'Send' }).click();
+    await expect(untyped).toBeHidden();
+    await tile(window).dblclick();
+    await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
   } finally {
     await app.close();
     await removeDataDir(dataDir);

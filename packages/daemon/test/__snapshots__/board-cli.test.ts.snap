@@ -22,7 +22,7 @@ Every agent: its ref, name, [state], status (or task) and zone.
 `;
 
 exports[`agent-board --help > has help for arrange 1`] = `
-"usage: agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off] [--json]
+"usage: agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off] [--json] | arrange board [--json]
 
 Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
 orchestrator: you first, then
@@ -71,6 +71,13 @@ the zone's map (\`zone map\`), so you can check the layout at once.
 (by issue, in rows, until you ask otherwise). With --auto on, your zone is arranged by itself
 after every agent you start, note you add and agent you close, the new one in its lane, so you
 need not call arrange; --auto off stops it.
+
+\`arrange board\`, for an orchestrator of the whole board (the Captain), lays out the board
+itself, never what is in a zone: whole zones, at their sizes and with all they hold, in rows in
+reading order a roomy gap apart, from the top-left of where they are, and the agents and shells
+loose on the board in rows below them. The notes, shapes and text loose on the board stay put,
+and what moves keeps clear of them. It is never run by itself. It takes no --by, --layout or
+--auto.
 
   --by <b>         issue, role, state.
   --layout <l>     rows, columns, cards, grid.
@@ -171,7 +178,7 @@ connectors between them as Mermaid: a class diagram when a class is among them, 
 `;
 
 exports[`agent-board --help > has help for doc 1`] = `
-"usage: agent-board doc <path> [--title <text>] [--board]
+"usage: agent-board doc <path> [--title <text>] [--board] [--plan]
 
 Shows the user a longer Markdown (.md) or HTML (.html) file of yours as a document, nicer to read
 than your terminal: a Document tab in your window, and with --board a card beside your tile too. Nothing
@@ -180,11 +187,22 @@ waits. Showing the same file again shows the same document.
 It stays live: write the file again and the user sees the new version. They may edit a Markdown
 document there; their edit is written to the file, and you are told what changed, typed at your
 prompt once your turn is over. An HTML document is view-only (sandboxed, offline), and the user
-may send you comments on it. For a plan to approve, use the MCP tool \`show_doc\` with plan, which
-waits for the decision; with on_board, its plan card goes beside your tile.
+may send you comments on it.
+
+With --plan the file is a plan for the user to approve, send back with changes, or reject (it may
+be edited first: Markdown only). It waits in their Needs you inbox and the Plan tab, kept as v1, v2…
+as you present each revision, and with --board a plan card goes beside your tile. The command
+returns at once: a shell command can't wait the hour the user may take. Their decision, with their
+comments and any edits of theirs, is typed at your prompt once your turn is over, as a document
+edit is. It waits as long as the user takes, with no timeout. End your turn and wait for it, and
+don't carry the plan out before. After changes are asked for, or to revise it sooner, write the
+revised plan and run it again: the new version takes the old one's place. To hold your turn for the
+decision instead, use the MCP tool \`show_doc\` with plan.
 
   --title <text>   What it is, in a line; else its first heading (or page title).
   --board          Also put it on the board, beside your tile.
+  --plan           It is your plan to decide on, not a document: returns at once, the decision
+                   arrives at your prompt later.
   --json           Print the document as JSON.
 "
 `;
@@ -687,6 +705,7 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.removeEdge
   orchestrator.move
   orchestrator.arrange
+  orchestrator.arrangeBoard
   orchestrator.map
   orchestrator.screenshot
   orchestrator.addZone
@@ -1044,9 +1063,10 @@ COMMANDS
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.
   open-pr               Open a draft pull request of your branch (agents only).
-  doc <path> [--title <text>] [--board]
+  doc <path> [--title <text>] [--board] [--plan]
                         Show the user a Markdown or HTML file of yours as a document: a Doc
-                        tab in your window (agents only). See \`doc --help\`.
+                        tab in your window (agents only). With --plan it is a plan for them
+                        to decide, and the command returns at once. See \`doc --help\`.
   record pr <url> | record doc <path> [--for orchestrator]
                         Put a pull request you opened, or a hand-off doc you wrote, on your
                         sidebar (agents only). See \`record --help\`.
@@ -1060,8 +1080,10 @@ COMMANDS
                         alone, as they wait on the user longer than a shell command runs:
                         ask (a question in the user's Needs you inbox) and show_doc with plan
                         (a plan for them to approve, send back with changes, or reject;
-                        present_plan still works). An agent an orchestrator started puts
-                        both to that orchestrator instead.
+                        present_plan still works), which holds your turn for the decision.
+                        From a shell, \`doc --plan\` presents a plan and returns at once, the
+                        decision coming to your prompt later. An agent an orchestrator started
+                        puts both to that orchestrator instead.
   rpc <method> [json]   Call a daemon method directly and print its JSON result. In an agent's
                         session, only the reads above, your own status and records (and, for an
                         orchestrator, the orchestrator commands).
@@ -1114,6 +1136,8 @@ ORCHESTRATING
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
+                        arrange board lays out the whole board's zones and loose tiles,
+                        at board scope.
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.

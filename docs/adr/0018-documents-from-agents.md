@@ -38,7 +38,7 @@ An agent often has more to show than its terminal reads well: a design, a findin
 
 ## Plans are documents with a decision
 
-- **`show_doc` with `plan`** reads the file and presents it as `present_plan` does, waiting for the decision, and with `on_board` puts a plan card beside the agent's tile; it is the documented way in, and `present_plan` is kept for agents that call it. A plan keeps its own versioned store and its held call (ADR-0014): a plan's body is the version decided on, kept even once the file moves on, which a live document can't be. The plan keeps its file's real path, so an approved edit of the user's is written there.
+- **`show_doc` with `plan`** reads the file and presents it as `present_plan` does, waiting for the decision, and with `on_board` puts a plan card beside the agent's tile; it is the documented way in, and `present_plan` is kept for agents that call it. A plan keeps its own versioned store and its held call (ADR-0014): a plan's body is the version decided on, kept even once the file moves on, which a live document can't be. The plan keeps its file's real path, so an approved edit of the user's is written there. From a shell, `agent-board doc <path> --plan` does the same but returns at once, and the decision is typed at the agent's prompt later, as a document edit is (ADR-0014).
 - **The Plan tab reads as a document** with its type tag (PLAN) beside its title and the decision bar under it, and edits a waiting Markdown plan as the Document tab does. Saving makes the user's version, not a write to the file: a decision is on a fixed text (ADR-0014), and the file is written only once that version is approved.
 
 ## Considered options

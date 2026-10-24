@@ -1,8 +1,8 @@
 // A zone as a map an orchestrator reads (`agent-board zone map`): its lanes as an arrange by issue sees them, and what is
 // amiss in it, as a lane table or a box picture. Pure, so every case is unit-tested.
 import { fittedSize, LANE_SLOTS, type Lanes } from './board-arrange.ts';
-import { AGENT_TILE_SIZE, GRID_COLUMN, GRID_ORIGIN, overlaps, ROW_STEP, TILE_GAP, type Point, type Rect } from './board-layout.ts';
-import type { AgentState, ArrangeSettings, ZoneMap, ZoneMapLane, ZoneMapThing } from './protocol.ts';
+import { overlaps, ROW_STEP, zoneGrid, type Point, type Rect, type ZoneGrid } from './board-layout.ts';
+import type { AgentState, ArrangeSettings, ArrangeSpacing, ZoneMap, ZoneMapLane, ZoneMapThing } from './protocol.ts';
 import { cutText } from './text-cut.ts';
 
 /**
@@ -15,6 +15,8 @@ export interface ZoneMapInput {
   things: readonly ZoneMapThing[];
   parts: ReadonlyMap<string, string>;
   arrange: ArrangeSettings;
+  /** The zone's spacing: the gaps an arrange keeps, which the gaps it reports are past, and the grid's. Normal without. */
+  spacing?: ArrangeSpacing;
   compact?: ReadonlyMap<string, Rect>;
   /** Where an arrange as set would put each tile of the crew now, by key (`arrangeTiles`): what its tiles are held to. */
   arranged?: ReadonlyMap<string, Point>;
@@ -26,14 +28,18 @@ const rectOf = (thing: ZoneMapThing): Rect => ({ x: thing.x, y: thing.y, width: 
  * which never depends on where anything is, so a tile dragged away is the only one off; else, for a tile an arrange
  * doesn't place, a grid cell, as `move --at` and the board's slots put tiles.
  */
-const onGrid = (thing: ZoneMapThing, arranged: ReadonlyMap<string, Point>) => {
+const onGrid = (thing: ZoneMapThing, arranged: ReadonlyMap<string, Point>, grid: ZoneGrid) => {
   const at = arranged.get(thing.key);
   if (at !== undefined && Math.abs(at.x - thing.x) < 0.5 && Math.abs(at.y - thing.y) < 0.5) return true;
-  return Number.isInteger((thing.x - GRID_ORIGIN.x) / GRID_COLUMN) && Number.isInteger((thing.y - GRID_ORIGIN.y) / ROW_STEP);
+  return Number.isInteger((thing.x - grid.origin.x) / grid.column) && Number.isInteger((thing.y - grid.origin.y) / grid.row);
 };
 
 /** The map of a zone: its lanes, the rest above them, and what is amiss. */
-export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map(), arranged = new Map() }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid'> {
+export function buildZoneMap({ lanes, things, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map() }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid'> {
+  // Every gap is measured past the one this spacing's arrange keeps, in this spacing's slots.
+  const grid = zoneGrid(spacing);
+  const { column: columnStep, row: rowStep } = grid;
+  const { tile: tileGap, lane: laneKept } = grid.gaps;
   const byKey = new Map(things.map((thing) => [thing.key, thing]));
   const part = (key: string) => {
     const item = parts.get(key);
@@ -62,7 +68,7 @@ export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map(
     }
   });
 
-  const offGrid = new Set(lead.filter((key) => !onGrid(byKey.get(key)!, arranged)));
+  const offGrid = new Set(lead.filter((key) => !onGrid(byKey.get(key)!, arranged, grid)));
   // A lane is a row, or a column, of its own only by issue in rows or columns: else its tiles need only be on the grid.
   const along = arrange.by !== 'issue' ? undefined : arrange.layout === 'rows' ? 'row' : arrange.layout === 'columns' ? 'column' : undefined;
   const lineOf = (thing: ZoneMapThing) => (along === 'row' ? thing.y : thing.x);
@@ -79,7 +85,7 @@ export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map(
     const tiles = LANE_SLOTS.flatMap((slot) => lane.slots[slot]).map((key) => byKey.get(key)!);
     const label = lane.labelItem === null ? undefined : byKey.get(lane.labelItem);
     const note = lane.note === null ? undefined : byKey.get(lane.note);
-    for (const tile of tiles) if (!onGrid(tile, arranged)) offGrid.add(tile.key);
+    for (const tile of tiles) if (!onGrid(tile, arranged, grid)) offGrid.add(tile.key);
     if (along === undefined) continue;
     // Its line is where its label is, else its first tile.
     const line = [label, ...tiles, note].find((thing) => thing !== undefined);
@@ -92,30 +98,30 @@ export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map(
     // The label's distance to its lane: the space to its nearest neighbour on either side (by the rule `widestGap` keeps), and
     // how far past the lane's first thing it lies, a label dragged to the far end.
     if (label !== undefined && (tiles.length > 0 || note !== undefined)) {
-      const [at, size, unit] = along === 'row' ? (['x', 'width', GRID_COLUMN] as const) : (['y', 'height', ROW_STEP] as const);
+      const [at, size, unit] = along === 'row' ? (['x', 'width', columnStep] as const) : (['y', 'height', rowStep] as const);
       const others = [...tiles, ...(note === undefined ? [] : [note])];
-      const keptBy = (thing: ZoneMapThing) => Math.max(TILE_GAP, along === 'row' ? TILE_GAP : ROW_STEP - thing[size]);
+      const keptBy = (thing: ZoneMapThing) => Math.max(tileGap, along === 'row' ? tileGap : rowStep - thing[size]);
       const near = Math.min(...others.map((other) => (other[at] >= label[at] ? other[at] - (label[at] + label[size]) - keptBy(label) : label[at] - (other[at] + other[size]) - keptBy(other))));
       const past = label[at] - Math.min(...others.map((other) => other[at]));
       labelGap = Math.max(labelGap, Math.round(near / unit), Math.round(Math.max(0, past) / unit));
     }
     // The gaps along it, in slots: grid columns across a row, grid rows down a column.
     const inLine = [label, ...tiles, note].filter((thing): thing is ZoneMapThing => thing !== undefined && lineOf(thing) === lineOf(line));
-    const [start, length, step] = along === 'row' ? (['x', 'width', GRID_COLUMN] as const) : (['y', 'height', ROW_STEP] as const);
+    const [start, length, step] = along === 'row' ? (['x', 'width', columnStep] as const) : (['y', 'height', rowStep] as const);
     inLine.sort((a, b) => a[start] - b[start]);
     for (const [index, thing] of inLine.slice(1).entries()) {
       const before = inLine[index]!;
       // What lies between them past the gap kept between any two: a row's gap is a tile gap, a column's a row's spacing.
-      const kept = along === 'row' ? TILE_GAP : ROW_STEP - before[length];
-      const gap = thing[start] - (before[start] + before[length]) - Math.max(TILE_GAP, kept);
+      const kept = along === 'row' ? tileGap : rowStep - before[length];
+      const gap = thing[start] - (before[start] + before[length]) - Math.max(tileGap, kept);
       widestGap = Math.max(widestGap, Math.round(gap / step));
     }
   }
   // The space between each lane and the next across, past what an arrange keeps between them: a row's tile perch and gap,
   // a column's tile gap, in slots across.
   spans.sort((a, b) => a.start - b.start);
-  // These kept gaps are the ones arrange keeps between lanes today (its row and column spacing): they follow it.
-  const [kept, unit] = along === 'row' ? [ROW_STEP - AGENT_TILE_SIZE.height, ROW_STEP] : [TILE_GAP, GRID_COLUMN];
+  // These kept gaps are the ones arrange keeps between lanes at this spacing (its lane and tile gaps): they follow it.
+  const [kept, unit] = along === 'row' ? [laneKept, rowStep] : [tileGap, columnStep];
   let laneGap = 0;
   let reach = spans[0]?.end ?? 0;
   for (const span of spans.slice(1)) {
@@ -125,7 +131,7 @@ export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map(
   // Down a column, the lanes start level with the top row (a column's label beside the lead, its tiles below): the
   // space from there to the lanes' first line.
   if (along === 'column' && topThings.length > 0 && lanesTop !== Infinity) {
-    laneGap = Math.max(laneGap, Math.round((lanesTop - Math.min(...topThings.map((thing) => thing.y))) / ROW_STEP));
+    laneGap = Math.max(laneGap, Math.round((lanesTop - Math.min(...topThings.map((thing) => thing.y))) / rowStep));
   }
   return { top, lanes: mapped, overlaps: overlapping, widestGap, laneGap, labelGap, offGrid: [...offGrid] };
 }
@@ -139,11 +145,12 @@ const MAX_NAME = 16;
 
 /**
  * How much bigger a zone is than an arrange would fit it to what is in it (`fittedSize`: padding, the bottom gap, the
- * least size), in grid columns wide and rows tall; 0 for a zone no bigger.
+ * least size, at its spacing), in grid columns wide and rows tall; 0 for a zone no bigger.
  */
-export function spareSlots(map: Pick<ZoneMap, 'width' | 'height' | 'things'>): { columns: number; rows: number } {
-  const fitted = fittedSize(map.things.map(rectOf), []);
-  return { columns: Math.max(0, Math.round((map.width - fitted.width) / GRID_COLUMN)), rows: Math.max(0, Math.round((map.height - fitted.height) / ROW_STEP)) };
+export function spareSlots(map: Pick<ZoneMap, 'width' | 'height' | 'things'> & Partial<Pick<ZoneMap, 'spacing'>>): { columns: number; rows: number } {
+  const grid = zoneGrid(map.spacing ?? 'normal');
+  const fitted = fittedSize(map.things.map(rectOf), [], grid);
+  return { columns: Math.max(0, Math.round((map.width - fitted.width) / grid.column)), rows: Math.max(0, Math.round((map.height - fitted.height) / grid.row)) };
 }
 
 /** The line saying what is amiss, or `ok`. */
@@ -164,7 +171,7 @@ export function lintLine(map: ZoneMap, ref: RefOf): string {
 /** The map's first line: the zone, its size, and how it is arranged. */
 function headLine(map: ZoneMap, zoneRef: string): string {
   const { by, layout, auto } = map.arrange;
-  return `zone ${zoneRef} ${map.name} · ${Math.round(map.width)}×${Math.round(map.height)} · by ${by}, in ${layout} · auto-arrange ${auto ? 'on' : 'off'}`;
+  return `zone ${zoneRef} ${map.name} · ${Math.round(map.width)}×${Math.round(map.height)} · by ${by}, in ${layout} · ${map.spacing} spacing · auto-arrange ${auto ? 'on' : 'off'}`;
 }
 
 const isDone = (thing: ZoneMapThing | undefined) => thing?.state === 'done';

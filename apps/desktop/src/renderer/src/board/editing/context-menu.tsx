@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { BoardItemKind } from '@agent-board/daemon/protocol';
+import { covers } from '../../board-colors';
 import {
   AlarmClock,
   AlignCenterVertical,
@@ -18,6 +19,7 @@ import {
   CopyPlus,
   Grid3x3,
   Spline,
+  LayoutDashboard,
   LayoutGrid,
   Pencil,
   RotateCcw,
@@ -26,7 +28,7 @@ import {
   Trash2,
   Workflow,
 } from 'lucide-react';
-import { keyText } from '../../keys/registry';
+import { binding, isActive, keyText } from '../../keys/registry';
 import type { MenuEntry } from '../../ui';
 import { ITEM_KINDS } from '../items/kinds';
 import type { Alignment, Reorder } from './arrange';
@@ -58,6 +60,8 @@ export interface ContextActions {
   toggleGrid(): void;
   /** Lays the tiles loose on the board out in a grid where they are. */
   tidyLoose(): void;
+  /** Lays the zones out in rows and gathers the loose tiles below them, never moving what is in a zone. */
+  arrangeBoard(): void;
   /** Puts a new clock where the menu was opened, and opens its editor. */
   addClock(): void;
 }
@@ -77,7 +81,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
     return [
       {
         label: colors.label,
-        swatches: colors.presets.map(({ name, value, color }) => ({ name, value, color, pressed: shown.size === 1 && shown.has(value) })),
+        swatches: colors.presets().map(({ name, value, color, also = [] }) => ({ name, value, color, pressed: shown.size === 1 && [...shown].some((has) => covers({ slot: value, also }, has)) })),
         onPick: (value) => actions.setColor(colors.patch, kind, value),
       },
     ];
@@ -153,5 +157,12 @@ export function boardEntries(actions: ContextActions): MenuEntry[] {
     { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },
+    {
+      label: 'Arrange the board',
+      icon: <LayoutDashboard />,
+      shortcut: isActive(binding('edit.arrangeBoard')) ? keyText('edit.arrangeBoard') : undefined,
+      hint: 'Zones in rows, loose tiles below; nothing inside a zone moves',
+      onSelect: actions.arrangeBoard,
+    },
   ];
 }

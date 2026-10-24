@@ -346,8 +346,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       shellIntegrationDir: join(paths.dataDir, 'shell-integration'),
       onOutput: (sessionId) => agents.onOutput(sessionId),
       onExit: (session) => {
-        asks.drop(session.id);
         agents.onExit(session);
+        // After the agent reads as ended, so what it is told of a plan it left waits for it to be resumed.
+        asks.end(session.id);
         reviews.onExit(session.id, session.stoppedByRestart || (agents.get(session.id)?.hibernated ?? null) !== null);
         shells.onSessionExit(session);
       },
@@ -526,6 +527,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       worktree: (sessionId) => agents.get(sessionId)?.worktree,
       addCard: (sessionId) => addPlanCard(sessionId),
       wrote: (sessionId, path) => documents.userWrote(sessionId, path),
+      // The decision on a plan left with the command line is typed at the agent's prompt as a document's edit is.
+      told: (sessionId, text) => documents.tell(sessionId, text),
       log,
     });
     // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
@@ -553,6 +556,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ensureHookShim,
       boardCliPath: cli === undefined ? undefined : cliPath,
       compactWindow: () => settings.get().compactWindow,
+      clickableLinks: () => settings.get().clickableLinks,
       env: options.agentEnv ?? process.env,
       shell,
       shellArgs,
@@ -621,7 +625,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const leavingZone = itemsLeavingZone(db, broadcast);
     // Sources is created just below; no clone runs before then.
     const reposDir = options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos'));
-    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir, groupsDir);
+    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir, groupsDir, () => settings.get().arrangeSpacing);
     const sources: ZoneSources = createZoneSources({
       db,
       zones: zoneTable,

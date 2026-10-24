@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey } from './agent-helpers.ts';
+import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -140,6 +140,7 @@ test('an agent tile drags within its zone, out onto the board and into another z
   const dataDir = tempDataDir();
   let { app, window } = await launch(dataDir, env);
   try {
+    await normalNewZones(window);
     await addZone(app, window, repo);
     await addZone(app, window, join(repo, 'apps', 'web'));
     // The view has moved to the folder zone, beside the repo's: show both.

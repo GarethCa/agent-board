@@ -142,6 +142,8 @@ export class FakeSession {
    * `FAKE_HARNESS_LOSE_ENTERS`, 0 by default.
    */
   private entersToLose = Number(process.env.FAKE_HARNESS_LOSE_ENTERS ?? 0);
+  /** How many more lines typed at it with text lose no Enter first: `FAKE_HARNESS_LOSE_ENTERS_AFTER`, 0 by default. */
+  private linesKept = Number(process.env.FAKE_HARNESS_LOSE_ENTERS_AFTER ?? 0);
   /**
    * How many more prompts typed at it (not given on the command line) fire no `UserPromptSubmit`, as a hook that timed
    * out on a loaded machine: `FAKE_HARNESS_LOSE_PROMPT_HOOKS`, 0 by default.
@@ -182,12 +184,17 @@ export class FakeSession {
     return this.dialect.startSource === 'resume';
   }
 
-  /** Starts the session. A resumed one shows its conversation so far first, as the real TUIs do. */
+  /**
+   * Starts the session. A resumed one shows its conversation so far first, as the real TUIs do. With
+   * `FAKE_HARNESS_NO_SESSION_START=1` it fires no `SessionStart`; with `FAKE_HARNESS_START_SOURCE`, its `SessionStart`
+   * names that source instead of its own (`compact`, as Claude's after a compaction).
+   */
   async start(): Promise<void> {
     if (this.resumed) {
       for (const { role, text } of this.dialect.transcript.history()) this.print(role === 'user' ? `> ${text}\n` : `${text}\n`);
     }
-    await this.fire('SessionStart', { source: this.dialect.startSource, model: this.dialect.model });
+    if (process.env.FAKE_HARNESS_NO_SESSION_START === '1') return;
+    await this.fire('SessionStart', { source: process.env.FAKE_HARNESS_START_SOURCE || this.dialect.startSource, model: this.dialect.model });
   }
 
   async submit(prompt: string): Promise<void> {
@@ -523,6 +530,10 @@ export class FakeSession {
    */
   async readLine(): Promise<string | undefined> {
     let line = await this.readMessage();
+    if (line !== undefined && line !== '' && this.linesKept > 0) {
+      this.linesKept -= 1;
+      return line;
+    }
     // A lost Enter leaves the text at the prompt until the next one, and whatever is typed before it joins it.
     while (line !== undefined && line !== '' && this.entersToLose > 0) {
       this.entersToLose -= 1;

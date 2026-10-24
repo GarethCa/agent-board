@@ -94,7 +94,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && crewView.look !== 'off' && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
-  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, pauseAgent, sendUnsent, clearUnsent, restartAgent, rename, startReview, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
+  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, pauseAgent, sendUnsent, clearUnsent, typeFirstPrompt, restartAgent, rename, startReview, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
     useContext(TileActionsContext);
   const commands = useBoardCommands();
   const gate = useGateRun(agent.sessionId);
@@ -294,6 +294,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           <StartSteps lines={starting ? agentStartLines(agent).slice(-1) : agentStartLines(agent)} title={starting ? agent.worktree : undefined} />
           <StartOutput output={startup.output} failed={startup.failed} />
         </>
+      ) : agent.untypedPrompt !== null ? (
+        <UntypedRow fitted={fitted} prompt={agent.untypedPrompt} onSend={() => typeFirstPrompt(agent.sessionId)} />
       ) : // Before what it asks: the answer is what sits unsent at its prompt.
       agent.unsent !== null ? (
         <UnsentRow
@@ -658,6 +660,51 @@ function UnsentRow({
       </Button>
       <Button size="xs" className="nodrag" data-testid="clear-unsent" disabled={pending !== undefined} onClick={() => run('clear', onClear)}>
         Clear
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * The first prompt its session never said it was up for, so never typed: Send types it at its prompt, once the user
+ * has seen its terminal is ready for it (a startup screen of its harness answered).
+ */
+function UntypedRow({ fitted, prompt, onSend }: { fitted: (element: HTMLElement | null) => void; prompt: string; onSend(): Promise<void> }) {
+  const [pending, setPending] = useState(false);
+  // What to do before Send (beside it), short enough to fit the one line a crowded tile leaves the row: Send on a
+  // startup screen (trust this folder?) answers it.
+  const hint = 'Answer its terminal first:';
+  return (
+    <span
+      ref={fitted}
+      className="hybrid-tile-body hybrid-tile-unsent"
+      role="note"
+      data-testid="tile-untyped"
+      title={`Its first prompt is not typed yet: its session never said it was up. Answer its terminal first, then Send.\n\n${prompt}`}
+      onDoubleClick={stopPropagation}
+    >
+      <span className="hybrid-tile-text">
+        {pending ? (
+          'Sending its first prompt…'
+        ) : (
+          <>
+            <strong>{hint}</strong> {prompt}
+          </>
+        )}
+      </span>
+      <Button
+        size="xs"
+        variant="primary"
+        icon={<SendHorizontal />}
+        className="nodrag"
+        data-testid="send-untyped"
+        disabled={pending}
+        onClick={() => {
+          setPending(true);
+          void onSend().finally(() => setPending(false));
+        }}
+      >
+        Send
       </Button>
     </span>
   );

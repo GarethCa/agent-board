@@ -137,6 +137,21 @@ describe('the shipped migrations', () => {
     expect(() => db.exec("UPDATE zones SET fill_opacity = 40")).not.toThrow();
   });
 
+  it('give existing zones normal spacing, the gaps they were laid out at, and refuse any other than the three', () => {
+    const db = new DatabaseSync(':memory:');
+    const added = MIGRATIONS.findIndex((m) => m.name === 'zone_spacing');
+    expect(added).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, added));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+      VALUES ('a', NULL, '', 'ideas', '#4c6ef5', 0, 0, 300, 200)`);
+
+    migrate(db);
+
+    expect(db.prepare('SELECT spacing FROM zones').all()).toEqual([{ spacing: 'normal' }]);
+    expect(() => db.exec("UPDATE zones SET spacing = 'huge'")).toThrow(/CHECK/);
+    expect(() => db.exec("UPDATE zones SET spacing = 'roomy'")).not.toThrow();
+  });
+
   it("remember existing zones' folders as recent ones, once each, when zones get sources", () => {
     const db = new DatabaseSync(':memory:');
     const sources = MIGRATIONS.findIndex((m) => m.name === 'zone_sources');

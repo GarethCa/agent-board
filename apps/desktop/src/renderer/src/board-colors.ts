@@ -1,4 +1,6 @@
 import {
+  COLOR_SLOTS,
+  FILL_SLOTS,
   SLOT_COLORS,
   STICKY_COLORS,
   colorSlotOf,
@@ -91,6 +93,61 @@ export const slotName = (slot: ColorSlot | FillSlot): string => `${slot[0]!.toUp
 
 /** How `slot` is drawn in the theme, as text, a line or an outline. */
 export const slotToken = (slot: ColorSlot): string => paint(PAINT_TOKENS[slot]);
+
+/** A colour slot that paints the same as an earlier one in the theme, folded into it in a picker's row. */
+export interface FoldedSlot<S extends string> {
+  /** The first slot with this look: the one a pick stores. */
+  slot: S;
+  /** The later slots that look just like it. */
+  also: readonly S[];
+}
+
+/**
+ * `slots` in order, each distinct `look` once: a slot that looks like an earlier one folds into it. A look is the
+ * colour the slot is drawn in, as the theme resolves it, so what folds depends on the theme and not on the slots' names.
+ */
+export function foldAlike<S extends string>(slots: readonly S[], look: (slot: S) => string): FoldedSlot<S>[] {
+  const groups = new Map<string, { slot: S; also: S[] }>();
+  for (const slot of slots) {
+    const key = look(slot).trim().toLowerCase();
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, { slot, also: [] });
+    else group.also.push(slot);
+  }
+  return [...groups.values()];
+}
+
+/** Whether `group` stands for `slot`, as its first slot or one folded into it: a stored folded slot shows as picked. */
+export const covers = (group: FoldedSlot<string>, slot: string | null): boolean => slot !== null && (group.slot === slot || group.also.includes(slot));
+
+/** Reads a theme token's resolved value (`--paint-blue`), for the theme being shown. */
+export type ReadToken = (token: string) => string;
+
+const lookOfSlot = (slot: ColorSlot, read: ReadToken): string => read(PAINT_TOKENS[slot]);
+
+/** A fill in the picker looks like its tint and the outline colour that rings its swatch. */
+const lookOfFill = (slot: TintedFill, read: ReadToken): string => `${read(FILL_TOKENS[slot])} ${read(PAINT_TOKENS[slot])}`;
+
+/** The fills a slot tints, in the colour rows' order: which of two alike wins, so one colour has one name in a bar. */
+type TintedFill = Exclude<FillSlot, 'tile'>;
+const TINTED_FILLS = COLOR_SLOTS.filter((slot): slot is TintedFill => (FILL_SLOTS as readonly string[]).includes(slot));
+
+/** The text, shape outline and text-item colours as the theme shows them: each distinct colour once. */
+export const foldColors: Fold<ColorSlot> = (read) => foldAlike(COLOR_SLOTS, (slot) => lookOfSlot(slot, read));
+
+/** A connector's colours but Ink, which its neutral line stands for. */
+export const foldLines: Fold<Exclude<ColorSlot, 'ink'>> = (read) =>
+  foldAlike(
+    COLOR_SLOTS.filter((slot): slot is Exclude<ColorSlot, 'ink'> => slot !== 'ink'),
+    (slot) => lookOfSlot(slot, read),
+  );
+
+/** A shape's tinted fills, the tile's own aside: the winner of alike ones as in the colour rows, shown in the fills' order. */
+export const foldFills: Fold<TintedFill> = (read) =>
+  foldAlike(TINTED_FILLS, (slot) => lookOfFill(slot, read)).sort((a, b) => FILL_SLOTS.indexOf(a.slot) - FILL_SLOTS.indexOf(b.slot));
+
+/** How a picker row folds its slots, given how the theme shown reads its tokens. */
+export type Fold<S extends string> = (read: ReadToken) => FoldedSlot<S>[];
 
 /** How `slot` is drawn in the theme as a shape's fill. */
 export const fillToken = (slot: FillSlot): string => paint(FILL_TOKENS[slot]);

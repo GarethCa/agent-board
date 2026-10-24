@@ -67,7 +67,7 @@ describe('an agent on a command it left running in the background', () => {
     writeFileSync(join(agent.worktree, 'done'), '');
     const next = await untilAgent(agent.sessionId, (a) => a.lastMessage === 'The command finished.');
     expect(next).toMatchObject({ state: 'idle', commands: [] });
-    expect(statesOf(recorder.events, agent.sessionId)).toEqual(['starting', 'running', 'thinking', 'running', 'thinking', 'on-command', 'idle']);
+    expect(statesOf(recorder.events, agent.sessionId)).toEqual(['starting', 'thinking', 'running', 'thinking', 'on-command', 'idle']);
   });
 
   it("finds a Codex agent's command from its process tree, and falls back to idle once nothing runs, its turn long over", async () => {

@@ -19,6 +19,7 @@ const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
   boardMcp: true,
   agentsOrchestrate: false,
   gateCommand: null,
+  spacing: 'normal',
   tracker: null,
   clone: null,
   managedClone: false,

@@ -2,7 +2,6 @@ import { memo, useContext, useEffect, useMemo, useRef, useState, type CSSPropert
 import { BaseEdge, EdgeLabelRenderer, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react';
 import {
   CONNECTOR_LINE_ENDS,
-  COLOR_SLOTS,
   MAX_CONNECTOR_LABEL,
   SLOT_COLORS,
   colorSlotOf,
@@ -10,10 +9,11 @@ import {
   type ConnectorLineEnd,
 } from '@agent-board/daemon/protocol';
 import { ChevronDown, Trash2 } from 'lucide-react';
-import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch } from '../items/ItemStyleBar';
+import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, slotTitle } from '../items/ItemStyleBar';
 import { Button, Menu, Swatch } from '../../ui';
 import { tokenNumber } from '../../theme';
-import { connectorPaint, slotName, slotToken } from '../../board-colors';
+import { connectorPaint, covers, foldLines, slotName, slotToken } from '../../board-colors';
+import { useFoldedSlots } from '../items/use-folded-slots';
 import { binding, isActive, keyText } from '../../keys/registry';
 import { useExtendedShortcuts } from '../../keys/extended-shortcuts';
 import { ConnectorActionsContext, type ConnectorLabelPlace } from './actions';
@@ -338,6 +338,7 @@ function ConnectorBar({ connector }: { connector: Connector }) {
   const set = (patch: Omit<Parameters<typeof update>[0], 'id'>) => update({ id: connector.id, ...patch });
   const relation = RELATIONS.find(({ id }) => id === relationOf(connector));
   const [customEnds, setCustomEnds] = useState(false);
+  const lineColors = useFoldedSlots(foldLines);
   // A new key, so off with the Extended keyboard shortcuts setting: ⇧S then arms the Shape tool, and the row says none.
   const extended = useExtendedShortcuts();
   return (
@@ -389,14 +390,15 @@ function ConnectorBar({ connector }: { connector: Connector }) {
           onClick={() => set({ color: null })}
         />
         {/* Its colour is stored as its slot's, which is drawn as the slot: the neutral line stands for Ink. */}
-        {COLOR_SLOTS.filter((slot) => slot !== 'ink').map((slot) => (
+        {lineColors.map((group) => (
           <BarSwatch
-            key={slot}
-            name={slotName(slot)}
-            title={`${slotName(slot)} · follows the theme`}
-            paint={slotToken(slot)}
-            pressed={connector.color !== null && colorSlotOf(connector.color) === slot}
-            onPick={() => set({ color: SLOT_COLORS[slot] })}
+            key={group.slot}
+            name={slotName(group.slot)}
+            title={slotTitle(group.slot, group.also)}
+            paint={slotToken(group.slot)}
+            folded={group.also.length > 0}
+            pressed={covers(group, connector.color === null ? null : colorSlotOf(connector.color))}
+            onPick={() => set({ color: SLOT_COLORS[group.slot] })}
           />
         ))}
         {connector.color !== null && colorSlotOf(connector.color) === null && (

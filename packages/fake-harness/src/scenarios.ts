@@ -300,7 +300,8 @@ const scripts: Record<FakeScenario, Script> = {
    * release plan in Markdown to `<path>` (an `.html` path, a page) and shows it with `show_doc`; `Doc on the board:
    * <path>` shows it as a card on the board too. Nothing waits on either. `Plan doc on the board: <path>` writes a
    * migration plan in Markdown to `<path>` and shows it with `show_doc` as a plan with its card on the board, waiting
-   * for the decision. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
+   * for the decision. `Plan doc by CLI: <path>` writes the same plan and leaves it with `agent-board doc --plan --board`,
+   * which returns at once, then ends its turn; the decision is typed at its prompt later. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
    * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`.
    */
   async 'ask-plan'(session, prompt) {
@@ -346,6 +347,14 @@ const scripts: Record<FakeScenario, Script> = {
       const text = '# Zone id migration\n\n## Steps\n\n- Add zone_id, nullable\n- Backfill from the board file\n- Make it NOT NULL\n';
       await session.runShell(writeFileCommand(planDoc, text));
       return say(await session.callMcpTool('agent-board', 'show_doc', { path: planDoc, plan: true, on_board: true }));
+    }
+    const planByCli = /^Plan doc by CLI: (.*)/.exec(prompt)?.[1];
+    if (planByCli !== undefined) {
+      const text = '# Zone id migration\n\n## Steps\n\n- Add zone_id, nullable\n- Backfill from the board file\n- Make it NOT NULL\n';
+      await session.runShell(writeFileCommand(planByCli, text));
+      await session.runShell(`agent-board doc '${planByCli}' --plan --board`);
+      await session.say('Plan left with the board.');
+      return session.stop();
     }
     const plan = /^Plan: (.*)/.exec(prompt)?.[1];
     if (plan !== undefined) {
@@ -494,7 +503,7 @@ const scripts: Record<FakeScenario, Script> = {
       return prompt.endsWith('fail') ? session.failTurn('server_error', '500 Internal Server Error') : session.failTurn('rate_limit', '429 Too Many Requests');
     }
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
+    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
     await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
     await session.say('Handover written.\nSTATUS: done');

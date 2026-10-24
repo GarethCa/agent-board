@@ -39,6 +39,7 @@ import {
   type PlanSummary,
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
+import { planDecisionText } from './plan-told.ts';
 import { oneLine } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
 import { lineDiff } from './text-diff.ts';
@@ -82,6 +83,8 @@ export interface AskHostOptions {
   addCard?(sessionId: string): Promise<void>;
   /** The user's approved version of the agent's plan was written to its file at `path`. */
   wrote?(sessionId: string, path: string): void;
+  /** Types `text` at the agent's prompt once it is ready for its next message: the decision on a plan it left. */
+  told?(sessionId: string, text: string): void;
   log?(message: string): void;
   clock?: Clock;
 }
@@ -91,6 +94,12 @@ export interface AskHost {
   ask(sessionId: string, spec: AskSpec, signal: AbortSignal): Promise<AskResult>;
   /** Presents the agent's next plan version, until the user decides it or it times out. Rejects, withdrawn, as `ask` does. */
   presentPlan(sessionId: string, spec: PlanSpec, signal: AbortSignal): Promise<PlanResult>;
+  /**
+   * Presents the agent's next plan version and returns it at once, for an agent whose command line can't wait: the wait
+   * outlives its connection and its turns, and the decision, or the timeout, is typed at its prompt (`told`). Ends, told
+   * to no one, only with the agent's session.
+   */
+  leavePlan(sessionId: string, spec: PlanSpec): PlanSummary;
   /** The question the agent asks now, or null. */
   pendingAsk(sessionId: string): AgentAsk | null;
   /** The agent's latest plan, or null before its first. */
@@ -108,8 +117,10 @@ export interface AskHost {
    * agent then waits on instead. Throws `invalidParams` as `decide` does, for an HTML plan, and for a body it can't take.
    */
   edit(sessionId: string, planId: string, body: string): PlanSummary;
-  /** The agent stopped waiting (its turn ended, or its session): its question goes, its plan is withdrawn. */
+  /** The agent stopped waiting (its turn ended, or its session): its question goes, its plan is withdrawn. A plan it left stays. */
   drop(sessionId: string): void;
+  /** The agent's session ended: what it waits on goes, a plan it left too. */
+  end(sessionId: string): void;
   /** The agent is being deleted: drops what it waits on and forgets its plans. */
   forget(sessionId: string): void;
   handlers<Context extends BoardConnection>(sources: BoardCallerSources & { agents: Pick<AgentHost, 'get'> }): RpcHandlers<AskMethods, Context>;
@@ -133,13 +144,14 @@ interface PlanRow {
   path: string | null;
 }
 
-const toSummary = (row: PlanRow): PlanSummary => ({
+const toSummary = (row: PlanRow, left = false): PlanSummary => ({
   id: row.id,
   version: row.version,
   title: row.title,
   format: row.format,
   presentedAt: row.presented_at,
-  expiresAt: row.expires_at,
+  expiresAt: row.expires_at === '' ? null : row.expires_at,
+  left,
   decision: row.outcome === null || row.decided_at === null ? null : { outcome: row.outcome, comments: row.comments, decidedAt: row.decided_at },
   author: row.author,
   path: row.path,
@@ -150,11 +162,14 @@ interface Waiting {
   ask: AgentAsk | null;
   planId: string | null;
   /** Ends the wait with what the user did, or with nothing (null) once the agent stopped waiting. */
-  settle(outcome: { answer: AskAnswer } | { decision: PlanOutcome; comments: string } | 'timed-out' | null): void;
+  settle(outcome: { answer: AskAnswer } | { decision: PlanOutcome; comments: string } | 'timed-out' | 'superseded' | null): void;
 }
 
 /** Why a wait ended with no answer to give. */
 const stoppedWaiting = () => new Error('the agent stopped waiting');
+
+/** Why a plan the agent left ended: the agent left its next version, which takes its place. No one is told. */
+const superseded = new Error('the agent left a newer plan');
 
 /** A trimmed text field, not blank, at most `max` characters. */
 function text(value: string, name: string, max: number): string {
@@ -204,13 +219,21 @@ export function createAskHost(options: AskHostOptions): AskHost {
   db.prepare('UPDATE plans SET outcome = ?, decided_at = ? WHERE outcome IS NULL').run('withdrawn', new Date(clock.now()).toISOString());
 
   const waiting = new Map<string, Waiting>();
+  /**
+   * The plan each agent left (`leavePlan`): no call waits on it and it has no timer, so it has a slot of its own, beside
+   * a question or a plan the agent holds a call on, and a turn's end doesn't end it.
+   */
+  const leftPlans = new Map<string, Waiting>();
   /** Each agent's latest plan, once read: the tile reads it at every update. Null for an agent with none. */
   const latest = new Map<string, PlanSummary | null>();
+
+  /** Whether the plan is the one its agent left and the user has yet to decide. */
+  const isLeft = (row: PlanRow): boolean => leftPlans.get(row.session_id)?.planId === row.id;
 
   const latestPlan = (sessionId: string): PlanSummary | null => {
     if (!latest.has(sessionId)) {
       const row = selectLatest.get(sessionId) as PlanRow | undefined;
-      latest.set(sessionId, row === undefined ? null : toSummary(row));
+      latest.set(sessionId, row === undefined ? null : toSummary(row, isLeft(row)));
     }
     return latest.get(sessionId)!;
   };
@@ -229,7 +252,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
   function hold<T>(
     sessionId: string,
     entry: Omit<Waiting, 'settle'>,
-    ms: number,
+    slot: Map<string, Waiting>,
+    ms: number | null,
     signal: AbortSignal,
     finish: (how: Parameters<Waiting['settle']>[0], wait: Waiting) => T,
   ): Promise<T> {
@@ -237,8 +261,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
       const done: Waiting = {
         ...entry,
         settle(how) {
-          if (waiting.get(sessionId) !== done) return;
-          waiting.delete(sessionId);
+          if (slot.get(sessionId) !== done) return;
+          slot.delete(sessionId);
           cancelTimer();
           signal.removeEventListener('abort', abort);
           try {
@@ -251,8 +275,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
         },
       };
       const abort = () => done.settle(null);
-      const cancelTimer = clock.setTimer(() => done.settle('timed-out'), ms);
-      waiting.set(sessionId, done);
+      const cancelTimer = ms === null ? () => undefined : clock.setTimer(() => done.settle('timed-out'), ms);
+      slot.set(sessionId, done);
       changed(sessionId, true);
       if (signal.aborted) abort();
       else signal.addEventListener('abort', abort, { once: true });
@@ -285,8 +309,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
 
   /** The agent's wait on its plan `planId`, while it still waits on it. */
   const waitingOn = (sessionId: string, planId: string): Waiting => {
-    const entry = waiting.get(sessionId);
-    if (entry !== undefined && entry.planId === planId) return entry;
+    const entry = [waiting.get(sessionId), leftPlans.get(sessionId)].find((wait) => wait?.planId === planId);
+    if (entry !== undefined) return entry;
     const row = selectPlan.get(planId) as PlanRow | undefined;
     if (row?.outcome === 'edited') {
       const edit = selectLatest.get(sessionId) as unknown as PlanRow;
@@ -311,6 +335,35 @@ export function createAskHost(options: AskHostOptions): AskHost {
     return { entry, ask };
   };
 
+  const present = (sessionId: string, spec: PlanSpec, signal: AbortSignal, left: boolean): Promise<PlanResult> => {
+    checkFree(sessionId);
+    const title = text(spec.title, 'title', MAX_PLAN_TITLE_LENGTH);
+    const body = planBody(spec.body);
+    // A plan left waits for the user as long as it takes: no timer, nor an expiry to show.
+    const ms = left ? null : waitMs(spec.timeoutMs, DEFAULT_PLAN_WAIT_MS);
+    const id = randomUUID();
+    const version = (latestPlan(sessionId)?.version ?? 0) + 1;
+    // The agent's next version takes the place of the plan it left before.
+    leftPlans.get(sessionId)?.settle('superseded');
+    insertPlan.run(id, sessionId, version, title, spec.format, body, now(), ms === null ? '' : new Date(clock.now() + ms).toISOString(), 'agent', spec.path ?? null);
+    latest.delete(sessionId);
+    return hold(sessionId, { ask: null, planId: id }, left ? leftPlans : waiting, ms, signal, (how, wait): PlanResult => {
+      const decision: PlanEnd =
+        how === null || how === 'timed-out' || how === 'superseded'
+          ? { outcome: how === 'timed-out' ? 'timed-out' : 'withdrawn', comments: '', decidedAt: now() }
+          : 'decision' in how
+            ? { outcome: how.decision, comments: how.comments, decidedAt: now() }
+            : { outcome: 'withdrawn', comments: '', decidedAt: now() };
+      // The user's edits made later versions: the decision is on the latest.
+      const decided = selectPlan.get(wait.planId!) as unknown as PlanRow;
+      recordDecision(sessionId, decided.id, decision);
+      if (how === 'superseded') throw superseded;
+      // A plan left ends with its session, which its agent is told once resumed; a held call just stops.
+      if (how === null && !left) throw stoppedWaiting();
+      return { version: decided.version, decision, edits: editsOf(sessionId, decided, decision.outcome === 'approved') };
+    });
+  };
+
   const host: AskHost = {
     ask(sessionId, spec, signal) {
       checkFree(sessionId);
@@ -329,45 +382,38 @@ export function createAskHost(options: AskHostOptions): AskHost {
         onBoard: spec.onBoard === true,
         at: null,
       };
-      return hold(sessionId, { ask, planId: null }, ms, signal, (how): AskResult => {
+      return hold(sessionId, { ask, planId: null }, waiting, ms, signal, (how): AskResult => {
         if (how === null) throw stoppedWaiting();
         if (how === 'timed-out') return { outcome: 'timed-out', answer: null };
-        if (!('answer' in how)) throw new Error('a plan decision answered a question');
+        if (how === 'superseded' || !('answer' in how)) throw new Error('a plan decision answered a question');
         const { answer } = how;
         if ('skip' in answer) return { outcome: 'skipped', answer: null };
         return { outcome: 'answered', answer: 'option' in answer ? offered[answer.option]! : answer.text.trim() };
       });
     },
 
-    presentPlan(sessionId, spec, signal) {
-      checkFree(sessionId);
-      const title = text(spec.title, 'title', MAX_PLAN_TITLE_LENGTH);
-      const body = planBody(spec.body);
-      const ms = waitMs(spec.timeoutMs, DEFAULT_PLAN_WAIT_MS);
-      const id = randomUUID();
-      const version = (latestPlan(sessionId)?.version ?? 0) + 1;
-      insertPlan.run(id, sessionId, version, title, spec.format, body, now(), new Date(clock.now() + ms).toISOString(), 'agent', spec.path ?? null);
-      latest.delete(sessionId);
-      return hold(sessionId, { ask: null, planId: id }, ms, signal, (how, wait): PlanResult => {
-        const decision: PlanEnd =
-          how === null || how === 'timed-out'
-            ? { outcome: how === null ? 'withdrawn' : 'timed-out', comments: '', decidedAt: now() }
-            : 'decision' in how
-              ? { outcome: how.decision, comments: how.comments, decidedAt: now() }
-              : { outcome: 'withdrawn', comments: '', decidedAt: now() };
-        // The user's edits made later versions: the decision is on the latest.
-        const decided = selectPlan.get(wait.planId!) as unknown as PlanRow;
-        recordDecision(sessionId, decided.id, decision);
-        if (how === null) throw stoppedWaiting();
-        return { version: decided.version, decision, edits: editsOf(sessionId, decided, decision.outcome === 'approved') };
-      });
+    presentPlan: (sessionId, spec, signal) => present(sessionId, spec, signal, false),
+
+    leavePlan(sessionId, spec) {
+      present(sessionId, spec, new AbortController().signal, true)
+        .then((result) => {
+          const said =
+            result.decision.outcome === 'withdrawn'
+              ? `Plan v${result.version} was withdrawn before the user decided: your session ended. Present it again.`
+              : planDecisionText(result, spec);
+          options.told?.(sessionId, `[agent-board] ${said}`);
+        })
+        .catch((error: unknown) => {
+          if (error !== superseded) options.log?.(`could not tell ${sessionId} how its plan ended: ${(error as Error).message}`);
+        });
+      return latestPlan(sessionId)!;
     },
 
     pendingAsk: (sessionId) => waiting.get(sessionId)?.ask ?? null,
 
     latestPlan,
 
-    plans: (sessionId) => (selectPlans.all(sessionId) as unknown as PlanRow[]).map((row) => ({ ...toSummary(row), body: row.body })),
+    plans: (sessionId) => (selectPlans.all(sessionId) as unknown as PlanRow[]).map((row) => ({ ...toSummary(row, isLeft(row)), body: row.body })),
 
     answer(sessionId, askId, answer) {
       const { entry, ask } = asking(sessionId, askId);
@@ -411,10 +457,16 @@ export function createAskHost(options: AskHostOptions): AskHost {
       return latestPlan(sessionId)!;
     },
 
+    // A plan the agent left is not in `waiting`: a turn's end leaves it.
     drop: (sessionId) => waiting.get(sessionId)?.settle(null),
 
+    end(sessionId) {
+      waiting.get(sessionId)?.settle(null);
+      leftPlans.get(sessionId)?.settle(null);
+    },
+
     forget(sessionId) {
-      host.drop(sessionId);
+      host.end(sessionId);
       deletePlans.run(sessionId);
       latest.delete(sessionId);
     },
@@ -502,7 +554,8 @@ export function createAskHost(options: AskHostOptions): AskHost {
           const lead = leadOf(sessionId);
           // Its plan is written where its orchestrator reads it: never into a folder of the user's it was resumed in.
           if (lead === undefined || !sources.agents.get(sessionId)!.ownsWorktree) {
-            const waited = host.presentPlan(sessionId, spec, closed(connection));
+            const detached = optionalBooleanParam(p, 'detached') === true;
+            const waited = detached ? { left: host.leavePlan(sessionId, spec) } : host.presentPlan(sessionId, spec, closed(connection));
             if (optionalBooleanParam(p, 'onBoard') === true && options.addCard !== undefined) {
               options.addCard(sessionId).catch((error: unknown) => options.log?.(`could not put the plan card on the board: ${(error as Error).message}`));
             }
@@ -540,7 +593,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
     },
 
     close() {
-      for (const sessionId of [...waiting.keys()]) host.drop(sessionId);
+      for (const sessionId of new Set([...waiting.keys(), ...leftPlans.keys()])) host.end(sessionId);
     },
   };
   return host;

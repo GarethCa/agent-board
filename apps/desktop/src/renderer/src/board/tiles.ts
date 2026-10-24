@@ -13,7 +13,7 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
-import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, rotatedBounds, slotUnplaced, tileSizeKey, ZONE_PADDING, zoneMinSize } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, rotatedBounds, slotUnplaced, tileSizeKey, zoneGrid, zoneMinSize } from '@agent-board/daemon/board-layout';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
 import type { ShownStart } from './use-agent-starts';
@@ -265,6 +265,7 @@ export function withTiles(
     rect,
     footprint: footprintOf,
     zoneWidth: (zoneId) => layoutOf(zones.get(zoneId)!).width,
+    zoneGrid: (zoneId) => zoneGrid(zones.get(zoneId)!.data.zone.spacing),
     zones: zoneRects,
     items: (zoneId) => items.get(zoneId) ?? [],
   });
@@ -310,15 +311,17 @@ export function withTiles(
 }
 
 /**
- * `zone` at its saved size, grown right and down to hold `tiles` (relative to it), remembering for its resizer the part
- * of the board it must cover and how many tiles it holds.
+ * `zone` at its saved size, grown right and down to hold `tiles` (relative to it) with its spacing's padding, remembering
+ * for its resizer the part of the board it must cover and how many tiles it holds.
  */
 function fitToTiles(zone: ZoneNodeType, tiles: readonly ZoneLayout[]): ZoneNodeType {
   const { x, y } = zone.position;
-  const least = zoneMinSize(tiles);
+  const grid = zoneGrid(zone.data.zone.spacing);
+  const { padding } = grid.gaps;
+  const least = zoneMinSize(tiles, grid);
   const covers = {
-    left: Math.min(...tiles.map((tile) => x + tile.x - ZONE_PADDING)),
-    top: Math.min(...tiles.map((tile) => y + tile.y - ZONE_PADDING - PERCH_ROOM)),
+    left: Math.min(...tiles.map((tile) => x + tile.x - padding)),
+    top: Math.min(...tiles.map((tile) => y + tile.y - padding - PERCH_ROOM)),
     right: x + Math.max(MIN_ZONE_SIZE.width, least.width),
     bottom: y + Math.max(MIN_ZONE_SIZE.height, least.height),
   };

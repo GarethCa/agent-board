@@ -26,6 +26,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   exitCode: null,
   shellSessionId: null,
   shellHarness: null,
+  clickableLinks: null,
   issue: null,
   notice: null,
   earlierConversations: [],
@@ -55,6 +56,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   spawnedBy: null,
   startup: null,
   unsent: null,
+  untypedPrompt: null,
   status: null,
   workFinishedAt: null,
   flag: null,
@@ -237,7 +239,7 @@ describe('agent notifications for every finished turn too', () => {
     const { alerts, notifications } = recorded();
     alerts.reset([agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?' })]);
     const ask = { id: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false, askedAt: '', expiresAt: '', onBoard: false, at: null };
-    const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '2026-10-23T19:00:00.000Z', decision: null, author: 'agent' as const, path: null };
+    const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '2026-10-23T19:00:00.000Z', decision: null, left: false, author: 'agent' as const, path: null };
 
     alerts.updated(agent('a', 'waiting', { ask }));
     alerts.updated(agent('a', 'waiting', { plan }));

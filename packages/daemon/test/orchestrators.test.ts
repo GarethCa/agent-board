@@ -1706,12 +1706,17 @@ describe('an agent still starting', () => {
     expect(waited.agents[0]!.state).not.toBe('starting');
   });
 
-  it('takes a message, which queues behind its first prompt, rather than refusing an agent that may never start', async () => {
+  it('refuses a message, saying why, until its session is up and its first prompt gone up first, then takes it', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
     const worker = await connection.call('orchestrator.spawn', { token, name: 'eager', prompt: 'Write the handover' });
     expect(worker.state).toBe('starting');
 
+    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' })).rejects.toThrow(
+      "eager's session isn't up yet: its first prompt goes first",
+    );
+    const waited = await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
+    expect(waited.agents[0]!.state).not.toBe('starting');
     await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' })).resolves.toBeDefined();
   });
 });

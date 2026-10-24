@@ -1,8 +1,6 @@
 import { memo, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react';
 import {
-  COLOR_SLOTS,
-  FILL_SLOTS,
   MAX_TEXT_LENGTH,
   SHAPE_STROKE_WIDTHS,
   TEXT_ALIGNS,
@@ -14,12 +12,12 @@ import {
 } from '@agent-board/daemon/protocol';
 import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Code } from 'lucide-react';
 import { Button, Popover } from '../../ui';
-import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, FontSizeControl, ItemStyleBar, SlotSwatches } from './ItemStyleBar';
+import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, FillSwatches, FontSizeControl, ItemStyleBar, SlotSwatches } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { filledIn, fixedColor, inSlot, shapeData } from './text-style';
 import { tokenNumber } from '../../theme';
 import { DeleteButton } from './TextNode';
-import { fillToken, shapeColors, slotName, slotToken } from '../../board-colors';
+import { shapeColors } from '../../board-colors';
 import { useDraftText } from './useDraftText';
 import { useFitResize, useGrowToFit, useWindowFocused } from './grow-to-fit';
 import { DEFAULT_SHAPE_SIZE, SHAPES, type LabelBox } from './shapes/catalogue';
@@ -306,17 +304,7 @@ export const ShapeNode = memo(function ShapeNode({
       <ItemStyleBar label="Shape style" visible={alone && !dragging}>
         <BarRow>
           <BarLabel>Fill</BarLabel>
-          {FILL_SLOTS.map((slot) => (
-            <BarSwatch
-              key={slot}
-              name={`Fill ${slot}`}
-              title={`${slotName(slot)} · follows the theme`}
-              paint={fillToken(slot)}
-              edge={slot === 'tile' ? 'var(--raised-edge)' : slotToken(slot)}
-              pressed={style.fill !== null && style.fillSlot === slot}
-              onPick={() => restyle(filledIn(slot))}
-            />
-          ))}
+          <FillSwatches slot={style.fill === null ? null : style.fillSlot} onPick={(slot) => restyle(filledIn(slot))} />
           {style.fill !== null && style.fillSlot === null && (
             <BarSwatch name={`Fill ${style.fill}, fixed`} title={`${style.fill} · fixed`} paint={style.fill} fixed pressed onPick={() => undefined} />
           )}
@@ -326,7 +314,6 @@ export const ShapeNode = memo(function ShapeNode({
           <BarLabel>Stroke</BarLabel>
           <SlotSwatches
             label="Stroke"
-            slots={COLOR_SLOTS}
             slot={style.strokeSlot}
             color={style.stroke}
             onPick={(slot) => restyle(inSlot('stroke', slot))}

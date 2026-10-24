@@ -19,7 +19,7 @@ let holds: PermissionHolds | undefined;
 afterEach(() => holds?.close());
 
 /** Hook states over the agent `start`, recording what is saved, unseen and finished. */
-function setup(start: HookStateRow) {
+function setup(start: HookStateRow, firstPromptDue = false) {
   let current = start;
   const clock = createFakeClock(new Date('2026-01-01T00:00:00Z'));
   const startingEnded: string[] = [];
@@ -31,6 +31,7 @@ function setup(start: HookStateRow) {
   const states = createHookStates<HookStateRow>({
     permissions: holds,
     subagents: createSubagentStore(),
+    firstPromptDue: () => firstPromptDue,
     save(saving, state, _next, always) {
       order.push(`save ${state}`);
       saved.push({ state, always });
@@ -77,6 +78,37 @@ describe('a starting agent', () => {
     hook({ hook_event_name: 'SessionStart' });
     expect(states.isStarting('a')).toBe(false);
     expect(now().state).toBe('running');
+  });
+
+  it('with its first prompt still to be typed, sits idle at its prompt and starting from its SessionStart until that prompt goes up', () => {
+    const { states, hook, row: now, clock, startingEnded } = setup(row('a'), true);
+    states.promptQueued('a');
+    clock.advance(10_000);
+    hook({ hook_event_name: 'SessionStart', source: 'startup' });
+    expect(states.isStarting('a')).toBe(true);
+    expect(now().state).toBe('idle');
+    expect(states.isAtPrompt(now())).toBe(true);
+    expect(states.isUp('a')).toBe(true);
+    // The prompt drawn as it is typed, however slowly, is no sign of hooks not arriving.
+    states.outputSeen('a');
+    clock.advance(10_000);
+    states.outputSeen('a');
+    expect(startingEnded).toEqual([]);
+    hook({ hook_event_name: 'UserPromptSubmit', prompt: 'a task' });
+    expect(states.isStarting('a')).toBe(false);
+    expect(now().state).toBe('thinking');
+  });
+
+  it('gives up on a first prompt typed at its prompt a minute after its SessionStart, not before', () => {
+    const { states, hook, clock, startingEnded } = setup(row('a'), true);
+    states.promptQueued('a');
+    clock.advance(50_000);
+    hook({ hook_event_name: 'SessionStart', source: 'startup' });
+    clock.advance(59_000);
+    expect(states.isStarting('a')).toBe(true);
+    clock.advance(1_000);
+    expect(states.isStarting('a')).toBe(false);
+    expect(startingEnded).toEqual(['a']);
   });
 
   it('stops being on output only once hooks have been late for a while', () => {

@@ -36,7 +36,11 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
   const model = stringFlag(args, '--model') ?? 'claude-opus-5';
   const projectDir = join(configDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
 
-  const hooks = mergeHooks(readHooksFile(join(configDir, 'settings.json')), settingsFlagHooks(stringFlag(args, '--settings')));
+  // Like Claude Code, `disableAllHooks` in the user's settings runs no hook at all, `--settings` ones too.
+  const userSettings = join(configDir, 'settings.json');
+  const hooks = hooksDisabled(userSettings)
+    ? {}
+    : mergeHooks(readHooksFile(userSettings), settingsFlagHooks(stringFlag(args, '--settings')));
   validateMatchers(hooks, 'claude');
 
   return {
@@ -94,6 +98,16 @@ function mcpConfigFlags(values: string[], env: NodeJS.ProcessEnv): Record<string
       return parseClaudeMcpConfig(readFileSync(value, 'utf8'), value, env);
     }),
   );
+}
+
+/** Whether the user's settings file turns every hook off (`"disableAllHooks": true`). */
+function hooksDisabled(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    return (JSON.parse(readFileSync(path, 'utf8')) as { disableAllHooks?: unknown }).disableAllHooks === true;
+  } catch {
+    return false;
+  }
 }
 
 /** `--settings` takes inline JSON or a file path. */

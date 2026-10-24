@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { canRestart, exitText } from './RestartAgent';
+import { canRestart, canRestartLive, exitText } from './RestartAgent';
 
 const agent = (fields: Partial<Agent>): Agent =>
   ({ harness: 'claude', state: 'done', endedAt: '2026-10-11T12:00:00.000Z', exitCode: 0, reviewOf: null, shellHarness: null, ...fields }) as Agent;
@@ -17,6 +17,13 @@ describe('restarting an ended agent', () => {
     expect(canRestart(agent({ reviewOf: 'implementer' }))).toBe(false);
     // Not while its harness runs by hand in the shell its pane dropped into.
     expect(canRestart(agent({ shellHarness: 'claude' }))).toBe(false);
+  });
+
+  it('can stop and restart a running agent in place, except a reviewer, whose restart the daemon refuses', () => {
+    expect(canRestartLive(agent({ state: 'running', endedAt: null }))).toBe(true);
+    expect(canRestartLive(agent({ state: 'running', endedAt: null, reviewOf: 'implementer' }))).toBe(false);
+    expect(canRestartLive(agent({ state: 'running', endedAt: null, shellHarness: 'claude' }))).toBe(false);
+    expect(canRestartLive(agent({}))).toBe(false);
   });
 
   it('says how its process went, with the code when there is one', () => {

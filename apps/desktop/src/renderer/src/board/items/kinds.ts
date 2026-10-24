@@ -3,17 +3,16 @@ import type { NodeProps } from '@xyflow/react';
 import {
   AGENT_NOTE_SIZE,
   CLOCK_SIZE,
-  COLOR_SLOTS,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
-  FILL_SLOTS,
   STICKY_COLORS,
   STICKY_SIZE,
   type BoardItemKind,
   type ColorSlot,
   type FillSlot,
 } from '@agent-board/daemon/protocol';
-import { fillToken, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
+import { fillToken, foldColors, foldFills, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
+import { foldedNow } from './use-folded-slots';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
 import { AgentNoteNode } from './AgentNoteNode';
 import { clockData } from '../clocks';
@@ -50,8 +49,11 @@ export interface ItemKind {
 export interface ItemColors {
   /** "Note colour". */
   label: string;
-  /** Each colour's name, its value in `of` and `patch` (a sticky's stored colour, a slot), and how the theme draws it. */
-  presets: readonly { name: string; value: string; color: string }[];
+  /**
+   * Each colour to pick, as the menu opens: its name, its value in `of` and `patch` (a sticky's stored colour, a slot),
+   * how the theme draws it, and the later values the theme draws just the same, which it stands for.
+   */
+  presets(): readonly { name: string; value: string; color: string; also?: readonly string[] }[];
   /** The colour an item has, from its data. */
   of(data: Record<string, unknown>): string | null;
   /** The change to an item's data that gives it `value`. */
@@ -66,7 +68,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     newData: () => ({ ...newStickyData() }),
     editOnCreate: true,
     minimapColor: (data) => stickyPaint(stickyData(data).color).color,
-    colors: { label: 'Note colour', presets: STICKY_COLORS.map((preset) => ({ ...preset, color: stickyPaint(preset.value).color })), of: (data) => stickyData(data).color, patch: (color) => ({ color }) },
+    colors: { label: 'Note colour', presets: () => STICKY_COLORS.map((preset) => ({ ...preset, color: stickyPaint(preset.value).color })), of: (data) => stickyData(data).color, patch: (color) => ({ color }) },
   },
   text: {
     label: 'text',
@@ -77,7 +79,7 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     minimapColor: (data) => slotPaint(textData(data).colorSlot, textData(data).color),
     colors: {
       label: 'Text colour',
-      presets: COLOR_SLOTS.map((slot) => ({ name: slotName(slot), value: slot, color: slotToken(slot) })),
+      presets: () => foldedNow(foldColors).map(({ slot, also }) => ({ name: slotName(slot), value: slot, color: slotToken(slot), also })),
       of: (data) => textData(data).colorSlot,
       patch: (slot) => inSlot('color', slot as ColorSlot),
     },
@@ -95,7 +97,10 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     },
     colors: {
       label: 'Shape fill',
-      presets: FILL_SLOTS.map((slot) => ({ name: slotName(slot), value: slot, color: fillToken(slot) })),
+      presets: () => [
+        { name: slotName('tile'), value: 'tile', color: fillToken('tile') },
+        ...foldedNow(foldFills).map(({ slot, also }) => ({ name: slotName(slot), value: slot, color: fillToken(slot), also })),
+      ],
       of: (data) => (shapeData(data).fill === null ? null : shapeData(data).fillSlot),
       patch: (slot) => filledIn(slot as FillSlot),
     },

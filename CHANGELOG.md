@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.3 (2026-10-24)
+
+- Type the first prompt only on SessionStart or Send, show the trust-screen hint, flag a stalled one
+- Spacing per zone (Compact / Normal / Roomy) from the zone tab's ▾, Roomy by default
+- Keep Claude agents' first prompt off argv: typed at the prompt once the session is up
+- Arrange the board: zones in rows a gap apart, loose tiles below, one undo
+- agent-board doc --plan presents a plan from the shell; the decision comes back at the prompt
+- Clickable links from Claude: a setting, on by default (FORCE_HYPERLINK)
+- The colour picker shows each distinct colour once (alike slots fold into the first)
+- Patch undici, fast-uri and zod in build tooling
+
 ## v0.6.2 (2026-10-24)
 
 - Arrange lays lanes out in pixels: own widths, exact rail room, rows as tall as what they hold

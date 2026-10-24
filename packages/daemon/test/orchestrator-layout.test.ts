@@ -3,8 +3,9 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import { agentNoteSize } from '../src/agent-notes.ts';
+import { BOARD_ARRANGE_GAP } from '../src/arrange-board.ts';
 import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, RAIL_GAP, ROW_STEP, sizedFootprint, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { daemonPaths } from '../src/paths.ts';
 import { AGENT_NOTE_SIZE, BOARD_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type Zone } from '../src/protocol.ts';
@@ -29,6 +30,8 @@ async function layoutDaemon({ gh }: { gh?: string } = {}) {
   const repo = tempRepo();
   // On GitHub, where a fake gh finds its agents' pull requests.
   if (gh !== undefined) git(repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
+  // At normal spacing, the gaps these tests are written in; a test of another spacing sets its zone's.
+  await client.call('settings.set', { arrangeSpacing: 'normal' });
   const zone = await client.call('zone.add', { path: repo, x: 0, y: 0, width: 1200, height: 600, name: 'web' });
   const other = await client.call('zone.add', { path: tempRepo('other'), x: 3000, y: 0, name: 'other' });
   for (const { id } of [zone, other]) await client.call('zone.configure', { id, agentsOrchestrate: false });
@@ -799,6 +802,40 @@ describe('the zone map and arranging by itself', () => {
     expect((await me.connection.call('orchestrator.map', { token: me.token })).offGrid).toEqual([key(review)]);
     // Read only: nothing is logged.
     expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange' });
+  });
+
+  it("lays its crew out at its zone's spacing, and maps it at that spacing with nothing amiss", async () => {
+    const setup = await layoutDaemon();
+    await setup.client.call('zone.configure', { id: setup.zone.id, spacing: 'roomy' });
+    const { me, impl, review } = await crewWithLanes(setup);
+    const result = await me.connection.call('orchestrator.arrange', { token: me.token });
+    const roomy = SPACING_GAPS.roomy;
+    const at = new Map((await setup.client.call('agent.list')).map((agent) => [agent.sessionId, agent.position!]));
+    const [lead, implAt, reviewAt] = [me.agent, impl, review].map((agent) => at.get(agent.sessionId)!);
+    expect(lead).toMatchObject({ x: roomy.padding, y: roomy.padding + PERCH_ROOM });
+    expect(implAt!.y - (lead!.y + AGENT_TILE_SIZE.height)).toBe(roomy.lane);
+    expect(reviewAt!.x - (implAt!.x + AGENT_TILE_SIZE.width)).toBe(roomy.rail);
+    const rects = [...(await rectsIn(setup.client, setup.zone.id)).values()];
+    expect(result.width).toBe(Math.max(...rects.map((rect) => rect.x + rect.width)) + roomy.padding);
+
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map).toMatchObject({ spacing: 'roomy', overlaps: [], offGrid: [], laneGap: 0, labelGap: 0 });
+    // The same tiles read at normal spacing are where no normal arrange puts them.
+    await setup.client.call('zone.configure', { id: setup.zone.id, spacing: 'normal' });
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).offGrid.length).toBeGreaterThan(0);
+  });
+
+  it("slots a tile no arrange placed on its zone's grid, so the map finds nothing off it", async () => {
+    const setup = await layoutDaemon();
+    await setup.client.call('zone.configure', { id: setup.zone.id, spacing: 'roomy' });
+    const me = await lead(setup, setup.zone.id);
+    await userAgent(setup.client, setup.zone.id, 'mine');
+    await setup.client.call('shell.create', { zoneId: setup.zone.id });
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map.things.filter((thing) => thing.itemKind === null)).toHaveLength(3);
+    expect(map).toMatchObject({ spacing: 'roomy', overlaps: [], offGrid: [] });
+    // The first slot is the zone's, its padding and perch in from its corner.
+    expect(Math.min(...map.things.map((thing) => thing.x))).toBe(SPACING_GAPS.roomy.padding);
   });
 
   it('keeps what an arrange was asked for as the orchestrator’s settings, for a bare arrange after', async () => {
@@ -1640,5 +1677,64 @@ describe('orchestrators drawing a diagram', () => {
     await me.connection.call('orchestrator.removeConnector', { token: me.token, id: inherits.id });
     expect((await setup.client.call('connector.list')).map((each) => each.id)).not.toContain(inherits.id);
     expect(await lastLine(setup.client)).toMatchObject({ action: 'remove-connector', targetName: 'connector “implements”', outcome: 'done' });
+  });
+});
+
+describe('orchestrator.arrangeBoard', () => {
+  it('moves whole zones, with what is in them, and the loose tiles for an orchestrator of the whole board, never the user’s loose notes', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id, 'board');
+    // In `other`, the zone that moves: they go with it, at the same place in it.
+    const inOther = await setup.client.call('shell.create', { zoneId: setup.other.id, position: { x: 40, y: 60 } });
+    const noteInOther = await setup.client.call('item.create', { kind: 'sticky', zoneId: setup.other.id, x: 320, y: 50, ...STICKY_SIZE, data: { text: 'inside', color: '#fff3a3' } });
+    const loose = await setup.client.call('shell.create', { zoneId: null, position: { x: 5000, y: 3000 } });
+    const sticky = await setup.client.call('item.create', { kind: 'sticky', zoneId: null, x: 9000, y: 9000, ...STICKY_SIZE, data: { text: 'mine', color: '#fff3a3' } });
+
+    const result = await me.connection.call('orchestrator.arrangeBoard', { token: me.token });
+    const zones = await setup.client.call('zone.list');
+    const web = zones.find((zone) => zone.id === setup.zone.id)!;
+    const other = zones.find((zone) => zone.id === setup.other.id)!;
+    // web stays at the top-left; other comes in beside it, a gap to its right.
+    expect({ x: web.x, y: web.y }).toEqual({ x: 0, y: 0 });
+    expect({ x: other.x, y: other.y }).toEqual({ x: web.width + BOARD_ARRANGE_GAP, y: 0 });
+    expect(result.zones).toEqual([{ zoneId: other.id, x: other.x, y: other.y }]);
+    const shells = await setup.client.call('shell.list');
+    expect(shells.find((each) => each.id === inOther.id)).toMatchObject({ zoneId: other.id, position: { x: 40, y: 60 } });
+    expect((await setup.client.call('item.list')).find((item) => item.id === noteInOther.id)).toMatchObject({ zoneId: other.id, x: 320, y: 50 });
+    // The loose shell goes below the zones, the only tile moved; the sticky stays where it is.
+    const moved = shells.find((each) => each.id === loose.id)!;
+    expect(moved.position!.y - PERCH_ROOM).toBe(Math.max(web.height, other.height) + BOARD_ARRANGE_GAP);
+    expect(result.moved).toEqual([{ target: { kind: 'shell', id: loose.id }, zoneId: null, x: moved.position!.x, y: moved.position!.y }]);
+    expect((await setup.client.call('item.list')).find((item) => item.id === sticky.id)).toMatchObject({ x: 9000, y: 9000 });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange-board', outcome: 'done', detail: '1 zone and 1 loose tile' });
+  });
+
+  it('keeps a zone a gap clear of a note loose on the board, which stays, and arranges over the MCP arrange tool', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id, 'board');
+    // Where `other` would go, right of web.
+    const note = await setup.client.call('item.create', { kind: 'sticky', zoneId: null, x: 1300, y: 100, ...STICKY_SIZE, data: { text: 'mine', color: '#fff3a3' } });
+    const env = { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: me.token };
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env }, tempDataDir());
+    await mcp.initialize();
+
+    expect(await mcp.callTool('arrange', { zone: 'board' })).toMatchObject({ isError: false, text: expect.stringMatching(/^Arranged the board:\n {2}zone:\S+ other at /) });
+    const other = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)!;
+    const kept = (await setup.client.call('item.list')).find((item) => item.id === note.id)!;
+    expect(kept).toMatchObject({ x: 1300, y: 100 });
+    const space = Math.max(kept.x - (other.x + other.width), other.x - (kept.x + kept.width), kept.y - (other.y + other.height), other.y - (kept.y + kept.height));
+    expect(space).toBeGreaterThanOrEqual(BOARD_ARRANGE_GAP);
+    expect(await mcp.callTool('arrange', { zone: 'board' })).toMatchObject({ isError: false, text: 'The board was arranged already: nothing moved.' });
+    expect(await mcp.callTool('arrange', { zone: 'board', by: 'role' })).toMatchObject({ isError: true, text: expect.stringContaining('arrange board takes no --by') });
+  });
+
+  it('refuses an orchestrator of less than the whole board', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    await expect(me.connection.call('orchestrator.arrangeBoard', { token: me.token })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/whole board/),
+    });
+    expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)).toMatchObject({ x: 3000, y: 0 });
   });
 });

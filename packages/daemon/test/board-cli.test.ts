@@ -79,6 +79,11 @@ describe('agent-board --help', () => {
     expect(out).toMatchSnapshot();
   });
 
+  it('says doc --plan returns at once, the decision coming to the prompt later', () => {
+    expect(COMMAND_HELP.doc!.text).toMatch(/returns at once/);
+    expect(COMMAND_HELP.doc!.text).toMatch(/typed at your prompt/);
+  });
+
   it('prints the board help with no command, --help or help, and a command’s with help <command>', async () => {
     let out = '';
     const write = process.stdout.write;
@@ -421,13 +426,22 @@ describe('laying out the board from the command line', () => {
     await usage(['note', 'remove'], 'give one note ref');
   });
 
+  it('arranges the whole board, its zones and loose tiles, and arranged, moves nothing', async () => {
+    const { env, client } = await board();
+    await client.call('zone.addUnbound', { name: 'far', x: 6000, y: 0 });
+    expect(await run(env, 'arrange', 'board')).toMatchObject({ code: 0, out: expect.stringMatching(/^Arranged the board:\n[^]*zone:\S+ far at /) });
+    expect(await run(env, 'arrange', 'board')).toMatchObject({ code: 0, out: 'The board was arranged already: nothing moved.\n' });
+    expect(await run(env, 'arrange', 'board', '--by', 'role')).toMatchObject({ code: 1, err: expect.stringContaining('arrange board takes no --by') });
+  });
+
   it('makes, changes and removes a group, moves a tile into it, arranges it and puts a note in it, as the user', async () => {
     const { env, client, shell } = await board();
 
     const made = await run(env, 'zone', 'add', '--group', '--name', 'Done', '--at', '0,2000', '--size', '900,500');
     expect(made).toMatchObject({ code: 0, out: expect.stringMatching(/^Made zone:\S+ {2}Done {2}\(group\) at 0,2000, 900×500\.\n$/) });
     const group = (await client.call('zone.list')).find((zone) => zone.name === 'Done')!;
-    expect(await run(env, 'move', ref('shell', shell.id), '--to', 'Done')).toMatchObject({ code: 0, out: expect.stringMatching(/\(in zone:\S+ Done\) at 20,44\./) });
+    // A new zone is roomy: the first slot is its padding and perch in.
+    expect(await run(env, 'move', ref('shell', shell.id), '--to', 'Done')).toMatchObject({ code: 0, out: expect.stringMatching(/\(in zone:\S+ Done\) at 32,56\./) });
     expect(await run(env, 'arrange', 'Done', '--json')).toMatchObject({ code: 0, out: expect.stringContaining(`"zoneId": "${group.id}"`) });
     expect(await run(env, 'note', 'add', '--to', 'Done', '--color', 'pink', '--', 'Shipped *today*')).toMatchObject({ code: 0, out: expect.stringContaining('sticky  "Shipped *today*"') });
     const note = (await client.call('item.list')).find((item) => item.zoneId === group.id)!;

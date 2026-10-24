@@ -142,6 +142,8 @@ export interface Zone {
   gateCommand: string | null;
   /** Where the zone's issues come from, or null if it has no tracker. */
   tracker: ZoneTracker | null;
+  /** How far apart a Tidy, and an orchestrator's arrange, put what is in it (`SPACING_GAPS`). */
+  spacing: ArrangeSpacing;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
   /**
@@ -170,12 +172,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing };
 }
 
 /**
@@ -323,7 +325,17 @@ export interface ZoneSettings {
   boardMcp: boolean;
   agentsOrchestrate: boolean;
   gateCommand: string | null;
+  spacing: ArrangeSpacing;
 }
+
+/**
+ * How far apart a zone's Tidy and an orchestrator's arrange in it put things: compact, normal (the gaps arrange always
+ * had) or roomy. Each zone keeps its own; a new zone takes the default in the settings (`arrangeSpacing`).
+ */
+export const ARRANGE_SPACINGS = ['compact', 'normal', 'roomy'] as const;
+export type ArrangeSpacing = (typeof ARRANGE_SPACINGS)[number];
+/** The spacing a new zone takes until the settings say otherwise. */
+export const DEFAULT_ARRANGE_SPACING: ArrangeSpacing = 'roomy';
 
 /** A zone's issue tracker: a provider and a scope in it, such as Linear team `ACME`. */
 export interface ZoneTracker {
@@ -1310,12 +1322,19 @@ export interface DaemonSettings {
    * default) passes nothing, leaving Claude Code's own choice. Codex has no equivalent.
    */
   compactWindow: number;
+  /**
+   * Whether Claude agents start with `FORCE_HYPERLINK=1`, so the links they print open on ⌘-click as OSC 8 links. On by
+   * default. A `FORCE_HYPERLINK` already in the daemon's environment wins either way. Codex and shells never get it.
+   */
+  clickableLinks: boolean;
   /** What the needs-you inbox lists: explicit requests only (the default), or every finished turn too. */
   needsYouShows: NeedsYouShows;
   /** Whether the app raises an OS notification for each new request in the needs-you inbox. On by default. */
   notifications: boolean;
   /** Whether it does so while the app is in front, too. Off by default: only the pill changes then. */
   notifyInFront: boolean;
+  /** The spacing a new zone starts with (`Zone.spacing`). Roomy by default. */
+  arrangeSpacing: ArrangeSpacing;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1455,7 +1474,7 @@ const PAUSABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'w
 export function pauseRefusal(agent: Pick<Agent, 'endedAt' | 'state' | 'ask' | 'plan' | 'permissions'>): string | undefined {
   if (agent.state === 'hibernated') return 'it is already paused';
   if (agent.endedAt !== null) return 'it has ended';
-  if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent)) return 'it is waiting on you';
+  if (agent.state === 'needs-permission' || agent.permissions.length > 0 || waitsOnUser(agent) || planPending(agent)) return 'it is waiting on you';
   if (agent.state === 'rate-limited') return 'it is rate-limited';
   // A pause would end the command with its session.
   if (agent.state === 'on-command') return 'a command it left running still runs';
@@ -1636,6 +1655,12 @@ export interface Agent {
   shellSessionId: string | null;
   /** Its own harness, while the user runs it by hand in the shell its pane dropped into (the tile shows it, and Restart waits). */
   shellHarness: Harness | null;
+  /**
+   * For a Claude agent the daemon started: whether that session got `FORCE_HYPERLINK=1` from the clickable links setting,
+   * so Settings can offer a restart to those started the other way. Null for Codex, and for a session this daemon did
+   * not start (an external one, or one that outlived the daemon).
+   */
+  clickableLinks: boolean | null;
   /** The subagents it has spawned that are still running, or finished a moment ago; oldest first. */
   subagents: Subagent[];
   /**
@@ -1714,6 +1739,15 @@ export interface Agent {
    * Ctrl-U is typed in its terminal, or its session ends.
    */
   unsent: string | null;
+  /**
+   * Its first prompt, typed at its prompt only once its session is up (its `SessionStart`), while its session has
+   * been given up on saying so: still `starting` past its limits, or relaunched a minute ago with no `SessionStart`.
+   * Nothing is typed at it blind, as Enter on a startup screen would answer it; the tile offers it to send
+   * (`agent.typeFirstPrompt`), and the agent is flagged (`flag`), unless it flags something of its own, until it is
+   * typed or the user opens the agent. Null otherwise, and once its `SessionStart` comes (not one after a compaction:
+   * it is typed then) or its session ends.
+   */
+  untypedPrompt: string | null;
   /**
    * Its harness starting: while it is `starting`, and kept once it ended before its session's first hook (it never
    * came up). Null otherwise.
@@ -2032,8 +2066,10 @@ export interface PlanSummary {
   title: string;
   format: PlanFormat;
   presentedAt: string;
-  /** When the agent stops waiting on it. */
-  expiresAt: string;
+  /** When the agent stops waiting on it; null for a plan it left, which waits as long as the user takes. */
+  expiresAt: string | null;
+  /** The agent left it (`agent-board doc --plan`) and went on: no call of its waits on it, so it isn't mid-turn for it. */
+  left: boolean;
   /** Null while the user is still to decide. */
   decision: PlanDecision | null;
   /** Who wrote it: its agent, or the user, who edited the agent's version before deciding. */
@@ -2045,6 +2081,11 @@ export interface PlanSummary {
 /** A plan, with its body. */
 export interface Plan extends PlanSummary {
   body: string;
+}
+
+/** What `board.presentPlan` answers at once for a plan the agent left (`detached`): the plan, now waiting for the user. */
+export interface PlanLeft {
+  left: PlanSummary;
 }
 
 /** How a plan the agent waited on ended: never `edited`, which only a version the user then edited is stamped with. */
@@ -2074,8 +2115,8 @@ export interface PlanEdits {
 export const planPending = <T extends Pick<Agent, 'plan'>>(agent: T): agent is T & { plan: PlanSummary & { decision: null } } =>
   agent.plan !== null && agent.plan.decision === null;
 
-/** Whether the agent's call waits on the user: a question it asks, or its latest plan. */
-export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'plan'>): boolean => agent.ask !== null || planPending(agent);
+/** Whether the agent's call waits on the user: a question it asks, or its latest plan, unless it left that and went on. */
+export const waitsOnUser = (agent: Pick<Agent, 'ask' | 'plan'>): boolean => agent.ask !== null || (planPending(agent) && !agent.plan.left);
 
 /** The kinds of file an agent shows as a document, by their extensions. */
 export const DOCUMENT_EXTENSIONS: Record<PlanFormat, readonly string[]> = { markdown: ['.md', '.markdown'], html: ['.html', '.htm'] };
@@ -2449,7 +2490,7 @@ export interface EarlierConversation {
  * What an orchestrator did, or tried: the control verbs, each logged (`OrchestratorActivity`). An edge it made or
  * removed is `add-edge` or `remove-edge`, its target the edge's `to` agent. A `handoff` is any agent's, an orchestrator's
  * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
- * (`move`, `arrange`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
+ * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
  * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
  * the role's name their detail.
  */
@@ -2468,6 +2509,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'handoff',
   'move',
   'arrange',
+  'arrange-board',
   'add-zone',
   'change-zone',
   'remove-zone',
@@ -2584,6 +2626,12 @@ export interface ArrangeResult {
   moved: LayoutMoved[];
 }
 
+/** What `orchestrator.arrangeBoard` did: where each zone and each loose tile it moved went. */
+export interface BoardArrangeResult {
+  zones: { zoneId: string; x: number; y: number }[];
+  moved: LayoutMoved[];
+}
+
 /** One thing in a zone, as its map shows it: a tile (`agent:<id>`, `shell:<id>`) or an item (`item:<id>`), relative to the zone. */
 export interface ZoneMapThing {
   key: string;
@@ -2620,6 +2668,8 @@ export interface ZoneMap {
   height: number;
   /** The caller's arrange settings, which its next arrange (and auto-arrange) uses. */
   arrange: ArrangeSettings;
+  /** The zone's spacing, which its arrange uses and the gaps it reports are past. */
+  spacing: ArrangeSpacing;
   /** The lead and the shells, then whatever is in no lane (notes, cards, tiles out of scope). */
   top: string[];
   lanes: ZoneMapLane[];
@@ -3452,6 +3502,12 @@ export interface DaemonMethods {
    */
   'agent.clearUnsent': { params: SessionRef; result: Agent };
   /**
+   * Types the agent's first prompt its session never said it was up for (`Agent.untypedPrompt`), as the user asked,
+   * and resolves with the agent, `untypedPrompt` cleared, and the flag it raised with it: it is typed and submitted as
+   * a delivery is, kept as its unsent message if no turn starts on it. Fails with `invalidParams` for an unknown agent or one with none.
+   */
+  'agent.typeFirstPrompt': { params: SessionRef; result: Agent };
+  /**
    * Ends the agent's session and resolves with it `done` (not `failed`: the user stopped it). Its worktree and branch
    * stay. Fails with `invalidParams` for an unknown or ended agent.
    */
@@ -3618,6 +3674,8 @@ export interface DaemonMethods {
    * growing or shrinking. The same board arranges the same way.
    */
   'orchestrator.arrange': { params: { token?: string; zoneId?: string; by?: ArrangeBy; layout?: ArrangeLayout; auto?: boolean }; result: ArrangeResult };
+  /** Lays out the whole board: its zones and its loose tiles, never what is in a zone. Board scope only. */
+  'orchestrator.arrangeBoard': { params: { token?: string }; result: BoardArrangeResult };
   /**
    * A zone in its scope (its own by default) as a map: its lanes, where everything is and what is amiss
    * (`ZoneMap`). It moves nothing.
@@ -3780,11 +3838,13 @@ export interface DaemonMethods {
    * closes or its turn ends. Fails as `board.ask` does, and for an empty or too long plan. A crew member's plan goes
    * to its live orchestrator instead (`SentToOrchestrator`), at once, written to `CREW_PLAN_PATH` in its worktree.
    * `path` is the real path of the file it was read from, if it was: the user's approved version is written there.
-   * With `onBoard`, the agent's plan card is put beside its tile too, if it has none.
+   * With `onBoard`, the agent's plan card is put beside its tile too, if it has none. With `detached` (the command line's
+   * `doc --plan`) nothing waits: it answers at once with the plan (`PlanLeft`), which then outlives the connection and
+   * the agent's turns, and its decision, or its timeout, is typed at the agent's prompt once it is ready for it.
    */
   'board.presentPlan': {
-    params: { token: string; title: string; body: string; format: PlanFormat; path?: string; onBoard?: boolean; timeoutMs?: number };
-    result: PlanResult | SentToOrchestrator;
+    params: { token: string; title: string; body: string; format: PlanFormat; path?: string; onBoard?: boolean; timeoutMs?: number; detached?: boolean };
+    result: PlanResult | PlanLeft | SentToOrchestrator;
   };
   /**
    * Answers the agent's question `askId`. Fails with `invalidParams` once it no longer asks it (answered, timed out or
@@ -4163,6 +4223,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.removeEdge',
   'orchestrator.move',
   'orchestrator.arrange',
+  'orchestrator.arrangeBoard',
   'orchestrator.map',
   'orchestrator.screenshot',
   'orchestrator.addZone',

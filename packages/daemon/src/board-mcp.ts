@@ -605,7 +605,11 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+        zone: {
+          type: 'string',
+          description:
+            "The zone, by ref; yours by default. `board`, at board scope: the whole board's zones in rows a gap apart and its loose agents and shells below them, never what is in a zone (no by, layout or auto).",
+        },
         by: { type: 'string', enum: [...ARRANGE_BYS], description: 'What a row holds: issue at first, then as you last asked.' },
         layout: {
           type: 'string',

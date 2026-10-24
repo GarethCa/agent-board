@@ -24,6 +24,11 @@ describe('board guard', () => {
     expect(env).toEqual({ AGENT_BOARD_GATE: '1', AGENT_BOARD_E2E_WORKERS: '2', PATH: '/bin' });
   });
 
+  it("drops the FORCE_HYPERLINK an enclosing board gave its agent, but keeps a user's own", () => {
+    expect(scrubBoardEnv({ FORCE_HYPERLINK: '1', AGENT_BOARD_FORCED_HYPERLINK: '1', PATH: '/bin' })).toEqual({ PATH: '/bin' });
+    expect(scrubBoardEnv({ FORCE_HYPERLINK: '0', PATH: '/bin' })).toEqual({ FORCE_HYPERLINK: '0', PATH: '/bin' });
+  });
+
   it("leaves the board's session variables out of the fakes' environment, unless the test hands them in", () => {
     const before = { ...process.env };
     Object.assign(process.env, boardSessionEnv);

@@ -42,6 +42,10 @@ async function agentDaemon(
     home?: string;
     /** Where the daemon's log lines go: nowhere by default. */
     log?: (message: string) => void;
+    /** Its fakes fire no `SessionStart`, their other hooks running. */
+    noSessionStart?: boolean;
+    /** The source its fakes' `SessionStart` names. */
+    sessionStartSource?: string;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -56,6 +60,8 @@ async function agentDaemon(
       idleNotifyMs: options.idleNotifyMs ?? 200,
       stepDelayMs: options.stepDelayMs,
       repeat: options.repeat,
+      noSessionStart: options.noSessionStart,
+      sessionStartSource: options.sessionStartSource,
     }),
     permissionHoldMs: options.permissionHoldMs,
     clock: options.clock,
@@ -150,9 +156,8 @@ describe('Claude agents', () => {
     const done = await untilState(recorder, agent.sessionId, 'done');
 
     expect(statesOf(recorder.events, agent.sessionId)).toEqual([
-      'starting', // spawned with its first prompt, whose turn has not begun
-      'running', // SessionStart
-      'thinking',
+      'starting', // spawned with its first prompt, whose turn has not begun; its SessionStart leaves it so
+      'thinking', // the first prompt, typed at its prompt
       'idle',
       'waiting',
       'thinking', // the answer
@@ -209,6 +214,92 @@ describe('Claude agents', () => {
     });
     expect(command).toContain('--settings');
     expect(command).not.toMatch(/Bearer [A-Za-z0-9_-]{20,}/);
+  });
+
+  it("keeps a Claude agent's task off its command line, typing it at its prompt once, before any message sent to it", async () => {
+    const { client, recorder } = await agentDaemon('output');
+    const zone = await addZone(client, tempRepo());
+    const task = 'Run the vitest suite\n\nthen stop the vite dev server';
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: task, ...SIZE });
+    // Sent before its session is up: refused, so nothing goes before the task.
+    await expect(client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).rejects.toThrow("session isn't up yet");
+
+    const submitted = (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit';
+    await recorder.waitFor(submitted);
+    await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' });
+    await recorder.waitFor((e): e is HookEvent => submitted(e) && e.payload.prompt === 'Also lint');
+    expect(recorder.events.filter(submitted).map((e) => e.payload.prompt)).toEqual([task, 'Also lint']);
+    const command = await commandLine(client, agent.sessionId);
+    expect(command).toContain(agent.sessionId);
+    expect(command).not.toMatch(/vite|dev server/);
+  });
+
+  it("offers a Claude agent's task on its tile, never typing it, while its session never says it is up, and types it on Send", async () => {
+    const home = tempDataDir();
+    // Its hooks never run, as with Claude Code's `disableAllHooks`: nothing says its session is up.
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { home, clock });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    expect((await client.call('agent.list'))[0]).toMatchObject({ state: 'starting', untypedPrompt: null });
+
+    // Given up on as starting: its tile offers the task, still untyped.
+    clock.advance(60_000);
+    const offered = await recorder.waitFor(
+      (e): e is AgentUpdatedEvent =>
+        isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.untypedPrompt === 'Tidy the docs' && e.agent.state === 'idle',
+    );
+    expect(offered.agent.startup).toBeNull();
+    await expect(client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).rejects.toThrow("session isn't up yet");
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
+
+    expect((await client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).untypedPrompt).toBeNull();
+    await recorder.waitForText(agent.sessionId, '> Tidy the docs');
+    await expect(client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).rejects.toThrow('has no first prompt waiting to be typed');
+  });
+
+  it("raises needs-you for a Claude agent's untyped task, and never types it into a prompt the user typed by hand", async () => {
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { clock, noSessionStart: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+
+    clock.advance(60_000);
+    const offered = await recorder.waitFor(
+      (e): e is AgentUpdatedEvent => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.untypedPrompt === 'Tidy the docs',
+    );
+    expect(offered.agent.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/first prompt.*Send/) });
+
+    // The user types at its terminal: that turn's hooks say nothing of its session being up, so the task waits.
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'Say hi\r' });
+    await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop',
+    );
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
+    expect((await client.call('agent.list'))[0]).toMatchObject({ untypedPrompt: 'Tidy the docs', flag: { to: 'user' } });
+
+    const sent = await client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId });
+    expect(sent).toMatchObject({ untypedPrompt: null, flag: null });
+    await recorder.waitForText(agent.sessionId, '> Tidy the docs');
+  });
+
+  it("never types a Claude agent's task on a SessionStart after a compaction, which can come mid-turn", async () => {
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { clock, sessionStartSource: 'compact' });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart');
+
+    clock.advance(60_000);
+    await recorder.waitFor(
+      (e): e is AgentUpdatedEvent => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.untypedPrompt === 'Tidy the docs',
+    );
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
   });
 
   it('starts a folder zone agent in that folder of its worktree', async () => {

@@ -38,11 +38,19 @@ export interface FakeHarnessEnvOptions {
   startDelayMs?: number;
   /** A line the TUI prints before exiting 1 as it starts, before its first hook: a start that fails. None by default. */
   startFailure?: string;
+  /** With `startFailure`: only the first start under `home` fails, the ones after it start as usual. Defaults to false. */
+  startFailureOnce?: boolean;
+  /** Fire no `SessionStart` as the session starts, its other hooks running as usual. Defaults to false. */
+  noSessionStart?: boolean;
+  /** The source its `SessionStart` names, as Claude's after a compaction does `compact`. Defaults to its own (`startup`, `resume`). */
+  sessionStartSource?: string;
   /**
    * How many Enters typed after text to lose, as a slow machine's TUI loses one that lands before it has taken the text
    * in: the text stays at the prompt until the next Enter. Defaults to 0.
    */
   loseEnters?: number;
+  /** How many lines typed with text, the first prompt typed at it among them, lose no Enter before those start. Defaults to 0. */
+  loseEntersAfter?: number;
   /**
    * How many prompts typed at the fake (not given on its command line) fire no `UserPromptSubmit`, as a hook that timed
    * out on a loaded machine; the turn runs all the same. Defaults to 0.
@@ -73,7 +81,11 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_MCP_CANCEL: options.mcpCancel === false ? '0' : '1',
     FAKE_HARNESS_START_DELAY_MS: String(options.startDelayMs ?? 0),
     FAKE_HARNESS_START_FAIL: options.startFailure ?? '',
+    FAKE_HARNESS_START_FAIL_ONCE: options.startFailureOnce ? '1' : '0',
+    FAKE_HARNESS_NO_SESSION_START: options.noSessionStart ? '1' : '0',
+    FAKE_HARNESS_START_SOURCE: options.sessionStartSource ?? '',
     FAKE_HARNESS_LOSE_ENTERS: String(options.loseEnters ?? 0),
+    FAKE_HARNESS_LOSE_ENTERS_AFTER: String(options.loseEntersAfter ?? 0),
     FAKE_HARNESS_LOSE_PROMPT_HOOKS: String(options.losePromptHooks ?? 0),
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
   };

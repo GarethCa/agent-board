@@ -139,6 +139,52 @@ describe('an agent asking the user through the board MCP', () => {
     await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'plan')).toEqual([]);
   });
 
+  it('leaves a plan from the command line, which outlives the agent’s turn, and types the decision at its prompt', async () => {
+    const { client, recorder, start, until } = await askDaemon();
+    const agent = await start('Plan doc by CLI: docs/migration.md');
+    await recorder.waitForText(agent.sessionId, 'Plan v1 shown to the user');
+    await recorder.waitForText(agent.sessionId, 'Plan left with the board.');
+    const left = await until(agent.sessionId, (seen) => seen.plan?.decision === null && seen.state === 'waiting');
+    expect(left.plan).toMatchObject({ version: 1, title: 'Zone id migration', author: 'agent' });
+    await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'plan')).toHaveLength(1);
+
+    // Its turn is over, yet the plan still waits.
+    await client.call('plan.decide', { sessionId: agent.sessionId, planId: left.plan!.id, outcome: 'changes-requested', comments: 'Add a down step' });
+    await recorder.waitForText(agent.sessionId, '[agent-board] The user asked for changes to plan v1.');
+    await recorder.waitForText(agent.sessionId, 'Add a down step');
+    expect((await until(agent.sessionId, (seen) => seen.plan?.decision?.outcome === 'changes-requested')).plan).toMatchObject({ version: 1, decision: { comments: 'Add a down step' } });
+  });
+
+  it('keeps a left plan through an interrupt, which an idle agent refuses, and types the decision once', async () => {
+    const { client, recorder, start, until } = await askDaemon();
+    const agent = await start('Plan doc by CLI: docs/migration.md');
+    await recorder.waitForText(agent.sessionId, 'Plan left with the board.');
+    const left = await until(agent.sessionId, (seen) => seen.plan?.decision === null && seen.plan.left && seen.state === 'idle');
+    expect(left.plan!.expiresAt).toBeNull();
+
+    // It is idle: the plan it left is not a turn under way to interrupt.
+    await expect(client.call('agent.interrupt', { sessionId: agent.sessionId })).rejects.toThrow(/no turn under way/);
+    expect((await client.call('plan.list', { sessionId: agent.sessionId })).at(-1)!.decision).toBeNull();
+
+    await client.call('plan.decide', { sessionId: agent.sessionId, planId: left.plan!.id, outcome: 'approved' });
+    await recorder.waitForText(agent.sessionId, '[agent-board] The user approved plan v1. Go ahead with it.');
+    const typed = recorder.screenText(agent.sessionId).split('The user approved plan v1. Go ahead with it.').length - 1;
+    expect(typed).toBe(1);
+  });
+
+  it('types the user’s edit of a left plan with its diff, and writes the approved version to the file', async () => {
+    const { client, recorder, start, until } = await askDaemon();
+    const agent = await start('Plan doc by CLI: docs/migration.md');
+    const shown = await until(agent.sessionId, (seen) => seen.plan?.decision === null);
+    const file = shown.plan!.path!;
+    const edited = readFileSync(file, 'utf8').replace('- Make it NOT NULL', '- Make it NOT NULL, last');
+    const mine = await client.call('plan.edit', { sessionId: agent.sessionId, planId: shown.plan!.id, body: edited });
+    await client.call('plan.decide', { sessionId: agent.sessionId, planId: mine.id, outcome: 'approved' });
+    await recorder.waitForText(agent.sessionId, '[agent-board] The user approved plan v2, their edit of your v1.');
+    await recorder.waitForText(agent.sessionId, '+ - Make it NOT NULL, last');
+    expect(readFileSync(file, 'utf8')).toBe(edited);
+  });
+
   it.each<Harness>(['claude', 'codex'])('lets a %s agent ask for a question card on the board, which only the user moves', async (harness) => {
     const { daemon, client, recorder, start, until } = await askDaemon();
     const agent = await start('Identify, then ask on the board: Which cache? | Redis | CDN only', harness);

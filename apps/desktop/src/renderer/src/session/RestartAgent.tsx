@@ -4,16 +4,18 @@ import { RotateCcw } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
 import { Button, ErrorText } from '../ui';
 
+/** The agents a restart can carry on: not a reviewer, whose round ends with it, nor one with a harness running in its shell. */
+const restartsInPlace = (agent: Agent): boolean => agent.reviewOf === null && agent.shellHarness === null;
+
 /**
  * Whether the agent ended on its own or was stopped (not by a restart, which has its own Resume, nor paused, which has
  * Wake): it can restart. Not a reviewer, whose round ended with it.
  */
 export const canRestart = (agent: Agent): boolean =>
-  agent.endedAt !== null &&
-  agent.state !== 'stopped-by-restart' &&
-  agent.state !== 'hibernated' &&
-  agent.reviewOf === null &&
-  agent.shellHarness === null;
+  agent.endedAt !== null && agent.state !== 'stopped-by-restart' && agent.state !== 'hibernated' && restartsInPlace(agent);
+
+/** Whether the running agent can be stopped and restarted in place: the daemon will accept the restart once it has ended. */
+export const canRestartLive = (agent: Agent): boolean => agent.endedAt === null && restartsInPlace(agent);
 
 /** How an ended agent's process went, for its pane's banner: `claude exited (code 0)`. */
 export function exitText(agent: Agent): string {

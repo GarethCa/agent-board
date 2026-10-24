@@ -82,6 +82,39 @@ function setup(rows: Row[], notReady?: string) {
 }
 
 describe('deliveries', () => {
+  it("types an agent's first prompt only once its session is up, refusing what is sent to it before then", async () => {
+    const { deliveries, writes, land, advance } = setup([row('a'), row('from')]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests\nthen push', up);
+    // However long its session takes: nothing is typed blind, and nothing else is typed first.
+    await advance(5_000);
+    await expect(deliveries.answer('a', 'Also lint')).rejects.toThrow("a's session isn't up yet: its first prompt goes first");
+    expect(await deliveries.deliver('from', 'a', 'plan', 'the plan')).toEqual({
+      started: false,
+      reason: "its session isn't up yet: its first prompt goes first",
+      busy: true,
+    });
+    expect(deliveries.runScheduled('a', 'Nightly')).toMatchObject({ started: false, reason: "its session isn't up yet: its first prompt goes first" });
+    expect(deliveries.isNotUp('a')).toBe(true);
+    expect(writes).toEqual([]);
+
+    comeUp(true);
+    await land('a');
+    expect(deliveries.isNotUp('a')).toBe(false);
+    expect(writes).toEqual([
+      ['a', '\x1b[200~Fix the tests\rthen push\x1b[201~'],
+      ['a', '\r'],
+    ]);
+  });
+
+  it('types no first prompt once the session it waited on has ended, and takes messages again', async () => {
+    const { deliveries, writes, land } = setup([row('a')]);
+    deliveries.firstPrompt('a', 'Fix the tests', Promise.resolve(false));
+    await land('a');
+    expect(writes).toEqual([]);
+    expect(deliveries.isNotUp('a')).toBe(false);
+  });
+
   it("types a hand-off at a live agent's prompt and submits it, showing the sender handing off until it lands", async () => {
     const { deliveries, writes, announced, land } = setup([row('from', { name: 'planner' }), row('to')]);
     const delivered = deliveries.deliver('from', 'to', 'plan', 'the plan');

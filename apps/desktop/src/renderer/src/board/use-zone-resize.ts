@@ -3,7 +3,7 @@ import type { NodeChange } from '@xyflow/react';
 import type { ZoneLayout } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 import { isItemNode } from './items/items';
-import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, packTiles, PERCH_ROOM, zoneGrid, type ZoneGrid } from '@agent-board/daemon/board-layout';
 import { holdsTiles, isSessionTile, isZone, layoutOf, sizeOfNode, type BoardNode } from './tiles';
 import { isDefaultSize } from './tile-size';
 import type { ZoneResize } from './ZoneNode';
@@ -24,6 +24,8 @@ interface Resizing {
   sizes: Map<string, { width: number; height: number }>;
   /** Its notes, text and shapes, which tiles are packed round. */
   obstacles: Rect[];
+  /** Its grid, at its spacing: the padding kept round its tiles and the slots a cut tile takes. */
+  grid: ZoneGrid;
 }
 
 interface ZoneResizeOptions {
@@ -61,6 +63,7 @@ export function useZoneResize({ nodesRef, setNodes, onNodesChange }: ZoneResizeO
             width: node.width ?? node.data.item.width,
             height: node.height ?? node.data.item.height,
           })),
+          grid: zoneGrid(zone.data.zone.spacing),
         };
       },
       resize(id, next) {
@@ -120,15 +123,15 @@ export function useZoneResize({ nodesRef, setNodes, onNodesChange }: ZoneResizeO
   return { zoneResize, onNodesChange: onResizeNodesChange, finish };
 }
 
-/** What a zone must cover to hold tiles at `places` (board coordinates) with its padding round them. */
-function coversOf(places: readonly { x: number; y: number; width: number; height: number }[]) {
+/** What a zone on `grid` must cover to hold tiles at `places` (board coordinates) with its padding round them. */
+function coversOf(places: readonly { x: number; y: number; width: number; height: number }[], { gaps }: ZoneGrid) {
   return places.length === 0
     ? undefined
     : {
-        left: Math.min(...places.map((place) => place.x)) - ZONE_PADDING,
-        top: Math.min(...places.map((place) => place.y)) - ZONE_PADDING - PERCH_ROOM,
-        right: Math.max(...places.map((place) => place.x + place.width)) + ZONE_PADDING,
-        bottom: Math.max(...places.map((place) => place.y + place.height)) + TILE_GAP + ZONE_PADDING,
+        left: Math.min(...places.map((place) => place.x)) - gaps.padding,
+        top: Math.min(...places.map((place) => place.y)) - gaps.padding - PERCH_ROOM,
+        right: Math.max(...places.map((place) => place.x + place.width)) + gaps.padding,
+        bottom: Math.max(...places.map((place) => place.y + place.height)) + gaps.tile + gaps.padding,
       };
 }
 
@@ -137,11 +140,12 @@ function packAt(state: Resizing, next: ZoneLayout): Places | undefined {
   const tiles = [...state.tiles];
   // Still holding them where they are (one hanging over an edge stays put unless that edge comes in): nothing moves.
   const sizeOf = (id: string) => state.sizes.get(id) ?? AGENT_TILE_SIZE;
-  if (holdsTiles(coversOf(tiles.map(([id, place]) => ({ ...place, ...sizeOf(id) }))), state.last, next)) return state.tiles;
+  if (holdsTiles(coversOf(tiles.map(([id, place]) => ({ ...place, ...sizeOf(id) })), state.grid), state.last, next)) return state.tiles;
   const packed = packTiles(
     next,
     tiles.map(([id, place]) => ({ id, x: place.x - next.x, y: place.y - next.y, ...state.sizes.get(id) })),
     state.obstacles.map((rect) => ({ ...rect, x: rect.x - next.x, y: rect.y - next.y })),
+    state.grid,
   );
   return packed && new Map([...packed].map(([id, place]) => [id, { x: place.x + next.x, y: place.y + next.y }]));
 }

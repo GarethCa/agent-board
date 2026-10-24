@@ -6,14 +6,20 @@ import { CREW_PLAN_PATH, CREW_QUESTION_PATH, MAX_FLAG_LENGTH, RPC_ERROR, type Ag
 import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
+import { createFakeClock } from './fake-clock.ts';
+import type { Clock } from '../src/clock.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
-/** A daemon whose agents play the fake harnesses' `orchestrate` scenario, with one zone whose agents may orchestrate. */
-async function flagDaemon() {
+/**
+ * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with one zone whose agents may orchestrate.
+ * With `noSessionStart`, its fakes fire no `SessionStart`.
+ */
+async function flagDaemon(options: { clock?: Clock; noSessionStart?: boolean } = {}) {
   const daemon = await startTestDaemon({
     worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200 }),
+    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, noSessionStart: options.noSessionStart }),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -105,6 +111,21 @@ describe('an agent flagging the user', () => {
     expect((await setup.client.call('agent.markSeen', { sessionId: agent.sessionId })).flag).toBeNull();
   });
 
+  it("keeps its own flag when its first prompt stalls after it, and when that prompt is sent", async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await flagDaemon({ clock, noSessionStart: true });
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Tidy the docs', ...SIZE });
+    // The user types at it by hand before its first prompt is given up on, and it flags them in that turn.
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    const { token, connection } = await agentSideOf(setup, agent.sessionId);
+    const own = (await connection.call('board.needsYou', { token, reason: 'Which docs?' })).flag;
+
+    clock.advance(60_000);
+    const stalled = await untilAgent(setup.recorder, agent.sessionId, (a) => a.untypedPrompt !== null);
+    expect(stalled.flag).toEqual(own);
+    expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).flag).toEqual(own);
+  });
+
   it('refuses a blank or overlong reason', async () => {
     const setup = await flagDaemon();
     const { token, connection } = await topLevel(setup);
@@ -145,6 +166,32 @@ describe("a crew member's flag", () => {
 
     const heard = await lead.connection.call('orchestrator.wait', { token: lead.token, since, crew: true, timeoutMs: 2000 });
     expect(heard.events).toContainEqual(expect.objectContaining({ kind: 'flagged', sessionId: member.agent.sessionId, detail: "can't reproduce it on CI, only locally" }));
+  });
+
+  it('goes to its orchestrator when its first prompt stalls, whose send is refused, leaving the flag, until the user sends it', async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await flagDaemon({ clock, noSessionStart: true });
+    // No session says it is up: the lead's first prompt is given up on too, and the user sends it.
+    const leadAgent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...SIZE });
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, leadAgent.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: leadAgent.sessionId });
+    const lead = { agent: leadAgent, ...(await agentSideOf(setup, leadAgent.sessionId)) };
+    const member = await lead.connection.call('orchestrator.spawn', { token: lead.token, prompt: 'Fix the flaky test', name: 'flaky fixer' });
+
+    clock.advance(60_000);
+    const stalled = await untilAgent(setup.recorder, member.sessionId, (a) => a.untypedPrompt !== null);
+    expect(stalled.flag).toMatchObject({ to: 'orchestrator', reason: expect.stringContaining('first prompt') });
+    await setup.recorder.waitForText(lead.agent.sessionId, 'flaky fixer');
+    expect(setup.recorder.screenText(lead.agent.sessionId)).toContain("needs you: its session never said it was up, so its first prompt isn't typed");
+
+    // Its orchestrator can't type it: its message is refused, and the flag stays for it to pass on.
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: member.sessionId, text: 'Go on' })).rejects.toThrow(
+      "session isn't up yet",
+    );
+    expect((await setup.client.call('agent.list')).find((a) => a.sessionId === member.sessionId)?.flag).toEqual(stalled.flag);
+
+    expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: member.sessionId })).flag).toBeNull();
   });
 
   it("waits for its orchestrator to be ready, as a hand-off does: never typed over the user's half-typed line", async () => {

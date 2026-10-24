@@ -103,6 +103,7 @@ export const KEYS = [
   { id: 'edit.resetRotation', label: 'Reset the rotation of what is selected', section: 'edit', scope: 'board', status: 'today', keys: [{ key: 'r', text: 'R', shift: true }] },
   { id: 'edit.snapTurn', label: `Hold while turning: ${ROTATION_SNAP}° steps`, section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⇧' }] },
   { id: 'edit.handOffDrag', label: 'Hold while drawing an edge between agents: a hand-off', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⌥' }] },
+  { id: 'edit.arrangeBoard', label: 'Arrange the board', section: 'edit', scope: 'board', status: 'new', keys: [{ key: 'l', text: 'L', shift: true }] },
   { id: 'edit.delete', label: 'Delete (sessions and zones ask first)', section: 'edit', scope: 'board', status: 'today', keys: [{ text: '⌫' }] },
 
   // A session window or an expanded tile: chords, so typing never fires one.
