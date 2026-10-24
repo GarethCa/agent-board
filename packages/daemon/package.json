@@ -14,6 +14,7 @@
     "./cron": "./src/cron.ts",
     "./gate-output": "./src/gate-output.ts",
     "./gate-rules": "./src/gate-rules.ts",
+    "./mermaid": "./src/mermaid.ts",
     "./pane-layout": "./src/pane-layout.ts",
     "./window-layout": "./src/window-layout.ts",
     "./web-url": "./src/web-url.ts",

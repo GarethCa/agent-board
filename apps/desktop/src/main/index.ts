@@ -21,6 +21,8 @@ import { registerFlowEdgeIpc } from './flow-edges';
 import { registerPullRequestIpc } from './pull-requests';
 import { registerGateIpc } from './gates';
 import { registerAskIpc } from './asks';
+import { registerCaptures } from './captures';
+import { CAPTURE_QUERY, captureSize } from '../shared/capture';
 import { registerUnsavedPlanEditIpc } from './unsaved-plan-edits';
 import { registerReviewIpc } from './reviews';
 import { registerOrchestratorIpc } from './orchestrators';
@@ -81,7 +83,8 @@ function openWindow(
     height = 800,
     x,
     y,
-  }: { title?: string; width?: number; height?: number; x?: number; y?: number } = {},
+    hidden = false,
+  }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean } = {},
 ): BrowserWindow {
   const window = new BrowserWindow({
     width,
@@ -89,22 +92,24 @@ function openWindow(
     x,
     y,
     title,
+    // A capture window: its page is exactly its size, and it is never shown.
+    ...(hidden ? { useContentSize: true, enableLargerThanScreen: true } : {}),
     // The desk of the theme it opens in, so it never flashes the other one before the page paints.
     backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
     ...chromeOptions(process.platform, WINDOW_QUERY.popOut in query ? 'pop-out' : 'board'),
-    ...(WINDOW_QUERY.popOut in query ? {} : BOARD_MIN_SIZE),
+    ...(WINDOW_QUERY.popOut in query || hidden ? {} : BOARD_MIN_SIZE),
     // Background mode shows the window without focus once it has loaded; headless mode never shows it.
-    show: !backgroundMode,
+    show: !backgroundMode && !hidden,
     webPreferences: {
       // Headless, the page paints into a bitmap rather than the window, so it renders (and Playwright screenshots it) unshown.
-      offscreen: headless,
+      offscreen: headless || hidden,
       sandbox: true,
       contextIsolation: true,
       preload: join(import.meta.dirname, '../preload/index.cjs'),
     },
   });
 
-  if (backgroundMode && !headless) window.once('ready-to-show', () => window.showInactive());
+  if (backgroundMode && !headless && !hidden) window.once('ready-to-show', () => window.showInactive());
   // macOS hides the traffic lights in full screen, and the page moves into the room they leave.
   const sendFullScreen = (fullScreen: boolean) => {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(WINDOW_IPC.fullScreen, fullScreen);
@@ -192,6 +197,11 @@ const poppedWindows = registerWindowIpc({
   view,
   board: () => board,
   openBoard,
+});
+// Pictures of zones for orchestrators, each in a hidden board window framed on its zone.
+registerCaptures({
+  daemon,
+  openBoard: (frame) => openWindow({ [CAPTURE_QUERY]: JSON.stringify(frame), onboarding: 'off' }, { ...captureSize(frame), hidden: true }),
 });
 registerTabDragIpc({ board: () => board, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });
 const openAgent = registerAgentOpening(() => board ?? openBoard());

@@ -28,6 +28,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'edit-note': { done: 'edited', tried: 'edit', nothing: 'a note' },
   'remove-note': { done: 'removed', tried: 'remove', nothing: 'a note' },
   'add-shape': { done: 'drew', tried: 'draw', nothing: 'a shape' },
+  'add-diagram': { done: 'drew', tried: 'draw', nothing: 'a diagram' },
   'edit-shape': { done: 'edited', tried: 'edit', nothing: 'a shape' },
   'remove-shape': { done: 'removed', tried: 'remove', nothing: 'a shape' },
   connect: { done: 'connected', tried: 'connect', nothing: 'two items' },

@@ -2475,6 +2475,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'edit-note',
   'remove-note',
   'add-shape',
+  'add-diagram',
   'edit-shape',
   'remove-shape',
   'connect',
@@ -2608,8 +2609,9 @@ export interface ZoneMapLane {
 
 /**
  * What `orchestrator.map` reads of a zone: its lanes as an arrange by issue sees them, where everything in it is, and
- * what is amiss: things on top of each other, the widest gap in a lane (in grid columns), and the tiles off the grid
- * or out of their lane's row.
+ * what is amiss: things on top of each other, the widest gap in a lane (in grid columns), the space between lanes (and
+ * from the top row to the first), a label's distance to its lane, a zone bigger than its contents, and the tiles not
+ * where an arrange as set would put them now (one no arrange places, off the grid) or out of their lane's row.
  */
 export interface ZoneMap {
   zoneId: string;
@@ -2624,6 +2626,10 @@ export interface ZoneMap {
   things: ZoneMapThing[];
   overlaps: [string, string][];
   widestGap: number;
+  /** The widest space between a lane and the next across (rows down, columns right), in slots past the gap kept. */
+  laneGap: number;
+  /** The farthest a lane's label lies from its nearest tile, in slots along the lane past the gap kept. */
+  labelGap: number;
   offGrid: string[];
 }
 
@@ -3063,6 +3069,15 @@ export const SCROLLBACK_LINES = 10_000;
 
 export interface DaemonMethods {
   'daemon.health': { params: undefined; result: DaemonHealth };
+  /**
+   * Makes this connection the one the daemon asks for pictures of zones (`capture.requested`): the app calls it on each
+   * connection. The last connection to call it is asked, until it closes.
+   */
+  'capture.serve': { params: undefined; result: null };
+  /** Hands back the picture a `capture.requested` asked for. */
+  'capture.deliver': { params: CaptureDelivery; result: null };
+  /** Says the picture a `capture.requested` asked for can't be taken, and why. */
+  'capture.fail': { params: { id: string; message: string }; result: null };
   /**
    * Shuts the daemon down, ending its sessions. Without `force` it refuses while sessions are live and answers
    * `stopped: false`; either way `liveSessions` says how many there were.
@@ -3609,6 +3624,13 @@ export interface DaemonMethods {
    */
   'orchestrator.map': { params: { token?: string; zoneId?: string }; result: ZoneMap };
   /**
+   * A picture of a zone in its scope (its own by default), as a PNG (`ZoneScreenshot`): the board as the app draws it
+   * (`board`, with every terminal's text hidden), or a plain drawing of the boxes and lines the daemon knows (`lofi`).
+   * The app takes it in a hidden window, never moving the user's view. Fails at once with no app open to take it, and
+   * after `captureTimeoutMs` with none handed back.
+   */
+  'orchestrator.screenshot': { params: { token?: string; zoneId?: string; style?: CaptureStyle }; result: ZoneScreenshot };
+  /**
    * Makes a group (an unbound zone) marked as made by it, as `zone.addUnbound` does: at `x`, `y` if given (stepped right
    * past any zone or loose tile there, as a new zone is), else beside its own zone; at `DEFAULT_ZONE_SIZE` without a
    * size. No zone in a zone: it never lands inside another.
@@ -3643,6 +3665,12 @@ export interface DaemonMethods {
    * if it needs more.
    */
   'orchestrator.addShape': { params: { token?: string } & DiagramShapeFields & { shape: ShapeType; text: string } & LayoutPlace; result: BoardItem };
+  /**
+   * Draws the Mermaid flowchart or class diagram `mermaid` on the board, each shape and connector marked as made by it:
+   * laid out in ranks as Mermaid draws it, and placed as one block where `addNote` places a note. `skipped` is the
+   * lines it passed over (styling, notes, and what it could not read).
+   */
+  'orchestrator.addDiagram': { params: { token?: string; mermaid: string } & LayoutPlace; result: { items: BoardItem[]; connectors: Connector[]; skipped: string[] } };
   /** Changes a shape it (or its crew) made: only the fields given; a user-side caller any shape. */
   'orchestrator.editShape': { params: { token?: string; id: string } & DiagramShapeFields; result: BoardItem };
   /** Deletes a shape it (or its crew) made, and with it every connector joined to it; a user-side caller any shape. */
@@ -4136,6 +4164,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.move',
   'orchestrator.arrange',
   'orchestrator.map',
+  'orchestrator.screenshot',
   'orchestrator.addZone',
   'orchestrator.changeZone',
   'orchestrator.removeZone',
@@ -4143,6 +4172,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.editNote',
   'orchestrator.removeNote',
   'orchestrator.addShape',
+  'orchestrator.addDiagram',
   'orchestrator.editShape',
   'orchestrator.removeShape',
   'orchestrator.connect',
@@ -4406,6 +4436,65 @@ export interface WindowLayoutEvent {
   layout: WindowLayout | null;
 }
 
+/** How a zone's picture is drawn: as the board draws it, or plainly from the boxes and lines the daemon knows. */
+export const CAPTURE_STYLES = ['board', 'lofi'] as const;
+export type CaptureStyle = (typeof CAPTURE_STYLES)[number];
+
+/** The longest side of a zone's picture, px: a bigger zone is drawn smaller, at `ZoneScreenshot.scale`. */
+export const MAX_CAPTURE_SIDE = 1568;
+
+/** The board round a zone its picture takes in too, px a side: room for the zone's tab above it, and its edge. */
+export const CAPTURE_MARGIN = 40;
+
+/**
+ * The most a zone's PNG may take, in bytes: under the 5 MB a model's API takes an image at, with room to spare. The app
+ * draws a picture over it smaller until it fits, and says so in its size.
+ */
+export const MAX_CAPTURE_PNG_BYTES = 3_500_000;
+
+/** A zone's picture, as `orchestrator.screenshot` answers. */
+export interface ZoneScreenshot {
+  zoneId: string;
+  style: CaptureStyle;
+  /** The PNG, as base64. */
+  png: string;
+  /** The picture's size, px. */
+  width: number;
+  height: number;
+  /**
+   * Picture px per board px: 1, or less for a zone (with its `CAPTURE_MARGIN`) bigger than `MAX_CAPTURE_SIDE`, or whose
+   * picture the app drew smaller to keep it under `MAX_CAPTURE_PNG_BYTES`.
+   */
+  scale: number;
+  /** The zone as `orchestrator.map` maps it, taken as the picture was asked for: its size, and its lint. */
+  map: ZoneMap;
+}
+
+/**
+ * Sent to the connection that serves captures (`capture.serve`) alone: draw `rect` (a zone's and its `CAPTURE_MARGIN`, in board px) at `scale`
+ * and hand it back with `capture.deliver`, or `capture.fail`. For `lofi`, `svg` is the whole drawing.
+ */
+export interface CaptureRequestedEvent {
+  type: 'capture.requested';
+  id: string;
+  zoneId: string;
+  style: CaptureStyle;
+  rect: { x: number; y: number; width: number; height: number };
+  scale: number;
+  svg?: string;
+  /** When the daemon stops waiting, ms since the epoch: a picture not handed back by then is no use. */
+  deadline: number;
+}
+
+/** A picture handed back for a `capture.requested`. */
+export interface CaptureDelivery {
+  id: string;
+  /** The PNG, as base64. */
+  png: string;
+  width: number;
+  height: number;
+}
+
 /** Sent to every client when a shell tile is removed. */
 export interface ShellRemovedEvent {
   type: 'shell.removed';
@@ -4439,7 +4528,8 @@ export type DaemonEvent =
   | AgentStartingEvent
   | AgentStartEndedEvent
   | SettingsUpdatedEvent
-  | OrchestratorActivityEvent;
+  | OrchestratorActivityEvent
+  | CaptureRequestedEvent;
 
 export const EVENT_METHOD = 'event';
 

@@ -21,6 +21,7 @@ import { PullRequestChip } from './HybridTile';
 import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';
 import { dropKey } from '../session/shell-moves';
+import { CAPTURE_FRAME } from './capture-mode';
 
 const stopPropagation = (event: MouseEvent) => event.stopPropagation();
 
@@ -101,7 +102,12 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
         <IconButton icon={<Minimize2 />} size="sm" variant="secondary" aria-label="Collapse" tooltip="Back to its tile; the session keeps running" onClick={() => collapse(id)} />
       </header>
       <div className="expanded-tile-body nodrag nowheel nopan">
-        {content ? (
+        {CAPTURE_FRAME !== undefined ? (
+          // A capture window never shows what a session printed.
+          <div className="expanded-tile-hidden" data-testid="terminal-hidden">
+            terminal hidden
+          </div>
+        ) : content ? (
           <SessionBody content={content} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} autoFocus={false} />
         ) : external ? (
           <ExternalBody session={external} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} />

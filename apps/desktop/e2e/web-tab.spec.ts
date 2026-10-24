@@ -58,6 +58,23 @@ async function stubBrowser(app: ElectronApplication): Promise<void> {
 }
 const opened = (app: ElectronApplication) => app.evaluate(() => (globalThis as { opened?: string[] }).opened);
 
+/** Waits until everything the one web tab's page has logged to its console so far has reached the main process, which hears it in order. */
+async function consoleSettled(app: ElectronApplication, page: Page): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) => {
+    const contents = (BrowserWindow.getAllWindows().flatMap((window) => window.contentView.children)[0] as Electron.WebContentsView).webContents;
+    (globalThis as { settled?: Promise<void> }).settled = new Promise<void>((resolve) => {
+      const heard = (event: { message: string }) => {
+        if (event.message !== 'console settled') return;
+        contents.off('console-message', heard);
+        resolve();
+      };
+      contents.on('console-message', heard);
+    });
+  });
+  await page.evaluate(() => console.debug('console settled'));
+  await app.evaluate(() => (globalThis as { settled?: Promise<void> }).settled);
+}
+
 /** A port nothing listens on now. */
 async function freePort(): Promise<number> {
   const probe = createServer();
@@ -184,6 +201,46 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     await offer.getByRole('button', { name: 'Open in browser' }).click();
     await expect.poll(() => opened(app)).toEqual(['https://example.com/spam4']);
     await expect(offer).toHaveCount(0);
+
+    // Where Electron can't serve a passkey (macOS), a page asking for one has its request left pending, and the tab says so as
+    // it asks, offering the page in the OS browser; dismissed, it stays away until another request, and a new page starts afresh.
+    if (process.platform === 'darwin') {
+      // On `localhost`: a page at an IP address has no valid relying party, and is refused with a SecurityError of its own.
+      await goTo(window, server.url.replace('127.0.0.1', 'localhost'));
+      await expect(page.locator('h1')).toHaveText('Dev home');
+      const notice = webView(window).getByTestId('web-passkey');
+      const ask = () => void page.evaluate(() => void navigator.credentials.get({ publicKey: { challenge: new Uint8Array(32) } }).catch(() => {}));
+      await expect(notice).toHaveCount(0);
+      // Autofill, which many sign-in pages ask for as they load, is passive and shows nothing; nor does a cross-origin frame in
+      // the page logging the probe's message with a token it guessed, as only the page's own probe has the page's.
+      test.info().annotations.push({ type: 'isConditionalMediationAvailable', description: String(await page.evaluate(() => PublicKeyCredential.isConditionalMediationAvailable())) });
+      await page.evaluate(() => void navigator.credentials.get({ mediation: 'conditional', publicKey: { challenge: new Uint8Array(32) } }).catch(() => {}));
+      const otherOrigin = server.url;
+      await page.evaluate((src) => {
+        const frame = document.createElement('iframe');
+        frame.src = src;
+        document.body.append(frame);
+      }, `${otherOrigin}next`);
+      await expect.poll(() => page.frames().some((each) => each.url() === `${otherOrigin}next`)).toBe(true);
+      const frame = page.frames().find((each) => each.url() === `${otherOrigin}next`)!;
+      await frame.evaluate(() => console.debug('\u2063agent-board:passkey-asked:guessed'));
+      // Messages reach the main process in the order they are logged: once one logged after them has, they have been heard.
+      await consoleSettled(app, page);
+      await expect(notice).toHaveCount(0);
+      ask();
+      await expect(notice).toContainText('This page is asking for a passkey');
+      await notice.getByRole('button', { name: 'Dismiss' }).click();
+      await expect(notice).toHaveCount(0);
+      ask();
+      await expect(notice).toBeVisible();
+      await notice.getByRole('button', { name: 'Open in your browser' }).click();
+      await expect.poll(() => opened(app)).toEqual(['https://example.com/spam4', server.url.replace('127.0.0.1', 'localhost')]);
+      await expect(notice).toHaveCount(0);
+      await goTo(window, `${server.url}next`);
+      await expect(notice).toHaveCount(0);
+      await goTo(window, server.url);
+      await expect(page.locator('h1')).toHaveText('Dev home');
+    }
 
     // A page's alert, confirm or prompt shows no dialog of the app's.
     await app.evaluate(({ dialog }) => {

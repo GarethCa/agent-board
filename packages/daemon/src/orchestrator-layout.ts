@@ -43,6 +43,7 @@ import {
 } from './board-layout.ts';
 import { makeRoom } from './board-room.ts';
 import type { BoardConnection } from './board.ts';
+import { checkedData } from './items.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrators.ts';
 import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
@@ -57,6 +58,9 @@ import {
   NOTE_KINDS,
   CONNECTOR_STYLES,
   MAX_CONNECTOR_LABEL,
+  CAPTURE_MARGIN,
+  CAPTURE_STYLES,
+  MAX_CAPTURE_SIDE,
   RELATIONS,
   SECTIONED_SHAPES,
   FILL_SLOTS,
@@ -79,7 +83,6 @@ import {
   type BoardItem,
   type BoardPlace,
   type Connector,
-  type ConnectorSide,
   type DaemonMethod,
   type DaemonMethods,
   type ExternalSession,
@@ -95,18 +98,25 @@ import {
   type Shell,
   type TileSide,
   type Zone,
+  type CaptureStyle,
+  type ZoneMap,
   type ZoneMapThing,
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cutText } from './text-cut.ts';
 import { nameSlug } from './worktrees.ts';
 import { buildZoneMap } from './zone-map.ts';
+import { facingSides, shapeSize } from './diagram.ts';
+import { layOutDiagram, MAX_MERMAID_LENGTH, parseMermaid } from './mermaid.ts';
+import type { CaptureHost } from './zone-captures.ts';
+import { zoneSketch, type SketchLine } from './zone-sketch.ts';
 
 export type LayoutMethods = Pick<
   DaemonMethods,
   | 'orchestrator.move'
   | 'orchestrator.arrange'
   | 'orchestrator.map'
+  | 'orchestrator.screenshot'
   | 'orchestrator.addZone'
   | 'orchestrator.changeZone'
   | 'orchestrator.removeZone'
@@ -114,6 +124,7 @@ export type LayoutMethods = Pick<
   | 'orchestrator.editNote'
   | 'orchestrator.removeNote'
   | 'orchestrator.addShape'
+  | 'orchestrator.addDiagram'
   | 'orchestrator.editShape'
   | 'orchestrator.removeShape'
   | 'orchestrator.connect'
@@ -134,6 +145,8 @@ export interface LayoutHandlerOptions {
   close: (params: unknown, connection: BoardConnection) => Promise<Agent | null>;
   /** Writes a line to the daemon's log: a reviewer that started but could not join its cluster. */
   warn?: (message: string) => void;
+  /** Asks the app for a picture of a zone (`zone-captures.ts`). */
+  capture: CaptureHost['request'];
 }
 
 /** Where each orchestrator's arrange settings are kept (`ArrangeSettings`), by its session id. */
@@ -522,41 +535,6 @@ function shapeKindParam(fields: Record<string, unknown>): ShapeType | undefined 
   return fields.shape as ShapeType;
 }
 
-/** The widest a shape an orchestrator draws starts, before its text wraps. */
-const MAX_SHAPE_WIDTH = 480;
-/** How wide a character is, in px, in a shape's name (heading 2, bold) and in its sections (mono), about. */
-const NAME_CHAR = 14;
-const SECTION_CHAR = 9;
-/** A line's height in a shape's name and in its sections, px, and the room round a shape's text. */
-const NAME_LINE = 32;
-const SECTION_LINE = 22;
-const SHAPE_PAD = 32;
-
-/**
- * The size a shape an orchestrator draws starts at: as wide as its longest line, up to a limit, and as tall as its
- * name and sections. About: the board grows a shape taller to fit its text as it draws it.
- */
-function shapeSize(data: { shape: ShapeType; text: string; attributes?: string; methods?: string }): Size {
-  const lines = (text: string) => (text === '' ? [] : text.split('\n'));
-  const name = lines(data.text);
-  const sections = SECTIONED_SHAPES.includes(data.shape) ? SHAPE_SECTIONS.map((section) => lines(data[section] ?? '')) : [];
-  const longest = Math.max(0, ...name.map((line) => line.length * NAME_CHAR), ...sections.flat().map((line) => line.length * SECTION_CHAR));
-  const width = Math.min(MAX_SHAPE_WIDTH, Math.max(sections.length > 0 ? 200 : 160, longest + SHAPE_PAD));
-  const sectionHeight = sections.reduce((sum, each) => sum + Math.max(1, each.length) * SECTION_LINE + SHAPE_PAD / 2, 0);
-  return { width, height: Math.max(80, Math.max(1, name.length) * NAME_LINE + SHAPE_PAD + sectionHeight) };
-}
-
-/**
- * The sides a connector from `from` to `to` (board rects) leaves and arrives at: facing each other across the axis
- * they are furthest apart on, so a parent above its children is joined bottom to top.
- */
-function facingSides(from: Rect, to: Rect): { from: ConnectorSide; to: ConnectorSide } {
-  const dx = to.x + to.width / 2 - (from.x + from.width / 2);
-  const dy = to.y + to.height / 2 - (from.y + from.height / 2);
-  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? { from: 'right', to: 'left' } : { from: 'left', to: 'right' };
-  return dy > 0 ? { from: 'bottom', to: 'top' } : { from: 'top', to: 'bottom' };
-}
-
 /** The look a connector's params set: its relation's ends and dash, its style and its labels, each only if given. */
 function connectorLookParams(fields: Record<string, unknown>): Partial<Pick<Connector, 'startEnd' | 'endEnd' | 'dashed' | 'style' | 'label' | 'startLabel' | 'endLabel'>> {
   const look: ReturnType<typeof connectorLookParams> = {};
@@ -661,6 +639,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   call,
   spawn,
   close,
+  capture,
   warn = () => {},
 }: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
@@ -719,7 +698,8 @@ export function layoutHandlers<Context extends BoardConnection>({
       : placed.kind === 'shell' || (placed.kind === 'agent' && access.reachesAgent(me, board.agents.find((each) => each.sessionId === placed.id)!));
 
   /**
-   * Where something of `size` goes in `zone` (or loose, with none) for `place`: at `at` on the grid cell nearest it, or
+   * Where something of `size` goes in `zone` (or loose, with none) for `place`: at `at` on the grid column nearest it, in
+   * the nearest grid row or row of tiles already there (a lane laid out in px), or
    * beside `near`, exactly (`roomFor` moves what is in the way aside); else the first free spot a new tile (or note)
    * takes. Loose on the board, or where that would be outside its zone, it is moved the least distance clear of what is
    * there but `exclude`.
@@ -741,10 +721,13 @@ export function layoutHandlers<Context extends BoardConnection>({
     } else if (place.at !== undefined) {
       if (zone !== undefined) {
         // A wish past the zone's reach is put at its edge, on the grid.
-        const snapped = snapToGrid({ x: clamp(place.at.x, ZONE_PADDING, zone.width + MAX_REACH), y: clamp(place.at.y, ZONE_PADDING, zone.height + MAX_REACH) });
+        const wish = { x: clamp(place.at.x, ZONE_PADDING, zone.width + MAX_REACH), y: clamp(place.at.y, ZONE_PADDING, zone.height + MAX_REACH) };
+        const snapped = snapToGrid(wish);
+        // Lanes are laid out in px, off the grid's rows: a tile's row in the zone, nearer the wish than a grid row, is its row.
+        const y = here.filter((each) => each.kind !== 'item').reduce((best, each) => (Math.abs(each.rect.y - wish.y) < Math.abs(best - wish.y) ? each.rect.y : best), snapped.y);
         return {
           x: snapped.x > zone.width + MAX_REACH ? snapped.x - GRID_COLUMN : snapped.x,
-          y: snapped.y > zone.height + MAX_REACH ? snapped.y - ROW_STEP : snapped.y,
+          y: y > zone.height + MAX_REACH ? y - ROW_STEP : y,
         };
       }
       wanted = { x: clamp(place.at.x, -BOARD_EXTENT, BOARD_EXTENT), y: clamp(place.at.y, -BOARD_EXTENT, BOARD_EXTENT) };
@@ -1160,6 +1143,61 @@ export function layoutHandlers<Context extends BoardConnection>({
   const settingsOf = async (me: Orchestrator): Promise<ArrangeSettings> =>
     me.agent === null ? DEFAULT_ARRANGE_SETTINGS : settingsFrom((await savedSettings())[me.agent.sessionId]);
 
+  /** The zone `zoneId` names (`me`'s own by default) as a map, once `me` is checked to reach it; `what` is for the refusal. */
+  const zoneToMap = async (me: Orchestrator, zoneId: string | undefined, what: string): Promise<{ map: ZoneMap; zone: Zone }> => {
+    const id = zoneId ?? me.zoneId;
+    if (id === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to ${what}`);
+    const board = await readBoard();
+    const zone = checkDestination(me, board, id)!;
+    const things = placedOf(board)
+      .filter((each) => each.zoneId === zone.id)
+      .map((each): ZoneMapThing => {
+        const item = each.kind === 'item' ? board.items.find((one) => one.id === each.id) : undefined;
+        const agent = each.kind === 'agent' ? board.agents.find((one) => one.sessionId === each.id) : undefined;
+        return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null,
+          // A turned item as the upright box it takes up, so the map shows (and lints) the room it really takes.
+          ...(item === undefined ? each.rect : takenBy(each)),
+        };
+      });
+    const { parts, stale } = clusterParts(me, zone.id, board.items);
+    const crew = crewOf(me, board, zone);
+    const links = await linksOf();
+    const lanes = lanesOf(crew, links);
+    const arrange = await settingsOf(me);
+    // Where an arrange as set would put the crew now, round what it may not move and each lane's note at its size:
+    // what the lint holds the tiles to, lanes being laid out in px.
+    const ids = new Set(crew.map((tile) => tile.id));
+    const own = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
+    const noteHeights = new Map([...parts].flatMap(([slot, item]) => (slot.endsWith(CLUSTER_NOTE_SLOT) ? [[clusterKeyOf(slot), item.height] as const] : [])));
+    const arranged = arrangeTiles(crew, links, {
+      by: arrange.by,
+      layout: arrange.layout,
+      width: zone.width,
+      obstacles: placedOf(board)
+        .filter((each) => each.zoneId === zone.id && !ids.has(each.key) && !own.has(each.key))
+        .map(takenBy),
+      clusters: arrange.by === 'issue' && arrange.layout !== 'grid',
+      noteHeights,
+    }).positions;
+    const map: ZoneMap = {
+      zoneId: zone.id,
+      name: zone.name,
+      width: zone.width,
+      height: zone.height,
+      arrange,
+      things,
+      ...buildZoneMap({
+        lanes,
+        things,
+        parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])),
+        arrange,
+        compact: new Map(things.flatMap((thing) => (board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
+        arranged,
+      }),
+    };
+    return { map, zone };
+  };
+
   /** Changes `me`'s arrange settings by `changes`, keeping them for its next arrange; returns them. */
   const keepSettings = (me: Orchestrator, changes: Partial<ArrangeSettings>): Promise<ArrangeSettings> =>
     settingsQueue('settings', async () => {
@@ -1382,38 +1420,30 @@ export function layoutHandlers<Context extends BoardConnection>({
     'orchestrator.map': async (params, connection) => {
       const p = paramsObject(params);
       const me = access.caller('orchestrator.map', p, connection);
-      const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
-      if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to map`);
-      const board = await readBoard();
-      const zone = checkDestination(me, board, zoneId)!;
-      const things = placedOf(board)
-        .filter((each) => each.zoneId === zone.id)
-        .map((each): ZoneMapThing => {
-          const item = each.kind === 'item' ? board.items.find((one) => one.id === each.id) : undefined;
-          const agent = each.kind === 'agent' ? board.agents.find((one) => one.sessionId === each.id) : undefined;
-          return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null,
-            // A turned item as the upright box it takes up, so the map shows (and lints) the room it really takes.
-            ...(item === undefined ? each.rect : takenBy(each)),
-          };
-        });
-      const { parts } = clusterParts(me, zone.id, board.items);
-      const lanes = lanesOf(crewOf(me, board, zone), await linksOf());
-      const arrange = await settingsOf(me);
-      return {
+      return (await zoneToMap(me, optionalStringParam(p, 'zoneId'), 'map')).map;
+    },
+
+    'orchestrator.screenshot': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.screenshot', p, connection);
+      const style = (optionalStringParam(p, 'style') ?? 'board') as CaptureStyle;
+      if (!CAPTURE_STYLES.includes(style)) throw invalidParams(`style must be ${CAPTURE_STYLES.join(' or ')}`);
+      const { map, zone } = await zoneToMap(me, optionalStringParam(p, 'zoneId'), 'picture');
+      const rect = { x: zone.x - CAPTURE_MARGIN, y: zone.y - CAPTURE_MARGIN, width: zone.width + 2 * CAPTURE_MARGIN, height: zone.height + 2 * CAPTURE_MARGIN };
+      const scale = Math.min(1, MAX_CAPTURE_SIDE / Math.max(rect.width, rect.height));
+      const sketchLines = async (): Promise<SketchLine[]> => [
+        ...(await linksOf()).map((link) => ({ ...link, kind: 'edge' as const })),
+        ...(await call('connector.list', undefined)).map((connector) => ({ from: `${connector.from.type}:${connector.from.id}`, to: `${connector.to.type}:${connector.to.id}`, kind: 'connector' as const })),
+      ];
+      const captured = await capture({
         zoneId: zone.id,
-        name: zone.name,
-        width: zone.width,
-        height: zone.height,
-        arrange,
-        things,
-        ...buildZoneMap({
-          lanes,
-          things,
-          parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])),
-          arrange,
-          compact: new Map(things.flatMap((thing) => (board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
-        }),
-      };
+        style,
+        rect,
+        scale,
+        ...(style === 'lofi' ? { svg: zoneSketch({ zone, map, lines: await sketchLines(), scale }) } : {}),
+      });
+      // As drawn: the app draws a picture too big to send smaller.
+      return { zoneId: zone.id, style, ...captured, scale: captured.width / rect.width, map };
     },
 
     'orchestrator.addZone': async (params, connection) => {
@@ -1679,6 +1709,63 @@ export function layoutHandlers<Context extends BoardConnection>({
           entry.on = { id: item.id, name: itemName(item) };
           entry.detail = `in ${zone?.name ?? 'the board'}`;
           return item;
+        });
+      });
+    },
+
+    'orchestrator.addDiagram': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.addDiagram', p, connection);
+      const entry: ActivityEntry = { detail: '' };
+      return access.logged(me, 'add-diagram', entry, async () => {
+        const text = stringParam(p, 'mermaid');
+        if (text.length > MAX_MERMAID_LENGTH) throw invalidParams(`mermaid is at most ${MAX_MERMAID_LENGTH} characters`);
+        if (NOTE_CONTROL.test(text.replace(/\r\n/g, '\n'))) throw invalidParams('mermaid may hold tabs and line breaks, but no other control character');
+        const diagram = parseMermaid(text);
+        if (diagram === undefined) throw invalidParams('mermaid is not a Mermaid flowchart or class diagram: it opens with `flowchart TD` (or LR) or `classDiagram`');
+        if (diagram.shapes.length === 0) throw invalidParams('the diagram has no shapes to draw');
+        const drawn = layOutDiagram(diagram);
+        // Every shape checked as the board will store it before any is made, so none is left half drawn.
+        for (const shape of drawn.shapes) checkedData('shape', shape.data as unknown as Record<string, unknown>);
+        const place = placeParams(p);
+        const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
+        return arranging(queued ?? '', async () => {
+          const board = await readBoard();
+          const zoneId = zoneOfPlace(board, place, me.zoneId);
+          const zone = checkDestination(me, board, zoneId);
+          // Placed as one block, as a note of its size would be.
+          const size = { width: drawn.width, height: drawn.height };
+          const spot = spotFor(board, zone, size, place, null, true);
+          const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
+          const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
+          if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');
+          const items = new Map<string, BoardItem>();
+          const connectors: Connector[] = [];
+          try {
+            for (const shape of drawn.shapes) {
+              const item = await call('item.create', { kind: 'shape', zoneId, x: spot.x + shape.x, y: spot.y + shape.y, width: shape.width, height: shape.height, data: { ...shape.data } });
+              markItem.run(me.agent?.sessionId ?? null, item.id);
+              items.set(shape.key, item);
+            }
+            for (const { from, to, look } of drawn.links) {
+              const connector = await call('connector.create', {
+                from: { type: 'item', id: items.get(from.key)!.id, side: from.side },
+                to: { type: 'item', id: items.get(to.key)!.id, side: to.side },
+                ...look,
+              });
+              markConnector.run(me.agent?.sessionId ?? null, connector.id);
+              connectors.push(connector);
+            }
+          } catch (error) {
+            // A diagram is drawn whole or not at all: what was made goes, its connectors with its shapes.
+            for (const item of items.values()) await call('item.delete', { id: item.id }).catch(() => undefined);
+            throw error;
+          }
+          for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
+          if (grown !== undefined) await growTo(zone, grown);
+          entry.on = { id: [...items.values()][0]!.id, name: `a ${diagram.kind === 'class' ? 'class diagram' : 'flowchart'} of ${items.size} shape${items.size === 1 ? '' : 's'}` };
+          entry.detail = `in ${zone?.name ?? 'the board'}`;
+          return { items: [...items.values()], connectors, skipped: diagram.skipped };
         });
       });
     },

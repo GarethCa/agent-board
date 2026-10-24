@@ -24,6 +24,7 @@ import {
   Sparkles,
   SquareDashedMousePointer,
   Trash2,
+  Workflow,
 } from 'lucide-react';
 import { keyText } from '../../keys/registry';
 import type { MenuEntry } from '../../ui';
@@ -40,6 +41,8 @@ export interface ContextActions {
   rename(): void;
   duplicate(): void;
   copy(): void;
+  /** Copies the selected shapes, and the connectors between them, as Mermaid text. */
+  copyMermaid(): void;
   restack(how: Reorder): void;
   align(how: Alignment): void;
   distribute(axis: 'x' | 'y'): void;
@@ -60,7 +63,7 @@ export interface ContextActions {
 }
 
 /**
- * The context menu on a selection (WbTools): Ask Claude (CM), duplicate and copy, z-order, align, reset rotation, each selected kind's
+ * The context menu on a selection (WbTools): Ask Claude (CM), duplicate and copy (shapes also as Mermaid), z-order, align, reset rotation, each selected kind's
  * colour, and delete, which asks before it deletes a session.
  */
 export function selectionEntries(selection: SelectionSummary, selectedConnectors: number, actions: ContextActions): MenuEntry[] {
@@ -98,6 +101,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
     ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: actions.rename }, 'separator' as const] : []),
     { label: 'Duplicate', icon: <CopyPlus />, shortcut: keyText('edit.duplicate'), disabled: !hasItems, onSelect: actions.duplicate },
     { label: 'Copy', icon: <Copy />, shortcut: keyText('edit.copy'), disabled: !hasItems, onSelect: actions.copy },
+    ...(selection.kinds.has('shape') ? [{ label: 'Copy as Mermaid', icon: <Workflow />, hint: 'The shapes and their connectors, as diagram text', onSelect: actions.copyMermaid }] : []),
     ...(connect.length > 0 ? ['separator' as const, ...connect] : []),
     'separator',
     { label: 'Bring to front', icon: <ArrowUpToLine />, shortcut: keyText('edit.front'), onSelect: () => actions.restack('front') },

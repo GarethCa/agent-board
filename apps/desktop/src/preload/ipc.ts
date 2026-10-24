@@ -36,3 +36,20 @@ export function ipcCalls(ipc: Pick<IpcRenderer, 'invoke' | 'on' | 'off'>) {
     },
   };
 }
+
+/** What the preload's API uses of `ipcRenderer`. */
+export type PreloadIpc = Pick<IpcRenderer, 'invoke' | 'send' | 'on' | 'off'>;
+
+/**
+ * `ipc` for a capture window (`shared/capture.ts`), which only reads the board: a call outside `reads` fails without
+ * reaching main, and nothing is sent, so the window never saves the view, writes to a session or takes a request meant
+ * for the board.
+ */
+export function readOnlyIpc(ipc: PreloadIpc, reads: ReadonlySet<string>): PreloadIpc {
+  return {
+    invoke: (channel, ...args) => (reads.has(channel) ? ipc.invoke(channel, ...args) : Promise.reject(new Error(`a capture window only reads the board: ${channel}`))),
+    send: () => {},
+    on: (channel, listener) => ipc.on(channel, listener),
+    off: (channel, listener) => ipc.off(channel, listener),
+  };
+}

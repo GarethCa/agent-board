@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   AGENT_IPC,
   APPEARANCE_IPC,
+  CAPTURE_IPC,
+  CAPTURE_READS,
   CONNECTOR_IPC,
   FLOW_EDGE_IPC,
   PULL_REQUEST_IPC,
@@ -32,9 +34,13 @@ import {
 } from './api';
 import { appearanceFromQuery } from '../shared/appearance';
 import { ipcErrorMessage } from '../shared/errors';
-import { ipcCalls } from './ipc';
+import { captureFrameFrom } from '../shared/capture';
+import { ipcCalls, readOnlyIpc } from './ipc';
 
-const { invoke, subscribe, keyed } = ipcCalls(ipcRenderer);
+// A capture window only reads the board (shared/capture.ts).
+const capturing = captureFrameFrom(location.search) !== undefined;
+const ipc = capturing ? readOnlyIpc(ipcRenderer, CAPTURE_READS) : ipcRenderer;
+const { invoke, subscribe, keyed } = ipcCalls(ipc);
 const sessionEvents = keyed<[SessionStreamEvent]>(SESSION_IPC.event);
 const webTabStates = keyed<[WebTabState]>(WEB_TAB_IPC.changed);
 const webTabKeys = keyed<[WebTabKey]>(WEB_TAB_IPC.key);
@@ -48,16 +54,16 @@ const api: AgentBoardApi = {
     attach(sessionId, onEvent) {
       const attachId = crypto.randomUUID();
       const stop = sessionEvents(attachId, onEvent);
-      ipcRenderer.invoke(SESSION_IPC.attach, sessionId, attachId).catch((error: unknown) => {
+      ipc.invoke(SESSION_IPC.attach, sessionId, attachId).catch((error: unknown) => {
         stop();
         onEvent({ type: 'session.attachFailed', sessionId, message: ipcErrorMessage(error) });
       });
       return () => {
         stop();
-        void ipcRenderer.invoke(SESSION_IPC.detach, attachId);
+        void ipc.invoke(SESSION_IPC.detach, attachId);
       };
     },
-    write: (sessionId, data) => ipcRenderer.send(SESSION_IPC.write, sessionId, data),
+    write: (sessionId, data) => ipc.send(SESSION_IPC.write, sessionId, data),
     resize: (sessionId, size) => invoke(SESSION_IPC.resize, sessionId, size),
     kill: (sessionId) => invoke(SESSION_IPC.kill, sessionId),
     cwd: (sessionId) => invoke(SESSION_IPC.cwd, sessionId),
@@ -167,24 +173,24 @@ const api: AgentBoardApi = {
     open(tabId, url, { onState, onKey }) {
       const stopStates = webTabStates(tabId, onState);
       const stopKeys = webTabKeys(tabId, onKey);
-      ipcRenderer.invoke(WEB_TAB_IPC.open, tabId, url).catch((error: unknown) => onState({ url, title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
+      ipc.invoke(WEB_TAB_IPC.open, tabId, url).catch((error: unknown) => onState({ url, title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
       return () => {
         stopStates();
         stopKeys();
-        void ipcRenderer.invoke(WEB_TAB_IPC.close, tabId);
+        void ipc.invoke(WEB_TAB_IPC.close, tabId);
       };
     },
     openPlan(tabId, html, { onState, onKey }) {
       const stopStates = webTabStates(tabId, onState);
       const stopKeys = webTabKeys(tabId, onKey);
-      ipcRenderer.invoke(WEB_TAB_IPC.openPlan, tabId, html).catch((error: unknown) => onState({ url: '', title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
+      ipc.invoke(WEB_TAB_IPC.openPlan, tabId, html).catch((error: unknown) => onState({ url: '', title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
       return () => {
         stopStates();
         stopKeys();
-        void ipcRenderer.invoke(WEB_TAB_IPC.close, tabId);
+        void ipc.invoke(WEB_TAB_IPC.close, tabId);
       };
     },
-    setBounds: (tabId, bounds) => ipcRenderer.send(WEB_TAB_IPC.setBounds, tabId, bounds),
+    setBounds: (tabId, bounds) => ipc.send(WEB_TAB_IPC.setBounds, tabId, bounds),
     load: (tabId, url) => invoke(WEB_TAB_IPC.load, tabId, url),
     back: (tabId) => invoke(WEB_TAB_IPC.back, tabId),
     forward: (tabId) => invoke(WEB_TAB_IPC.forward, tabId),
@@ -192,6 +198,7 @@ const api: AgentBoardApi = {
     openInBrowser: (tabId) => invoke(WEB_TAB_IPC.openInBrowser, tabId),
     openOffered: (tabId, shown) => invoke(WEB_TAB_IPC.openOffered, tabId, shown),
     dismissOffered: (tabId) => invoke(WEB_TAB_IPC.dismissOffered, tabId),
+    dismissPasskey: (tabId) => invoke(WEB_TAB_IPC.dismissPasskey, tabId),
     forget: (tabId) => invoke(WEB_TAB_IPC.forget, tabId),
     handOff: (tabId) => invoke(WEB_TAB_IPC.handOff, tabId),
     focus: (tabId) => invoke(WEB_TAB_IPC.focus, tabId),
@@ -238,10 +245,12 @@ const api: AgentBoardApi = {
     onChanged: (listener) => subscribe(AGENT_IPC.changed, listener),
     onStartChanged: (listener) => subscribe(AGENT_IPC.startChanged, listener),
     onOpenRequested(listener) {
+      // A capture window takes no request meant for the board's window.
+      if (capturing) return () => {};
       // Taken on every poke and once on subscribing, for a request made before this window listened. Taking is
       // one-shot in main, so a request is never delivered twice.
       const take = () =>
-        void ipcRenderer.invoke(AGENT_IPC.takeOpenRequest).then((sessionId: string | null) => {
+        void ipc.invoke(AGENT_IPC.takeOpenRequest).then((sessionId: string | null) => {
           if (sessionId !== null) listener(sessionId);
         });
       const unsubscribe = subscribe(AGENT_IPC.openRequested, take);
@@ -310,9 +319,11 @@ const api: AgentBoardApi = {
     testNotification: () => invoke(SETUP_IPC.testNotification),
     installCli: () => invoke(SETUP_IPC.installCli),
     onGettingStarted(listener) {
+      // A capture window takes no request meant for the board's window.
+      if (capturing) return () => {};
       // Taken on every poke and once on subscribing, as opening an agent is, for a request made while the board loaded.
       const take = () =>
-        void ipcRenderer.invoke(SETUP_IPC.takeGettingStarted).then((requested: boolean) => {
+        void ipc.invoke(SETUP_IPC.takeGettingStarted).then((requested: boolean) => {
           if (requested) listener();
         });
       const unsubscribe = subscribe(SETUP_IPC.gettingStarted, take);
@@ -329,9 +340,11 @@ const api: AgentBoardApi = {
     onSwitched: (listener) => subscribe(WINDOW_IPC.switched, listener),
     requestBoard: (request) => invoke(WINDOW_IPC.boardRequest, request),
     onBoardRequested(listener) {
+      // A capture window takes no request meant for the board's window.
+      if (capturing) return () => {};
       // As agents' open requests: taken on every poke and once on subscribing, for one made while the board was opening.
       const take = () =>
-        void ipcRenderer.invoke(WINDOW_IPC.takeBoardRequest).then((request: BoardRequest | null) => {
+        void ipc.invoke(WINDOW_IPC.takeBoardRequest).then((request: BoardRequest | null) => {
           if (request !== null) listener(request);
         });
       const unsubscribe = subscribe(WINDOW_IPC.boardRequested, take);
@@ -355,6 +368,13 @@ const api: AgentBoardApi = {
     onMakeMove: (listener) => subscribe(TAB_DRAG_IPC.makeMove, listener),
     onPopOut: (listener) => subscribe(TAB_DRAG_IPC.popOut, listener),
     onReplay: (listener) => subscribe(TAB_DRAG_IPC.replay, listener),
+  },
+  capture: {
+    active: capturing,
+    // Past the read-only guard: the one thing a capture window tells main.
+    ready: () => {
+      if (capturing) ipcRenderer.send(CAPTURE_IPC.ready);
+    },
   },
 };
 

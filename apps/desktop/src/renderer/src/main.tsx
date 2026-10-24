@@ -16,6 +16,7 @@ import { App } from './App';
 import { Gallery } from './Gallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
+import { CAPTURE_FRAME } from './board/capture-mode';
 import { ReviewsProvider } from './review/ReviewsProvider';
 import { GatesProvider } from './gate/GatesProvider';
 import { followTheme } from './themes';
@@ -35,6 +36,9 @@ if (popOut === undefined) void window.agentBoard.build().then((build) => (docume
 // The theme for the window's light or dark mode, which the Appearance setting drives (themes.ts): set before the first
 // paint, and again whenever macOS or the setting changes it.
 followTheme();
+
+// A capture window shows the board's canvas alone (board/capture-mode.ts, app.css).
+if (CAPTURE_FRAME !== undefined) document.documentElement.dataset.capture = '';
 
 // Whether the keys added since the key registry work: read as the window opens, and again as it comes to the front.
 followExtendedShortcuts();

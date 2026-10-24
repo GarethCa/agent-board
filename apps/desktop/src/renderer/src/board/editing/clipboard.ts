@@ -1,8 +1,10 @@
 // Copying board items: what goes on the clipboard, and the copies a paste or a duplicate makes from it.
 
 import { BOARD_ITEM_KINDS, DEFAULT_CONNECTOR_LOOK, type BoardItem, type BoardItemKind, type Connector } from '@agent-board/daemon/protocol';
+import { layOutDiagram, parseMermaid, toMermaid } from '@agent-board/daemon/mermaid';
 import { boundsOf } from './snap';
 import { createParamsOf } from '../connectors/endpoints';
+import { shapeData } from '../items/text-style';
 
 /** The clipboard type board items are copied under, beside plain text for other apps. */
 export const BOARD_CLIPBOARD_TYPE = 'application/x-agent-board+json';
@@ -95,4 +97,42 @@ export function plainText({ items }: Copied): string {
     .map(({ data }) => (typeof data.text === 'string' && data.text !== '' ? data.text : typeof data.url === 'string' ? data.url : ''))
     .filter((text) => text !== '')
     .join('\n\n');
+}
+
+/**
+ * A copy of the diagram `text` draws, if it is a Mermaid flowchart or class diagram: its shapes laid out from 0,0 and
+ * the connectors between them, to paste as a copy of board items is pasted, and the lines it passed over. Throws for
+ * a diagram too long to read.
+ */
+export function diagramCopy(text: string): { copy: Copied; skipped: string[] } | undefined {
+  const diagram = parseMermaid(text);
+  if (diagram === undefined || diagram.shapes.length === 0) return undefined;
+  const { shapes, links } = layOutDiagram(diagram);
+  return {
+    copy: {
+      items: shapes.map(({ key, x, y, width, height, data }) => ({ id: key, kind: 'shape', x, y, width, height, rotation: 0, data: { ...data } })),
+      connectors: links.map(({ from, to, look }, n) => ({
+        ...DEFAULT_CONNECTOR_LOOK,
+        ...look,
+        id: `link-${n}`,
+        from: { type: 'item', id: from.key, side: from.side },
+        to: { type: 'item', id: to.key, side: to.side },
+        points: [],
+      })),
+    },
+    skipped: diagram.skipped,
+  };
+}
+
+/** What a pasted diagram left out, in words for a notice: the first few lines, each cut short. */
+export function skippedNotice(skipped: readonly string[]): string {
+  const shown = skipped.slice(0, 3).map((line) => (line.length > 60 ? `${line.slice(0, 59)}…` : line));
+  const more = skipped.length - shown.length;
+  return `Drew the diagram without ${skipped.length === 1 ? 'one line' : `${skipped.length} lines`} it can't draw: ${shown.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
+}
+
+/** The copied shapes, and the connectors between them, as Mermaid; undefined if no shape was copied. */
+export function mermaidOf({ items, connectors }: Copied): string | undefined {
+  const shapes = items.filter((item) => item.kind === 'shape').map(({ id, data }) => ({ id, data: shapeData(data) }));
+  return shapes.length === 0 ? undefined : toMermaid(shapes, connectors);
 }

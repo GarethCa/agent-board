@@ -5,6 +5,7 @@ import {
   AGENT_TILE_SIZE,
   clearOf,
   GRID_COLUMN,
+  GRID_ORIGIN,
   gridPoint,
   gridRowAtOrBelow,
   gridSpan,
@@ -95,11 +96,11 @@ export interface ArrangedCluster {
 }
 
 /**
- * The grid columns, and rows, left empty between two tiles a rail joins, so its token and label fit between them
- * (`RAIL_GAP`): next to each other they are only a tile gap apart.
+ * The room added above a row a rail crosses, so the rail between it and the row above is `RAIL_GAP` long to the perch
+ * of the row below, its token and label clear of both tiles and of the characters on the lower one: rows are only a
+ * tile gap apart there.
  */
-const RAIL_COLUMNS = Math.ceil((RAIL_GAP - TILE_GAP) / GRID_COLUMN);
-const RAIL_ROWS = Math.ceil((RAIL_GAP - (ROW_STEP - AGENT_TILE_SIZE.height)) / ROW_STEP);
+const RAIL_ROOM_ABOVE = RAIL_GAP - TILE_GAP;
 
 /**
  * Roles in the order a unit's tiles go, and by role, the order of the rows: those that do the work first, then those
@@ -477,15 +478,13 @@ export function arrangeTiles(
     const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
     const columnsOf = (row: Row) => row.columns.map((column) => column + (isCluster(row) ? 1 : 0));
     const noteColumn = (row: Row) => Math.max(-1, ...row.columns) + 2;
-    // Every column as many grid columns wide as its widest tile, in every row, so columns line up; and a rail's room
-    // wider than a tile of a row a rail runs past the right of, in every row too: past each tile from either end of the
-    // rail to the tile before the other, so its token has room whichever end it is at, never on a tile between them.
-    // By issue a row is a lane: there a tile wider than a grid column (expanded, or resized) widens its column in its own
-    // lane only, so the rest of it goes past and no other lane's tiles and note are spread apart by it. By role or state
-    // the rows line up whole, so a reviewer stays under what it reviews. The lead's row lines up with none: its tiles go
-    // at their own widths.
-    const spansOf = (spanned: readonly Row[], widthOf: (tile: ArrangeTile) => number = (tile) => gridSpan(sizeOf(tile)).columns): number[] => {
-      const spans: number[] = [];
+    // Each column as wide as its widest tile, in px, and a rail's room past a tile of a row a rail runs past the right
+    // of: past each tile from either end of the rail to the tile before the other, so its token has room whichever end
+    // it is at, never on a tile between them. By issue a row is a lane, with its own widths: a wide tile (expanded, or
+    // resized) or a rail spreads only its own lane, and lanes alike line up on the grid. By role or state the rows line
+    // up whole, so a reviewer stays under what it reviews. The lead's row lines up with none.
+    const advanceOf = (spanned: readonly Row[]): number[] => {
+      const advance: number[] = [];
       for (const row of spanned) {
         const columns = columnsOf(row);
         const railAfter = new Set<number>();
@@ -495,25 +494,15 @@ export function arrangeTiles(
           }
         }
         columns.forEach((column, index) => {
-          const rail = railAfter.has(column) ? RAIL_COLUMNS : 0;
-          spans[column] = Math.max(spans[column] ?? 1, widthOf(row.tiles[index]!) + rail);
+          advance[column] = Math.max(advance[column] ?? 0, sizeOf(row.tiles[index]!).width + (railAfter.has(column) ? RAIL_GAP : TILE_GAP));
         });
+        if (isCluster(row)) advance[0] = Math.max(advance[0] ?? 0, CLUSTER_LABEL_SIZE.width + TILE_GAP);
       }
-      return spans;
+      return advance;
     };
     const leads = (row: Row) => row.tiles.some((tile) => tile.lead);
-    const byLane = options.by === 'issue';
-    const shared = spansOf(
-      rows.filter((row) => !leads(row)),
-      byLane ? () => 1 : undefined,
-    );
-    /** The widths of `row`'s columns: the shared ones, a lane's each widened for a wider tile of its own. */
-    const spansIn = (row: Row): number[] => {
-      if (leads(row)) return spansOf([row]);
-      if (!byLane) return shared;
-      return widenedBy(shared, spansOf([row]));
-    };
-    const gridColumnOf = (spans: readonly number[], column: number) => Array.from({ length: column }, (_, index) => spans[index] ?? 1).reduce((sum, span) => sum + span, 0);
+    const shared = advanceOf(rows.filter((row) => !leads(row)));
+    const startsIn = (row: Row): number[] => columnStarts(leads(row) || options.by === 'issue' ? advanceOf([row]) : shared, noteColumn(row) + 1, 0);
     // A rail's room above each row a rail crosses the top of: one from a row above it to it, or to a row below it.
     const rowOf = new Map(rows.flatMap((row, index) => row.tiles.map((tile) => [tile.id, index] as const)));
     const crossings = links.flatMap((link) => {
@@ -521,33 +510,26 @@ export function arrangeTiles(
       return from === undefined || to === undefined || from === to ? [] : [[Math.min(from, to), Math.max(from, to)] as const];
     });
     const railAbove = (index: number) => crossings.some(([top, bottom]) => top < index && index <= bottom);
-    let next = 0;
+    let next = GRID_ORIGIN.y;
     for (const [rowIndex, row] of rows.entries()) {
       const cluster = isCluster(row);
-      const spans = spansIn(row);
-      const columns = columnsOf(row).map((column) => gridColumnOf(spans, column));
+      const starts = startsIn(row);
+      const xs = columnsOf(row).map((column) => starts[column]!);
       const noteSize = noteSizeOf(laneKey(row.tiles), CLUSTER_NOTE_SIZE);
-      if (railAbove(rowIndex)) next += RAIL_ROWS;
-      const labelAt = (at: number) => gridPoint(0, at);
-      const noteAt = (at: number) => gridPoint(gridColumnOf(spans, noteColumn(row)), at);
-      const parts = (at: number): Rect[] => [
-        ...row.tiles.map((tile, index) => sizedFootprint(gridPoint(columns[index]!, at), sizeOf(tile))),
+      if (railAbove(rowIndex)) next += RAIL_ROOM_ABOVE;
+      const labelAt = (y: number) => ({ x: starts[0]!, y });
+      const noteAt = (y: number) => ({ x: starts[noteColumn(row)]!, y });
+      const parts = (y: number): Rect[] => [
+        ...row.tiles.map((tile, index) => sizedFootprint({ x: xs[index]!, y }, sizeOf(tile))),
         ...(cluster
           ? [
-              { ...labelAt(at), ...CLUSTER_LABEL_SIZE },
-              { ...noteAt(at), ...noteSize },
+              { ...labelAt(y), ...CLUSTER_LABEL_SIZE },
+              { ...noteAt(y), ...noteSize },
             ]
           : []),
       ];
-      // Down past the lowest obstacle in the way, a whole row at a time, until nothing is: each step passes one.
-      let at = next;
-      const blockedAt = (row: number) => obstacles.filter((obstacle) => parts(row).some((rect) => !clearOf(rect, [obstacle])));
-      for (let step = 0; step <= obstacles.length && blockedAt(at).length > 0; step++) {
-        at = Math.max(at + 1, gridRowAtOrBelow(Math.max(...blockedAt(at).map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM));
-      }
-      // Never past the cap still in the way: the first grid row below every obstacle.
-      if (blockedAt(at).length > 0) at = gridRowAtOrBelow(Math.max(...obstacles.map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM);
-      row.tiles.forEach((tile, index) => positions.set(tile.id, gridPoint(columns[index]!, at)));
+      const at = downPast(next, parts, obstacles);
+      row.tiles.forEach((tile, index) => positions.set(tile.id, { x: xs[index]!, y: at }));
       if (cluster) {
         clusters.push({
           key: laneKey(row.tiles),
@@ -558,8 +540,8 @@ export function arrangeTiles(
           noteSize,
         });
       }
-      // As many grid rows as its tallest tile, or its note.
-      next = at + Math.max(...row.tiles.map((tile) => gridSpan(sizeOf(tile)).rows), cluster ? gridSpan(noteSize).rows : 1);
+      // As tall as its tallest tile, or its note, and a row's gap and perch below it.
+      next = at + Math.max(...row.tiles.map((tile) => sizeOf(tile).height), cluster ? noteSize.height : 0) + TILE_GAP + PERCH_ROOM;
     }
   }
   const placed = [
@@ -571,10 +553,6 @@ export function arrangeTiles(
   ];
   return { positions, clusters, size: fittedSize(placed, obstacles) };
 }
-
-/** `shared` column widths, each widened to `own`'s where that is wider: for a lane's, or a line of cards', own wider tiles. */
-const widenedBy = (shared: readonly number[], own: readonly number[]): number[] =>
-  Array.from({ length: Math.max(shared.length, own.length) }, (_, column) => Math.max(shared[column] ?? 1, own[column] ?? 1));
 
 /** Something put in a cell of a layout's own grid, before sizes and rails widen its columns and rows: a tile, or a lane's head. */
 interface Cell {
@@ -641,63 +619,80 @@ function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
 }
 
 /**
- * Where `cells` go on the zone's grid: every column as many grid columns wide as its widest cell (a line of cards' widest
- * in its own line, the lead's row's its own: `Cell.band`, `Cell.alone`), and a rail's room past each column a rail runs
- * along within a row; every row as tall as its tallest, and a rail's room above each row a rail
- * crosses; each row pushed down whole past what it may not move (`obstacles`).
+ * Where `cells` go, in px: every column as wide as its widest cell (a line of cards' widest in its own line, the lead's
+ * row's its own: `Cell.band`, `Cell.alone`), and a rail's room past each column a rail runs along within a row, each on
+ * the grid where that costs nothing (`columnStarts`), an empty one a grid column of space; every row as tall as its
+ * tallest, and a rail's room above each row a rail crosses; each row pushed down whole past what it may not move
+ * (`obstacles`).
  */
 function placeCells(cells: readonly Cell[], links: readonly ArrangeLink[], obstacles: readonly Rect[]): Map<string, Point> {
   const byId = new Map(cells.map((cell) => [cell.id, cell]));
-  const railAfter = new Set<number>();
   const railAbove = new Set<number>();
   for (const { from, to } of links) {
     const [a, b] = [byId.get(from), byId.get(to)];
-    if (a === undefined || b === undefined || a === b) continue;
-    if (a.row === b.row) for (let column = Math.min(a.column, b.column); column < Math.max(a.column, b.column); column++) railAfter.add(column);
-    else for (let row = Math.min(a.row, b.row) + 1; row <= Math.max(a.row, b.row); row++) railAbove.add(row);
+    if (a === undefined || b === undefined || a === b || a.row === b.row) continue;
+    for (let row = Math.min(a.row, b.row) + 1; row <= Math.max(a.row, b.row); row++) railAbove.add(row);
   }
-  /** Each column's width, as wide as its widest of `spanned` (by `widthOf`), and a rail's room past it. */
-  const spansOf = (spanned: readonly Cell[], widthOf = (cell: Cell) => gridSpan(cell.size).columns) =>
-    Array.from({ length: Math.max(0, ...spanned.map((cell) => cell.column + 1)) }, (_, column) =>
-      Math.max(1, ...spanned.filter((cell) => cell.column === column).map(widthOf)) + (railAfter.has(column) ? RAIL_COLUMNS : 0),
-    );
-  // A cell in a line of cards counts as a grid column wide here: its own line is widened for it (`band`).
-  const shared = spansOf(
-    cells.filter((cell) => cell.alone !== true),
-    (cell) => (cell.band === undefined ? gridSpan(cell.size).columns : 1),
-  );
-  const spansFor = (cell: Cell): number[] => {
-    if (cell.alone === true) return spansOf(cells.filter((other) => other.alone === true && other.row === cell.row));
-    if (cell.band === undefined) return shared;
-    return widenedBy(
-      shared,
-      spansOf(cells.filter((other) => other.band === cell.band)),
-    );
+  /** Where each column of `group` starts: as wide as its widest cell, and a rail's room past it where a rail runs along a row of the group. */
+  const startsOf = (group: readonly Cell[]): number[] => {
+    const inGroup = new Set(group);
+    const railAfter = new Set<number>();
+    for (const { from, to } of links) {
+      const [a, b] = [byId.get(from), byId.get(to)];
+      if (a === undefined || b === undefined || a === b || a.row !== b.row || !inGroup.has(a) || !inGroup.has(b)) continue;
+      for (let column = Math.min(a.column, b.column); column < Math.max(a.column, b.column); column++) railAfter.add(column);
+    }
+    const advance: number[] = [];
+    for (const cell of group) advance[cell.column] = Math.max(advance[cell.column] ?? 0, cell.size.width + (railAfter.has(cell.column) ? RAIL_GAP : TILE_GAP));
+    return columnStarts(advance, advance.length, GRID_COLUMN);
   };
-  const gridColumn = (cell: Cell) => spansFor(cell).slice(0, cell.column).reduce((sum, span) => sum + span, 0);
+  const groupOf = (cell: Cell): string => (cell.alone === true ? `alone:${cell.row}` : cell.band === undefined ? 'shared' : `band:${cell.band}`);
+  const groups = new Map<string, Cell[]>();
+  for (const cell of cells) groups.set(groupOf(cell), [...(groups.get(groupOf(cell)) ?? []), cell]);
+  const starts = new Map([...groups].map(([key, group]) => [key, startsOf(group)]));
+  const xOf = (cell: Cell) => starts.get(groupOf(cell))![cell.column]!;
   const positions = new Map<string, Point>();
   const rows = Math.max(0, ...cells.map((cell) => cell.row + 1));
-  let next = 0;
+  let next = GRID_ORIGIN.y;
   for (let row = 0; row < rows; row++) {
     const inRow = cells.filter((cell) => cell.row === row);
     // An empty row is a grid row of space.
     if (inRow.length === 0) {
-      next += 1;
+      next += ROW_STEP;
       continue;
     }
-    if (railAbove.has(row)) next += RAIL_ROWS;
-    const parts = (at: number) => inRow.map((cell) => sizedFootprint(gridPoint(gridColumn(cell), at), cell.size));
-    const blockedAt = (at: number) => obstacles.filter((obstacle) => parts(at).some((rect) => !clearOf(rect, [obstacle])));
-    let at = next;
-    // Down past the lowest obstacle in the way, a whole row at a time, until nothing is: each step passes one.
-    for (let step = 0; step <= obstacles.length && blockedAt(at).length > 0; step++) {
-      at = Math.max(at + 1, gridRowAtOrBelow(Math.max(...blockedAt(at).map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM));
-    }
-    if (blockedAt(at).length > 0) at = gridRowAtOrBelow(Math.max(...obstacles.map((obstacle) => obstacle.y + obstacle.height)) + TILE_GAP + PERCH_ROOM);
-    for (const cell of inRow) positions.set(cell.id, gridPoint(gridColumn(cell), at));
-    next = at + Math.max(...inRow.map((cell) => gridSpan(cell.size).rows));
+    if (railAbove.has(row)) next += RAIL_ROOM_ABOVE;
+    const at = downPast(next, (y) => inRow.map((cell) => sizedFootprint({ x: xOf(cell), y }, cell.size)), obstacles);
+    for (const cell of inRow) positions.set(cell.id, { x: xOf(cell), y: at });
+    next = at + Math.max(...inRow.map((cell) => cell.size.height)) + TILE_GAP + PERCH_ROOM;
   }
   return positions;
+}
+
+/**
+ * Where each column starts, in px, from the zone's first: column `c` on the grid (`gridPoint`) unless the one before it
+ * (`advance`: its widest thing and the gap after it) reaches past that, so compact columns line up on the grid and a wide
+ * tile or a rail spreads only what follows it, by no more than it needs. A column with nothing in it takes `empty`.
+ */
+function columnStarts(advance: readonly (number | undefined)[], count: number, empty: number): number[] {
+  const starts: number[] = [];
+  for (let column = 0; column < count; column++) {
+    const grid = gridPoint(column, 0).x;
+    starts.push(column === 0 ? grid : Math.max(grid, starts[column - 1]! + (advance[column - 1] ?? empty)));
+  }
+  return starts;
+}
+
+/**
+ * The top, at or below `y`, at which a row whose parts at a top are `parts` keeps clear of `obstacles`: down past the
+ * lowest obstacle in the way until nothing is, each step passing one; never past the cap still in the way, below them all.
+ */
+function downPast(y: number, parts: (y: number) => Rect[], obstacles: readonly Rect[]): number {
+  const below = (rects: readonly Rect[]) => Math.max(...rects.map((rect) => rect.y + rect.height)) + TILE_GAP + PERCH_ROOM;
+  const blockedAt = (at: number) => obstacles.filter((obstacle) => parts(at).some((rect) => !clearOf(rect, [obstacle])));
+  let at = y;
+  for (let step = 0; step <= obstacles.length && blockedAt(at).length > 0; step++) at = Math.max(at + 1, below(blockedAt(at)));
+  return blockedAt(at).length > 0 ? Math.max(at, below(obstacles)) : at;
 }
 
 /**

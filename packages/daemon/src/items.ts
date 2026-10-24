@@ -257,8 +257,8 @@ function isHttpsUrl(text: string): boolean {
   }
 }
 
-/** `data` as stored for an item of `kind`, once it passes the kind's check and the size cap. */
-function checkedData(kind: BoardItemKind, data: Record<string, unknown>): string {
+/** `data` as stored for an item of `kind`, once it passes the kind's check and the size cap; throws if it doesn't. */
+export function checkedData(kind: BoardItemKind, data: Record<string, unknown>): string {
   KIND_DATA[kind](data);
   const encoded = JSON.stringify(data);
   if (Buffer.byteLength(encoded) > MAX_ITEM_DATA_BYTES) {

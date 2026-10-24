@@ -170,8 +170,10 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
     { tool: 'move', command: 'move', positional: ['tile'] },
     { tool: 'arrange', command: 'arrange', positional: ['zone'] },
-    // `zone map` alone: the other zone commands change groups, the CLI's alone.
+    // `zone map` and `zone screenshot` alone: the other zone commands change groups, the CLI's alone.
     { tool: 'map', command: 'zone', positional: ['zone'], options: ['boxes', 'sections'] },
+    // The CLI writes the picture to a file (--out) as the tool hands it to the model.
+    { tool: 'zone_screenshot', command: 'zone', positional: ['zone'], options: ['style'] },
     { tool: 'add_note', command: 'note' },
     { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
@@ -190,6 +192,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
       options: ['kind', 'text', 'attribute', 'method', 'fill'],
     },
     { tool: 'remove_shape', command: 'shape', positional: ['item'], options: [] },
+    { tool: 'add_diagram', command: 'diagram', positional: ['mermaid'], options: ['to', 'at', 'near', 'side'] },
+    { tool: 'export_diagram', command: 'diagram', positional: ['refs'], options: [] },
     { tool: 'connect', command: 'connect', positional: ['from', 'to'], renamed: { from_label: 'from-label', to_label: 'to-label' } },
     { tool: 'edit_connector', command: 'connector', positional: ['connector'], renamed: { from_label: 'from-label', to_label: 'to-label' } },
     { tool: 'remove_connector', command: 'connector', positional: ['connector'], options: [] },
