@@ -1,8 +1,10 @@
-// The board master (ADR-0019): one agent per board, started only by the user, at board scope, in a folder of its own.
+// The Captain (ADR-0019): one agent per board, started only by the user, at board scope, in a folder of its own.
 import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
+import { daemonPaths } from '../src/paths.ts';
 import { masterPosition } from '../src/master.ts';
 import { BOARD_ERROR, RPC_ERROR, TILE_SLOT, type Agent } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
@@ -53,7 +55,7 @@ async function masterSide(setup: Setup) {
   return { master, ...(await sideOf(setup, master.sessionId)) };
 }
 
-describe('the board master', () => {
+describe('the Captain', () => {
   it('starts loose on the board left of the zones, at board scope, in a folder of its own with no repo or branch', async () => {
     const { client, dataDir } = await masterDaemon();
     await client.call('zone.add', { path: tempRepo(), x: 400, y: 200, name: 'web' });
@@ -70,11 +72,36 @@ describe('the board master', () => {
       branch: '',
       harness: 'claude',
       model: 'opus',
-      name: 'Board master',
+      name: 'Captain',
     });
     expect(master.position).toMatchObject({ x: 400 - TILE_SLOT.width - 80, y: -100 });
     expect(realpathSync(master.cwd)).toBe(realpathSync(join(dataDir, 'master')));
     expect(existsSync(join(dataDir, 'master', '.git'))).toBe(false);
+  });
+
+  it('loads a master tile still named from before the Captain as the same Captain, and leaves a name the user chose', async () => {
+    const dataDir = tempDataDir();
+    const rename = (sessionId: string, name: string) => {
+      const db = new DatabaseSync(daemonPaths(dataDir).database);
+      db.prepare('UPDATE agents SET name = ? WHERE session_id = ?').run(name, sessionId);
+      db.close();
+    };
+    const first = await startTestDaemon({ dataDir, worktreesDir: tempDataDir() });
+    const master = await (await connectTestClient(first)).call('master.start', SIZE);
+    await first.stop();
+    rename(master.sessionId, 'Board master');
+
+    const second = await startTestDaemon({ dataDir, worktreesDir: tempDataDir() });
+    const client = await connectTestClient(second);
+    const renamed = (await client.call('agent.list')).filter((agent) => agent.master);
+    expect(renamed.map((agent) => [agent.sessionId, agent.name])).toEqual([[master.sessionId, 'Captain']]);
+    expect((await client.call('master.start', SIZE)).sessionId).toBe(master.sessionId);
+    await second.stop();
+    rename(master.sessionId, 'Chief');
+
+    const third = await startTestDaemon({ dataDir, worktreesDir: tempDataDir() });
+    const kept = (await (await connectTestClient(third)).call('agent.list')).find((agent) => agent.master);
+    expect(kept).toMatchObject({ sessionId: master.sessionId, name: 'Chief' });
   });
 
   it('is one per board: starting it again, or twice at once, gives the same agent', async () => {

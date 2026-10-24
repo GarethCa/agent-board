@@ -27,7 +27,7 @@ const zone = (id: string, name = id): Zone => ({ id, name }) as Zone;
 const master = agent('m', { master: true, zoneId: null, orchestrate: 'board' });
 const lead = agent('lead', { role: 'custom', roleName: 'Orchestrator', orchestrate: 'zone' });
 
-describe('the board master', () => {
+describe('the Captain', () => {
   it('is the agent marked as it, if there is one', () => {
     expect(boardMaster([lead, master])).toBe(master);
     expect(boardMaster([lead])).toBeUndefined();

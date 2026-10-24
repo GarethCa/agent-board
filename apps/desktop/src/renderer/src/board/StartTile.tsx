@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { useCallback, useContext, useRef, type RefCallback } from 'react';
 import { Check, RotateCcw, Trash2, X } from 'lucide-react';
 import type { Agent, Harness, StartStep } from '@agent-board/daemon/protocol';
 import { HARNESSES } from '../harness';
@@ -41,12 +41,41 @@ export function agentStartLines(agent: Agent): StepLine[] {
   return lines;
 }
 
+/**
+ * A ref for a start's steps that drops the ones done (`data-spare`) when the tile has no room for them: the failed step and
+ * the error under it matter more. It measures with them all showing, whenever the tile or a part of it changes size, and
+ * again whenever the steps change (`key`), as when a start fails.
+ */
+function useSpareSteps(key: string): RefCallback<HTMLElement> {
+  const observer = useRef<ResizeObserver | undefined>(undefined);
+  return useCallback((element: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = undefined;
+    const tile = element?.parentElement;
+    if (element === null || tile === null || tile === undefined) return;
+    const spare = [...element.querySelectorAll<HTMLElement>('[data-spare]')];
+    if (spare.length === 0) return;
+    const fit = () => {
+      for (const row of spare) row.style.display = '';
+      // Its footer is the tile's last row: past the tile's padding, there is no room.
+      const footer = tile.querySelector(':scope > .hybrid-tile-footer')?.getBoundingClientRect().bottom ?? 0;
+      const inside = tile.getBoundingClientRect().bottom - parseFloat(getComputedStyle(tile).paddingBottom);
+      for (const row of spare) row.style.display = footer > inside + 0.5 ? 'none' : '';
+    };
+    fit();
+    observer.current = new ResizeObserver(fit);
+    for (const part of [tile, ...tile.children]) observer.current.observe(part);
+    // `key` gives the callback a new identity, so React runs it again for the new steps.
+  }, [key]);
+}
+
 /** A start's steps, each with its mark: a tick once done, a spinner while under way, a cross where it failed. */
-export function StartSteps({ lines }: { lines: readonly StepLine[] }) {
+export function StartSteps({ lines, title }: { lines: readonly StepLine[]; title?: string | undefined }) {
+  const spare = useSpareSteps(lines.map((line) => `${line.state}:${line.text}`).join('\n'));
   return (
-    <span className="hybrid-tile-steps" data-testid="start-steps">
+    <span ref={spare} className="hybrid-tile-steps" data-testid="start-steps" title={title}>
       {lines.map((line) => (
-        <span key={line.text} className="hybrid-tile-step" data-state={line.state}>
+        <span key={line.text} className="hybrid-tile-step" data-state={line.state} data-spare={line.state === 'done' ? '' : undefined}>
           {line.state === 'done' ? <Check aria-hidden /> : line.state === 'failed' ? <X aria-hidden /> : <Spinner />}
           <span className="hybrid-tile-step-text">{line.text}</span>
         </span>

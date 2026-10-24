@@ -4,7 +4,7 @@ import postcss from 'postcss';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { RAIL_TOKEN_ROOM } from '@agent-board/daemon/board-layout';
-import { SHAPE_FILLS, STICKY_COLORS, TEXT_COLORS, ZONE_COLORS } from '@agent-board/daemon/protocol';
+import { COLOR_SLOTS, FILL_SLOTS, STICKY_COLORS, ZONE_COLORS } from '@agent-board/daemon/protocol';
 import { boardPaint } from './board-colors';
 import { contrast, mix } from '../../shared/colour';
 import { NOTE_TAB_ROOM, themePacksCss } from '../../shared/theme-pack-tokens';
@@ -189,6 +189,7 @@ const LOCAL = [
   '--shape-stroke-style',
   '--connector-color',
   '--swatch',
+  '--swatch-edge',
   '--chip',
   '--chip-ink',
   '--chip-edge',
@@ -479,13 +480,8 @@ describe('themes', () => {
   });
 });
 
-/** Text in a filled shape on that fill, by the stored colours' names: `--shape-ink-blue` on `--shape-fill-pink`. */
-const SHAPE_TEXT_PAIRS = TEXT_COLORS.flatMap(({ name: ink }) =>
-  SHAPE_FILLS.map(({ name: fill }): [string, string] => [
-    `--shape-ink-${ink.toLowerCase()}`,
-    fill === 'White' ? '--sticky-white' : `--shape-fill-${fill.toLowerCase()}`,
-  ]),
-);
+/** A shape's fills in its slots, the tile's own aside: `--shape-fill-blue`. */
+const SHAPE_FILL_TOKENS = FILL_SLOTS.filter((slot) => slot !== 'tile').map((slot) => `--shape-fill-${slot}`);
 
 describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) => {
   it.each(TEXT_PAIRS)('%s on %s meets WCAG AA', (text, background) => {
@@ -522,6 +518,18 @@ describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) =>
     expect(contrast(hexOf(`--sticky-${tone}-ink`, scope), hexOf(`--sticky-${tone}`, scope))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // Text in any slot may sit on any fill, the tile's too: each pair meets AA.
+  it.each(COLOR_SLOTS.flatMap((slot) => ['--raised', ...SHAPE_FILL_TOKENS].map((fill) => [`--shape-ink-${slot}`, fill])))(
+    "a shape's text %s on its fill %s meets WCAG AA",
+    (text, fill) => {
+      expect(contrast(hexOf(text, scope), hexOf(fill, scope))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(COLOR_SLOTS.map((slot) => `--paint-${slot}`))('%s reads at 3:1 on the desk, as a line or large text must', (paint) => {
+    expect(contrast(hexOf(paint, scope), hexOf('--surface', scope))).toBeGreaterThanOrEqual(3);
+  });
+
   // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
   // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
   it.each([...ZONE_COLORS, 'loose'])("an agent note's tab text meets WCAG AA on a %s tab, or nearly as well as the theme's text on its panel", (zone) => {
@@ -531,12 +539,6 @@ describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) =>
     const tab = mix(tint, panel, share('--agent-note-tab-mix'));
     const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
     expect(contrast(ink, tab)).toBeGreaterThanOrEqual(id === 'light' || id === 'dark' ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
-  });
-
-  // The light theme's are the stored colours, as picked; a theme that redraws them must not read worse.
-  it.each(SHAPE_TEXT_PAIRS)('in a filled shape, %s on %s reads at least as well as in the light theme, or meets AA', (text, background) => {
-    const light = contrast(hexOf(text), hexOf(background));
-    expect(contrast(hexOf(text, scope), hexOf(background, scope))).toBeGreaterThanOrEqual(Math.min(light, 4.5));
   });
 });
 

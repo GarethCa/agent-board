@@ -39,7 +39,7 @@ export function tetherPath(ends: LineEnds, route?: readonly RoutePoint[]): strin
  * The dashed tether from an agent note, or a question card, to its agent's tile: from the middle of the source's side
  * that faces the tile to the middle of the tile's side that faces it, straight, or, when that would cross another
  * object, square round them as an arrow does (`useRoute`). `data.tab` false: a source with no tab, as a question card
- * has; `data.look` `clock`, a clock's, to the agent it runs; `master`, the board master's rail to a lead it watches.
+ * has; `data.look` `clock`, a clock's, to the agent it runs; `master`, the Captain's rail to a lead it watches.
  */
 export const TetherEdge = memo(function TetherEdge({ id, source, target, data }: EdgeProps) {
   const sourceRect = rectOf(useInternalNode(source));
@@ -53,7 +53,7 @@ export const TetherEdge = memo(function TetherEdge({ id, source, target, data }:
   const route = useRoute(ends !== undefined, ends ?? NO_ENDS, straight ?? '', source, target);
   if (ends === undefined) return null;
   const path = tetherPath(ends, route);
-  // A clock's tether leads to the agent it runs; the board master's rail to a lead it watches is drawn in its teal.
+  // A clock's tether leads to the agent it runs; the Captain's rail to a lead it watches is drawn in its teal.
   const look = data?.look === 'clock' ? 'clock-tether' : data?.look === 'master' ? 'master-rail' : 'agent-note-tether';
   return <BaseEdge id={id} path={path} className={look} data-testid={look} data-routed={route !== undefined || undefined} />;
 });

@@ -50,6 +50,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   reviewCap: 3,
   ownsWorktree: true,
   master: false,
+  plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
   startup: null,
@@ -236,10 +237,12 @@ describe('agent notifications for every finished turn too', () => {
     const { alerts, notifications } = recorded();
     alerts.reset([agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?' })]);
     const ask = { id: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false, askedAt: '', expiresAt: '', onBoard: false, at: null };
-    const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '', decision: null };
+    const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '2026-10-23T19:00:00.000Z', decision: null, author: 'agent' as const, path: null };
 
     alerts.updated(agent('a', 'waiting', { ask }));
     alerts.updated(agent('a', 'waiting', { plan }));
+    // The user's own edit of it is the same request.
+    alerts.updated(agent('a', 'waiting', { plan: { ...plan, id: 'p2', version: 3, author: 'user' } }));
     alerts.updated(agent('a', 'running', { plan: { ...plan, decision: { outcome: 'approved', comments: '', decidedAt: '' } } }));
 
     expect(notifications).toEqual([

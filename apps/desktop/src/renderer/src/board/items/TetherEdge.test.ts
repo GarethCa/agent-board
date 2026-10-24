@@ -42,12 +42,12 @@ describe('a tether between a note and its agent', () => {
   });
 
   it('falls back to the straight line when nothing is clear', () => {
-    // A wall of tiles shutting the agent in on every side.
+    // A wall of tiles shutting the agent in on every side, meeting at the corners.
     const boxed = [
-      { x: 560, y: 0, width: 20, height: 400 },
+      { x: 560, y: -40, width: 20, height: 460 },
       { x: 580, y: -40, width: 400, height: 20 },
       { x: 580, y: 400, width: 400, height: 20 },
-      { x: 900, y: 0, width: 20, height: 400 },
+      { x: 900, y: -40, width: 20, height: 460 },
       between,
     ];
     expect(drawn(note, agent, boxed)).toBe(tetherPath(endsOf(note, agent)));

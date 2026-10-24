@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { AGENT_STATES, SHAPE_TYPES, STICKY_COLORS, ZONE_COLOR_NAMES, ZONE_COLORS, type ShapeType } from '@agent-board/daemon/protocol';
+import { AGENT_STATES, COLOR_SLOTS, FILL_SLOTS, SHAPE_TYPES, STICKY_COLORS, ZONE_COLOR_NAMES, ZONE_COLORS, type ShapeData, type ShapeType } from '@agent-board/daemon/protocol';
 import {
   AlignStartVertical,
   BellOff,
@@ -24,14 +24,14 @@ import {
   Trash2,
   Type,
 } from 'lucide-react';
-import { themedColor } from '../board-colors';
+import { slotName, stickyPaint } from '../board-colors';
 import { HarnessMark } from '../board/HarnessMark';
 import { RotateGrip } from '../board/items/Rotatable';
 import { ShapeBody, ShapeText, shapePaint } from '../board/items/ShapeNode';
 import { SHAPE_GROUPS, SHAPES } from '../board/items/shapes/catalogue';
 import { iconSize, ShapeIcon } from '../board/items/shapes/ShapeArt';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
-import { newShapeData } from '../board/items/text-style';
+import { filledIn, fixedColor, inSlot, newShapeData } from '../board/items/text-style';
 import { Button, Chip, IconButton, Spinner, type ButtonVariant } from './Button';
 import { Dialog } from './Dialog';
 import { EditableName, RenameButton, type Renaming } from './EditableName';
@@ -83,7 +83,7 @@ const CONTEXT_MENU: MenuEntry[] = [
   'separator',
   {
     label: 'Note colour',
-    swatches: STICKY_COLORS.slice(0, 5).map(({ name, value }, index) => ({ name, value, color: themedColor(value), pressed: index === 0 })),
+    swatches: STICKY_COLORS.slice(0, 5).map(({ name, value }, index) => ({ name, value, color: stickyPaint(value).color, pressed: index === 0 })),
     onPick: nothing,
   },
   'separator',
@@ -405,6 +405,29 @@ export function ComponentGallery() {
         </Row>
       </Section>
 
+      <Section id="shape-colours" title="Shape colours">
+        <Row label="Fills, each outlined in its slot">
+          <div className="component-gallery-shapes">
+            {FILL_SLOTS.map((slot) => (
+              <GalleryShape key={slot} shape="rounded" name={slotName(slot)} look={{ ...filledIn(slot), ...inSlot('stroke', slot === 'tile' ? 'accent' : slot) }} />
+            ))}
+          </div>
+        </Row>
+        <Row label="Outlines and text, with no fill">
+          <div className="component-gallery-shapes">
+            {COLOR_SLOTS.map((slot) => (
+              <GalleryShape key={slot} shape="rectangle" name={slotName(slot)} look={{ ...filledIn(null), ...inSlot('stroke', slot), ...inSlot('textColor', slot) }} />
+            ))}
+          </div>
+        </Row>
+        <Row label="Fixed">
+          <div className="component-gallery-shapes">
+            {/* Colours an agent might set, which are no slot's: a zone's orange on an orange note's paper. */}
+            <GalleryShape shape="rounded" name={FIXED_STROKE} look={{ ...fixedColor('fill', STICKY_COLORS[1].value), ...fixedColor('stroke', FIXED_STROKE) }} />
+          </div>
+        </Row>
+      </Section>
+
       <Section id="chrome" title="Chrome">
         <StateGrid label="Tools" rows={['tool'] as const} states={['rest', 'hover', 'active', 'focus', 'pressed'] as const}>
           {(_row, state) => (
@@ -459,16 +482,18 @@ export function ComponentGallery() {
   );
 }
 
+const FIXED_STROKE = ZONE_COLORS[8]!;
+
 /** A shape as the board draws it, at its own proportions and a gallery cell's size, named inside. */
-function GalleryShape({ shape }: { shape: ShapeType }) {
-  const style = newShapeData(shape);
+function GalleryShape({ shape, name = SHAPES[shape].name, look }: { shape: ShapeType; name?: string; look?: Partial<ShapeData> }) {
+  const style = { ...newShapeData(shape), ...look };
   const { width, height } = iconSize(shape, { width: 132, height: 96 });
   return (
     <div className="component-gallery-shape">
       <div style={{ width, height }}>
         <div className="shape" data-shape={shape} data-text-size="body" data-bold="false" style={shapePaint(style)}>
           <ShapeBody style={style} width={width} height={height}>
-            <ShapeText style={{ ...style, text: SHAPES[shape].name }} />
+            <ShapeText style={{ ...style, text: name }} />
           </ShapeBody>
         </div>
       </div>

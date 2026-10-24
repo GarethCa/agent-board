@@ -13,7 +13,7 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { isItemNode, type ItemNodeType } from './items/items';
 import { expandedRank, type ExpandedTiles } from './expanded';
 import { tileSizeOf, type TileSizes } from './tile-size';
-import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, slotUnplaced, tileSizeKey, ZONE_PADDING, zoneMinSize } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, CHIP_SIZE, isFolded, PERCH_ROOM, rotatedBounds, slotUnplaced, tileSizeKey, ZONE_PADDING, zoneMinSize } from '@agent-board/daemon/board-layout';
 import type { TileData, TileNodeType } from './tile';
 import type { ZoneCovers, ZoneNodeType } from './ZoneNode';
 import type { ShownStart } from './use-agent-starts';
@@ -253,7 +253,8 @@ export function withTiles(
   const zoneRects = [...zones.values()].map(layoutOf);
   // Board items in each zone (an issue card, a sticky), and loose on the board, are in the way too.
   const items = new Map<string | undefined, ZoneLayout[]>();
-  for (const node of nodes.filter(isItemNode)) items.set(node.parentId, [...(items.get(node.parentId) ?? []), node.data.item]);
+  // A turned item is in the way by the upright box round it.
+  for (const node of nodes.filter(isItemNode)) items.set(node.parentId, [...(items.get(node.parentId) ?? []), rotatedBounds(node.data.item, node.data.item.rotation)]);
   // An orchestrator's new agent goes beside it, in its crew, when it starts where its orchestrator is.
   slotUnplaced(entries, {
     zoneOf: (entry) => entry.parentId,

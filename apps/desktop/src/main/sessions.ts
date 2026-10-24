@@ -10,7 +10,7 @@ import type {
 } from '@agent-board/daemon/protocol';
 import { SESSION_IPC, type SessionStreamEvent } from '../preload/api';
 import { forwardEvents } from './broadcast';
-import { revealFolder } from './reveal-folder';
+import { revealFile, revealFolder } from './reveal-folder';
 
 /** The daemon events a session window gets about the session it shows. */
 function isSessionStreamEvent(event: DaemonEvent): event is SessionSnapshotEvent | SessionOutputEvent | SessionExitedEvent {
@@ -45,6 +45,7 @@ export function registerSessionIpc(daemon: DaemonLink, connect: () => Promise<Da
   ipcMain.handle(SESSION_IPC.kill, (_event, sessionId: string): Promise<SessionInfo> => daemon.call('session.kill', { sessionId }));
   ipcMain.handle(SESSION_IPC.cwd, async (_event, sessionId: string): Promise<string> => (await daemon.call('session.cwd', { sessionId })).cwd);
   ipcMain.handle(SESSION_IPC.revealFolder, (_event, path: string) => revealFolder(path));
+  ipcMain.handle(SESSION_IPC.revealFile, (_event, path: string) => revealFile(path));
   // Keystrokes are fire-and-forget; the link writes them to the daemon in order.
   ipcMain.on(SESSION_IPC.write, (_event, sessionId: string, data: string) => {
     daemon.call('session.write', { sessionId, data }).catch(() => {

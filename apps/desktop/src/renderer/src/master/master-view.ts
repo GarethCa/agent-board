@@ -1,4 +1,4 @@
-// What the board master's panel and tile show (ADR-0019): which agent is the master, the zones' leads it watches, the
+// What the Captain's panel and tile show (ADR-0019): which agent is the master, the zones' leads it watches, the
 // rails to them, what needs the user, and its latest digest. Derived from the board's lists, never stored.
 import type { Edge } from '@xyflow/react';
 import { isOrchestratorRole, type Agent, type BoardItem, type NeedsYouKind, type Zone } from '@agent-board/daemon/protocol';

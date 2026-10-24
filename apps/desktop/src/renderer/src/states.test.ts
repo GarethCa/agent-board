@@ -51,7 +51,7 @@ describe("an agent's pill", () => {
 
   it('says what a waiting agent asks of you: a question, or a plan to review', () => {
     const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, at: null };
-    const plan = { id: 'p1', version: 1, title: 'Plan', format: 'markdown' as const, presentedAt: '', expiresAt: '', decision: null };
+    const plan = { id: 'p1', version: 1, title: 'Plan', format: 'markdown' as const, presentedAt: '', expiresAt: '', decision: null, author: 'agent' as const, path: null };
     expect(agentPill(agent({ ask }), 'turns', TILE_STATE_LABELS)).toEqual({ state: 'waiting', label: 'asks you' });
     expect(agentPill(agent({ plan }), 'turns')).toEqual({ state: 'waiting', label: 'plan to review' });
     expect(agentPill(agent({ plan, seen: true }), 'turns')).toEqual({ state: 'idle', label: 'plan to review' });

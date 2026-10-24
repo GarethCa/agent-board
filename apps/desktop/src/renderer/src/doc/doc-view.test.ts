@@ -29,6 +29,8 @@ describe('what the Document tab and a document card say', () => {
     // With the extended keys off, neither key does anything, so neither is offered.
     expect(editHint(0, undefined, undefined)).toBe('Cancel or Save');
     expect(editHint(2, undefined, undefined)).toBe('2 changes · Save tells the agent');
+    // A plan's edit is saved as the user's version.
+    expect(editHint(1, '⌘S', 'esc', 'makes it v3, yours')).toBe('1 change · ⌘S saves and makes it v3, yours');
   });
 });
 

@@ -3,7 +3,7 @@
 import type { NodeChange } from '@xyflow/react';
 import type { TileMove } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
-import { AGENT_TILE_SIZE, clearOf, CREW_GAP, CREW_PER_ROW, CREW_ROWS, crewSpot, footprint, PERCH_ROOM, ROW_STEP, TILE_GAP } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, clearOf, CREW_GAP, CREW_PER_ROW, CREW_ROWS, crewSpot, footprint, PERCH_ROOM, ROW_STEP, sizedFootprint, TILE_GAP } from '@agent-board/daemon/board-layout';
 import type { TileNodeType } from './tile';
 import type { BoardNode } from './tiles';
 
@@ -116,10 +116,12 @@ export function crewMoves(
   others: readonly Rect[],
 ): { node: TileNodeType; move: TileMove }[] {
   const crew = crewTiles(nodes, orchestrator);
-  const taken = [...others, footprint(move)];
+  // At its size as drawn, expanded too: its crew lands clear of it, the next free spot right of its edge.
+  const drawn = { width: orchestrator.width ?? AGENT_TILE_SIZE.width, height: orchestrator.height ?? AGENT_TILE_SIZE.height };
+  const taken = [...others, sizedFootprint(move, drawn)];
   return crew.map((node) => {
     const kept = { x: move.x + node.position.x - orchestrator.position.x, y: move.y + node.position.y - orchestrator.position.y };
-    const spot = clearOf(footprint(kept), taken) ? kept : (crewSpot(move, taken) ?? kept);
+    const spot = clearOf(footprint(kept), taken) ? kept : (crewSpot(move, taken, drawn.width) ?? kept);
     taken.push(footprint(spot));
     return { node, move: { zoneId: move.zoneId, ...spot } };
   });

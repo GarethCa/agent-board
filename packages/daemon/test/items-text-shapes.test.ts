@@ -13,12 +13,15 @@ const textData: TextData = {
   italic: false,
   align: 'left',
   color: '#2b2a27',
+  colorSlot: 'ink',
   wrap: false,
 };
 const shapeData: ShapeData = {
   shape: 'ellipse',
   fill: '#d3f9d8',
+  fillSlot: 'green',
   stroke: '#2f9e44',
+  strokeSlot: 'green',
   strokeWidth: 2.5,
   dashed: false,
   text: 'CI green?',
@@ -30,6 +33,7 @@ const shapeData: ShapeData = {
   attributes: '',
   methods: '',
   textColor: '#2b2a27',
+  textColorSlot: 'ink',
 };
 const text = (data: Record<string, unknown> = { ...textData }): CreateItemParams => ({
   kind: 'text',
@@ -139,6 +143,20 @@ describe('text and shape board items', () => {
       attributes: '+ id: string',
       methods: '+ send(text)',
     });
+  });
+
+  it('takes a theme colour slot, or none for a fixed colour, for each colour, and one saved before slots without them', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const fixed = await client.call('item.create', shape({ ...shapeData, stroke: '#e8590c', strokeSlot: null, fillSlot: 'tile', textColorSlot: 'accent' }));
+    expect(fixed.data).toMatchObject({ strokeSlot: null, fillSlot: 'tile', textColorSlot: 'accent' });
+    await expect(client.call('item.create', shape({ ...shapeData, fillSlot: 'ink' }))).rejects.toThrow('fillSlot must be one of tile, accent');
+    await expect(client.call('item.create', shape({ ...shapeData, strokeSlot: 'tile' }))).rejects.toThrow('strokeSlot must be one of accent, ink');
+    await expect(client.call('item.update', { id: fixed.id, data: { textColorSlot: '#2b2a27' } })).rejects.toThrow('textColorSlot must be one of');
+    expect((await client.call('item.create', text({ ...textData, colorSlot: null }))).data).toMatchObject({ colorSlot: null });
+    await expect(client.call('item.create', text({ ...textData, colorSlot: 'mauve' }))).rejects.toThrow('colorSlot must be one of');
+    const old: Record<string, unknown> = { ...shapeData };
+    for (const key of ['fillSlot', 'strokeSlot', 'textColorSlot']) delete old[key];
+    expect((await client.call('item.create', shape(old))).data).toEqual(old);
   });
 
   it('takes the diagram shapes, today\'s four under their old names', async () => {

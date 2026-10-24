@@ -37,7 +37,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
   loadedEmpty: boolean;
   zones: readonly Zone[];
   agents: readonly Agent[];
-  /** The board master's panel: whether it is open, and the Master button's toggle. */
+  /** The Captain's panel: whether it is open, and the Captain button's toggle. */
   masterOpen: boolean;
   onMaster(): void;
   /** Undefined until the board has listed them. */

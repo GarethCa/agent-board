@@ -43,4 +43,9 @@ describe('agentNoteTethers', () => {
 
     expect(agentNoteTethers(nodes).map((edge) => [edge.source, edge.target])).toEqual([['item:n1', `${AGENT_NODE_PREFIX}worker`]]);
   });
+
+  it("ties a plan card to its agent's tile", () => {
+    const card: BoardItem = { ...note('p1', 'a1'), kind: 'plan', data: { agent: { sessionId: 'a1', name: 'a', harness: 'claude', role: null }, title: 'Plan' } };
+    expect(agentNoteTethers([itemNode(card), tile('a1')]).map((edge) => [edge.source, edge.target])).toEqual([['item:p1', `${AGENT_NODE_PREFIX}a1`]]);
+  });
 });

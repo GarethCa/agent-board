@@ -10,10 +10,10 @@ type MasterMethods = Pick<DaemonMethods, 'master.start'>;
 const MASTER_MARGIN = 80;
 
 /**
- * The board master's first message (ADR-0019): what it is for, how it routes, and what it never does. Plain text, as an
+ * The Captain's first message (ADR-0019): what it is for, how it routes, and what it never does. Plain text, as an
  * orchestrator's prompt must be: no leading `!` or `/command`, no control characters.
  */
-const MASTER_PROMPT = `You are the board master: the one agent on this board the user asks for work. You have orchestrator scope over the whole board. Run \`agent-board --help\` and \`agent-board help orchestrate\` once to learn the commands.
+const MASTER_PROMPT = `You are the Captain: the one agent on this board the user asks for work. You have orchestrator scope over the whole board. Run \`agent-board --help\` and \`agent-board help orchestrate\` once to learn the commands.
 
 Your job:
 - Route each request to the right zone's orchestrator. Find the zone from the repo, issue or wording with \`agent-board tree\`, or ask the user when it is unclear. If the zone has a live orchestrator, \`agent-board send\` it the request. If it has none, start one there with \`agent-board new --zone <zone> --role orchestrator <request>\`. Don't do a zone's work yourself.
@@ -48,7 +48,7 @@ export function masterPosition(zones: readonly Pick<Zone, 'x' | 'y'>[]): { x: nu
   return { x: left - TILE_SLOT.width - MASTER_MARGIN, y: top };
 }
 
-/** The board master (ADR-0019): one per board, started only by the user, in a folder of its own. */
+/** The Captain (ADR-0019): one per board, started only by the user, in a folder of its own. */
 export function createBoardMaster(options: BoardMasterOptions): BoardMaster {
   /** A start under way, so two clicks make one master. */
   let starting: Promise<Agent> | undefined;
@@ -67,7 +67,7 @@ export function createBoardMaster(options: BoardMasterOptions): BoardMaster {
         position: masterPosition(options.zones()),
         harness: harness as Harness,
         model: optionalStringParam(params, 'model') ?? (harness === 'claude' ? 'opus' : undefined),
-        name: 'Board master',
+        name: 'Captain',
         prompt: MASTER_PROMPT,
         noTemplate: true,
         orchestrate: 'board',

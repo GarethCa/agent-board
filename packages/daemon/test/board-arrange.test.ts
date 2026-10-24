@@ -71,10 +71,11 @@ const edges = [
 describe('arrangeTiles', () => {
   it('by issue, in rows: the lead and the shells first, then a row per issue with the implementer and its reviewer to its right', () => {
     const { positions } = arrangeTiles(crew, edges, { by: 'issue', layout: 'rows', width: 900 });
-    // The rail between impl-b and review-b takes a column, in every row; the lead's into impl-a a row.
+    // The rail between impl-b and review-b takes a column, in every lane's row; the lead's into impl-a a row. The
+    // lead's row lines up with none, so its shell sits beside it.
     expect(cells(positions)).toEqual({
       lead: [0, 0],
-      notes: [2, 0],
+      notes: [1, 0],
       'impl-a': [0, 2],
       'review-a': [2, 2],
       'impl-b': [0, 3],
@@ -537,7 +538,7 @@ describe('arranging in lanes', () => {
     expect([at['review-a']![0], at['review-a2']![0], at['again-a']![0]]).toEqual([2, 3, 4]);
   });
 
-  it('measures a resized or expanded tile at its size: its lane is taller and its column wider', () => {
+  it('measures a resized or expanded tile at its size: its lane is taller and its column wider, in its lane only', () => {
     const big = { width: 2 * COLUMN + AGENT_TILE_SIZE.width, height: 2 * ROW_STEP + AGENT_TILE_SIZE.height };
     const tiles = lanes.map((tile) => (tile.id === 'impl-a' ? { ...tile, size: big } : tile));
     const { positions, clusters } = arranged(tiles);
@@ -545,7 +546,8 @@ describe('arranging in lanes', () => {
     expect(at['review-a']![0]).toBe(4);
     expect(at['impl-b']![0]).toBe(1);
     expect(at['impl-b']![1]).toBe(4);
-    expect(column(clusters[1]!.noteAt)).toBe(4);
+    // The next lane's note right after its own tile, not past the big one.
+    expect(column(clusters[1]!.noteAt)).toBe(2);
     expectClear(positions, tiles);
   });
 
@@ -692,5 +694,134 @@ describe('parking the clusters of an arrange by issue', () => {
   it('parks from a row below the crew as readily as beside it', () => {
     const [cluster] = parkClusters(['k'], { column: 0, row: 3 }, []);
     expect(cluster!.labelAt).toEqual({ x: FIRST.x, y: FIRST.y + 3 * ROW_STEP });
+  });
+});
+
+describe('arranging round an expanded lead', () => {
+  // Expanded in place: four grid columns wide and four grid rows tall.
+  const OPEN = { width: 960, height: 600 };
+  const tiles: ArrangeTile[] = [
+    agent('lead', { lead: true, size: OPEN }),
+    { ...agent('shell'), kind: 'shell', state: null },
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9', createdAt: '1' }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a', createdAt: '2' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-12', createdAt: '3' }),
+  ];
+
+  it('in rows, puts the shells right of it and the lanes below it, their tiles beside their labels, not past its width', () => {
+    const { positions, clusters } = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 900, clusters: true });
+    expect(cells(positions)).toEqual({ lead: [0, 0], shell: [4, 0], 'impl-a': [1, 4], 'review-a': [2, 4], 'impl-b': [1, 5] });
+    expect(clusters.map((cluster) => cells(new Map([['label', cluster.labelAt]])).label)).toEqual([
+      [0, 4],
+      [0, 5],
+    ]);
+    expectClear(positions, tiles);
+  });
+
+  it('by role, starts every row below it at the first column', () => {
+    const { positions } = arrangeTiles(tiles, [], { by: 'role', layout: 'rows', width: 900 });
+    expect(cells(positions)).toEqual({ lead: [0, 0], 'impl-a': [0, 4], 'impl-b': [1, 4], 'review-a': [0, 5], shell: [0, 6] });
+    expectClear(positions, tiles);
+  });
+
+  it('in cards, starts the cards below it at the first column', () => {
+    const { positions, clusters } = arrangeTiles(tiles, [], { by: 'issue', layout: 'cards', width: 900, clusters: true });
+    expect(cells(positions)).toMatchObject({ lead: [0, 0], shell: [4, 0], 'impl-a': [1, 4], 'review-a': [2, 4] });
+    expect(cells(new Map([['label', clusters[0]!.labelAt]])).label).toEqual([0, 4]);
+    expectClear(positions, tiles);
+  });
+});
+
+describe('arranging round an expanded crew member', () => {
+  const OPEN = { width: 960, height: 600 };
+  const tiles: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9', createdAt: '1', size: OPEN }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a', createdAt: '2' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-12', createdAt: '3' }),
+    agent('review-b', { role: 'reviewer', reviewOf: 'impl-b', createdAt: '4' }),
+  ];
+
+  it('in rows, widens only its own lane: the other lanes keep their tiles and note side by side', () => {
+    const { positions, clusters } = arrangeTiles(tiles, [], { by: 'issue', layout: 'rows', width: 900, clusters: true });
+    // Its lane's reviewer and note past it; the next lane's at the columns a compact lane takes.
+    expect(cells(positions)).toEqual({ lead: [0, 0], 'impl-a': [1, 1], 'review-a': [5, 1], 'impl-b': [1, 5], 'review-b': [2, 5] });
+    expect(clusters.map((cluster) => cells(new Map([['note', cluster.noteAt]])).note)).toEqual([
+      [6, 1],
+      [3, 5],
+    ]);
+    expectClear(positions, tiles);
+  });
+});
+
+describe('arranging by role or state round an expanded crew member', () => {
+  const OPEN = { width: 960, height: 600 };
+  const tiles: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9', size: OPEN }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-12' }),
+    agent('review-b', { role: 'reviewer', reviewOf: 'impl-b' }),
+  ];
+  const links = [
+    { from: 'impl-a', to: 'review-a' },
+    { from: 'impl-b', to: 'review-b' },
+  ];
+
+  it('by role, keeps each reviewer under its implementer, its rail clear of the expanded tile', () => {
+    const { positions } = arrangeTiles(tiles, links, { by: 'role', layout: 'rows', width: 900 });
+    const at = cells(positions);
+    expect(at['review-a']![0]).toBe(at['impl-a']![0]);
+    expect(at['review-b']![0]).toBe(at['impl-b']![0]);
+    expect(railTrouble(positions, tiles, links)).toEqual([]);
+    expectClear(positions, tiles);
+  });
+
+  it('by state, lines its rows up whole round it, nothing on it', () => {
+    const { positions } = arrangeTiles(tiles, links, { by: 'state', layout: 'rows', width: 900 });
+    // Every tile idle: one row after the lead's, the expanded tile's column as wide as it, and a rail's room after each
+    // tile its reviewer follows.
+    expect(cells(positions)).toEqual({ lead: [0, 0], 'impl-a': [0, 1], 'review-a': [5, 1], 'impl-b': [6, 1], 'review-b': [8, 1] });
+    expectClear(positions, tiles);
+  });
+});
+
+describe('arranging cards round an expanded crew member', () => {
+  const OPEN = { width: 960, height: 600 };
+  const tiles: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    agent('impl-a', { role: 'implementer', issue: 'ACME-1', createdAt: '1', size: OPEN }),
+    agent('review-a', { role: 'reviewer', reviewOf: 'impl-a', createdAt: '2' }),
+    agent('impl-b', { role: 'implementer', issue: 'ACME-2', createdAt: '3' }),
+    agent('review-b', { role: 'reviewer', reviewOf: 'impl-b', createdAt: '4' }),
+    agent('impl-c', { role: 'implementer', issue: 'ACME-3', createdAt: '5' }),
+    agent('review-c', { role: 'reviewer', reviewOf: 'impl-c', createdAt: '6' }),
+  ];
+
+  it('widens only its own line of cards: the card below keeps its tiles side by side', () => {
+    const { positions } = arrangeTiles(tiles, [], { by: 'issue', layout: 'cards', width: 900, clusters: true });
+    const at = cells(positions);
+    // Its own card's reviewer past it; the card beside it past its card.
+    expect(at['review-a']![0]).toBe(at['impl-a']![0] + 4);
+    expect(at['impl-b']![0]).toBeGreaterThan(at['review-a']![0]);
+    // The card below it, in the next line: its head, its implementer and its reviewer in the first three columns.
+    expect([at['impl-c'], at['review-c']]).toEqual([
+      [1, at['impl-c']![1]],
+      [2, at['impl-c']![1]],
+    ]);
+    expectClear(positions, tiles);
+  });
+});
+
+describe('arranging cards round an expanded tile in the top row, with no lead', () => {
+  it('widens no card: the top row lines up with none', () => {
+    const tiles: ArrangeTile[] = [
+      { ...agent('shell'), kind: 'shell', state: null, size: { width: 960, height: 600 } },
+      agent('impl-a', { role: 'implementer', issue: 'ACME-1', createdAt: '1' }),
+      agent('review-a', { role: 'reviewer', reviewOf: 'impl-a', createdAt: '2' }),
+    ];
+    const { positions } = arrangeTiles(tiles, [], { by: 'issue', layout: 'cards', width: 900, clusters: true });
+    expect(cells(positions)).toEqual({ shell: [0, 0], 'impl-a': [1, 4], 'review-a': [2, 4] });
+    expectClear(positions, tiles);
   });
 });

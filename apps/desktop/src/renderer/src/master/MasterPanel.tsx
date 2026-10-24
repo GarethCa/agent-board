@@ -35,7 +35,7 @@ interface MasterPanelProps {
 const RUNS: RunsChoice = { mode: 'auto', at: 0 };
 
 /**
- * The board master's docked panel (ADR-0019): the zones it watches, what needs you with its digest, and its chat. One
+ * The Captain's docked panel (ADR-0019): the zones it watches, what needs you with its digest, and its chat. One
  * of two views of the master, beside its tile: closing it stops nothing. With no master yet it offers to start one,
  * which only this click does.
  */
@@ -53,17 +53,17 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label="Board master" onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label="Captain" onKeyDown={onKeyDown}>
       <header className="master-panel-head">
         <span className="master-glyph" aria-hidden>
-          M
+          C
         </span>
-        <h2>Master</h2>
+        <h2>Captain</h2>
         <small className="master-panel-scope">{master === undefined ? 'not started' : `board scope · ${master.model ?? master.harness}`}</small>
         <span className="master-panel-actions">
           {master !== undefined && <ToolButton size="sm" icon={<Crosshair />} label="Show on board" onClick={() => onShowAgent(master.sessionId)} />}
           {master !== undefined && <ToolButton size="sm" icon={<SquareArrowOutUpRight />} label="Open its session window" onClick={() => onOpenAgent(master)} />}
-          <ToolButton size="sm" icon={<X />} label="Close" hint="Close the panel: the master keeps running" onClick={onClose} />
+          <ToolButton size="sm" icon={<X />} label="Close" hint="Close the panel: the Captain keeps running" onClick={onClose} />
         </span>
       </header>
       {master === undefined ? (
@@ -73,17 +73,17 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
           <Watching agents={agents} zones={zones} onShowAgent={onShowAgent} onShowZone={onShowZone} />
           <ForYou agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />
           {/* Dark in every theme, as a session window's chat is. */}
-          <section className="master-panel-chat" data-surface="window" aria-label="Chat with the master">
+          <section className="master-panel-chat" data-surface="window" aria-label="Chat with the Captain">
             {canRestart(master) && (
               <div className="agent-exit-banner" role="status">
                 {exitText(master)}
-                <RestartAgent agent={master} label="Restart the master" testId="master-restart" />
+                <RestartAgent agent={master} label="Restart the Captain" testId="master-restart" />
               </div>
             )}
             <div className="session-chat-view">
               <ChatView agent={master} active onShowTerminal={() => onOpenAgent(master)} runs={RUNS} onOpenLink={onOpenLink} />
             </div>
-            <Composer agent={master} placeholder="Ask the master…" focusRequest={focusRequest} />
+            <Composer agent={master} placeholder="Ask the Captain…" focusRequest={focusRequest} />
           </section>
         </>
       )}
@@ -97,7 +97,7 @@ function StartMaster() {
   return (
     <section className="master-panel-section master-panel-start">
       <p>
-        The master is one agent for the whole board. Tell it what you want; it hands the work to the right zone’s orchestrator, starting one if the zone has
+        The Captain is one agent for the whole board. Tell it what you want; it hands the work to the right zone’s orchestrator, starting one if the zone has
         none, and keeps a digest of what needs you.
       </p>
       <p className="master-panel-muted">It never answers a permission prompt, approves or merges for you.</p>
@@ -107,7 +107,7 @@ function StartMaster() {
         loading={busy}
         onClick={() => run(() => window.agentBoard.agents.startMaster({ harness: 'claude', ...NEW_AGENT_SIZE }))}
       >
-        Start the master
+        Start the Captain
       </Button>
       <p className="master-panel-muted">Claude · Opus, at board scope, in a folder of its own.</p>
       {error && <ErrorText>{error}</ErrorText>}
@@ -196,7 +196,7 @@ function ForYou({ agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<
         </ul>
       )}
       {digest === undefined ? (
-        <p className="master-panel-muted">No digest yet: the master writes one in a note beside its tile.</p>
+        <p className="master-panel-muted">No digest yet: the Captain writes one in a note beside its tile.</p>
       ) : (
         <div className="master-digest" data-testid="master-digest">
           <button type="button" className="master-digest-head" aria-expanded={digestOpen} onClick={() => setDigestOpen(!digestOpen)}>

@@ -23,6 +23,7 @@ const zone = (id: string, overrides: Partial<Zone> = {}): Zone => ({
   clone: null,
   managedClone: false,
   defaultRepo: null,
+  groupFolder: null,
   createdAt: '',
   ...overrides,
 });

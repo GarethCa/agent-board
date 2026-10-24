@@ -2,7 +2,7 @@
 // guessed (gh, hooks) of entries it didn't record. A record the user deleted hides the entry, guess included, until the
 // agent records it again. Pure, so it is unit-tested.
 import { pullRequestKey, pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
-import type { Agent, AgentRecord, AgentRecordKind, PullRequest, Subagent } from '@agent-board/daemon/protocol';
+import type { Agent, AgentRecord, AgentRecordKind, DocumentSummary, PinTarget, PullRequest, Subagent } from '@agent-board/daemon/protocol';
 
 /**
  * One row of a section: recorded (with its record, which the user may delete) or guessed. A record the user just
@@ -118,6 +118,67 @@ export function docSection(agent: Pick<Agent, 'records' | 'guessedDoc'>, fading 
     agent.guessedDoc === null ? [] : [{ key: agent.guessedDoc, item: { path: agent.guessedDoc, from: null } }],
     fading,
   );
+}
+
+/**
+ * How a pin opens: a Markdown or HTML file in a Doc tab, any other file shown in its folder, a link in a web tab; a note
+ * shows all it has on the sidebar.
+ */
+type PinOpens = 'doc' | 'reveal' | 'web' | 'none';
+
+/** A pin row: what it shows, from whom, the name the sidebar gives it and how it opens. */
+export interface PinRow {
+  target: PinTarget;
+  label: string | null;
+  from: { sessionId: string; name: string } | null;
+  name: string;
+  opens: PinOpens;
+}
+
+/** Whether a file is one the Doc tab draws, by its name: Markdown or HTML. */
+const DOC_FILE = /\.(md|markdown|html?)$/i;
+
+const pinOpens = (target: PinTarget): PinOpens =>
+  target.kind === 'file' ? (DOC_FILE.test(target.path) ? 'doc' : 'reveal') : target.kind === 'link' ? 'web' : 'none';
+
+/** A link as the sidebar names it: its host and path, with no scheme. */
+function linkName(url: string): string {
+  try {
+    const { host, pathname, search } = new URL(url);
+    return `${host}${pathname === '/' ? '' : pathname}${search}`;
+  } catch {
+    return url;
+  }
+}
+
+/** The Pins section: what the agent (or its crew, for it) pinned for the user to see. Nothing is ever guessed. */
+export function pinSection(agent: Pick<Agent, 'records'>, fading = NONE_FADING): SidebarSection<PinRow> {
+  return section(
+    agent.records,
+    'pin',
+    (record) => {
+      if (record.kind !== 'pin') return undefined;
+      const { target, label, from } = record;
+      const name = label ?? (target.kind === 'file' ? (target.path.split(/[\\/]/).at(-1) ?? target.path) : target.kind === 'link' ? linkName(target.url) : '');
+      return { target, label, from, name, opens: pinOpens(target) };
+    },
+    [],
+    fading,
+  );
+}
+
+/** A Documents row: a document the agent showed, or its latest plan (a document with a decision), each opening its tab. */
+export type DocumentRow = { key: string; name: string; version: number; at: string } & (
+  | { kind: 'document'; document: DocumentSummary }
+  | { kind: 'plan' }
+);
+
+/** The Documents section: every document the agent showed, and its plan, oldest shown first. Not records: none is deleted here. */
+export function documentSection(agent: Pick<Agent, 'docs' | 'plan'>): DocumentRow[] {
+  const rows: DocumentRow[] = agent.docs.map((document) => ({ key: document.id, name: document.title, version: document.version, at: document.shownAt, kind: 'document', document }));
+  const { plan } = agent;
+  if (plan !== null) rows.push({ key: `plan:${plan.id}`, name: plan.title, version: plan.version, at: plan.presentedAt, kind: 'plan' });
+  return rows.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 /** The Subagents section: none is ever recorded, so every one is guessed from hooks. */

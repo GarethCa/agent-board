@@ -40,7 +40,7 @@ import { Button, Chip, EditableName, FlowPill, HoverCard, IconButton, Menu, Rena
 import { Character } from './Character';
 import { CommandFigure } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
-import { badgeLine, checksLabel, foldRanking, tileFooter } from './tile-footer';
+import { badgeLine, checksLabel, foldRanking, isStarting, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
 import { ResumeButton } from './RestartBanner';
 import { cx } from '../ui/cx';
@@ -117,7 +117,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
             onSelect: () => startReview(agent),
           },
         ];
-  const shownName = agent.reviewOf === null ? { name: agent.name } : splitReviewerName(agent.name);
+  const starting = isStarting(agent);
+  // A starting reviewer has no room for a subtitle row, so its marker leads its name ("Review · r1 · Rework the…"), where a
+  // long name's clamp can't cut it off.
+  const split = agent.reviewOf === null ? { name: agent.name } : splitReviewerName(agent.name);
+  const shownName = starting && split.subtitle !== undefined ? { name: `${split.subtitle} · ${split.name}` } : split;
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
@@ -185,7 +189,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
     >
       {agent.master && (
         <span className="hybrid-tile-master-badge" data-testid="master-badge">
-          MASTER
+          CAPTAIN
         </span>
       )}
       <div className="hybrid-tile-head">
@@ -250,7 +254,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
         </span>
       )}
       {shownName.subtitle !== undefined && <span className="hybrid-tile-subtitle">{shownName.subtitle}</span>}
-      {(startup === null || chip || repo !== undefined) && (
+      {/* Not while it starts: the tile's room is its name, its step and its footer; its crew frame or the board's zone says whose it is. */}
+      {!starting && (startup === null || chip || repo !== undefined) && (
         <span className="hybrid-tile-branch" title={agent.worktree}>
           {chip && (
             <span
@@ -277,7 +282,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           )}
         </span>
       )}
-      {checkoutWarning !== undefined && (
+      {!starting && checkoutWarning !== undefined && (
         <span className="hybrid-tile-warning" data-testid="checkout-warning" title={`${checkoutWarning}: ${agent.repoRoot}`}>
           <TriangleAlert aria-hidden />
           {checkoutWarning}
@@ -285,7 +290,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
       )}
       {startup !== null ? (
         <>
-          <StartSteps lines={agentStartLines(agent)} />
+          {/* Starting, only the step it is on, its worktree in the tooltip; a failed start keeps the worktree step above the one that failed. */}
+          <StartSteps lines={starting ? agentStartLines(agent).slice(-1) : agentStartLines(agent)} title={starting ? agent.worktree : undefined} />
           <StartOutput output={startup.output} failed={startup.failed} />
         </>
       ) : // Before what it asks: the answer is what sits unsent at its prompt.
@@ -327,7 +333,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
         </span>
       )}
       {/* A paused tile says who paused it instead: one line under the body, which yields to the body's lines. */}
-      {ask === undefined && agent.notice === null && agent.status?.setBy != null && agent.hibernated === null && (
+      {/* Not on a start, failed either: its footer is Retry and Delete, and nothing there yields to give it room. */}
+      {ask === undefined && agent.notice === null && agent.status?.setBy != null && agent.hibernated === null && startup === null && (
         <span className="hybrid-tile-byline" data-testid="tile-set-by" data-yields="">
           set by ◎ {agent.status.setBy}
         </span>
@@ -396,7 +403,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                   );
               }
             })}
-            {latestRound !== undefined && (
+            {!starting && latestRound !== undefined && (
               <Chip
                 className="hybrid-tile-review nodrag"
                 data-testid="tile-review"
@@ -408,7 +415,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                 <FileCheck aria-hidden />r{latestRound.round}
               </Chip>
             )}
-            {agent.plan !== null && (
+            {!starting && agent.plan !== null && (
               <Chip
                 className="hybrid-tile-plan nodrag"
                 data-testid="tile-plan"
@@ -421,7 +428,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                 {planBadge(agent.plan)}
               </Chip>
             )}
-            {agent.docs.length > 0 && (
+            {!starting && agent.docs.length > 0 && (
               <Chip
                 className="hybrid-tile-docs nodrag"
                 data-testid="tile-docs"
@@ -433,7 +440,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                 {agent.docs.length === 1 ? '1 doc' : `${agent.docs.length} docs`}
               </Chip>
             )}
-            {gate !== undefined && (
+            {!starting && gate !== undefined && (
               <Chip
                 className="hybrid-tile-gate nodrag"
                 data-testid="tile-gate"
@@ -456,7 +463,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
             >
               +{folded.length}
             </Chip>
-            {crewFlags !== undefined && (
+            {!starting && crewFlags !== undefined && (
               <Chip className="hybrid-tile-crew-flags" data-testid="crew-flags" title="Crew members waiting for its answer: sending each a message clears its flag">
                 ⚑ {crewFlags} crew flag{crewFlags === 1 ? '' : 's'}
               </Chip>

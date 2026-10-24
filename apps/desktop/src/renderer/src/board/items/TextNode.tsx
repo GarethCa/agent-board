@@ -1,20 +1,20 @@
 import { memo, useContext, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react';
 import {
+  COLOR_SLOTS,
   MAX_TEXT_LENGTH,
   TEXT_ALIGNS,
-  TEXT_COLORS,
   TEXT_PRESET_FONT_SIZES,
   TEXT_SIZES,
   type TextData,
   type TextSize,
 } from '@agent-board/daemon/protocol';
 import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Trash2 } from 'lucide-react';
-import { BarButton, BarRow, BarSeparator, BarSwatch, FontSizeControl, ItemStyleBar } from './ItemStyleBar';
+import { BarButton, BarRow, BarSeparator, FontSizeControl, ItemStyleBar, SlotSwatches } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
 import { clampTextHeight, resizedText, textItemSize } from './text-layout';
-import { clampFontSize, textData, textMetrics } from './text-style';
-import { themedColor } from '../../board-colors';
+import { clampFontSize, fixedColor, inSlot, textData, textMetrics } from './text-style';
+import { slotPaint } from '../../board-colors';
 import { useDraftText } from './useDraftText';
 
 const SIZE_LABELS: Record<TextSize, string> = {
@@ -136,7 +136,7 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
       data-editing={editing || undefined}
       data-selected={selected || undefined}
       data-zone={item.zoneId ?? ''}
-      style={{ '--item-color': themedColor(style.color), '--text-font-size': `${style.fontSize}px` } as CSSProperties}
+      style={{ '--item-color': slotPaint(style.colorSlot, style.color), '--text-font-size': `${style.fontSize}px` } as CSSProperties}
       onDoubleClick={(event) => {
         event.stopPropagation();
         if (!editing) startEditing();
@@ -214,17 +214,17 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
             </BarButton>
           ))}
           <BarSeparator />
-          {TEXT_COLORS.map((preset) => (
-            <BarSwatch
-              key={preset.value}
-              name={`Text ${preset.name.toLowerCase()}`}
-              value={preset.value}
-              pressed={style.color === preset.value}
-              onPick={() => restyle({ color: preset.value })}
-            />
-          ))}
-          <BarSeparator />
           <DeleteButton onClick={() => remove(item.id)} />
+        </BarRow>
+        <BarRow>
+          <SlotSwatches
+            label="Text"
+            slots={COLOR_SLOTS}
+            slot={style.colorSlot}
+            color={style.color}
+            onPick={(slot) => restyle(inSlot('color', slot))}
+            onFixed={(hex) => restyle(fixedColor('color', hex))}
+          />
         </BarRow>
       </ItemStyleBar>
       {editing ? (

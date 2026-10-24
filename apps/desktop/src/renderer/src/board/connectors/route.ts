@@ -6,6 +6,11 @@ import { ROUTED_CORNER, roundedCorner, type LineEnds, type RoutePoint } from './
 
 /** How far a routed line keeps from the objects it goes round. */
 export const ROUTE_CLEARANCE = 16;
+/**
+ * The clearances a route tries, widest first: the whole, then half, which still fits down a gap the width of a whole
+ * one, where the margins of the objects either side meet. Objects a tile gap apart (a note beside a tile) are that close.
+ */
+const CLEARANCES = [ROUTE_CLEARANCE, ROUTE_CLEARANCE / 2];
 /** What a turn costs, as a length of line: enough that a route takes the gap with fewest turns, not the shortest. */
 const TURN_COST = 40;
 /** How much dearer a stretch is along the very edge of an object's margin than down the middle of a gap. */
@@ -108,22 +113,33 @@ function indexOf(lanes: readonly number[], value: number): number {
 /**
  * The way a line with these `ends` goes round the `others` (the objects on the board not at its ends) and its `own`
  * two, as the points it goes through from its source to its target, each stretch square: out of its source's side and
- * into its target's, then through the gaps between the objects in the way, `ROUTE_CLEARANCE` from each. Each corner
- * says how far a curve may round it and keep that clear (`radius`). Undefined when a straight line would do, or when
- * nothing is clear: an end hard against another object, or boxed in.
+ * into its target's, then through the gaps between the objects in the way, `ROUTE_CLEARANCE` from each, or half that
+ * where the whole doesn't fit (`CLEARANCES`). Each corner says how far a curve may round it and keep that clear
+ * (`radius`). Undefined when a straight line would do, or when nothing is clear even at half: an end hard against
+ * another object, or boxed in.
  *
  * The board is cut into lanes along the margins round the objects near the line and the middles of the gaps between
  * them, and the route is the cheapest way along those lanes (A*), each turn costing extra.
  */
 export function routeAround(ends: LineEnds, others: readonly Rect[], own: OwnObjects): RoutePoint[] | undefined {
-  const clearance = ROUTE_CLEARANCE;
+  for (const clearance of CLEARANCES) {
+    const route = routeWith(clearance, ends, others, own);
+    // A straight line would do: a narrower clearance finds nothing more.
+    if (route === 'straight') return undefined;
+    if (route !== undefined) return route;
+  }
+  return undefined;
+}
+
+/** `routeAround`, keeping `clearance` from each object: `straight` when the way it finds is the straight line. */
+function routeWith(clearance: number, ends: LineEnds, others: readonly Rect[], own: OwnObjects): RoutePoint[] | 'straight' | undefined {
   const obstacles = [...others, ...[own.source, own.target].filter((rect) => rect !== undefined)];
   const padded = obstacles.map((rect) => grown(rect, clearance));
   const sourceTile = own.source === undefined ? -1 : others.length;
   const targetTile = own.target === undefined ? -1 : obstacles.length - 1;
   // Each end sets out square from its side to the edge of its object's margin, which it may cross to get there.
-  const start = setOutFrom(ends.source, ends.sourceSide, padded[sourceTile]);
-  const goal = setOutFrom(ends.target, ends.targetSide, padded[targetTile]);
+  const start = setOutFrom(ends.source, ends.sourceSide, padded[sourceTile], clearance);
+  const goal = setOutFrom(ends.target, ends.targetSide, padded[targetTile], clearance);
   if (padded.some((rect) => within(rect, start) || within(rect, goal))) return undefined;
 
   // Only the objects near the line: those in the box between its ends, and those touching them, and so on out.
@@ -174,7 +190,7 @@ export function routeAround(ends: LineEnds, others: readonly Rect[], own: OwnObj
   if (path === undefined) return undefined;
   const points = [ends.source, ...path.map((cell) => ({ x: xs[cell % columns]!, y: ys[Math.floor(cell / columns)]! })), ends.target];
   const route = withoutStraights(points);
-  if (route.length <= 2) return undefined;
+  if (route.length <= 2) return 'straight';
   // A curve's corner keeps clear of the margins of the objects round it, and of its own two objects themselves: it
   // leaves and arrives inside their margins.
   const keepOut = [
@@ -200,9 +216,9 @@ function cornerRadius(from: EdgePoint, to: EdgePoint, after: EdgePoint, keepOut:
   );
 }
 
-/** Where a line leaving `point` out of `side` of its object reaches the edge of the object's `margin`, or the clearance out from it. */
-function setOutFrom(point: EdgePoint, side: ConnectorSide, margin: Rect | undefined): EdgePoint {
-  if (margin === undefined) return { x: point.x + OUTWARD[side].x * ROUTE_CLEARANCE, y: point.y + OUTWARD[side].y * ROUTE_CLEARANCE };
+/** Where a line leaving `point` out of `side` of its object reaches the edge of the object's `margin`, or `clearance` out from it. */
+function setOutFrom(point: EdgePoint, side: ConnectorSide, margin: Rect | undefined, clearance: number): EdgePoint {
+  if (margin === undefined) return { x: point.x + OUTWARD[side].x * clearance, y: point.y + OUTWARD[side].y * clearance };
   if (side === 'left') return { x: margin.x, y: point.y };
   if (side === 'right') return { x: margin.x + margin.width, y: point.y };
   if (side === 'top') return { x: point.x, y: margin.y };

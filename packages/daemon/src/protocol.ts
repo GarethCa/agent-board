@@ -154,6 +154,11 @@ export interface Zone {
    * repo of their own are cut from, and its shells start in. Null for none, and for every bound zone.
    */
   defaultRepo: string | null;
+  /**
+   * A group's own folder, outside git, which the app makes in its data directory on first use: where an agent started
+   * in the group runs when it has no repo (none given, and no default repo). Null for every bound zone.
+   */
+  groupFolder: string | null;
   createdAt: string;
 }
 
@@ -391,7 +396,7 @@ export interface ZoneLayout {
  * The kinds of board item. Each is drawn by its own node type on the board. An `agent-note` is a note an agent wrote
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`).
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -689,18 +694,60 @@ export type TextAlign = (typeof TEXT_ALIGNS)[number];
 export const MAX_TEXT_LENGTH = 20_000;
 
 /**
- * The colours text can be, the first by default. Stored in the item's data, so content rather than theme, like
- * `STICKY_COLORS`.
+ * The theme's colours a shape's outline and text, a text item or a connector can be, in the picker's order: the theme's
+ * accent, its text (Ink) and muted text (Grey), then its palette's hues. An item stores the slot, and the board draws it
+ * in the theme it shows, so switching theme recolours it.
  */
-export const TEXT_COLORS = [
-  { name: 'Ink', value: '#2b2a27' },
-  { name: 'Grey', value: '#6f6a60' },
-  { name: 'Red', value: '#c92a2a' },
-  { name: 'Orange', value: '#d9480f' },
-  { name: 'Green', value: '#2f9e44' },
-  { name: 'Blue', value: '#3b5bdb' },
-  { name: 'Violet', value: '#6741d9' },
-] as const;
+export const COLOR_SLOTS = ['accent', 'ink', 'grey', 'red', 'orange', 'yellow', 'green', 'teal', 'cyan', 'blue', 'violet', 'pink'] as const;
+export type ColorSlot = (typeof COLOR_SLOTS)[number];
+
+/**
+ * What each slot is in the light theme, stored as an item's `#rrggbb` beside its slot, so an app or daemon from before
+ * slots still reads it. The colours from before slots are these, so one stored without a slot is read as its slot.
+ */
+export const SLOT_COLORS: Record<ColorSlot, string> = {
+  accent: '#364fc7',
+  ink: '#2b2a27',
+  grey: '#6f6a60',
+  red: '#c92a2a',
+  orange: '#d9480f',
+  yellow: '#c16400',
+  green: '#2f9e44',
+  teal: '#087f5b',
+  cyan: '#0c8599',
+  blue: '#3b5bdb',
+  violet: '#6741d9',
+  pink: '#c2255c',
+};
+
+/**
+ * The fills a shape can have, in the picker's order: the tile's own colour, then the slots tinted into it. A shape may
+ * also have none (`fill` null).
+ */
+export const FILL_SLOTS = ['tile', 'accent', 'yellow', 'green', 'teal', 'cyan', 'blue', 'violet', 'pink', 'red', 'orange'] as const;
+export type FillSlot = (typeof FILL_SLOTS)[number];
+
+/** A fill slot's stored `#rrggbb`: the fills from before slots for theirs (White for the tile's), else its light tint. */
+export const FILL_SLOT_COLORS: Record<FillSlot, string> = {
+  tile: '#ffffff',
+  accent: '#dfe3f6',
+  yellow: '#fff3bf',
+  green: '#d3f9d8',
+  teal: '#d7ebe5',
+  cyan: '#d8ebef',
+  blue: '#d0ebff',
+  violet: '#e7e1f9',
+  pink: '#ffdeeb',
+  red: '#f6dddd',
+  orange: '#f9e2d9',
+};
+
+const slotOf = <Slot extends string>(colors: Record<Slot, string>, color: string): Slot | null =>
+  (Object.keys(colors) as Slot[]).find((slot) => colors[slot] === color.toLowerCase()) ?? null;
+
+/** The slot a colour stored without one stands for, or null for a fixed colour: one that is no slot's. */
+export const colorSlotOf = (color: string): ColorSlot | null => slotOf(SLOT_COLORS, color);
+export const fillSlotOf = (color: string): FillSlot | null => slotOf(FILL_SLOT_COLORS, color);
 
 /** A text item's `data`: free text with no background. */
 export interface TextData {
@@ -717,8 +764,13 @@ export interface TextData {
   bold: boolean;
   italic: boolean;
   align: TextAlign;
-  /** `#rrggbb`. */
+  /** `#rrggbb`: `colorSlot`'s, or a fixed colour. */
   color: string;
+  /**
+   * The theme colour it is drawn in, or null for `color` as it is. Missing in one saved before slots, which reads it
+   * from `color` (`colorSlotOf`).
+   */
+  colorSlot: ColorSlot | null;
   /**
    * False while the text sizes its own width as it is typed; true once the user has resized it, when the width stays
    * and the text wraps.
@@ -778,25 +830,6 @@ export const SHAPE_TYPES = [
 ] as const;
 export type ShapeType = (typeof SHAPE_TYPES)[number];
 
-/** The fills a shape can have, the first by default. A shape may also have none (`fill` null). */
-export const SHAPE_FILLS = [
-  { name: 'Yellow', value: '#fff3bf' },
-  { name: 'Green', value: '#d3f9d8' },
-  { name: 'Blue', value: '#d0ebff' },
-  { name: 'Pink', value: '#ffdeeb' },
-  { name: 'White', value: '#ffffff' },
-] as const;
-
-/** The stroke colours a shape can have, the first by default. */
-export const SHAPE_STROKES = [
-  { name: 'Orange', value: '#d9480f' },
-  { name: 'Ink', value: '#2b2a27' },
-  { name: 'Blue', value: '#3b5bdb' },
-  { name: 'Green', value: '#2f9e44' },
-  { name: 'Red', value: '#c92a2a' },
-  { name: 'Violet', value: '#6741d9' },
-] as const;
-
 /** The stroke widths of a shape, px; 0 is no outline. */
 export const SHAPE_STROKE_WIDTHS = [1, 2.5, 4] as const;
 
@@ -805,8 +838,14 @@ export interface ShapeData {
   shape: ShapeType;
   /** `#rrggbb`, or null for none. */
   fill: string | null;
+  /**
+   * The theme colour the fill is drawn in, or null for `fill` as it is. Each slot is missing in a shape saved before
+   * slots, which reads it from its colour (`fillSlotOf`, `colorSlotOf`).
+   */
+  fillSlot: FillSlot | null;
   /** `#rrggbb`. */
   stroke: string;
+  strokeSlot: ColorSlot | null;
   strokeWidth: number;
   dashed: boolean;
   text: string;
@@ -826,11 +865,35 @@ export interface ShapeData {
   methods: string;
   /** `#rrggbb`. */
   textColor: string;
+  textColorSlot: ColorSlot | null;
 }
 
 /** The sections a shape may have under its text, as keys of its data, in the order they are drawn. */
 export const SHAPE_SECTIONS = ['attributes', 'methods'] as const;
 export type ShapeSection = (typeof SHAPE_SECTIONS)[number];
+/** The kinds of shape that have `SHAPE_SECTIONS` under their name: a class and a box interface. */
+export const SECTIONED_SHAPES: readonly ShapeType[] = ['class', 'interface-box'];
+
+/** A new shape's data, as the board draws one dropped from its toolbar: Accent on the tile, a class's sections in mono. */
+export const newShapeData = (shape: ShapeType): ShapeData => ({
+  shape,
+  fill: FILL_SLOT_COLORS.tile,
+  fillSlot: 'tile',
+  stroke: SLOT_COLORS.accent,
+  strokeSlot: 'accent',
+  strokeWidth: SHAPE_STROKE_WIDTHS[1],
+  dashed: false,
+  text: '',
+  textSize: 'h2',
+  fontSize: null,
+  bold: true,
+  align: 'center',
+  mono: SECTIONED_SHAPES.includes(shape),
+  attributes: '',
+  methods: '',
+  textColor: SLOT_COLORS.ink,
+  textColorSlot: 'ink',
+});
 
 /**
  * A new board item. Its `z` is above every other item's. A client may pick its `id` (letters, digits and `-`, at most
@@ -940,6 +1003,36 @@ export const DEFAULT_CONNECTOR_LOOK = {
   startLabel: '',
   endLabel: '',
 } as const satisfies ConnectorLook;
+
+/** The ends and dash of a class diagram's relation: one pick sets all three. */
+export type RelationLook = Pick<ConnectorLook, 'startEnd' | 'endEnd' | 'dashed'>;
+
+export interface Relation {
+  id: 'association' | 'directed' | 'inheritance' | 'realisation' | 'dependency' | 'aggregation' | 'composition';
+  label: string;
+  /** Which way it reads, from `from` to `to`, where that is not plain. */
+  reads?: string;
+  look: RelationLook;
+}
+export type RelationId = Relation['id'];
+
+/**
+ * The relations of a class diagram, as a connector's ends and dash. The line is drawn the way the relation reads, from
+ * `from` to `to`: a child to its parent, a client to what it uses, a whole to its parts.
+ */
+export const RELATIONS: readonly Relation[] = [
+  { id: 'association', label: 'Association', look: { startEnd: 'none', endEnd: 'none', dashed: false } },
+  { id: 'directed', label: 'Directed', look: { startEnd: 'none', endEnd: 'arrow', dashed: false } },
+  { id: 'inheritance', label: 'Inheritance', reads: 'child → parent', look: { startEnd: 'none', endEnd: 'triangle', dashed: false } },
+  { id: 'realisation', label: 'Realisation', reads: 'class → interface', look: { startEnd: 'none', endEnd: 'triangle', dashed: true } },
+  { id: 'dependency', label: 'Dependency', reads: 'user → used', look: { startEnd: 'none', endEnd: 'arrow', dashed: true } },
+  { id: 'aggregation', label: 'Aggregation', reads: 'whole → part', look: { startEnd: 'diamond', endEnd: 'none', dashed: false } },
+  { id: 'composition', label: 'Composition', reads: 'whole → part', look: { startEnd: 'filled-diamond', endEnd: 'none', dashed: false } },
+];
+
+/** The relation a connector's ends and dash are, as drawn; none for ends of its own. */
+export const relationOf = (look: RelationLook): RelationId | undefined =>
+  RELATIONS.find((relation) => relation.look.startEnd === look.startEnd && relation.look.endEnd === look.endEnd && relation.look.dashed === look.dashed)?.id;
 
 /**
  * A new connector. A client may pick its `id` (letters, digits and `-`, at most 64), so it can show the connector before
@@ -1286,6 +1379,11 @@ export interface TileMove {
   z?: number;
   /** Puts it in front of every other tile, whatever `z` says. */
   toFront?: boolean;
+  /**
+   * Saves it only if it has no place yet: the board saving the slot it worked out for a tile with none. A tile placed
+   * meanwhile (an orchestrator's arrange) keeps that place.
+   */
+  ifUnplaced?: boolean;
 }
 
 /** The agent CLI a session runs. */
@@ -1583,8 +1681,15 @@ export interface Agent {
    * in its own folder (`external.resume`): deleting it only takes it off the board.
    */
   ownsWorktree: boolean;
-  /** Whether it is the board master (ADR-0019): the one agent the user asks for work, at most one per board. */
+  /** Whether it is the Captain (ADR-0019): the one agent the user asks for work, at most one per board. */
   master: boolean;
+  /**
+   * Whether it runs in its group's own folder (`Zone.groupFolder`), outside git: it has no worktree or branch, and the
+   * app runs no git there (no branch reads, gate, pull requests or checkout warning). Deleting it leaves the folder.
+   * Read from where it runs, inside the data directory's `groups`, not kept: a daemon on another data directory doesn't
+   * know an agent of this one's as such.
+   */
+  plainFolder: boolean;
   /**
    * Whether it may start, message and watch other agents through the board CLI and MCP, and where: its scope,
    * or null while it may not. Only the user sets it (`agent.setOrchestrate`); an agent an orchestrator starts never has it.
@@ -1909,10 +2014,11 @@ export type PlanOutcome = (typeof PLAN_OUTCOMES)[number];
 
 /**
  * How a plan ended: the user's decision, or none, as it `timed-out` or was `withdrawn` (the agent stopped waiting: its
- * call cancelled, its turn over, its session or the daemon gone).
+ * call cancelled, its turn over, its session or the daemon gone), or `edited`: the user saved their own version of it,
+ * the next one, which the decision then applies to.
  */
 export interface PlanDecision {
-  outcome: PlanOutcome | 'timed-out' | 'withdrawn';
+  outcome: PlanOutcome | 'timed-out' | 'withdrawn' | 'edited';
   /** The user's comments for the agent; '' for none. */
   comments: string;
   decidedAt: string;
@@ -1930,6 +2036,10 @@ export interface PlanSummary {
   expiresAt: string;
   /** Null while the user is still to decide. */
   decision: PlanDecision | null;
+  /** Who wrote it: its agent, or the user, who edited the agent's version before deciding. */
+  author: DocumentWriter;
+  /** The real path of the file it was read from, absolute; null for a plan given inline. */
+  path: string | null;
 }
 
 /** A plan, with its body. */
@@ -1937,10 +2047,27 @@ export interface Plan extends PlanSummary {
   body: string;
 }
 
+/** How a plan the agent waited on ended: never `edited`, which only a version the user then edited is stamped with. */
+export type PlanEnd = PlanDecision & { outcome: Exclude<PlanDecision['outcome'], 'edited'> };
+
 /** What `board.presentPlan` tells the agent. */
 export interface PlanResult {
   version: number;
-  decision: PlanDecision;
+  decision: PlanEnd;
+  /** What the user changed before deciding, if the version decided is theirs; else null. */
+  edits: PlanEdits | null;
+}
+
+/** The user's edits to a plan, as its agent is told them with the decision. */
+export interface PlanEdits {
+  /** The agent's version they edited. */
+  from: number;
+  /** The line diff from the agent's version to the one decided (`text-diff.ts`). */
+  diff: string;
+  /** The approved version was written to the plan's file. */
+  written: boolean;
+  /** Why an approved version wasn't written to the plan's file; null when it was, or there was none to write. */
+  problem: string | null;
 }
 
 /** Whether the agent waits on its latest plan. */
@@ -1988,6 +2115,8 @@ export interface DocumentContent extends DocumentSummary {
 /** A document card's size, open, and its height as a slim bar. */
 export const DOCUMENT_CARD_SIZE = { width: 256, height: 208 };
 export const DOCUMENT_BAR_HEIGHT = 76;
+/** The smallest a document card can be dragged to. */
+export const DOCUMENT_MIN_SIZE = { width: 160, height: 120 };
 
 /** A document card's `data`: which document it shows, and who showed it, as they were then. */
 export interface DocumentCardData {
@@ -1997,6 +2126,20 @@ export interface DocumentCardData {
   format: PlanFormat;
   /** Drawn as a slim bar (type, title and author) instead of a page with a preview. */
   collapsed: boolean;
+  /** The height the user gave the page, kept while it is a slim bar so showing the page again restores it. */
+  openHeight?: number;
+}
+
+/** A plan card's size. */
+export const PLAN_CARD_SIZE = { width: 256, height: 132 };
+
+/**
+ * A plan card's `data`: whose plans it shows, as they were then, and the title of the plan it was put there for. It
+ * shows the agent's latest plan as it is now, so one card follows every version.
+ */
+export interface PlanCardData {
+  agent: AgentNoteAuthor;
+  title: string;
 }
 
 /**
@@ -2137,8 +2280,8 @@ export const MAX_DESCRIPTION_LENGTH = 500;
 /** Longest status summary an agent can set: a line or two on its tile. */
 export const MAX_STATUS_LENGTH = 200;
 
-/** What an agent may record about its own work: a pull request, a hand-off doc, an agent it started. */
-export const AGENT_RECORD_KINDS = ['pr', 'doc', 'crew'] as const;
+/** What an agent may record about its own work: a pull request, a hand-off doc, an agent it started, a pin. */
+export const AGENT_RECORD_KINDS = ['pr', 'doc', 'crew', 'pin'] as const;
 export type AgentRecordKind = (typeof AGENT_RECORD_KINDS)[number];
 
 /**
@@ -2155,12 +2298,36 @@ export type AgentRecord = {
   /** `from` the crew member that recorded it for this orchestrator; null for its own. */
   | { kind: 'doc'; path: string; from: { sessionId: string; name: string } | null }
   | { kind: 'crew' }
+  /** `from` the crew member that pinned it for this orchestrator; null for its own. */
+  | { kind: 'pin'; target: PinTarget; label: string | null; from: { sessionId: string; name: string } | null }
 );
 
-/** What `board.record` takes besides the token: a pull request by its URL, or a doc by its path, for the caller or its orchestrator. */
+/**
+ * What a pin shows the user (`board.record` of kind `pin`): a file by its real path, an http(s) link, or a note's text.
+ * Its record's key is the file's path, the link, or `note:` and the note's label; one a crew member pinned for its
+ * orchestrator is under `from:<its session>:` too, so it stands beside the orchestrator's own and its other crew's.
+ */
+export type PinTarget = { kind: 'file'; path: string } | { kind: 'link'; url: string } | { kind: 'note'; text: string };
+
+/** Which pin `board.unpin` takes off: exactly one of a file's path, a link, or a note's label. */
+export interface PinRef {
+  path?: string;
+  url?: string;
+  label?: string;
+  forOrchestrator?: boolean;
+}
+
+/** What `board.record` takes besides the token: a pull request by its URL, a doc by its path, or a pin, for the caller or its orchestrator. */
 export type RecordParams =
   | { kind: 'pr'; url: string; title?: string }
-  | { kind: 'doc'; path: string; forOrchestrator?: boolean };
+  | { kind: 'doc'; path: string; forOrchestrator?: boolean }
+  /** Exactly one of `path`, `url` and `note`; a note needs a `label`. */
+  | { kind: 'pin'; path?: string; url?: string; note?: string; label?: string; forOrchestrator?: boolean };
+
+/** The most characters of a pin's label, of a pinned note, and of a pinned link. */
+export const MAX_PIN_LABEL = 80;
+export const MAX_PIN_NOTE = 2000;
+export const MAX_PIN_URL = 2048;
 
 /** The most a hand-off doc may hold for its tab to show it, in bytes. */
 export const MAX_DOC_BYTES = 1024 * 1024;
@@ -2307,6 +2474,12 @@ export const ORCHESTRATOR_ACTIONS = [
   'add-note',
   'edit-note',
   'remove-note',
+  'add-shape',
+  'edit-shape',
+  'remove-shape',
+  'connect',
+  'edit-connector',
+  'remove-connector',
   'add-clock',
   'remove-clock',
   'set-role',
@@ -2346,6 +2519,8 @@ export interface OrchestratorSpawnParams {
   /** Without its role's template: its first message is the issue and `prompt` alone. */
   noTemplate?: boolean;
   name?: string;
+  /** In a group, the repo (an absolute path to it, or a folder in it) to cut its worktree from: the group's without. */
+  repo?: string;
   branch?: string;
   baseBranch?: string;
   issueId?: string;
@@ -2467,6 +2642,29 @@ export const DEFAULT_ARRANGE_SETTINGS: ArrangeSettings = { by: 'issue', layout: 
 /** The kinds of note an orchestrator makes (`orchestrator.addNote`): a sticky note (the default) or a text item. */
 export const NOTE_KINDS = ['sticky', 'text'] as const;
 export type NoteKind = (typeof NOTE_KINDS)[number];
+
+/** What an orchestrator gives a shape it draws (`orchestrator.addShape`, `editShape`). */
+export interface DiagramShapeFields {
+  shape?: ShapeType;
+  /** Its text: a class's name. */
+  text?: string;
+  /** A class's (or box interface's) sections, a line each; refused for a shape without them. */
+  attributes?: string;
+  methods?: string;
+  /** One of `FILL_SLOTS` by name (any case), `#rrggbb` (a fixed fill), or `none`. */
+  fill?: string;
+}
+
+/** What an orchestrator gives a connector it draws (`orchestrator.connect`, `editConnector`). */
+export interface DiagramConnectorFields {
+  /** Sets its ends and dash; `directed` (an arrow at `to`) by default. */
+  relation?: RelationId;
+  style?: ConnectorStyle;
+  /** The text on its middle, and by its `from` and `to` ends (a multiplicity such as `0..*`, or a role). */
+  label?: string;
+  startLabel?: string;
+  endLabel?: string;
+}
 
 /**
  * How long `orchestrator.wait` waits at most, and by default: under the 60 s Codex gives an MCP tool call
@@ -2782,7 +2980,8 @@ export interface RoleTemplate {
 
 /**
  * Starts an agent in a new worktree, on a new branch, with `prompt` as its first task. Its repo is `repo` if given,
- * else its zone's (a bound zone's repo, or a group's default repo).
+ * else its zone's (a bound zone's repo, or a group's default repo). In a group with neither it has no repo: it runs in
+ * the group's own folder (`Zone.groupFolder`), with no worktree or branch.
  */
 export type SpawnAgentParams = TerminalSize & {
   /** The zone its tile starts in, or null for loose on the board (which needs `repo` and `position`). */
@@ -3292,8 +3491,8 @@ export interface DaemonMethods {
    */
   'agent.setRecordDeleted': { params: SessionRef & { kind: AgentRecordKind; key: string; deleted: boolean }; result: Agent };
   /**
-   * Reads one of the agent's hand-off docs: a path it recorded, and hasn't had deleted, or its `guessedDoc`. Fails with
-   * `invalidParams` for any other path, a file that is gone or one over `MAX_DOC_BYTES`.
+   * Reads one of the agent's hand-off docs or pinned files: a path it recorded, and hasn't had deleted, or its
+   * `guessedDoc`. Fails with `invalidParams` for any other path, a file that is gone or one over `MAX_DOC_BYTES`.
    */
   'agent.readDoc': { params: SessionRef & { path: string }; result: { path: string; text: string } };
   /**
@@ -3439,6 +3638,25 @@ export interface DaemonMethods {
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
   /**
+   * Puts a shape of `shape` with `text` in it on the board (a class's `attributes` and `methods`, a line each, under its
+   * name), marked as made by it, placed as `addNote` places a note. It is sized for its text; the board grows it taller
+   * if it needs more.
+   */
+  'orchestrator.addShape': { params: { token?: string } & DiagramShapeFields & { shape: ShapeType; text: string } & LayoutPlace; result: BoardItem };
+  /** Changes a shape it (or its crew) made: only the fields given; a user-side caller any shape. */
+  'orchestrator.editShape': { params: { token?: string; id: string } & DiagramShapeFields; result: BoardItem };
+  /** Deletes a shape it (or its crew) made, and with it every connector joined to it; a user-side caller any shape. */
+  'orchestrator.removeShape': { params: { token?: string; id: string }; result: null };
+  /**
+   * Joins two board items with a connector, marked as made by it: `from` to `to` as `relation` reads (a child to its
+   * parent, a whole to its parts), its sides picked from where the two are. Both in zones it may lay out.
+   */
+  'orchestrator.connect': { params: { token?: string; from: string; to: string } & DiagramConnectorFields; result: Connector };
+  /** Changes a connector it (or its crew) made: only the fields given; a user-side caller any connector. */
+  'orchestrator.editConnector': { params: { token?: string; id: string } & DiagramConnectorFields; result: Connector };
+  /** Deletes a connector it (or its crew) made; a user-side caller any connector. */
+  'orchestrator.removeConnector': { params: { token?: string; id: string }; result: null };
+  /**
    * Puts a clock on the board (`ClockData` over a new clock's), marked as made by it: one that messages an agent in its
    * scope goes on that agent's tile's left; one that starts a fresh agent goes in a zone in its scope (`zoneId`, its own
    * by default). A hand-off's agent must be in its scope too.
@@ -3490,6 +3708,13 @@ export interface DaemonMethods {
    */
   'board.record': { params: { token: string } & RecordParams; result: AgentRecord };
   /**
+   * Takes a pin off the sidebar of the agent holding `token`, or with `forOrchestrator`, one it pinned there off its
+   * orchestrator's (never the orchestrator's own, nor another crew member's). The record is gone, not deleted as the
+   * user's delete leaves it. A file is named as `board.record` names it, even once it is gone; a note by its label.
+   * Fails with `invalidParams` when there is no such pin.
+   */
+  'board.unpin': { params: { token: string } & PinRef; result: AgentRecord };
+  /**
    * The agent holding `token` flags that it wants a look (`Agent.flag`): blocked, its work ready for review, or a
    * decision needed. `reason` is one line, at most `MAX_FLAG_LENGTH`; it replaces any flag it had. A crew member's flag
    * goes to its live orchestrator: typed at that one's prompt once it is there, and heard as a `flagged` crew event.
@@ -3526,9 +3751,11 @@ export interface DaemonMethods {
    * `timed-out` after `timeoutMs` (`DEFAULT_PLAN_WAIT_MS`, at most `MAX_ASK_WAIT_MS`); `withdrawn` once the connection
    * closes or its turn ends. Fails as `board.ask` does, and for an empty or too long plan. A crew member's plan goes
    * to its live orchestrator instead (`SentToOrchestrator`), at once, written to `CREW_PLAN_PATH` in its worktree.
+   * `path` is the real path of the file it was read from, if it was: the user's approved version is written there.
+   * With `onBoard`, the agent's plan card is put beside its tile too, if it has none.
    */
   'board.presentPlan': {
-    params: { token: string; title: string; body: string; format: PlanFormat; timeoutMs?: number };
+    params: { token: string; title: string; body: string; format: PlanFormat; path?: string; onBoard?: boolean; timeoutMs?: number };
     result: PlanResult | SentToOrchestrator;
   };
   /**
@@ -3548,6 +3775,12 @@ export interface DaemonMethods {
    * out or withdrawn).
    */
   'plan.decide': { params: SessionRef & { planId: string; outcome: PlanOutcome; comments?: string }; result: PlanSummary };
+  /**
+   * The user saves `body` as their own version of the Markdown plan `planId` the agent waits on: its next version, which
+   * the agent then waits on, the decision applying to it. Fails with `invalidParams` once it doesn't wait on that plan,
+   * for an HTML plan, and for an empty, too long or unchanged body.
+   */
+  'plan.edit': { params: SessionRef & { planId: string; body: string }; result: PlanSummary };
   /**
    * The live agent holding `token` shows the user one of its files, Markdown or HTML (by its extension), as a document:
    * a Document tab in its window, and with `onBoard` a card beside its tile too. `path` is absolute. Showing the same file
@@ -3792,7 +4025,7 @@ export interface DaemonMethods {
    */
   'selection.ask': { params: AskSelectionParams; result: Agent };
   /**
-   * The board master (ADR-0019): the board's master, live or ended, or, with none, starts one at `board` scope, loose on
+   * The Captain (ADR-0019): the board's master, live or ended, or, with none, starts one at `board` scope, loose on
    * the board left of the zones, in a folder of its own with no repo, with the master's prompt as its first message.
    * The app's alone: a board token's connection is refused it.
    */
@@ -3872,6 +4105,7 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.identify',
   'board.setStatus',
   'board.record',
+  'board.unpin',
   'board.needsYou',
   'board.handoff',
   'board.ask',
@@ -3908,6 +4142,12 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.addNote',
   'orchestrator.editNote',
   'orchestrator.removeNote',
+  'orchestrator.addShape',
+  'orchestrator.editShape',
+  'orchestrator.removeShape',
+  'orchestrator.connect',
+  'orchestrator.editConnector',
+  'orchestrator.removeConnector',
   'orchestrator.addClock',
   'orchestrator.removeClock',
   'orchestrator.roles',

@@ -60,3 +60,9 @@ export function lineDiff(before: string, after: string): string {
   });
   return out.join('\n');
 }
+
+/** The longest diff an agent is told: past it, it is told to read the file. */
+const MAX_TOLD_DIFF = 6_000;
+
+/** `diff` as an agent is told it: cut past `MAX_TOLD_DIFF`, saying to read the file for the rest. */
+export const toldDiff = (diff: string): string => (diff.length <= MAX_TOLD_DIFF ? diff : `${diff.slice(0, MAX_TOLD_DIFF)}\n… (more: read the file)`);

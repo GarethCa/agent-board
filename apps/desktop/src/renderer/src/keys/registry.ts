@@ -72,7 +72,7 @@ export const KEYS = [
   { id: 'move.connections', label: 'Cycle which connections are drawn', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'e', text: 'E', shift: true }] },
   { id: 'move.crews', label: 'Cycle how an orchestrator’s crew is shown', section: 'move', scope: 'board', status: 'today', keys: [{ key: 'c', text: 'C', shift: true }] },
   { id: 'move.cheatSheet', label: 'Keyboard shortcuts', section: 'move', scope: 'board', status: 'new', keys: [{ key: '?', shift: 'any' }] },
-  { id: 'move.master', label: 'Open the board master, its message box focused', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
+  { id: 'move.master', label: 'Open the Captain, its message box focused', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', shift: true, code: 'KeyM', text: 'M' }], otherKeys: [{ mod: 'window', code: 'KeyM', text: 'M' }] },
   { id: 'move.cheatSheetAnywhere', label: 'Keyboard shortcuts, from anywhere', section: 'move', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'Slash', text: '/' }] },
 
   // Putting things on the board.

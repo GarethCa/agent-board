@@ -1,18 +1,31 @@
 import type { ComponentType } from 'react';
 import type { NodeProps } from '@xyflow/react';
-import { AGENT_NOTE_SIZE, CLOCK_SIZE, DOCUMENT_CARD_SIZE, SHAPE_FILLS, STICKY_COLORS, STICKY_SIZE, TEXT_COLORS, type BoardItemKind } from '@agent-board/daemon/protocol';
-import { themedColor } from '../../board-colors';
+import {
+  AGENT_NOTE_SIZE,
+  CLOCK_SIZE,
+  COLOR_SLOTS,
+  DOCUMENT_CARD_SIZE,
+  PLAN_CARD_SIZE,
+  FILL_SLOTS,
+  STICKY_COLORS,
+  STICKY_SIZE,
+  type BoardItemKind,
+  type ColorSlot,
+  type FillSlot,
+} from '@agent-board/daemon/protocol';
+import { fillToken, shapeColors, slotName, slotPaint, slotToken, stickyPaint } from '../../board-colors';
 import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items';
 import { AgentNoteNode } from './AgentNoteNode';
 import { clockData } from '../clocks';
 import { ClockNode } from './ClockNode';
 import { DocumentNode } from './DocumentNode';
+import { PlanNode } from './PlanNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
 import { LINK_CARD_SIZE, LinkNode } from './LinkNode';
 import { ShapeNode, SHAPE_SIZE } from './ShapeNode';
 import { newStickyData, StickyNode, stickyData } from './StickyNode';
-import { newShapeData, newTextData, shapeData, textData } from './text-style';
+import { filledIn, inSlot, newShapeData, newTextData, shapeData, textData } from './text-style';
 import { TextNode } from './TextNode';
 
 /** What the board needs to know about a kind of board item. A new kind plugs in here. */
@@ -37,7 +50,8 @@ export interface ItemKind {
 export interface ItemColors {
   /** "Note colour". */
   label: string;
-  presets: readonly { name: string; value: string }[];
+  /** Each colour's name, its value in `of` and `patch` (a sticky's stored colour, a slot), and how the theme draws it. */
+  presets: readonly { name: string; value: string; color: string }[];
   /** The colour an item has, from its data. */
   of(data: Record<string, unknown>): string | null;
   /** The change to an item's data that gives it `value`. */
@@ -51,8 +65,8 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: STICKY_SIZE,
     newData: () => ({ ...newStickyData() }),
     editOnCreate: true,
-    minimapColor: (data) => themedColor(stickyData(data).color),
-    colors: { label: 'Note colour', presets: STICKY_COLORS, of: (data) => stickyData(data).color, patch: (color) => ({ color }) },
+    minimapColor: (data) => stickyPaint(stickyData(data).color).color,
+    colors: { label: 'Note colour', presets: STICKY_COLORS.map((preset) => ({ ...preset, color: stickyPaint(preset.value).color })), of: (data) => stickyData(data).color, patch: (color) => ({ color }) },
   },
   text: {
     label: 'text',
@@ -60,8 +74,13 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: { width: 40, height: 36 },
     newData: () => ({ ...newTextData() }),
     editOnCreate: true,
-    minimapColor: (data) => themedColor(textData(data).color),
-    colors: { label: 'Text colour', presets: TEXT_COLORS, of: (data) => textData(data).color, patch: (color) => ({ color }) },
+    minimapColor: (data) => slotPaint(textData(data).colorSlot, textData(data).color),
+    colors: {
+      label: 'Text colour',
+      presets: COLOR_SLOTS.map((slot) => ({ name: slotName(slot), value: slot, color: slotToken(slot) })),
+      of: (data) => textData(data).colorSlot,
+      patch: (slot) => inSlot('color', slot as ColorSlot),
+    },
   },
   shape: {
     label: 'shape',
@@ -69,8 +88,17 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: SHAPE_SIZE,
     newData: () => ({ ...newShapeData() }),
     editOnCreate: false,
-    minimapColor: (data) => themedColor(shapeData(data).fill ?? shapeData(data).stroke),
-    colors: { label: 'Shape fill', presets: SHAPE_FILLS, of: (data) => shapeData(data).fill, patch: (fill) => ({ fill }) },
+    minimapColor: (data) => {
+      const style = shapeData(data);
+      const { fill, stroke } = shapeColors(style, true);
+      return style.fill === null ? stroke : fill;
+    },
+    colors: {
+      label: 'Shape fill',
+      presets: FILL_SLOTS.map((slot) => ({ name: slotName(slot), value: slot, color: fillToken(slot) })),
+      of: (data) => (shapeData(data).fill === null ? null : shapeData(data).fillSlot),
+      patch: (slot) => filledIn(slot as FillSlot),
+    },
   },
   image: {
     label: 'image',
@@ -106,6 +134,14 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     label: 'document',
     node: DocumentNode,
     size: DOCUMENT_CARD_SIZE,
+    editOnCreate: false,
+    minimapColor: () => 'var(--raised)',
+  },
+  // Made by agents only (a plan shown on the board), never from the toolbar.
+  plan: {
+    label: 'plan card',
+    node: PlanNode,
+    size: PLAN_CARD_SIZE,
     editOnCreate: false,
     minimapColor: () => 'var(--raised)',
   },

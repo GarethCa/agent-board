@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentRecord, PullRequest, Subagent } from '@agent-board/daemon/protocol';
-import { crewSection, docSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
+import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
 
 const AT = '2026-10-23T10:12:00.000Z';
 
@@ -138,5 +138,61 @@ describe('section counts', () => {
     const subagent: Subagent = { id: 's1', type: 'general-purpose', state: 'running', startedAt: AT, endedAt: null, result: null };
     expect(sectionCount(subagentSection(agent({ subagents: [subagent] })).rows)).toBe('1 · guessed');
     expect(sectionCount([])).toBe('None');
+  });
+});
+
+const pinRecord = (key: string, target: Extract<AgentRecord, { kind: 'pin' }>['target'], label: string | null = null, deleted = false): AgentRecord => ({
+  kind: 'pin',
+  key,
+  target,
+  label,
+  from: null,
+  recordedAt: AT,
+  deletedAt: deleted ? AT : null,
+});
+
+describe("an agent's Pins section", () => {
+  it('lists its pins as recorded, each named by its label or what it is, and opened as its kind says', () => {
+    const { rows } = pinSection(
+      agent({
+        records: [
+          pinRecord('/wt/report.html', { kind: 'file', path: '/wt/report.html' }),
+          pinRecord('/wt/NOTES.MD', { kind: 'file', path: '/wt/NOTES.MD' }, 'Notes'),
+          pinRecord('/wt/shot.png', { kind: 'file', path: '/wt/shot.png' }),
+          pinRecord('C:\\wt\\log.txt', { kind: 'file', path: 'C:\\wt\\log.txt' }),
+          pinRecord('http://localhost:5173/app', { kind: 'link', url: 'http://localhost:5173/app' }),
+          pinRecord('note:Logins', { kind: 'note', text: 'ann / hunter2' }, 'Logins'),
+          prRecord(4),
+        ],
+      }),
+    );
+    expect(rows.map(({ source, item }) => [source, item.name, item.opens])).toEqual([
+      ['recorded', 'report.html', 'doc'],
+      ['recorded', 'Notes', 'doc'],
+      ['recorded', 'shot.png', 'reveal'],
+      ['recorded', 'log.txt', 'reveal'],
+      ['recorded', 'localhost:5173/app', 'web'],
+      ['recorded', 'Logins', 'none'],
+    ]);
+  });
+
+  it('hides a pin the user deleted, but while its Undo is up', () => {
+    const records = [pinRecord('https://example.com/', { kind: 'link', url: 'https://example.com/' }, 'Site', true)];
+    expect(pinSection(agent({ records }))).toMatchObject({ rows: [], hidden: records });
+    expect(pinSection(agent({ records }), new Set(['https://example.com/'])).rows).toEqual([expect.objectContaining({ gone: true })]);
+  });
+});
+
+describe("an agent's Documents section", () => {
+  it('lists every document it showed and its plan, oldest shown first', () => {
+    const doc = (id: string, title: string, shownAt: string) => ({ id, sessionId: 'lead', path: `/wt/${id}.md`, title, format: 'markdown', version: 2, shownAt }) as Agent['docs'][number];
+    const plan = { id: 'p', version: 3, title: 'Release plan', format: 'markdown', presentedAt: '2026-10-23T10:05:00.000Z', decision: null } as unknown as Agent['plan'];
+    const rows = documentSection(agent({ docs: [doc('a', 'Design', '2026-10-23T10:00:00.000Z'), doc('b', 'Findings', '2026-10-23T10:10:00.000Z')], plan }));
+    expect(rows.map((row) => [row.kind, row.name, row.version])).toEqual([
+      ['document', 'Design', 2],
+      ['plan', 'Release plan', 3],
+      ['document', 'Findings', 2],
+    ]);
+    expect(documentSection(agent({ docs: [], plan: null }))).toEqual([]);
   });
 });

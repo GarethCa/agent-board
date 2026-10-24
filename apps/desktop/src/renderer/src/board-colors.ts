@@ -1,14 +1,21 @@
-import { SHAPE_FILLS, SHAPE_STROKES, STICKY_COLORS, TEXT_COLORS } from '@agent-board/daemon/protocol';
+import {
+  SLOT_COLORS,
+  STICKY_COLORS,
+  colorSlotOf,
+  type ColorSlot,
+  type FillSlot,
+  type ShapeData,
+} from '@agent-board/daemon/protocol';
+import { readable } from '../../shared/colour';
 
 /*
- * The colours a sticky note, text item, shape or connector stores are its data: light-theme hex values from the
- * protocol's presets, which no theme may rewrite. The board draws each preset through a theme token named for it
- * instead ("map sticky notes by colour name, not by stored hex"), so the dark theme can dim a note's paper and
- * lift Ink off the dark desk. The light theme's tokens are the stored values themselves (tokens.test.ts checks).
+ * A text item, shape or connector is drawn in the theme's colour slots: each of its colours names one, and the board
+ * draws it through that slot's token, so switching theme recolours it. A colour with no slot is fixed, drawn as
+ * stored. A sticky note's colour is its data, a light-theme hex from the protocol's presets that no theme may rewrite:
+ * the board draws each preset through a theme token named for it instead, so the dark theme can dim a note's paper.
  */
 
 type Named<T extends readonly { name: string }[]> = T[number]['name'];
-type PaintName = Named<typeof TEXT_COLORS> | Named<typeof SHAPE_STROKES>;
 
 /** A note's paper and the ink written on it, for each sticky colour. */
 const STICKY_TOKENS: Record<Named<typeof STICKY_COLORS>, { paper: string; ink: string }> = {
@@ -22,45 +29,54 @@ const STICKY_TOKENS: Record<Named<typeof STICKY_COLORS>, { paper: string; ink: s
   White: { paper: '--sticky-white', ink: '--sticky-white-ink' },
 };
 
-/** Text, a connector's line and a shape's outline: drawn on the desk. */
-const PAINT_TOKENS: Record<PaintName, string> = {
-  Ink: '--paint-ink',
-  Grey: '--paint-grey',
-  Red: '--paint-red',
-  Orange: '--paint-orange',
-  Green: '--paint-green',
-  Blue: '--paint-blue',
-  Violet: '--paint-violet',
+/** Text, a connector's line and a shape's outline and text, in a slot: drawn on the desk, or on a shape's fill. */
+const PAINT_TOKENS: Record<ColorSlot, string> = {
+  accent: '--paint-accent',
+  ink: '--paint-ink',
+  grey: '--paint-grey',
+  red: '--paint-red',
+  orange: '--paint-orange',
+  yellow: '--paint-yellow',
+  green: '--paint-green',
+  teal: '--paint-teal',
+  cyan: '--paint-cyan',
+  blue: '--paint-blue',
+  violet: '--paint-violet',
+  pink: '--paint-pink',
 };
 
-/** Text in a filled shape: drawn on its paper, which every theme keeps light. */
-const SHAPE_INK_TOKENS: Record<PaintName, string> = {
-  Ink: '--shape-ink-ink',
-  Grey: '--shape-ink-grey',
-  Red: '--shape-ink-red',
-  Orange: '--shape-ink-orange',
-  Green: '--shape-ink-green',
-  Blue: '--shape-ink-blue',
-  Violet: '--shape-ink-violet',
+/** A shape's text on its fill, in a slot: the slot's paint, nudged to read on every fill. */
+const SHAPE_INK_TOKENS: Record<ColorSlot, string> = {
+  accent: '--shape-ink-accent',
+  ink: '--shape-ink-ink',
+  grey: '--shape-ink-grey',
+  red: '--shape-ink-red',
+  orange: '--shape-ink-orange',
+  yellow: '--shape-ink-yellow',
+  green: '--shape-ink-green',
+  teal: '--shape-ink-teal',
+  cyan: '--shape-ink-cyan',
+  blue: '--shape-ink-blue',
+  violet: '--shape-ink-violet',
+  pink: '--shape-ink-pink',
 };
 
-/** A shape's fill: paper, like a note's. White is a note's white. */
-const SHAPE_FILL_TOKENS: Record<Named<typeof SHAPE_FILLS>, string> = {
-  Yellow: '--shape-fill-yellow',
-  Green: '--shape-fill-green',
-  Blue: '--shape-fill-blue',
-  Pink: '--shape-fill-pink',
-  White: STICKY_TOKENS.White.paper,
+/** A shape's fill in a slot: the slot tinted into the tile, or the tile itself. */
+const FILL_TOKENS: Record<FillSlot, string> = {
+  tile: '--raised',
+  accent: '--shape-fill-accent',
+  yellow: '--shape-fill-yellow',
+  green: '--shape-fill-green',
+  teal: '--shape-fill-teal',
+  cyan: '--shape-fill-cyan',
+  blue: '--shape-fill-blue',
+  violet: '--shape-fill-violet',
+  pink: '--shape-fill-pink',
+  red: '--shape-fill-red',
+  orange: '--shape-fill-orange',
 };
 
-/** Each stored preset's token. A value two palettes share (Ink, White) is one colour, so has one token. */
-const tokens = new Map<string, string>([
-  ...STICKY_COLORS.map(({ name, value }): [string, string] => [value, STICKY_TOKENS[name].paper]),
-  ...SHAPE_FILLS.map(({ name, value }): [string, string] => [value, SHAPE_FILL_TOKENS[name]]),
-  ...[...TEXT_COLORS, ...SHAPE_STROKES].map(({ name, value }): [string, string] => [value, PAINT_TOKENS[name]]),
-]);
 const stickies = new Map<string, { paper: string; ink: string }>(STICKY_COLORS.map(({ name, value }) => [value, STICKY_TOKENS[name]]));
-const shapeInks = new Map<string, string>([...TEXT_COLORS, ...SHAPE_STROKES].map(({ name, value }) => [value, SHAPE_INK_TOKENS[name]]));
 
 const paint = (token: string) => `var(${token})`;
 
@@ -70,19 +86,52 @@ export function stickyPaint(color: string): { color: string; ink: string } {
   return tokens === undefined ? { color, ink: paint('--sticky-other-ink') } : { color: paint(tokens.paper), ink: paint(tokens.ink) };
 }
 
-/** How a stored colour (a text item's, a shape's fill or outline, a connector's) is drawn on the desk in the theme. */
-export function themedColor(color: string): string {
-  const token = tokens.get(color.toLowerCase());
-  return token === undefined ? color : paint(token);
+/** A slot's name as the board shows it: `Blue`. */
+export const slotName = (slot: ColorSlot | FillSlot): string => `${slot[0]!.toUpperCase()}${slot.slice(1)}`;
+
+/** How `slot` is drawn in the theme, as text, a line or an outline. */
+export const slotToken = (slot: ColorSlot): string => paint(PAINT_TOKENS[slot]);
+
+/** How `slot` is drawn in the theme as a shape's fill. */
+export const fillToken = (slot: FillSlot): string => paint(FILL_TOKENS[slot]);
+
+/** How a colour in `slot` is drawn in the theme, or `color` as it is for none. */
+export const slotPaint = (slot: ColorSlot | null, color: string): string => (slot === null ? color : slotToken(slot));
+
+/** How a fill in `slot` is drawn in the theme, `fill` as it is for none, or `none` for no fill. */
+export const fillPaint = (slot: FillSlot | null, fill: string | null): string => (fill === null ? 'none' : slot === null ? fill : fillToken(slot));
+
+/** How a connector's stored colour is drawn: its slot's, read from the colour, or the colour as it is. */
+export const connectorPaint = (color: string): string => slotPaint(colorSlotOf(color), color);
+
+/**
+ * A shape's fill, outline and text colours in the theme. Text in a slot on a slot's fill is the slot's text on fills,
+ * which reads on every one; text on a fixed fill is that fill's in every theme: its light colour, nudged until it reads
+ * on the fill. Fixed text on a slot's fill is as the user picked it.
+ */
+export function shapeColors(style: ShapeData, textOnFill: boolean): { fill: string; stroke: string; text: string } {
+  const filled = textOnFill && style.fill !== null;
+  const text =
+    filled && style.fillSlot === null
+      ? onFixedFill(style.textColorSlot === null ? style.textColor : SLOT_COLORS[style.textColorSlot], style.fill!)
+      : filled && style.textColorSlot !== null
+        ? paint(SHAPE_INK_TOKENS[style.textColorSlot])
+        : slotPaint(style.textColorSlot, style.textColor);
+  return { fill: fillPaint(style.fillSlot, style.fill), stroke: slotPaint(style.strokeSlot, style.stroke), text };
 }
 
-/** How a filled shape's stored text colour is drawn on its fill in the theme. */
-export function shapeInk(color: string): string {
-  const token = shapeInks.get(color.toLowerCase());
-  return token === undefined ? color : paint(token);
+function onFixedFill(text: string, fill: string): string {
+  try {
+    return readable(text, [fill]);
+  } catch {
+    return text; // a fill nothing reads on, as the user picked it
+  }
 }
 
-/** Each colour token, with the stored value it stands for: what the light theme draws it in. */
+/** Each sticky and paint token, with the stored value it stands for: what the light theme draws it in. */
 export function boardPaint(): Map<string, string> {
-  return new Map([...tokens, ...shapeInks].map(([value, token]) => [token, value]));
+  return new Map([
+    ...STICKY_COLORS.map(({ name, value }): [string, string] => [STICKY_TOKENS[name].paper, value]),
+    ...Object.entries(SLOT_COLORS).map(([slot, value]): [string, string] => [PAINT_TOKENS[slot as ColorSlot], value]),
+  ]);
 }

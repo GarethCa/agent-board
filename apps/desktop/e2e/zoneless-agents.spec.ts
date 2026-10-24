@@ -282,6 +282,45 @@ test('a group with a default repo prefills the New agent dialog with it, and tak
   }
 });
 
+test('an orchestrator in a group with no repo starts in the group’s own folder, outside git; a repo picked brings the checkout choices back', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await addEmptyZone(window, 'Local Banking');
+    const group = zoneNamed(window, 'Local Banking');
+    await group.getByRole('button', { name: 'New agent' }).click();
+    const form = picker(window);
+    await pickInChip(form, 'Role', 'Orchestrator');
+
+    // No repo, and no checkout to choose: it runs in the group's own folder.
+    const { groupFolder } = (await stored(dataDir)).zones[0]!;
+    await expect(form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ })).toHaveText('No repo');
+    await expect(form.getByTestId('checkout-no-repo')).toHaveText(`No repo: runs in ${groupFolder}. Agents it starts pick their repo per task.`);
+    await expect(form.getByRole('group', { name: 'Checkout' })).toHaveCount(0);
+
+    // A repo picked brings the checkout choices back; No repo takes them away again.
+    await browseRepo(app, window, repo);
+    await expect(form.getByRole('group', { name: 'Checkout' }).getByRole('button', { name: 'Main checkout' })).toBeVisible();
+    await expect(form.getByTestId('checkout-no-repo')).toHaveCount(0);
+    await form.getByRole('group', { name: 'Repo' }).getByRole('button', { name: /^Repo:/ }).click();
+    await window.getByRole('menuitem', { name: /^No repo\b/ }).filter({ hasText: 'outside git' }).click();
+    await expect(form.getByTestId('checkout-no-repo')).toBeVisible();
+
+    await form.getByRole('button', { name: /^Start/ }).click();
+    await expect(form).toHaveCount(0);
+    await expect.poll(async () => (await stored(dataDir)).agents.length).toBe(1);
+    const [orchestrator] = (await stored(dataDir)).agents;
+    expect(orchestrator).toMatchObject({ roleName: 'orchestrator', plainFolder: true, ownsWorktree: false, branch: '', worktree: groupFolder });
+    // Nothing git-related shows on its tile: no checkout warning.
+    await expect(tile(window).getByTestId('checkout-warning')).toHaveCount(0);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the Shell tool puts a shell at home on the board; its folder chip follows cd and opens a pane elsewhere', async () => {
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();

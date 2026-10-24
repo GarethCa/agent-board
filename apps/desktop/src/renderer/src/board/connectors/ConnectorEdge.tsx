@@ -2,8 +2,10 @@ import { memo, useContext, useEffect, useMemo, useRef, useState, type CSSPropert
 import { BaseEdge, EdgeLabelRenderer, useReactFlow, type Edge, type EdgeProps } from '@xyflow/react';
 import {
   CONNECTOR_LINE_ENDS,
+  COLOR_SLOTS,
   MAX_CONNECTOR_LABEL,
-  TEXT_COLORS,
+  SLOT_COLORS,
+  colorSlotOf,
   type Connector,
   type ConnectorLineEnd,
 } from '@agent-board/daemon/protocol';
@@ -11,7 +13,7 @@ import { ChevronDown, Trash2 } from 'lucide-react';
 import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch } from '../items/ItemStyleBar';
 import { Button, Menu, Swatch } from '../../ui';
 import { tokenNumber } from '../../theme';
-import { themedColor } from '../../board-colors';
+import { connectorPaint, slotName, slotToken } from '../../board-colors';
 import { binding, isActive, keyText } from '../../keys/registry';
 import { useExtendedShortcuts } from '../../keys/extended-shortcuts';
 import { ConnectorActionsContext, type ConnectorLabelPlace } from './actions';
@@ -199,7 +201,7 @@ export const ConnectorEdge = memo(function ConnectorEdge(props: EdgeProps<Connec
     () => lineDashes(length, END_TRIM[connector.startEnd], END_TRIM[connector.endEnd], connector.dashed),
     [length, connector.startEnd, connector.endEnd, connector.dashed],
   );
-  const style = { ...(connector.color === null ? {} : { '--connector-color': themedColor(connector.color) }), strokeDasharray: dashes } as CSSProperties;
+  const style = { ...(connector.color === null ? {} : { '--connector-color': connectorPaint(connector.color) }), strokeDasharray: dashes } as CSSProperties;
   const finish = (place: ConnectorLabelPlace) => (text: string) => {
     edit(undefined);
     if (text !== connector[place]) update({ id: connector.id, [place]: text });
@@ -386,15 +388,20 @@ function ConnectorBar({ connector }: { connector: Connector }) {
           pressed={connector.color === null}
           onClick={() => set({ color: null })}
         />
-        {TEXT_COLORS.slice(1).map((color) => (
+        {/* Its colour is stored as its slot's, which is drawn as the slot: the neutral line stands for Ink. */}
+        {COLOR_SLOTS.filter((slot) => slot !== 'ink').map((slot) => (
           <BarSwatch
-            key={color.value}
-            name={color.name}
-            value={color.value}
-            pressed={connector.color === color.value}
-            onPick={() => set({ color: color.value })}
+            key={slot}
+            name={slotName(slot)}
+            title={`${slotName(slot)} · follows the theme`}
+            paint={slotToken(slot)}
+            pressed={connector.color !== null && colorSlotOf(connector.color) === slot}
+            onPick={() => set({ color: SLOT_COLORS[slot] })}
           />
         ))}
+        {connector.color !== null && colorSlotOf(connector.color) === null && (
+          <BarSwatch name={`${connector.color}, fixed`} title={`${connector.color} · fixed`} paint={connector.color} fixed pressed onPick={() => undefined} />
+        )}
       </BarRow>
     </div>
   );

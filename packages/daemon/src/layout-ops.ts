@@ -1,7 +1,26 @@
 // The layout commands as the CLI and MCP give them (`move`, `arrange`, `zone`, `note`): refs and words turned into the
 // daemon's `orchestrator.*` layout methods, and their results as text and JSON (ADR-0010's one API, two faces).
-import { BoardError, BoardRefs, inZone, itemLine, readBoard, REF_KINDS, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
-import { ARRANGE_BYS, ARRANGE_LAYOUTS, NOTE_KINDS, TILE_SIDES, type BoardCaller, type BoardItem, type LayoutPlace, type LayoutTarget, type TileSide, type ZoneMap } from './protocol.ts';
+import { BoardError, BoardRefs, connectorLine, connectorsIn, inZone, itemLine, readBoard, REF_KINDS, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
+import {
+  ARRANGE_BYS,
+  ARRANGE_LAYOUTS,
+  CONNECTOR_STYLES,
+  NOTE_KINDS,
+  RELATIONS,
+  SHAPE_TYPES,
+  TILE_SIDES,
+  type BoardCaller,
+  type BoardItem,
+  type ConnectorStyle,
+  type DiagramConnectorFields,
+  type DiagramShapeFields,
+  type LayoutPlace,
+  type LayoutTarget,
+  type RelationId,
+  type ShapeType,
+  type TileSide,
+  type ZoneMap,
+} from './protocol.ts';
 import { boxPicture, laneTable } from './zone-map.ts';
 
 /** A point as typed: `x,y`. Throws `BoardError` for anything else. */
@@ -108,11 +127,73 @@ function mapText(refs: BoardRefs, map: ZoneMap, boxes: boolean): string {
   return (boxes ? boxPicture : laneTable)(map, refs.of('zone', map.zoneId), (key) => mapRef(refs, key));
 }
 
-/** `zone map`: a zone (the caller's by default) as its lanes and what is amiss, or with `boxes` as a box picture. */
-export async function zoneMap(session: BoardSession, zone: string | undefined, options: { boxes?: boolean }): Promise<BoardView> {
+/** The most lines of a zone's diagram `zone map` prints, without its members and with them; the rest are counted. */
+const DIAGRAM_LINES = 40;
+const DIAGRAM_LINES_WITH_SECTIONS = 200;
+/** The most lines of each section `zone map --sections` prints, and the most characters of each. */
+const SECTION_LIMIT = { lines: 12, width: 80 };
+
+/** Where a read is printed: the CLI, or an MCP tool's answer, whose hints name the tools instead of the commands. */
+export type ReadFace = 'cli' | 'mcp';
+
+/** What a diagram summary points to for more, in the CLI's words or the MCP tools'. */
+const DIAGRAM_HINTS: Record<ReadFace, { members: string; whole: string; all: string }> = {
+  cli: { members: 'members with --sections, or `agent-board show <ref>`', whole: '`agent-board show <ref>` for one whole', all: '`agent-board tree --json` lists them all' },
+  mcp: { members: 'members with sections: true', whole: 'each section cut to its first 12 lines', all: 'the board tool lists them all' },
+};
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+/**
+ * The zone's diagram, kept short whatever its size: its shapes, each by its kind, text and section counts (with
+ * `sections`, a class's members too, cut short), then its connectors by their ends, relation and labels. Cut short,
+ * shapes and connectors share the lines, so a big diagram still shows some of its relations. Empty for a zone with
+ * neither.
+ */
+function diagramLines(refs: BoardRefs, zoneId: string, sections: boolean, face: ReadFace): string[] {
+  const shapes = refs.board.items.filter((item) => item.zoneId === zoneId && item.kind === 'shape');
+  const connectors = connectorsIn(refs, zoneId);
+  if (shapes.length === 0 && connectors.length === 0) return [];
+  const blocks = shapes.map((item) => [itemLine(refs, item), ...(sections ? shapeSectionLines(item, SECTION_LIMIT).map((line) => `  ${line}`) : [])]);
+  const cap = sections ? DIAGRAM_LINES_WITH_SECTIONS : DIAGRAM_LINES;
+  const shapeLines = blocks.reduce((sum, block) => sum + block.length, 0);
+  // Connectors take what the shapes leave, and at least half the lines when both overrun them.
+  const connectorBudget = Math.min(connectors.length, Math.max(cap - shapeLines, Math.floor(cap / 2)));
+  let left = cap - connectorBudget;
+  const shown: string[][] = [];
+  for (const block of blocks) {
+    if (block.length > left) break;
+    shown.push(block);
+    left -= block.length;
+  }
+  const lines = connectors.slice(0, connectorBudget + left).map((connector) => connectorLine(refs, connector));
+  const hints = DIAGRAM_HINTS[face];
+  const more = [
+    shapes.length > shown.length ? plural(shapes.length - shown.length, 'more shape') : '',
+    connectors.length > lines.length ? plural(connectors.length - lines.length, 'more connector') : '',
+  ]
+    .filter((each) => each !== '')
+    .join(' and ');
+  return [
+    `diagram  (${plural(shapes.length, 'shape')}, ${plural(connectors.length, 'connector')}; ${sections ? hints.whole : hints.members})`,
+    ...[...shown.flat(), ...lines].map((line) => `  ${line}`),
+    ...(more === '' ? [] : [`  … and ${more}: ${hints.all}`]),
+  ];
+}
+
+/**
+ * `zone map`: a zone (the caller's by default) as its lanes and what is amiss, or with `boxes` as a box picture; then a
+ * summary of its diagram, if it has one, a class's members too with `sections`.
+ */
+export async function zoneMap(
+  session: BoardSession,
+  zone: string | undefined,
+  options: { boxes?: boolean; sections?: boolean; face?: ReadFace },
+): Promise<BoardView> {
   const refs = new BoardRefs(await readBoard(session.client));
   const map = await session.client.call('orchestrator.map', { token: session.token, ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }) });
-  return { text: mapText(refs, map, options.boxes === true), json: map };
+  const diagram = diagramLines(refs, map.zoneId, options.sections === true, options.face ?? 'cli');
+  return { text: [mapText(refs, map, options.boxes === true), ...(diagram.length === 0 ? [] : ['', ...diagram])].join('\n'), json: map };
 }
 
 /** `arrange`: lays out the tiles of a zone (the caller's by default) it may move. */
@@ -236,4 +317,141 @@ export async function removeNote(session: BoardSession, ref: string): Promise<Bo
   const id = noteId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeNote', { token: session.token, id });
   return { text: `Removed ${refs.of('item', id)}.`, json: null };
+}
+
+/** What `shape add` and `shape edit` take, as typed. */
+export interface ShapeOptions {
+  shape?: string;
+  text?: string;
+  /** A line each. */
+  attributes?: string[];
+  methods?: string[];
+  fill?: string;
+}
+
+/** Checks a shape's options before anything connects. */
+export function checkShape(options: ShapeOptions): void {
+  if (options.shape !== undefined && !(SHAPE_TYPES as readonly string[]).includes(options.shape)) throw new BoardError(`the shape is one of ${SHAPE_TYPES.join(', ')}`);
+}
+
+function shapeFields(options: ShapeOptions): DiagramShapeFields {
+  checkShape(options);
+  return {
+    ...(options.shape === undefined ? {} : { shape: options.shape as ShapeType }),
+    ...(options.text === undefined ? {} : { text: options.text }),
+    ...(options.attributes === undefined ? {} : { attributes: options.attributes.join('\n') }),
+    ...(options.methods === undefined ? {} : { methods: options.methods.join('\n') }),
+    ...(options.fill === undefined ? {} : { fill: options.fill }),
+  };
+}
+
+/** `shape add`: a shape with text (a class's sections under its name), marked as made by the caller, placed as a note is. */
+export async function addShape(session: BoardSession, options: ShapeOptions & PlaceOptions & { shape: string }): Promise<BoardView> {
+  checkPlace(options);
+  const refs = new BoardRefs(await readBoard(session.client));
+  const item = await session.client.call('orchestrator.addShape', {
+    token: session.token,
+    ...shapeFields(options),
+    shape: options.shape as ShapeType,
+    text: options.text ?? '',
+    ...placeOf(refs, options, session.caller),
+  });
+  const fresh = new BoardRefs(await readBoard(session.client));
+  return { text: `Added ${itemLine(fresh, item)} ${inZone(fresh, item.zoneId)} ${where(item.x, item.y)}.`, json: item };
+}
+
+/** The shape `text` names, by its id. */
+function shapeId(refs: BoardRefs, text: string, caller: BoardCaller | null): string {
+  const object = refs.resolve(text, caller);
+  if (object.kind !== 'item' || object.item.kind !== 'shape') throw new BoardError(`${text} is ${object.kind === 'item' ? `a ${object.item.kind}` : `a ${object.kind}`}, not a shape`);
+  return object.item.id;
+}
+
+/** `shape edit`: the kind, text, sections or fill of a shape the caller (or its crew) made. */
+export async function editShape(session: BoardSession, ref: string, options: ShapeOptions): Promise<BoardView> {
+  const fields = shapeFields(options);
+  if (Object.keys(fields).length === 0) throw new BoardError('give the shape, text, attributes, methods or fill to change');
+  const refs = new BoardRefs(await readBoard(session.client));
+  const item = await session.client.call('orchestrator.editShape', { token: session.token, id: shapeId(refs, ref, session.caller), ...fields });
+  return { text: `Changed ${itemLine(new BoardRefs(await readBoard(session.client)), item)}.`, json: item };
+}
+
+/** `shape remove`: deletes a shape the caller (or its crew) drew, and every connector joined to it. */
+export async function removeShape(session: BoardSession, ref: string): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const id = shapeId(refs, ref, session.caller);
+  await session.client.call('orchestrator.removeShape', { token: session.token, id });
+  return { text: `Removed ${refs.of('item', id)}.`, json: null };
+}
+
+/** What `connect` and `connector edit` take, as typed. */
+export interface ConnectorOptions {
+  relation?: string;
+  style?: string;
+  label?: string;
+  fromLabel?: string;
+  toLabel?: string;
+}
+
+/** Checks a connector's options before anything connects. */
+export function checkConnector(options: ConnectorOptions): void {
+  if (options.relation !== undefined && !RELATIONS.some((relation) => relation.id === options.relation)) {
+    throw new BoardError(`the relation is one of ${RELATIONS.map((relation) => relation.id).join(', ')}`);
+  }
+  if (options.style !== undefined && !(CONNECTOR_STYLES as readonly string[]).includes(options.style)) throw new BoardError(`the style is one of ${CONNECTOR_STYLES.join(', ')}`);
+}
+
+function connectorFields(options: ConnectorOptions): DiagramConnectorFields {
+  checkConnector(options);
+  return {
+    ...(options.relation === undefined ? {} : { relation: options.relation as RelationId }),
+    ...(options.style === undefined ? {} : { style: options.style as ConnectorStyle }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.fromLabel === undefined ? {} : { startLabel: options.fromLabel }),
+    ...(options.toLabel === undefined ? {} : { endLabel: options.toLabel }),
+  };
+}
+
+/** The item `text` names, by its id: an end of a connector. */
+function connectorEnd(refs: BoardRefs, text: string, caller: BoardCaller | null): string {
+  const object = refs.resolve(text, caller);
+  if (object.kind !== 'item') throw new BoardError(`${text} is a ${object.kind}: a connector joins board items (shapes, notes, cards)`);
+  return object.item.id;
+}
+
+/** `connect`: joins two items with a connector, `from` to `to` as the relation reads, marked as made by the caller. */
+export async function connectItems(session: BoardSession, from: string, to: string, options: ConnectorOptions): Promise<BoardView> {
+  const fields = connectorFields(options);
+  const refs = new BoardRefs(await readBoard(session.client));
+  const connector = await session.client.call('orchestrator.connect', {
+    token: session.token,
+    from: connectorEnd(refs, from, session.caller),
+    to: connectorEnd(refs, to, session.caller),
+    ...fields,
+  });
+  return { text: `Connected ${connectorLine(new BoardRefs(await readBoard(session.client)), connector)}.`, json: connector };
+}
+
+/** The connector `text` names, by its id. */
+function connectorId(refs: BoardRefs, text: string, caller: BoardCaller | null): string {
+  const object = refs.resolve(text, caller);
+  if (object.kind !== 'connector') throw new BoardError(`${text} is a ${object.kind}, not a connector`);
+  return object.connector.id;
+}
+
+/** `connector edit`: the relation, style or labels of a connector the caller (or its crew) made. */
+export async function editConnector(session: BoardSession, ref: string, options: ConnectorOptions): Promise<BoardView> {
+  const fields = connectorFields(options);
+  if (Object.keys(fields).length === 0) throw new BoardError('give the relation, style or a label to change');
+  const refs = new BoardRefs(await readBoard(session.client));
+  const connector = await session.client.call('orchestrator.editConnector', { token: session.token, id: connectorId(refs, ref, session.caller), ...fields });
+  return { text: `Changed ${connectorLine(new BoardRefs(await readBoard(session.client)), connector)}.`, json: connector };
+}
+
+/** `connector remove`: deletes a connector the caller (or its crew) made. */
+export async function removeConnector(session: BoardSession, ref: string): Promise<BoardView> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const id = connectorId(refs, ref, session.caller);
+  await session.client.call('orchestrator.removeConnector', { token: session.token, id });
+  return { text: `Removed ${refs.of('connector', id)}.`, json: null };
 }

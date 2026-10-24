@@ -21,6 +21,7 @@ import { registerFlowEdgeIpc } from './flow-edges';
 import { registerPullRequestIpc } from './pull-requests';
 import { registerGateIpc } from './gates';
 import { registerAskIpc } from './asks';
+import { registerUnsavedPlanEditIpc } from './unsaved-plan-edits';
 import { registerReviewIpc } from './reviews';
 import { registerOrchestratorIpc } from './orchestrators';
 import { registerImageProtocol, registerImageScheme, registerItemIpc } from './items';
@@ -171,6 +172,7 @@ registerReviewIpc(daemon);
 registerPullRequestIpc(daemon);
 registerGateIpc(daemon);
 registerAskIpc(daemon);
+registerUnsavedPlanEditIpc();
 // The board's window may hand off any window's web tab, as it makes every move.
 registerWebTabIpc({ isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents });
 registerOrchestratorIpc(daemon);

@@ -45,7 +45,7 @@ import {
   nameSlug,
   removeWorktree,
 } from './worktrees.ts';
-import { initProject, resolveZoneFolder } from './zones.ts';
+import { groupFolder, initProject, resolveZoneFolder } from './zones.ts';
 
 /** Codex's flag that runs untrusted hooks without review (ADR-0004). */
 export const CODEX_BYPASS_FLAG = '--dangerously-bypass-hook-trust';
@@ -78,6 +78,7 @@ interface AgentSpawnOptions
     | 'db'
     | 'worktreesDir'
     | 'scratchDir'
+    | 'groupsDir'
     | 'rememberFolder'
     | 'harnessPaths'
     | 'hookShimPath'
@@ -157,7 +158,7 @@ export interface FolderPlace {
   cwd: string;
   repoRoot: string;
   readOnly: boolean;
-  /** It is the board master (ADR-0019): only `master.start` says so. */
+  /** It is the Captain (ADR-0019): only `master.start` says so. */
   master?: boolean;
 }
 
@@ -294,8 +295,9 @@ export function createAgentSpawns(
 
   /**
    * The repo a new agent's worktree is cut from, and the folder in it the agent starts in: the repo it was given (a
-   * new scratch repo named after it, or a folder in a repo), else its zone's, else its group's default repo. `undo`
-   * removes a scratch repo made for it, for a spawn that fails after.
+   * new scratch repo named after it, or a folder in a repo), else its zone's, else its group's default repo. A group
+   * with none gives no repo: its agent runs in the group's own folder (see `begin`). `undo` removes a scratch repo made
+   * for it, for a spawn that fails after.
    */
   const agentRepo = async (
     params: SpawnAgentParams,
@@ -435,8 +437,16 @@ export function createAgentSpawns(
     if (params.checkout !== undefined && params.checkout !== 'main' && params.checkout !== 'worktree') {
       throw invalidParams(`unknown checkout ${String(params.checkout)}`);
     }
+    // Given no repo in a group with none, it runs in the group's own folder, outside git: no worktree, branch or review.
+    const inGroup =
+      place === undefined && params.repo === undefined && zone !== undefined && zone.repo_root === null && zone.clone_repo === null && zone.default_repo === null;
+    if (inGroup && (reviewer || params.branch !== undefined || params.baseBranch !== undefined)) {
+      throw invalidParams(`${zone.name} has no repo for a branch, base branch or reviewer: give the agent one to work in`);
+    }
+    const folder = inGroup ? groupFolder(options.groupsDir, zone.id) : undefined;
+    const at: FolderPlace | undefined = place ?? (folder === undefined ? undefined : { cwd: folder, repoRoot: folder, readOnly: false });
     // The repo's own checkout, with no worktree, is the user's to give (ADR-0011): an orchestrator's agents each get their own.
-    const mainCheckout = params.checkout === 'main' && place === undefined;
+    const mainCheckout = params.checkout === 'main' && at === undefined;
     if (mainCheckout && spawnedBy !== undefined) throw invalidParams("an orchestrator's agents each work in a worktree of their own");
     if (mainCheckout && (reviewer || params.branch !== undefined || params.baseBranch !== undefined)) {
       throw invalidParams("an agent in the repo's own checkout takes no branch, base branch or reviewer role: it works on the branch checked out there");
@@ -452,7 +462,7 @@ export function createAgentSpawns(
     reservedNames.set(id, shownName);
     const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, spawnedBy: spawnedBy ?? null };
     const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
-      startAgent({ id, shownName, params, spawnedBy, place, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
+      startAgent({ id, shownName, params, spawnedBy, place: at, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
     const progress = starts.open(shown, {
       retry: (again, allow) => void run(again, allow).catch(() => {}),
       dismissed: () => reservedNames.delete(id),

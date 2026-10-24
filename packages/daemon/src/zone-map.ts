@@ -7,20 +7,22 @@ import { cutText } from './text-cut.ts';
 
 /**
  * What a zone's map is read from: its lanes, everything in it, the parts an arrange made (by arrange key, the item's
- * key), and how it is arranged, which says where a lane's tiles belong.
+ * key), and how it is arranged, which says where a lane's tiles belong; and each tile expanded in place as it is
+ * compact, by key (none, for none).
  */
 export interface ZoneMapInput {
   lanes: Lanes;
   things: readonly ZoneMapThing[];
   parts: ReadonlyMap<string, string>;
   arrange: ArrangeSettings;
+  compact?: ReadonlyMap<string, Rect>;
 }
 
 const rectOf = (thing: ZoneMapThing): Rect => ({ x: thing.x, y: thing.y, width: thing.width, height: thing.height });
 const onGrid = (thing: ZoneMapThing) => Number.isInteger((thing.x - GRID_ORIGIN.x) / GRID_COLUMN) && Number.isInteger((thing.y - GRID_ORIGIN.y) / ROW_STEP);
 
 /** The map of a zone: its lanes, the rest above them, and what is amiss. */
-export function buildZoneMap({ lanes, things, parts, arrange }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'offGrid'> {
+export function buildZoneMap({ lanes, things, parts, arrange, compact = new Map() }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'offGrid'> {
   const byKey = new Map(things.map((thing) => [thing.key, thing]));
   const part = (key: string) => {
     const item = parts.get(key);
@@ -37,9 +39,16 @@ export function buildZoneMap({ lanes, things, parts, arrange }: ZoneMapInput): P
   const lead = lanes.top.map((tile) => tile.id).filter((id) => byKey.has(id));
   const top = [...lead, ...things.filter((thing) => !inLanes.has(thing.key) && !lead.includes(thing.key)).map((thing) => thing.key)];
 
+  // A tile expanded in place pushes what it grew over aside on the board, for as long as it is open, without moving it
+  // where it is kept: two things overlap only if they did with every expanded tile compact. The lint so trusts the
+  // board's push: where the board finds no room to push something clear (`clearOfExpanded` in the app's displace), it
+  // is left under the expanded tile, and the lint doesn't say so.
+  const asLaidOut = (thing: ZoneMapThing) => compact.get(thing.key) ?? rectOf(thing);
   const overlapping: [string, string][] = [];
   things.forEach((thing, index) => {
-    for (const other of things.slice(index + 1)) if (overlaps(rectOf(thing), rectOf(other))) overlapping.push([thing.key, other.key]);
+    for (const other of things.slice(index + 1)) {
+      if (overlaps(rectOf(thing), rectOf(other)) && overlaps(asLaidOut(thing), asLaidOut(other))) overlapping.push([thing.key, other.key]);
+    }
   });
 
   const offGrid = new Set(lead.filter((key) => !onGrid(byKey.get(key)!)));

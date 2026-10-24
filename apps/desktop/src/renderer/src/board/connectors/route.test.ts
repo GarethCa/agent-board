@@ -87,6 +87,26 @@ describe('a route round the tiles between its ends', () => {
     expect(routeAround(across, [], own)).toBeUndefined();
   });
 
+  it('goes round a tile a tile gap from its end, where the margins meet, a half clearance from each', () => {
+    // A lane: the agent, its reviewer two slots right, and a note on the agent in the slot past the reviewer, 16 from
+    // it. The note's line leaves its card's left side, across the reviewer, to the agent's right side.
+    const [agent, reviewer] = [tile(1380, 1804), tile(1924, 1804)];
+    const note = { x: 2196, y: 1804, width: 256, height: 267 };
+    const ends = { source: { x: 2196, y: 1948 }, sourceSide: 'left', target: { x: 1636, y: 1872 }, targetSide: 'right' } as const;
+    const samples = samplePath('M2196,1948 L1636,1872');
+    const route = routeLine(ends, samples, [reviewer], { source: note, target: agent })!;
+    expect(route).toBeDefined();
+    expect(crossesAny(route, [reviewer])).toBe(false);
+    expect(distanceTo(route, reviewer)).toBeGreaterThanOrEqual(ROUTE_CLEARANCE / 2);
+  });
+
+  it('goes no nearer than half the clearance: a note closer to the tile than a tile gap gives up', () => {
+    // As above, but a note the reviewer's height, 12 from it: room for 4 clear of each, not 8.
+    const [agent, reviewer, note] = [tile(1380, 1804), tile(1924, 1804), tile(2192, 1804)];
+    const ends = { source: { x: 2192, y: 1872 }, sourceSide: 'left', target: { x: 1636, y: 1872 }, targetSide: 'right' } as const;
+    expect(routeLine(ends, samplePath('M2192,1872 L1636,1872'), [reviewer], { source: note, target: agent })).toBeUndefined();
+  });
+
   it('gives up when an end is boxed in, leaving the line as it was', () => {
     // A tile hard against the source's side: there is no room to leave it.
     const against = { x: 262, y: 0, width: 40, height: 300 };

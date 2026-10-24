@@ -2,12 +2,12 @@
 // `board.presentPlan` hold the agent's call open until the user answers in the needs-you inbox or the Plan tab, the wait
 // times out, or the agent stops waiting. Nothing here answers for the user: a timeout tells the agent there was no answer.
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { systemClock, type Clock } from './clock.ts';
-import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalCountParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
@@ -31,6 +31,8 @@ import {
   type DaemonMethods,
   type Plan,
   type PlanDecision,
+  type PlanEdits,
+  type PlanEnd,
   type PlanFormat,
   type PlanOutcome,
   type PlanResult,
@@ -39,9 +41,11 @@ import {
 import type { RpcHandlers } from './rpc.ts';
 import { oneLine } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
+import { lineDiff } from './text-diff.ts';
+import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
 import type { AgentHost } from './agents.ts';
 
-type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.place' | 'plan.list' | 'plan.decide'>;
+type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.place' | 'plan.list' | 'plan.decide' | 'plan.edit'>;
 
 /** A question as an agent asks it. */
 export interface AskSpec {
@@ -58,6 +62,8 @@ export interface PlanSpec {
   title: string;
   body: string;
   format: PlanFormat;
+  /** The real path of the file it was read from, absolute, if it was: the user's approved version is written there. */
+  path?: string;
   timeoutMs?: number;
 }
 
@@ -65,8 +71,18 @@ export interface AskHostOptions {
   db: DatabaseSync;
   /** The agent began (`began`) or stopped waiting on a question or plan: its tile and the inbox follow. */
   changed(sessionId: string, began: boolean): void;
-  /** The user moved the card of the agent's question: its tile and the inbox follow, the question no newer for it. */
-  placed(sessionId: string): void;
+  /**
+   * The user moved the card of the agent's question, or saved their version of its plan: its tile and the inbox follow,
+   * what it waits on no newer for it.
+   */
+  touched(sessionId: string): void;
+  /** The agent's worktree, the only folder the user's approved version of a plan is written in. */
+  worktree(sessionId: string): string | undefined;
+  /** Puts the agent's plan card beside its tile, if it has none. */
+  addCard?(sessionId: string): Promise<void>;
+  /** The user's approved version of the agent's plan was written to its file at `path`. */
+  wrote?(sessionId: string, path: string): void;
+  log?(message: string): void;
   clock?: Clock;
 }
 
@@ -87,6 +103,11 @@ export interface AskHost {
   place(sessionId: string, askId: string, at: { x: number; y: number }): void;
   /** The user decides the agent's plan `planId`. Throws `invalidParams` once it no longer waits on it. */
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): PlanSummary;
+  /**
+   * The user saves `body` as their version of the Markdown plan `planId` the agent waits on: its next version, which the
+   * agent then waits on instead. Throws `invalidParams` as `decide` does, for an HTML plan, and for a body it can't take.
+   */
+  edit(sessionId: string, planId: string, body: string): PlanSummary;
   /** The agent stopped waiting (its turn ended, or its session): its question goes, its plan is withdrawn. */
   drop(sessionId: string): void;
   /** The agent is being deleted: drops what it waits on and forgets its plans. */
@@ -108,6 +129,8 @@ interface PlanRow {
   outcome: PlanDecision['outcome'] | null;
   comments: string;
   decided_at: string | null;
+  author: PlanSummary['author'];
+  path: string | null;
 }
 
 const toSummary = (row: PlanRow): PlanSummary => ({
@@ -118,6 +141,8 @@ const toSummary = (row: PlanRow): PlanSummary => ({
   presentedAt: row.presented_at,
   expiresAt: row.expires_at,
   decision: row.outcome === null || row.decided_at === null ? null : { outcome: row.outcome, comments: row.comments, decidedAt: row.decided_at },
+  author: row.author,
+  path: row.path,
 });
 
 /** What waits for the user: the agent's question or plan, and how to end the wait. */
@@ -139,19 +164,40 @@ function text(value: string, name: string, max: number): string {
   return trimmed;
 }
 
+/** A plan's body: not blank, at most `MAX_PLAN_LENGTH` characters. */
+function planBody(body: string): string {
+  if (body.trim() === '') throw invalidParams('the plan must not be empty');
+  if (body.length > MAX_PLAN_LENGTH) throw invalidParams(`the plan must be at most ${MAX_PLAN_LENGTH} characters; it has ${body.length}`);
+  return body;
+}
+
+/**
+ * Why the plan's file can't take the user's version: it no longer holds `body`, the agent's version they edited, as
+ * something wrote it while the plan waited. Undefined while it holds it: writing over it then loses nothing.
+ */
+function whyChanged(path: string, body: string): string | undefined {
+  try {
+    if (readFileSync(path, 'utf8') === body) return undefined;
+  } catch (error) {
+    return `can't read the file: ${(error as Error).message}`;
+  }
+  return 'the file changed since you showed it, so it is not written';
+}
+
 /** How long a wait lasts: as asked, else `fallback`, never longer than `MAX_ASK_WAIT_MS`. */
 const waitMs = (asked: number | undefined, fallback: number) => Math.min(asked ?? fallback, MAX_ASK_WAIT_MS);
 
 export function createAskHost(options: AskHostOptions): AskHost {
-  const { db, changed, placed } = options;
+  const { db, changed, touched } = options;
   const clock = options.clock ?? systemClock;
   const insertPlan = db.prepare(
-    'INSERT INTO plans (id, session_id, version, title, format, body, presented_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO plans (id, session_id, version, title, format, body, presented_at, expires_at, author, path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const decidePlan = db.prepare('UPDATE plans SET outcome = ?, comments = ?, decided_at = ? WHERE id = ? AND outcome IS NULL');
   const selectPlans = db.prepare('SELECT * FROM plans WHERE session_id = ? ORDER BY version');
   const selectLatest = db.prepare('SELECT * FROM plans WHERE session_id = ? ORDER BY version DESC LIMIT 1');
   const selectPlan = db.prepare('SELECT * FROM plans WHERE id = ?');
+  const selectAgentsBefore = db.prepare("SELECT * FROM plans WHERE session_id = ? AND author = 'agent' AND version < ? ORDER BY version DESC LIMIT 1");
   const deletePlans = db.prepare('DELETE FROM plans WHERE session_id = ?');
 
   // No call waits on a plan the daemon held as it went: it is withdrawn.
@@ -177,9 +223,16 @@ export function createAskHost(options: AskHostOptions): AskHost {
 
   /**
    * Holds a wait for the agent until `settle` ends it: the user, the timer, the signal or `drop`. `finish` turns how it
-   * ended into what the call resolves with, or throws for a wait no one hears now.
+   * ended, and the wait as it ended (its plan the user's latest version), into what the call resolves with, or throws
+   * for a wait no one hears now.
    */
-  function hold<T>(sessionId: string, entry: Omit<Waiting, 'settle'>, ms: number, signal: AbortSignal, finish: (how: Parameters<Waiting['settle']>[0]) => T): Promise<T> {
+  function hold<T>(
+    sessionId: string,
+    entry: Omit<Waiting, 'settle'>,
+    ms: number,
+    signal: AbortSignal,
+    finish: (how: Parameters<Waiting['settle']>[0], wait: Waiting) => T,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const done: Waiting = {
         ...entry,
@@ -189,7 +242,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
           cancelTimer();
           signal.removeEventListener('abort', abort);
           try {
-            resolve(finish(how));
+            resolve(finish(how, done));
           } catch (error) {
             reject(error);
           } finally {
@@ -205,6 +258,42 @@ export function createAskHost(options: AskHostOptions): AskHost {
       else signal.addEventListener('abort', abort, { once: true });
     });
   }
+
+  /**
+   * What the user changed in the agent's version to make `decided`, for the agent; null if `decided` is the agent's. An
+   * approved version is written to the plan's file (`approved`), if the agent's worktree holds it.
+   */
+  const editsOf = (sessionId: string, decided: PlanRow, approved: boolean): PlanEdits | null => {
+    if (decided.author !== 'user') return null;
+    const agents = selectAgentsBefore.get(sessionId, decided.version) as unknown as PlanRow;
+    const edits: PlanEdits = { from: agents.version, diff: lineDiff(agents.body, decided.body), written: false, problem: null };
+    if (!approved || decided.path === null) return edits;
+    const worktree = options.worktree(sessionId);
+    const problem =
+      worktree === undefined || !isInside(realPath(worktree), decided.path)
+        ? 'the file is outside your worktree, so it is not written there'
+        : (whyNotWritable(decided.path) ?? whyChanged(decided.path, agents.body));
+    if (problem !== undefined) return { ...edits, problem };
+    try {
+      writeWhole(decided.path, decided.body, statSync(decided.path).mode);
+      options.wrote?.(sessionId, decided.path);
+      return { ...edits, written: true };
+    } catch (error) {
+      return { ...edits, problem: `could not write the file: ${(error as Error).message}` };
+    }
+  };
+
+  /** The agent's wait on its plan `planId`, while it still waits on it. */
+  const waitingOn = (sessionId: string, planId: string): Waiting => {
+    const entry = waiting.get(sessionId);
+    if (entry !== undefined && entry.planId === planId) return entry;
+    const row = selectPlan.get(planId) as PlanRow | undefined;
+    if (row?.outcome === 'edited') {
+      const edit = selectLatest.get(sessionId) as unknown as PlanRow;
+      throw invalidParams(`you edited it: decide v${edit.version}, your version`);
+    }
+    throw invalidParams(row?.outcome != null ? `that plan was decided already (${row.outcome})` : 'the agent no longer waits on that plan');
+  };
 
   /** Records how the plan ended, and says so as its latest. */
   const recordDecision = (sessionId: string, planId: string, decision: PlanDecision) => {
@@ -253,23 +342,24 @@ export function createAskHost(options: AskHostOptions): AskHost {
     presentPlan(sessionId, spec, signal) {
       checkFree(sessionId);
       const title = text(spec.title, 'title', MAX_PLAN_TITLE_LENGTH);
-      if (spec.body.trim() === '') throw invalidParams('the plan must not be empty');
-      if (spec.body.length > MAX_PLAN_LENGTH) throw invalidParams(`the plan must be at most ${MAX_PLAN_LENGTH} characters; it has ${spec.body.length}`);
+      const body = planBody(spec.body);
       const ms = waitMs(spec.timeoutMs, DEFAULT_PLAN_WAIT_MS);
       const id = randomUUID();
       const version = (latestPlan(sessionId)?.version ?? 0) + 1;
-      insertPlan.run(id, sessionId, version, title, spec.format, spec.body, now(), new Date(clock.now() + ms).toISOString());
+      insertPlan.run(id, sessionId, version, title, spec.format, body, now(), new Date(clock.now() + ms).toISOString(), 'agent', spec.path ?? null);
       latest.delete(sessionId);
-      return hold(sessionId, { ask: null, planId: id }, ms, signal, (how): PlanResult => {
-        const decision: PlanDecision =
+      return hold(sessionId, { ask: null, planId: id }, ms, signal, (how, wait): PlanResult => {
+        const decision: PlanEnd =
           how === null || how === 'timed-out'
             ? { outcome: how === null ? 'withdrawn' : 'timed-out', comments: '', decidedAt: now() }
             : 'decision' in how
               ? { outcome: how.decision, comments: how.comments, decidedAt: now() }
               : { outcome: 'withdrawn', comments: '', decidedAt: now() };
-        recordDecision(sessionId, id, decision);
+        // The user's edits made later versions: the decision is on the latest.
+        const decided = selectPlan.get(wait.planId!) as unknown as PlanRow;
+        recordDecision(sessionId, decided.id, decision);
         if (how === null) throw stoppedWaiting();
-        return { version, decision };
+        return { version: decided.version, decision, edits: editsOf(sessionId, decided, decision.outcome === 'approved') };
       });
     },
 
@@ -297,17 +387,27 @@ export function createAskHost(options: AskHostOptions): AskHost {
       if (!ask.onBoard) throw invalidParams('that question is not on the board: it is answered in the inbox');
       if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) throw invalidParams('at must be a point: finite x and y');
       entry.ask = { ...ask, at: { x: at.x, y: at.y } };
-      placed(sessionId);
+      touched(sessionId);
     },
 
     decide(sessionId, planId, outcome, comments) {
-      const entry = waiting.get(sessionId);
-      if (entry === undefined || entry.planId !== planId) {
-        const row = selectPlan.get(planId) as PlanRow | undefined;
-        throw invalidParams(row?.outcome != null ? `that plan was decided already (${row.outcome})` : 'the agent no longer waits on that plan');
-      }
+      const entry = waitingOn(sessionId, planId);
       if (comments.length > MAX_REPLY_LENGTH) throw invalidParams(`comments must be at most ${MAX_REPLY_LENGTH} characters`);
       entry.settle({ decision: outcome, comments: comments.trim() });
+      return latestPlan(sessionId)!;
+    },
+
+    edit(sessionId, planId, body) {
+      const entry = waitingOn(sessionId, planId);
+      const plan = selectPlan.get(planId) as unknown as PlanRow;
+      if (plan.format !== 'markdown') throw invalidParams('an HTML plan is view-only: say what to change in your comments');
+      if (planBody(body) === plan.body) throw invalidParams(`nothing changed: it is v${plan.version} as it was`);
+      const id = randomUUID();
+      insertPlan.run(id, sessionId, plan.version + 1, plan.title, plan.format, body, now(), plan.expires_at, 'user', plan.path);
+      decidePlan.run('edited', '', now(), planId);
+      entry.planId = id;
+      latest.delete(sessionId);
+      touched(sessionId);
       return latestPlan(sessionId)!;
     },
 
@@ -331,7 +431,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
       };
       /**
        * The live orchestrator that started the agent, which its questions and plans go to instead of the user; else
-       * undefined. Never the board master (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
+       * undefined. Never the Captain (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
        */
       const leadOf = (sessionId: string): Agent | undefined => {
         const spawnedBy = sources.agents.get(sessionId)?.spawnedBy;
@@ -390,16 +490,29 @@ export function createAskHost(options: AskHostOptions): AskHost {
         'board.presentPlan': (params, connection) => {
           const p = paramsObject(params);
           const sessionId = asker(p, connection);
-          const spec: PlanSpec = { title: stringParam(p, 'title'), body: stringParam(p, 'body'), format: oneOf(p, 'format', PLAN_FORMATS), timeoutMs: timeout(p) };
+          const path = optionalStringParam(p, 'path');
+          if (path !== undefined && !isAbsolute(path)) throw invalidParams('the path must be absolute');
+          const spec: PlanSpec = {
+            title: stringParam(p, 'title'),
+            body: stringParam(p, 'body'),
+            format: oneOf(p, 'format', PLAN_FORMATS),
+            ...(path === undefined ? {} : { path: realPath(path) }),
+            timeoutMs: timeout(p),
+          };
           const lead = leadOf(sessionId);
           // Its plan is written where its orchestrator reads it: never into a folder of the user's it was resumed in.
-          if (lead === undefined || !sources.agents.get(sessionId)!.ownsWorktree) return host.presentPlan(sessionId, spec, closed(connection));
+          if (lead === undefined || !sources.agents.get(sessionId)!.ownsWorktree) {
+            const waited = host.presentPlan(sessionId, spec, closed(connection));
+            if (optionalBooleanParam(p, 'onBoard') === true && options.addCard !== undefined) {
+              options.addCard(sessionId).catch((error: unknown) => options.log?.(`could not put the plan card on the board: ${(error as Error).message}`));
+            }
+            return waited;
+          }
           const title = text(spec.title, 'title', MAX_PLAN_TITLE_LENGTH);
-          if (spec.body.trim() === '') throw invalidParams('the plan must not be empty');
-          if (spec.body.length > MAX_PLAN_LENGTH) throw invalidParams(`the plan must be at most ${MAX_PLAN_LENGTH} characters; it has ${spec.body.length}`);
-          const path = CREW_PLAN_PATH[spec.format];
-          writeForLead(sessionId, path, spec.body);
-          return sendToLead(sessionId, lead, `plan to review, in ${path}: ${title}`);
+          planBody(spec.body);
+          const crewPath = CREW_PLAN_PATH[spec.format];
+          writeForLead(sessionId, crewPath, spec.body);
+          return sendToLead(sessionId, lead, `plan to review, in ${crewPath}: ${title}`);
         },
         'ask.answer': (params) => {
           const p = paramsObject(params);
@@ -418,6 +531,10 @@ export function createAskHost(options: AskHostOptions): AskHost {
           const p = paramsObject(params);
           const comments = p.comments === undefined ? '' : stringParam(p, 'comments');
           return host.decide(sessionOf(p), stringParam(p, 'planId'), oneOf(p, 'outcome', PLAN_OUTCOMES), comments);
+        },
+        'plan.edit': (params) => {
+          const p = paramsObject(params);
+          return host.edit(sessionOf(p), stringParam(p, 'planId'), stringParam(p, 'body'));
         },
       };
     },

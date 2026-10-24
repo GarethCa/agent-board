@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonClient, DaemonLink } from '@agent-board/daemon/client';
 import { SESSION_IPC } from '../preload/api';
-import { revealFolder } from './reveal-folder';
+import { revealFile, revealFolder } from './reveal-folder';
 import { registerSessionIpc } from './sessions';
 
 const shell = vi.hoisted(() => ({ showItemInFolder: vi.fn(), openPath: vi.fn() }));
@@ -33,6 +33,26 @@ describe('revealFolder', () => {
     expect(() => revealFolder('relative/dir')).toThrow('not a folder');
     expect(() => revealFolder(file)).toThrow('not a folder');
     expect(() => revealFolder(join(dir, 'missing'))).toThrow();
+    expect(shell.showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('revealFile', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reveals a file selected in its folder and never opens it', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'reveal-')), 'shot.png');
+    writeFileSync(file, '');
+    revealFile(file);
+    expect(shell.showItemInFolder).toHaveBeenCalledWith(file);
+    expect(shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it('refuses a relative path, a folder and a missing path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reveal-'));
+    expect(() => revealFile('relative/file.txt')).toThrow('not a file');
+    expect(() => revealFile(dir)).toThrow('not a file');
+    expect(() => revealFile(join(dir, 'missing'))).toThrow();
     expect(shell.showItemInFolder).not.toHaveBeenCalled();
   });
 });

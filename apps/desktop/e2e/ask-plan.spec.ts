@@ -1,6 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { launch, screen, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -28,6 +29,9 @@ async function spawn(page: Page, prompt: string): Promise<Agent> {
   const after = await page.evaluate(() => window.agentBoard.agents.list());
   return after.find((agent) => !before.some((known) => known.sessionId === agent.sessionId))!;
 }
+
+/** The agent as the daemon has it now. */
+const latest = (page: Page, agent: Agent) => page.evaluate((sessionId) => window.agentBoard.agents.list().then((all) => all.find((each) => each.sessionId === sessionId)!), agent.sessionId);
 
 const notifications = (app: ElectronApplication) => app.evaluate(() => (globalThis.agentBoardNotifications ?? []).map(({ title, body }) => ({ title, body })));
 
@@ -220,6 +224,95 @@ test('a plan opens in a Plan tab from the inbox, changes requested there come ba
     await expect(planView(window).getByTestId('plan-version').first()).toContainText('Approved');
     await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
     await expect(screen(window)).toContainText('The user approved plan v2. Go ahead with it.');
+  });
+});
+
+test('a plan shown on the board is a card beside its agent, decided from Review plan, and an edit in its Plan tab is approved as the user’s version', async () => {
+  await withApp(async (window, app) => {
+    const agent = await spawn(window, 'Plan doc on the board: docs/migration.md');
+
+    const card = window.getByTestId('plan-card');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Zone id migration');
+    await expect(card).toContainText('migration.md');
+    await expect(card.getByTestId('plan-card-stamp')).toHaveText('waiting on you');
+    await expect(card.getByTestId('plan-card-meta')).toHaveText('v1');
+    const told = { title: `${agent.name} has a plan to review`, body: 'Zone id migration · v1' };
+    await expect.poll(() => notifications(app)).toContainEqual(told);
+
+    // Review plan opens the inbox's decision beside the card; the text is edited only in the Plan tab.
+    await card.getByTestId('plan-card-review-button').click();
+    const review = window.getByTestId('plan-card-review');
+    await expect(review.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toHaveText('Approve');
+    await review.getByRole('button', { name: /Edit in the Plan tab/ }).click();
+    await expect(planView(window)).toBeVisible();
+
+    await planView(window).getByRole('button', { name: 'Edit' }).click();
+    const source = planView(window).getByLabel('Markdown of Zone id migration');
+    await expect(source).toBeFocused();
+    const decision = planView(window).getByTestId('plan-decision');
+    // Edit alone holds nothing; a change not yet saved holds every decision on the plan, the inbox's too.
+    await expect(decision.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeEnabled();
+    await source.fill('# Zone id migration\n\n## Steps\n\n- Add zone_id, nullable\n- Backfill from the board file, with a down step\n- Make it NOT NULL\n');
+    await expect(planView(window).getByTestId('plan-edit-hint')).toContainText('1 change');
+    await expect(decision.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeDisabled();
+    await openInbox(window);
+    await expect(item(window, agent).getByTestId('plan-held')).toBeVisible();
+    await expect(item(window, agent).getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeDisabled();
+    await source.press('ControlOrMeta+s');
+
+    // Saved as v2, the user's, which Approve now approves with their edits.
+    await expect(planView(window).getByTestId('plan-version')).toHaveCount(2);
+    await expect(planView(window).getByTestId('plan-version').first()).toContainText('by you');
+    // The tab lands on the version just saved.
+    await expect(planView(window).getByTestId('plan-version').first()).toHaveAttribute('aria-current', 'true');
+    await expect(item(window, agent).getByTestId('plan-held')).toHaveCount(0);
+    await expect(planView(window).getByTestId('plan-version').last()).toContainText('Edited');
+    await expect(decision.getByRole('button', { name: `Approve plan v2 for ${agent.name}` })).toHaveText('Approve with my edits');
+    await expect(decision.getByTestId('plan-mine')).toContainText('Approving approves your version (v2)');
+    // The user's own edit is no new plan to tell them of.
+    expect((await notifications(app)).filter((each) => each.title === told.title)).toEqual([told]);
+
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(card.getByTestId('plan-card-meta')).toHaveText('v2 · by you');
+    await card.getByTestId('plan-card-review-button').click();
+    await review.getByRole('button', { name: `Approve plan v2 for ${agent.name}` }).click();
+    await expect(card.getByTestId('plan-card-stamp')).toHaveText('✓ approved');
+    await expect(card.getByTestId('plan-card-review-button')).toHaveCount(0);
+
+    expect(readFileSync(join((await latest(window, agent)).worktree, 'docs/migration.md'), 'utf8')).toContain('- Backfill from the board file, with a down step');
+    await card.dispatchEvent('dblclick');
+    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await expect(screen(window)).toContainText('The user approved plan v2, their edit of your v1.');
+  });
+});
+
+test('an unsaved edit in a popped-out Plan tab holds the decision on the board’s plan card until it is cancelled', async () => {
+  await withApp(async (window, app) => {
+    const agent = await spawn(window, 'Plan doc on the board: docs/migration.md');
+    const card = window.getByTestId('plan-card');
+    await expect(card.getByTestId('plan-card-stamp')).toHaveText('waiting on you');
+    await card.getByTestId('plan-card-review-button').click();
+    await window.getByTestId('plan-card-review').getByRole('button', { name: /Edit in the Plan tab/ }).click();
+    await expect(planView(window)).toBeVisible();
+
+    // The Plan tab goes to a window of its own, and the draft is made there.
+    const [popped] = await Promise.all([app.waitForEvent('window'), sessionWindow(window).getByRole('button', { name: 'Pop out session window' }).click()]);
+    const tab = planView(popped);
+    await tab.getByRole('button', { name: 'Edit' }).click();
+    await tab.getByLabel('Markdown of Zone id migration').fill('# Zone id migration\n\n## Steps\n\n- Add zone_id\n');
+    await expect(tab.getByTestId('plan-edit-hint')).toContainText('change');
+
+    // The board's card, in another window, can't decide past it.
+    await card.getByTestId('plan-card-review-button').click();
+    const review = window.getByTestId('plan-card-review');
+    await expect(review.getByTestId('plan-held')).toBeVisible();
+    await expect(review.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeDisabled();
+
+    // Cancelled there, the card decides again.
+    await tab.getByRole('button', { name: 'Cancel' }).click();
+    await expect(review.getByTestId('plan-held')).toHaveCount(0);
+    await expect(review.getByRole('button', { name: `Approve plan v1 for ${agent.name}` })).toBeEnabled();
   });
 });
 

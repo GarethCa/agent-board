@@ -147,6 +147,7 @@ export const SESSION_IPC = {
   kill: 'session:kill',
   cwd: 'session:cwd',
   revealFolder: 'session:revealFolder',
+  revealFile: 'session:revealFile',
   /** main → renderer: `(attachId, SessionStreamEvent)` for an attachment. */
   event: 'session:event',
   /** main → renderer: `(SessionExitedEvent)` for every session that ends. */
@@ -169,6 +170,8 @@ export interface SessionsApi {
   cwd(sessionId: string): Promise<string>;
   /** Reveals a folder in the OS file manager (Finder), selected in its parent. Never opens it: a `.app` would launch. */
   revealFolder(path: string): Promise<void>;
+  /** Reveals a file in the OS file manager, selected in its folder; never opens it. */
+  revealFile(path: string): Promise<void>;
   /** Calls `listener` whenever any session ends. Returns the unsubscribe function. */
   onExited(listener: (event: SessionExitedEvent) => void): () => void;
 }
@@ -483,6 +486,10 @@ export const ASK_IPC = {
   place: 'ask:place',
   plans: 'plan:list',
   decide: 'plan:decide',
+  editPlan: 'plan:edit',
+  markUnsavedEdit: 'plan:markUnsavedEdit',
+  unsavedEdits: 'plan:unsavedEdits',
+  unsavedEditsChanged: 'plan:unsavedEditsChanged',
   readDoc: 'doc:read',
   saveDoc: 'doc:save',
   commentDoc: 'doc:comment',
@@ -498,6 +505,14 @@ export interface AsksApi {
   plans(sessionId: string): Promise<Plan[]>;
   /** Decides the agent's plan `planId` while it waits on it. */
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): Promise<PlanSummary>;
+  /** Saves `body` as the user's version of the Markdown plan `planId` the agent waits on: its next version, decided instead. */
+  editPlan(sessionId: string, planId: string, body: string): Promise<PlanSummary>;
+  /** Says whether this window's Plan tab has a changed, unsaved draft of the agent's plan `planId`, for every window to hold it. */
+  markUnsavedEdit(sessionId: string, planId: string, changed: boolean): Promise<void>;
+  /** The plans with an unsaved edit in any window, as `planEditKey`s. */
+  unsavedEdits(): Promise<string[]>;
+  /** Calls `listener` with every plan held whenever that changes. Returns the unsubscribe function. */
+  onUnsavedEditsChanged(listener: (keys: string[]) => void): () => void;
   /** A document an agent showed, with its file's text now. */
   readDoc(documentId: string): Promise<DocumentContent>;
   /**
@@ -772,7 +787,7 @@ export interface AgentsApi {
   captureSelection(rect: { x: number; y: number; width: number; height: number }, width: number): Promise<string>;
   /** Ask Claude about a selection: starts an agent with its picture and diagram (`selection.ask`). */
   askSelection(params: AskSelectionParams): Promise<Agent>;
-  /** The board master: the board's own, or a new one started at board scope (`master.start`, ADR-0019). */
+  /** The Captain: the board's own, or a new one started at board scope (`master.start`, ADR-0019). */
   startMaster(params: StartMasterParams): Promise<Agent>;
   /** Its conversation from its transcript, from entry `since` of `generation` on. */
   transcript(sessionId: string, since: number, generation?: number): Promise<TranscriptChunk>;

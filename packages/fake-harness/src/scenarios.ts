@@ -12,6 +12,13 @@ export function isScenario(name: string): name is FakeScenario {
 
 type Script = (session: FakeSession, prompt: string) => Promise<void>;
 
+/** `text` single-quoted for the shell, a quote in it closed, escaped and opened again. */
+const shellQuoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
+
+/** A shell command writing `text` to `path`, making its folder: printf's %b turns each \n back into a line break. */
+const writeFileCommand = (path: string, text: string) =>
+  `mkdir -p "$(dirname ${shellQuoted(path)})" && printf '%b' ${shellQuoted(text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n'))} > ${shellQuoted(path)}`;
+
 /** The `review` scenario's doc for round 1, in the format a reviewer's prompt asks for. */
 const FIRST_REVIEW = [
   '# Review of the work so far',
@@ -291,7 +298,10 @@ const scripts: Record<FakeScenario, Script> = {
    * `window.open`) and the app, and says in its title what it could. `Plan file: <path>` presents the file at `<path>`.
    * `Flag: <reason>` asks for a look with `needs_you` and ends its turn, nothing waiting. `Doc: <path>` writes a short
    * release plan in Markdown to `<path>` (an `.html` path, a page) and shows it with `show_doc`; `Doc on the board:
-   * <path>` shows it as a card on the board too. Nothing waits on either.
+   * <path>` shows it as a card on the board too. Nothing waits on either. `Plan doc on the board: <path>` writes a
+   * migration plan in Markdown to `<path>` and shows it with `show_doc` as a plan with its card on the board, waiting
+   * for the decision. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
+   * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`.
    */
   async 'ask-plan'(session, prompt) {
     await session.submit(prompt);
@@ -314,15 +324,28 @@ const scripts: Record<FakeScenario, Script> = {
     }
     const flag = /^Flag: (.*)/.exec(prompt)?.[1];
     if (flag !== undefined) return say(await session.callMcpTool('agent-board', 'needs_you', { reason: flag }));
-    const doc = /^Doc( on the board)?: (.*)/.exec(prompt);
+    const doc = /^(?:Doc|(Pins))( on the board)?: (.*)/.exec(prompt);
     if (doc !== null) {
-      const path = doc[2]!;
+      const [pins, onBoard, path] = [doc[1], doc[2], doc[3]!];
       const text = /\.html?$/.test(path)
         ? '<html><head><title>Cache benchmark</title></head><body><h1>Cache benchmark</h1><p>SQLite 41 ms.</p></body></html>\n'
-        : '# Release 1.4 plan\n\n## Order\nMerge the flake fix first, then the pin bump.\n';
-      // printf's %b turns each \n back into a line break; the text has no quote to escape.
-      await session.runShell(`mkdir -p "$(dirname '${path}')" && printf '%b' '${text.replaceAll('\n', '\\n')}' > '${path}'`);
-      return say(await session.callMcpTool('agent-board', 'show_doc', { path, ...(doc[1] === undefined ? {} : { on_board: true }) }));
+        : '# Release 1.4 plan\n\n## Order\nMerge the flake fix first, then the pin bump.\n' +
+          // A long page, for a card that is dragged tall enough to show more of it.
+          (/long/.test(path) ? Array.from({ length: 14 }, (_, at) => `- Step ${at + 1}: check the release gate\n`).join('') : '');
+      await session.runShell(writeFileCommand(path, text));
+      const shown = await session.callMcpTool('agent-board', 'show_doc', { path, ...(onBoard === undefined ? {} : { on_board: true }) });
+      if (pins === undefined) return say(shown);
+      await session.runShell(`printf 'png' > "$(dirname '${path}')/shot.png"`);
+      await session.callMcpTool('agent-board', 'pin', { path, label: 'Report' });
+      await session.callMcpTool('agent-board', 'pin', { path: path.replace(/[^/]*$/, 'shot.png') });
+      await session.callMcpTool('agent-board', 'pin', { url: 'http://localhost:9/preview' });
+      return say(await session.callMcpTool('agent-board', 'pin', { note: 'Seeded 3 users: ann, bob, cy', label: 'Test logins' }));
+    }
+    const planDoc = /^Plan doc on the board: (.*)/.exec(prompt)?.[1];
+    if (planDoc !== undefined) {
+      const text = '# Zone id migration\n\n## Steps\n\n- Add zone_id, nullable\n- Backfill from the board file\n- Make it NOT NULL\n';
+      await session.runShell(writeFileCommand(planDoc, text));
+      return say(await session.callMcpTool('agent-board', 'show_doc', { path: planDoc, plan: true, on_board: true }));
     }
     const plan = /^Plan: (.*)/.exec(prompt)?.[1];
     if (plan !== undefined) {
@@ -351,11 +374,14 @@ const scripts: Record<FakeScenario, Script> = {
    * its first turn, joins itself to it with an edge carrying a message (`add_edge`) and hands it `<message>` along it,
    * ending on `Wired.`. `Arrange a messy crew` starts workers `impl` and `review` with the CLI, scatters itself and them
    * about its zone (`agent-board move`), joins them with an edge and runs `agent-board arrange`, ending on `Arranged.`.
+   * `Arrange by itself, then start three` turns auto-arrange on and ends its turn; its next prompt starts workers `one`,
+   * `two` and `three` with the CLI, ending on `Started three.`.
+   * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
    * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
    * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
    * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
-   * `Ask permission` plays `permission`; `Ask: …`, `Plan: …` and `Flag: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
@@ -384,6 +410,21 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Two workers started.');
       return session.stop();
     }
+    const crowded = /^Lead a crowded crew: (.*)/.exec(prompt)?.[1];
+    if (crowded !== undefined) {
+      // An implementer with a long name and a role, its orchestrator's line on its tile and a reviewer of it, all while they start.
+      const name = 'Rework the movable sessions follow-up so the dock keeps up';
+      const started = await session.callMcpTool('agent-board', 'new_agent', { prompt: crowded, name, role: 'implementer', model: 'claude-opus-5-5' });
+      const ref = /agent:[0-9a-f]+/.exec(started?.text ?? '')?.[0];
+      if (ref === undefined) {
+        await session.say('I could not start a worker.');
+        return session.stop();
+      }
+      await session.callMcpTool('agent-board', 'set_status', { agent: ref, summary: 'Starting up' });
+      await session.callMcpTool('agent-board', 'new_agent', { prompt: crowded, name: `${name} · review r1`, role: 'reviewer', base: ref });
+      await session.say('A worker and its reviewer started.');
+      return session.stop();
+    }
     const handoff = /^Hand off(?: to (\S+))?( by CLI)?: (.*)/.exec(prompt);
     if (handoff !== null) {
       const [, to, cli, text] = handoff as unknown as [string, string | undefined, string | undefined, string];
@@ -408,6 +449,17 @@ const scripts: Record<FakeScenario, Script> = {
       await session.runShell('agent-board move impl --at 620,420 && agent-board move review --at 40,420 && agent-board move me --at 900,60');
       await session.runShell('agent-board edge add impl review --carries message && agent-board arrange');
       await session.say('Arranged.');
+      return session.stop();
+    }
+    if (prompt === 'Arrange by itself, then start three') {
+      await session.runShell('agent-board arrange --auto on');
+      await session.say('Arranging by itself.');
+      await session.stop();
+      const next = await session.waitForInput();
+      if (next === undefined) return;
+      await session.submit(next);
+      await session.runShell(['one', 'two', 'three'].map((name) => `agent-board new --name ${name} -- 'Stand by'`).join(' && '));
+      await session.say('Started three.');
       return session.stop();
     }
     if (prompt === 'Print your board identity') {
@@ -440,7 +492,7 @@ const scripts: Record<FakeScenario, Script> = {
       return prompt.endsWith('fail') ? session.failTurn('server_error', '500 Internal Server Error') : session.failTurn('rate_limit', '429 Too Many Requests');
     }
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| briefly| on the board)?|Plan|Flag|Doc( on the board)?): /.test(prompt)) return scripts['ask-plan'](session, prompt);
+    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
     await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
     await session.say('Handover written.\nSTATUS: done');

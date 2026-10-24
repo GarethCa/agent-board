@@ -198,18 +198,33 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   if (dark) set('--sticky-other-ink', readable(ink, papers));
   set('--sticky-link', readable(accentFill, papers, 3));
 
-  // Text, connectors and outlines on the desk, and shapes' paper fills with text that reads on each
-  set('--paint-ink', p.text);
-  set('--paint-grey', p.muted);
-  const paints = { red: p.hues.red, orange: p.warn, green: p.ok, blue: p.hues.blue, violet: p.hues.violet };
-  for (const [name, colour] of Object.entries(paints)) set(`--paint-${name}`, readable(colour, [p.desk], 3));
-  const fills = Object.entries({ yellow: p.hues.amber, green: p.ok, blue: p.hues.blue, pink: p.hues.pink }).map(([name, hue]) => {
-    const fill = dark ? mix(hue, p.text, 0.45) : mix(hue, WHITE, 0.22);
+  // The colour slots: text, connectors and outlines on the desk, and shapes' fills, each its slot tinted into the
+  // tile, with the theme's text reading on every one
+  const paints = {
+    accent: p.accent,
+    red: p.hues.red,
+    orange: p.warn,
+    yellow: p.hues.amber,
+    green: p.ok,
+    teal: p.hues.teal,
+    cyan: p.hues.cyan,
+    blue: p.hues.blue,
+    violet: p.hues.violet,
+    pink: p.hues.pink,
+  };
+  const painted = Object.fromEntries(Object.entries(paints).map(([name, colour]) => [name, readable(colour, [p.desk], 3)]));
+  const fills = Object.entries(painted).map(([name, paint]) => {
+    const fill = mix(paint, p.tile, 0.16);
     set(`--shape-fill-${name}`, fill);
     return fill;
   });
-  const shapePapers = [...fills, tokens.get('--sticky-white')!];
-  for (const [name, colour] of Object.entries({ ink, grey: p.muted, ...paints })) set(`--shape-ink-${name}`, readable(colour, shapePapers));
+  set('--paint-ink', readable(p.text, [p.desk, ...fills]));
+  const greyPaint = readable(p.muted, [p.desk], 3);
+  set('--paint-grey', greyPaint);
+  for (const [name, paint] of Object.entries(painted)) set(`--paint-${name}`, paint);
+  // A shape's text on its fill: its slot's paint, nudged to read on every fill, as text may sit on any of them
+  const onFills = [p.tile, ...fills];
+  for (const [name, paint] of Object.entries({ ...painted, ink: p.text, grey: greyPaint })) set(`--shape-ink-${name}`, readable(paint, onFills));
 
   // The session window: the terminal's well, its chrome a step off it, its text and syntax colours reading on both
   const { well, ansi } = p.term;

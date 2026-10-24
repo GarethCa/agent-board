@@ -269,7 +269,7 @@ kbd {
   box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--crew-halo);
 }
 
-/* The board master: a teal edge and halo, and a MASTER badge on its top edge. */
+/* The Captain: a teal edge and halo, and a CAPTAIN badge on its top edge. */
 .hybrid-tile-agent[data-master] {
   border-color: var(--master);
   box-shadow: var(--shadow-tile), 0 0 0 var(--focus-ring-width) var(--master-halo);
@@ -865,7 +865,8 @@ kbd {
 .hybrid-tile-start-error {
   display: -webkit-box;
   flex: 0 1 auto;
-  min-height: 0;
+  /* Never squeezed out by a long name above it: one line at least, the rest clamped. */
+  min-height: calc(var(--font-size-sm) * var(--leading-snug));
   overflow: hidden;
   color: var(--danger);
   font-size: var(--font-size-sm);
@@ -2289,6 +2290,16 @@ kbd {
     animation: none;
     opacity: 0.45;
   }
+}
+
+/* A pinned note's text, under its label: wrapped, in the UI type, up to four lines (the row's title has it all). */
+.details-pin-note {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
 
 .details-hidden {
@@ -3805,7 +3816,7 @@ kbd {
   stroke-dasharray: var(--agent-note-tether-dash);
 }
 
-/* The board master's rail to each zone lead it watches: a tether in its teal. */
+/* The Captain's rail to each zone lead it watches: a tether in its teal. */
 .react-flow__edge-path.master-rail {
   stroke: color-mix(in srgb, var(--master) 60%, transparent);
   stroke-width: var(--connector-width);
@@ -4399,6 +4410,46 @@ kbd {
       transparent calc(50% + 1px)
     ),
     var(--raised);
+}
+
+/* A fill's swatch, ringed in its outline's colour, as a shape filled with it is. */
+.ui-swatch.item-bar-swatch[style*='--swatch-edge'] {
+  border: var(--size-swatch-ring) solid var(--swatch-edge);
+}
+
+/* A fixed colour's swatch: marked with a diamond, as no theme changes it. */
+.item-bar-swatch[data-fixed] {
+  position: relative;
+}
+
+.item-bar-swatch[data-fixed]::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--space-1) * -1);
+  right: calc(var(--space-1) * -1);
+  width: var(--space-2);
+  height: var(--space-2);
+  transform: rotate(45deg);
+  border: var(--size-swatch-ring) solid var(--raised);
+  background: var(--text);
+}
+
+.item-bar-hex-button {
+  font-weight: var(--weight-bold);
+  color: var(--muted);
+}
+
+.item-bar-hex-form {
+  display: grid;
+  grid-template-columns: 8rem auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.item-bar-hex-hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
 }
 
 /* Arming a tool (T, S): the board takes the next click or drag */
@@ -8157,6 +8208,12 @@ tr[data-status='running'] .gate-step-icon {
   content: '';
 }
 
+/* A slim bar keeps its height: only its left and right sides resize. */
+.react-flow__node:has(.doc-card[data-collapsed]) .react-flow__resize-control.top:not(.left):not(.right),
+.react-flow__node:has(.doc-card[data-collapsed]) .react-flow__resize-control.bottom:not(.left):not(.right) {
+  display: none;
+}
+
 .doc-card[data-gone] {
   opacity: 0.7;
 }
@@ -8292,6 +8349,113 @@ tr[data-status='running'] .gate-step-icon {
   --chip-ink: var(--muted);
 
   font-family: var(--font-mono);
+}
+
+/* An agent's plan on the board: a document card with a violet PLAN tag, a stamp of how it stands, its version under
+   its title, and Review plan at its foot while the agent waits, which opens the inbox's decision beside it. */
+.plan-card-type {
+  background: color-mix(in srgb, var(--paint-violet) 16%, transparent);
+  color: var(--paint-violet);
+}
+
+.plan-card-stamp {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--tag);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.plan-card[data-outcome='pending'] .plan-card-stamp {
+  background: color-mix(in srgb, var(--state-waiting) 14%, transparent);
+  color: var(--state-waiting-ink);
+}
+
+.plan-card-stamp[data-tone='approve'] {
+  background: var(--verdict-approve);
+  color: var(--verdict-approve-ink);
+}
+
+.plan-card-stamp[data-tone='changes'] {
+  color: var(--verdict-changes-ink);
+}
+
+.plan-card-stamp[data-tone='failed'] {
+  color: var(--severity-blocker);
+}
+
+.plan-card[data-outcome='rejected'] {
+  opacity: 0.7;
+}
+
+.plan-card[data-outcome='rejected'] .plan-card-title {
+  text-decoration: line-through;
+}
+
+.plan-card-meta {
+  flex: 1;
+  padding: 0 var(--space-2-5);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.plan-card-review-button {
+  flex: none;
+  margin-left: auto;
+}
+
+.plan-card-review-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 320px;
+}
+
+.plan-card-review-head {
+  overflow: hidden;
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-card-edit {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: var(--font-size-2xs);
+  cursor: pointer;
+}
+
+.plan-card-edit:hover {
+  text-decoration: underline;
+}
+
+/* Whose each version is, in the Plan tab's rail: the user's own edits stand out. */
+.plan-version-author {
+  color: var(--muted);
+  font-size: var(--font-size-badge);
+}
+
+.plan-version-author[data-author='user'] {
+  color: var(--agent-note-edited);
+  font-weight: var(--weight-semibold);
+}
+
+.plan-decision-note {
+  margin: 0;
+}
+
+.plan-head .ui-segmented {
+  align-self: center;
+  margin-left: auto;
 }
 
 /* The Document tab: the document read, or in Edit its Markdown beside the live render, with Save under them. */

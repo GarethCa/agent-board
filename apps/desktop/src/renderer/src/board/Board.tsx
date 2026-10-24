@@ -130,6 +130,7 @@ import { SelectionBox, SnapGuides } from './editing/SelectionOverlays';
 import { useAskClaude } from './ask/AskClaude';
 import { SuggestionActionsContext, SuggestionGhosts, useSuggestionCommands } from './ask/SuggestionGhosts';
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
+import { PlanCardsContext, type PlanCards } from './items/PlanNode';
 import { useShownDocuments } from '../doc/use-shown-documents';
 import { agentLine, externalEnded, externalLine, type PendingDelete } from './editing/delete-plan';
 import { useEditing } from './editing/use-editing';
@@ -1012,6 +1013,10 @@ function BoardView() {
       },
       open: (agent, document) => tileActions.openDoc(agent, document),
     }),
+    [agents, tileActions],
+  );
+  const planCards = useMemo<PlanCards>(
+    () => ({ find: (sessionId) => agents.find((each) => each.sessionId === sessionId), open: (agent) => tileActions.openPlan(agent) }),
     [agents, tileActions],
   );
 
@@ -2871,6 +2876,7 @@ function BoardView() {
                       <RenameRequestContext value={renameRequests}>
                         <ItemActionsContext value={itemActions}>
                           <DocumentCardsContext value={documentCards}>
+                          <PlanCardsContext value={planCards}>
                           <ClockBoardContext value={clockBoard}>
                           <SuggestionActionsContext value={suggestionActions}>
                           <LiveRotationsContext value={rotations}>
@@ -3075,6 +3081,7 @@ function BoardView() {
                           </LiveRotationsContext>
                           </SuggestionActionsContext>
                           </ClockBoardContext>
+                          </PlanCardsContext>
                           </DocumentCardsContext>
                         </ItemActionsContext>
                       </RenameRequestContext>

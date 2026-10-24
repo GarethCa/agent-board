@@ -247,6 +247,7 @@ export function SessionBody({
           })
         }
         onOpenSurface={panes && ((surface) => panes.open(surface))}
+        onOpenWeb={panes?.openWeb}
       />
       )}
       {content.kind !== 'tabs' && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
@@ -431,7 +432,18 @@ function SurfaceView({
   }
   if (surface.kind === 'pr') return <PullRequestTab pr={surface.pr} visible={shown && visible} />;
   if (surface.kind === 'gate') return <GateTab sessionId={surface.gate.sessionId} agent={surface.agent} visible={shown && visible} />;
-  if (surface.kind === 'doc') return <DocTab doc={surface.doc} agent={surface.agent} visible={shown && visible} />;
+  if (surface.kind === 'doc') {
+    const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
+    return (
+      <DocTab
+        doc={surface.doc}
+        agent={surface.agent}
+        visible={shown && visible}
+        onFocus={() => paneId !== undefined && panes.focusPane(paneId)}
+        onPaneKey={(key) => paneId !== undefined && panes.paneKey(paneId, key)}
+      />
+    );
+  }
   if (surface.kind === 'plan') {
     const paneId = panes.panes.find((pane) => pane.surfaces.includes(surface))?.id;
     return (

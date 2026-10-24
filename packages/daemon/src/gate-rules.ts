@@ -326,10 +326,15 @@ export function failurePaste(run: GateRun, step: string, log: string): string {
 /**
  * Whether the agent works in its repo's own checkout, with no worktree of its own: on whatever branch is checked out
  * there, usually the default one. It never opens a pull request, merges or pushes (`inCheckoutWhy`), so nothing it does
- * through the app can reach that branch.
+ * through the app can reach that branch. Not an agent in its group's own folder, which is no repo at all.
  */
-export function inRepoCheckout(agent: { ownsWorktree: boolean; worktree: string; repoRoot: string }): boolean {
-  return !agent.ownsWorktree && agent.worktree === agent.repoRoot;
+export function inRepoCheckout(agent: { ownsWorktree: boolean; worktree: string; repoRoot: string; plainFolder: boolean }): boolean {
+  return !agent.ownsWorktree && !agent.plainFolder && agent.worktree === agent.repoRoot;
+}
+
+/** Why an agent in its group's own folder has no gate, pull request or merge: there is no repo. */
+export function noRepoWhy(name: string): string {
+  return `${name} has no repo: it works in its group's own folder, outside git, so it has no gate, pull request or merge.`;
 }
 
 /** Why an agent in the repo's own checkout can't open a pull request or merge one, for the app, the CLI and the MCP tool. */

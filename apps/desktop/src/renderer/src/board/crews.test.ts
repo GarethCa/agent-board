@@ -84,6 +84,16 @@ describe('a crew on the board', () => {
     expect(landingRects(nodes, 'other', boss)).toEqual([{ ...byId(nodes, 'agent:away').position, y: byId(nodes, 'agent:away').position.y - PERCH_ROOM, width, height: height + PERCH_ROOM }]);
   });
 
+  it('takes the crew of an expanded orchestrator along right of it as drawn, never under it', () => {
+    const nodes = laidOut();
+    const open = { ...byId(nodes, 'agent:boss'), width: 960, height: 600 };
+    const landing = { zoneId: 'other', x: 100, y: 200 };
+    expect(crewMoves(nodes, open, landing, []).map(({ move }) => move)).toEqual([
+      { zoneId: 'other', x: 100 + 960 + CREW_GAP, y: 200 },
+      { zoneId: 'other', x: 100 + 960 + CREW_GAP + width + TILE_GAP, y: 200 },
+    ]);
+  });
+
   it('frames no crew loose on the board, nor a member moved off from its crew, so each carries its chip', () => {
     const loose = withTiles(
       [zone('z')],

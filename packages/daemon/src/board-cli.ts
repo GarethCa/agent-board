@@ -1,6 +1,7 @@
 // `agent-board <command>`: the board's command line for agents and people (ADR-0010). Its help is the documentation an
 // agent reads, so it teaches the concepts as well as the commands.
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   activityView,
@@ -31,6 +32,8 @@ import {
   setCrewStatus,
   setOwnStatus,
   recordEntry,
+  pinEntry,
+  unpinEntry,
   flagLine,
   flagOwn,
   openOwnPullRequest,
@@ -46,11 +49,35 @@ import {
 } from './board-ops.ts';
 import { DaemonRpcError } from './client.ts';
 import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
-import { addGroup, addNote, arrangeZone, changeGroup, checkArrange, checkNote, checkPlace, editNote, moveTile, pointOf, removeGroup, removeNote, sizeOf, zoneMap } from './layout-ops.ts';
+import {
+  addGroup,
+  addNote,
+  addShape,
+  arrangeZone,
+  changeGroup,
+  checkArrange,
+  checkConnector,
+  checkNote,
+  checkPlace,
+  checkShape,
+  connectItems,
+  editConnector,
+  editNote,
+  editShape,
+  moveTile,
+  pointOf,
+  removeConnector,
+  removeGroup,
+  removeNote,
+  removeShape,
+  sizeOf,
+  zoneMap,
+} from './layout-ops.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
   BOARD_CALLER_METHODS,
+  RELATIONS,
   CREW_EVENT_KINDS,
   DEFAULT_ACTIVITY_LIMIT,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
@@ -61,6 +88,8 @@ import {
   ORCHESTRATE_SETTING,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
+  MAX_PIN_LABEL,
+  MAX_PIN_NOTE,
   MAX_STATUS_LENGTH,
   ORCHESTRATE_SCOPES,
   ORCHESTRATOR_METHODS,
@@ -92,12 +121,17 @@ CONCEPTS
           message, once the edge's conditions pass. \`connections\` in the MCP, or
           \`show me\`, lists yours.
   item    A sticky note, text, shape, image, link card, issue card or agent note on the board.
+          A shape has text in it; a class's has attributes and methods under its name.
+  connector
+          A line between two things on the board, carrying nothing: a note's arrow, or a
+          diagram's relation (inheritance, composition, ...), with a label on its middle and
+          one by each end (a multiplicity such as 0..*, or a role).
 
 REFS
   Commands name things by ref: <kind>:<start of its id>, as the board lists them
-  (zone:4f2a, agent:9c1e, shell:07bd, edge:e5aa, item:31f0). A whole id works, and so does a
-  unique name, alone or after its kind (fix-tests, zone:web). \`me\` is your own tile. A name
-  that more than one thing has is an error listing them.
+  (zone:4f2a, agent:9c1e, shell:07bd, edge:e5aa, item:31f0, connector:8a2c). A whole id
+  works, and so does a unique name, alone or after its kind (fix-tests, zone:web). \`me\` is
+  your own tile. A name that more than one thing has is an error listing them.
 
 COMMANDS
   identify              Who and where you are: your tile, its zone, your state and status.
@@ -106,7 +140,7 @@ COMMANDS
   agents (or ls)        Every agent: state, status (or task) and zone.
   shells                Every shell tile.
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
-  show <ref>            Everything about one zone, agent, shell, edge or item.
+  show <ref>            Everything about one zone, agent, shell, edge, item or connector.
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
@@ -120,14 +154,18 @@ COMMANDS
   record pr <url> | record doc <path> [--for orchestrator]
                         Put a pull request you opened, or a hand-off doc you wrote, on your
                         sidebar (agents only). See \`record --help\`.
+  pin <path|url> [--label <text>] | pin --note <text> --label <text>
+                        Pin a file, a link or a note you want the user to see on your
+                        sidebar (agents only); \`unpin\` takes it off. See \`pin --help\`.
   handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
                         Hand your finished work to the next agent over your own outgoing
                         edges, once it is ready, and say it is finished. See \`handoff --help\`.
   mcp                   Serve these as MCP tools on stdio, for a harness. Two are MCP tools
                         alone, as they wait on the user longer than a shell command runs:
-                        ask (a question in the user's Needs you inbox) and present_plan (a
-                        plan for them to approve, send back with changes, or reject). An
-                        agent an orchestrator started puts both to that orchestrator instead.
+                        ask (a question in the user's Needs you inbox) and show_doc with plan
+                        (a plan for them to approve, send back with changes, or reject;
+                        present_plan still works). An agent an orchestrator started puts
+                        both to that orchestrator instead.
   rpc <method> [json]   Call a daemon method directly and print its JSON result. In an agent's
                         session, only the reads above, your own status and records (and, for an
                         orchestrator, the orchestrator commands).
@@ -144,7 +182,8 @@ ORCHESTRATING
   \`agent-board help orchestrate\` shows the loop.
 
   new [options] [--] <prompt>
-                        Start an agent with <prompt> as its first message.
+                        Start an agent with <prompt> as its first message. In a group, --repo
+                        <path> picks the repo it works in, task by task.
   send <ref> [--] <message>
                         Send an agent its next message, once its turn has ended.
   wait [<ref>...] [--crew] [--until finished]
@@ -188,6 +227,14 @@ ORCHESTRATING
   note add [--] <text> [--near <ref> [--side <s>]] [--color <c>] [--kind sticky|text]
                         Put a note on the board: --near an agent, in its cluster.
                         \`note edit|remove\` change yours.
+
+  Drawing a diagram, only when asked for one:
+  shape add <kind> [--] <text> [--attribute <line>]... [--method <line>]... [--near <ref>]
+                        Draw a shape with text: a class's attributes and methods under its
+                        name. \`shape edit|remove\` change yours.
+  connect <from ref> <to ref> [--relation <r>] [--label <t>] [--from-label <t>] [--to-label <t>]
+                        Join two items with a connector, from → to as the relation reads.
+                        \`connector edit|remove\` change yours.
 
   Schedules, each a clock on the board:
   schedule add '<cron>' (--to <ref> | --fresh [--role <r>]) [--] <prompt>
@@ -294,8 +341,8 @@ waits. Showing the same file again shows the same document.
 It stays live: write the file again and the user sees the new version. They may edit a Markdown
 document there; their edit is written to the file, and you are told what changed, typed at your
 prompt once your turn is over. An HTML document is view-only (sandboxed, offline), and the user
-may send you comments on it. For a plan to approve, use the MCP tool \`show_doc\` with plan (or
-\`present_plan\`), which waits for the decision.
+may send you comments on it. For a plan to approve, use the MCP tool \`show_doc\` with plan, which
+waits for the decision; with on_board, its plan card goes beside your tile.
 
   --title <text>   What it is, in a line; else its first heading (or page title).
   --board          Also put it on the board, beside your tile.
@@ -345,6 +392,35 @@ delete a record, not edit it.
                         wrote it: do that for what your orchestrator should read.
   --json                Print the record as JSON.`,
   },
+  pin: {
+    usage: 'agent-board pin <path|url> [--label <text>] [--for orchestrator] | pin --note <text> --label <text>',
+    text: `Pins something you want the user to see on your sidebar's Pins, the details beside your
+terminal in your session window: the preview you started, a screenshot, a log, a login to try.
+
+  pin <path>            A file. A Markdown or HTML one opens in a Doc tab; any other is shown
+                        in its folder. A relative path is from where you are.
+  pin <url>             An http or https link, which opens in a web tab.
+  pin --note <text>     A short note (at most ${MAX_PIN_NOTE} characters), shown on the sidebar
+                        under its label.
+
+Pinning the same file, link or note label again replaces it. The user may delete a pin, not
+edit it. \`agent-board unpin <path|url>\`, or \`unpin --label <text>\` for a note, takes one off.
+
+  --label <text>        What the sidebar calls it (at most ${MAX_PIN_LABEL} characters); a note's
+                        names it.
+  --for orchestrator    Pin it on the orchestrator that started you instead, saying you pinned
+                        it.
+  --json                Print the pin as JSON.`,
+  },
+  unpin: {
+    usage: 'agent-board unpin <path|url> [--for orchestrator] | unpin --label <text> [--for orchestrator]',
+    text: `Takes a pin off your sidebar: a file by its path (even once it is gone), a link by its URL,
+or a note by its label. It is gone at once; the user gets no Undo for it.
+
+  --label <text>        The note's label.
+  --for orchestrator    Take it off the orchestrator's sidebar, where you pinned it for it.
+  --json                Print the pin it was as JSON.`,
+  },
   'needs-you': {
     usage: "agent-board needs-you [--via <ref>] [--] <reason> | agent-board needs-you --clear",
     text: `Asks for a look, without a question: nothing waits, and your turn goes on. A turn ending tells
@@ -368,7 +444,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
   mcp: {
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
-show_doc, set_status, needs_you, open_pr, record_pr and record_doc, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
+show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin and unpin, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
 interrupt, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
 add_note, edit_note, remove_note, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
@@ -477,10 +553,12 @@ works in its own worktree and branch, as any agent does.
   new: {
     usage:
       'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--role <role>] ' +
-      '[--branch <branch>] [--base <branch or agent ref>] [--issue <id>] [--file <path>] [--] <prompt>',
+      '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--issue <id>] [--file <path>] [--] <prompt>',
     text: `Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
-branch of its zone's repo, as the user starts one. You must be an orchestrator, a shell, or
-outside agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref.
+branch of its zone's repo, as the user starts one. In a group (a zone with no repo), give it one
+with --repo, else it works in the group's default repo; with neither, in the group's own folder,
+outside git, with no worktree or branch. You must be an orchestrator, a shell, or outside
+agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref.
 
   --zone <ref>       A zone in your scope; your own by default (needed outside agent-board).
   --name <name>      Its tile's name; made from the prompt without.
@@ -494,11 +572,14 @@ outside agent-board: see \`agent-board help orchestrate\`. It prints the new age
                      \`agent-board roles\`), filled in, then <prompt>; a name with neither starts
                      with <prompt> alone. A reviewer works on a detached checkout of --base,
                      the branch it reviews, with no branch of its own.
+  --repo <path>      In a group, the repo (or a folder in one) to cut its worktree from, for
+                     this task. Refused in a zone bound to a repo, whose agents work in it.
   --no-template      Start it without its role's template: its first message is exactly <prompt>
                      (and the issue, if --issue). For when you write the whole prompt.
   --branch <name>    Its new branch; made from its name without. Not for a reviewer.
   --base <b>         The branch to cut it from, or an agent's ref (agent:9c1e, agent:impl) for
                      that agent's branch, as for a reviewer of its work; the repo's HEAD without.
+                     In a group, an agent's ref takes its repo too, unless --repo names one.
                      Refused when its project config (.claude, .mcp.json, .codex) differs
                      from HEAD's.
   --issue <id>       An issue in the zone's tracker: it comes first in the prompt.
@@ -807,7 +888,7 @@ need not call arrange; --auto off stops it.
     usage:
       'agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | ' +
       'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | ' +
-      'zone map [<ref>] [--boxes]',
+      'zone map [<ref>] [--boxes] [--sections]',
     text: `Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
 
@@ -831,7 +912,10 @@ each other, the widest gap in a lane (in slots), and the tiles off the grid or o
 lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
 prints it after every arrange. --boxes draws the zone in characters instead, about one to
 40 px, a key on each tile and note and a legend below: overlaps (#) and gaps show where they
-really are, whatever the layout, at about three times the length.
+really are, whatever the layout, at about three times the length. A zone with a diagram ends
+with it in short: each shape's kind, text and how many attributes and methods it has, and each
+connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
+too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -839,6 +923,7 @@ really are, whatever the layout, at about three times the length.
   --at <x>,<y>     Where its top-left goes on the board.
   --size <w>,<h>   Its size: 720,480 by default.
   --boxes          zone map: draw the zone as boxes.
+  --sections       zone map: list a diagram's class members, not only their counts.
   --json           Print the zone (or map) as JSON.`,
   },
   note: {
@@ -867,10 +952,68 @@ it yours again. \`note remove\` removes such a link card too.
   --kind <k>       sticky or text. From an agent, a note with no --kind is an agent note and
                    --kind sticky makes a signed sticky; elsewhere sticky is the default.
   --color <c>      A sticky note's yellow, orange, pink, violet, blue, green, grey or white;
-                   text's ink, grey, red, orange, green, blue or violet; or #rrggbb.
+                   text's accent, ink, grey, red, orange, yellow, green, teal, cyan, blue,
+                   violet or pink, which follow the theme; or #rrggbb, which doesn't.
   --to, --at, --near, --side
                    Where, as for \`agent-board move\`.
   --json           Print the note as JSON.`,
+  },
+  shape: {
+    usage:
+      'agent-board shape add <kind> [--text <text> | [--] <text>] [--attribute <line>]... [--method <line>]... [--fill <f>] [--to <zone ref>] ' +
+      '[--at <x>,<y>] [--near <ref> [--side <s>]] | shape edit <ref> [--kind <kind>] [--text <text>] [--attribute <line>]... [--method <line>]... ' +
+      '[--fill <f>] | shape remove <ref>',
+    text: `Shapes for an orchestrator (\`agent-board help orchestrate\`) to draw a diagram with, marked as made
+by you. Draw only when the user asks for a diagram. \`shape add\` puts a shape of <kind> with <text> in it
+in your zone (or --to's), at its first free spot, or exactly at --at or beside --near (another
+shape, to lay the diagram out), what is there moving aside as for \`agent-board move\`. It is
+sized for its text, and the board grows it taller if it needs more.
+
+A class or interface-box has sections under its name: give each attribute with --attribute and
+each method with --method, in order, one line each (\`+ id: UUID\`, \`+ total(): Money\`). They are
+set in the mono font. Another kind has no sections, and refuses them.
+
+\`shape edit\` changes only what it is given: --attribute or --method replaces that whole section.
+It and \`shape remove\` change only a shape you, or an agent you started, drew; in a shell, or
+outside agent-board, any shape. Removing a shape removes every connector on it. \`agent-board show\`
+prints a shape's text, sections and connectors; \`agent-board zone map\` sums up a zone's diagram.
+
+  <kind>           rectangle, rounded, ellipse, diamond, terminator, database, queue, cloud,
+                   server, service, user, note, class, interface-box, component, package,
+                   actor, use-case, state, ... (\`shape edit\` takes it as --kind)
+  --text <text>    Its text: a class's name (or give it after --).
+  --attribute <line>, --method <line>
+                   A line of a class's (or interface-box's) attributes or methods; repeat it.
+  --fill <f>       tile (the default), accent, yellow, green, teal, cyan, blue, violet, pink,
+                   red or orange, which follow the theme; #rrggbb, which doesn't; or none.
+  --to, --at, --near, --side
+                   Where, as for \`agent-board move\`.
+  --json           Print the shape as JSON.`,
+  },
+  connect: {
+    usage: 'agent-board connect <from ref> <to ref> [--relation <r>] [--style straight|elbow|curved] [--label <t>] [--from-label <t>] [--to-label <t>]',
+    text: `Joins two items on the board (shapes, notes, cards) with a connector, marked as made by you:
+for an orchestrator (\`agent-board help orchestrate\`) drawing a diagram, only when the user asks for
+one. The line goes from <from ref> to <to ref> as the relation reads, and its sides face each
+other. Both items must be in zones you may lay out.
+
+  --relation <r>   Its ends and dash, from → to:
+${RELATIONS.map((relation) => `                     ${relation.id.padEnd(12)} ${relation.reads ?? (relation.id === 'directed' ? 'an arrow at to (the default)' : 'a plain line')}`).join('\n')}
+  --style <s>      straight, elbow or curved (the default).
+  --label <t>      The text on its middle.
+  --from-label <t>, --to-label <t>
+                   The text by its from or to end: a multiplicity (1, 0..*) or a role.
+  --json           Print the connector as JSON.
+
+\`connector edit\` and \`connector remove\` change it.`,
+  },
+  connector: {
+    usage:
+      'agent-board connector edit <ref> [--relation <r>] [--style straight|elbow|curved] [--label <t>] [--from-label <t>] [--to-label <t>] | connector remove <ref>',
+    text: `Changes a connector you, or an agent you started, made with \`agent-board connect\`; in a shell, or
+outside agent-board, any connector. \`connector edit\` changes only what it is given, with the
+options of \`connect\` (an empty label clears it). \`connector remove\` deletes it. \`agent-board show
+<ref>\` prints its ends, relation and labels.`,
   },
   schedule: {
     usage:
@@ -1008,6 +1151,7 @@ const OPTIONS = {
   model: { type: 'string' },
   role: { type: 'string' },
   'no-template': { type: 'boolean' },
+  repo: { type: 'string' },
   branch: { type: 'string' },
   base: { type: 'string' },
   issue: { type: 'string' },
@@ -1040,10 +1184,12 @@ const OPTIONS = {
   layout: { type: 'string' },
   auto: { type: 'string' },
   boxes: { type: 'boolean' },
+  sections: { type: 'boolean' },
   group: { type: 'boolean' },
   color: { type: 'string' },
   size: { type: 'string' },
   text: { type: 'string' },
+  note: { type: 'string' },
   board: { type: 'boolean' },
   kind: { type: 'string' },
   via: { type: 'string' },
@@ -1051,6 +1197,14 @@ const OPTIONS = {
   keep: { type: 'boolean' },
   result: { type: 'string' },
   'handoff-to': { type: 'string' },
+  attribute: { type: 'string', multiple: true },
+  method: { type: 'string', multiple: true },
+  fill: { type: 'string' },
+  relation: { type: 'string' },
+  style: { type: 'string' },
+  label: { type: 'string' },
+  'from-label': { type: 'string' },
+  'to-label': { type: 'string' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -1059,9 +1213,11 @@ type Option = keyof typeof OPTIONS;
 export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   status: ['progress', 'done', 'agent'],
   record: ['title', 'for'],
+  pin: ['note', 'label', 'for'],
+  unpin: ['label', 'for'],
   'needs-you': ['via', 'clear'],
   doc: ['title', 'board'],
-  new: ['zone', 'name', 'harness', 'model', 'role', 'no-template', 'branch', 'base', 'issue', 'file'],
+  new: ['zone', 'name', 'harness', 'model', 'role', 'no-template', 'repo', 'branch', 'base', 'issue', 'file'],
   roles: ['file', 'zone'],
   send: ['file'],
   wait: ['until', 'any', 'timeout', 'crew'],
@@ -1074,8 +1230,11 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   edge: ['carries', 'path', 'trigger', 'condition'],
   move: ['to', 'at', 'near', 'side'],
   arrange: ['by', 'layout', 'auto'],
-  zone: ['group', 'name', 'color', 'at', 'size', 'boxes'],
+  zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections'],
   note: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'],
+  shape: ['text', 'attribute', 'method', 'fill', 'kind', 'to', 'at', 'near', 'side'],
+  connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
+  connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
   schedule: ['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
 };
 
@@ -1133,6 +1292,12 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       throw new UsageError((error as Error).message);
     }
   };
+  /** `connect`'s and `connector edit`'s options, checked. */
+  const connectorOptions = () => {
+    const options = { relation: string('relation'), style: string('style'), label: string('label'), fromLabel: string('from-label'), toLabel: string('to-label') };
+    checked(() => checkConnector(options));
+    return options;
+  };
   const wholeNumber = (option: Option, max: number) => {
     const raw = string(option);
     if (raw === undefined) return undefined;
@@ -1179,6 +1344,24 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         kind === 'pr' ? { kind, url: target, ...(title === undefined ? {} : { title }) } : { kind, path: target, forOrchestrator: forWhom === 'orchestrator' };
       return async (session) => print(await recordEntry(session, params, process.cwd()));
     }
+    case 'pin':
+    case 'unpin': {
+      const [target, ...rest] = positionals;
+      const note = string('note');
+      const label = string('label');
+      const forWhom = string('for');
+      if (forWhom !== undefined && forWhom !== 'orchestrator') throw new UsageError('--for takes only orchestrator');
+      const forOrchestrator = forWhom === 'orchestrator';
+      const named = target === undefined ? {} : /^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? { url: target } : { path: target };
+      if (command === 'unpin') {
+        if (rest.length > 0 || (target === undefined) === (label === undefined)) throw new UsageError('unpin a file, a link or --label <note label>');
+        return async (session) => print(await unpinEntry(session, { ...named, ...(label === undefined ? {} : { label }), forOrchestrator }, process.cwd()));
+      }
+      if (rest.length > 0 || (target === undefined) === (note === undefined)) throw new UsageError('pin a file, a link or --note <text>');
+      if (note !== undefined && label === undefined) throw new UsageError('a note needs --label, which names it on the sidebar');
+      const params = { kind: 'pin' as const, ...named, ...(note === undefined ? {} : { note }), ...(label === undefined ? {} : { label }), forOrchestrator };
+      return async (session) => print(await pinEntry(session, params, process.cwd()));
+    }
     case 'status': {
       if (positionals[0] !== 'set') throw new UsageError('the only status command is `status set`');
       const summary = positionals.slice(1).join(' ');
@@ -1211,6 +1394,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'new': {
       const prompt = text(0);
+      const repo = string('repo');
       return async (session) =>
         print(
           await newAgent(session, {
@@ -1221,6 +1405,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
             model: string('model'),
             role: string('role'),
             noTemplate: values['no-template'] === true,
+            repo: repo === undefined ? undefined : resolve(process.cwd(), repo),
             branch: string('branch'),
             base: string('base'),
             issue: string('issue'),
@@ -1379,7 +1564,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'zone': {
       const [sub, ref, ...rest] = positionals;
-      const given = (['group', 'name', 'color', 'at', 'size', 'boxes'] as const).filter((option) => values[option] !== undefined);
+      const given = (['group', 'name', 'color', 'at', 'size', 'boxes', 'sections'] as const).filter((option) => values[option] !== undefined);
       const only = (allowed: readonly Option[]) => {
         const stray = given.find((option) => !allowed.includes(option));
         if (stray !== undefined) throw new UsageError(`--${stray} is not an option of \`zone ${sub}\``);
@@ -1414,9 +1599,9 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeGroup(session, ref));
       }
       if (sub === 'map') {
-        only(['boxes']);
+        only(['boxes', 'sections']);
         if (rest.length > 0) throw new UsageError('give at most one zone ref');
-        return async (session) => print(await zoneMap(session, ref, { boxes: values.boxes === true }));
+        return async (session) => print(await zoneMap(session, ref, { boxes: values.boxes === true, sections: values.sections === true }));
       }
       throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove` and `zone map`');
     }
@@ -1445,6 +1630,61 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeNote(session, rest[0]!));
       }
       throw new UsageError('the note commands are `note add`, `note edit` and `note remove`');
+    }
+    case 'shape': {
+      const [sub, ...rest] = positionals;
+      const shapeOptions = {
+        text: string('text'),
+        attributes: values.attribute as string[] | undefined,
+        methods: values.method as string[] | undefined,
+        fill: string('fill'),
+      };
+      if (sub === 'add') {
+        if (string('kind') !== undefined) throw new UsageError('give the kind as the first word: `shape add class Order`');
+        const [kind, ...words] = rest;
+        if (kind === undefined) throw new UsageError('give the kind of shape, then its text');
+        if (words.length > 0 && shapeOptions.text !== undefined) throw new UsageError('give the text or --text, not both');
+        const options = { ...shapeOptions, shape: kind, text: shapeOptions.text ?? words.join(' '), to: string('to'), at: string('at'), near: string('near'), side: string('side') };
+        checked(() => {
+          checkShape(options);
+          checkPlace(options);
+        });
+        return async (session) => print(await addShape(session, options));
+      }
+      const placed = (['to', 'at', 'near', 'side'] as const).find((option) => values[option] !== undefined);
+      if (placed !== undefined) throw new UsageError(`--${placed} is only for \`shape add\` (move a shape with \`agent-board move\`)`);
+      if (sub === 'edit') {
+        if (rest.length !== 1) throw new UsageError('give one shape ref');
+        const options = { ...shapeOptions, shape: string('kind') };
+        checked(() => checkShape(options));
+        if (Object.values(options).every((value) => value === undefined)) throw new UsageError('give its new --kind, --text, --attribute, --method or --fill');
+        return async (session) => print(await editShape(session, rest[0]!, options));
+      }
+      if (sub === 'remove') {
+        if (rest.length !== 1) throw new UsageError('give one shape ref');
+        if (Object.values(shapeOptions).some((value) => value !== undefined) || string('kind') !== undefined) throw new UsageError('`shape remove` takes no options');
+        return async (session) => print(await removeShape(session, rest[0]!));
+      }
+      throw new UsageError('the shape commands are `shape add`, `shape edit` and `shape remove`');
+    }
+    case 'connect': {
+      const options = connectorOptions();
+      if (positionals.length !== 2) throw new UsageError('give the two items to join: <from ref> <to ref>');
+      return async (session) => print(await connectItems(session, positionals[0]!, positionals[1]!, options));
+    }
+    case 'connector': {
+      const [sub, ...rest] = positionals;
+      const options = connectorOptions();
+      if (rest.length !== 1) throw new UsageError('give one connector ref');
+      if (sub === 'edit') {
+        if (Object.values(options).every((value) => value === undefined)) throw new UsageError('give its new --relation, --style or a label');
+        return async (session) => print(await editConnector(session, rest[0]!, options));
+      }
+      if (sub === 'remove') {
+        if (Object.values(options).some((value) => value !== undefined)) throw new UsageError('`connector remove` takes no options');
+        return async (session) => print(await removeConnector(session, rest[0]!));
+      }
+      throw new UsageError('the connector commands are `connector edit` and `connector remove`');
     }
     case 'schedule': {
       const [sub, ...rest] = positionals;

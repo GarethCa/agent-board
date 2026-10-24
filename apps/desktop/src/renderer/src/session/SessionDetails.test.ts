@@ -20,6 +20,7 @@ const agent = {
   records: [],
   recordedPullRequests: [],
   guessedDoc: null,
+  docs: [],
   subagents: [],
   permissions: [],
   ask: null,
@@ -40,7 +41,7 @@ describe('the details strip', () => {
   it('draws the rail’s section icons before its headings, aria-hidden', () => {
     const rail = iconsIn(render(true));
     const strip = iconsIn(render(false));
-    for (const icon of ['circle-dot', 'folder-git-2', 'git-pull-request', 'users-round', 'file-stack', 'bot', 'calendar-clock']) expect(rail).toContain(icon);
+    for (const icon of ['circle-dot', 'folder-git-2', 'git-pull-request', 'users-round', 'file-stack', 'book-open', 'pin', 'bot', 'calendar-clock']) expect(rail).toContain(icon);
     for (const icon of rail) expect(strip).toContain(icon);
     expect(render(false)).not.toMatch(/<svg(?![^>]*aria-hidden="true")/);
   });

@@ -70,6 +70,7 @@ import { createTranscriptReader } from './transcripts.ts';
 import type { TrackerHost } from './trackers.ts';
 import { moveParams, optionalPlaceParam, saveMove, tilePosition, zoneIdParam, type PositionColumns } from './tile-position.ts';
 import type { RoleTemplates } from './role-templates.ts';
+import { inGroupFolder } from './zones.ts';
 
 /** The agent's hooks after which its branch is read: not the ones before a tool runs or that only notify. */
 const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
@@ -99,6 +100,8 @@ export interface AgentHostOptions {
   reviewsDir: string;
   /** Where an agent asked for a scratch repo gets one, named after it (ADR-0007). */
   scratchDir: string;
+  /** Where groups' own folders are (`groupFolder`): an agent in a group with no repo runs in the group's. */
+  groupsDir: string;
   /** Remembers a folder an agent was started from, so pickers offer it again. */
   rememberFolder(path: string): void;
   /** The harness executables, as absolute paths: what an agent is launched with, never a name looked up at launch. */
@@ -426,7 +429,7 @@ export interface AgentRow extends PositionColumns {
   owns_worktree: number;
   /** 1 for an agent that may change nothing where it runs (`FolderPlace.readOnly`). */
   read_only: number;
-  /** 1 for the board master (migration 0060): at most one agent. */
+  /** 1 for the Captain (migration 0060): at most one agent. */
   master: number;
   /** A reviewer's: the branch it reviews, and the commit it checked out detached. Null for any other agent. */
   reviews_branch: string | null;
@@ -501,6 +504,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
+  // The Captain was named "Board master" before it was called the Captain: an unchanged name follows (a name the user chose stays).
+  db.prepare("UPDATE agents SET name = 'Captain' WHERE master = 1 AND name = 'Board master'").run();
   const updateStatus = db.prepare(
     'UPDATE agents SET status_summary = ?, status_progress = ?, status_updated_at = ?, status_set_by = ? WHERE session_id = ?',
   );
@@ -508,7 +513,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateOrchestrate = db.prepare('UPDATE agents SET orchestrate = ?, orchestrate_off = ? WHERE session_id = ?');
   /** The agents a zone's setting reaches: those in it. */
   const selectReachedBy = db.prepare('SELECT session_id FROM agents WHERE zone_id = ?');
-  /** The agents in a zone the user let orchestrate by hand: not the board master, whose scope is what it is (ADR-0019). */
+  /** The agents in a zone the user let orchestrate by hand: not the Captain, whose scope is what it is (ADR-0019). */
   const clearHandGrantsIn = db.prepare('UPDATE agents SET orchestrate = NULL WHERE zone_id = ? AND orchestrate IS NOT NULL AND master = 0');
   const updateHarnessSession = db.prepare('UPDATE agents SET harness_session_id = ? WHERE session_id = ?');
   const selectConversations = db.prepare(
@@ -738,6 +743,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       reviewCap: row.review_cap ?? DEFAULT_REVIEW_CAP,
       ownsWorktree: row.owns_worktree === 1,
       master: row.master === 1,
+      plainFolder: inGroupFolder(options.groupsDir, row.worktree),
       orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
       records: records.of(row.session_id),

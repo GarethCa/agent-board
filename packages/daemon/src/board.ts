@@ -1,4 +1,4 @@
-import { recordFor, recordParams } from './agent-records.ts';
+import { pinRefParams, recordFor, recordParams, unpinFor } from './agent-records.ts';
 import type { AgentHost } from './agents.ts';
 import { checkPayloadPath } from './flow-payloads.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
@@ -216,6 +216,18 @@ export function boardHandlers<Context extends BoardConnection>(
       }
       if (record.kind === 'pr') void options.refreshPullRequests?.(on).catch(() => {});
       return recorded;
+    },
+    'board.unpin': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined) throw invalidParams('only an agent keeps records; this is a shell tile');
+      const ref = pinRefParams(p);
+      const { on, key } = unpinFor(me, ref, agents);
+      const removed = agents.records.remove(on, 'pin', key);
+      if (removed === undefined) throw invalidParams(`no pin ${ref.label ?? ref.url ?? ref.path} on ${on === me.sessionId ? 'your sidebar' : "your orchestrator's sidebar that you pinned there"}`);
+      agents.announce(on);
+      return removed;
     },
     'board.needsYou': (params, connection) => {
       const p = paramsObject(params);

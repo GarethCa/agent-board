@@ -165,6 +165,8 @@ export interface ExternalSessionHostOptions {
   isAgentSession(sessionId: string): boolean;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
+  /** Where groups' own folders are (`groupFolder`), which the Unsorted group it makes is told of. */
+  groupsDir: string;
   /** How often a live session's status file is checked for changes. */
   statusPollMs?: number;
 }
@@ -217,7 +219,7 @@ export function createExternalSessionHost(options: ExternalSessionHostOptions): 
   );
   const markUnsorted = db.prepare('UPDATE zones SET unsorted = 1 WHERE id = ?');
   // It only makes the Unsorted group, which is bound to no repo, so which folders are managed clones doesn't matter.
-  const zoneTable = createZoneTable(db, options.broadcast, () => undefined, '');
+  const zoneTable = createZoneTable(db, options.broadcast, () => undefined, '', options.groupsDir);
   const insert = db.prepare(
     `INSERT INTO external_sessions (id, harness, session_id, cwd, worktree, repo_root, folder, branch, state)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,

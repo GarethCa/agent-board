@@ -36,6 +36,8 @@ import {
   flagOwn,
   openOwnPullRequest,
   recordEntry,
+  pinEntry,
+  unpinEntry,
   treeView,
   waitForAgents,
   watchCrew,
@@ -43,18 +45,39 @@ import {
 } from './board-ops.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
-import { addNote, arrangeZone, editNote, moveTile, removeNote, zoneMap, type PlaceOptions } from './layout-ops.ts';
+import {
+  addNote,
+  addShape,
+  arrangeZone,
+  connectItems,
+  editConnector,
+  editNote,
+  editShape,
+  moveTile,
+  removeConnector,
+  removeNote,
+  removeShape,
+  zoneMap,
+  type ConnectorOptions,
+  type PlaceOptions,
+  type ShapeOptions,
+} from './layout-ops.ts';
 import {
   AGENT_ROLES,
   ARRANGE_BYS,
   CREW_EVENT_KINDS,
   ARRANGE_LAYOUTS,
   NOTE_KINDS,
+  CONNECTOR_STYLES,
+  RELATIONS,
+  SHAPE_TYPES,
   TILE_SIDES,
   DAEMON_VERSION,
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
   MAX_ASK_OPTIONS,
+  MAX_PIN_LABEL,
+  MAX_PIN_NOTE,
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
@@ -97,7 +120,7 @@ export const ORCHESTRATOR_INSTRUCTIONS =
   'manual edges; wire only reviewer ↔ implementer (findings back, next round), never an edge to your own tile, and ' +
   'keep one of the pair manual, as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
   'with `set_status` and `agent`: what each agent is doing now, as its work moves on. A crew member\'s `needs_you` comes ' +
-  'to you, typed at your prompt, and so do its `ask` questions and `present_plan` plans (the plan written in its ' +
+  'to you, typed at your prompt, and so do its `ask` questions and plans (`show_doc` with `plan`, written in its ' +
   'worktree, for `read`): answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
   'and `via`. Only its permission prompts reach the user directly.';
 
@@ -120,7 +143,9 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'board',
-    description: 'Every zone with its tiles (agents and shells, with state and status) and items. As `agent-board tree`.',
+    description:
+      "Every zone with its tiles (agents and shells, with state and status), items (a shape's text and sections) and " +
+      'connectors (their ends, relation and labels). As `agent-board tree`.',
     inputSchema: NO_INPUT,
   },
   {
@@ -184,13 +209,10 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'present_plan',
     description:
-      'Show the user your plan before you carry it out, and wait for their decision: it waits in their Needs you inbox ' +
-      'and they read it in a Plan tab in your window, kept as v1, v2… in your history; they approve it, ask for ' +
-      'changes (with comments) or reject it. Give ' +
-      'it as Markdown, as HTML (shown sandboxed, offline: no network, no navigation), or as the path of a .md or .html ' +
-      `file. Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, present the revised plan again. ` +
-      'If an orchestrator started you, the plan goes to it instead, written in your worktree, and nothing waits: end ' +
-      'your turn, and its answer comes as your next message.',
+      'Kept for agents that already call it: write your plan to a file and use show_doc with plan instead. Shows the ' +
+      'user your plan before you carry it out, and waits for their decision, as show_doc with plan does. Give it as ' +
+      'Markdown, as HTML (shown sandboxed, offline: no network, no navigation), or as the path of a .md or .html ' +
+      `file. Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -198,6 +220,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         markdown: { type: 'string', description: 'The plan as Markdown.' },
         html: { type: 'string', description: 'The plan as a self-contained HTML page.' },
         path: { type: 'string', description: 'A .md or .html file holding the plan, relative to your working directory.' },
+        on_board: { type: 'boolean', description: 'Also put its plan card on the board, beside your tile.' },
         timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait.' },
       },
       required: ['title'],
@@ -211,14 +234,20 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'terminal: a Document tab in your window, and with on_board a card beside your tile too. Returns at once. It stays ' +
       'live: write the file again and they see the new version. They may edit a Markdown document there: their edit is ' +
       'written to the file, and you are told what changed at your prompt. An HTML document is view-only, sandboxed and ' +
-      'offline. With plan, it is a plan for them to decide on, as present_plan, and waits for their decision.',
+      'offline. With plan, it is your plan, for them to decide on before you carry it out, and waits for their ' +
+      'decision: it waits in their Needs you inbox (and, with on_board, on a plan card beside your tile), kept as v1, ' +
+      'v2… in your history; they approve it, ask for changes (with comments) or reject it. They may edit a Markdown ' +
+      'plan before deciding: you are then told what they changed, and an approved edit is written to the file. ' +
+      `Waits ${DEFAULT_PLAN_WAIT_MS / 60_000} minutes by default. After changes are asked for, write the revised plan ` +
+      'and show it again. If an orchestrator started you, the plan goes to it instead, written in your worktree, and ' +
+      'nothing waits: end your turn, and its answer comes as your next message.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'The file, relative to your working directory.' },
         title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it is, in a line; else its first heading.' },
-        on_board: { type: 'boolean', description: 'Also put it on the board, as a card beside your tile.' },
-        plan: { type: 'boolean', description: 'It is a plan to approve, send back with changes, or reject: waits as present_plan does.' },
+        on_board: { type: 'boolean', description: 'Also put it on the board, as a card beside your tile (a plan card, with plan).' },
+        plan: { type: 'boolean', description: 'It is your plan, to approve, send back with changes, or reject: waits for their decision.' },
         timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'With plan, how long to wait.' },
       },
       required: ['path'],
@@ -300,6 +329,39 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'pin',
+    description:
+      'Pin something you want the user to see on your sidebar\'s Pins: a file (a Markdown or HTML one opens in a Doc tab, ' +
+      'any other is shown in its folder), an http(s) link (opens in a web tab), or a short note with a label. Give one of ' +
+      'path, url or note. Pinning the same file, link or note label again replaces it; the user may delete a pin, not ' +
+      'edit it. With for_orchestrator, it goes on the orchestrator that started you instead. As `agent-board pin`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'A file, relative to your working directory, or absolute.' },
+        url: { type: 'string', description: 'An http or https link, such as a preview server.' },
+        note: { type: 'string', description: `A short note, at most ${MAX_PIN_NOTE} characters; needs a label.` },
+        label: { type: 'string', description: `What the sidebar calls it, at most ${MAX_PIN_LABEL} characters; a note's names it.` },
+        for_orchestrator: { type: 'boolean', description: 'Pin it for the orchestrator that started you.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'unpin',
+    description: 'Take a pin off your sidebar (or with for_orchestrator, off your orchestrator\'s): a file by its path, a link by its URL, or a note by its label. As `agent-board unpin`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The pinned file, as you named it to pin it.' },
+        url: { type: 'string', description: 'The pinned link.' },
+        label: { type: 'string', description: 'The pinned note\'s label.' },
+        for_orchestrator: { type: 'boolean', description: 'Unpin it from the orchestrator that started you.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e) or unique name.' };
@@ -310,6 +372,24 @@ const PLACE_PROPERTIES = {
   at: { type: 'string', description: 'x,y relative to the zone, such as 40,120.' },
   near: { type: 'string', description: 'A tile or note to put it a gap beside, by ref.' },
   side: { type: 'string', enum: [...TILE_SIDES], description: 'Which side of near: below by default.' },
+};
+
+/** A shape's fields, as `add_shape` and `edit_shape` take them. */
+const SHAPE_PROPERTIES = {
+  shape: { type: 'string', enum: [...SHAPE_TYPES], description: 'Its kind: rectangle, rounded, diamond, database, class, interface-box, …' },
+  text: { type: 'string', description: "Its text: a class's name." },
+  attributes: { type: 'array', items: { type: 'string' }, description: 'class and interface-box only: its attributes, a line each, such as "+ id: UUID".' },
+  methods: { type: 'array', items: { type: 'string' }, description: 'class and interface-box only: its methods, a line each, such as "+ total(): Money".' },
+  fill: { type: 'string', description: 'tile (the default), accent, yellow, green, teal, cyan, blue, violet, pink, red or orange, which follow the theme; #rrggbb, which doesn\'t; or none.' },
+};
+
+/** A connector's fields, as `connect` and `edit_connector` take them. */
+const CONNECTOR_PROPERTIES = {
+  relation: { type: 'string', enum: RELATIONS.map((relation) => relation.id), description: 'Its ends and dash; directed (an arrow at to) by default.' },
+  style: { type: 'string', enum: [...CONNECTOR_STYLES], description: 'Its line: curved by default.' },
+  label: { type: 'string', description: 'The text on its middle.' },
+  from_label: { type: 'string', description: 'The text by its from end: a multiplicity (1, 0..*) or a role.' },
+  to_label: { type: 'string', description: 'The text by its to end.' },
 };
 
 /** The orchestrator's tools (ADR-0011), listed only to a session that may orchestrate (a shell's too). As the CLI's commands. */
@@ -343,8 +423,13 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
           description:
             "false starts it without its role's template: its first message is exactly your prompt (and the issue). For when you write the whole prompt. The result says which template was applied. As --no-template.",
         },
+        repo: {
+          type: 'string',
+          description:
+            "In a group (a zone with no repo), the absolute path of the repo, or a folder in one, to cut its worktree from: the group's default repo without, else the group's own folder, outside git. Refused in a zone bound to a repo.",
+        },
         branch: { type: 'string', description: 'Its new branch; made from its name by default. Not for a reviewer.' },
-        base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch." },
+        base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch (and, in a group, its repo, unless repo names one)." },
         issue: { type: 'string', description: "An issue in the zone's tracker, which comes first in its prompt." },
       },
       required: ['prompt'],
@@ -540,6 +625,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       properties: {
         zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
         boxes: { type: 'boolean', description: 'Draw the zone in characters instead, overlaps and gaps where they really are (about three times as long).' },
+        sections: { type: 'boolean', description: "List a diagram's class members under each shape (cut short), not only their counts." },
       },
       additionalProperties: false,
     },
@@ -555,7 +641,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       properties: {
         text: { type: 'string' },
         kind: { type: 'string', enum: [...NOTE_KINDS], description: 'Left out, an agent note from you; sticky makes a signed sticky; or text.' },
-        color: { type: 'string', description: 'Text only (an agent note has none, and ignores one): yellow, orange, pink, violet, blue, green, grey or white (text: ink, grey, red, …), or #rrggbb.' },
+        color: { type: 'string', description: 'Text only (an agent note has none, and ignores one): yellow, orange, pink, violet, blue, green, grey or white (text: accent, ink, grey, red, orange, yellow, green, teal, cyan, blue, violet or pink, which follow the theme), or #rrggbb.' },
         ...PLACE_PROPERTIES,
       },
       required: ['text'],
@@ -579,6 +665,77 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' } },
       required: ['note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'add_shape',
+    description:
+      'Draw a shape with text in it, marked as made by you, placed as add_note places a note (near another shape, with a ' +
+      'side, to lay a diagram out). A class or interface-box takes attributes and methods, a line each, under its name. ' +
+      'It is sized for its text. Draw only when the user asks for a diagram. As `agent-board shape add`.',
+    inputSchema: {
+      type: 'object',
+      properties: { ...SHAPE_PROPERTIES, ...PLACE_PROPERTIES },
+      required: ['shape'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'edit_shape',
+    description: "Change a shape's kind, text, sections or fill: one you, or an agent you started, drew. Only what is given changes. As `agent-board shape edit`.",
+    inputSchema: {
+      type: 'object',
+      properties: { item: { type: 'string', description: 'The shape, by ref (item:31f0).' }, ...SHAPE_PROPERTIES },
+      required: ['item'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remove_shape',
+    description: 'Remove a shape you, or an agent you started, drew, and every connector joined to it. As `agent-board shape remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: { item: { type: 'string', description: 'The shape, by ref (item:31f0).' } },
+      required: ['item'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'connect',
+    description:
+      'Join two board items (shapes, notes) with a connector, marked as made by you, from → to as the relation reads: a ' +
+      'child to its parent (inheritance), a class to its interface (realisation), a user to what it uses (dependency), a ' +
+      'whole to its parts (aggregation, composition). Its sides face each other. Draw only when the user asks for a ' +
+      'diagram. As `agent-board connect`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'The item it starts at, by ref (item:31f0).' },
+        to: { type: 'string', description: 'The item it ends at, by ref.' },
+        ...CONNECTOR_PROPERTIES,
+      },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'edit_connector',
+    description: "Change a connector's relation, style or labels: one you, or an agent you started, made. Only what is given changes. As `agent-board connector edit`.",
+    inputSchema: {
+      type: 'object',
+      properties: { connector: { type: 'string', description: 'The connector, by ref (connector:8a2c).' }, ...CONNECTOR_PROPERTIES },
+      required: ['connector'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'remove_connector',
+    description: 'Remove a connector you, or an agent you started, made. As `agent-board connector remove`.',
+    inputSchema: {
+      type: 'object',
+      properties: { connector: { type: 'string', description: 'The connector, by ref (connector:8a2c).' } },
+      required: ['connector'],
       additionalProperties: false,
     },
   },
@@ -701,6 +858,16 @@ function stringArg(args: Record<string, unknown>, name: string, optional = false
   return value;
 }
 
+/** The string arguments of `names` that were given, each checked, as an object of only those. */
+function givenStrings<Name extends string>(args: Record<string, unknown>, names: readonly Name[]): Partial<Record<Name, string>> {
+  return Object.fromEntries(
+    names.flatMap((name) => {
+      const value = stringArg(args, name, true);
+      return value === undefined ? [] : [[name, value]];
+    }),
+  ) as Partial<Record<Name, string>>;
+}
+
 /**
  * `arrange`'s `auto` as the CLI's `--auto`: true or false, or as a model may send it, `"true"`, `"on"`, `"false"` or
  * `"off"`; anything else is refused rather than read as off.
@@ -711,6 +878,13 @@ function autoArg(args: Record<string, unknown>): { auto?: string } {
   if (value === true || value === 'true' || value === 'on') return { auto: 'on' };
   if (value === false || value === 'false' || value === 'off') return { auto: 'off' };
   throw new BoardError('auto must be true or false');
+}
+
+/** `on_board` as a plan takes it: true or false, or not given. */
+function onBoardArg(args: Record<string, unknown>): { onBoard?: boolean } {
+  if (args.on_board === undefined) return {};
+  if (typeof args.on_board !== 'boolean') throw new BoardError('on_board must be true or false');
+  return { onBoard: args.on_board };
 }
 
 /** A tool's `timeout_minutes`, as the daemon's `timeoutMs`; nothing when absent. */
@@ -742,6 +916,14 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   record_doc: async (session, args, cwd) =>
     (await recordEntry(session, { kind: 'doc', path: stringArg(args, 'path'), forOrchestrator: args.for_orchestrator === true }, cwd)).text,
+  pin: async (session, args, cwd) => {
+    const given = givenStrings(args, ['path', 'url', 'note', 'label']);
+    if (given.note !== undefined && given.label === undefined) throw new BoardError('a note needs a label, which names it on the sidebar');
+    return (await pinEntry(session, { kind: 'pin', ...given, forOrchestrator: args.for_orchestrator === true }, cwd)).text;
+  },
+  unpin: async (session, args, cwd) => {
+    return (await unpinEntry(session, { ...givenStrings(args, ['path', 'url', 'label']), forOrchestrator: args.for_orchestrator === true }, cwd)).text;
+  },
   needs_you: async (session, { reason, via, clear }) => {
     if (clear === true) return flagLine(await flagOwn(session, undefined));
     if (typeof reason !== 'string') throw new BoardError('give a reason, or clear');
@@ -769,6 +951,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         model: stringArg(args, 'model', true),
         role: stringArg(args, 'role', true),
         noTemplate: args.template === false,
+        repo: stringArg(args, 'repo', true),
         branch: stringArg(args, 'branch', true),
         base: stringArg(args, 'base', true),
         issue: stringArg(args, 'issue', true),
@@ -852,16 +1035,15 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   present_plan: async (session, args, cwd) => {
     const source = { markdown: stringArg(args, 'markdown', true), html: stringArg(args, 'html', true), path: stringArg(args, 'path', true) };
-    return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, cwd), ...timeoutArg(args) })).text;
+    return (await presentPlan(session, { title: stringArg(args, 'title'), ...readPlanSource(source, cwd), ...onBoardArg(args), ...timeoutArg(args) })).text;
   },
   show_doc: async (session, args, cwd) => {
     const path = stringArg(args, 'path');
     const title = stringArg(args, 'title', true);
     if (args.on_board !== undefined && typeof args.on_board !== 'boolean') throw new BoardError('on_board must be true or false');
     if (args.plan === true) {
-      if (args.on_board === true) throw new BoardError('a plan is not put on the board: give plan or on_board, not both');
       const source = readPlanSource({ path }, cwd);
-      return (await presentPlan(session, { title: title ?? documentTitle(path, source.format, source.body), ...source, ...timeoutArg(args) })).text;
+      return (await presentPlan(session, { title: title ?? documentTitle(path, source.format, source.body), ...source, ...onBoardArg(args), ...timeoutArg(args) })).text;
     }
     if (args.timeout_minutes !== undefined) throw new BoardError('timeout_minutes is for a plan: give plan too');
     return (await showDoc(session, { path, title, onBoard: args.on_board === true }, cwd)).text;
@@ -877,7 +1059,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         ...autoArg(args),
       })
     ).text,
-  map: async (session, args) => (await zoneMap(session, stringArg(args, 'zone', true), { boxes: args.boxes === true })).text,
+  map: async (session, args) => (await zoneMap(session, stringArg(args, 'zone', true), { boxes: args.boxes === true, sections: args.sections === true, face: 'mcp' })).text,
   add_note: async (session, args) =>
     (
       await addNote(session, {
@@ -894,6 +1076,12 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await editNote(session, stringArg(args, 'note'), { text, color })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
+  add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,
+  edit_shape: async (session, args) => (await editShape(session, stringArg(args, 'item'), shapeArgs(args))).text,
+  remove_shape: async (session, args) => (await removeShape(session, stringArg(args, 'item'))).text,
+  connect: async (session, args) => (await connectItems(session, stringArg(args, 'from'), stringArg(args, 'to'), connectorArgs(args))).text,
+  edit_connector: async (session, args) => (await editConnector(session, stringArg(args, 'connector'), connectorArgs(args))).text,
+  remove_connector: async (session, args) => (await removeConnector(session, stringArg(args, 'connector'))).text,
   add_schedule: async (session, args) =>
     (
       await addSchedule(session, {
@@ -919,6 +1107,35 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
 };
 
 /** A layout tool's place, as `agent-board move` takes it. */
+/** A shape's section as a model may send it: a line each, or one string of lines. */
+function linesArg(args: Record<string, unknown>, name: string): string[] | undefined {
+  const value = args[name];
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value.split('\n');
+  if (!Array.isArray(value) || !value.every((line) => typeof line === 'string')) throw new BoardError(`${name} must be an array of strings, a line each`);
+  return value as string[];
+}
+
+function shapeArgs(args: Record<string, unknown>): ShapeOptions {
+  return {
+    shape: stringArg(args, 'shape', true),
+    text: stringArg(args, 'text', true),
+    attributes: linesArg(args, 'attributes'),
+    methods: linesArg(args, 'methods'),
+    fill: stringArg(args, 'fill', true),
+  };
+}
+
+function connectorArgs(args: Record<string, unknown>): ConnectorOptions {
+  return {
+    relation: stringArg(args, 'relation', true),
+    style: stringArg(args, 'style', true),
+    label: stringArg(args, 'label', true),
+    fromLabel: stringArg(args, 'from_label', true),
+    toLabel: stringArg(args, 'to_label', true),
+  };
+}
+
 function placeArgs(args: Record<string, unknown>): PlaceOptions {
   return { to: stringArg(args, 'to', true), at: stringArg(args, 'at', true), near: stringArg(args, 'near', true), side: stringArg(args, 'side', true) };
 }

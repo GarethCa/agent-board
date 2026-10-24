@@ -21,6 +21,7 @@ import {
   overlaps,
   packTiles,
   PERCH_ROOM,
+  rotatedBounds,
   ROW_STEP,
   sizedFootprint,
   slotUnplaced,
@@ -50,14 +51,23 @@ import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
   BOARD_ERROR,
+  COLOR_SLOTS,
   DEFAULT_ARRANGE_SETTINGS,
   DEFAULT_ZONE_SIZE,
   NOTE_KINDS,
+  CONNECTOR_STYLES,
+  MAX_CONNECTOR_LABEL,
+  RELATIONS,
+  SECTIONED_SHAPES,
+  FILL_SLOTS,
+  FILL_SLOT_COLORS,
+  SHAPE_SECTIONS,
+  SHAPE_TYPES,
   MAX_STICKY_TEXT,
   MAX_TEXT_LENGTH,
+  SLOT_COLORS,
   STICKY_COLORS,
   STICKY_SIZE,
-  TEXT_COLORS,
   TEXT_PRESET_FONT_SIZES,
   TILE_SIDES,
   type Agent,
@@ -68,6 +78,8 @@ import {
   type ArrangeSettings,
   type BoardItem,
   type BoardPlace,
+  type Connector,
+  type ConnectorSide,
   type DaemonMethod,
   type DaemonMethods,
   type ExternalSession,
@@ -75,6 +87,10 @@ import {
   type LayoutPlace,
   type LayoutTarget,
   type NoteKind,
+  type ColorSlot,
+  type FillSlot,
+  newShapeData,
+  type ShapeType,
   statusLine,
   type Shell,
   type TileSide,
@@ -97,6 +113,12 @@ export type LayoutMethods = Pick<
   | 'orchestrator.addNote'
   | 'orchestrator.editNote'
   | 'orchestrator.removeNote'
+  | 'orchestrator.addShape'
+  | 'orchestrator.editShape'
+  | 'orchestrator.removeShape'
+  | 'orchestrator.connect'
+  | 'orchestrator.editConnector'
+  | 'orchestrator.removeConnector'
 >;
 
 /** Calls one of the daemon's own methods, as the app would. */
@@ -193,6 +215,8 @@ const CLUSTER_NOTE_SLOT = '#note';
 const NOTE_ITEM_KINDS: ReadonlySet<string> = new Set([...NOTE_KINDS, 'agent-note']);
 /** What `note remove` removes: notes, and link cards. */
 const REMOVABLE_KINDS: ReadonlySet<string> = new Set([...NOTE_ITEM_KINDS, 'link']);
+/** What the shape commands change. */
+const SHAPE_KINDS: ReadonlySet<string> = new Set(['shape']);
 
 /** Whether `item` is a note of text: a sticky note, text or an agent note. */
 const isNote = (item: BoardItem) => NOTE_ITEM_KINDS.has(item.kind);
@@ -205,8 +229,10 @@ interface Board {
   shells: Shell[];
   externals: ExternalSession[];
   items: BoardItem[];
-  /** Resized tiles' sizes, by `tileSizeKey`. */
+  /** Resized tiles' sizes, by `tileSizeKey`: an expanded tile's expanded size. */
   sizes: Record<string, Size>;
+  /** The tiles expanded in place, by `tileSizeKey`: each one's size compact, which the board pushes its neighbours aside from. */
+  compact: Record<string, Size>;
 }
 
 /** A tile or item on the board, where it is and what it is. */
@@ -215,8 +241,10 @@ interface Placed {
   kind: 'agent' | 'shell' | 'external' | 'item';
   id: string;
   zoneId: string | null;
-  /** Its place and size, relative to its zone (a board position when loose), as the board draws it. */
+  /** Its place and size, relative to its zone (a board position when loose), as the board draws it, unrotated. */
   rect: Rect;
+  /** An item's angle, clockwise about its centre (`BoardItem.rotation`); 0 for a tile. */
+  rotation: number;
   /** Whether that place is its own, saved: false for a tile the board slots each time it draws. */
   saved: boolean;
   name: string;
@@ -231,6 +259,14 @@ function noteText(item: BoardItem): string {
   return typeof item.data.text === 'string' ? item.data.text : '';
 }
 
+/** What an item is called in a log line or a refusal: a note or shape by its text, a link by its URL. */
+function itemName(item: BoardItem): string {
+  if (isNote(item)) return `note ${quoted(noteText(item))}`;
+  if (item.kind === 'shape') return `shape ${quoted(noteText(item))}`;
+  if (item.kind === 'link') return `link ${quoted(String(item.data.url ?? ''))}`;
+  return `${item.kind} item`;
+}
+
 /**
  * Every tile and item on the board, where the board draws it: a tile with no place of its own yet is slotted as the
  * board slots it (`slotUnplaced`), since the board never saves that place.
@@ -243,10 +279,11 @@ function placedOf(board: Board): Placed[] {
     id: item.id,
     zoneId: item.zoneId,
     rect: { x: item.x, y: item.y, width: item.width, height: item.height },
+    rotation: item.rotation,
     saved: true,
-    name: isNote(item) ? `note ${quoted(noteText(item))}` : `${item.kind} item`,
+    name: itemName(item),
   }));
-  type Slotted = Omit<Placed, 'rect' | 'saved'> & { at: Point | undefined; size: Size; from: string | undefined };
+  type Slotted = Omit<Placed, 'rect' | 'rotation' | 'saved'> & { at: Point | undefined; size: Size; from: string | undefined };
   const tile = (kind: 'agent' | 'shell' | 'external', id: string, subject: Pick<Agent, 'zoneId' | 'position' | 'name'>, from?: string | null): Slotted => ({
     key: tileSizeKey(kind, id),
     kind,
@@ -274,16 +311,19 @@ function placedOf(board: Board): Placed[] {
     footprint: (each) => sizedFootprint(each.at!, each.size),
     zoneWidth: (zoneId) => zones.get(zoneId)!.width,
     zones: board.zones,
-    items: (zoneId) => items.filter((item) => item.zoneId === (zoneId ?? null)).map((item) => item.rect),
+    items: (zoneId) => items.filter((item) => item.zoneId === (zoneId ?? null)).map(takenBy),
   });
   return [
-    ...tiles.map(({ key, kind, id, zoneId, name, at, size }): Placed => ({ key, kind, id, zoneId, name, rect: { ...at!, ...size }, saved: saved.has(key) })),
+    ...tiles.map(({ key, kind, id, zoneId, name, at, size }): Placed => ({ key, kind, id, zoneId, name, rect: { ...at!, ...size }, rotation: 0, saved: saved.has(key) })),
     ...items,
   ];
 }
 
-/** What a tile or item takes up for another placed near it: a tile with the room above it for its characters. */
-const takenBy = (placed: Placed): Rect => (placed.kind === 'item' ? placed.rect : sizedFootprint(placed.rect, placed.rect));
+/**
+ * What a tile or item takes up for another placed near it: a tile with the room above it for its characters, an item
+ * turned (`rotation`) the upright box round it.
+ */
+const takenBy = (placed: Placed): Rect => (placed.kind === 'item' ? rotatedBounds(placed.rect, placed.rotation) : sizedFootprint(placed.rect, placed.rect));
 
 /** The size a text item of `text` starts at: as wide as its longest line, up to a limit, and as tall as its lines. */
 function textSize(text: string): Size {
@@ -296,9 +336,9 @@ function textSize(text: string): Size {
   return { width, height: Math.ceil(rows * fontSize * TEXT_LINE) + TEXT_PAD };
 }
 
-/** A text item's data: body text of `text` in `color`, wrapping at the width it is given. */
-function textItemData(text: string, color: string): Record<string, unknown> {
-  return { text, size: 'body', fontSize: TEXT_PRESET_FONT_SIZES.body, minHeight: 0, bold: false, italic: false, align: 'left', color, wrap: true };
+/** A text item's data: body text of `text` in `colors` (its colour, and its slot), wrapping at the width it is given. */
+function textItemData(text: string, colors: NoteColors): Record<string, unknown> {
+  return { text, size: 'body', fontSize: TEXT_PRESET_FONT_SIZES.body, minHeight: 0, bold: false, italic: false, align: 'left', ...colors, wrap: true };
 }
 
 /** An orchestrator's signature on a note it writes: 🤖, its name and the time, on a line of its own at the end. */
@@ -416,13 +456,124 @@ function stamped(text: string, name: string, now = new Date()): string {
   return `${unsigned(text)}\n\n🤖 ${name} · ${time}`;
 }
 
-/** `color` as a note of `kind` keeps it: one of its colours by name (any case), or any #rrggbb. */
-function noteColor(kind: NoteKind, color: string): string {
-  const presets = kind === 'sticky' ? STICKY_COLORS : TEXT_COLORS;
+/** Text's colours by name: the theme colour slots, each stored as its colour, which the board draws as the slot. */
+const TEXT_SLOT_COLORS = COLOR_SLOTS.map((slot) => ({ name: slot, value: SLOT_COLORS[slot] }));
+
+/** A note's colour as its data keeps it: a text item's slot beside it, so a colour set writes over the slot it had. */
+type NoteColors = { color: string; colorSlot?: ColorSlot | null };
+
+/**
+ * `color` as a note of `kind` keeps it: one of its colours by name (any case), or any #rrggbb. A text item's colour by
+ * name is its theme colour slot, and a #rrggbb is fixed, in no slot.
+ */
+function noteColor(kind: NoteKind, color: string): NoteColors {
+  const presets = kind === 'sticky' ? STICKY_COLORS : TEXT_SLOT_COLORS;
   const named = presets.find((preset) => preset.name.toLowerCase() === color.trim().toLowerCase());
-  if (named !== undefined) return named.value;
-  if (/^#[0-9a-fA-F]{6}$/.test(color.trim())) return color.trim().toLowerCase();
+  if (named !== undefined) return kind === 'sticky' ? { color: named.value } : { color: named.value, colorSlot: named.name as ColorSlot };
+  if (/^#[0-9a-fA-F]{6}$/.test(color.trim())) return kind === 'sticky' ? { color: color.trim().toLowerCase() } : { color: color.trim().toLowerCase(), colorSlot: null };
   throw invalidParams(`a ${kind === 'sticky' ? 'sticky note' : 'text'} colour is #rrggbb or one of ${presets.map((preset) => preset.name.toLowerCase()).join(', ')}`);
+}
+
+/** Text an agent gives a shape or connector: no control character but tabs and line breaks, at most `max` characters. */
+function diagramText(fields: Record<string, unknown>, name: string, max: number): string | undefined {
+  const text = optionalStringParam(fields, name);
+  if (text === undefined) return undefined;
+  if (NOTE_CONTROL.test(text)) throw invalidParams(`${name} may hold tabs and line breaks, but no other control character`);
+  if (text.length > max) throw invalidParams(`${name} is at most ${max} characters`);
+  return text;
+}
+
+/**
+ * A shape's fill as given, with its slot: one of `FILL_SLOTS` by name (any case; `white`, as the tile was once called,
+ * too), any #rrggbb, fixed, or `none`.
+ */
+function shapeFill(fill: string): { fill: string | null; fillSlot: FillSlot | null } {
+  const wanted = fill.trim().toLowerCase();
+  if (wanted === 'none') return { fill: null, fillSlot: null };
+  const named = wanted === 'white' ? 'tile' : FILL_SLOTS.find((slot) => slot === wanted);
+  if (named !== undefined) return { fill: FILL_SLOT_COLORS[named], fillSlot: named };
+  if (/^#[0-9a-f]{6}$/.test(wanted)) return { fill: wanted, fillSlot: null };
+  throw invalidParams(`a shape's fill is none, #rrggbb or one of ${FILL_SLOTS.join(', ')}`);
+}
+
+/**
+ * The data fields a shape's params set, checked against its kind `shape`: only a class or box interface has sections,
+ * so a section given another kind is refused.
+ */
+function shapeDataParams(fields: Record<string, unknown>, shape: ShapeType): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  const text = diagramText(fields, 'text', MAX_TEXT_LENGTH);
+  if (text !== undefined) data.text = text;
+  for (const section of SHAPE_SECTIONS) {
+    const lines = diagramText(fields, section, MAX_TEXT_LENGTH);
+    if (lines === undefined) continue;
+    if (!SECTIONED_SHAPES.includes(shape)) throw invalidParams(`a ${shape} has no ${section}: only ${SECTIONED_SHAPES.join(' and ')} shapes have sections`);
+    data[section] = lines;
+  }
+  const fill = optionalStringParam(fields, 'fill');
+  if (fill !== undefined) Object.assign(data, shapeFill(fill));
+  return data;
+}
+
+/** A shape's kind as given, if it is. */
+function shapeKindParam(fields: Record<string, unknown>): ShapeType | undefined {
+  if (fields.shape === undefined) return undefined;
+  if (!SHAPE_TYPES.includes(fields.shape as ShapeType)) throw invalidParams(`shape must be one of ${SHAPE_TYPES.join(', ')}`);
+  return fields.shape as ShapeType;
+}
+
+/** The widest a shape an orchestrator draws starts, before its text wraps. */
+const MAX_SHAPE_WIDTH = 480;
+/** How wide a character is, in px, in a shape's name (heading 2, bold) and in its sections (mono), about. */
+const NAME_CHAR = 14;
+const SECTION_CHAR = 9;
+/** A line's height in a shape's name and in its sections, px, and the room round a shape's text. */
+const NAME_LINE = 32;
+const SECTION_LINE = 22;
+const SHAPE_PAD = 32;
+
+/**
+ * The size a shape an orchestrator draws starts at: as wide as its longest line, up to a limit, and as tall as its
+ * name and sections. About: the board grows a shape taller to fit its text as it draws it.
+ */
+function shapeSize(data: { shape: ShapeType; text: string; attributes?: string; methods?: string }): Size {
+  const lines = (text: string) => (text === '' ? [] : text.split('\n'));
+  const name = lines(data.text);
+  const sections = SECTIONED_SHAPES.includes(data.shape) ? SHAPE_SECTIONS.map((section) => lines(data[section] ?? '')) : [];
+  const longest = Math.max(0, ...name.map((line) => line.length * NAME_CHAR), ...sections.flat().map((line) => line.length * SECTION_CHAR));
+  const width = Math.min(MAX_SHAPE_WIDTH, Math.max(sections.length > 0 ? 200 : 160, longest + SHAPE_PAD));
+  const sectionHeight = sections.reduce((sum, each) => sum + Math.max(1, each.length) * SECTION_LINE + SHAPE_PAD / 2, 0);
+  return { width, height: Math.max(80, Math.max(1, name.length) * NAME_LINE + SHAPE_PAD + sectionHeight) };
+}
+
+/**
+ * The sides a connector from `from` to `to` (board rects) leaves and arrives at: facing each other across the axis
+ * they are furthest apart on, so a parent above its children is joined bottom to top.
+ */
+function facingSides(from: Rect, to: Rect): { from: ConnectorSide; to: ConnectorSide } {
+  const dx = to.x + to.width / 2 - (from.x + from.width / 2);
+  const dy = to.y + to.height / 2 - (from.y + from.height / 2);
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? { from: 'right', to: 'left' } : { from: 'left', to: 'right' };
+  return dy > 0 ? { from: 'bottom', to: 'top' } : { from: 'top', to: 'bottom' };
+}
+
+/** The look a connector's params set: its relation's ends and dash, its style and its labels, each only if given. */
+function connectorLookParams(fields: Record<string, unknown>): Partial<Pick<Connector, 'startEnd' | 'endEnd' | 'dashed' | 'style' | 'label' | 'startLabel' | 'endLabel'>> {
+  const look: ReturnType<typeof connectorLookParams> = {};
+  if (fields.relation !== undefined) {
+    const relation = RELATIONS.find((each) => each.id === fields.relation);
+    if (relation === undefined) throw invalidParams(`relation must be one of ${RELATIONS.map((each) => each.id).join(', ')}`);
+    Object.assign(look, relation.look);
+  }
+  if (fields.style !== undefined) {
+    if (!CONNECTOR_STYLES.includes(fields.style as Connector['style'])) throw invalidParams(`style must be one of ${CONNECTOR_STYLES.join(', ')}`);
+    look.style = fields.style as Connector['style'];
+  }
+  for (const name of ['label', 'startLabel', 'endLabel'] as const) {
+    const text = diagramText(fields, name, MAX_CONNECTOR_LABEL);
+    if (text !== undefined) look[name] = text;
+  }
+  return look;
 }
 
 function targetParam(fields: Record<string, unknown>, name: string): LayoutTarget {
@@ -472,6 +623,7 @@ async function readLayoutBoard(call: DaemonCall): Promise<Board> {
   const open = new Set(unfoldedFrom(unfolded));
   // A closed agent the user hasn't unfolded is a chip on the board, so it takes a chip's room.
   const chips = Object.fromEntries(agents.filter((agent) => isFolded(agent, open)).map((agent) => [tileSizeKey('agent', agent.sessionId), CHIP_SIZE]));
+  const opened = expandedSizesFrom(expanded);
   return {
     zones,
     agents,
@@ -479,7 +631,8 @@ async function readLayoutBoard(call: DaemonCall): Promise<Board> {
     externals,
     items,
     // A tile expanded in place takes its expanded size, so the rest are laid out clear of it.
-    sizes: { ...resized, ...chips, ...expandedSizesFrom(expanded) },
+    sizes: { ...resized, ...chips, ...opened },
+    compact: Object.fromEntries(Object.keys(opened).map((key) => [key, chips[key] ?? resized[key] ?? AGENT_TILE_SIZE])),
   };
 }
 
@@ -514,6 +667,8 @@ export function layoutHandlers<Context extends BoardConnection>({
   const markZone = db.prepare('UPDATE zones SET made_by = ? WHERE id = ?');
   const itemMadeBy = db.prepare('SELECT made_by FROM board_items WHERE id = ?');
   const markItem = db.prepare('UPDATE board_items SET made_by = ? WHERE id = ?');
+  const connectorMadeBy = db.prepare('SELECT made_by FROM connectors WHERE id = ?');
+  const markConnector = db.prepare('UPDATE connectors SET made_by = ? WHERE id = ?');
   /** Arranges, one at a time per zone. */
   const arranging = keyedQueue();
 
@@ -625,7 +780,9 @@ export function layoutHandlers<Context extends BoardConnection>({
     );
     return [...moves].map(([key, at]) => {
       const placed = here.find((each) => each.key === key)!;
-      return { placed, spot: placed.kind === 'item' ? at : { x: at.x, y: at.y + PERCH_ROOM } };
+      // Where it goes is where what it takes goes: a tile below the room above it, a turned item inside its upright box.
+      const taken = takenBy(placed);
+      return { placed, spot: { x: at.x + placed.rect.x - taken.x, y: at.y + placed.rect.y - taken.y } };
     });
   };
 
@@ -699,11 +856,47 @@ export function layoutHandlers<Context extends BoardConnection>({
   const ownNote = (me: Orchestrator, id: string, items: BoardItem[], kinds: ReadonlySet<string> = NOTE_ITEM_KINDS): BoardItem => {
     const item = items.find((each) => each.id === id);
     if (item === undefined) throw invalidParams(`no board item ${id}`);
-    if (!kinds.has(item.kind)) throw invalidParams(`that is a ${item.kind} item: the note commands change only notes and text, and remove link cards`);
+    if (!kinds.has(item.kind)) {
+      throw invalidParams(
+        kinds === SHAPE_KINDS
+          ? `that is a ${item.kind} item: the shape commands change only shapes`
+          : `that is a ${item.kind} item: the note commands change only notes and text, and remove link cards`,
+      );
+    }
     if (!access.madeByCrew(me, madeBy(itemMadeBy, item.id))) {
-      throw outOfScope(`that note was not made by you or an agent you started: an orchestrator changes only the notes its crew made`);
+      const what = item.kind === 'shape' ? 'shape' : 'note';
+      throw outOfScope(`that ${what} was not made by you or an agent you started: an orchestrator changes only the ${what}s its crew made`);
     }
     return item;
+  };
+
+  /** The item `id`, which `me` may draw a connector to: one in a zone it may lay out (loose, at board scope). */
+  const drawable = (me: Orchestrator, board: Board, id: string): BoardItem => {
+    const item = board.items.find((each) => each.id === id);
+    if (item === undefined) throw invalidParams(`no board item ${id}`);
+    const zone = board.zones.find((each) => each.id === item.zoneId);
+    const reached = zone === undefined ? me.orchestrate === 'board' : zoneInReach(me, zone);
+    if (!reached) throw outOfScope(`${itemName(item)} is outside your scope (${access.scopeText(me)})`);
+    return item;
+  };
+
+  /** `item`'s rect on the board: its zone's corner added to a place relative to it. */
+  const boardRect = (board: Board, item: BoardItem): Rect => {
+    const zone = board.zones.find((each) => each.id === item.zoneId);
+    return { x: item.x + (zone?.x ?? 0), y: item.y + (zone?.y ?? 0), width: item.width, height: item.height };
+  };
+
+  /** What a connector is called in a log line: its label, or that it is one. */
+  const connectorName = (connector: Connector) => (connector.label === '' ? 'a connector' : `connector ${quoted(connector.label)}`);
+
+  /** The connector `id`, which `me` may change: one it or its crew made (any, on the user's side). */
+  const ownConnector = async (me: Orchestrator, id: string): Promise<Connector> => {
+    const connector = (await call('connector.list', undefined)).find((each) => each.id === id);
+    if (connector === undefined) throw invalidParams(`no connector ${id}`);
+    if (!access.madeByCrew(me, madeBy(connectorMadeBy, connector.id))) {
+      throw outOfScope('that connector was not made by you or an agent you started: an orchestrator changes only the connectors its crew made');
+    }
+    return connector;
   };
 
   /** `item` as it is now, or undefined if it has gone (or was undefined). */
@@ -752,7 +945,7 @@ export function layoutHandlers<Context extends BoardConnection>({
     for (const cluster of clusters) {
       const label = parts.get(`${cluster.key}#label`);
       if (label !== undefined) used.add(label);
-      await put(`${cluster.key}#label`, 'text', label, cluster.labelAt, CLUSTER_LABEL_SIZE, { ...textItemData(cluster.label, TEXT_COLORS[0].value), bold: true });
+      await put(`${cluster.key}#label`, 'text', label, cluster.labelAt, CLUSTER_LABEL_SIZE, { ...textItemData(cluster.label, { color: SLOT_COLORS.ink, colorSlot: 'ink' }), bold: true });
       const said = noteSays(cluster, standing);
       const slot = `${cluster.key}${CLUSTER_NOTE_SLOT}`;
       // Read afresh: the user may have edited it in the app since the arrange read the board.
@@ -1198,7 +1391,10 @@ export function layoutHandlers<Context extends BoardConnection>({
         .map((each): ZoneMapThing => {
           const item = each.kind === 'item' ? board.items.find((one) => one.id === each.id) : undefined;
           const agent = each.kind === 'agent' ? board.agents.find((one) => one.sessionId === each.id) : undefined;
-          return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null, ...each.rect };
+          return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null,
+            // A turned item as the upright box it takes up, so the map shows (and lints) the room it really takes.
+            ...(item === undefined ? each.rect : takenBy(each)),
+          };
         });
       const { parts } = clusterParts(me, zone.id, board.items);
       const lanes = lanesOf(crewOf(me, board, zone), await linksOf());
@@ -1210,7 +1406,13 @@ export function layoutHandlers<Context extends BoardConnection>({
         height: zone.height,
         arrange,
         things,
-        ...buildZoneMap({ lanes, things, parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])), arrange }),
+        ...buildZoneMap({
+          lanes,
+          things,
+          parts: new Map([...parts].map(([key, item]) => [key, `item:${item.id}`])),
+          arrange,
+          compact: new Map(things.flatMap((thing) => (board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
+        }),
       };
     },
 
@@ -1325,7 +1527,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         // An agent note has no colour: one asked for is ignored, not refused, so callers that give one still work (the
         // CLI and MCP say so).
         const colorParam = agentNote ? undefined : optionalStringParam(p, 'color');
-        const color = noteColor(asked, colorParam ?? (asked === 'sticky' ? STICKY_COLORS[0].value : TEXT_COLORS[0].value));
+        const colors = noteColor(asked, colorParam ?? (asked === 'sticky' ? STICKY_COLORS[0].value : 'ink'));
         const place = placeParams(p);
         // In the zone's layout queue, with its arranges and joins: none of them can write over a note added to a sticky.
         const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
@@ -1353,8 +1555,25 @@ export function layoutHandlers<Context extends BoardConnection>({
             // An agent note has no colour, and says it is written by an agent again (it no longer reads as the arrange's own).
             const data = onAgentNote
               ? { text: added, ...(me.agent === null ? { editedByUser: true } : { writtenAt: new Date().toISOString(), editedByUser: false }) }
-              : { text: me.agent === null ? added : stamped(added, me.name), ...(given === undefined ? {} : { color: noteColor('sticky', given) }) };
-            return call('item.update', { id: clusterSticky.id, data, ...(onAgentNote ? grownNote(clusterSticky, added) : {}) });
+              : { text: me.agent === null ? added : stamped(added, me.name), ...(given === undefined ? {} : noteColor('sticky', given)) };
+            const taller = onAgentNote ? grownNote(clusterSticky, added) : {};
+            // Its place was made for the tiles' sizes then: a tile expanded since may cover it. Only then (a note it grew into is the arrange's to put right) does it move, beside
+            // the agent at its real size, clear of everything; growing taller is left to the arrange, as an edit's is.
+            const rect = { x: clusterSticky.x, y: clusterSticky.y, width: clusterSticky.width, height: clusterSticky.height };
+            const here = placedOf(board).filter((each) => each.zoneId === zone!.id && each.key !== `item:${clusterSticky.id}`);
+            const others = here.map(takenBy);
+            const size = { width: rect.width, height: taller.height ?? rect.height };
+            const region = { left: ZONE_PADDING, top: ZONE_PADDING, right: Infinity, bottom: Infinity };
+            // Beside the agent; else, where that would grow the zone over another, below everything there; else in place.
+            const bottom = Math.max(ZONE_PADDING, ...others.map((each) => each.y + each.height));
+            const candidates = clearOf(rect, here.filter((each) => each.kind !== 'item').map(takenBy))
+              ? []
+              : [besideSpot(nearAgent!.rect, 'right', size), { x: ZONE_PADDING, y: bottom + TILE_GAP }].map((wanted) => nearestFreeSpot(wanted, others, region, size)!);
+            const spot = candidates.find((each) => coveredBy(board, zone!, grownTo(zone!, { ...each, ...size }, true)) === undefined);
+            const grew = spot === undefined ? undefined : grownTo(zone!, { ...spot, ...size }, true);
+            const updated = await call('item.update', { id: clusterSticky.id, data, ...taller, ...spot });
+            if (grew !== undefined) await growTo(zone, grew);
+            return updated;
           }
           // Else in the slot before the agent, which moves along: only one it may move, else beside it as asked.
           const slotOf = nearAgent !== undefined && mayMove(me, board, nearAgent) ? nearAgent : undefined;
@@ -1367,8 +1586,8 @@ export function layoutHandlers<Context extends BoardConnection>({
           const [kind, data] = agentNote
             ? (['agent-note', agentNoteData(agentNoteAuthor(me.agent!), text, place.near?.kind === 'agent' ? { about: place.near.id } : {})] as const)
             : asked === 'sticky'
-              ? (['sticky', { text: signed, color }] as const)
-              : (['text', textItemData(signed, color)] as const);
+              ? (['sticky', { text: signed, ...colors }] as const)
+              : (['text', textItemData(signed, colors)] as const);
           const item = await call('item.create', { kind, zoneId, ...spot, ...size, data: { ...data } });
           markItem.run(me.agent?.sessionId ?? null, item.id);
           for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
@@ -1411,7 +1630,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           if (text !== undefined) checkNoteText(text, kind, me.agent === null ? 0 : signatureLength(me.name));
           // Signed again, in place of the old signature.
           const signed = text === undefined || me.agent === null ? text : stamped(text, me.name);
-          const data = { ...(signed === undefined ? {} : { text: signed }), ...(color === undefined ? {} : { color: noteColor(kind, color) }) };
+          const data = { ...(signed === undefined ? {} : { text: signed }), ...(color === undefined ? {} : noteColor(kind, color)) };
           // A text item is as big as its text; a sticky note keeps its size, its font shrinking to fit.
           const size = kind === 'text' && signed !== undefined ? textSize(signed) : {};
           return call('item.update', { id: item.id, data, ...size });
@@ -1428,8 +1647,125 @@ export function layoutHandlers<Context extends BoardConnection>({
       const entry: ActivityEntry = { detail: '' };
       return access.logged(me, 'remove-note', entry, async () => {
         const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), REMOVABLE_KINDS);
-        entry.on = { id: item.id, name: item.kind === 'link' ? `link ${quoted(String(item.data.url ?? ''))}` : `note ${quoted(noteText(item))}` };
+        entry.on = { id: item.id, name: itemName(item) };
         await call('item.delete', { id: item.id });
+        return null;
+      });
+    },
+
+    'orchestrator.addShape': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.addShape', p, connection);
+      const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
+      return access.logged(me, 'add-shape', entry, async () => {
+        const shape = shapeKindParam(p);
+        if (shape === undefined) throw invalidParams('shape is required');
+        const data = { ...newShapeData(shape), ...shapeDataParams(p, shape) };
+        const place = placeParams(p);
+        const queued = zoneOfPlace(await readBoard(), place, me.zoneId);
+        return arranging(queued ?? '', async () => {
+          const board = await readBoard();
+          const zoneId = zoneOfPlace(board, place, me.zoneId);
+          const zone = checkDestination(me, board, zoneId);
+          const size = shapeSize(data);
+          const spot = spotFor(board, zone, size, place, null, true);
+          const aside = zone === undefined || (place.at === undefined && place.near === undefined) ? [] : roomFor(me, board, zone, { ...spot, ...size }, null);
+          const grown = zone === undefined ? undefined : grownWith(zone, { ...spot, ...size }, true, aside);
+          if (zone !== undefined) checkGrowth(board, zone, grown!, 'put there,');
+          const item = await call('item.create', { kind: 'shape', zoneId, ...spot, ...size, data });
+          markItem.run(me.agent?.sessionId ?? null, item.id);
+          for (const each of aside) await moveTo(each.placed, zoneId, each.spot);
+          if (grown !== undefined) await growTo(zone, grown);
+          entry.on = { id: item.id, name: itemName(item) };
+          entry.detail = `in ${zone?.name ?? 'the board'}`;
+          return item;
+        });
+      });
+    },
+
+    'orchestrator.editShape': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.editShape', p, connection);
+      const entry: ActivityEntry = { detail: typeof p.text === 'string' ? quoted(p.text) : '' };
+      return access.logged(me, 'edit-shape', entry, async () => {
+        const found = (await call('item.list', undefined)).find((each) => each.id === p.id);
+        // In its zone's layout queue: an arrange or add under way can't place things by its old size.
+        return arranging(found?.zoneId ?? '', async () => {
+          const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), SHAPE_KINDS);
+          entry.on = { id: item.id, name: itemName(item) };
+          const asked = shapeKindParam(p);
+          const was = SHAPE_TYPES.includes(item.data.shape as ShapeType) ? (item.data.shape as ShapeType) : 'rectangle';
+          const shape = asked ?? was;
+          const data: Record<string, unknown> = { ...(asked === undefined ? {} : { shape }), ...shapeDataParams(p, shape) };
+          if (Object.keys(data).length === 0) throw invalidParams('give the shape, text, attributes, methods or fill to change');
+          // Its sections go with a kind that has none, so they don't come back unasked if it is made a class again.
+          if (!SECTIONED_SHAPES.includes(shape)) for (const section of SHAPE_SECTIONS) if (item.data[section]) data[section] = '';
+          // Made a class, it takes a class's mono, as one drawn as a class has.
+          if (SECTIONED_SHAPES.includes(shape) && !SECTIONED_SHAPES.includes(was)) data.mono = true;
+          const merged = { ...item.data, ...data } as Parameters<typeof shapeSize>[0];
+          // Only grows, keeping a size the user gave it; the board grows it taller to fit its text as it draws it.
+          const needs = shapeSize({ ...merged, text: typeof merged.text === 'string' ? merged.text : '' });
+          const size = { width: Math.max(item.width, needs.width), height: Math.max(item.height, needs.height) };
+          return call('item.update', { id: item.id, data, ...(size.width === item.width && size.height === item.height ? {} : size) });
+        });
+      });
+    },
+
+    'orchestrator.removeShape': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.removeShape', p, connection);
+      const entry: ActivityEntry = { detail: '' };
+      return access.logged(me, 'remove-shape', entry, async () => {
+        const item = ownNote(me, stringParam(p, 'id'), await call('item.list', undefined), SHAPE_KINDS);
+        entry.on = { id: item.id, name: itemName(item) };
+        await call('item.delete', { id: item.id });
+        return null;
+      });
+    },
+
+    'orchestrator.connect': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.connect', p, connection);
+      const entry: ActivityEntry = { detail: typeof p.relation === 'string' ? p.relation : '' };
+      return access.logged(me, 'connect', entry, async () => {
+        const board = await readBoard();
+        const [from, to] = (['from', 'to'] as const).map((name) => drawable(me, board, stringParam(p, name)));
+        if (from!.id === to!.id) throw invalidParams('a connector joins two different items');
+        const look = connectorLookParams(p);
+        const sides = facingSides(boardRect(board, from!), boardRect(board, to!));
+        entry.on = { id: to!.id, name: `${itemName(from!)} → ${itemName(to!)}` };
+        entry.detail = look.startEnd === undefined ? '' : `as ${String(p.relation)}`;
+        const connector = await call('connector.create', {
+          from: { type: 'item', id: from!.id, side: sides.from },
+          to: { type: 'item', id: to!.id, side: sides.to },
+          ...look,
+        });
+        markConnector.run(me.agent?.sessionId ?? null, connector.id);
+        return connector;
+      });
+    },
+
+    'orchestrator.editConnector': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.editConnector', p, connection);
+      const entry: ActivityEntry = { detail: typeof p.relation === 'string' ? p.relation : '' };
+      return access.logged(me, 'edit-connector', entry, async () => {
+        const connector = await ownConnector(me, stringParam(p, 'id'));
+        entry.on = { id: connector.id, name: connectorName(connector) };
+        const look = connectorLookParams(p);
+        if (Object.keys(look).length === 0) throw invalidParams('give the relation, style or a label to change');
+        return call('connector.update', { id: connector.id, ...look });
+      });
+    },
+
+    'orchestrator.removeConnector': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.removeConnector', p, connection);
+      const entry: ActivityEntry = { detail: '' };
+      return access.logged(me, 'remove-connector', entry, async () => {
+        const connector = await ownConnector(me, stringParam(p, 'id'));
+        entry.on = { id: connector.id, name: connectorName(connector) };
+        await call('connector.delete', { id: connector.id });
         return null;
       });
     },

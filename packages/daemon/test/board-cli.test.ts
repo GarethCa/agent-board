@@ -5,7 +5,7 @@ import { BOARD_HELP, COMMAND_HELP, runBoardCommand } from '../src/board-cli.ts';
 import { runAgentBoardCli } from '../src/cli.ts';
 import { paneIds } from '../src/pane-layout.ts';
 import { daemonPaths, defaultDataDir } from '../src/paths.ts';
-import { AGENT_NOTE_SIZE, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, newShapeData, type AgentUpdatedEvent, type DaemonEvent } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
@@ -437,6 +437,112 @@ describe('laying out the board from the command line', () => {
     expect((await client.call('shell.list')).find((each) => each.id === shell.id)).toMatchObject({ zoneId: null });
     expect(await run(env, 'zone', 'remove', 'zone:web')).toMatchObject({ code: 1, err: expect.stringContaining('only groups') });
     expect((await run(env, 'activity')).out).toMatch(/you {2}remove-zone Shipped work.*you {2}add-zone Done/s);
+  });
+});
+
+describe('drawing a diagram from the command line', () => {
+  it('checks the diagram commands’ arguments before it connects', async () => {
+    const usage = async (args: string[], message: string) =>
+      expect(await run({}, args[0]!, ...args.slice(1))).toMatchObject({ code: 2, err: expect.stringContaining(message) });
+    await usage(['shape', 'add'], 'give the kind of shape');
+    await usage(['shape', 'add', 'blob', 'Order'], 'the shape is one of rectangle');
+    await usage(['shape', 'add', '--kind', 'class', 'Order'], 'give the kind as the first word');
+    await usage(['shape', 'add', 'class', 'Order', '--text', 'Order'], 'give the text or --text, not both');
+    await usage(['shape', 'edit', 'item:1'], 'give its new --kind');
+    await usage(['shape', 'edit', 'item:1', '--near', 'a'], '--near is only for `shape add`');
+    await usage(['shape', 'remove', 'item:1', '--text', 'x'], '`shape remove` takes no options');
+    await usage(['shape', 'draw'], 'the shape commands are');
+    await usage(['connect', 'item:1'], 'give the two items to join');
+    await usage(['connect', 'item:1', 'item:2', '--relation', 'friendship'], 'the relation is one of association');
+    await usage(['connect', 'item:1', 'item:2', '--style', 'wavy'], 'the style is one of straight');
+    await usage(['connector', 'edit', 'connector:1'], 'give its new --relation');
+    await usage(['connector', 'remove', 'connector:1', '--label', 'x'], '`connector remove` takes no options');
+    await usage(['connector', 'bend', 'connector:1'], 'the connector commands are');
+  });
+
+  it('draws a class diagram, reads it back in the tree, by ref and in the zone map, changes it and removes it, as the user', async () => {
+    const daemon = await startTestDaemon({ worktreesDir: tempDataDir() });
+    const client = await connectTestClient(daemon);
+    const env = { AGENT_BOARD_SOCKET: daemon.socketPath };
+    const zone = await client.call('zone.add', { path: tempRepo('shop'), x: 0, y: 0, width: 1400, height: 800, name: 'shop' });
+    const shapeIn = async (text: string) => (await client.call('item.list')).find((item) => item.kind === 'shape' && item.data.text === text)!;
+
+    expect(await run(env, 'shape', 'add', 'class', 'Order', '--to', 'shop', '--attribute', '+ id: UUID', '--attribute', '+ placed: Date', '--method', '+ total(): Money')).toMatchObject({
+      code: 0,
+      out: expect.stringMatching(/^Added item:\S+ {2}shape class {2}"Order" {2}\(2 attributes, 1 method\) \(in zone:\S+ shop\) at \d+,\d+\.\n$/),
+    });
+    const order = await shapeIn('Order');
+    expect(order).toMatchObject({ zoneId: zone.id, data: { shape: 'class', attributes: '+ id: UUID\n+ placed: Date', methods: '+ total(): Money' } });
+    expect(await run(env, 'shape', 'add', 'class', '--near', ref('item', order.id), '--side', 'right', '--', 'LineItem')).toMatchObject({ code: 0 });
+    const line = await shapeIn('LineItem');
+    expect(line.x).toBeGreaterThan(order.x + order.width);
+    expect(await run(env, 'shape', 'add', 'rectangle', 'Cart', '--to', 'shop', '--method', 'x')).toMatchObject({ code: 1, err: expect.stringContaining('a rectangle has no methods') });
+
+    const joined = await run(env, 'connect', ref('item', order.id), ref('item', line.id), '--relation', 'composition', '--from-label', '1', '--to-label', '1..*', '--label', 'holds');
+    expect(joined).toMatchObject({
+      code: 0,
+      out: expect.stringMatching(/^Connected connector:\S+ {2}item:\S+ "Order" → item:\S+ "LineItem" {2}composition {2}\(label "holds", from "1", to "1\.\.\*"\)\.\n$/),
+    });
+    const [connector] = await client.call('connector.list');
+    // Side by side, they are joined right to left, a filled diamond by the whole.
+    expect(connector).toMatchObject({ from: { id: order.id, side: 'right' }, to: { id: line.id, side: 'left' }, startEnd: 'filled-diamond', endEnd: 'none', startLabel: '1', endLabel: '1..*' });
+
+    const tree = await run(env, 'tree');
+    expect(tree.out).toContain(`${ref('connector', connector!.id)}  ${ref('item', order.id)} "Order" → ${ref('item', line.id)} "LineItem"  composition`);
+    expect(JSON.parse((await run(env, 'tree', '--json')).out).zones[0]).toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ kind: 'shape', shape: 'class', text: 'Order', attributes: ['+ id: UUID', '+ placed: Date'], methods: ['+ total(): Money'] })]),
+      connectors: [expect.objectContaining({ relation: 'composition', startLabel: '1', endLabel: '1..*', label: 'holds' })],
+    });
+    const shown = await run(env, 'show', ref('item', order.id));
+    expect(shown.out).toContain('shape class');
+    expect(shown.out).toMatch(/ {2}Order\n {2}── attributes\n {2}\+ id: UUID\n {2}\+ placed: Date\n {2}── methods\n {2}\+ total\(\): Money\n {2}connectors\n {4}connector:/);
+    const connectorShown = await run(env, 'show', ref('connector', connector!.id));
+    expect(connectorShown.out).toMatch(/relation {3}composition\n.*label {6}holds\n {2}from label 1\n {2}to label {3}1\.\.\*/s);
+    const map = await run(env, 'zone', 'map', 'shop');
+    expect(map.out).toMatch(/\ndiagram {2}\(2 shapes, 1 connector; members with --sections[^\n]*\n {2}item:\S+ {2}shape class {2}"Order" {2}\(2 attributes, 1 method\)\n {2}item:\S+ {2}shape class {2}"LineItem"[^\n]*\n {2}connector:\S+ /);
+    expect((await run(env, 'zone', 'map', 'shop', '--sections')).out).toMatch(
+      /\n {2}item:\S+ {2}shape class {2}"Order"[^\n]*\n {4}── attributes\n {4}\+ id: UUID\n {4}\+ placed: Date\n {4}── methods\n {4}\+ total\(\): Money\n {2}item:\S+ {2}shape class {2}"LineItem"[^\n]*\n {4}── attributes\n {4}\(none\)\n/,
+    );
+
+    expect(await run(env, 'shape', 'edit', ref('item', line.id), '--attribute', 'qty: int')).toMatchObject({ code: 0, out: expect.stringContaining('(1 attribute, 0 methods)') });
+    expect(await run(env, 'connector', 'edit', ref('connector', connector!.id), '--relation', 'aggregation', '--label', '')).toMatchObject({ code: 0, out: expect.stringContaining('aggregation  (from "1", to "1..*")') });
+    expect(await run(env, 'shape', 'edit', ref('item', line.id), '--kind', 'rectangle')).toMatchObject({ code: 0 });
+    expect((await shapeIn('LineItem')).data).toMatchObject({ shape: 'rectangle', attributes: '' });
+    expect(await run(env, 'connector', 'remove', ref('connector', connector!.id))).toMatchObject({ code: 0 });
+    expect(await client.call('connector.list')).toEqual([]);
+    expect(await run(env, 'shape', 'remove', ref('item', order.id))).toMatchObject({ code: 0 });
+    expect(await run(env, 'note', 'remove', ref('item', line.id))).toMatchObject({ code: 1, err: expect.stringContaining('the note commands change only notes') });
+    expect((await run(env, 'activity')).out).toMatch(/you {2}remove-shape shape “Order”.*you {2}remove-connector .*you {2}connect shape “Order” → shape “LineItem”.*you {2}add-shape /s);
+  });
+
+  it('keeps a big diagram short in the zone map, and out of what arrange prints', async () => {
+    const daemon = await startTestDaemon({ worktreesDir: tempDataDir() });
+    const client = await connectTestClient(daemon);
+    const env = { AGENT_BOARD_SOCKET: daemon.socketPath };
+    const zone = await client.call('zone.add', { path: tempRepo('big'), x: 0, y: 0, width: 4000, height: 4000, name: 'big' });
+    const members = (what: string) => Array.from({ length: 30 }, (_, n) => `+ ${what}${n}: ${'x'.repeat(300)}`).join('\n');
+    const shapes = [];
+    for (let n = 0; n < 60; n++) {
+      const data = { ...newShapeData('class'), text: `Class${n} ${'y'.repeat(200)}`, attributes: members('field'), methods: members('call') };
+      shapes.push(await client.call('item.create', { kind: 'shape', zoneId: zone.id, x: (n % 10) * 300, y: Math.floor(n / 10) * 400, width: 200, height: 300, data }));
+    }
+    for (let n = 1; n < 60; n++) await client.call('connector.create', { from: { type: 'item', id: shapes[n]!.id, side: 'left' }, to: { type: 'item', id: shapes[n - 1]!.id, side: 'right' } });
+
+    const map = (await run(env, 'zone', 'map', 'big')).out;
+    const diagram = map.slice(map.indexOf('\ndiagram'));
+    expect(diagram).toContain('(60 shapes, 59 connectors;');
+    expect(diagram.split('\n').length).toBeLessThan(45);
+    // Cut short, shapes and connectors share the lines: half the relations still show.
+    expect(diagram.match(/^ {2}item:/gm)).toHaveLength(20);
+    expect(diagram.match(/^ {2}connector:/gm)).toHaveLength(20);
+    expect(diagram).toContain('… and 40 more shapes and 39 more connectors: `agent-board tree --json` lists them all');
+    expect(Math.max(...diagram.split('\n').map((line) => line.length))).toBeLessThan(200);
+    const withSections = (await run(env, 'zone', 'map', 'big', '--sections')).out;
+    const sections = withSections.slice(withSections.indexOf('\ndiagram'));
+    expect(sections.split('\n').length).toBeLessThan(210);
+    expect(sections).toContain('… and 18 more');
+    expect(Math.max(...sections.split('\n').map((line) => line.length))).toBeLessThan(200);
+    expect((await run(env, 'arrange', 'big')).out).not.toContain('diagram');
   });
 });
 

@@ -7,13 +7,13 @@ export interface MasterPanelState {
   open: boolean;
   /** Grows with each ⌘⇧M, which puts the focus in the panel. */
   focusRequest: number;
-  /** The Master button: opens the panel, or closes it. */
+  /** The Captain button: opens the panel, or closes it. */
   toggle(): void;
   close(): void;
 }
 
 /**
- * Whether the board master's panel is open. ⌘⇧M opens it from the board window, a focused expanded tile's terminal
+ * Whether the Captain's panel is open. ⌘⇧M opens it from the board window, a focused expanded tile's terminal
  * included, and puts the focus in its message box; pressed with it open, it gives the focus to the box again. Not while
  * a dialog, menu or session window is over the board.
  */
