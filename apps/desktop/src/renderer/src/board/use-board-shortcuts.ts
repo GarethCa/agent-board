@@ -39,6 +39,8 @@ interface BoardShortcutsOptions {
   openQuickInsert(at: { x: number; y: number } | undefined): void;
   /** Opens the keyboard cheat sheet. */
   openCheatSheet(): void;
+  /** Arranges the board's zones and loose tiles. */
+  arrangeBoard(): void;
   /** Starts typing in the shape with `nodeId`. */
   typeInShape(nodeId: string): void;
 }
@@ -63,11 +65,12 @@ export function useBoardShortcuts({
   cycleCrewLook,
   openQuickInsert,
   openCheatSheet,
+  arrangeBoard,
   typeInShape,
 }: BoardShortcutsOptions) {
   // N adds a note at the pointer, or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, B box-selects, H pans.
-  // / puts any tool down and opens the shape palette at the pointer. ? opens the cheat sheet.
+  // / puts any tool down and opens the shape palette at the pointer. ? opens the cheat sheet. ⇧L arranges the board.
   useEffect(() => {
     if (!loaded) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -90,6 +93,7 @@ export function useBoardShortcuts({
       else if (shortcut.kind === 'connections') cycleConnections();
       else if (shortcut.kind === 'crews') cycleCrewLook();
       else if (shortcut.kind === 'cheatSheet') openCheatSheet();
+      else if (shortcut.kind === 'arrangeBoard') arrangeBoard();
       else if (shortcut.kind === 'insert') {
         setTool(undefined);
         openQuickInsert(pointer.current);
@@ -98,7 +102,7 @@ export function useBoardShortcuts({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet]);
+  }, [loaded, tool, setTool, renameRequest, createItem, pointer, boardCentre, screenToFlowPosition, pickMode, collapseFrontTile, cycleConnections, cycleCrewLook, openQuickInsert, openCheatSheet, arrangeBoard]);
 
   // F2 renames the one agent or shell tile selected; its field opens where it is drawn (compact or expanded).
   useEffect(() => {

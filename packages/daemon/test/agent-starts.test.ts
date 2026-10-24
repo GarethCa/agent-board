@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,13 +10,14 @@ import {
   type AgentStartingEvent,
   type AgentUpdatedEvent,
   type DaemonEvent,
+  type HookEvent,
 } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
 /** A daemon whose agents run the fake harnesses, starting as `fake` says, with a fake Linear. */
-async function startDaemon(fake: Pick<FakeHarnessEnvOptions, 'startDelayMs' | 'startFailure'> = {}, startStepTimeoutMs?: number) {
+async function startDaemon(fake: Pick<FakeHarnessEnvOptions, 'startDelayMs' | 'startFailure' | 'startFailureOnce'> = {}, startStepTimeoutMs?: number) {
   const daemon = await startTestDaemon({
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'output', home: tempDataDir(), ...fake }),
@@ -268,7 +270,9 @@ describe('starting an agent', () => {
     const { client, recorder } = await startDaemon({ startFailure: 'ANTHROPIC_API_KEY not set' });
     const zone = await addZone(client, tempRepo());
 
-    const { sessionId } = await client.call('agent.start', { zoneId: zone.id, prompt: 'Go', role: 'implementer', ...SIZE });
+    // A Codex agent, whose first message is on its command line for the fake to show: a Claude agent's is typed once its
+    // session is up, which a failed start never is.
+    const { sessionId } = await client.call('agent.start', { zoneId: zone.id, harness: 'codex', prompt: 'Go', role: 'implementer', ...SIZE });
     const failed = (event: DaemonEvent): event is AgentUpdatedEvent =>
       isUpdate(sessionId)(event) && event.agent.startup?.failed === true && event.agent.startup.output === 'ANTHROPIC_API_KEY not set';
     await recorder.waitFor(failed);
@@ -281,6 +285,27 @@ describe('starting an agent', () => {
     // Its first message again, the implementer's template first, as the fake shows from its saved screen.
     await client.call('session.attach', { sessionId });
     await recorder.waitForText(sessionId, 'task: You are the implementer');
+  });
+
+  it("retries a Claude agent that exited as it started by typing its whole first message once, at its prompt, never on its command line", async () => {
+    const { client, recorder } = await startDaemon({ startFailure: 'ANTHROPIC_API_KEY not set', startFailureOnce: true });
+    const zone = await addZone(client, tempRepo());
+
+    const { sessionId } = await client.call('agent.start', { zoneId: zone.id, prompt: 'Go', role: 'implementer', ...SIZE });
+    await recorder.waitFor(
+      (event): event is AgentUpdatedEvent =>
+        isUpdate(sessionId)(event) && event.agent.startup?.failed === true && event.agent.startup.output === 'ANTHROPIC_API_KEY not set',
+    );
+    await client.call('agent.retryStart', { sessionId });
+
+    const submitted = (event: DaemonEvent): event is HookEvent => event.type === 'hook' && event.sessionId === sessionId && event.event === 'UserPromptSubmit';
+    const first = await recorder.waitFor(submitted);
+    // Its role's template first, then its task.
+    expect(first.payload.prompt).toMatch(/^You are the implementer[\s\S]*\n\nGo$/);
+    const session = (await client.call('session.list')).find((s) => s.id === sessionId)!;
+    expect(execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(session.pid)], { encoding: 'utf8' })).not.toContain('implementer');
+    await recorder.waitFor((event): event is AgentUpdatedEvent => isUpdate(sessionId)(event) && event.agent.state === 'idle' && recorder.events.indexOf(event) > recorder.events.indexOf(first));
+    expect(recorder.events.filter(submitted)).toHaveLength(1);
   });
 
   it('puts up a start tile for agent.spawn, as orchestrators and Ask Claude use, and shows an issue step', async () => {

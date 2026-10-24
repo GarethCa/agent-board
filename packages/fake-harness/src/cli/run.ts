@@ -1,3 +1,6 @@
+import { existsSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { ConfigError } from '../hooks.ts';
 import type { HarnessName } from '../paths.ts';
 import { isScenario, play, SCENARIOS } from '../scenarios.ts';
@@ -40,11 +43,12 @@ function fail(harness: HarnessName, message: string): never {
 /**
  * What the TUI does before its session starts: prints a boot line and, with `FAKE_HARNESS_START_DELAY_MS`, takes that
  * long, as a slow machine does; with `FAKE_HARNESS_START_FAIL`, prints the first line of the task it was given, then
- * that, and exits 1 before its first hook.
+ * that, and exits 1 before its first hook. With `FAKE_HARNESS_START_FAIL_ONCE=1` too, only the first start under its
+ * `HOME` fails: the ones after start as usual.
  */
 async function boot(harness: HarnessName, prompt: string | undefined): Promise<void> {
   const delayMs = Number(process.env.FAKE_HARNESS_START_DELAY_MS ?? 0);
-  const failure = process.env.FAKE_HARNESS_START_FAIL;
+  const failure = process.env.FAKE_HARNESS_START_FAIL && !failedOnceBefore() ? process.env.FAKE_HARNESS_START_FAIL : undefined;
   if (delayMs <= 0 && !failure) return;
   process.stdout.write(`${harness} is starting\r\n`);
   if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -53,4 +57,13 @@ async function boot(harness: HarnessName, prompt: string | undefined): Promise<v
     process.stdout.write(`${failure}\r\n`);
     process.exit(1);
   }
+}
+
+/** Whether a start that fails only once has failed already under this `HOME`; marks this start as that one if not. */
+function failedOnceBefore(): boolean {
+  if (process.env.FAKE_HARNESS_START_FAIL_ONCE !== '1') return false;
+  const marker = join(process.env.HOME ?? homedir(), '.fake-harness-start-failed');
+  if (existsSync(marker)) return true;
+  writeFileSync(marker, '');
+  return false;
 }

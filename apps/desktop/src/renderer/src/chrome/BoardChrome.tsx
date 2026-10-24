@@ -44,6 +44,8 @@ export interface BoardChromeProps extends CreateToolbarProps {
   shells: readonly Shell[] | undefined;
   /** Opens Add zone in the middle of the view, on the source's tab (GitHub without one). */
   onAddZone(source?: ZoneSource): void;
+  /** Lays the zones out in rows and gathers the loose tiles below them. */
+  onArrangeBoard(): void;
   onJump(zone: Zone): void;
   /** The zone last brought into view, which the zones pill marks and keeps in view. */
   currentZone?: string;
@@ -69,6 +71,8 @@ export interface BoardChromeProps extends CreateToolbarProps {
   onAgentNoteLook(value: AgentNoteLook): void;
   connections: ConnectionsView;
   onConnections(value: ConnectionsView): void;
+  /** When something on the board last asked for Settings (a zone's menu): the board menu opens on it each time it changes. */
+  settingsAsked?: number;
 }
 
 /**
@@ -77,9 +81,12 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterOpen, onMaster, shells, onAddZone, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterOpen, onMaster, shells, onAddZone, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, settingsAsked, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
+  useEffect(() => {
+    if (settingsAsked !== undefined) setMenu({ open: true, at: 'settings', asked: settingsAsked });
+  }, [settingsAsked]);
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
 
   const spotlight = useRef<SpotlightHandle>(null);
@@ -110,6 +117,7 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterO
         shells={shells}
         onJump={onJump}
         onAddZone={() => onAddZone()}
+        onArrangeBoard={onArrangeBoard}
         onOpenAgent={onOpenAgent}
         onOpenShell={onOpenShell}
         onError={onError}

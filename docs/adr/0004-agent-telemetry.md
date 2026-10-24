@@ -304,3 +304,32 @@ PTY.
 - **Gaps.** Linux `bwrap --unshare-pid` adds a process level between the sandbox and the shell, which isn't followed,
   so a Codex agent sandboxed that way never shows `on-command`. A command that daemonises (`nohup … &`, `setsid`) leaves the tree and isn't seen. Windows has no `ps`, so
   agents there are never `on-command`.
+
+**The first prompt, typed**, as built (`packages/daemon/src/agent-spawns.ts` `launch`, `deliveries.ts` `firstPrompt`):
+
+- **Off the command line.** A Claude agent's harness starts with no task in its argv: `ps` shows its binary, flags,
+  session id and `--settings`, never the prompt. Any `pkill -f <word>` run on the machine matches every process whose
+  command line names the word, so a prompt in argv let another agent's `pkill -f vite` end every agent whose task
+  mentioned vitest. Every launch goes through `launch`: a spawn, a reviewer, a restart, a retried start and a wake with
+  a message alike.
+- **Typed once its session is up.** The task is queued in the agent's typing queue (the one delivered messages use) at
+  launch. It is typed, as a bracketed paste, on the session's `SessionStart` (Claude fires it at launch), then
+  submitted as any delivery is. Only `SessionStart` says the session is up: any other hook of its own is of a turn the
+  user began by hand, which the task would be pasted into, left unsent. Until then nothing else is typed at the agent: a message, hand-off,
+  scheduled run or pause is refused at once, saying its session isn't up yet (a hand-off is skipped or queued as for a busy agent),
+  so nothing goes before the task.
+- **Never blind.** A session whose `SessionStart` hasn't come (a startup screen waiting for the user, hooks turned off
+  or failing) is never typed at, as Enter on a startup screen would answer it. Once it is given up on (its `starting`
+  limits, or a minute after a relaunch with no `SessionStart`), the tile shows the task, untyped, with Send and, in
+  plain text, to answer its terminal first: the user types it once its terminal is at its prompt
+  (`agent.typeFirstPrompt`). The agent is flagged too (`Agent.flag`), so its orchestrator, else the user, hears of it
+  away from the board, unless it already flags something of its own. Like any flag, the flag goes when the user opens
+  the agent, and it also goes once the task is typed or the session ends; the tile keeps offering the task until it is
+  typed. A `SessionStart` coming later types it as usual, but not one after a compaction (`source: compact`), which
+  can come mid-turn. A session that ends first types nothing.
+- **State.** Until that prompt's own `UserPromptSubmit`, the agent stays `starting`, its row `idle` (at its prompt), for
+  a minute more from its `SessionStart`: its `SessionStart` no longer shows it `running`, and what it prints from then
+  on (its prompt) is neither its startup output nor a sign of hooks not arriving. One that exits in between is a failed
+  start, as before.
+- **Codex keeps it in argv.** The Codex TUI fires `SessionStart` with its first prompt, not at launch, so there is no
+  hook that says it is ready to be typed at; a Codex agent's task is still its last argument.

@@ -291,3 +291,11 @@ export async function closeAgent(page: Page, sessionId: string): Promise<void> {
     }
   }, sessionId);
 }
+
+/**
+ * Makes the zones added from now on normal spacing, the gaps a test written in px for a zone's slots and padding uses
+ * (a new zone is roomy otherwise).
+ */
+export async function normalNewZones(page: Page): Promise<void> {
+  await page.evaluate(() => window.agentBoard.flowEdges.setSettings({ arrangeSpacing: 'normal' }));
+}

@@ -245,7 +245,7 @@ describe('pushedAside', () => {
 });
 
 const zone = (id: string, x: number, y: number, width = 800, height = 300) =>
-  zoneNode({ id, x, y, width, height, repoRoot: null, folder: '', name: id, color: '#4c6ef5' } as Zone);
+  zoneNode({ id, x, y, width, height, repoRoot: null, folder: '', name: id, color: '#4c6ef5', spacing: 'normal' } as Zone);
 const shell = (id: string, zoneId: string | null, position: TilePosition) =>
   ({ id, zoneId, position, name: id, cwd: '/', layout: { type: 'pane', sessionId: `${id}-pane` }, endedPanes: [] }) as unknown as Shell;
 const at = (x: number, y: number): TilePosition => ({ x, y, z: 0 });

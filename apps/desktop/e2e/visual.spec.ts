@@ -338,13 +338,16 @@ test('a session window resized up to the board\'s top edge clears the macOS traf
   }
 });
 
-/** Zones in four colours with every fill opacity from none to the most, and a zone's menu with its 16 colours and slider. */
+/**
+ * Zones in four colours with every fill opacity from none to the most, a zone's menu with its 16 colours and slider
+ *, and the ▾ beside its Tidy: Tidy now and its spacing.
+ */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },
 ] as const) {
   test(`zone colours and fill opacity: four zones and the zone menu, ${theme}`, async () => {
-    needsBaselines(`zone-looks${suffix}`, `zone-menu${suffix}`);
+    needsBaselines(`zone-looks${suffix}`, `zone-menu${suffix}`, `zone-spacing-menu${suffix}`);
     const { dir, env } = scratch('waiting');
     const dataDir = tempDataDir();
     const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
@@ -382,6 +385,19 @@ for (const { theme, suffix } of [
       restorePointer = await ignorePointer(window);
       await settle(window);
       await expect.soft(window.locator('body')).toHaveScreenshot(`zone-menu${suffix}.png`, SHOT);
+      await restorePointer();
+      await window.keyboard.press('Escape');
+      await expect(window.getByRole('menu')).toBeHidden();
+
+      // A zone wide enough for Tidy and its ▾ to stay on its tab.
+      await window.evaluate(() => globalThis.window.agentBoard.zones.addUnbound({ name: 'Spacing', x: 0, y: 460, width: 720, height: 200 }));
+      const spacious = zoneNamed(window, 'Spacing');
+      await spacious.getByRole('button', { name: 'Tidy and spacing' }).click();
+      await expect(window.getByRole('menuitemradio', { name: /Roomy/ })).toHaveAttribute('aria-checked', 'true');
+      await expect(window.getByRole('menuitem', { name: /Roomy · Settings/ })).toBeVisible();
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`zone-spacing-menu${suffix}.png`, SHOT);
       await restorePointer();
     } finally {
       await app.close().catch(() => {});
@@ -2104,6 +2120,41 @@ for (const { theme, suffix } of [
       await app.close();
       await removeDataDir(dataDir);
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+/**
+ * A shape's style bar where the theme paints some slots alike: Latte folds Blue into Accent, Dracula folds more, each
+ * folded swatch with its dashed ring.
+ */
+for (const { theme, scheme } of [
+  { theme: 'catppuccin-latte', scheme: 'light' },
+  { theme: 'dracula', scheme: 'dark' },
+] as const) {
+  test(`the shape style bar shows each distinct colour once, ${theme}`, async () => {
+    needsBaselines(`shape-bar-${theme}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS);
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: scheme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+      await window.mouse.click(pane.x + pane.width - 20, pane.y + pane.height / 2);
+      await window.keyboard.press('s');
+      await drag(window, { x: pane.x + 300, y: pane.y + 400 }, { x: pane.x + 500, y: pane.y + 510 });
+      await window.getByTestId('shape').click();
+      const bar = window.getByRole('toolbar', { name: 'Shape style' });
+      await expect(bar).toBeVisible();
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(bar).toHaveScreenshot(`shape-bar-${theme}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
     }
   });
 }

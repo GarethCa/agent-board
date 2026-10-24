@@ -180,12 +180,38 @@ test("a shape is drawn in the theme's colours, which follow a switch of theme, a
 
     await shapeOf(slotted!).click();
     const swatch = (name: string) => window.getByRole('button', { name, exact: true }).evaluate((button) => getComputedStyle(button).backgroundColor);
-    expect(await swatch('Stroke blue')).toBe('rgb(137, 180, 250)');
-    await window.getByRole('button', { name: 'Stroke blue', exact: true }).click();
-    await window.getByRole('button', { name: 'Fill blue', exact: true }).click();
-    await expect.poll(async () => (await stored(dataDir)).find((item) => item.id === slotted!.id)?.data).toMatchObject({ strokeSlot: 'blue', fillSlot: 'blue' });
+    // Mocha paints Blue as it does Accent, so the row shows them as one swatch, which says so.
+    await expect(window.getByRole('button', { name: 'Stroke blue', exact: true })).toHaveCount(0);
+    await expect(window.getByRole('button', { name: 'Stroke accent', exact: true })).toHaveAttribute('title', 'Accent · also Blue here');
+    // A shape that stores Blue shows the folded swatch as picked, and its stored data stays Blue.
+    await window.evaluate(
+      (id) => globalThis.window.agentBoard.items.update({ id, data: { stroke: '#3b5bdb', strokeSlot: 'blue', fill: '#d0ebff', fillSlot: 'blue' } }),
+      slotted!.id,
+    );
+    await expect(window.getByRole('button', { name: 'Stroke accent', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(window.getByRole('button', { name: 'Fill accent', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    expect((await stored(dataDir)).find((item) => item.id === slotted!.id)?.data).toMatchObject({ strokeSlot: 'blue', fillSlot: 'blue' });
+    // The right-click menu folds the same way, and lights the folded swatch for a shape that stores Blue.
+    await shapeOf(slotted!).click({ button: 'right' });
+    const fillRow = window.getByRole('group', { name: 'Shape fill' });
+    await expect(fillRow.getByLabel('Accent', { exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(fillRow.getByLabel('Blue', { exact: true })).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    // Nord paints Blue alone: switching theme with the bar open unfolds it, and it is the one picked.
+    await setTheme('nord');
+    await expect(window.locator('html')).toHaveAttribute('data-theme', 'nord');
+    await expect(window.getByRole('button', { name: 'Stroke blue', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(window.getByRole('button', { name: 'Stroke accent', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(window.getByRole('button', { name: 'Fill blue', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await setTheme('catppuccin');
+    await expect(window.locator('html')).toHaveAttribute('data-theme', 'catppuccin-mocha');
+    await expect(window.getByRole('button', { name: 'Stroke accent', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(await swatch('Stroke violet')).toBe('rgb(203, 166, 247)');
+    await window.getByRole('button', { name: 'Stroke violet', exact: true }).click();
+    await window.getByRole('button', { name: 'Fill violet', exact: true }).click();
+    await expect.poll(async () => (await stored(dataDir)).find((item) => item.id === slotted!.id)?.data).toMatchObject({ strokeSlot: 'violet', fillSlot: 'violet' });
     const token = (name: string) => window.evaluate((name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), name);
-    const mocha = { stroke: await token('--paint-blue'), fill: await token('--shape-fill-blue') };
+    const mocha = { stroke: await token('--paint-violet'), fill: await token('--shape-fill-violet') };
     await expect.poll(async () => Object.fromEntries(Object.entries(await look(slotted!)).map(([key, value]) => [key, value.trim()]))).toEqual(mocha);
 
     // # sets a fixed colour, which the bar shows as its own swatch.
@@ -200,7 +226,7 @@ test("a shape is drawn in the theme's colours, which follow a switch of theme, a
     const strokeOf = (item: BoardItem) => shapeOf(item).locator('.shape-art').evaluate((art) => getComputedStyle(art.querySelector('path, rect, ellipse, polygon')!).stroke);
     await setTheme('gruvbox');
     await expect(window.locator('html')).toHaveAttribute('data-theme', 'gruvbox-dark');
-    const gruvbox = { stroke: await token('--paint-blue'), fill: await token('--shape-fill-blue') };
+    const gruvbox = { stroke: await token('--paint-violet'), fill: await token('--shape-fill-violet') };
     expect(gruvbox).not.toEqual(mocha);
     await expect.poll(async () => Object.fromEntries(Object.entries(await look(slotted!)).map(([key, value]) => [key, value.trim()]))).toEqual(gruvbox);
     expect(await strokeOf(fixed!)).toBe('rgb(232, 89, 12)');

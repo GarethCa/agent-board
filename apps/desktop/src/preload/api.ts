@@ -730,6 +730,7 @@ export const AGENT_IPC = {
   continueOnCredits: 'agent:continueOnCredits',
   sendUnsent: 'agent:sendUnsent',
   clearUnsent: 'agent:clearUnsent',
+  typeFirstPrompt: 'agent:typeFirstPrompt',
   stop: 'agent:stop',
   pause: 'agent:pause',
   resume: 'agent:resume',
@@ -809,6 +810,8 @@ export interface AgentsApi {
   sendUnsent(sessionId: string): Promise<Agent>;
   /** Clears the message typed at the agent's prompt and never sent (`Agent.unsent`); resolves with the agent. */
   clearUnsent(sessionId: string): Promise<Agent>;
+  /** Types the first prompt its session never said it was up for (`Agent.untypedPrompt`); resolves with the agent. */
+  typeFirstPrompt(sessionId: string): Promise<Agent>;
   /** Ends the agent's session, keeping its worktree and branch; resolves with it done. */
   stop(sessionId: string): Promise<Agent>;
   /** Pauses the idle agent (hibernated), ending its session to free what it held; resolves with it paused. */

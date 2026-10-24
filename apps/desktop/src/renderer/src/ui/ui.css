@@ -853,6 +853,13 @@
   margin-left: auto;
 }
 
+/* A few muted words at a row's end. */
+.ui-menu-detail {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
 .ui-menu-separator {
   height: 1px;
   margin: var(--space-1) var(--space-0-5);

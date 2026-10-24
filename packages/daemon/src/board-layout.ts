@@ -1,6 +1,6 @@
 // Where tiles, items and zones go on the board: the pure geometry the board and the daemon's layout
 // commands share, so a tile an orchestrator moves lands where a drop would. Pure, so every case is unit-tested.
-import type { Agent, TileSide, ZoneLayout } from './protocol.ts';
+import type { Agent, ArrangeSpacing, TileSide, ZoneLayout } from './protocol.ts';
 
 export interface Point {
   x: number;
@@ -100,58 +100,105 @@ export const RAIL_TOKEN_ROOM = 160;
 /** The least gap between two tiles a rail joins, so its token and label clear both: its room, and a tile gap each side. */
 export const RAIL_GAP = RAIL_TOKEN_ROOM + 2 * TILE_GAP;
 
+/**
+ * A spacing's gaps, in px: between two tiles in a row (`tile`), from the bottom of one lane or row to the top of the
+ * next's tiles, the perch above them included (`lane`), between a zone's edge and what it holds (`padding`), and
+ * between two tiles a rail joins (`rail`: its token's room and a tile gap each side). Arrange, Tidy, placing a new
+ * tile, sizing a zone round its tiles and the zone map's lint all read them from here.
+ */
+export interface SpacingGaps {
+  tile: number;
+  lane: number;
+  padding: number;
+  rail: number;
+}
+
+/** Each spacing's gaps. Normal's are the gaps a zone always had (`TILE_GAP`, `ROW_STEP`, `ZONE_PADDING`, `RAIL_GAP`). */
+export const SPACING_GAPS: Readonly<Record<ArrangeSpacing, SpacingGaps>> = {
+  compact: { tile: 8, lane: 32, padding: 12, rail: RAIL_TOKEN_ROOM + 2 * 8 },
+  normal: { tile: TILE_GAP, lane: PERCH_ROOM + TILE_GAP, padding: ZONE_PADDING, rail: RAIL_GAP },
+  roomy: { tile: 32, lane: 64, padding: 32, rail: RAIL_TOKEN_ROOM + 2 * 32 },
+};
+
+/**
+ * A zone's grid at a spacing: where its first cell is (`origin`), and how far apart its columns and rows are. A column
+ * is a default tile and a tile gap wide, never less than the board's 16 px dots, so tiles in a row are at least that far
+ * apart; a row is a default tile and a lane gap tall.
+ */
+export interface ZoneGrid {
+  gaps: SpacingGaps;
+  origin: Point;
+  column: number;
+  row: number;
+}
+
+/** The board's dot grid: tiles in a row are never closer. */
+const DOT_STEP = 16;
+
+/** A zone's grid at `spacing`. */
+export function zoneGrid(spacing: ArrangeSpacing): ZoneGrid {
+  const gaps = SPACING_GAPS[spacing];
+  return {
+    gaps,
+    origin: { x: gaps.padding, y: gaps.padding + PERCH_ROOM },
+    column: AGENT_TILE_SIZE.width + Math.max(DOT_STEP, gaps.tile),
+    row: AGENT_TILE_SIZE.height + gaps.lane,
+  };
+}
+
+/** The grid at normal spacing: `GRID_ORIGIN`, `GRID_COLUMN` and `ROW_STEP`, what places tiles outside a Tidy or an arrange use. */
+export const NORMAL_GRID = zoneGrid('normal');
+
 /** The top-left of the grid cell `column` along and `row` down, relative to its zone. */
-export const gridPoint = (column: number, row: number): Point => ({ x: GRID_ORIGIN.x + column * GRID_COLUMN, y: GRID_ORIGIN.y + row * ROW_STEP });
+export const gridPoint = (column: number, row: number, grid: ZoneGrid = NORMAL_GRID): Point => ({ x: grid.origin.x + column * grid.column, y: grid.origin.y + row * grid.row });
 
 /** The grid cell nearest `point`, relative to its zone: never left of or above the first. */
-export function snapToGrid(point: Point): Point {
-  return gridPoint(Math.max(0, Math.round((point.x - GRID_ORIGIN.x) / GRID_COLUMN)), Math.max(0, Math.round((point.y - GRID_ORIGIN.y) / ROW_STEP)));
+export function snapToGrid(point: Point, grid: ZoneGrid = NORMAL_GRID): Point {
+  return gridPoint(Math.max(0, Math.round((point.x - grid.origin.x) / grid.column)), Math.max(0, Math.round((point.y - grid.origin.y) / grid.row)), grid);
 }
 
 /** The first grid row whose tiles start at or below `y`. */
-export const gridRowAtOrBelow = (y: number): number => Math.max(0, Math.ceil((y - GRID_ORIGIN.y - EPSILON) / ROW_STEP));
+export const gridRowAtOrBelow = (y: number, grid: ZoneGrid = NORMAL_GRID): number => Math.max(0, Math.ceil((y - grid.origin.y - EPSILON) / grid.row));
 
 /** The first grid column whose tiles start at or right of `x`. */
-export const gridColumnAtOrRight = (x: number): number => Math.max(0, Math.ceil((x - GRID_ORIGIN.x - EPSILON) / GRID_COLUMN));
+export const gridColumnAtOrRight = (x: number, grid: ZoneGrid = NORMAL_GRID): number => Math.max(0, Math.ceil((x - grid.origin.x - EPSILON) / grid.column));
 
 /** How many grid columns and rows a tile of `size` takes, with its gaps and the room above it for its characters. */
-export function gridSpan(size: Size): { columns: number; rows: number } {
+export function gridSpan(size: Size, grid: ZoneGrid = NORMAL_GRID): { columns: number; rows: number } {
   return {
-    columns: Math.max(1, Math.ceil((size.width + TILE_GAP - EPSILON) / GRID_COLUMN)),
-    rows: Math.max(1, Math.ceil((size.height + PERCH_ROOM + TILE_GAP - EPSILON) / ROW_STEP)),
+    columns: Math.max(1, Math.ceil((size.width + grid.column - AGENT_TILE_SIZE.width - EPSILON) / grid.column)),
+    rows: Math.max(1, Math.ceil((size.height + grid.gaps.lane - EPSILON) / grid.row)),
   };
 }
 
 /**
  * Where the `index`th tile of a zone `zoneWidth` wide goes, relative to the zone: in rows from the top-left, as many
- * to a row as fit, and at least one, each row below room for its characters.
+ * to a row as fit, and at least one, each row below room for its characters; on `grid`, a normal zone's without.
  */
-export function tileSlot(index: number, zoneWidth: number): { x: number; y: number } {
-  const perRow = Math.max(1, Math.floor((zoneWidth - 2 * ZONE_PADDING + TILE_GAP) / (AGENT_TILE_SIZE.width + TILE_GAP)));
-  return {
-    x: ZONE_PADDING + (index % perRow) * (AGENT_TILE_SIZE.width + TILE_GAP),
-    y: ZONE_PADDING + PERCH_ROOM + Math.floor(index / perRow) * ROW_STEP,
-  };
+export function tileSlot(index: number, zoneWidth: number, grid: ZoneGrid = NORMAL_GRID): { x: number; y: number } {
+  const perRow = Math.max(1, Math.floor((zoneWidth - 2 * grid.origin.x + grid.column - AGENT_TILE_SIZE.width) / grid.column));
+  return gridPoint(index % perRow, Math.floor(index / perRow), grid);
 }
 
-/** How tall a zone `zoneWidth` wide must be to hold `tileCount` tiles laid out by `tileSlot`, at least one row. */
-export function zoneHeightFor(tileCount: number, zoneWidth: number): number {
-  const lastSlot = tileSlot(Math.max(tileCount, 1) - 1, zoneWidth);
-  return lastSlot.y + AGENT_TILE_SIZE.height + TILE_GAP + ZONE_PADDING;
+/** How tall a zone `zoneWidth` wide must be to hold `tileCount` tiles laid out by `tileSlot` on `grid`, at least one row. */
+export function zoneHeightFor(tileCount: number, zoneWidth: number, grid: ZoneGrid = NORMAL_GRID): number {
+  const lastSlot = tileSlot(Math.max(tileCount, 1) - 1, zoneWidth, grid);
+  return lastSlot.y + AGENT_TILE_SIZE.height + grid.gaps.tile + grid.gaps.padding;
 }
 
 /**
- * Where a new tile of `size` goes in a zone `zoneWidth` wide: the first `tileSlot` where no tile in `taken` (relative to
- * the zone) covers it, even partly, so it never lands on top of another. A resized tile takes only a slot it fits in
- * the zone's width from, or the first of a row.
+ * Where a new tile of `size` goes in a zone `zoneWidth` wide: the first `tileSlot` of the zone's `grid` where no tile in
+ * `taken` (relative to the zone) covers it, even partly, so it never lands on top of another. A resized tile takes only
+ * a slot it fits in the zone's width from, or the first of a row.
  */
-export function freeTileSlot(zoneWidth: number, taken: readonly ZoneLayout[], size: Size = AGENT_TILE_SIZE): { x: number; y: number } {
+export function freeTileSlot(zoneWidth: number, taken: readonly ZoneLayout[], size: Size = AGENT_TILE_SIZE, grid: ZoneGrid = NORMAL_GRID): { x: number; y: number } {
+  const { padding, lane } = grid.gaps;
   for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
-    const slot = tileSlot(index, zoneWidth);
-    const fits = slot.x === ZONE_PADDING || slot.x + size.width + ZONE_PADDING <= zoneWidth;
+    const slot = tileSlot(index, zoneWidth, grid);
+    const fits = slot.x === padding || slot.x + size.width + padding <= zoneWidth;
     if (fits && !taken.some((tile) => overlaps({ ...slot, width: size.width, height: size.height }, tile))) return slot;
   }
-  return { x: ZONE_PADDING, y: lowestOf(taken, 0) + TILE_GAP + PERCH_ROOM };
+  return { x: padding, y: lowestOf(taken, 0) + lane };
 }
 
 /**
@@ -241,12 +288,13 @@ export function freeItemSpot(zoneWidth: number, size: { width: number; height: n
 
 /**
  * The least size a zone needs to hold `tiles` (relative to it) with its padding round them, as `zoneHeightFor` does
- * for tiles laid out by `tileSlot`: at least a row tall.
+ * for tiles laid out by `tileSlot` on its `grid`: at least a row tall.
  */
-export function zoneMinSize(tiles: readonly ZoneLayout[]): { width: number; height: number } {
+export function zoneMinSize(tiles: readonly ZoneLayout[], grid: ZoneGrid = NORMAL_GRID): { width: number; height: number } {
+  const { tile: gap, padding } = grid.gaps;
   const right = Math.max(0, ...tiles.map((tile) => tile.x + tile.width));
-  const bottom = Math.max(...tiles.map((tile) => tile.y + tile.height + TILE_GAP + ZONE_PADDING));
-  return { width: right + ZONE_PADDING, height: Math.max(zoneHeightFor(0, 0), bottom) };
+  const bottom = Math.max(...tiles.map((tile) => tile.y + tile.height + gap + padding));
+  return { width: right + padding, height: Math.max(zoneHeightFor(0, 0, grid), bottom) };
 }
 
 /** A tile in a zone, by its top-left relative to the zone. */
@@ -277,13 +325,15 @@ export function packTiles(
   size: { width: number; height: number },
   tiles: readonly ZoneTile[],
   obstacles: readonly Rect[] = [],
+  grid: ZoneGrid = NORMAL_GRID,
 ): Map<string, { x: number; y: number }> | undefined {
   const { width, height } = AGENT_TILE_SIZE;
+  const { tile: gap, padding } = grid.gaps;
   const region = {
-    left: ZONE_PADDING,
-    top: ZONE_PADDING + PERCH_ROOM,
-    right: size.width - ZONE_PADDING - width,
-    bottom: size.height - TILE_GAP - ZONE_PADDING - height,
+    left: padding,
+    top: padding + PERCH_ROOM,
+    right: size.width - padding - width,
+    bottom: size.height - gap - padding - height,
   };
   const inside = (spot: { x: number; y: number }) =>
     spot.x >= region.left - EPSILON &&
@@ -297,8 +347,8 @@ export function packTiles(
     return (
       tile.x >= region.left - EPSILON &&
       tile.y >= region.top - EPSILON &&
-      tile.x + own.width <= size.width - ZONE_PADDING + EPSILON &&
-      tile.y + own.height <= size.height - TILE_GAP - ZONE_PADDING + EPSILON
+      tile.x + own.width <= size.width - padding + EPSILON &&
+      tile.y + own.height <= size.height - gap - padding + EPSILON
     );
   };
   if (tiles.some((tile) => resized(tile) && !holds(tile))) return undefined;
@@ -317,11 +367,12 @@ export function packTiles(
   if (near !== undefined) return new Map([...packed, ...near]);
 
   // In reading order, into the free slots of rows round the tiles that stay.
-  const slots = freeSlots(size, region.bottom);
+  const slots = freeSlots(size, region.bottom, grid);
   const inRows = placeEach(
     cut.toSorted((a, b) => a.y - b.y || a.x - b.x),
     taken,
-    (_tile, blocking) => slots.find((slot) => clearOf(footprint(slot), blocking)),
+    // As far apart as the zone's own rows are, so a compact zone's rows are free slots too.
+    (_tile, blocking) => slots.find((slot) => clearOf(footprint(slot), blocking, gap)),
   );
   return inRows === undefined ? undefined : new Map([...packed, ...inRows]);
 }
@@ -415,6 +466,8 @@ export interface Slotting<T> {
   rect(tile: T): Rect;
   footprint(tile: T): Rect;
   zoneWidth(zoneId: string): number;
+  /** The zone's grid, at its spacing, whose slots a new tile in it takes: a normal zone's without. */
+  zoneGrid?(zoneId: string): ZoneGrid;
   /** Every zone, on the board: a loose tile keeps clear of them. */
   zones: readonly Rect[];
   /** The board items in the zone (or loose, for undefined), which are in the way too. */
@@ -441,7 +494,7 @@ export function slotUnplaced<T>(tiles: readonly T[], slotting: Slotting<T>): voi
       crewSpot(placeOf(orchestrator)!, [...siblings.map(slotting.footprint), ...inTheWay, ...(zoneId === undefined ? slotting.zones : [])], slotting.footprint(orchestrator).width);
     if (besideIt !== undefined) slotting.place(tile, besideIt);
     else if (zoneId === undefined) slotting.place(tile, freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...slotting.zones, ...siblings.map(slotting.rect)]));
-    else slotting.place(tile, freeTileSlot(slotting.zoneWidth(zoneId), [...siblings.map(slotting.rect), ...inTheWay]));
+    else slotting.place(tile, freeTileSlot(slotting.zoneWidth(zoneId), [...siblings.map(slotting.rect), ...inTheWay], AGENT_TILE_SIZE, slotting.zoneGrid?.(zoneId)));
   }
 }
 
@@ -453,37 +506,38 @@ export function sizedFootprint(spot: { x: number; y: number }, size: { width: nu
   return { x: spot.x, y: spot.y - PERCH_ROOM, width: size.width, height: size.height + PERCH_ROOM };
 }
 
-/** Whether `rect` keeps `TILE_GAP` from every one of `others`. */
-export function clearOf(rect: Rect, others: readonly Rect[]): boolean {
+/** Whether `rect` keeps `gap` (a tile gap without) from every one of `others`. */
+export function clearOf(rect: Rect, others: readonly Rect[], gap = TILE_GAP): boolean {
   return others.every(
     (other) =>
-      rect.x + rect.width + TILE_GAP <= other.x + EPSILON ||
-      other.x + other.width + TILE_GAP <= rect.x + EPSILON ||
-      rect.y + rect.height + TILE_GAP <= other.y + EPSILON ||
-      other.y + other.height + TILE_GAP <= rect.y + EPSILON,
+      rect.x + rect.width + gap <= other.x + EPSILON ||
+      other.x + other.width + gap <= rect.x + EPSILON ||
+      rect.y + rect.height + gap <= other.y + EPSILON ||
+      other.y + other.height + gap <= rect.y + EPSILON,
   );
 }
 
-/** The `tileSlot` slots of a zone `size` that are inside it, a tile's top-left no lower than `bottom`. */
-function freeSlots(size: { width: number; height: number }, bottom: number): { x: number; y: number }[] {
+/** The `tileSlot` slots of `grid` of a zone `size` that are inside it, a tile's top-left no lower than `bottom`. */
+function freeSlots(size: { width: number; height: number }, bottom: number, grid: ZoneGrid): { x: number; y: number }[] {
   const slots: { x: number; y: number }[] = [];
   for (let index = 0; index < MAX_SEARCH_STEPS; index++) {
-    const slot = tileSlot(index, size.width);
+    const slot = tileSlot(index, size.width, grid);
     if (slot.y > bottom + EPSILON) return slots;
-    if (slot.x + AGENT_TILE_SIZE.width + ZONE_PADDING <= size.width + EPSILON) slots.push(slot);
+    if (slot.x + AGENT_TILE_SIZE.width + grid.gaps.padding <= size.width + EPSILON) slots.push(slot);
   }
   return slots;
 }
 
 /**
- * The least a zone `size` can shrink to and still hold `tileCount` tiles laid out by `tileSlot`: its least width at its
- * height, and its least height at its width. `packTiles` can always pack them into that.
+ * The least a zone `size` can shrink to and still hold `tileCount` tiles laid out by `tileSlot` on its `grid`: its least
+ * width at its height, and its least height at its width. `packTiles` can always pack them into that.
  */
-export function leastZoneSize(tileCount: number, size: { width: number; height: number }): { width: number; height: number } {
+export function leastZoneSize(tileCount: number, size: { width: number; height: number }, grid: ZoneGrid = NORMAL_GRID): { width: number; height: number } {
   if (tileCount === 0) return { width: 0, height: 0 };
   const { width, height } = AGENT_TILE_SIZE;
-  const rowsRoom = size.height - 2 * ZONE_PADDING - PERCH_ROOM - height - TILE_GAP;
-  const rows = Math.max(1, Math.floor(rowsRoom / (PERCH_ROOM + height + TILE_GAP)) + 1);
+  const { tile: gap, padding } = grid.gaps;
+  const rowsRoom = size.height - 2 * padding - PERCH_ROOM - height - gap;
+  const rows = Math.max(1, Math.floor(rowsRoom / grid.row) + 1);
   const perRow = Math.ceil(tileCount / rows);
-  return { width: 2 * ZONE_PADDING + perRow * width + (perRow - 1) * TILE_GAP, height: zoneHeightFor(tileCount, size.width) };
+  return { width: 2 * padding + perRow * width + (perRow - 1) * (grid.column - width), height: zoneHeightFor(tileCount, size.width, grid) };
 }

@@ -1,7 +1,6 @@
 import { memo, useContext, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react';
 import {
-  COLOR_SLOTS,
   MAX_TEXT_LENGTH,
   TEXT_ALIGNS,
   TEXT_PRESET_FONT_SIZES,
@@ -219,7 +218,6 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
         <BarRow>
           <SlotSwatches
             label="Text"
-            slots={COLOR_SLOTS}
             slot={style.colorSlot}
             color={style.color}
             onPick={(slot) => restyle(inSlot('color', slot))}

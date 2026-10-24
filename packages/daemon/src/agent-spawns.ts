@@ -86,6 +86,7 @@ interface AgentSpawnOptions
     | 'boardCliPath'
     | 'env'
     | 'compactWindow'
+    | 'clickableLinks'
     | 'shell'
     | 'shellArgs'
     | 'hookUrl'
@@ -111,6 +112,8 @@ interface AgentSpawnOptions
   records: Pick<AgentRecordStore, 'put'>;
   /** The agent was started with a first prompt, which its session has yet to take up. */
   promptQueued(sessionId: string): void;
+  /** Types `prompt` at the Claude agent just launched as session `sessionId`, once its session is up. */
+  typeFirstPrompt(sessionId: string, prompt: string): void;
   /**
    * Watches the agent just launched: a bypassed Codex agent's worktree for project config, and a Codex agent carrying
    * on conversation `codexSessionId` for `codex resume` failing.
@@ -174,6 +177,8 @@ export function createAgentSpawns(
   pending: Pick<AgentStarts, 'has' | 'retry' | 'update' | 'dismiss' | 'dismissIn'>;
   /** The first message the agent was started with, if any, while it is on the board. */
   firstMessage(sessionId: string): string | undefined;
+  /** Whether the Claude agent's session was started with our `FORCE_HYPERLINK=1`; undefined when this daemon never started it. */
+  hyperlinked(sessionId: string): boolean | undefined;
   /** The agent was deleted. */
   forget(sessionId: string): void;
 } {
@@ -210,7 +215,8 @@ export function createAgentSpawns(
 
   /**
    * Starts the agent's harness in `cwd` as session `id`, with a new hook token, and `task` (if any) as its first
-   * message. With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
+   * message: typed at Claude's prompt once its session is up, so that no `pkill -f` naming a word of it ends the agent
+   * (Codex, which fires no hook before its first prompt, still takes it on its command line). With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
    * is known (else it starts afresh). Returns whether Codex runs with the hook-trust bypass flag. Throws
    * `AGENT_ERROR.projectCodexConfig` for a Codex agent whose worktree has Codex config, unless allowed.
    */
@@ -233,7 +239,6 @@ export function createAgentSpawns(
           ...(boardCli === undefined ? [] : ['--mcp-config', JSON.stringify(claudeMcpConfig(options.boardMcpUrl()))]),
           ...(spec.model === null ? [] : ['--model', spec.model]),
           ...(spec.readOnly === true ? ['--permission-mode', 'plan'] : []),
-          ...(task === undefined ? [] : ['--', task]),
         ],
       };
     } else {
@@ -262,6 +267,21 @@ export function createAgentSpawns(
     // Only Claude Code has a knob for it, and only when the setting is on: off leaves whatever the user's own env has.
     const compactWindow = options.compactWindow();
     if (harness === 'claude' && compactWindow > 0) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(compactWindow);
+    // A `FORCE_HYPERLINK` that carries our marker was set by an agent-board this daemon was started from (inside one of
+    // its Claude agents): not the user's, so it goes, and the setting decides afresh.
+    if (env[FORCED_HYPERLINK_ENV] !== undefined) {
+      delete env.FORCE_HYPERLINK;
+      delete env[FORCED_HYPERLINK_ENV];
+    }
+    // Claude Code prints OSC 8 links only when it thinks the terminal wants them. A value of the user's own wins.
+    if (harness === 'claude') {
+      const forced = options.clickableLinks() && env.FORCE_HYPERLINK === undefined;
+      if (forced) {
+        env.FORCE_HYPERLINK = '1';
+        env[FORCED_HYPERLINK_ENV] = '1';
+      }
+      hyperlinked.set(id, forced);
+    }
     sessions.start({
       id,
       harness,
@@ -273,6 +293,7 @@ export function createAgentSpawns(
       ...spec.size,
       hookTokenSha256: hashToken(token),
     });
+    if (harness === 'claude' && task !== undefined) options.typeFirstPrompt(id, task);
     return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
   };
 
@@ -389,6 +410,8 @@ export function createAgentSpawns(
 
   /** The first message each agent was started with, for a retry of a start whose harness exited before its first hook. */
   const firstMessages = new Map<string, string>();
+  /** Whether each Claude agent's latest session got our `FORCE_HYPERLINK=1` (`DaemonSettings.clickableLinks`), by session id. */
+  const hyperlinked = new Map<string, boolean>();
 
   /**
    * `work`, unless it takes longer than a start's step may: then the start fails, saying `what` took too long, and
@@ -693,7 +716,11 @@ export function createAgentSpawns(
 
     firstMessage: (sessionId) => firstMessages.get(sessionId),
 
-    forget: (sessionId) => void firstMessages.delete(sessionId),
+    hyperlinked: (sessionId) => hyperlinked.get(sessionId),
+    forget: (sessionId) => {
+      firstMessages.delete(sessionId);
+      hyperlinked.delete(sessionId);
+    },
 
     async spawnReviewer({ of, name, branch: wanted, prompt, cols, rows }) {
       const implementer = getRow(of);
@@ -876,6 +903,12 @@ export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
 
 /** What the board MCP server is called in a harness's MCP config. */
 const BOARD_MCP_SERVER = 'agent-board';
+
+/**
+ * Set beside the `FORCE_HYPERLINK=1` that agent-board gives a Claude agent, so an agent-board started from inside that
+ * agent can tell its inherited `FORCE_HYPERLINK` from one the user set.
+ */
+export const FORCED_HYPERLINK_ENV = 'AGENT_BOARD_FORCED_HYPERLINK';
 
 /** The board env Codex passes its stdio board MCP server (ADR-0010). */
 const BOARD_MCP_ENV = [BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_SESSION_ENV, BOARD_ZONE_ENV];

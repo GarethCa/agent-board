@@ -77,6 +77,9 @@ async function agentSide(setup: Setup, name: string) {
   const { daemon, client, recorder, zone } = setup;
   const agent = await client.call('agent.spawn', { zoneId: zone.id, name, prompt: 'Print your board identity', ...SIZE });
   await client.call('session.attach', { sessionId: agent.sessionId });
+  // A TUI losing Enters loses those after its first prompt too, which is typed at it: Send then sends it, as you would.
+  const up = await untilAgent(recorder, agent.sessionId, (seen) => seen.state === 'thinking' || seen.unsent !== null);
+  if (up.unsent !== null) await client.call('agent.sendUnsent', { sessionId: agent.sessionId });
   await recorder.waitForText(agent.sessionId, ':end\r\n');
   const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
   await untilAgent(recorder, agent.sessionId, (seen) => seen.state === 'waiting');
@@ -679,7 +682,8 @@ describe('an answer sent mid-turn', () => {
   );
 
   it('shows as not sent once no Enter starts a turn on it after that turn, and no hand-off is typed onto it', async () => {
-    const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 4 }, 200);
+    // Each agent's first prompt, typed at it, goes up: only the answer after it loses Enters.
+    const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 4, loseEntersAfter: 1 }, 200);
     const { agent: a } = await agentSide(setup, 'impl');
     const b = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'review', prompt: 'Work slowly', ...SIZE });
     await setup.client.call('session.attach', { sessionId: b.sessionId });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeTiles, CLUSTER_LABEL_SIZE, CLUSTER_NOTE_SIZE, parkClusters, ticketOfBranch, type ArrangeTile } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, TILE_GAP, ZONE_PADDING, type Point, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, ZONE_PADDING, type Point, type Rect } from '../src/board-layout.ts';
+import { ARRANGE_SPACINGS } from '../src/protocol.ts';
 
 const COLUMN = AGENT_TILE_SIZE.width + TILE_GAP;
 /** Where a zone's first grid row starts. */
@@ -415,6 +416,103 @@ describe('arranging a crowded zone', () => {
       expect(result.positions.size).toBe(40);
       expectClear(result.positions, many, [wall]);
       expect(offGrid(result, many)).toEqual([]);
+    }
+  });
+});
+
+describe('arranging at a spacing', () => {
+  // A busy zone: the lead, then three lanes of an implementer and the reviewer an edge joins it to, each with its note.
+  const busy: ArrangeTile[] = [
+    agent('lead', { lead: true }),
+    ...[9, 12, 15].flatMap((n) => [
+      agent(`impl-${n}`, { role: 'implementer', issue: `ACME-${n}` }),
+      agent(`review-${n}`, { role: 'reviewer', reviewOf: `impl-${n}` }),
+    ]),
+  ];
+  const links = [9, 12, 15].map((n) => ({ from: `impl-${n}`, to: `review-${n}` }));
+  const { width, height } = AGENT_TILE_SIZE;
+
+  it.each(ARRANGE_SPACINGS)('%s: the zone padding, rail, tile gap and lane gap its spacing says', (spacing) => {
+    const gaps = SPACING_GAPS[spacing];
+    const { positions, clusters, size } = arrangeTiles(busy, links, { by: 'issue', layout: 'rows', width: 600, clusters: true, spacing });
+    const at = (id: string) => positions.get(id)!;
+    // The lead at the zone's top-left, its padding and its perch in from the edge; each lane's label at its padding.
+    expect(at('lead')).toEqual({ x: gaps.padding, y: gaps.padding + PERCH_ROOM });
+    for (const cluster of clusters) expect(cluster.labelAt.x).toBe(gaps.padding);
+    // Along a lane: a rail's room between the pair, a tile gap to the note.
+    expect(at('review-9').x - (at('impl-9').x + width)).toBe(gaps.rail);
+    expect(clusters[0]!.noteAt.x - (at('review-9').x + width)).toBe(gaps.tile);
+    // A lane gap below the top row and below each lane, the perch in it.
+    expect(at('impl-9').y - (at('lead').y + height)).toBe(gaps.lane);
+    expect(at('impl-12').y - (at('impl-9').y + height)).toBe(gaps.lane);
+    expect(at('impl-15').y - (at('impl-12').y + height)).toBe(gaps.lane);
+    // The lanes line up, and the zone ends its padding past the last note.
+    expect(new Set(['impl-9', 'impl-12', 'impl-15'].map((id) => at(id).x)).size).toBe(1);
+    expect(size.width).toBe(clusters[0]!.noteAt.x + CLUSTER_NOTE_SIZE.width + gaps.padding);
+    expect(size.height).toBe(at('impl-15').y + height + gaps.tile + gaps.padding);
+  });
+
+  it('at normal spacing, puts the busy zone exactly where it always went', () => {
+    expect(SPACING_GAPS.normal).toEqual({ tile: 16, lane: 40, padding: 20, rail: 192 });
+    for (const spacing of ['normal', undefined] as const) {
+      const { positions, clusters, size } = arrangeTiles(busy, links, { by: 'issue', layout: 'rows', width: 600, clusters: true, ...(spacing === undefined ? {} : { spacing }) });
+      expect(px(positions)).toEqual({
+        lead: [20, 44],
+        'impl-9': [292, 220],
+        'review-9': [740, 220],
+        'impl-12': [292, 396],
+        'review-12': [740, 396],
+        'impl-15': [292, 572],
+        'review-15': [740, 572],
+      });
+      expect(clusters.map((cluster) => [cluster.labelAt, cluster.noteAt])).toEqual([220, 396, 572].map((y) => [{ x: 20, y }, { x: 1012, y }]));
+      expect(size).toEqual({ width: 1288, height: 744 });
+    }
+  });
+
+  it('keeps tiles in a row on the dots, a tile gap or 16 px apart, whichever is more', () => {
+    const pair = [agent('impl-a', { role: 'implementer', issue: 'ACME-9' }), agent('impl-b', { role: 'implementer', issue: 'ACME-9' })];
+    const gapAt = (spacing: (typeof ARRANGE_SPACINGS)[number]) => {
+      const { positions } = arrangeTiles(pair, [], { by: 'issue', layout: 'rows', width: 600, spacing });
+      return positions.get('impl-b')!.x - (positions.get('impl-a')!.x + width);
+    };
+    expect([gapAt('compact'), gapAt('normal'), gapAt('roomy')]).toEqual([16, 16, 32]);
+  });
+
+  it("leaves a rail's room between rows a rail crosses, at the spacing's rail", () => {
+    // By state, an edge joins tiles in two rows.
+    const tiles = [agent('a', { state: 'waiting' }), agent('b', { state: 'idle' })];
+    for (const spacing of ARRANGE_SPACINGS) {
+      const { positions } = arrangeTiles(tiles, [{ from: 'a', to: 'b' }], { by: 'state', layout: 'rows', width: 600, spacing });
+      // From the upper tile's bottom to the lower one's perch.
+      expect(positions.get('b')!.y - PERCH_ROOM - (positions.get('a')!.y + height)).toBe(SPACING_GAPS[spacing].rail);
+    }
+  });
+
+  it('as a grid, fills each row of its spacing, none skipped', () => {
+    const loose = ['a', 'b', 'c', 'd'].map((id) => agent(id));
+    for (const spacing of ARRANGE_SPACINGS) {
+      const { positions } = arrangeTiles(loose, [], { by: 'issue', layout: 'grid', width: 640, spacing });
+      // Two to a row: the third starts the next row, a tile and a lane gap below the first.
+      expect(positions.get('c')!.y - positions.get('a')!.y).toBe(height + SPACING_GAPS[spacing].lane);
+    }
+  });
+
+  it.each(['columns', 'cards', 'grid'] as const)('in %s, starts at the spacing\'s padding and keeps its gaps', (layout) => {
+    for (const spacing of ARRANGE_SPACINGS) {
+      const gaps = SPACING_GAPS[spacing];
+      const { positions } = arrangeTiles(busy, links, { by: 'issue', layout, width: 1400, clusters: layout !== 'grid', spacing });
+      const rects = busy.map((tile) => ({ x: positions.get(tile.id)!.x, y: positions.get(tile.id)!.y, width, height }));
+      expect(Math.min(...rects.map((rect) => rect.x))).toBe(gaps.padding);
+      expect(Math.min(...rects.map((rect) => rect.y))).toBe(gaps.padding + PERCH_ROOM);
+      // No two tiles closer than its tile gap across, or its lane gap down.
+      for (const a of rects) {
+        for (const b of rects) {
+          if (a === b) continue;
+          const apart = Math.max(b.x - (a.x + width), b.y - (a.y + height) - (gaps.lane - gaps.tile));
+          if (b.x >= a.x && b.y >= a.y) expect(apart).toBeGreaterThanOrEqual(gaps.tile);
+        }
+      }
     }
   });
 });

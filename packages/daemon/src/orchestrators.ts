@@ -93,6 +93,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.removeEdge': 'remove-edge',
   'orchestrator.move': 'move',
   'orchestrator.arrange': 'arrange',
+  'orchestrator.arrangeBoard': 'arrange-board',
   'orchestrator.addZone': 'add-zone',
   'orchestrator.changeZone': 'change-zone',
   'orchestrator.removeZone': 'remove-zone',
@@ -165,8 +166,8 @@ const SCOPE_RANK: Record<OrchestrateScope, number> = { zone: 0, repo: 1, board: 
 
 /**
  * States an agent takes a message in: between turns, at its prompt (after a failed or rate-limited turn too, or with a
- * command still running), `starting` (the message queues behind its first prompt in the terminal), or `hibernated` (it
- * wakes with it).
+ * command still running), `starting` (a Codex agent's message queues behind its first prompt in the terminal; a Claude
+ * agent's is refused, saying so, until its session is up and its first prompt typed), or `hibernated` (it wakes with it).
  */
 const SENDABLE_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['starting', 'idle', 'waiting', 'scheduled', 'on-command', 'failed', 'rate-limited', 'hibernated']);
 

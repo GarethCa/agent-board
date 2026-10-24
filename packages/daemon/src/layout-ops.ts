@@ -205,9 +205,10 @@ export async function zoneMap(
   return { text: [mapText(refs, map, options.boxes === true), ...(diagram.length === 0 ? [] : ['', ...diagram])].join('\n'), json: map };
 }
 
-/** `arrange`: lays out the tiles of a zone (the caller's by default) it may move. */
+/** `arrange`: lays out the tiles of a zone (the caller's by default) it may move; `board`, the whole board. */
 export async function arrangeZone(session: BoardSession, zone: string | undefined, options: ArrangeOptions): Promise<BoardView> {
   checkArrange(options);
+  if (zone === 'board') return arrangeWholeBoard(session, options);
   const refs = new BoardRefs(await readBoard(session.client));
   const result = await session.client.call('orchestrator.arrange', {
     token: session.token,
@@ -550,4 +551,20 @@ export async function removeConnector(session: BoardSession, ref: string): Promi
   const id = connectorId(refs, ref, session.caller);
   await session.client.call('orchestrator.removeConnector', { token: session.token, id });
   return { text: `Removed ${refs.of('connector', id)}.`, json: null };
+}
+
+/**
+ * `arrange board`: lays out the whole board, its zones in rows and its loose tiles below them, never what is in a zone,
+ * for an orchestrator of the whole board. It takes none of a zone's arrange options.
+ */
+async function arrangeWholeBoard(session: BoardSession, options: ArrangeOptions): Promise<BoardView> {
+  if (Object.values(options).some((value) => value !== undefined)) throw new BoardError('arrange board takes no --by, --layout or --auto: they are a zone\'s');
+  const result = await session.client.call('orchestrator.arrangeBoard', { token: session.token });
+  const refs = new BoardRefs(await readBoard(session.client));
+  const zones = result.zones.map((each) => `  ${refs.of('zone', each.zoneId)} ${refs.board.zones.find((zone) => zone.id === each.zoneId)?.name ?? ''} ${where(each.x, each.y)}`);
+  const tiles = result.moved.map((each) => `  ${label(refs, each.target)} ${where(each.x, each.y)}`);
+  return {
+    text: zones.length + tiles.length === 0 ? 'The board was arranged already: nothing moved.' : ['Arranged the board:', ...zones, ...tiles].join('\n'),
+    json: result,
+  };
 }

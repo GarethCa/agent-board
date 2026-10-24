@@ -39,6 +39,7 @@ const CHANNELS: string[] = [
   'agent:subagentTranscript',
   'agent:takeOpenRequest',
   'agent:transcript',
+  'agent:typeFirstPrompt',
   'agent:updateStart',
   'appearance:changed',
   'appearance:get',

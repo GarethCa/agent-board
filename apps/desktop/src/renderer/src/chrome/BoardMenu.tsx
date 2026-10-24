@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { LifeBuoy, Menu as MenuIcon, Plus, Search } from 'lucide-react';
+import { LayoutDashboard, LifeBuoy, Menu as MenuIcon, Plus, Search } from 'lucide-react';
 import { APP_NAME } from '../../../shared/brand';
 import { DaemonStatus, type DaemonStatusValue } from '../DaemonStatus';
-import { keyText } from '../keys/registry';
+import { binding, isActive, keyText } from '../keys/registry';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
@@ -24,6 +24,8 @@ export interface BoardMenuProps extends Omit<SettingsProps, 'muted'> {
   onJump(zone: Zone): void;
   /** Opens Add zone, in the middle of the view. */
   onAddZone(): void;
+  /** Lays the zones out in rows and gathers the loose tiles below them. */
+  onArrangeBoard(): void;
   onOpenAgent(agent: Agent): void;
   onOpenShell(shell: Shell): void;
   /** Reopens onboarding; the Help section's Getting started row shows only while it is set. */
@@ -37,7 +39,7 @@ export interface BoardMenuProps extends Omit<SettingsProps, 'muted'> {
  * panel with the zones, the agents and shells, and the settings. Its search field (⌘\ opens the menu on it) narrows
  * the zones and agents by name; Find opens the ⌘K switcher.
  */
-export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onOpenAgent, onOpenShell, onGettingStarted, onFind, ...settings }: BoardMenuProps) {
+export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onArrangeBoard, onOpenAgent, onOpenShell, onGettingStarted, onFind, ...settings }: BoardMenuProps) {
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const settingsSection = useRef<HTMLElement>(null);
@@ -113,6 +115,19 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
               }}
             >
               Add a zone
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<LayoutDashboard />}
+              disabled={zones === undefined}
+              tooltip={`Zones in rows, loose tiles below; nothing inside a zone moves${isActive(binding('edit.arrangeBoard')) ? `  ${keyText('edit.arrangeBoard')}` : ''}`}
+              onClick={() => {
+                close();
+                onArrangeBoard();
+              }}
+            >
+              Arrange the board
             </Button>
           </div>
         </Section>

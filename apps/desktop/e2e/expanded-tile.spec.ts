@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
@@ -825,16 +826,16 @@ test('Tidy lays a messy zone out in rows in reading order, fitting the zone to t
 
     await zone.getByRole('button', { name: 'Tidy zone' }).click();
     // In reading order: the top one, then the one on the left, then the one below on the right; the zone keeps its
-    // width and fits its height to one row of two and a second row.
-    const PADDING = 20;
+    // width and fits its height to one row of two and a second row, at a new zone's spacing (roomy).
+    const { padding: PADDING, tile: GAP, lane: LANE } = SPACING_GAPS.roomy;
     const PERCH = 24;
-    const STEP = { x: 256 + 16, y: PERCH + 136 + 16 };
+    const STEP = { x: 256 + GAP, y: 136 + LANE };
     const slot = (index: number) => ({ x: PADDING + (index % 2) * STEP.x, y: PADDING + PERCH + Math.floor(index / 2) * STEP.y });
     await expect
       .poll(async () => Object.fromEntries((await storedShellPlaces(window)).map(([id, place]) => [id, { x: place!.x, y: place!.y }])))
       .toEqual({ [ids[2]!]: slot(0), [ids[1]!]: slot(1), [ids[0]!]: slot(2) });
     await expect.poll(async () => (await storedZoneLayouts(window))[0]).toMatchObject({ width: zoneBefore.width });
-    expect((await storedZoneLayouts(window))[0]!.height).toBe(slot(2).y + 136 + 16 + PADDING);
+    expect((await storedZoneLayouts(window))[0]!.height).toBe(slot(2).y + 136 + GAP + PADDING);
 
     // One undo puts the tiles and the zone back.
     await window.locator('.react-flow__pane').click({ position: { x: 20, y: 300 } });

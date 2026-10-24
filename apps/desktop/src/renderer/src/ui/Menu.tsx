@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from 'react';
 import * as RadixMenu from '@radix-ui/react-dropdown-menu';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Circle, CircleDot } from 'lucide-react';
 import { Swatch } from './Field';
 import { Kbd } from './Label';
 
@@ -17,7 +17,14 @@ export interface MenuAction {
   disabled?: boolean;
   /** A line under the row saying what it leaves alone, such as "Agents stay running". */
   hint?: string;
+  /** One choice of the rows beside it: drawn as a radio button, picked when true, in place of an icon. */
+  checked?: boolean;
+  /** A few muted words at the row's end, such as the gaps a spacing keeps. */
+  detail?: string;
 }
+
+/** A choice's radio button, picked or not; nothing for a row that is no choice. */
+const radioOf = (checked: boolean | undefined) => (checked === undefined ? undefined : checked ? <CircleDot aria-hidden="true" /> : <Circle aria-hidden="true" />);
 
 /** A row that opens a menu of its own beside it. */
 export interface Submenu {
@@ -216,9 +223,11 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
         data-hinted={entry.hint === undefined ? undefined : true}
         disabled={entry.disabled}
         onSelect={entry.onSelect}
+        {...(entry.checked === undefined ? {} : { role: 'menuitemradio', 'aria-checked': entry.checked })}
       >
-        {entry.icon}
+        {entry.icon ?? radioOf(entry.checked)}
         {entry.label}
+        {entry.detail !== undefined && <span className="ui-menu-detail">{entry.detail}</span>}
         {entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
         {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
       </RadixMenu.Item>
@@ -313,7 +322,8 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
         return (
           <div
             key={entry.label}
-            role="menuitem"
+            role={!submenu && entry.checked !== undefined ? 'menuitemradio' : 'menuitem'}
+            aria-checked={submenu ? undefined : entry.checked}
             className="ui-menu-item"
             aria-haspopup={submenu ? 'menu' : undefined}
             data-danger={(!submenu && entry.danger) || undefined}
@@ -322,8 +332,9 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
             data-disabled={entry.disabled ? '' : undefined}
             aria-disabled={entry.disabled || undefined}
           >
-            {entry.icon}
+            {entry.icon ?? (submenu ? undefined : radioOf(entry.checked))}
             {entry.label}
+            {!submenu && entry.detail !== undefined && <span className="ui-menu-detail">{entry.detail}</span>}
             {submenu && <ChevronRight className="ui-menu-chevron" />}
             {!submenu && entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
             {!submenu && entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}

@@ -5,6 +5,12 @@ overrides:
   # @electron/get 3.x (pinned by app-builder-lib) loads global-agent only for proxy
   # setups; 3.0.0 pulls in roarr 2 -> sprintf-js. 4.1.3 has the same bootstrap API.
   "@electron/get>global-agent": 4.1.3
+  # Security fixes for build-tool dependencies (node-gyp, @electron/get, ajv, knip) whose
+  # parents haven't picked them up yet; drop once they pull these versions themselves.
+  "undici@6": ^6.29.1
+  "undici@7": ^7.30.1
+  "fast-uri@3": ^3.1.9
+  "zod@4": ^4.6.6
 allowBuilds:
   electron: true
   electron-winstaller: false

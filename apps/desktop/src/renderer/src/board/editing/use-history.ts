@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import type { BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
+import type { ArrangeSpacing, BoardItem, Connector, FlowEdge, PaneLayout, ShellPlace, TileMove, UpdateItemParams, WindowOwner, Zone, ZoneLayout, ZoneSnapshot } from '@agent-board/daemon/protocol';
 import type { Placement, Surface } from '@agent-board/daemon/window-layout';
 import type { RenameTarget } from '../rename';
 import { emptyHistory, merged, record, redo, undo, withoutLastCreation, type History, type States, type Step } from './history';
@@ -18,6 +18,7 @@ export type BoardState =
   | { type: 'flowEdge'; edge: FlowEdge }
   | { type: 'zone'; layout: ZoneLayout }
   | { type: 'zoneLook'; look: ZoneLook }
+  | { type: 'zoneSpacing'; spacing: ArrangeSpacing }
   | { type: 'zoneGroup'; group: DissolvedGroup }
   | { type: 'tile'; move: TileMove }
   | { type: 'tileSize'; size: { width: number; height: number } }
@@ -51,6 +52,7 @@ export const historyKey = {
   flowEdge: (id: string) => `flow-edge:${id}`,
   zone: (id: string) => `zone:${id}`,
   zoneLook: (id: string) => `zone-look:${id}`,
+  zoneSpacing: (id: string) => `zone-spacing:${id}`,
   zoneGroup: (id: string) => `zone-group:${id}`,
   tile: (nodeId: string) => `tile:${nodeId}`,
   tileSize: (nodeId: string) => `tile-size:${nodeId}`,

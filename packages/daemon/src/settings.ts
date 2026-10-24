@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { invalidParams, oneOf, optionalBooleanParam, paramsObject, stringParam } from './params.ts';
-import { COMPACT_WINDOW_RANGE, HELD_PAYLOAD_STORAGE, NEEDS_YOU_SHOWS, type DaemonMethods, type DaemonSettings } from './protocol.ts';
+import { ARRANGE_SPACINGS, COMPACT_WINDOW_RANGE, DEFAULT_ARRANGE_SPACING, HELD_PAYLOAD_STORAGE, NEEDS_YOU_SHOWS, type DaemonMethods, type DaemonSettings } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 
 type SettingsMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `settings.${string}`>>;
@@ -12,13 +12,15 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   claudePath: '',
   codexPath: '',
   compactWindow: 0,
+  clickableLinks: true,
   needsYouShows: 'explicit',
   notifications: true,
   notifyInFront: false,
+  arrangeSpacing: DEFAULT_ARRANGE_SPACING,
 };
 
 /** The settings that are switches. */
-const SWITCHES = ['notifications', 'notifyInFront'] as const;
+const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront'] as const;
 
 export interface SettingsHost {
   get(): DaemonSettings;
@@ -40,6 +42,7 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       if (key === 'compactWindow' && isCompactWindow(JSON.parse(value))) settings.compactWindow = JSON.parse(value);
       if ((key === 'claudePath' || key === 'codexPath') && typeof JSON.parse(value) === 'string') settings[key] = JSON.parse(value);
       if (key === 'needsYouShows' && NEEDS_YOU_SHOWS.includes(JSON.parse(value))) settings.needsYouShows = JSON.parse(value);
+      if (key === 'arrangeSpacing' && ARRANGE_SPACINGS.includes(JSON.parse(value))) settings.arrangeSpacing = JSON.parse(value);
       for (const name of SWITCHES) if (key === name && typeof JSON.parse(value) === 'boolean') settings[name] = JSON.parse(value);
     }
     return settings;
@@ -58,6 +61,7 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
         }
         if (fields.compactWindow !== undefined) upsert.run('compactWindow', JSON.stringify(compactWindowParam(fields)));
         if (fields.needsYouShows !== undefined) upsert.run('needsYouShows', JSON.stringify(oneOf(fields, 'needsYouShows', NEEDS_YOU_SHOWS)));
+        if (fields.arrangeSpacing !== undefined) upsert.run('arrangeSpacing', JSON.stringify(oneOf(fields, 'arrangeSpacing', ARRANGE_SPACINGS)));
         for (const name of SWITCHES) {
           const on = optionalBooleanParam(fields, name);
           if (on !== undefined) upsert.run(name, JSON.stringify(on));

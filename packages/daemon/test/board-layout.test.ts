@@ -28,9 +28,12 @@ import {
   ZONE_PADDING,
   zoneHeightFor,
   zoneMinSize,
+  zoneGrid,
+  SPACING_GAPS,
   type ZoneTile,
   type Rect,
 } from '../src/board-layout.ts';
+import { ARRANGE_SPACINGS } from '../src/protocol.ts';
 
 const size = { width: 100, height: 50 };
 
@@ -105,6 +108,48 @@ describe('zoneHeightFor', () => {
 
   it('needs more rows in a narrower zone', () => {
     expect(zoneHeightFor(3, 100)).toBe(2 * ZONE_PADDING + 3 * rowHeight);
+  });
+});
+
+describe("a zone's spacing, for what places and sizes its tiles", () => {
+  const { width, height } = AGENT_TILE_SIZE;
+
+  it.each(ARRANGE_SPACINGS)('%s: a new tile takes the first free slot of its grid', (spacing) => {
+    const grid = zoneGrid(spacing);
+    const { padding } = SPACING_GAPS[spacing];
+    const first = freeTileSlot(1000, [], AGENT_TILE_SIZE, grid);
+    expect(first).toEqual({ x: padding, y: padding + 24 });
+    expect(freeTileSlot(1000, [{ ...first, width, height }], AGENT_TILE_SIZE, grid)).toEqual({ x: padding + grid.column, y: padding + 24 });
+  });
+
+  it.each(ARRANGE_SPACINGS)("%s: a zone holds its tiles with its spacing's padding and tile gap round them", (spacing) => {
+    const { padding, tile } = SPACING_GAPS[spacing];
+    const tiles = [{ x: padding, y: padding + 24, width, height }];
+    expect(zoneMinSize(tiles, zoneGrid(spacing))).toEqual({ width: padding + width + padding, height: padding + 24 + height + tile + padding });
+  });
+
+  it("is a normal zone's without a grid", () => {
+    expect(zoneMinSize([{ x: 20, y: 44, width, height }])).toEqual({ width: 296, height: 216 });
+    expect(freeTileSlot(1000, [])).toEqual({ x: 20, y: 44 });
+    expect(leastZoneSize(4, { width: 2000, height: 216 })).toEqual({ width: 4 * width + 3 * 16 + 40, height: 216 });
+  });
+
+  it.each(ARRANGE_SPACINGS)('%s: shrinks no further than rows of its tiles on its grid', (spacing) => {
+    const grid = zoneGrid(spacing);
+    const { padding } = SPACING_GAPS[spacing];
+    // One row tall: four tiles side by side, on its columns.
+    const oneRow = padding + 24 + height + grid.gaps.tile + padding;
+    expect(leastZoneSize(4, { width: 2000, height: oneRow }, grid)).toEqual({ width: 2 * padding + 3 * grid.column + width, height: oneRow });
+  });
+
+  it.each(ARRANGE_SPACINGS)('%s: packs a tile its edge cuts through into its padding, on its grid', (spacing) => {
+    const grid = zoneGrid(spacing);
+    const { padding } = SPACING_GAPS[spacing];
+    const size = { width: 2 * padding + width, height: padding + 24 + 2 * height + grid.gaps.lane + grid.gaps.tile + padding };
+    const packed = packTiles(size, [{ id: 'a', x: padding, y: padding + 24 }, { id: 'b', x: padding + grid.column, y: padding + 24 }], [], grid)!;
+    expect(packed.get('a')).toEqual({ x: padding, y: padding + 24 });
+    expect(packed.get('b')!.x).toBe(padding);
+    expect(packed.get('b')!.y).toBeGreaterThanOrEqual(padding + 24 + height + grid.gaps.tile);
   });
 });
 

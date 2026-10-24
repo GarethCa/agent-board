@@ -110,6 +110,8 @@ export interface TileActions {
   sendUnsent(sessionId: string): Promise<void>;
   /** Clears the message typed at the agent's prompt and never sent; settles once done (or failing that, said why). */
   clearUnsent(sessionId: string): Promise<void>;
+  /** Types the first prompt its session never said it was up for; settles once done (or failing that, said why). */
+  typeFirstPrompt(sessionId: string): Promise<void>;
   /** Restarts an ended agent, asking first if the shell its pane dropped into is running something. */
   restartAgent(sessionId: string): void;
   /** Starts a shell tile's panes stopped by a restart again; settles once it has (or failing that, said why). */
@@ -176,6 +178,7 @@ export const TileActionsContext = createContext<TileActions>({
   pauseAgent: async () => {},
   sendUnsent: async () => {},
   clearUnsent: async () => {},
+  typeFirstPrompt: async () => {},
   restartAgent: () => {},
   resumeShell: async () => {},
   startReview: () => {},

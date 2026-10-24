@@ -229,6 +229,7 @@ const api: AgentBoardApi = {
     continueOnCredits: (sessionId) => invoke(AGENT_IPC.continueOnCredits, sessionId),
     sendUnsent: (sessionId) => invoke(AGENT_IPC.sendUnsent, sessionId),
     clearUnsent: (sessionId) => invoke(AGENT_IPC.clearUnsent, sessionId),
+    typeFirstPrompt: (sessionId) => invoke(AGENT_IPC.typeFirstPrompt, sessionId),
     stop: (sessionId) => invoke(AGENT_IPC.stop, sessionId),
     pause: (sessionId) => invoke(AGENT_IPC.pause, sessionId),
     resume: (sessionId) => invoke(AGENT_IPC.resume, sessionId),

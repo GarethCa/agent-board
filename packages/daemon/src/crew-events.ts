@@ -1,7 +1,7 @@
 // Crew events: what happened to each agent, once each, derived from the daemon's agent updates, so an
 // orchestrator hears its crew through `orchestrator.wait` instead of polling states and collapsing their flips itself.
 import { randomBytes } from 'node:crypto';
-import { CREW_CURSOR as CURSOR, MAX_CREW_EVENTS, waitsOnUser, type Agent, type AgentState, type CrewEvent, type CrewEventKind, type PullRequest } from './protocol.ts';
+import { CREW_CURSOR as CURSOR, MAX_CREW_EVENTS, planPending, waitsOnUser, type Agent, type AgentState, type CrewEvent, type CrewEventKind, type PullRequest } from './protocol.ts';
 import { oneLine } from './terminal-input.ts';
 
 /** States a turn is under way in: a turn ends when an agent goes from one of these to its prompt. */
@@ -74,6 +74,7 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
     agent.state === 'needs-permission' ||
     agent.permissions.length > 0 ||
     waitsOnUser(agent) ||
+    planPending(agent) ||
     // Waiting with no ask of the board's: Claude's own question (`agent_needs_input`), unless only its idle prompt.
     (agent.state === 'waiting' && agent.endedAt === null && !options.idlePrompted(agent.sessionId));
 

@@ -72,6 +72,15 @@ import { moveParams, optionalPlaceParam, saveMove, tilePosition, zoneIdParam, ty
 import type { RoleTemplates } from './role-templates.ts';
 import { inGroupFolder } from './zones.ts';
 
+/**
+ * How long a relaunched agent's session gets to say it is up (its `SessionStart`) before its tile offers its first prompt
+ * to send by hand: as long as a starting one gets (`STARTING_MAX_MS`).
+ */
+const FIRST_PROMPT_STALL_MS = 60_000;
+/** The flag a Claude agent's first prompt raises once its session is given up on saying it is up. */
+const STALLED_FIRST_PROMPT =
+  "its session never said it was up, so its first prompt isn't typed and messages to it are refused: the user answers its terminal, then presses Send on its tile";
+
 /** The agent's hooks after which its branch is read: not the ones before a tool runs or that only notify. */
 const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
 
@@ -117,6 +126,8 @@ export interface AgentHostOptions {
   boardCliPath?: string;
   /** The context size Claude agents compact at (`DaemonSettings.compactWindow`), read as each starts; 0 for Claude's own. */
   compactWindow: () => number;
+  /** Whether Claude agents get `FORCE_HYPERLINK=1` (`DaemonSettings.clickableLinks`), read as each starts. */
+  clickableLinks: () => boolean;
   /** The environment harness sessions start from. */
   env: NodeJS.ProcessEnv;
   /** The user's shell and its arguments. A login shell (`-l`) also launches the harness, so it gets the profile's PATH. */
@@ -346,6 +357,8 @@ export interface AgentHost {
   sendUnsent(sessionId: string): Promise<Agent>;
   /** Clears the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked. */
   clearUnsent(sessionId: string): Agent;
+  /** Types the first prompt its session never said it was up for (`Agent.untypedPrompt`), as the user asked. */
+  typeFirstPrompt(sessionId: string): Agent;
   /**
    * Moves the session's agent, if it has one, and its subagents on a hook call. Resolves with the hook's reply: a
    * PermissionRequest is held open until the user decides in the inbox, or the hold lapses (`signal` aborts if the
@@ -541,15 +554,59 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
     },
   });
+  /** Each live agent's flag (`Agent.flag`), without who it reaches: in memory, as its session ending clears it. */
+  const flags = new Map<string, Omit<AgentFlag, 'to'>>();
+  /** The last flag's id: each new one is the next. */
+  let lastFlagId = 0;
+  /**
+   * Per Claude agent launched with a first prompt not yet typed: the prompt, what settles whether to type it (true on
+   * its session's `SessionStart`, or the user's Send; false once that session ends or the agent is deleted), and
+   * whether its session has been given up on saying it is up (`stalled`): its tile then offers the prompt to send, and
+   * the flag it raised for that (`flagId`) asks for a look.
+   */
+  const firstPrompts = new Map<
+    string,
+    { prompt: string; settle: (ready: boolean) => void; stalled: boolean; flagId: number | null; cancel: () => void }
+  >();
+  const settleFirstPrompt = (sessionId: string, ready: boolean) => {
+    const entry = firstPrompts.get(sessionId);
+    if (entry === undefined) return;
+    firstPrompts.delete(sessionId);
+    entry.cancel();
+    entry.settle(ready);
+    // Its flag goes with it, unless the agent has flagged something of its own since.
+    if (entry.flagId !== null && flags.get(sessionId)?.id === entry.flagId) flags.delete(sessionId);
+    if (entry.stalled) announce(sessionId);
+  };
+  /**
+   * The agent's session never said it was up: its first prompt waits, untyped, for its `SessionStart` or the user's
+   * Send, and a flag says so to its orchestrator, else the user (unless the agent has flagged something of its own).
+   */
+  const stallFirstPrompt = (sessionId: string) => {
+    const entry = firstPrompts.get(sessionId);
+    if (entry === undefined || entry.stalled) return;
+    entry.stalled = true;
+    options.log(`${sessionId}'s session never said it was up: its first prompt is not typed until it does, or the user sends it`);
+    // A flag of the agent's own already asks for a look: it stays, as its own words.
+    if (!flags.has(sessionId)) {
+      entry.flagId = ++lastFlagId;
+      flags.set(sessionId, { id: entry.flagId, reason: STALLED_FIRST_PROMPT, at: new Date().toISOString(), via: null });
+    }
+    announce(sessionId);
+  };
   // These are made before anything below: what they are given of it is only reached once the host is built.
   const hookStates = createHookStates<AgentRow>({
     permissions,
     subagents,
+    firstPromptDue: (sessionId) => firstPrompts.has(sessionId),
     save: (row, state, next, always) => save(row, state, next, always),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
     clock: options.clock ?? systemClock,
     onCommand: (sessionId) => backgroundCommands.of(sessionId).length > 0,
-    startingEnded: (sessionId) => announce(sessionId),
+    startingEnded(sessionId) {
+      announce(sessionId);
+      stallFirstPrompt(sessionId);
+    },
     recordFinal: (sessionId, finalMessage) => void updateFinalMessage.run(finalMessage, sessionId),
     finished(sessionId) {
       options.onHandoff(sessionId);
@@ -593,6 +650,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     repoZoneFor: (zoneId, repoRoot) => repoZoneFor(zoneId, repoRoot),
     announce: (sessionId) => announce(sessionId),
     promptQueued: (sessionId) => hookStates.promptQueued(sessionId),
+    typeFirstPrompt(sessionId, prompt) {
+      // A launch before this one's session came up (a quick retry) types nothing: this one's prompt is typed instead.
+      settleFirstPrompt(sessionId, false);
+      const { promise: ready, resolve: settle } = Promise.withResolvers<boolean>();
+      // One relaunched (woken, restarted) shows no `starting` to give up: it is given up on after as long.
+      const cancel = (options.clock ?? systemClock).setTimer(() => stallFirstPrompt(sessionId), FIRST_PROMPT_STALL_MS);
+      firstPrompts.set(sessionId, { prompt, settle, stalled: false, flagId: null, cancel });
+      deliveries.firstPrompt(sessionId, prompt, ready);
+    },
     watch: (...launched) => lifecycle.watchLaunched(...launched),
   });
   const lifecycle = createAgentLifecycle({
@@ -617,6 +683,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       deleted(sessionId) {
         startupLines.forget(sessionId);
         spawns.forget(sessionId);
+        settleFirstPrompt(sessionId, false);
         hookStates.deleted(sessionId);
       },
     },
@@ -637,10 +704,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const pausedBy = (id: string | null): { by: string | null; byId: string | null } =>
     id === null ? { by: null, byId: null } : { by: getRow(id)?.name ?? 'a removed orchestrator', byId: id };
 
-  /** Each live agent's flag (`Agent.flag`), without who it reaches: in memory, as its session ending clears it. */
-  const flags = new Map<string, Omit<AgentFlag, 'to'>>();
-  /** The last flag's id: each new one is the next. */
-  let lastFlagId = 0;
   const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
   const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
 
@@ -727,6 +790,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       exitCode: row.exit_code,
       shellSessionId: lifecycle.fallbackShell(row.session_id) ?? null,
       shellHarness: lifecycle.shellHarnessOf(row),
+      clickableLinks: spawns.hyperlinked(row.session_id) ?? null,
       subagents: [...subagents.of(row.session_id)],
       commands: [...commands],
       pullRequests: [...options.pullRequests(row.session_id)],
@@ -751,6 +815,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       startup,
       flag: flagOf(row),
       unsent: live ? (deliveries.unsent(row.session_id) ?? null) : null,
+      untypedPrompt: firstPrompts.get(row.session_id)?.stalled === true ? firstPrompts.get(row.session_id)!.prompt : null,
     };
   };
 
@@ -986,6 +1051,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return get(sessionId)!;
     },
 
+    typeFirstPrompt(sessionId) {
+      const agent = requireAgent(sessionId);
+      if (agent.untypedPrompt === null) throw invalidParams(`${agent.name} has no first prompt waiting to be typed`);
+      // The user says its session is up: it is typed now, as on its first hook.
+      options.log(`typing ${sessionId}'s first prompt as the user asked: its session never said it was up`);
+      settleFirstPrompt(sessionId, true);
+      return get(sessionId)!;
+    },
+
     interrupt(sessionId, why) {
       const agent = requireAgent(sessionId);
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
@@ -1019,6 +1093,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         pauseRefusal(agent) ??
         (lifecycle.pausing(sessionId) === undefined ? undefined : 'it is already being paused') ??
         (deliveries.unsent(sessionId) === undefined ? undefined : 'a message typed at its prompt was never sent') ??
+        (deliveries.isNotUp(sessionId) ? "its session isn't up yet: its first prompt goes first" : undefined) ??
         (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined) ??
         hookStates.whyNotReady(row, true);
       if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`);
@@ -1191,12 +1266,19 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (payload.agent_id === undefined && payload.hook_event_name === 'Stop') options.asks?.drop(sessionId);
       // Before its state is saved, so the turn's end already shows what it left running.
       backgroundCommands.onHook(sessionId, payload);
-      return hookStates.onHook(row, payload, signal);
+      const reply = hookStates.onHook(row, payload, signal);
+      // Its session is up, its state saved as at its prompt: its first prompt is typed there now. Only on its start:
+      // another hook, or a `SessionStart` after a compaction (which can come mid-turn), is of a turn the user began by
+      // hand, which the prompt would be pasted into, left unsent.
+      const started = payload.hook_event_name === 'SessionStart' && payload.source !== 'compact';
+      if (payload.agent_id === undefined && started) settleFirstPrompt(sessionId, true);
+      return reply;
     },
 
     onOutput(sessionId) {
       hookStates.outputSeen(sessionId);
-      if (hookStates.isStarting(sessionId)) startupLines.soon(sessionId);
+      // Its startup's lines, not its prompt as its first prompt is typed there.
+      if (hookStates.isStarting(sessionId) && !hookStates.isUp(sessionId)) startupLines.soon(sessionId);
       deliveries.outputSeen(sessionId);
     },
 
@@ -1204,6 +1286,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
       hookStates.ended(session.id);
+      settleFirstPrompt(session.id, false);
       backgroundCommands.forget(session.id);
       // What it printed last, as it ended, is why its start failed.
       if (hookStates.startFailed(session.id)) startupLines.now(session.id);
@@ -1328,6 +1411,7 @@ export function agentHandlers<Context>(
     'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId'), "the app's agent.interrupt"),
     'agent.continueOnCredits': (params) => agents.continueOnCredits(stringParam(paramsObject(params), 'sessionId'), "the app's agent.continueOnCredits"),
     'agent.sendUnsent': (params) => agents.sendUnsent(stringParam(paramsObject(params), 'sessionId')),
+    'agent.typeFirstPrompt': (params) => agents.typeFirstPrompt(stringParam(paramsObject(params), 'sessionId')),
     'agent.clearUnsent': (params) => agents.clearUnsent(stringParam(paramsObject(params), 'sessionId')),
     'agent.stop': (params) => agents.stop(stringParam(paramsObject(params), 'sessionId'), "the app's agent.stop"),
     'agent.pause': (params) => agents.pause(stringParam(paramsObject(params), 'sessionId'), null, "the app's agent.pause"),

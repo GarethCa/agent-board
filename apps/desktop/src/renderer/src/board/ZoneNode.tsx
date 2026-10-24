@@ -1,18 +1,20 @@
-import { createContext, memo, useContext, useId, type CSSProperties, type ReactNode } from 'react';
+import { createContext, memo, useContext, useId, useState, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
-import { CircleDot, Ellipsis, FileText, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, ShieldCheck, Unlink, X } from 'lucide-react';
+import { ChevronDown, CircleDot, Ellipsis, FileText, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, Rows3, ShieldCheck, Unlink, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming, type MenuEntry } from '../ui';
 import { folderLabel } from './folders';
-import { leastZoneSize } from '@agent-board/daemon/board-layout';
+import { leastZoneSize, SPACING_GAPS, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
 import {
+  ARRANGE_SPACINGS,
   MIN_ZONE_SIZE,
   TRACKER_PROVIDERS,
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
   ZONE_FILL_OPACITY,
+  type ArrangeSpacing,
   type Zone,
   type ZoneBinding,
   type ZoneLayout,
@@ -104,6 +106,10 @@ export interface ZoneBindingActions {
   pickDefaultRepo(zone: Zone): void;
   /** Lays its tiles out in rows, in reading order, and fits its height to them. */
   tidy(zone: Zone): void;
+  /** Keeps `spacing` as the zone's, for its Tidy and its orchestrators' arrange, and tidies it at once. */
+  setSpacing(zone: Zone, spacing: ArrangeSpacing): void;
+  /** Opens Settings, where the spacing new zones take is. */
+  openSettings(): void;
   /** Renames it; rejects if the daemon refuses. */
   rename(zone: Zone, name: string): Promise<unknown>;
   recolor(zone: Zone, color: string): void;
@@ -128,6 +134,8 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   unbind: () => {},
   pickDefaultRepo: () => {},
   tidy: () => {},
+  setSpacing: () => {},
+  openSettings: () => {},
   rename: () => Promise.resolve(),
   recolor: () => {},
   previewFill: () => {},
@@ -143,6 +151,48 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
 /** The fill opacity the theme gives a zone that has none of its own, in percent. */
 function themeFillOpacity(): number {
   return tokenNumber('--zone-fill-default');
+}
+
+/** Each spacing's name in a menu. */
+export const SPACING_LABELS: Record<ArrangeSpacing, string> = { compact: 'Compact', normal: 'Normal', roomy: 'Roomy' };
+
+/** A zone's spacings to pick from, its own picked, each with its tile and lane gaps. */
+function spacingEntries(zone: Zone, binding: ZoneBindingActions): MenuEntry[] {
+  return ARRANGE_SPACINGS.map((spacing) => ({
+    label: SPACING_LABELS[spacing],
+    checked: zone.spacing === spacing,
+    detail: `${SPACING_GAPS[spacing].tile} · ${SPACING_GAPS[spacing].lane}`,
+    onSelect: () => binding.setSpacing(zone, spacing),
+  }));
+}
+
+/**
+ * The tab's Tidy button, and the ▾ beside it: a menu of Tidy now, the zone's spacing, and where the spacing for new zones
+ * is set (named as it is now, read as the menu opens).
+ */
+function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions }) {
+  const [newZones, setNewZones] = useState<ArrangeSpacing>();
+  const readNewZones = (open: boolean) => {
+    if (open) window.agentBoard.flowEdges.settings().then((settings) => setNewZones(settings.arrangeSpacing), () => {});
+  };
+  return (
+    <span className="zone-tab-split">
+      <Chip className="zone-tab-control nodrag" icon={<LayoutGrid />} aria-label="Tidy zone" title="Tidy: its tiles in rows, in reading order" onClick={() => binding.tidy(zone)} />
+      <Menu
+        onOpenChange={readNewZones}
+        entries={[
+          { label: 'Tidy now', icon: <LayoutGrid />, onSelect: () => binding.tidy(zone) },
+          'separator',
+          { heading: 'Spacing in this zone' },
+          ...spacingEntries(zone, binding),
+          'separator',
+          { label: 'Default for new zones…', icon: <Rows3 />, detail: newZones === undefined ? 'Settings' : `${SPACING_LABELS[newZones]} · Settings`, onSelect: binding.openSettings },
+        ]}
+      >
+        <Chip className="zone-tab-control nodrag" icon={<ChevronDown />} aria-label="Tidy and spacing" title="Tidy now, or pick this zone's spacing" />
+      </Menu>
+    </span>
+  );
 }
 
 /** A chip on a zone's tab that can fold into its ⋯ menu. */
@@ -185,7 +235,7 @@ export const ZoneNode = memo(function ZoneNode({
   const saveLayout = useContext(SaveZoneLayoutContext);
   const resize = useContext(ZoneResizeContext);
   // Never smaller than rows of its tiles, nor than it is now if they already need more, nor than this resize can go.
-  const rows = leastZoneSize(tileCount, { width: width ?? 0, height: height ?? 0 });
+  const rows = leastZoneSize(tileCount, { width: width ?? 0, height: height ?? 0 }, zoneGrid(zone.spacing));
   const least = {
     width: resizeMin?.width ?? Math.min(rows.width, width ?? 0),
     height: resizeMin?.height ?? Math.min(rows.height, height ?? 0),
@@ -348,15 +398,7 @@ export const ZoneNode = memo(function ZoneNode({
     },
     {
       key: 'tidy',
-      chip: (
-        <Chip
-          className="zone-tab-control nodrag"
-          icon={<LayoutGrid />}
-          aria-label="Tidy zone"
-          title="Tidy: its tiles in rows, in reading order"
-          onClick={() => binding.tidy(zone)}
-        />
-      ),
+      chip: <TidyChips zone={zone} binding={binding} />,
       // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
       entry: clone === null ? undefined : { label: 'Tidy', icon: <LayoutGrid />, onSelect: () => binding.tidy(zone) },
     },
@@ -440,6 +482,7 @@ export const ZoneNode = memo(function ZoneNode({
               entries={[
                 ...(foldedEntries.length > 0 ? [...foldedEntries, 'separator' as const] : []),
                 { label: 'Tidy', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', onSelect: () => binding.tidy(zone) },
+                { label: 'Spacing', icon: <Rows3 />, entries: spacingEntries(zone, binding) },
                 { label: 'Rename', icon: <Pencil />, onSelect: renaming.startSoon },
                 {
                   label: 'Colour',
@@ -502,7 +545,7 @@ export const ZoneNode = memo(function ZoneNode({
                 },
               ]}
             >
-              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, rename, colour, default repo, unbind, board MCP, orchestrating, gate command, role templates, delete" />
+              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, spacing, rename, colour, default repo, unbind, board MCP, orchestrating, gate command, role templates, delete" />
             </Menu>
           )}
         </div>

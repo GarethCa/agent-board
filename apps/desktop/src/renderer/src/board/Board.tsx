@@ -28,6 +28,7 @@ import {
   ZONE_COLORS,
   type Agent,
   type AgentStart,
+  type ArrangeSpacing,
   issueCardData,
   type IssueCardData,
   type TrackerIssue,
@@ -171,7 +172,8 @@ import type { BoardRequest, ScreenPoint, WindowTarget } from '../../../preload/a
 import { VIEW_KEYS, viewSaver } from '../../../shared/view-saver';
 import { useProvideBoardCommands, type BoardCommands } from './commands';
 import { tileSizeOf, withTileSize } from './tile-size';
-import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, isFolded, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { AGENT_TILE_SIZE, freeItemSpot, freeSpotFor, isFolded, rotatedBounds, sizedFootprint, TILE_GAP, ZONE_PADDING } from '@agent-board/daemon/board-layout';
+import { arrangeBoard as arrangeBoardLayout } from '@agent-board/daemon/arrange-board';
 import { tidyLoose as tidyLooseLayout, tidyZone as tidyZoneLayout } from '@agent-board/daemon/board-tidy';
 import { LinkIssueDialog } from './LinkIssueDialog';
 import { ClockDialog, type ClockEditing } from './ClockDialog';
@@ -192,6 +194,7 @@ import { TileNode } from './TileNode';
 import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type ShellFolders, type TileActions, type TileData, type TileNodeType } from './tile';
 import {
   DRAGGED_TILE_Z_INDEX,
+  EXTERNAL_NODE_PREFIX,
   isSessionTile,
   isStartTile,
   isZone,
@@ -385,6 +388,8 @@ function BoardView() {
   selectedConnectorsRef.current = selectedConnectors;
   /** Whether a drag snaps to the grid rather than to what is near it; kept in the view state. */
   const [grid, setGrid] = useState(false);
+  /** When a zone's menu last asked for Settings, which the board menu then opens on. */
+  const [settingsAsked, setSettingsAsked] = useState<number>();
   /** What was selected as a Shift-drag on empty board or a zone's bare body began: its marquee adds to that (WbTools). */
   const keptSelection = useRef<{ nodes: ReadonlySet<string>; connectors: ReadonlySet<string> }>(undefined);
   /** The connector label being typed. */
@@ -940,6 +945,7 @@ function BoardView() {
       pauseAgent: (sessionId) => lifecycleOnce(sessionId, () => window.agentBoard.agents.pause(sessionId).then(agentHeard, report('pause the agent'))),
       sendUnsent: (sessionId) => window.agentBoard.agents.sendUnsent(sessionId).then(agentHeard, report('send the message')),
       clearUnsent: (sessionId) => window.agentBoard.agents.clearUnsent(sessionId).then(agentHeard, report('clear the message')),
+      typeFirstPrompt: (sessionId) => window.agentBoard.agents.typeFirstPrompt(sessionId).then(agentHeard, report('send its first prompt')),
       restartAgent: (sessionId) => restartAgent(sessionId, false),
       resumeShell: (shell) =>
         Promise.all(shell.stoppedPanes.map((sessionId) => window.agentBoard.shells.resumePane(shell.id, sessionId))).then(
@@ -1773,9 +1779,12 @@ function BoardView() {
 
   const { zoneResize, onNodesChange, finish: finishResize } = useZoneResize({ nodesRef, setNodes, onNodesChange: tileMoves.onNodesChange });
 
-  /** Saves the zone's new layout, which can be undone, and draws it so while its tiles are laid out again. */
+  /**
+   * Saves the zone's new layout, which can be undone, and draws it so while its tiles are laid out again. With `move`,
+   * draws it at its new place too: nothing dragged it there.
+   */
   const saveZoneLayout = useCallback(
-    (id: string, layout: ZoneLayout) => {
+    (id: string, layout: ZoneLayout, move = false) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === id)?.data.zone;
       const before = savedZoneLayouts.current.get(id) ?? (zone && { x: zone.x, y: zone.y, width: zone.width, height: zone.height });
       if (before !== undefined) history.record([[historyKey.zone(id), { type: 'zone', layout: before }, { type: 'zone', layout }]]);
@@ -1783,7 +1792,7 @@ function BoardView() {
       window.agentBoard.zones.update(id, layout).catch(report("save the zone's layout"));
       // The node may still have a dragged size: set this one while the tiles are laid out again.
       setNodes((current) =>
-        laidOut(current.map((node) => (isZone(node) && node.id === id ? withSavedLayout(node, layout, { move: false }) : node))),
+        laidOut(current.map((node) => (isZone(node) && node.id === id ? withSavedLayout(node, layout, { move }) : node))),
       );
     },
     [report, setNodes, laidOut, history],
@@ -1833,17 +1842,22 @@ function BoardView() {
 
   /**
    * Tidies the zone: its tiles in rows, in reading order, round its notes and cards, and its height fitted to
-   * them. Saved, as one step to undo.
+   * them, at its spacing (or `spacing`, one just picked). Saved, as one step to undo.
    */
   const tidyZone = useCallback(
-    (zoneId: string) => {
+    (zoneId: string, spacing?: ArrangeSpacing) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === zoneId);
       if (zone === undefined) return;
       const children = nodesRef.current.filter((node) => node.parentId === zoneId);
       const tiles = children.filter(isSessionTile);
       const items = children.filter(isItemNode).map((node) => node.data.item);
       const layout = layoutOf(zone);
-      const { positions, size } = tidyZoneLayout(layout, tiles.map((node) => ({ id: node.id, ...node.position, ...tidySizeOf(node) })), items);
+      const { positions, size } = tidyZoneLayout(
+        layout,
+        tiles.map((node) => ({ id: node.id, ...node.position, ...tidySizeOf(node) })),
+        items,
+        spacing ?? zone.data.zone.spacing,
+      );
       moveTilesTo(tiles, positions, zoneId);
       freeOverlaps([...positions.keys()]);
       if (size.width !== layout.width || size.height !== layout.height) saveZoneLayout(zoneId, { ...layout, ...size });
@@ -1938,6 +1952,36 @@ function BoardView() {
   }, [moveTilesTo, tidySizeOf]);
 
   /**
+   * Arranges the board: whole zones in rows a gap apart, with what is in them, and the agents and shells loose on the
+   * board in rows below them, clear of what stays: the notes, shapes and text loose on it (turned ones by their upright
+   * box), and other sessions' tiles. Never inside a zone. Saved, as one step to undo.
+   */
+  const arrangeBoard = useCallback(() => {
+    const zones = nodesRef.current.filter(isZone);
+    const loose = nodesRef.current.filter(isSessionTile).filter((node) => node.parentId === undefined);
+    const moving = loose.filter((node) => !node.id.startsWith(EXTERNAL_NODE_PREFIX));
+    const fixed = [
+      ...nodesRef.current.flatMap((node): Rect[] => (isItemNode(node) && node.parentId === undefined ? [rotatedBounds(node.data.item, node.data.item.rotation)] : [])),
+      ...loose.filter((node) => !moving.includes(node)).map((node) => sizedFootprint(node.position, tidySizeOf(node))),
+    ];
+    // Laid out as drawn, so the gaps hold on the screen, but each zone saved at its own size: the room the board makes
+    // round an expanded tile, or grows a zone by to hold its tiles, is never saved.
+    const arranged = arrangeBoardLayout(
+      zones.map((node) => ({ id: node.id, ...layoutOf(node) })),
+      moving.map((node) => ({ id: node.id, ...node.position, ...tidySizeOf(node) })),
+      fixed,
+    );
+    for (const node of zones) {
+      const at = arranged.zones.get(node.id);
+      // As the daemon has it now: a resize from elsewhere (another window, an orchestrator's arrange) included.
+      const { width, height } = node.data.zone;
+      if (at !== undefined) saveZoneLayout(node.id, { ...at, width, height }, true);
+    }
+    moveTilesTo(moving.filter((node) => arranged.tiles.has(node.id)), arranged.tiles, null);
+    freeOverlaps([...arranged.tiles.keys()]);
+  }, [moveTilesTo, saveZoneLayout, tidySizeOf]);
+
+  /**
    * Puts board objects back as an undo or redo has them, through the board's own actions: an item or connector made
    * again under its own id, changed back, or deleted; a zone's layout; a tile's place. One whose object has gone
    * meanwhile (deleted in another window, a session ended) is left be.
@@ -2014,6 +2058,10 @@ function BoardView() {
         const id = key.slice(historyKey.zoneLook('').length);
         if (!nodeIds.has(id)) continue;
         window.agentBoard.zones.setLook(id, state.look).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s look'));
+      } else if (state?.type === 'zoneSpacing') {
+        const id = key.slice(historyKey.zoneSpacing('').length);
+        if (!nodeIds.has(id)) continue;
+        window.agentBoard.zones.configure(id, { spacing: state.spacing }).then((saved) => setNodes((current) => withZone(current, saved)), report('undo the zone’s spacing'));
       } else if (state?.type === 'tile') {
         const nodeId = key.slice(historyKey.tile('').length);
         const node = nodesRef.current.find((known): known is TileNodeType => known.id === nodeId && isSessionTile(known));
@@ -2172,6 +2220,7 @@ function BoardView() {
   const typeInShape = useCallback((nodeId: string) => updateNodeData(nodeId, { editing: true }), [updateNodeData]);
   useBoardShortcuts({
     openCheatSheet: cheatSheet.open,
+    arrangeBoard,
     typeInShape,
     cycleConnections,
     cycleCrewLook,
@@ -2238,6 +2287,7 @@ function BoardView() {
     grid,
     toggleGrid,
     tidyLoose,
+    arrangeBoard,
     selectOnly,
     addClock: (at) => {
       const clockId = createItem('clock', screenToFlowPosition(at));
@@ -2416,6 +2466,15 @@ function BoardView() {
       },
       pickDefaultRepo: setDefaultRepoZone,
       tidy: (zone) => tidyZone(zone.id),
+      setSpacing(zone, spacing) {
+        window.agentBoard.zones.configure(zone.id, { spacing }).then((saved) => {
+          setNodes((current) => withZone(current, saved));
+          // One step with the tidy it makes: an undo puts the spacing back with the tiles.
+          history.record([[historyKey.zoneSpacing(zone.id), { type: 'zoneSpacing', spacing: zone.spacing }, { type: 'zoneSpacing', spacing }]]);
+          tidyZone(zone.id, spacing);
+        }, report('change the zone’s spacing'));
+      },
+      openSettings: () => setSettingsAsked(performance.now()),
       rename: (zone, name) => tileActions.rename({ kind: 'zone', zoneId: zone.id }, name),
       recolor(zone, color) {
         const { fillOpacity } = zone;
@@ -3120,6 +3179,7 @@ function BoardView() {
           {cheatSheet.sheet}
           <BoardChrome
             onKeyboardHelp={cheatSheet.open}
+            settingsAsked={settingsAsked}
             loaded={loaded}
             empty={loaded && nodes.length === 0 && newAgent === undefined}
             loadedEmpty={loadedEmpty}
@@ -3130,6 +3190,7 @@ function BoardView() {
             shells={shells}
             onOpenShell={openShell}
             onAddZone={openAddZone}
+            onArrangeBoard={arrangeBoard}
             onJump={(zone) => {
               // Where it is now: its node may have been moved or resized since the daemon sent it.
               const node = getNodes().filter(isZone).find((known) => known.id === zone.id);

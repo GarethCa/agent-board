@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_TILE_SIZE, overlaps, PERCH_ROOM, TILE_GAP, tileSlot, ZONE_PADDING, zoneHeightFor } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, overlaps, PERCH_ROOM, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, zoneHeightFor } from '../src/board-layout.ts';
+import { ARRANGE_SPACINGS } from '../src/protocol.ts';
 import { tidyLoose, tidyZone } from '../src/board-tidy.ts';
 
 const STEP = { x: AGENT_TILE_SIZE.width + TILE_GAP, y: PERCH_ROOM + AGENT_TILE_SIZE.height + TILE_GAP };
@@ -35,6 +36,18 @@ describe('tidyZone', () => {
     expect(overlaps(big, small)).toBe(false);
     expect(size.height).toBeGreaterThanOrEqual(big.y + big.height + TILE_GAP + ZONE_PADDING);
     expect(size.width).toBeGreaterThanOrEqual(2 * ZONE_PADDING + 400);
+  });
+
+  it.each(ARRANGE_SPACINGS)("at %s spacing, keeps its padding, tile gap (16 px at the least) and lane gap", (spacing) => {
+    const gaps = SPACING_GAPS[spacing];
+    const tiles = ['a', 'b', 'c'].map((id, index) => ({ id, x: 30 + index * 300, y: 50 }));
+    // Two tiles to a row, whatever the spacing.
+    const { positions, size } = tidyZone({ width: 640, height: 300 }, tiles, [], spacing);
+    const [a, b, c] = ['a', 'b', 'c'].map((id) => positions.get(id)!);
+    expect(a).toEqual({ x: gaps.padding, y: gaps.padding + PERCH_ROOM });
+    expect(b!.x - (a!.x + AGENT_TILE_SIZE.width)).toBe(Math.max(16, gaps.tile));
+    expect(c).toEqual({ x: gaps.padding, y: a!.y + AGENT_TILE_SIZE.height + gaps.lane });
+    expect(size.height).toBe(c!.y + AGENT_TILE_SIZE.height + gaps.tile + gaps.padding);
   });
 
   it('breaks a tie in reading order by id, so the same zone always tidies the same way', () => {
@@ -107,5 +120,18 @@ describe('tidyLoose', () => {
 
   it('has nothing to do with no tiles', () => {
     expect(tidyLoose([])).toEqual(new Map());
+  });
+
+  it('leaves tiles it tidied round an obstacle in their first spot where they are, tidied again', () => {
+    const tiles = [
+      { id: 'a', x: 0, y: 0 },
+      { id: 'b', x: 400, y: 300 },
+    ];
+    // Over the first slot, so the first tile goes past it.
+    const note = { x: -20, y: -40, width: 200, height: 200 };
+    const first = tidyLoose(tiles, [note]);
+    const tidied = tiles.map((tile) => ({ ...tile, ...first.get(tile.id) }));
+    const again = tidyLoose(tidied, [note]);
+    expect([...again].filter(([id, at]) => tidied.find((tile) => tile.id === id)!.x !== at.x || tidied.find((tile) => tile.id === id)!.y !== at.y)).toEqual([]);
   });
 });

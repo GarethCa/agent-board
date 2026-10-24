@@ -8,7 +8,7 @@ import { itemNode } from './items/items';
 import { zoneNode, type ZoneNodeType } from './ZoneNode';
 
 const zone = (id: string, x = 0, repoRoot: string | null = '/code/app'): ZoneNodeType =>
-  zoneNode({ id, x, y: 0, width: 800, height: 300, repoRoot, folder: '', name: id, color: '#4c6ef5' } as Zone);
+  zoneNode({ id, x, y: 0, width: 800, height: 300, repoRoot, folder: '', name: id, color: '#4c6ef5', spacing: 'normal' } as Zone);
 
 const agent = (sessionId: string, zoneId: string | null, position: TilePosition | null = null, repoRoot = '/code/app') =>
   ({ sessionId, zoneId, position, repoRoot, name: sessionId, harness: 'claude', endedAt: null }) as Agent;

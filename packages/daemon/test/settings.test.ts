@@ -13,6 +13,17 @@ function setup() {
   return { settings, set };
 }
 
+describe('the spacing new zones take', () => {
+  it('is roomy until it is changed, and keeps any of the three', () => {
+    const { settings, set } = setup();
+    expect(settings.get().arrangeSpacing).toBe('roomy');
+    set({ arrangeSpacing: 'compact' });
+    expect(settings.get().arrangeSpacing).toBe('compact');
+    expect(() => set({ arrangeSpacing: 'huge' })).toThrow(/arrangeSpacing must be one of compact, normal, roomy/);
+    expect(settings.get().arrangeSpacing).toBe('compact');
+  });
+});
+
 describe('the compact window setting', () => {
   it('is off until it is changed', () => {
     expect(setup().settings.get().compactWindow).toBe(0);
@@ -39,5 +50,22 @@ describe('the compact window setting', () => {
     set({ compactWindow: 200_000 });
     expect(() => set({ compactWindow: value })).toThrow(/compactWindow must be/);
     expect(settings.get().compactWindow).toBe(200_000);
+  });
+});
+
+describe('the clickable links setting', () => {
+  it('is on until it is turned off, and stays as it was set', () => {
+    const { settings, set } = setup();
+    expect(settings.get().clickableLinks).toBe(true);
+    set({ clickableLinks: false });
+    expect(settings.get().clickableLinks).toBe(false);
+    set({ clickableLinks: true });
+    expect(settings.get().clickableLinks).toBe(true);
+  });
+
+  it('refuses anything but a boolean', () => {
+    const { settings, set } = setup();
+    expect(() => set({ clickableLinks: 'no' })).toThrow();
+    expect(settings.get().clickableLinks).toBe(true);
   });
 });

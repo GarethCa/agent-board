@@ -6,12 +6,15 @@ import { gateCommandArgv } from './gate-rules.ts';
 import { runGit } from './git.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import { folderPath } from './repo-zone.ts';
-import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
+  ARRANGE_SPACINGS,
+  DEFAULT_ARRANGE_SPACING,
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
   validZoneFillOpacity,
   ZONE_COLORS,
+  type ArrangeSpacing,
   type DaemonEvent,
   type DaemonMethods,
   type TrackerProvider,
@@ -56,6 +59,7 @@ interface ZoneRow {
   board_mcp: number;
   agents_orchestrate: number;
   gate_command: string | null;
+  spacing: ArrangeSpacing;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -77,6 +81,8 @@ export interface NewZone extends ZoneLayout {
   name: string;
   color: string;
   tracker: ZoneTracker | null;
+  /** Its spacing; the default for new zones in the settings without. */
+  spacing?: ArrangeSpacing;
   /** The clone it waits for, and which folders the daemon made for it, so a failed clone removes only those. */
   clone?: { repo: string; path: string; madeFolder: boolean; madeOwner: boolean };
 }
@@ -140,14 +146,16 @@ export function createZoneTable(
   reposDir: string,
   /** Where groups' own folders are (`groupFolder`). */
   groupsDir: string,
+  /** The spacing a new zone takes when it is given none: the settings' `arrangeSpacing`. */
+  newZoneSpacing: () => ArrangeSpacing = () => DEFAULT_ARRANGE_SPACING,
 ): ZoneTable {
   const selectAll = db.prepare('SELECT * FROM zones ORDER BY rowid');
   const selectOne = db.prepare('SELECT * FROM zones WHERE id = ?');
   const selectCloning = db.prepare('SELECT * FROM zones WHERE clone_repo IS NOT NULL ORDER BY rowid');
   const insert = db.prepare(
     `INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, tracker_provider, tracker_scope,
-       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // A bound zone's repo is its own: binding drops a group's default repo.
   const bind = db.prepare(
@@ -186,6 +194,7 @@ export function createZoneTable(
     boardMcp: row.board_mcp === 1,
     agentsOrchestrate: row.agents_orchestrate === 1,
     gateCommand: row.gate_command,
+    spacing: row.spacing,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -237,6 +246,7 @@ export function createZoneTable(
         zone.clone?.path ?? null,
         zone.clone === undefined ? null : Number(zone.clone.madeFolder),
         zone.clone === undefined ? null : Number(zone.clone.madeOwner),
+        zone.spacing ?? newZoneSpacing(),
       );
       if (zone.repoRoot !== null) rememberFolder(folderPath(zone.repoRoot, zone.folder));
       announce(id);
@@ -290,6 +300,7 @@ export function zoneHandlers<Context>(
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
   const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
+  const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -393,11 +404,13 @@ export function zoneHandlers<Context>(
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
       const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
       const gateCommand = gateCommandParam(fields);
-      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined) {
-        throw invalidParams('give codexBypassHookTrust, boardMcp, agentsOrchestrate or gateCommand');
+      const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
+      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined) {
+        throw invalidParams('give codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand or spacing');
       }
       zones.get(id);
       if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
+      if (spacing !== undefined) updateSpacing.run(spacing, id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
       if (agentsOrchestrate !== undefined) updateAgentsOrchestrate.run(agentsOrchestrate ? 1 : 0, id);
@@ -448,6 +461,8 @@ export function zoneHandlers<Context>(
       const repoRoot = fields.repoRoot === undefined || fields.repoRoot === null ? null : stringParam(fields, 'repoRoot');
       if (repoRoot !== null && !isAbsolute(repoRoot)) throw invalidParams(`repoRoot must be absolute, got ${repoRoot}`);
       const boundFolder = optionalStringParam(fields, 'folder') ?? '';
+      // A snapshot from before zones had a spacing is of a zone laid out at normal's gaps, as the migration keeps those.
+      const spacing = fields.spacing === undefined ? 'normal' : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
@@ -455,7 +470,7 @@ export function zoneHandlers<Context>(
         const repo = folder === null ? null : folderPath(folder.repoRoot, folder.folder);
         // A zone that was bound to a repo is bound again if it still is one; if not, it comes back as the group it is.
         const bound = repoRoot === null ? null : await resolveZoneFolder(folderPath(repoRoot, boundFolder)).catch(() => null);
-        zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker });
+        zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing });
         updateFillOpacity.run(fillOpacity, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);

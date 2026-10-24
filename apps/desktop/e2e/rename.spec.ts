@@ -6,11 +6,14 @@ import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
 
 const shells = (page: Page) => page.evaluate(() => window.agentBoard.shells.list());
-/** Clicks empty zone floor, so the board (not a terminal or a field) has the keyboard. */
+/**
+ * Clicks empty zone floor, so the board (not a terminal or a field) has the keyboard: in its left margin, three quarters
+ * down, clear of its resize handles and of the chrome over the window's bottom corner.
+ */
 async function focusBoard(page: Page): Promise<void> {
   const zone = page.getByTestId('zone').first();
   const box = (await zone.boundingBox())!;
-  await page.mouse.click(box.x + 12, box.y + box.height - 12);
+  await page.mouse.click(box.x + 12, box.y + box.height * 0.75);
 }
 
 const field = (page: Page) => page.getByTestId('rename-field');

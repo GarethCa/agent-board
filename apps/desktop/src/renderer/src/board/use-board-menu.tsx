@@ -21,6 +21,7 @@ interface BoardMenuOptions {
   grid: boolean;
   toggleGrid(): void;
   tidyLoose(): void;
+  arrangeBoard(): void;
   /** Selects these nodes alone. */
   selectOnly(nodeIds: ReadonlySet<string>): void;
   /** Puts a new clock at `at`, on the screen, and opens its editor. */
@@ -45,6 +46,7 @@ export function useBoardMenu({
   grid,
   toggleGrid,
   tidyLoose,
+  arrangeBoard,
   selectOnly,
   addClock,
 }: BoardMenuOptions) {
@@ -71,6 +73,7 @@ export function useBoardMenu({
     grid,
     toggleGrid,
     tidyLoose,
+    arrangeBoard,
     // Where the menu was opened, once it has handed the focus back.
     addClock: () => {
       const at = contextMenu?.at;

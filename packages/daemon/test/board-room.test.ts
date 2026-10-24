@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clearOf, GRID_COLUMN, gridPoint, sizedFootprint, AGENT_TILE_SIZE, type Rect } from '../src/board-layout.ts';
+import { clearOf, GRID_COLUMN, gridPoint, sizedFootprint, AGENT_TILE_SIZE, zoneGrid, type Rect } from '../src/board-layout.ts';
 import { makeRoom } from '../src/board-room.ts';
 
 const tile = (column: number, row: number): Rect => sizedFootprint(gridPoint(column, row), AGENT_TILE_SIZE);
@@ -42,5 +42,12 @@ describe('makeRoom', () => {
     const right = Math.max(...wall.map((rect) => rect.x + rect.width));
     expect(moved.get('a')!.x).toBeGreaterThan(right);
     expect(Number.isInteger((moved.get('a')!.x - gridPoint(0, 0).x) / GRID_COLUMN)).toBe(true);
+  });
+
+  it("pushes what is in the way a whole column of its zone's grid at a time", () => {
+    const roomy = zoneGrid('roomy');
+    const at = (column: number) => sizedFootprint(gridPoint(column, 0, roomy), AGENT_TILE_SIZE);
+    const moved = makeRoom(at(0), [{ id: 'a', rect: at(0) }], [], undefined, roomy);
+    expect(moved.get('a')).toEqual({ x: gridPoint(1, 0, roomy).x, y: at(0).y });
   });
 });

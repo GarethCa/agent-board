@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { agentNoteSize } from '../src/agent-notes.ts';
 import { arrangeTiles, CLUSTER_LABEL_SIZE, lanesOf, type ArrangeTile } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, GRID_COLUMN, ROW_STEP } from '../src/board-layout.ts';
-import { DEFAULT_ARRANGE_SETTINGS, type ArrangeBy, type ArrangeLayout, type ZoneMap, type ZoneMapThing } from '../src/protocol.ts';
+import { ARRANGE_SPACINGS, DEFAULT_ARRANGE_SETTINGS, type ArrangeBy, type ArrangeLayout, type ArrangeSpacing, type ZoneMap, type ZoneMapThing } from '../src/protocol.ts';
 import { boxPicture, buildZoneMap, laneTable, spareSlots } from '../src/zone-map.ts';
 
 function agent(id: string, fields: Partial<ArrangeTile> = {}): ArrangeTile {
@@ -25,8 +25,9 @@ function arrangedZone(
   links: readonly { from: string; to: string }[] = [],
   noteHeights?: ReadonlyMap<string, number>,
   by: ArrangeBy = 'issue',
+  spacing: ArrangeSpacing = 'normal',
 ): ZoneMap {
-  const { positions, clusters, size } = arrangeTiles(tiles, links, { by, layout, width: 600, clusters: true, noteHeights });
+  const { positions, clusters, size } = arrangeTiles(tiles, links, { by, layout, width: 600, clusters: true, noteHeights, spacing });
   const things: ZoneMapThing[] = [
     ...tiles.map((tile) => ({ key: tile.id, itemKind: null, name: tile.name, state: tile.state, ...positions.get(tile.id)!, ...(tile.size ?? AGENT_TILE_SIZE) })),
     ...clusters.flatMap((cluster) => [
@@ -36,7 +37,7 @@ function arrangedZone(
   ].map(move);
   const parts = new Map(clusters.flatMap((cluster) => [[`${cluster.key}#label`, `item:${cluster.key}-label`] as const, [`${cluster.key}#note`, `item:${cluster.key}-note`] as const]));
   const arrange = { ...DEFAULT_ARRANGE_SETTINGS, by, layout };
-  return { zoneId: 'z', name: 'web', ...size, arrange, things, ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, arranged: positions }) };
+  return { zoneId: 'z', name: 'web', ...size, arrange, spacing, things, ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, spacing, arranged: positions }) };
 }
 
 /** A ref as the CLI writes one: its kind and the start of its id. */
@@ -268,7 +269,7 @@ describe('a zone map', () => {
   it('reads as a lane table: a line per lane, a cell per slot, then where the next lane goes and the lint', () => {
     expect(laneTable(arrangedZone(crew), 'zone:z', ref)).toBe(
       [
-        'zone zone:z web · 1112×568 · by issue, in rows · auto-arrange off',
+        'zone zone:z web · 1112×568 · by issue, in rows · normal spacing · auto-arrange off',
         '',
         'lane    │ implementer                          │ reviewer                        │ follow-up │ notes',
         '────────┼──────────────────────────────────────┼─────────────────────────────────┼───────────┼────────────────',
@@ -280,6 +281,32 @@ describe('a zone map', () => {
         'lint  ok · no overlaps · widest gap 0 slots · 0 off-grid',
       ].join('\n'),
     );
+  });
+
+  it.each(ARRANGE_SPACINGS)('finds nothing amiss in a zone arranged at %s spacing, its own gaps no gaps', (spacing) => {
+    const map = arrangedZone(crew, undefined, 'rows', [], undefined, 'issue', spacing);
+    expect(laneTable(map, 'zone:z', ref).split('\n').at(-1)).toBe('lint  ok · no overlaps · widest gap 0 slots · 0 off-grid');
+    expect(laneTable(map, 'zone:z', ref).split('\n')[0]).toContain(`· ${spacing} spacing ·`);
+  });
+
+  it("measures the space between lanes past its spacing's lane gap, in its spacing's rows", () => {
+    // Roomy lanes, the last pulled a little over two roomy rows further down.
+    const roomy = arrangedZone(crew, undefined, 'rows', [], undefined, 'issue', 'roomy');
+    const lower = new Set(['agent:impl-b', 'item:issue:ACME-12-label', 'item:issue:ACME-12-note']);
+    const things = roomy.things.map((thing) => (lower.has(thing.key) ? { ...thing, y: thing.y + 458 } : thing));
+    const parts = new Map(roomy.lanes.flatMap((lane) => [[`${lane.key}#label`, lane.labelItem!] as const, [`${lane.key}#note`, lane.note!] as const]));
+    const gapAt = (spacing: ArrangeSpacing) => buildZoneMap({ lanes: lanesOf(crew, []), things, parts, arrange: DEFAULT_ARRANGE_SETTINGS, spacing }).laneGap;
+    // Read at its own spacing it is two slots apart, not flagged; read at normal, three, flagged.
+    expect(gapAt('roomy')).toBe(2);
+    expect(gapAt('normal')).toBe(3);
+  });
+
+  it('fits a zone at its spacing before it calls the zone too big', () => {
+    const lead: ZoneMapThing = { key: 'agent:lead', itemKind: null, name: 'lead', state: 'idle', x: 32, y: 56, ...AGENT_TILE_SIZE };
+    // Two of normal's columns past what a roomy zone fits to is less than two of roomy's.
+    const width = 32 + AGENT_TILE_SIZE.width + 32 + 2.6 * GRID_COLUMN;
+    expect(spareSlots({ width, height: 480, things: [lead], spacing: 'roomy' }).columns).toBe(2);
+    expect(spareSlots({ width, height: 480, things: [lead], spacing: 'normal' }).columns).toBe(3);
   });
 
   it('says what is amiss on its lint line', () => {

@@ -203,7 +203,7 @@ function PlanRow({ agent, plan, now, onShow }: { agent: Agent; plan: PlanSummary
       <PlanDecisionBar agent={agent} plan={plan} compact />
       <p className="inbox-ask-timer">
         <Timer aria-hidden />
-        <span>Waits {waitLeft(plan.expiresAt, now)} for your decision</span>
+        <span>{plan.expiresAt === null ? 'Waits for your decision' : `Waits ${waitLeft(plan.expiresAt, now)} for your decision`}</span>
       </p>
     </div>
   );

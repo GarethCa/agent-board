@@ -71,6 +71,8 @@ export interface DocumentHost {
    * documents, the write is the user's next version, not an agent's rewrite. The agent is told by the plan's answer.
    */
   userWrote(sessionId: string, path: string): void;
+  /** Types `text` at the agent's prompt once it is ready for its next message, with what else waits for it (a plan's decision). */
+  tell(sessionId: string, text: string): void;
   /** The user's comments on the document, for its agent. */
   comment(documentId: string, text: string): void;
   /** Looks at every live agent's documents' files for a rewrite. */
@@ -335,6 +337,8 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
       recordWrite(document, read.text, 'user');
       changed(sessionId);
     },
+
+    tell: (sessionId, text) => queue(sessionId, text),
 
     comment(documentId, text) {
       const document = row(documentId);

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { settledBox, withDaemon } from './board-helpers.ts';
-import { launch, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, normalNewZones, spawnAgent, tile } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone, addEmptyZone, openAddZone } from './launch.ts';
 import { AGENT_TILE_SIZE, leastZoneSize, ZONE_PADDING } from '@agent-board/daemon/board-layout';
@@ -141,6 +141,7 @@ test('a zone grows to hold more tiles than its initial height, and cannot be res
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await normalNewZones(window);
     await pickFolderNext(app, repo);
     await addZone(window);
     const zone = zoneNamed(window, 'monorepo');
@@ -229,6 +230,7 @@ test('shrinking a zone past hand-placed tiles packs them inward as it goes, stop
   const dataDir = tempDataDir();
   let { app, window } = await launch(dataDir, env);
   try {
+    await normalNewZones(window);
     await pickFolderNext(app, repo);
     await addZone(window);
     const zone = zoneNamed(window, 'monorepo');
@@ -295,6 +297,7 @@ test('shrinking a zone from its left edge moves only the tile the edge cuts, kee
   const dataDir = tempDataDir();
   let { app, window } = await launch(dataDir, env);
   try {
+    await normalNewZones(window);
     await pickFolderNext(app, repo);
     await addZone(window);
     const zone = zoneNamed(window, 'monorepo');

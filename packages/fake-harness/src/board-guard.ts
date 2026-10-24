@@ -27,8 +27,16 @@ export const RUN_KNOBS = [
   'AGENT_BOARD_E2E_SHOTS',
 ] as const;
 
+/** Removes the `FORCE_HYPERLINK` an enclosing board gave its Claude agent (its marker names it), which is not a user's own. */
+function dropForcedHyperlink(env: NodeJS.ProcessEnv): void {
+  if (env.AGENT_BOARD_FORCED_HYPERLINK === undefined) return;
+  delete env.FORCE_HYPERLINK;
+  delete env.AGENT_BOARD_FORCED_HYPERLINK;
+}
+
 /** Removes the session variables of an enclosing board from `env` (the process's own by default). */
 export function scrubBoardSessionEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  dropForcedHyperlink(env);
   for (const name of BOARD_SESSION_VARS) delete env[name];
   return env;
 }
@@ -38,6 +46,7 @@ export function scrubBoardSessionEnv(env: NodeJS.ProcessEnv = process.env): Node
  * a test run: whatever the app reads then comes only from what the run's own setup and tests set.
  */
 export function scrubBoardEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  dropForcedHyperlink(env);
   for (const name of Object.keys(env)) {
     if (name.startsWith('AGENT_BOARD_') && !(RUN_KNOBS as readonly string[]).includes(name)) delete env[name];
   }

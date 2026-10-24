@@ -28,6 +28,7 @@ const SHORTCUTS: readonly (readonly [KeyId, BoardShortcut])[] = [
   ['move.box', { kind: 'mode', mode: 'box' }],
   ['move.hand', { kind: 'mode', mode: 'hand' }],
   ['move.cheatSheet', { kind: 'cheatSheet' }],
+  ['edit.arrangeBoard', { kind: 'arrangeBoard' }],
 ];
 
 /** What a single key asks of the board. */
@@ -39,12 +40,13 @@ export type BoardShortcut =
   | { kind: 'connections' }
   | { kind: 'crews' }
   | { kind: 'insert' }
-  | { kind: 'cheatSheet' };
+  | { kind: 'cheatSheet' }
+  | { kind: 'arrangeBoard' };
 
 /**
  * The shortcut a key press is, if any: N adds a note; T, S, Z, A and ` arm a tool; V selects, B box-selects and H pans;
  * ⇧E cycles which connections are drawn and ⇧C how a crew is shown; / opens the shape palette at the pointer; ? opens
- * the cheat sheet (with the extended keys on); and Escape. Never with ⌘, Ctrl or ⌥ held, nor as the key repeats.
+ * the cheat sheet and ⇧L arranges the board (with the extended keys on); and Escape. Never with ⌘, Ctrl or ⌥ held, nor as the key repeats.
  */
 export function boardShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'repeat'>): BoardShortcut | undefined {
   if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return undefined;

@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react';
-import { TEXT_FONT_SIZES, type ColorSlot } from '@agent-board/daemon/protocol';
+import { TEXT_FONT_SIZES, type ColorSlot, type FillSlot } from '@agent-board/daemon/protocol';
 import { Minus, Plus } from 'lucide-react';
 import { stepFontSize } from './text-style';
 import { NodeToolbar, Position } from '@xyflow/react';
 import { Button, Input, Popover, Swatch } from '../../ui';
-import { slotName, slotToken } from '../../board-colors';
+import { covers, foldColors, foldFills, fillToken, slotName, slotToken } from '../../board-colors';
+import { useFoldedSlots } from './use-folded-slots';
 
 /** The bar above a selected text item or shape: floats over it, keeping its size at any zoom. */
 export function ItemStyleBar({ label, visible, children }: { label: string; visible: boolean; children: ReactNode }) {
@@ -26,13 +27,15 @@ export const BarLabel = ({ children }: { children: ReactNode }) => <span classNa
 
 /**
  * A colour to pick, as the board draws it (`paint`), `null` for none (drawn struck through). A fill's is ringed in
- * `edge`, its outline's colour; a `fixed` one, which no theme changes, is marked so.
+ * `edge`, its outline's colour; a `fixed` one, which no theme changes, is marked so, a `folded` one for the slots it
+ * stands for.
  */
 export function BarSwatch({
   name,
   paint,
   edge,
   fixed = false,
+  folded = false,
   title,
   pressed,
   onPick,
@@ -41,6 +44,8 @@ export function BarSwatch({
   paint: string | null;
   edge?: string;
   fixed?: boolean;
+  /** It stands for more than one slot, which paint alike in this theme: ringed with a dashed line. */
+  folded?: boolean;
   title?: string;
   pressed: boolean;
   onPick: () => void;
@@ -50,6 +55,7 @@ export function BarSwatch({
       className="item-bar-swatch"
       data-none={paint === null || undefined}
       data-fixed={fixed || undefined}
+      data-folded={folded || undefined}
       edge={edge}
       color={paint ?? 'transparent'}
       aria-label={name}
@@ -113,36 +119,73 @@ function FixedColorButton({ name, color, onPick }: { name: string; color: string
   );
 }
 
+/** A folded swatch's tooltip: its slot and the ones it covers (`Accent · also Blue here`), or a lone slot's. */
+export function slotTitle<S extends ColorSlot | FillSlot>(slot: S, also: readonly S[]): string {
+  return also.length === 0 ? `${slotName(slot)} · follows the theme` : `${slotName(slot)} · also ${also.map(slotName).join(', ')} here`;
+}
+
 /**
- * A row's theme colours to pick (`slots`), each named `label` and the slot, then the fixed colour the item has, if it
- * has one, and the `#` that sets one.
+ * A shape's fills to pick: the tile's own, then each distinct tint once (those that paint alike in the theme fold, as in
+ * `SlotSwatches`). `slot` is the one the shape has, null for a fixed fill or none.
+ */
+export function FillSwatches({ slot, onPick }: { slot: FillSlot | null; onPick(slot: FillSlot): void }) {
+  const shown = useFoldedSlots(foldFills);
+  return (
+    <>
+      <BarSwatch
+        name="Fill tile"
+        title={slotTitle('tile', [])}
+        paint={fillToken('tile')}
+        edge="var(--raised-edge)"
+        pressed={slot === 'tile'}
+        onPick={() => onPick('tile')}
+      />
+      {shown.map((group) => (
+        <BarSwatch
+          key={group.slot}
+          name={`Fill ${group.slot}`}
+          title={slotTitle(group.slot, group.also)}
+          paint={fillToken(group.slot)}
+          edge={slotToken(group.slot)}
+          folded={group.also.length > 0}
+          pressed={covers(group, slot)}
+          onPick={() => onPick(group.slot)}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * A row's theme colours to pick (those that paint alike in the theme show once), each named `label` and the
+ * slot, then the fixed colour the item has, if it has one, and the `#` that sets one.
  */
 export function SlotSwatches({
   label,
-  slots,
   slot,
   color,
   onPick,
   onFixed,
 }: {
   label: string;
-  slots: readonly ColorSlot[];
   /** The slot the item's colour is in, or null for a fixed `color`. */
   slot: ColorSlot | null;
   color: string;
   onPick(slot: ColorSlot): void;
   onFixed(hex: string): void;
 }) {
+  const shown = useFoldedSlots(foldColors);
   return (
     <>
-      {slots.map((each) => (
+      {shown.map((group) => (
         <BarSwatch
-          key={each}
-          name={`${label} ${each}`}
-          title={`${slotName(each)} · follows the theme`}
-          paint={slotToken(each)}
-          pressed={slot === each}
-          onPick={() => onPick(each)}
+          key={group.slot}
+          name={`${label} ${group.slot}`}
+          title={slotTitle(group.slot, group.also)}
+          paint={slotToken(group.slot)}
+          folded={group.also.length > 0}
+          pressed={covers(group, slot)}
+          onPick={() => onPick(group.slot)}
         />
       ))}
       <BarSeparator />

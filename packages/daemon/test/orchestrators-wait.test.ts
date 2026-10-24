@@ -29,6 +29,7 @@ function host(agents = new Map<string, Agent>()) {
       spawnedBy: null,
       flag: null,
       unsent: null,
+      untypedPrompt: null,
       lastMessage: null,
       workFinishedAt: null,
       pullRequests: [],

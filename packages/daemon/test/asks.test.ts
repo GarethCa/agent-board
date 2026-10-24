@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createAskHost } from '../src/asks.ts';
 import { readPlanSource } from '../src/board-ops.ts';
 import { migrate } from '../src/migrate.ts';
-import { DEFAULT_ASK_WAIT_MS, DEFAULT_PLAN_WAIT_MS, MAX_ASK_OPTIONS } from '../src/protocol.ts';
+import { DEFAULT_ASK_WAIT_MS, DEFAULT_PLAN_WAIT_MS, MAX_ASK_OPTIONS, isMidTurn, pauseRefusal, planPending, waitsOnUser } from '../src/protocol.ts';
 import { createFakeClock } from './fake-clock.ts';
 import { tempDataDir } from './helpers.ts';
 
@@ -16,8 +16,16 @@ function asks(db = memoryDb(), worktree?: string) {
   const clock = createFakeClock(START);
   const changes: [string, boolean][] = [];
   const placed: string[] = [];
-  const host = createAskHost({ db, clock, changed: (sessionId, began) => changes.push([sessionId, began]), touched: (sessionId) => placed.push(sessionId), worktree: () => worktree });
-  return { db, clock, changes, placed, host };
+  const told: [string, string][] = [];
+  const host = createAskHost({
+    db,
+    clock,
+    changed: (sessionId, began) => changes.push([sessionId, began]),
+    touched: (sessionId) => placed.push(sessionId),
+    worktree: () => worktree,
+    told: (sessionId, text) => told.push([sessionId, text]),
+  });
+  return { db, clock, changes, placed, told, host };
 }
 
 function memoryDb(): DatabaseSync {
@@ -129,7 +137,7 @@ describe('plans an agent presents', () => {
 
     const plan = host.latestPlan('s1')!;
     expect(plan).toMatchObject({ version: 1, title: 'Cache product pages', format: 'markdown', decision: null, presentedAt: START.toISOString() });
-    expect(Date.parse(plan.expiresAt) - START.getTime()).toBe(DEFAULT_PLAN_WAIT_MS);
+    expect(Date.parse(plan.expiresAt!) - START.getTime()).toBe(DEFAULT_PLAN_WAIT_MS);
     expect(changes).toEqual([['s1', true]]);
 
     host.decide('s1', plan.id, 'changes-requested', 'Also bust on the nightly import');
@@ -316,5 +324,93 @@ describe('a plan’s source, as the present_plan tool takes it', () => {
     expect(() => readPlanSource({}, dir)).toThrow(/exactly one of markdown, html or path/);
     expect(() => readPlanSource({ markdown: '# Plan', html: '<h1>Plan</h1>' }, dir)).toThrow(/exactly one/);
     expect(() => readPlanSource({ path: 'missing.md' }, dir)).toThrow(/can't read the plan/);
+  });
+});
+
+describe('a plan an agent leaves instead of waiting on', () => {
+  const plan = { title: 'Cache pages', body: '# Cache\n\n1. Redis.\n', format: 'markdown' as const };
+
+  it('waits for the user past the end of the agent’s turn, then types the decision once', async () => {
+    const { host, told } = asks();
+    const left = host.leavePlan('s1', plan);
+    expect(left).toMatchObject({ version: 1, title: 'Cache pages', decision: null, left: true, expiresAt: null });
+
+    // The turn ended, which withdraws a plan a call waits on, not one the agent left.
+    host.drop('s1');
+    expect(host.latestPlan('s1')!.decision).toBeNull();
+
+    host.decide('s1', left.id, 'changes-requested', 'Use the CDN');
+    await Promise.resolve();
+    expect(told).toEqual([['s1', '[agent-board] The user asked for changes to plan v1.\n\nTheir comments:\nUse the CDN\n\nRevise the plan and present it again.']]);
+    expect(host.latestPlan('s1')).toMatchObject({ left: false, decision: { outcome: 'changes-requested' } });
+  });
+
+  it('has no timer: it waits however long the user takes, and the agent is never nudged', async () => {
+    const { host, clock, told } = asks();
+    host.leavePlan('s1', plan);
+    clock.advance(30 * 24 * 60 * 60_000);
+    await Promise.resolve();
+    expect(host.latestPlan('s1')!.decision).toBeNull();
+    expect(told).toEqual([]);
+  });
+
+  it('is replaced by the agent’s next version, with no one told, and an ask still works beside it', async () => {
+    const { host, told } = asks();
+    const first = host.leavePlan('s1', plan);
+    const second = host.leavePlan('s1', { ...plan, body: '# Cache\n\n1. CDN.\n' });
+    await Promise.resolve();
+    expect(second.version).toBe(2);
+    expect(host.plans('s1').map((each) => [each.version, each.decision?.outcome ?? null])).toEqual([[1, 'withdrawn'], [2, null]]);
+    expect(() => host.decide('s1', first.id, 'approved', '')).toThrow(/decided already/);
+    expect(told).toEqual([]);
+
+    const asked = host.ask('s1', { question: 'Which region?', options: ['eu', 'us'] }, never());
+    expect(host.pendingAsk('s1')).toMatchObject({ question: 'Which region?' });
+    host.answer('s1', host.pendingAsk('s1')!.id, { option: 1 });
+    await expect(asked).resolves.toMatchObject({ outcome: 'answered', answer: 'us' });
+    // It still waits, and the user decides it.
+    host.decide('s1', second.id, 'approved', '');
+    await Promise.resolve();
+    expect(told).toHaveLength(1);
+    expect(told[0]![1]).toContain('The user approved plan v2.');
+  });
+
+  it('is not a call waiting on the user: its agent is not mid-turn for it, yet its plan still waits for review', () => {
+    const { host } = asks();
+    host.leavePlan('s1', plan);
+    const agent = { ask: null, plan: host.latestPlan('s1')!, state: 'idle' as const, endedAt: null, permissions: [] };
+    expect(waitsOnUser(agent)).toBe(false);
+    expect(isMidTurn(agent)).toBe(false);
+    expect(planPending(agent)).toBe(true);
+    expect(pauseRefusal(agent)).toBe('it is waiting on you');
+  });
+
+  it('ends with the agent’s session, which it is told once resumed', async () => {
+    const { host, told } = asks();
+    host.leavePlan('s1', plan);
+    host.end('s1');
+    await Promise.resolve();
+    expect(host.latestPlan('s1')).toMatchObject({ left: false, decision: { outcome: 'withdrawn' } });
+    expect(told).toEqual([['s1', '[agent-board] Plan v1 was withdrawn before the user decided: your session ended. Present it again.']]);
+  });
+
+  it('logs what goes wrong in telling the agent instead of dropping it', async () => {
+    const logs: string[] = [];
+    const db = memoryDb();
+    const host = createAskHost({
+      db,
+      clock: createFakeClock(START),
+      changed: () => undefined,
+      touched: () => undefined,
+      worktree: () => undefined,
+      told: () => {
+        throw new Error('the queue is gone');
+      },
+      log: (message) => logs.push(message),
+    });
+    const left = host.leavePlan('s1', plan);
+    host.decide('s1', left.id, 'rejected', '');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(logs).toEqual(['could not tell s1 how its plan ended: the queue is gone']);
   });
 });
