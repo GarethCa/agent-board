@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.2 (2026-10-24)
+
+- Arrange lays lanes out in pixels: own widths, exact rail room, rows as tall as what they hold
+- agent-board zone screenshot / MCP zone_screenshot: a PNG of a zone from a hidden window, terminals hidden, with a lo-fi style to compare
+- Zone map lint sees gaps between lanes, far labels and a mostly empty zone
+- keyboard spec waits for the saved windows before reloading
+- Pasting Mermaid draws a diagram, a selection copies as Mermaid, and agents get diagram add and export
+- A web tab says when its page asks for a passkey, and offers the page in your browser
+- Bump electron to 44.9.3 (certificate advisory)
+
 ## v0.6.1 (2026-10-24)
 
 - Arrange respects expanded tiles: lanes keep their own widths, new crew lands in its lane, turned items stay clear

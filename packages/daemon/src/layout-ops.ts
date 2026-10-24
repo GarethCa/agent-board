@@ -1,27 +1,36 @@
 // The layout commands as the CLI and MCP give them (`move`, `arrange`, `zone`, `note`): refs and words turned into the
 // daemon's `orchestrator.*` layout methods, and their results as text and JSON (ADR-0010's one API, two faces).
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { BoardError, BoardRefs, connectorLine, connectorsIn, inZone, itemLine, readBoard, REF_KINDS, shapeSectionLines, zoneLine, type BoardSession, type BoardView, type RefKind } from './board-ops.ts';
 import {
   ARRANGE_BYS,
   ARRANGE_LAYOUTS,
+  CAPTURE_STYLES,
   CONNECTOR_STYLES,
+  FILL_SLOT_COLORS,
   NOTE_KINDS,
   RELATIONS,
   SHAPE_TYPES,
   TILE_SIDES,
   type BoardCaller,
   type BoardItem,
+  type CaptureStyle,
   type ConnectorStyle,
   type DiagramConnectorFields,
   type DiagramShapeFields,
   type LayoutPlace,
   type LayoutTarget,
   type RelationId,
+  type ShapeData,
   type ShapeType,
   type TileSide,
   type ZoneMap,
+  type ZoneScreenshot,
 } from './protocol.ts';
-import { boxPicture, laneTable } from './zone-map.ts';
+import { toMermaid } from './mermaid.ts';
+import { boxPicture, laneTable, lintLine } from './zone-map.ts';
 
 /** A point as typed: `x,y`. Throws `BoardError` for anything else. */
 export function pointOf(text: string, what: string): { x: number; y: number } {
@@ -224,6 +233,49 @@ export async function arrangeZone(session: BoardSession, zone: string | undefine
   };
 }
 
+/** A zone's picture, and the caption that says what it shows. */
+export interface ZoneScreenshotView {
+  shot: ZoneScreenshot;
+  caption: string;
+}
+
+/** Picture px per board px, as a caption says it: `1×`, `0.5×`. */
+const scaleText = (scale: number) => `${Number(scale.toFixed(3))}×`;
+
+/** `zone screenshot`: a picture of a zone (the caller's by default), as the app draws it or as a plain drawing. */
+export async function zoneScreenshot(session: BoardSession, zone: string | undefined, options: { style?: string }): Promise<ZoneScreenshotView> {
+  if (options.style !== undefined && !(CAPTURE_STYLES as readonly string[]).includes(options.style)) throw new BoardError(`style must be ${CAPTURE_STYLES.join(' or ')}`);
+  const refs = new BoardRefs(await readBoard(session.client));
+  const shot = await session.client.call('orchestrator.screenshot', {
+    token: session.token,
+    ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
+    ...(options.style === undefined ? {} : { style: options.style as CaptureStyle }),
+  });
+  const { map } = shot;
+  const what = shot.style === 'lofi' ? 'a plain drawing of its tiles, notes and lines' : 'terminals hidden';
+  return {
+    shot,
+    caption: [
+      `${refs.of('zone', map.zoneId)} ${map.name}, ${Math.round(map.width)}×${Math.round(map.height)} px, drawn at ${scaleText(shot.scale)} (${shot.width}×${shot.height}), ${what}.`,
+      lintLine(map, (key) => mapRef(refs, key)),
+    ].join('\n'),
+  };
+}
+
+/**
+ * `zone screenshot` in the CLI: the zone's picture written to `out`, and where it went with the caption. By default it
+ * goes to a temp file named for the zone and style, which the next picture of them replaces, so they never pile up.
+ * Its JSON is the shot's details and the map, without the picture.
+ */
+export async function writeZoneScreenshot(session: BoardSession, zone: string | undefined, options: { style?: string; out?: string }): Promise<BoardView> {
+  const { shot, caption } = await zoneScreenshot(session, zone, options);
+  const path = options.out ?? join(tmpdir(), 'agent-board-screenshots', `zone-${shot.zoneId.slice(0, 8)}-${shot.style}.png`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, Buffer.from(shot.png, 'base64'));
+  const { zoneId, style, width, height, scale, map } = shot;
+  return { text: `Wrote ${path}\n${caption}`, json: { path, zoneId, style, width, height, scale, map } };
+}
+
 /** What `zone add|rename|resize` take, as typed. */
 export interface GroupOptions {
   name?: string;
@@ -358,6 +410,50 @@ export async function addShape(session: BoardSession, options: ShapeOptions & Pl
   });
   const fresh = new BoardRefs(await readBoard(session.client));
   return { text: `Added ${itemLine(fresh, item)} ${inZone(fresh, item.zoneId)} ${where(item.x, item.y)}.`, json: item };
+}
+
+/** `diagram add`: the Mermaid flowchart or class diagram `mermaid` drawn as shapes and connectors, placed as a note is. */
+export async function addDiagram(session: BoardSession, mermaid: string, options: PlaceOptions): Promise<BoardView> {
+  checkPlace(options);
+  const refs = new BoardRefs(await readBoard(session.client));
+  const drawn = await session.client.call('orchestrator.addDiagram', { token: session.token, mermaid, ...placeOf(refs, options, session.caller) });
+  const fresh = new BoardRefs(await readBoard(session.client));
+  const [first] = drawn.items;
+  return {
+    text: [
+      `Drew ${drawn.items.length} shape${drawn.items.length === 1 ? '' : 's'} and ${drawn.connectors.length} connector${drawn.connectors.length === 1 ? '' : 's'} ${inZone(fresh, first!.zoneId)}:`,
+      ...drawn.items.map((item) => `  ${itemLine(fresh, item)}`),
+      ...drawn.connectors.map((connector) => `  ${connectorLine(fresh, connector)}`),
+      ...(drawn.skipped.length === 0 ? [] : [`Passed over ${drawn.skipped.length} line${drawn.skipped.length === 1 ? '' : 's'} it does not draw:`, ...drawn.skipped.map((line) => `  ${line}`)]),
+    ].join('\n'),
+    json: drawn,
+  };
+}
+
+/**
+ * `diagram export`: the shapes `refs` name (each a shape, or a zone for every shape in it; the caller's zone with none),
+ * and the connectors between them, as Mermaid.
+ */
+export async function exportDiagram(session: BoardSession, refs: readonly string[]): Promise<BoardView> {
+  const board = new BoardRefs(await readBoard(session.client));
+  const own = session.caller?.zoneId ?? null;
+  const named = refs.length > 0 ? refs : own === null ? [] : [`zone:${own}`];
+  if (named.length === 0) throw new BoardError('give the zone, or the shapes, to export');
+  const shapes = new Map<string, BoardItem>();
+  for (const ref of named) {
+    const object = board.resolve(ref, session.caller);
+    if (object.kind === 'zone') {
+      for (const item of board.board.items) if (item.kind === 'shape' && item.zoneId === object.zone.id) shapes.set(item.id, item);
+    } else if (object.kind === 'item' && object.item.kind === 'shape') shapes.set(object.item.id, object.item);
+    else throw new BoardError(`${ref} is ${object.kind === 'item' ? `a ${object.item.kind}` : `a ${object.kind}`}: export takes shapes, or a zone`);
+  }
+  if (shapes.size === 0) throw new BoardError(`there is no shape in ${named.join(', ')} to export`);
+  const mermaid = toMermaid(
+    // A shape saved before sections has none.
+    [...shapes.values()].map((item) => ({ id: item.id, data: { shape: 'rectangle', text: '', attributes: '', methods: '', fill: FILL_SLOT_COLORS.tile, ...item.data } as ShapeData })),
+    board.board.connectors.map(({ from, to, ...look }) => ({ from, to, ...look })),
+  );
+  return { text: mermaid.trimEnd(), json: { mermaid } };
 }
 
 /** The shape `text` names, by its id. */

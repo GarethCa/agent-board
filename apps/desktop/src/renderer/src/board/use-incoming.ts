@@ -15,6 +15,8 @@ interface IncomingOptions {
   report(action: string): (error: unknown) => void;
   /** Pastes board items copied here or in another window, from the clipboard's board data; whether there were any. */
   pasteItems(data: string): boolean;
+  /** Draws a pasted Mermaid diagram, from the clipboard's text; whether it was one. */
+  pasteDiagram(text: string): boolean;
   /** Where the pointer last was over the board, in screen coordinates. */
   pointer: RefObject<Point | undefined>;
   /** The board position in the middle of the window. */
@@ -24,9 +26,9 @@ interface IncomingOptions {
 
 /**
  * What a paste or a drop brings onto the board that isn't board items: an image item per image file, its bytes in the
- * daemon's image store, or a link card for a pasted link. Returns `onFilesDropped`, for the board's drop.
+ * daemon's image store, a link card for a pasted link, or the shapes and connectors of a pasted Mermaid diagram. Returns `onFilesDropped`, for the board's drop.
  */
-export function useIncoming({ loaded, createItem, report, pasteItems, pointer, boardCentre, screenToFlowPosition }: IncomingOptions) {
+export function useIncoming({ loaded, createItem, report, pasteItems, pasteDiagram, pointer, boardCentre, screenToFlowPosition }: IncomingOptions) {
   /** Adds `file` as an image item centred on `centre`: its bytes go to the daemon's image store first. */
   const addImage = useCallback(
     async (file: File, centre: Point) => {
@@ -67,17 +69,17 @@ export function useIncoming({ loaded, createItem, report, pasteItems, pointer, b
       if (isTyping(event) || event.clipboardData === null) return;
       // Board items copied here or in another window.
       if (pasteItems(event.clipboardData.getData(BOARD_CLIPBOARD_TYPE))) return event.preventDefault();
-      const incoming = classifyPaste({
-        files: [...event.clipboardData.files],
-        text: event.clipboardData.getData('text/plain'),
-      });
+      const text = event.clipboardData.getData('text/plain');
+      // A Mermaid flowchart or class diagram, drawn as shapes and connectors.
+      if (event.clipboardData.files.length === 0 && pasteDiagram(text)) return event.preventDefault();
+      const incoming = classifyPaste({ files: [...event.clipboardData.files], text });
       if (incoming.type === 'nothing') return;
       event.preventDefault();
       addIncoming(incoming, pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
-  }, [loaded, addIncoming, boardCentre, screenToFlowPosition, pasteItems]);
+  }, [loaded, addIncoming, boardCentre, screenToFlowPosition, pasteItems, pasteDiagram]);
 
   /** Adds the files dropped on the board where they were let go; a drop without files is left alone. */
   const onFilesDropped = useCallback(

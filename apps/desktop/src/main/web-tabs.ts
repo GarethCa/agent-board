@@ -4,6 +4,7 @@ import { WEB_TAB_IPC, type WebTabBounds, type WebTabKey, type WebTabState } from
 import { headless } from './background';
 import { openWebLink, openWebTabLink } from './links';
 import { webKey } from './web-keys';
+import { passkeyNotice, probePasskeys } from './web-passkeys';
 import { lockDownContents, lockDownSession } from './web-lockdown';
 import { lockDownPlanContents, lockDownPlanSession, PLAN_URL } from './plan-lockdown';
 
@@ -60,6 +61,8 @@ interface WebTab {
   problem: string | undefined;
   /** The https page the page last asked to open in a new window, offered for the user to open. */
   offered: string | undefined;
+  /** Whether its page has asked for a passkey, which the tab may not be able to serve, and the user hasn't dismissed that (`web-passkeys.ts`). */
+  passkey: ReturnType<typeof passkeyNotice>;
   /** Whether it shows an agent's plan, which goes nowhere: `load` takes it nowhere either. */
   plan: boolean;
 }
@@ -98,7 +101,8 @@ const planKind = (tabId: string): ViewKind => ({
  * goes when its renderer takes it away, reloads or closes; its partition's data when the tab is closed (`forget`), or
  * its renderer reloads or closes, as nothing there can show it again. A tab moving to another window (slice
  * 4) is handed off first (`handOff`): its page waits, hidden and kept from its window's going, for the window that
- * opens the tab next, which takes the page as it is.
+ * opens the tab next, which takes the page as it is. Its one injection is the passkey probe (`web-passkeys.ts`): a script
+ * in the page, never a preload, that logs when it explicitly asks for a passkey.
  */
 export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents): boolean }): void {
   const tabs = new Map<string, WebTab>();
@@ -132,6 +136,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       focused: contents.isFocused(),
       ...(tab.problem === undefined ? {} : { problem: tab.problem }),
       ...(tab.offered === undefined ? {} : { offered: tab.offered }),
+      ...(tab.passkey.shown ? { passkey: true } : {}),
     };
   };
   const tell = (tabId: string, tab: WebTab) => {
@@ -267,7 +272,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     });
     window.contentView.addChildView(view);
     const kind = 'url' in page ? webKind(page.url) : planKind(tabId);
-    const tab: WebTab = { view, window, owner, asked: kind.asked, problem: undefined, offered: undefined, plan: kind.plan };
+    const tab: WebTab = { view, window, owner, asked: kind.asked, problem: undefined, offered: undefined, passkey: passkeyNotice(() => tell(tabId, tab)), plan: kind.plan };
     tabs.set(key, tab);
     place(tab, placed.get(key) ?? null);
 
@@ -288,6 +293,9 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
         tell(tabId, tab);
       },
     );
+    if (!kind.plan) {
+      probePasskeys(contents, process.platform, tab.passkey.asked);
+    }
     const changed = () => tell(tabId, tab);
     contents.on('did-start-loading', changed);
     contents.on('did-stop-loading', changed);
@@ -297,6 +305,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     contents.on('blur', changed);
     contents.on('did-navigate', () => {
       tab.problem = undefined;
+      tab.passkey.clear();
       changed();
     });
     contents.on('did-fail-load', (_event, code, description, failed, isMainFrame) => {
@@ -385,6 +394,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     tab.offered = undefined;
     tell(tabId as string, tab);
   });
+  ipcMain.handle(WEB_TAB_IPC.dismissPasskey, (event, tabId: unknown) => tabOf(event, tabId)?.passkey.clear());
   ipcMain.handle(WEB_TAB_IPC.close, (event, tabId: unknown) => {
     const key = keyFor(event, tabId);
     if (key !== undefined) destroy(key);

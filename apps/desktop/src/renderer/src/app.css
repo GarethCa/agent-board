@@ -2017,6 +2017,15 @@ kbd {
   cursor: default;
 }
 
+.expanded-tile-hidden {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-sm);
+}
+
 .expanded-tile-elsewhere {
   padding: var(--space-4);
   color: var(--window-ink-soft);
@@ -8580,4 +8589,22 @@ tr[data-status='running'] .gate-step-icon {
 
 .doc-banner > span {
   margin-right: auto;
+}
+
+/*
+ * A capture window (board/capture-mode.ts) shows the board's canvas and nothing else: whatever is not in it (a toast, a
+ * tooltip, a popover, an overlay added later) is invisible by default, not left out one by one.
+ */
+:root[data-capture] body * {
+  visibility: hidden;
+}
+
+:root[data-capture] .react-flow,
+:root[data-capture] .react-flow * {
+  visibility: visible;
+}
+
+:root[data-capture] .react-flow__panel,
+:root[data-capture] .react-flow__panel * {
+  visibility: hidden;
 }

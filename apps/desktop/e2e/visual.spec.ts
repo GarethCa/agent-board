@@ -1,4 +1,5 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
+import { AGENT_TILE_SIZE, PERCH_ROOM } from '@agent-board/daemon/board-layout';
 import type { EdgePoint } from '@agent-board/daemon/protocol';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
@@ -1362,8 +1363,11 @@ test('an orchestrator expanded in place, its crew pushed aside in their frame, w
   }
 });
 
-test('an orchestrator arranges its crew: its implementer and reviewer a rail apart, the token and its label clear of both tiles', async () => {
-  needsBaselines('arranged-crew-rail');
+for (const { shot, layout, prompt } of [
+  { shot: 'arranged-crew-rail', layout: 'rows', prompt: 'Arrange a messy crew' },
+  { shot: 'arranged-crew-rail-columns', layout: 'columns', prompt: 'Arrange a messy crew in columns' },
+] as const) test(`an orchestrator arranges its crew in ${layout}: its implementer and reviewer a rail apart, the token and its label clear of both tiles`, async () => {
+  needsBaselines(shot);
   const { dir, repo, env } = scratch('orchestrate');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
@@ -1373,7 +1377,7 @@ test('an orchestrator arranges its crew: its implementer and reviewer a rail apa
     await pinFonts(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await spawnAgent(window, 'monorepo', 'Arrange a messy crew');
+    await spawnAgent(window, 'monorepo', prompt);
     if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
     // Each CLI command starts the app's executable as Node: a turn's worth of time each.
     await expect(tile(window)).toHaveCount(3, { timeout: 4 * TURN_MS });
@@ -1398,8 +1402,14 @@ test('an orchestrator arranges its crew: its implementer and reviewer a rail apa
       token.getByTestId('rail-token-note').boundingBox(),
     ]);
     for (const part of [chip!, note!]) {
-      expect(part.x).toBeGreaterThan(impl!.x + impl!.width);
-      expect(part.x + part.width).toBeLessThan(review!.x);
+      // In rows the rail runs across, in columns down: past the room above the reviewer for the characters on its top edge.
+      if (layout === 'rows') {
+        expect(part.x).toBeGreaterThan(impl!.x + impl!.width);
+        expect(part.x + part.width).toBeLessThan(review!.x);
+      } else {
+        expect(part.y).toBeGreaterThan(impl!.y + impl!.height);
+        expect(part.y + part.height).toBeLessThan(review!.y - PERCH_ROOM * (impl!.width / AGENT_TILE_SIZE.width));
+      }
     }
     await pinRandomText(window);
     // The note's badge says when it was written.
@@ -1411,7 +1421,7 @@ test('an orchestrator arranges its crew: its implementer and reviewer a rail apa
     });
     const restorePointer = await ignorePointer(window);
     await settle(window);
-    await expect.soft(window.locator('.board')).toHaveScreenshot('arranged-crew-rail.png', SHOT);
+    await expect.soft(window.locator('.board')).toHaveScreenshot(`${shot}.png`, SHOT);
     await restorePointer();
   } finally {
     await app.close();

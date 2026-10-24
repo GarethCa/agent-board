@@ -242,6 +242,7 @@ import { useZoneResize } from './use-zone-resize';
 import { isQuestionNodeId, QUESTION_CARD_TYPE, questionTethers, type QuestionNodeType } from './question-cards';
 import { QuestionCardNode } from './QuestionCardNode';
 import { useQuestionCards } from './use-question-cards';
+import { CAPTURE_FRAME, captureViewport, edgesAmong, nodesInZone, useCaptureReady } from './capture-mode';
 
 // Module-level so React Flow never sees a new object and re-mounts every node.
 const nodeTypes: NodeTypes = {
@@ -674,6 +675,7 @@ function BoardView() {
   // An agent's question, beside its tile as drawn, when it asked for it on the board.
   const questionCards = useQuestionCards(agents, shown, report('move the question card'));
   const clockStatuses = useClockStatuses(report, loaded);
+  useCaptureReady(loaded);
   applyCardChanges.current = questionCards.apply;
   const drawn = useMemo(() => (questionCards.cards.length === 0 ? shown : [...shown, ...(questionCards.cards as unknown as BoardNode[])]), [shown, questionCards.cards]);
 
@@ -2130,6 +2132,7 @@ function BoardView() {
     pasteAt: () => (pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current)),
     duplicateOffset: desk.gap,
     report,
+    inform: (message) => toasts.show({ tone: 'info', message }),
   });
 
   // Whether to snap to the grid is kept in the view state, as the view is.
@@ -2242,7 +2245,7 @@ function BoardView() {
     },
   });
 
-  const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pointer, boardCentre, screenToFlowPosition });
+  const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
 
   /** Starts a shell tile in the zone and opens its window. */
   const newShell = useCallback(
@@ -2703,6 +2706,12 @@ function BoardView() {
     if (hoveredTile !== undefined) revealed.add(hoveredTile);
     return shownEdges(allEdges, connections, revealed);
   }, [allEdges, connections, selectedKey, hoveredTile]);
+  /** In a capture window, what it draws: its zone and what is in it, and the edges between those (capture-mode.ts). */
+  const captured = useMemo(() => {
+    if (CAPTURE_FRAME === undefined) return undefined;
+    const kept = nodesInZone(drawn, CAPTURE_FRAME.zoneId);
+    return { nodes: kept, edges: edgesAmong(edges, kept) };
+  }, [drawn, edges]);
   const hiddenCounts = useMemo(() => {
     if (connections === 'all') return new Map<string, number>();
     const drawn = new Set(shownEdges(allEdges, connections, new Set()).map((edge) => edge.id));
@@ -2887,8 +2896,8 @@ function BoardView() {
                           <HandingOffContext value={handingOff}>
                             <RepresentationProvider style={DEFAULT_REPRESENTATION}>
                               <ReactFlow
-                              nodes={drawn}
-                              edges={edges}
+                              nodes={captured?.nodes ?? drawn}
+                              edges={captured?.edges ?? edges}
                               edgeTypes={edgeTypes}
                               onEdgesChange={edgesChanged}
                               // A connector can join any two objects, whichever handles: the sides are the user's choice.
@@ -3012,10 +3021,11 @@ function BoardView() {
                               onlyRenderVisibleElements
                               elevateNodesOnSelect={false}
                               minZoom={0.05}
-                              fitView={fitOnLoad}
+                              // A capture window is framed on its zone, and keeps the user's view as it is.
+                              fitView={CAPTURE_FRAME === undefined && fitOnLoad}
                               fitViewOptions={{ maxZoom: 1 }}
-                              defaultViewport={savedViewport}
-                              onMoveEnd={(_event, { x, y, zoom }) => saveViewport({ x, y, zoom })}
+                              defaultViewport={CAPTURE_FRAME === undefined ? savedViewport : captureViewport(CAPTURE_FRAME)}
+                              onMoveEnd={(_event, { x, y, zoom }) => CAPTURE_FRAME === undefined && saveViewport({ x, y, zoom })}
                               proOptions={{ hideAttribution: true }}
                             >
                               <Background
@@ -3104,295 +3114,300 @@ function BoardView() {
           </SaveZoneLayoutContext>
         </DropTargetContext>
       )}
-      {cheatSheet.sheet}
-      <BoardChrome
-        onKeyboardHelp={cheatSheet.open}
-        loaded={loaded}
-        empty={loaded && nodes.length === 0 && newAgent === undefined}
-        loadedEmpty={loadedEmpty}
-        zones={zones}
-        agents={agents}
-        masterOpen={masterPanel.open}
-        onMaster={masterPanel.toggle}
-        shells={shells}
-        onOpenShell={openShell}
-        onAddZone={openAddZone}
-        onJump={(zone) => {
-          // Where it is now: its node may have been moved or resized since the daemon sent it.
-          const node = getNodes().filter(isZone).find((known) => known.id === zone.id);
-          if (node === undefined) return;
-          bringIntoView(layoutOf(node));
-          setCurrentZone(zone.id);
-        }}
-        currentZone={currentZone}
-        onOpenAgent={openAgent}
-        onError={report}
-        minimapColor={minimapColor}
-        grid={grid}
-        onGrid={toggleGrid}
-        clickOpens={clickOpens}
-        onClickOpens={pickClickOpens}
-        crewLook={crewLook}
-        onCrewLook={pickCrewLook}
-        connections={connections}
-        onConnections={pickConnections}
-        agentNoteLook={agentNoteLook}
-        onAgentNoteLook={pickAgentNoteLook}
-        mode={mode}
-        onMode={pickMode}
-        tool={tool}
-        onTool={setTool}
-        ghostSize={{ width: AGENT_TILE_SIZE.width * getZoom(), height: AGENT_TILE_SIZE.height * getZoom() }}
-        onDropTool={dropTool}
-        onSticky={() => createItem('sticky', boardCentre())}
-        onRunInShell={startLooseShell}
-        onCloseWindow={closeWindow}
-      />
-      {loaded && masterPanel.open && (
-        <MasterPanel
-          agents={agents}
-          zones={zones}
-          items={boardItems}
-          focusRequest={masterPanel.focusRequest}
-          onClose={masterPanel.close}
-          onShowAgent={(sessionId) => boardCommands.showTile({ kind: 'agent', id: sessionId })}
-          onShowZone={(zoneId) => boardCommands.showZone(zoneId)}
-          onOpenAgent={openAgent}
-          onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
-        />
-      )}
-      {/* Only while both its agents are on the board: one deleted takes the edge, which may not have been heard yet. */}
-      {shownFlowEdge !== undefined && shownEnds?.from !== undefined && shownEnds.to !== undefined && (
-        <EdgeRules
-          key={shownFlowEdge.id}
-          edge={shownFlowEdge}
-          fromName={shownEnds.from.name}
-          toName={shownEnds.to.name}
-          madeByName={agents.find((agent) => agent.sessionId === shownFlowEdge.madeBy)?.name}
-          fromRevision={shownEnds.from.lastMessage}
-          drawn={flow.drawn === shownFlowEdge.id}
-          live={flow.live.has(shownFlowEdge.id)}
-          directions={shownDirections}
-          actions={flow.actions}
-          onDelete={() => flow.actions.remove(shownFlowEdge.id)}
-          onClose={() => setSelectedFlowEdges(new Set())}
-        />
-      )}
-      {/* Over the board, or in the session window shown over it, whose title bar it would otherwise cover. */}
-      {loaded && shownWindow(windows) === undefined && restartBanner}
-      {newAgent !== undefined && (
-        <NewAgentDialog
-          key={newAgent.zone?.id ?? 'loose'}
-          zone={newAgent.zone}
-          agents={agents}
-          issue={newAgent.issue}
-          issueZoneId={newAgent.issueZoneId}
-          name={newAgent.name}
-          position={newAgent.position}
-          onStarted={(sessionId, fromIssue) => {
-            const zone = newAgent.zone;
-            // Started from an issue picked for it: its card goes in first, so the tile's slot is clear of it (R1).
-            if (newAgent.card !== undefined && zone !== undefined) placeIssueCard(zone, newAgent.card);
-            // Started from an issue another way (the dialog's own picker): its card goes in once its agent is.
-            else if (fromIssue && zone !== undefined && newAgent.issue === undefined) issueCardsDue.current.set(sessionId, zone);
-            setNewAgent(undefined);
-          }}
-          onCancel={() => setNewAgent(undefined)}
-          onZoneChanged={(zone) => {
-            setNewAgent((current) => current && { ...current, zone });
-            setNodes((current) => withZone(current, zone));
-          }}
-        />
-      )}
-      {issueZone !== undefined && (
-        <IssueCardDialog
-          key={issueZone.id}
-          zone={issueZone}
-          whyNoStart={issueZone.clone === null ? undefined : whyNoAgents(issueZone)}
-          onAddCard={(issue) => {
-            placeIssueCard(issueZone, issue);
-            setIssueZone(undefined);
-          }}
-          onStartAgent={(issue) => {
-            startFromZoneIssue(issueZone, issue);
-            setIssueZone(undefined);
-          }}
-          onCancel={() => setIssueZone(undefined)}
-        />
-      )}
-      {defaultRepoZone !== undefined && (
-        <DefaultRepoDialog
-          key={defaultRepoZone.id}
-          zone={defaultRepoZone}
-          onSaved={(zone) => {
-            setNodes((current) => withZone(current, zone));
-            setDefaultRepoZone(undefined);
-          }}
-          onCancel={() => setDefaultRepoZone(undefined)}
-        />
-      )}
-      {trackerZone !== undefined && (
-        <ZoneTrackerDialog
-          key={trackerZone.id}
-          zone={trackerZone}
-          onSaved={zoneSaved}
-          onCancel={() => setTrackerZone(undefined)}
-        />
-      )}
-      {linking !== undefined && (
-        <LinkIssueDialog
-          key={linking.agent.sessionId}
-          agent={linking.agent}
-          zone={linking.zone}
-          onLinked={(agent) => {
-            agentHeard(agent);
-            setLinking(undefined);
-          }}
-          onCancel={() => setLinking(undefined)}
-        />
-      )}
-      {roleTemplatesZone !== undefined && (
-        <RoleTemplatesDialog key={roleTemplatesZone.id} zone={roleTemplatesZone} onClose={() => setRoleTemplatesZone(undefined)} />
-      )}
-      {gateCommandZone !== undefined && (
-        <GateCommandDialog
-          key={gateCommandZone.id}
-          zone={gateCommandZone}
-          onSaved={(saved) => {
-            setGateCommandZone(undefined);
-            setNodes((current) => withZone(current, saved));
-          }}
-          onCancel={() => setGateCommandZone(undefined)}
-        />
-      )}
-      {clockEditing !== undefined && (
-        <ClockDialog
-          key={'clockId' in clockEditing ? clockEditing.clockId : clockEditing.agent.sessionId}
-          editing={clockEditing}
-          status={'clockId' in clockEditing ? clockStatuses.get(clockEditing.clockId) : undefined}
-          agents={agents}
-          onUpdate={(id, data) => itemActions.update({ id, data: { ...data } })}
-          onDelete={(id) => itemActions.remove(id)}
-          onClose={() => setClockEditing(undefined)}
-        />
-      )}
-      {menu}
-      {pendingDelete !== undefined && (
-        <Dialog
-          role="alertdialog"
-          title={pendingDelete.title}
-          onClose={settleDelete}
-          footer={
-            <>
-              <Button variant="ghost" onClick={settleDelete}>
-                Cancel
-              </Button>
-              {pendingDelete.keepLabel !== undefined && (
-                <Button
-                  variant="secondary"
-                  disabled={cloneTicked}
-                  title={cloneTicked ? 'A clone can only be deleted with the worktrees it holds' : undefined}
-                  onClick={() => {
-                    const deleteClone = cloneTicked;
-                    settleDelete();
-                    pendingDelete.run(true, deleteClone);
-                  }}
-                >
-                  {pendingDelete.keepLabel}
-                </Button>
-              )}
-              <Button
-                variant="danger"
-                onClick={() => {
-                  const deleteClone = cloneTicked;
-                  settleDelete();
-                  pendingDelete.run(false, deleteClone);
-                }}
-              >
-                {pendingDelete.confirm}
-              </Button>
-            </>
-          }
-        >
-          {pendingDelete.lines.map((line, index) => (
-            // Lines may repeat (two shells of one name), and the list is fixed for the dialog.
-            <p key={index}>{line}</p>
-          ))}
-          {pendingDelete.cloneLabel !== undefined && (
-            <Checkbox label={pendingDelete.cloneLabel} checked={cloneTicked} onChange={(event) => setCloneTicked(event.target.checked)} />
+      {/* A capture window draws the canvas alone (capture-mode.ts): no chrome, panel, dialog or session window over the zone. */}
+      {CAPTURE_FRAME === undefined && (
+        <>
+          {cheatSheet.sheet}
+          <BoardChrome
+            onKeyboardHelp={cheatSheet.open}
+            loaded={loaded}
+            empty={loaded && nodes.length === 0 && newAgent === undefined}
+            loadedEmpty={loadedEmpty}
+            zones={zones}
+            agents={agents}
+            masterOpen={masterPanel.open}
+            onMaster={masterPanel.toggle}
+            shells={shells}
+            onOpenShell={openShell}
+            onAddZone={openAddZone}
+            onJump={(zone) => {
+              // Where it is now: its node may have been moved or resized since the daemon sent it.
+              const node = getNodes().filter(isZone).find((known) => known.id === zone.id);
+              if (node === undefined) return;
+              bringIntoView(layoutOf(node));
+              setCurrentZone(zone.id);
+            }}
+            currentZone={currentZone}
+            onOpenAgent={openAgent}
+            onError={report}
+            minimapColor={minimapColor}
+            grid={grid}
+            onGrid={toggleGrid}
+            clickOpens={clickOpens}
+            onClickOpens={pickClickOpens}
+            crewLook={crewLook}
+            onCrewLook={pickCrewLook}
+            connections={connections}
+            onConnections={pickConnections}
+            agentNoteLook={agentNoteLook}
+            onAgentNoteLook={pickAgentNoteLook}
+            mode={mode}
+            onMode={pickMode}
+            tool={tool}
+            onTool={setTool}
+            ghostSize={{ width: AGENT_TILE_SIZE.width * getZoom(), height: AGENT_TILE_SIZE.height * getZoom() }}
+            onDropTool={dropTool}
+            onSticky={() => createItem('sticky', boardCentre())}
+            onRunInShell={startLooseShell}
+            onCloseWindow={closeWindow}
+          />
+          {loaded && masterPanel.open && (
+            <MasterPanel
+              agents={agents}
+              zones={zones}
+              items={boardItems}
+              focusRequest={masterPanel.focusRequest}
+              onClose={masterPanel.close}
+              onShowAgent={(sessionId) => boardCommands.showTile({ kind: 'agent', id: sessionId })}
+              onShowZone={(zoneId) => boardCommands.showZone(zoneId)}
+              onOpenAgent={openAgent}
+              onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
+            />
           )}
-        </Dialog>
+          {/* Only while both its agents are on the board: one deleted takes the edge, which may not have been heard yet. */}
+          {shownFlowEdge !== undefined && shownEnds?.from !== undefined && shownEnds.to !== undefined && (
+            <EdgeRules
+              key={shownFlowEdge.id}
+              edge={shownFlowEdge}
+              fromName={shownEnds.from.name}
+              toName={shownEnds.to.name}
+              madeByName={agents.find((agent) => agent.sessionId === shownFlowEdge.madeBy)?.name}
+              fromRevision={shownEnds.from.lastMessage}
+              drawn={flow.drawn === shownFlowEdge.id}
+              live={flow.live.has(shownFlowEdge.id)}
+              directions={shownDirections}
+              actions={flow.actions}
+              onDelete={() => flow.actions.remove(shownFlowEdge.id)}
+              onClose={() => setSelectedFlowEdges(new Set())}
+            />
+          )}
+          {/* Over the board, or in the session window shown over it, whose title bar it would otherwise cover. */}
+          {loaded && shownWindow(windows) === undefined && restartBanner}
+          {newAgent !== undefined && (
+            <NewAgentDialog
+              key={newAgent.zone?.id ?? 'loose'}
+              zone={newAgent.zone}
+              agents={agents}
+              issue={newAgent.issue}
+              issueZoneId={newAgent.issueZoneId}
+              name={newAgent.name}
+              position={newAgent.position}
+              onStarted={(sessionId, fromIssue) => {
+                const zone = newAgent.zone;
+                // Started from an issue picked for it: its card goes in first, so the tile's slot is clear of it (R1).
+                if (newAgent.card !== undefined && zone !== undefined) placeIssueCard(zone, newAgent.card);
+                // Started from an issue another way (the dialog's own picker): its card goes in once its agent is.
+                else if (fromIssue && zone !== undefined && newAgent.issue === undefined) issueCardsDue.current.set(sessionId, zone);
+                setNewAgent(undefined);
+              }}
+              onCancel={() => setNewAgent(undefined)}
+              onZoneChanged={(zone) => {
+                setNewAgent((current) => current && { ...current, zone });
+                setNodes((current) => withZone(current, zone));
+              }}
+            />
+          )}
+          {issueZone !== undefined && (
+            <IssueCardDialog
+              key={issueZone.id}
+              zone={issueZone}
+              whyNoStart={issueZone.clone === null ? undefined : whyNoAgents(issueZone)}
+              onAddCard={(issue) => {
+                placeIssueCard(issueZone, issue);
+                setIssueZone(undefined);
+              }}
+              onStartAgent={(issue) => {
+                startFromZoneIssue(issueZone, issue);
+                setIssueZone(undefined);
+              }}
+              onCancel={() => setIssueZone(undefined)}
+            />
+          )}
+          {defaultRepoZone !== undefined && (
+            <DefaultRepoDialog
+              key={defaultRepoZone.id}
+              zone={defaultRepoZone}
+              onSaved={(zone) => {
+                setNodes((current) => withZone(current, zone));
+                setDefaultRepoZone(undefined);
+              }}
+              onCancel={() => setDefaultRepoZone(undefined)}
+            />
+          )}
+          {trackerZone !== undefined && (
+            <ZoneTrackerDialog
+              key={trackerZone.id}
+              zone={trackerZone}
+              onSaved={zoneSaved}
+              onCancel={() => setTrackerZone(undefined)}
+            />
+          )}
+          {linking !== undefined && (
+            <LinkIssueDialog
+              key={linking.agent.sessionId}
+              agent={linking.agent}
+              zone={linking.zone}
+              onLinked={(agent) => {
+                agentHeard(agent);
+                setLinking(undefined);
+              }}
+              onCancel={() => setLinking(undefined)}
+            />
+          )}
+          {roleTemplatesZone !== undefined && (
+            <RoleTemplatesDialog key={roleTemplatesZone.id} zone={roleTemplatesZone} onClose={() => setRoleTemplatesZone(undefined)} />
+          )}
+          {gateCommandZone !== undefined && (
+            <GateCommandDialog
+              key={gateCommandZone.id}
+              zone={gateCommandZone}
+              onSaved={(saved) => {
+                setGateCommandZone(undefined);
+                setNodes((current) => withZone(current, saved));
+              }}
+              onCancel={() => setGateCommandZone(undefined)}
+            />
+          )}
+          {clockEditing !== undefined && (
+            <ClockDialog
+              key={'clockId' in clockEditing ? clockEditing.clockId : clockEditing.agent.sessionId}
+              editing={clockEditing}
+              status={'clockId' in clockEditing ? clockStatuses.get(clockEditing.clockId) : undefined}
+              agents={agents}
+              onUpdate={(id, data) => itemActions.update({ id, data: { ...data } })}
+              onDelete={(id) => itemActions.remove(id)}
+              onClose={() => setClockEditing(undefined)}
+            />
+          )}
+          {menu}
+          {pendingDelete !== undefined && (
+            <Dialog
+              role="alertdialog"
+              title={pendingDelete.title}
+              onClose={settleDelete}
+              footer={
+                <>
+                  <Button variant="ghost" onClick={settleDelete}>
+                    Cancel
+                  </Button>
+                  {pendingDelete.keepLabel !== undefined && (
+                    <Button
+                      variant="secondary"
+                      disabled={cloneTicked}
+                      title={cloneTicked ? 'A clone can only be deleted with the worktrees it holds' : undefined}
+                      onClick={() => {
+                        const deleteClone = cloneTicked;
+                        settleDelete();
+                        pendingDelete.run(true, deleteClone);
+                      }}
+                    >
+                      {pendingDelete.keepLabel}
+                    </Button>
+                  )}
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      const deleteClone = cloneTicked;
+                      settleDelete();
+                      pendingDelete.run(false, deleteClone);
+                    }}
+                  >
+                    {pendingDelete.confirm}
+                  </Button>
+                </>
+              }
+            >
+              {pendingDelete.lines.map((line, index) => (
+                // Lines may repeat (two shells of one name), and the list is fixed for the dialog.
+                <p key={index}>{line}</p>
+              ))}
+              {pendingDelete.cloneLabel !== undefined && (
+                <Checkbox label={pendingDelete.cloneLabel} checked={cloneTicked} onChange={(event) => setCloneTicked(event.target.checked)} />
+              )}
+            </Dialog>
+          )}
+          {resumingExternal !== undefined && (
+            <ResumeExternalDialog
+              key={resumingExternal.session.id}
+              session={resumingExternal.session}
+              position={resumingExternal.position}
+              onResumed={(agent) => {
+                const nodeId = tileNodeId('external', resumingExternal.session.id);
+                externalGone(resumingExternal.session.id);
+                collapse(nodeId);
+                agentHeard(agent);
+                setResumingExternal(undefined);
+              }}
+              onClose={() => setResumingExternal(undefined)}
+            />
+          )}
+          {confirmingStart !== undefined && (
+            <Dialog
+              role="alertdialog"
+              aria-label="Codex config in this repo"
+              title="This repo has its own Codex config"
+              onClose={() => setConfirmingStart(undefined)}
+              footer={
+                <>
+                  <Button variant="ghost" onClick={() => setConfirmingStart(undefined)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setConfirmingStart(undefined);
+                      window.agentBoard.agents.retryStart(confirmingStart.sessionId, true).catch(report('start the agent'));
+                    }}
+                  >
+                    Start anyway
+                  </Button>
+                </>
+              }
+            >
+              <p>{confirmingStart.error}</p>
+            </Dialog>
+          )}
+          {pendingRestart !== undefined && (
+            <Dialog
+              role="alertdialog"
+              title="Restart agent?"
+              onClose={() => setPendingRestart(undefined)}
+              footer={
+                <>
+                  <Button variant="ghost" onClick={() => setPendingRestart(undefined)}>
+                    Cancel
+                  </Button>
+                  <Button variant="danger" onClick={() => restartAgent(pendingRestart.sessionId, true)}>
+                    Restart anyway
+                  </Button>
+                </>
+              }
+            >
+              <p>{pendingRestart.message}</p>
+            </Dialog>
+          )}
+          <TileActionsContext value={tileActions}>
+            <SessionWindowsLayer
+              agents={agents}
+              shells={shells}
+              loaded={loaded}
+              notice={loaded ? restartBanner : null}
+              sessions={navSessions}
+              zones={zones}
+            />
+          </TileActionsContext>
+        </>
       )}
-      {resumingExternal !== undefined && (
-        <ResumeExternalDialog
-          key={resumingExternal.session.id}
-          session={resumingExternal.session}
-          position={resumingExternal.position}
-          onResumed={(agent) => {
-            const nodeId = tileNodeId('external', resumingExternal.session.id);
-            externalGone(resumingExternal.session.id);
-            collapse(nodeId);
-            agentHeard(agent);
-            setResumingExternal(undefined);
-          }}
-          onClose={() => setResumingExternal(undefined)}
-        />
-      )}
-      {confirmingStart !== undefined && (
-        <Dialog
-          role="alertdialog"
-          aria-label="Codex config in this repo"
-          title="This repo has its own Codex config"
-          onClose={() => setConfirmingStart(undefined)}
-          footer={
-            <>
-              <Button variant="ghost" onClick={() => setConfirmingStart(undefined)}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  setConfirmingStart(undefined);
-                  window.agentBoard.agents.retryStart(confirmingStart.sessionId, true).catch(report('start the agent'));
-                }}
-              >
-                Start anyway
-              </Button>
-            </>
-          }
-        >
-          <p>{confirmingStart.error}</p>
-        </Dialog>
-      )}
-      {pendingRestart !== undefined && (
-        <Dialog
-          role="alertdialog"
-          title="Restart agent?"
-          onClose={() => setPendingRestart(undefined)}
-          footer={
-            <>
-              <Button variant="ghost" onClick={() => setPendingRestart(undefined)}>
-                Cancel
-              </Button>
-              <Button variant="danger" onClick={() => restartAgent(pendingRestart.sessionId, true)}>
-                Restart anyway
-              </Button>
-            </>
-          }
-        >
-          <p>{pendingRestart.message}</p>
-        </Dialog>
-      )}
-      <TileActionsContext value={tileActions}>
-        <SessionWindowsLayer
-          agents={agents}
-          shells={shells}
-          loaded={loaded}
-          notice={loaded ? restartBanner : null}
-          sessions={navSessions}
-          zones={zones}
-        />
-      </TileActionsContext>
     </div>
   );
 }

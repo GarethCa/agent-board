@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import type { IpcRenderer } from 'electron';
-import { ipcCalls } from './ipc';
+import { ipcCalls, readOnlyIpc } from './ipc';
 
 /** An ipcRenderer stand-in: `on`/`off` on an emitter, and `invoke` answered by `answer`. */
 function fakeIpc(answer: (channel: string, ...args: unknown[]) => Promise<unknown>) {
@@ -78,5 +78,29 @@ describe('subscribe', () => {
 
     expect(heard).toEqual([['agent:a1', 'closed']]);
     expect(emitter.listenerCount('windows:returned')).toBe(0);
+  });
+});
+
+describe('readOnlyIpc', () => {
+  it('passes on the calls that only read, and refuses every other without reaching main', async () => {
+    const reached: string[] = [];
+    const sent: string[] = [];
+    const { ipc } = fakeIpc(async (channel) => (reached.push(channel), channel));
+    const guarded = readOnlyIpc({ ...ipc, send: (channel: string) => void sent.push(channel) }, new Set(['zone:list']));
+
+    await expect(guarded.invoke('zone:list')).resolves.toBe('zone:list');
+    await expect(guarded.invoke('view:set', 'viewport', {})).rejects.toThrow('a capture window only reads the board: view:set');
+    guarded.send('session:write', 'id', 'rm -rf');
+
+    expect(reached).toEqual(['zone:list']);
+    expect(sent).toEqual([]);
+  });
+
+  it("still hears what main sends", () => {
+    const { ipc, emitter } = fakeIpc(async () => undefined);
+    const heard: unknown[] = [];
+    ipcCalls(readOnlyIpc({ ...ipc, send: () => {} }, new Set())).subscribe('zone:changed', (zone: unknown) => heard.push(zone));
+    emitter.emit('zone:changed', {}, 'z1');
+    expect(heard).toEqual(['z1']);
   });
 });

@@ -1,4 +1,6 @@
+import { writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { BOARD_HELP, COMMAND_HELP, runBoardCommand } from '../src/board-cli.ts';
@@ -458,6 +460,10 @@ describe('drawing a diagram from the command line', () => {
     await usage(['connector', 'edit', 'connector:1'], 'give its new --relation');
     await usage(['connector', 'remove', 'connector:1', '--label', 'x'], '`connector remove` takes no options');
     await usage(['connector', 'bend', 'connector:1'], 'the connector commands are');
+    await usage(['diagram', 'add'], 'give the Mermaid text after --');
+    await usage(['diagram', 'add', '--near', 'a', '--at', '1,2', '--', 'flowchart TD'], 'give --at or --near, not both');
+    await usage(['diagram', 'export', '--to', 'web'], '--to is only for `diagram add`');
+    await usage(['diagram', 'draw'], 'the diagram commands are');
   });
 
   it('draws a class diagram, reads it back in the tree, by ref and in the zone map, changes it and removes it, as the user', async () => {
@@ -513,6 +519,26 @@ describe('drawing a diagram from the command line', () => {
     expect(await run(env, 'shape', 'remove', ref('item', order.id))).toMatchObject({ code: 0 });
     expect(await run(env, 'note', 'remove', ref('item', line.id))).toMatchObject({ code: 1, err: expect.stringContaining('the note commands change only notes') });
     expect((await run(env, 'activity')).out).toMatch(/you {2}remove-shape shape “Order”.*you {2}remove-connector .*you {2}connect shape “Order” → shape “LineItem”.*you {2}add-shape /s);
+  });
+
+  it('draws a Mermaid flowchart from a file, and exports a zone of it as Mermaid', async () => {
+    const daemon = await startTestDaemon({ worktreesDir: tempDataDir() });
+    const client = await connectTestClient(daemon);
+    const env = { AGENT_BOARD_SOCKET: daemon.socketPath };
+    await client.call('zone.add', { path: tempRepo('flow'), x: 0, y: 0, width: 1400, height: 800, name: 'flow' });
+    const file = join(tempDataDir(), 'flow.mmd');
+    writeFileSync(file, 'flowchart LR\r\n  a([Start]) -->|go| b{Ok?}\r\n  b -.-> c[(Store)]\r\n');
+
+    expect(await run(env, 'diagram', 'add', '--file', file, '--to', 'flow')).toMatchObject({
+      code: 0,
+      out: expect.stringMatching(/^Drew 3 shapes and 2 connectors \(in zone:\S+ flow\):\n {2}item:\S+ {2}shape terminator {2}"Start"\n/),
+    });
+    expect(await run(env, 'diagram', 'export', 'flow')).toMatchObject({
+      code: 0,
+      out: 'flowchart LR\n  n1(["Start"])\n  n2{"Ok?"}\n  n3[("Store")]\n  n1 -->|"go"| n2\n  n2 -.-> n3\n',
+    });
+    expect(await run(env, 'diagram', 'export')).toMatchObject({ code: 1, err: expect.stringContaining('give the zone, or the shapes, to export') });
+    expect(await run(env, 'diagram', 'add', '--', 'not a diagram')).toMatchObject({ code: 1, err: expect.stringContaining('not a Mermaid flowchart or class diagram') });
   });
 
   it('keeps a big diagram short in the zone map, and out of what arrange prints', async () => {

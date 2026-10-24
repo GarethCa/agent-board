@@ -172,6 +172,21 @@ describe('orchestrator.move', () => {
     expectNoOverlap(rects);
   });
 
+  it('lands in the row of a lane laid out in px off the grid rows, when that is nearer the wish than a grid row', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const spawn = (name: string) => me.connection.call('orchestrator.spawn', { token: me.token, name });
+    const [a, b] = [await spawn('a'), await spawn('b')];
+    await setup.client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: setup.zone.id, ...gridPoint(0, 0) });
+    // A lane below a 140 px note: 400 px down, where no grid row is.
+    await setup.client.call('agent.move', { sessionId: a.sessionId, zoneId: setup.zone.id, x: gridPoint(1, 0).x, y: 400 });
+    const moved = await me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: b.sessionId }, at: { x: gridPoint(2, 0).x + 10, y: 405 } });
+    expect(moved).toMatchObject({ x: gridPoint(2, 0).x, y: 400 });
+    // Nearer a grid row than any tile's, it takes the grid row.
+    const away = await me.connection.call('orchestrator.move', { token: me.token, target: { kind: 'agent', id: b.sessionId }, at: { x: gridPoint(2, 0).x, y: gridPoint(0, 4).y + 10 } });
+    expect(away).toMatchObject(gridPoint(2, 4));
+  });
+
   it("never moves the user's notes aside: a spot one fills is refused", async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
@@ -283,9 +298,8 @@ describe('orchestrator.arrange', () => {
     expectNoOverlap(rects);
     const [leadAt, impl, review, third] = ['lead', 'impl', 'review', 'third'].map((name) => rects.get(name)!) as [Rect, Rect, Rect, Rect];
     expect(review.y).toBe(impl.y);
-    // The edge joining them is drawn as a rail: its token and label fit between them, a grid column apart.
-    expect(review.x).toBe(impl.x + 2 * COLUMN);
-    expect(review.x - (impl.x + AGENT_TILE_SIZE.width)).toBeGreaterThanOrEqual(RAIL_GAP);
+    // The edge joining them is drawn as a rail: its token and label fit between them, exactly a rail's room apart.
+    expect(review.x - (impl.x + AGENT_TILE_SIZE.width)).toBe(RAIL_GAP);
     expect(leadAt.y).toBeLessThan(impl.y);
     expect(third.y).toBeGreaterThan(impl.y);
     // The user's note stays where it was.
@@ -403,14 +417,16 @@ describe('orchestrator.arrange', () => {
     expect((await setup.client.call('item.list')).find((item) => item.id === sticky.id)!.data.text).toBe('mine now');
   });
 
-  it("puts every tile on the grid and every note on its implementer's row, past its lane's tiles", async () => {
+  it("puts every tile on the grid across, or packed past another, and every note on its implementer's row, past its lane's tiles", async () => {
     const setup = await layoutDaemon();
     const { me } = await messyCrew(setup);
     for (const by of ['issue', 'role', 'state'] as const) {
       for (const layout of ['rows', 'grid'] as const) {
         await me.connection.call('orchestrator.arrange', { token: me.token, by, layout });
         const agents = (await setup.client.call('agent.list')).filter((agent) => agent.zoneId === setup.zone.id);
-        const off = agents.filter(({ position }) => !Number.isInteger((position!.x - FIRST.x) / COLUMN) || !Number.isInteger((position!.y - FIRST.y) / ROW_STEP));
+        const placed = [...(await rectsIn(setup.client, setup.zone.id)).values()];
+        const packed = (x: number) => placed.some((rect) => [TILE_GAP, RAIL_GAP].includes(x - (rect.x + rect.width)));
+        const off = agents.filter(({ position }) => !Number.isInteger((position!.x - FIRST.x) / COLUMN) && !packed(position!.x));
         expect(off.map((agent) => [by, layout, agent.name, agent.position])).toEqual([]);
         expectNoOverlap(await rectsIn(setup.client, setup.zone.id));
       }
@@ -688,7 +704,10 @@ describe('orchestrator.arrange', () => {
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const parts = async () => (await setup.client.call('item.list')).filter((item) => typeof item.data.arrange === 'string');
     const before = (await parts()).map((item) => item.id).sort();
-    const web = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!;
+    // Room in web to lay the crew out round what stays, as an arrange leaves it only as big as its crew needs.
+    const arranged = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!;
+    await setup.client.call('zone.update', { id: arranged.id, x: arranged.x, y: arranged.y, width: arranged.width, height: arranged.height + 600 });
+    const web = { ...arranged, height: arranged.height + 600 };
     // Zones hard against web to its right and below it: it can grow neither way.
     await setup.client.call('zone.update', { id: setup.other.id, x: web.x + web.width + 10, y: 0, width: 720, height: 480 });
     await setup.client.call('zone.addUnbound', { name: 'below', x: 0, y: web.y + web.height + 10, width: web.width, height: 400 });
@@ -1505,6 +1524,54 @@ describe('orchestrators drawing a diagram', () => {
     await expect(me.connection.call('orchestrator.removeNote', { token: me.token, id: order.id })).rejects.toMatchObject({ message: expect.stringMatching(/the note commands change only notes/) });
     await me.connection.call('orchestrator.removeShape', { token: me.token, id: order.id });
     expect(await lastLine(setup.client)).toMatchObject({ action: 'remove-shape', targetName: 'shape “Order”', outcome: 'done' });
+  });
+
+  it('draws a Mermaid diagram as one block of its own shapes and connectors, and exports it as Mermaid again', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const env = { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: me.token };
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env }, tempDataDir());
+    await mcp.initialize();
+    const mermaid = ['classDiagram', '  class Order {', '    +UUID id', '    +total() Money', '  }', '  Order "1" *-- "1..*" Line : holds', '  Base <|-- Order', '  note for Order "kept"'].join('\n');
+
+    const drawn = await mcp.callTool('add_diagram', { mermaid });
+    expect(drawn).toMatchObject({ isError: false, text: expect.stringMatching(/^Drew 3 shapes and 2 connectors \(in zone:\w+ web\):\n/) });
+    expect(drawn.text).toMatch(/connector:\w+ {2}item:\w+ "Order" → item:\w+ "Line" {2}composition {2}\(label "holds", from "1", to "1\.\.\*"\)/);
+    expect(drawn.text).toMatch(/item:\w+ "Order" → item:\w+ "Base" {2}inheritance/);
+    expect(drawn.text).toMatch(/Passed over 1 line it does not draw:\n {2}note for Order "kept"$/);
+    const items = (await setup.client.call('item.list')).filter((item) => item.kind === 'shape');
+    expect(items.map((item) => [item.zoneId, item.data.text, item.data.attributes])).toEqual([
+      [setup.zone.id, 'Order', '+UUID id'],
+      [setup.zone.id, 'Line', ''],
+      [setup.zone.id, 'Base', ''],
+    ]);
+    // Laid out as Mermaid draws it: the parent above, the parts below, none on another.
+    const [order, line, base] = items;
+    expect(base!.y + base!.height).toBeLessThan(order!.y);
+    expect(order!.y + order!.height).toBeLessThan(line!.y);
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'add-diagram', targetName: 'a class diagram of 3 shapes', outcome: 'done' });
+    // Its own, to change as any shape it drew.
+    expect((await me.connection.call('orchestrator.editShape', { token: me.token, id: line!.id, text: 'LineItem' })).data.text).toBe('LineItem');
+
+    const exported = await mcp.callTool('export_diagram', {});
+    expect(exported).toMatchObject({ isError: false });
+    expect(exported.text).toBe(
+      ['classDiagram', '  class Order {', '    +UUID id', '    +total() Money', '  }', '  class LineItem', '  class Base', '  Order "1" *-- "1..*" LineItem : holds', '  Order --|> Base'].join('\n'),
+    );
+    expect(await mcp.callTool('add_diagram', { mermaid: 'sequenceDiagram\n  A->>B: hi' })).toMatchObject({ isError: true, text: expect.stringContaining('not a Mermaid flowchart or class diagram') });
+    expect(await mcp.callTool('add_diagram', { mermaid: 'flowchart TD\n  style A fill:#fff', to: setup.other.id })).toMatchObject({ isError: true, text: expect.stringContaining('no shapes') });
+    // No control character but a tab or a line break, raw or as an entity, as shape add refuses.
+    expect(await mcp.callTool('add_diagram', { mermaid: 'flowchart TD\n  A["\u001b[2J"] --> B' })).toMatchObject({ isError: true, text: expect.stringContaining('no other control character') });
+    const shapes = async () => (await setup.client.call('item.list')).filter((item) => item.kind === 'shape');
+    expect(await shapes()).toHaveLength(3);
+    expect(await mcp.callTool('add_diagram', { mermaid: 'flowchart TD\n  A["#27;[2Jx"] --> B' })).toMatchObject({ isError: false });
+    expect((await shapes()).map((item) => item.data.text)).toContain('[2Jx');
+    // A class longer than a shape holds is cut to fit, its name and sections together, not refused half drawn.
+    const members = (prefix: string) => Array.from({ length: 1200 }, (_, n) => `    ${prefix}${String(n).padStart(6, '0')}`);
+    expect(await mcp.callTool('add_diagram', { mermaid: ['classDiagram', '  class Big {', ...members('+a'), ...members('+m()'), '  }', '  Big --> Small'].join('\n') })).toMatchObject({
+      isError: false,
+      text: expect.stringContaining('Drew 2 shapes and 1 connector'),
+    });
   });
 
   it("changes the shapes and connectors an agent of its crew made, and removing its shape takes the user's connectors on it too", async () => {

@@ -373,7 +373,8 @@ const scripts: Record<FakeScenario, Script> = {
    * alone, and `Hand off by CLI: <text>` the same with `agent-board handoff`, each then ending its turn on `Handed off.`. `Wire a worker: <message>` starts a worker, waits for
    * its first turn, joins itself to it with an edge carrying a message (`add_edge`) and hands it `<message>` along it,
    * ending on `Wired.`. `Arrange a messy crew` starts workers `impl` and `review` with the CLI, scatters itself and them
-   * about its zone (`agent-board move`), joins them with an edge and runs `agent-board arrange`, ending on `Arranged.`.
+   * about its zone (`agent-board move`), joins them with an edge and runs `agent-board arrange`, ending on `Arranged.`;
+   * `Arrange a messy crew in columns` the same, with `--layout columns`.
    * `Arrange by itself, then start three` turns auto-arrange on and ends its turn; its next prompt starts workers `one`,
    * `two` and `three` with the CLI, ending on `Started three.`.
    * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
@@ -444,10 +445,11 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Wired.');
       return session.stop();
     }
-    if (prompt === 'Arrange a messy crew') {
+    if (prompt === 'Arrange a messy crew' || prompt === 'Arrange a messy crew in columns') {
       await session.runShell("agent-board new --name impl -- 'Stand by' && agent-board new --name review -- 'Stand by'");
       await session.runShell('agent-board move impl --at 620,420 && agent-board move review --at 40,420 && agent-board move me --at 900,60');
-      await session.runShell('agent-board edge add impl review --carries message && agent-board arrange');
+      const layout = prompt.endsWith('in columns') ? ' --layout columns' : '';
+      await session.runShell(`agent-board edge add impl review --carries message && agent-board arrange${layout}`);
       await session.say('Arranged.');
       return session.stop();
     }

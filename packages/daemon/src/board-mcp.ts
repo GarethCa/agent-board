@@ -46,6 +46,7 @@ import {
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import {
+  addDiagram,
   addNote,
   addShape,
   arrangeZone,
@@ -53,11 +54,13 @@ import {
   editConnector,
   editNote,
   editShape,
+  exportDiagram,
   moveTile,
   removeConnector,
   removeNote,
   removeShape,
   zoneMap,
+  zoneScreenshot,
   type ConnectorOptions,
   type PlaceOptions,
   type ShapeOptions,
@@ -65,6 +68,7 @@ import {
 import {
   AGENT_ROLES,
   ARRANGE_BYS,
+  CAPTURE_STYLES,
   CREW_EVENT_KINDS,
   ARRANGE_LAYOUTS,
   NOTE_KINDS,
@@ -619,13 +623,29 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       'Your zone as arrange sees it, to check a layout without a screenshot: a line per lane with a cell per slot ' +
       '(implementer, reviewer, follow-up, notes), each tile\'s ref, name and state, and a lint line naming overlaps, the ' +
-      'widest gap in a lane, and tiles off the grid or out of their lane. Moves nothing. As `agent-board zone map`.',
+      'widest gap in a lane, the space between lanes, a label far from its tiles, a zone mostly empty, and tiles not where an arrange would put them or out of their lane. Moves nothing. As `agent-board zone map`.',
     inputSchema: {
       type: 'object',
       properties: {
         zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
         boxes: { type: 'boolean', description: 'Draw the zone in characters instead, overlaps and gaps where they really are (about three times as long).' },
         sections: { type: 'boolean', description: "List a diagram's class members under each shape (cut short), not only their counts." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'zone_screenshot',
+    description:
+      'A picture of your zone (PNG), to see its layout as the user does: as the board draws it, every terminal\'s text ' +
+      'hidden, or with style lofi a plain drawing of its tiles, notes and lines. A bigger zone is drawn smaller, and the ' +
+      'caption says by how much, with the map\'s lint line. Costs about 2–3k tokens: check with map first. Needs the ' +
+      'app open; never moves the user\'s view. As `agent-board zone screenshot`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+        style: { type: 'string', enum: [...CAPTURE_STYLES], description: 'board (the default): as the app draws it; lofi: a plain drawing from what the board knows.' },
       },
       additionalProperties: false,
     },
@@ -678,6 +698,32 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       type: 'object',
       properties: { ...SHAPE_PROPERTIES, ...PLACE_PROPERTIES },
       required: ['shape'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'add_diagram',
+    description:
+      'Draw a Mermaid flowchart (`flowchart TD`, or LR) or class diagram (`classDiagram`) as shapes and connectors, marked ' +
+      'as made by you: laid out in ranks as Mermaid draws it, and placed as one block as add_note places a note. A ' +
+      "flowchart's brackets pick each shape and its links their ends and labels; a class diagram's classes take their " +
+      'members and its relations (<|--, *--, o--, ..>, ..|>) their ends and multiplicities. It says which lines it passed ' +
+      'over. Draw only when the user asks for a diagram. As `agent-board diagram add`.',
+    inputSchema: {
+      type: 'object',
+      properties: { mermaid: { type: 'string', description: 'The Mermaid text, its header line first.' }, ...PLACE_PROPERTIES },
+      required: ['mermaid'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'export_diagram',
+    description:
+      'Shapes on the board and the connectors between them as Mermaid: a class diagram when a class is among them, else a ' +
+      'flowchart. As `agent-board diagram export`.',
+    inputSchema: {
+      type: 'object',
+      properties: { refs: { type: 'array', items: { type: 'string' }, description: 'Zones (every shape in each) or shapes, by ref; your zone if left out.' } },
       additionalProperties: false,
     },
   },
@@ -843,8 +889,11 @@ export interface McpMethods {
   'tools/call': { params: { name?: string; arguments?: Record<string, unknown> }; result: ToolResult };
 }
 
+/** A tool's answer is text, and for `zone_screenshot` a picture before it. */
+type ToolContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: 'image/png' };
+
 interface ToolResult {
-  content: { type: 'text'; text: string }[];
+  content: ToolContent[];
   isError?: boolean;
 }
 
@@ -904,8 +953,8 @@ export interface BoardMcpContext {
   cwd(): string;
 }
 
-/** What each tool does with a board session, its arguments and the caller's folder: the text the model reads. */
-const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<string>> = {
+/** What each tool does with a board session, its arguments and the caller's folder: the text the model reads, or what it sees. */
+const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<string | ToolContent[]>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
@@ -1059,6 +1108,13 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         ...autoArg(args),
       })
     ).text,
+  zone_screenshot: async (session, args) => {
+    const { shot, caption } = await zoneScreenshot(session, stringArg(args, 'zone', true), givenStrings(args, ['style']));
+    return [
+      { type: 'image', data: shot.png, mimeType: 'image/png' },
+      { type: 'text', text: caption },
+    ];
+  },
   map: async (session, args) => (await zoneMap(session, stringArg(args, 'zone', true), { boxes: args.boxes === true, sections: args.sections === true, face: 'mcp' })).text,
   add_note: async (session, args) =>
     (
@@ -1077,6 +1133,8 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
   add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,
+  add_diagram: async (session, args) => (await addDiagram(session, stringArg(args, 'mermaid'), placeArgs(args))).text,
+  export_diagram: async (session, args) => (await exportDiagram(session, linesArg(args, 'refs') ?? [])).text,
   edit_shape: async (session, args) => (await editShape(session, stringArg(args, 'item'), shapeArgs(args))).text,
   remove_shape: async (session, args) => (await removeShape(session, stringArg(args, 'item'))).text,
   connect: async (session, args) => (await connectItems(session, stringArg(args, 'from'), stringArg(args, 'to'), connectorArgs(args))).text,
@@ -1160,7 +1218,7 @@ async function callTool(
   args: Record<string, unknown>,
   context: BoardMcpContext,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<string | ToolContent[]> {
   const session = await context.openSession();
   if (signal.aborted) session.close();
   else signal.addEventListener('abort', () => session.close(), { once: true });
@@ -1195,7 +1253,8 @@ export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMetho
       const call = typeof name === 'string' && Object.hasOwn(TOOL_CALLS, name) ? TOOL_CALLS[name]! : undefined;
       if (call === undefined) throw new RpcMethodError(RPC_ERROR.invalidParams, `no tool ${String(name)}`);
       try {
-        return { content: [{ type: 'text', text: await callTool(call, args, context, signal) }] };
+        const answer = await callTool(call, args, context, signal);
+        return { content: typeof answer === 'string' ? [{ type: 'text', text: answer }] : answer };
       } catch (error) {
         // A refusal is the tool's answer, for the model to read; anything else is the server's failure.
         if (error instanceof BoardError || error instanceof DaemonRpcError) {

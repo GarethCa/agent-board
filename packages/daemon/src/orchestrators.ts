@@ -100,6 +100,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
   'orchestrator.addShape': 'add-shape',
+  'orchestrator.addDiagram': 'add-diagram',
   'orchestrator.editShape': 'edit-shape',
   'orchestrator.removeShape': 'remove-shape',
   'orchestrator.connect': 'connect',

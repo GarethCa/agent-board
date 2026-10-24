@@ -7,6 +7,8 @@ import { scratch } from './scratch.ts';
 const sheet = (page: Page) => page.getByRole('dialog', { name: 'Keyboard' });
 const row = (page: Page, id: string) => sheet(page).locator(`[data-key="${id}"]`);
 const here = (page: Page) => sheet(page).getByTestId('cheat-sheet-here');
+/** What the board has saved under a view key: it saves a moment after a change, so a reload must wait for it. */
+const saved = (page: Page, key: string) => page.evaluate((each) => globalThis.window.agentBoard.view.get(each), key);
 const sections = (page: Page) => sheet(page).locator('section').evaluateAll((all) => all.map((section) => section.getAttribute('aria-label')));
 
 test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and with the extended keys off neither does', async () => {
@@ -85,8 +87,13 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
     await window.keyboard.press('Escape');
     await expect(sheet(window)).toBeHidden();
 
-    // Kept: a reload reads it back off.
+    // Kept: a reload reads it back off. Once what it reads back is saved: the closed session window would otherwise come
+    // back open, and its first click on the board's chrome only minimises it.
+    await expect.poll(() => saved(window, 'windows')).toEqual([]);
+    await expect.poll(() => saved(window, 'keyboard.extendedShortcuts')).toBe(false);
     await window.reload();
+    await expect(tile(window)).toHaveCount(1);
+    await expect(sessionWindow(window)).toHaveCount(0);
     await window.getByRole('button', { name: 'Board menu' }).click();
     const kept = window.getByRole('dialog', { name: 'Board menu' }).getByRole('switch', { name: 'Extended keyboard shortcuts' });
     await expect(kept).not.toBeChecked();

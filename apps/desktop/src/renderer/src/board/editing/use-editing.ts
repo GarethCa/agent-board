@@ -8,7 +8,7 @@ import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from 
 import { isTyping } from '../use-tile-moves';
 import type { Rect } from '../../geometry';
 import { align, distribute, reorder, type Alignment, type Reorder } from './arrange';
-import { BOARD_CLIPBOARD_TYPE, centreOf, copied, parseCopied, placed, plainText, serialiseCopied, type Copied } from './clipboard';
+import { BOARD_CLIPBOARD_TYPE, centreOf, copied, diagramCopy, mermaidOf, parseCopied, placed, plainText, serialiseCopied, skippedNotice, type Copied } from './clipboard';
 import { selectedNodes } from './selection';
 import { swapped } from '../connectors/relations';
 import type { BoardHistory } from './use-history';
@@ -43,6 +43,8 @@ interface EditingOptions {
   duplicateOffset: number;
   /** Shows why something failed. */
   report(action: string): (error: unknown) => void;
+  /** Shows a notice that is no failure. */
+  inform(message: string): void;
 }
 
 /** What the selection holds, for the context menu and the selection box. */
@@ -127,10 +129,9 @@ export function useEditing(options: EditingOptions) {
     if (copy !== undefined) putCopies(copy, { dx: offset, dy: offset });
   }, [optionsRef, copySelection, putCopies]);
 
-  /** Pastes `text` if it is a copy of board items, centred on where a paste goes; false if it isn't one. */
-  const paste = useCallback(
-    (text: string) => {
-      const copy = parseCopied(text);
+  /** Pastes `copy`, centred on where a paste goes; false if there is nothing in it. */
+  const pasteCopy = useCallback(
+    (copy: Copied | undefined) => {
       if (copy === undefined || copy.items.length === 0) return false;
       const at = optionsRef.current.pasteAt();
       const centre = centreOf(copy);
@@ -139,6 +140,36 @@ export function useEditing(options: EditingOptions) {
     },
     [optionsRef, putCopies],
   );
+
+  /** Pastes `text` if it is a copy of board items; false if it isn't one. */
+  const paste = useCallback((text: string) => pasteCopy(parseCopied(text)), [pasteCopy]);
+
+  /**
+   * Draws the diagram `text` is, if it is Mermaid, as a paste of its shapes and connectors, saying what it left out;
+   * false if it isn't one.
+   */
+  const pasteDiagram = useCallback(
+    (text: string) => {
+      let diagram: ReturnType<typeof diagramCopy>;
+      try {
+        diagram = diagramCopy(text);
+      } catch (error) {
+        optionsRef.current.report('draw the diagram')(error);
+        return true;
+      }
+      if (diagram === undefined || !pasteCopy(diagram.copy)) return false;
+      if (diagram.skipped.length > 0) optionsRef.current.inform(skippedNotice(diagram.skipped));
+      return true;
+    },
+    [optionsRef, pasteCopy],
+  );
+
+  /** Copies the selected shapes, and the connectors between them, as Mermaid text. */
+  const copyMermaid = useCallback(() => {
+    const copy = copySelection();
+    const text = copy === undefined ? undefined : mermaidOf(copy);
+    if (text !== undefined) navigator.clipboard.writeText(text).catch(optionsRef.current.report('copy it as Mermaid'));
+  }, [optionsRef, copySelection]);
 
   /** The ids of the selected items and connectors now, for a delete that is confirmed, or waits, later. */
   const selectedForDelete = useCallback(
@@ -324,6 +355,8 @@ export function useEditing(options: EditingOptions) {
     selectAll,
     duplicate,
     paste,
+    pasteDiagram,
+    copyMermaid,
     deleteSelection,
     selectedForDelete,
     restack,

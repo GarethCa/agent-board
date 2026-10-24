@@ -143,6 +143,33 @@ the user.
 "
 `;
 
+exports[`agent-board --help > has help for diagram 1`] = `
+"usage: agent-board diagram add [--file <path> | -] [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side <s>]] [--] [<mermaid>] | diagram export [<zone or shape ref>...]
+
+Mermaid in and out of the board, for an orchestrator (\`agent-board help orchestrate\`) drawing a
+diagram, only when the user asks for one.
+
+\`diagram add\` draws a Mermaid flowchart (\`flowchart TD\`, or LR) or class diagram (\`classDiagram\`)
+as shapes and connectors marked as made by you, laid out in ranks as Mermaid draws it, and placed
+as one block in your zone (or --to's), at its first free spot, or exactly at --at or beside --near.
+Give the text after --, or in a file with --file (- reads it from stdin). A flowchart's brackets
+pick each shape ([box], (rounded), {decision}, [(database)], @{ shape: doc } ...), and its links
+their ends, dash and label; a class diagram's classes take their attributes and methods, an
+<<interface>> is a box interface, and each relation (<|--, *--, o--, ..>, ..|>) its ends and the
+multiplicities by them. \`style <id> fill:#rrggbb\` sets a fill. It prints the lines it passed over:
+subgraphs are drawn without their box, and clicks, classDefs and notes are left out.
+
+\`diagram export\` prints the shapes named (a zone's, or each shape ref; your zone with none) and the
+connectors between them as Mermaid: a class diagram when a class is among them, else a flowchart.
+\`shape edit\` and \`connector edit\` change what was drawn.
+
+  --file <path>    Read the Mermaid text from a file, or - for stdin.
+  --to, --at, --near, --side
+                   Where the diagram goes, as for \`agent-board move\`.
+  --json           Print what was drawn, or the text, as JSON.
+"
+`;
+
 exports[`agent-board --help > has help for doc 1`] = `
 "usage: agent-board doc <path> [--title <text>] [--board]
 
@@ -661,6 +688,7 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.move
   orchestrator.arrange
   orchestrator.map
+  orchestrator.screenshot
   orchestrator.addZone
   orchestrator.changeZone
   orchestrator.removeZone
@@ -668,6 +696,7 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.editNote
   orchestrator.removeNote
   orchestrator.addShape
+  orchestrator.addDiagram
   orchestrator.editShape
   orchestrator.removeShape
   orchestrator.connect
@@ -907,7 +936,7 @@ Exits 0, or 3 when --timeout came before --count lines.
 `;
 
 exports[`agent-board --help > has help for zone 1`] = `
-"usage: agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | zone map [<ref>] [--boxes] [--sections]
+"usage: agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi]
 
 Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
@@ -928,14 +957,23 @@ loose on the board, where they were.
 line per lane with a cell per slot (implementer, reviewer, follow-up, notes), each tile's ref,
 name and state, a free slot as ·, and you, the shells and what is in no lane on the top line;
 then where the next lane goes, which lanes are all done, and a lint line: things on top of
-each other, the widest gap in a lane (in slots), and the tiles off the grid or out of their
-lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
+each other, the widest gap in a lane (in slots), the space between lanes, a label far from its
+tiles, a zone mostly empty, and the tiles not where an arrange would put them, or out of
+their lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
 prints it after every arrange. --boxes draws the zone in characters instead, about one to
 40 px, a key on each tile and note and a legend below: overlaps (#) and gaps show where they
 really are, whatever the layout, at about three times the length. A zone with a diagram ends
 with it in short: each shape's kind, text and how many attributes and methods it has, and each
 connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
 too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
+
+\`zone screenshot\` writes a PNG of your zone (or <ref>, in your scope) and prints where, the
+zone's size, the scale it is drawn at and the map's lint line. The app takes it in a hidden
+window, as the board draws it, with every terminal's text hidden; it never moves the user's
+view, and fails when the app isn't open. A zone over 1568 px a side is drawn smaller
+to fit. --style lofi draws the zone plainly instead, from what the board knows: each tile and
+note as a labelled box, and its edges and connectors as straight lines. Check with \`zone map\`
+first: a picture costs a model far more to read.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -944,7 +982,9 @@ too, a few of each and cut short. \`agent-board show <ref>\` prints one shape wh
   --size <w>,<h>   Its size: 720,480 by default.
   --boxes          zone map: draw the zone as boxes.
   --sections       zone map: list a diagram's class members, not only their counts.
-  --json           Print the zone (or map) as JSON.
+  --out <file>     zone screenshot: where to write the PNG (by default a temp file per zone and style).
+  --style <s>      zone screenshot: board (as the app draws it) or lofi (a plain drawing).
+  --json           Print the zone (or map, or screenshot's details) as JSON.
 "
 `;
 
@@ -1077,6 +1117,8 @@ ORCHESTRATING
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.
+  zone screenshot [<zone ref>] [--out <file>] [--style board|lofi]
+                        A PNG of your zone as the app draws it, terminals hidden.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.
@@ -1091,6 +1133,10 @@ ORCHESTRATING
   connect <from ref> <to ref> [--relation <r>] [--label <t>] [--from-label <t>] [--to-label <t>]
                         Join two items with a connector, from → to as the relation reads.
                         \`connector edit|remove\` change yours.
+  diagram add [--file <path>|-] [--to <zone ref>] [--near <ref>] [--] <mermaid>
+                        Draw a Mermaid flowchart or class diagram as shapes and connectors.
+  diagram export [<zone or shape ref>...]
+                        Print shapes and the connectors between them as Mermaid.
 
   Schedules, each a clock on the board:
   schedule add '<cron>' (--to <ref> | --fresh [--role <r>]) [--] <prompt>

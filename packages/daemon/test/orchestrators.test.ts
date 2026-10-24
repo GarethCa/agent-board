@@ -967,8 +967,8 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'add_note',
-      'edit_note', 'remove_note', 'add_shape', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
+      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'zone_screenshot', 'add_note',
+      'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);

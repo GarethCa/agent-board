@@ -542,6 +542,7 @@ export const WEB_TAB_IPC = {
   openInBrowser: 'web-tab:openInBrowser',
   openOffered: 'web-tab:openOffered',
   dismissOffered: 'web-tab:dismissOffered',
+  dismissPasskey: 'web-tab:dismissPasskey',
   /** main → renderer: `(tabId, WebTabState)` as its page loads, moves on or is stopped. */
   changed: 'web-tab:changed',
   /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
@@ -571,6 +572,8 @@ export interface WebTabState {
   problem?: string;
   /** The https page the page last asked to open in a new window: never opened but by the user's click (`openOffered`). */
   offered?: string;
+  /** The page has asked for a passkey, which this app can't serve for most pages, and the user hasn't dismissed that (`web-passkeys.ts`). */
+  passkey?: true;
 }
 
 /** A key pressed in a web tab's page that is its window's to act on, as a `KeyboardEvent` would carry it. */
@@ -608,6 +611,8 @@ export interface WebTabsApi {
   openOffered(tabId: string, shown: string): Promise<void>;
   /** Lets the page the page asked to open go unopened. */
   dismissOffered(tabId: string): Promise<void>;
+  /** Hides the notice that the page asked for a passkey (`WebTabState.passkey`), until it asks again. */
+  dismissPasskey(tabId: string): Promise<void>;
   /** The tab was closed: its page goes, and its partition's cookies, storage and cache with it. */
   forget(tabId: string): Promise<void>;
   /**
@@ -1326,4 +1331,50 @@ export interface AgentBoardApi {
   view: ViewApi;
   appearance: AppearanceApi;
   setup: SetupApi;
+  capture: CaptureApi;
+}
+
+/** The channels between a capture window (`shared/capture.ts`) and main. */
+export const CAPTURE_IPC = {
+  /** Renderer to main: the board is drawn, framed on the zone, and may be captured. */
+  ready: 'capture:ready',
+} as const;
+
+/**
+ * The calls a capture window may make: those that only read the board. Every other fails in its preload, so the hidden
+ * window never saves the view, writes to or resizes a session, or takes a request meant for the board's window.
+ */
+export const CAPTURE_READS: ReadonlySet<string> = new Set([
+  DAEMON_IPC.health,
+  DAEMON_IPC.build,
+  SESSION_IPC.list,
+  ZONE_IPC.list,
+  ITEM_IPC.list,
+  ITEM_IPC.clocks,
+  CONNECTOR_IPC.list,
+  FLOW_EDGE_IPC.list,
+  FLOW_EDGE_IPC.settings,
+  REVIEW_IPC.list,
+  GATE_IPC.list,
+  GATE_IPC.status,
+  ASK_IPC.plans,
+  ASK_IPC.unsavedEdits,
+  ORCHESTRATOR_IPC.activity,
+  AGENT_IPC.list,
+  AGENT_IPC.starts,
+  SHELL_IPC.list,
+  SHELL_IPC.windowLayout,
+  SHELL_IPC.tabWindows,
+  EXTERNAL_IPC.list,
+  EXTERNAL_IPC.hooksStatus,
+  WINDOW_IPC.isFullScreen,
+  VIEW_IPC.get,
+  APPEARANCE_IPC.get,
+]);
+
+export interface CaptureApi {
+  /** Whether this window is a capture window. */
+  active: boolean;
+  /** Tells main the board is drawn and may be captured. A no-op outside a capture window. */
+  ready(): void;
 }

@@ -50,6 +50,7 @@ import {
 import { DaemonRpcError } from './client.ts';
 import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
 import {
+  addDiagram,
   addGroup,
   addNote,
   addShape,
@@ -64,6 +65,7 @@ import {
   editConnector,
   editNote,
   editShape,
+  exportDiagram,
   moveTile,
   pointOf,
   removeConnector,
@@ -72,6 +74,7 @@ import {
   removeShape,
   sizeOf,
   zoneMap,
+  writeZoneScreenshot,
 } from './layout-ops.ts';
 import {
   ARRANGE_BYS,
@@ -85,6 +88,7 @@ import {
   isStatusProgress,
   isWaitState,
   MAX_ACTIVITY_LIMIT,
+  MAX_CAPTURE_SIDE,
   ORCHESTRATE_SETTING,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
@@ -221,6 +225,8 @@ ORCHESTRATING
   zone map [<zone ref>] [--boxes]
                         Your zone as a table of its lanes and what is amiss, to check a
                         layout; --boxes draws it in characters.
+  zone screenshot [<zone ref>] [--out <file>] [--style board|lofi]
+                        A PNG of your zone as the app draws it, terminals hidden.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.
@@ -235,6 +241,10 @@ ORCHESTRATING
   connect <from ref> <to ref> [--relation <r>] [--label <t>] [--from-label <t>] [--to-label <t>]
                         Join two items with a connector, from → to as the relation reads.
                         \`connector edit|remove\` change yours.
+  diagram add [--file <path>|-] [--to <zone ref>] [--near <ref>] [--] <mermaid>
+                        Draw a Mermaid flowchart or class diagram as shapes and connectors.
+  diagram export [<zone or shape ref>...]
+                        Print shapes and the connectors between them as Mermaid.
 
   Schedules, each a clock on the board:
   schedule add '<cron>' (--to <ref> | --fresh [--role <r>]) [--] <prompt>
@@ -888,7 +898,7 @@ need not call arrange; --auto off stops it.
     usage:
       'agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | ' +
       'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | ' +
-      'zone map [<ref>] [--boxes] [--sections]',
+      'zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi]',
     text: `Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
 
@@ -908,14 +918,23 @@ loose on the board, where they were.
 line per lane with a cell per slot (implementer, reviewer, follow-up, notes), each tile's ref,
 name and state, a free slot as ·, and you, the shells and what is in no lane on the top line;
 then where the next lane goes, which lanes are all done, and a lint line: things on top of
-each other, the widest gap in a lane (in slots), and the tiles off the grid or out of their
-lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
+each other, the widest gap in a lane (in slots), the space between lanes, a label far from its
+tiles, a zone mostly empty, and the tiles not where an arrange would put them, or out of
+their lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
 prints it after every arrange. --boxes draws the zone in characters instead, about one to
 40 px, a key on each tile and note and a legend below: overlaps (#) and gaps show where they
 really are, whatever the layout, at about three times the length. A zone with a diagram ends
 with it in short: each shape's kind, text and how many attributes and methods it has, and each
 connector's ends, relation and labels, at most 40 lines; --sections lists a class's members
 too, a few of each and cut short. \`agent-board show <ref>\` prints one shape whole.
+
+\`zone screenshot\` writes a PNG of your zone (or <ref>, in your scope) and prints where, the
+zone's size, the scale it is drawn at and the map's lint line. The app takes it in a hidden
+window, as the board draws it, with every terminal's text hidden; it never moves the user's
+view, and fails when the app isn't open. A zone over ${MAX_CAPTURE_SIDE} px a side is drawn smaller
+to fit. --style lofi draws the zone plainly instead, from what the board knows: each tile and
+note as a labelled box, and its edges and connectors as straight lines. Check with \`zone map\`
+first: a picture costs a model far more to read.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -924,7 +943,9 @@ too, a few of each and cut short. \`agent-board show <ref>\` prints one shape wh
   --size <w>,<h>   Its size: 720,480 by default.
   --boxes          zone map: draw the zone as boxes.
   --sections       zone map: list a diagram's class members, not only their counts.
-  --json           Print the zone (or map) as JSON.`,
+  --out <file>     zone screenshot: where to write the PNG (by default a temp file per zone and style).
+  --style <s>      zone screenshot: board (as the app draws it) or lofi (a plain drawing).
+  --json           Print the zone (or map, or screenshot's details) as JSON.`,
   },
   note: {
     usage:
@@ -1006,6 +1027,32 @@ ${RELATIONS.map((relation) => `                     ${relation.id.padEnd(12)} ${
   --json           Print the connector as JSON.
 
 \`connector edit\` and \`connector remove\` change it.`,
+  },
+  diagram: {
+    usage:
+      'agent-board diagram add [--file <path> | -] [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side <s>]] [--] [<mermaid>] | ' +
+      'diagram export [<zone or shape ref>...]',
+    text: `Mermaid in and out of the board, for an orchestrator (\`agent-board help orchestrate\`) drawing a
+diagram, only when the user asks for one.
+
+\`diagram add\` draws a Mermaid flowchart (\`flowchart TD\`, or LR) or class diagram (\`classDiagram\`)
+as shapes and connectors marked as made by you, laid out in ranks as Mermaid draws it, and placed
+as one block in your zone (or --to's), at its first free spot, or exactly at --at or beside --near.
+Give the text after --, or in a file with --file (- reads it from stdin). A flowchart's brackets
+pick each shape ([box], (rounded), {decision}, [(database)], @{ shape: doc } ...), and its links
+their ends, dash and label; a class diagram's classes take their attributes and methods, an
+<<interface>> is a box interface, and each relation (<|--, *--, o--, ..>, ..|>) its ends and the
+multiplicities by them. \`style <id> fill:#rrggbb\` sets a fill. It prints the lines it passed over:
+subgraphs are drawn without their box, and clicks, classDefs and notes are left out.
+
+\`diagram export\` prints the shapes named (a zone's, or each shape ref; your zone with none) and the
+connectors between them as Mermaid: a class diagram when a class is among them, else a flowchart.
+\`shape edit\` and \`connector edit\` change what was drawn.
+
+  --file <path>    Read the Mermaid text from a file, or - for stdin.
+  --to, --at, --near, --side
+                   Where the diagram goes, as for \`agent-board move\`.
+  --json           Print what was drawn, or the text, as JSON.`,
   },
   connector: {
     usage:
@@ -1202,6 +1249,7 @@ const OPTIONS = {
   fill: { type: 'string' },
   relation: { type: 'string' },
   style: { type: 'string' },
+  out: { type: 'string' },
   label: { type: 'string' },
   'from-label': { type: 'string' },
   'to-label': { type: 'string' },
@@ -1230,11 +1278,12 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   edge: ['carries', 'path', 'trigger', 'condition'],
   move: ['to', 'at', 'near', 'side'],
   arrange: ['by', 'layout', 'auto'],
-  zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections'],
+  zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections', 'style', 'out'],
   note: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'],
   shape: ['text', 'attribute', 'method', 'fill', 'kind', 'to', 'at', 'near', 'side'],
   connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
+  diagram: ['file', 'to', 'at', 'near', 'side'],
   schedule: ['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
 };
 
@@ -1564,7 +1613,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
     case 'zone': {
       const [sub, ref, ...rest] = positionals;
-      const given = (['group', 'name', 'color', 'at', 'size', 'boxes', 'sections'] as const).filter((option) => values[option] !== undefined);
+      const given = (['group', 'name', 'color', 'at', 'size', 'boxes', 'sections', 'style', 'out'] as const).filter((option) => values[option] !== undefined);
       const only = (allowed: readonly Option[]) => {
         const stray = given.find((option) => !allowed.includes(option));
         if (stray !== undefined) throw new UsageError(`--${stray} is not an option of \`zone ${sub}\``);
@@ -1603,7 +1652,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         if (rest.length > 0) throw new UsageError('give at most one zone ref');
         return async (session) => print(await zoneMap(session, ref, { boxes: values.boxes === true, sections: values.sections === true }));
       }
-      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove` and `zone map`');
+      if (sub === 'screenshot') {
+        only(['style', 'out']);
+        if (rest.length > 0) throw new UsageError('give at most one zone ref');
+        const out = string('out');
+        return async (session) => print(await writeZoneScreenshot(session, ref, { style: string('style'), out: out === undefined ? undefined : resolve(process.cwd(), out) }));
+      }
+      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove`, `zone map` and `zone screenshot`');
     }
     case 'note': {
       const [sub, ...rest] = positionals;
@@ -1685,6 +1740,23 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeConnector(session, rest[0]!));
       }
       throw new UsageError('the connector commands are `connector edit` and `connector remove`');
+    }
+    case 'diagram': {
+      const [sub, ...rest] = positionals;
+      if (sub === 'add') {
+        const place = { to: string('to'), at: string('at'), near: string('near'), side: string('side') };
+        checked(() => checkPlace(place));
+        const mermaid = string('file') === '-' ? (positionals.length > 1 ? undefined : readFileSync(0, 'utf8').replace(/\r\n?/g, '\n')) : text(1);
+        if (mermaid === undefined) throw new UsageError('give the text or --file, not both');
+        if (mermaid.trim() === '') throw new UsageError('give the Mermaid text after --, or --file');
+        return async (session) => print(await addDiagram(session, mermaid, place));
+      }
+      if (sub === 'export') {
+        const stray = (['file', 'to', 'at', 'near', 'side'] as const).find((option) => values[option] !== undefined);
+        if (stray !== undefined) throw new UsageError(`--${stray} is only for \`diagram add\``);
+        return async (session) => print(await exportDiagram(session, rest));
+      }
+      throw new UsageError('the diagram commands are `diagram add` and `diagram export`');
     }
     case 'schedule': {
       const [sub, ...rest] = positionals;

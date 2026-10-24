@@ -8,6 +8,9 @@ import { Button, ErrorText, IconButton, Input } from '../ui';
 import { newWebTabs, type LocalServer } from './tabs';
 import { useWebViewBounds } from './use-web-view';
 
+/** What a web tab says when its page asks for a passkey: this app can't serve most, and a request it can't serve never answers. */
+const PASSKEY_NOTICE = "This page is asking for a passkey. Web tabs can't use Touch ID, iCloud Keychain or a phone passkey; if nothing happens, sign in in your browser.";
+
 /** How long a tab's page stays at a URL before the tab keeps it: a page rewriting its URL as it scrolls is kept once. */
 const KEEP_URL_MS = 1000;
 
@@ -167,6 +170,17 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
             Open in browser
           </Button>
           <Button size="xs" variant="ghost" onClick={() => run(() => window.agentBoard.webTabs.dismissOffered(web.id))}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+      {state.passkey && (
+        <div className="web-offer" data-testid="web-passkey" role="status">
+          <span className="web-offer-text" title={PASSKEY_NOTICE}>{PASSKEY_NOTICE}</span>
+          <Button size="xs" variant="primary" onClick={() => run(() => window.agentBoard.webTabs.openInBrowser(web.id).then(() => window.agentBoard.webTabs.dismissPasskey(web.id)))}>
+            Open in your browser
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => run(() => window.agentBoard.webTabs.dismissPasskey(web.id))}>
             Dismiss
           </Button>
         </div>
