@@ -2,7 +2,7 @@ import { memo, useContext, useMemo, useSyncExternalStore, type CSSProperties, ty
 import { NodeResizer, NodeToolbar, Position, type NodeProps } from '@xyflow/react';
 import { MAX_STICKY_TEXT, STICKY_COLORS, type StickyData } from '@agent-board/daemon/protocol';
 import { Trash2 } from 'lucide-react';
-import { stickyPaint, themedColor } from '../../board-colors';
+import { stickyPaint } from '../../board-colors';
 import { token, tokenNumber } from '../../theme';
 import { IconButton, Kbd, Swatch } from '../../ui';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
@@ -119,7 +119,7 @@ export const StickyNode = memo(function StickyNode({ id, data, selected: picked,
         {STICKY_COLORS.map((preset) => (
           <Swatch
             key={preset.value}
-            color={themedColor(preset.value)}
+            color={stickyPaint(preset.value).color}
             aria-label={preset.name}
             pressed={preset.value === color}
             onClick={() => update({ id: item.id, data: { color: preset.value } })}

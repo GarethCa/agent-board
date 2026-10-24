@@ -160,6 +160,20 @@ describe('documents an agent shows the user', () => {
     expect(readFileSync(path, 'utf8')).toBe('mine\n');
   });
 
+  it('counts a plan’s approved edit written to its file as the user’s version, and tells the agent nothing more', async () => {
+    const { host, file, agentWrites, told } = documents();
+    const path = file('docs/plan.md', '# Plan\n\n- Add zone_id\n');
+    host.show('s1', { path });
+
+    agentWrites(path, '# Plan\n\n- Add zone_id, nullable\n');
+    host.userWrote('s1', path);
+    expect(host.list('s1')[0]).toMatchObject({ version: 2, writtenBy: 'user' });
+    host.poll();
+    await settle();
+    expect(host.list('s1')[0]).toMatchObject({ version: 2, writtenBy: 'user' });
+    expect(told).toEqual([]);
+  });
+
   it('leaves an HTML document view-only', () => {
     const { host, file } = documents();
     const { id } = host.show('s1', { path: file('bench.html', '<p>41 ms</p>') });

@@ -339,8 +339,8 @@ describe('unbound zones', () => {
     const boundIdeas = await client.call('zone.bind', { id: ideas.id, as: 'repo', path: repo });
     const boundWeb = await client.call('zone.bind', { id: web.id, as: 'repo', path: join(repo, 'apps', 'web') });
 
-    expect(boundIdeas).toEqual({ ...ideas, kind: 'repo', repoRoot: repo, folder: '' });
-    expect(boundWeb).toEqual({ ...web, kind: 'folder', repoRoot: repo, folder: 'apps/web' });
+    expect(boundIdeas).toEqual({ ...ideas, kind: 'repo', repoRoot: repo, folder: '', groupFolder: null });
+    expect(boundWeb).toEqual({ ...web, kind: 'folder', repoRoot: repo, folder: 'apps/web', groupFolder: null });
     expect(await client.call('zone.list')).toEqual([boundIdeas, boundWeb]);
   });
 
@@ -362,7 +362,7 @@ describe('unbound zones', () => {
 
     const bound = await client.call('zone.bind', { id: zone.id, as: 'project', path: empty });
 
-    expect(bound).toEqual({ ...zone, kind: 'repo', repoRoot: empty, folder: '' });
+    expect(bound).toEqual({ ...zone, kind: 'repo', repoRoot: empty, folder: '', groupFolder: null });
     expect(gitLog(empty)).toEqual({ toplevel: empty, subjects: ['Initial commit'] });
   });
 
@@ -443,7 +443,7 @@ describe('unbound zones', () => {
     expect(lost).toHaveLength(1);
     expect(lost[0]!.reason).toMatchObject({ code: RPC_ERROR.invalidParams, message: expect.stringMatching(/is already bound to/) });
     const winner = won[0]!.value.repoRoot!;
-    expect(await client.call('zone.list')).toEqual([{ ...zone, kind: 'repo', repoRoot: winner, folder: '' }]);
+    expect(await client.call('zone.list')).toEqual([{ ...zone, kind: 'repo', repoRoot: winner, folder: '', groupFolder: null }]);
     expect(gitLog(winner).subjects).toEqual(['Initial commit']);
     if (winner === missing) expect(readdirSync(empty)).toEqual([]);
     else expect(existsSync(missing)).toBe(false);

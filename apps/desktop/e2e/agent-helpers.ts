@@ -70,13 +70,14 @@ export async function spawnAgent(
   window: Page,
   zoneName: string,
   prompt: string,
-  { harness = 'Claude', issue, started = true }: { harness?: 'Claude' | 'Codex'; issue?: string; started?: boolean } = {},
+  { harness = 'Claude', issue, name, started = true }: { harness?: 'Claude' | 'Codex'; issue?: string; name?: string; started?: boolean } = {},
 ): Promise<void> {
   await zoneNamed(window, zoneName).getByRole('button', { name: 'New agent' }).click();
   const form = window.getByRole('dialog', { name: 'New agent' });
   await pickInChip(form, 'Harness', harness);
   if (issue !== undefined) await form.getByRole('listbox', { name: 'Issues' }).getByRole('option').filter({ hasText: issue }).click();
   await form.getByLabel('Task').fill(prompt);
+  if (name !== undefined) await form.getByLabel('Name').fill(name);
   await form.getByRole('button', { name: 'Start' }).click();
   // The form gives way either to the agent starting or, the first time, to Codex's notice in the same dialog.
   await expect(form).toBeHidden();

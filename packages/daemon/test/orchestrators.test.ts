@@ -967,13 +967,13 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'add_note',
-      'edit_note', 'remove_note', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
+      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'add_note',
+      'edit_note', 'remove_note', 'add_shape', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
     expect((await plainMcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc']);
+    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
   });
 
   it('joins two of its agents with an edge, and removes it, over the tools', async () => {
@@ -1982,6 +1982,192 @@ describe('agents recording their own sidebar', () => {
     const guessed = (await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.guessedDoc;
     expect(guessed).toBe(realpathSync(join(agent.worktree, '.agent-board', 'handover.md')));
     expect(await read(guessed!)).toMatchObject({ text: 'Done.\n' });
+  });
+
+  it('pins a file, a link and a labelled note on its own sidebar, each again replacing it, and unpins them', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    writeFileSync(join(agent.worktree, 'shot.png'), 'png');
+    const shot = realpathSync(join(agent.worktree, 'shot.png'));
+    const records = async () => (await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.records;
+
+    expect(await connection.call('board.record', { token, kind: 'pin', path: 'shot.png' })).toMatchObject({
+      kind: 'pin',
+      key: shot,
+      target: { kind: 'file', path: shot },
+      label: null,
+      from: null,
+    });
+    expect(await connection.call('board.record', { token, kind: 'pin', url: 'http://localhost:5173/app', label: 'Preview' })).toMatchObject({
+      key: 'http://localhost:5173/app',
+      target: { kind: 'link', url: 'http://localhost:5173/app' },
+      label: 'Preview',
+    });
+    expect(await connection.call('board.record', { token, kind: 'pin', note: 'Seeded 3 users: ann, bob, cy', label: 'Test logins' })).toMatchObject({
+      key: 'note:Test logins',
+      target: { kind: 'note', text: 'Seeded 3 users: ann, bob, cy' },
+      label: 'Test logins',
+    });
+    // A note with the same label is the same pin, its text replaced.
+    await connection.call('board.record', { token, kind: 'pin', note: 'Seeded 4 users', label: 'Test logins' });
+    expect((await records()).map((record) => record.kind === 'pin' && record.target)).toEqual([
+      { kind: 'file', path: shot },
+      { kind: 'link', url: 'http://localhost:5173/app' },
+      { kind: 'note', text: 'Seeded 4 users' },
+    ]);
+
+    // Unpinning takes it off, row and all: nothing for the sidebar to bring back.
+    await connection.call('board.unpin', { token, url: 'http://localhost:5173/app' });
+    await connection.call('board.unpin', { token, label: 'Test logins' });
+    // A file gone since, named through a link to its folder, is still the pin it was.
+    symlinkSync(agent.worktree, join(agent.worktree, 'via'));
+    rmSync(shot);
+    await connection.call('board.unpin', { token, path: 'via/shot.png' });
+    expect(await records()).toEqual([]);
+    await expect(connection.call('board.unpin', { token, label: 'Test logins' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/no pin Test logins/),
+    });
+  });
+
+  it('refuses a pin of no file, a link that is not http, a note with no label, or two things at once', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+    const pin = (params: Record<string, unknown>) => connection.call('board.record', { token, kind: 'pin', ...params } as never);
+    await expect(pin({ path: 'missing.png' })).rejects.toMatchObject({ message: expect.stringMatching(/missing.png is not a file/) });
+    // Only links a web tab opens: https anywhere, http on this machine, never a name or password.
+    for (const url of ['file:///etc/passwd', 'not a url', 'http://evil.example/', 'http://0.0.0.0:3000', 'https://user:pass@example.com/', 'javascript:alert(1)']) {
+      await expect(pin({ url })).rejects.toMatchObject({ message: expect.stringMatching(/not a link a web tab opens\. A web tab shows https pages/) });
+    }
+    await expect(pin({ url: `https://example.com/${'a'.repeat(2048)}` })).rejects.toMatchObject({ message: expect.stringMatching(/at most 2048 characters/) });
+    expect(await pin({ url: 'http://127.0.0.1:5173/' })).toMatchObject({ target: { kind: 'link', url: 'http://127.0.0.1:5173/' } });
+    await expect(pin({ note: 'Seeded' })).rejects.toMatchObject({ message: expect.stringMatching(/a note needs a label/) });
+    await expect(pin({ note: 'x'.repeat(2001), label: 'Long' })).rejects.toMatchObject({ message: expect.stringMatching(/at most 2000 characters/) });
+    await expect(pin({ path: 'a.md', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringMatching(/pin one of path, url or note/) });
+    await expect(pin({})).rejects.toMatchObject({ message: expect.stringMatching(/pin one of path, url or note/) });
+  });
+
+  it('keeps a label as one line, so a label with line breaks in it is the same note as on one', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    expect(await connection.call('board.record', { token, kind: 'pin', note: 'ann / pw', label: '  Test\n\tlogins ' })).toMatchObject({ key: 'note:Test logins', label: 'Test logins' });
+    await connection.call('board.unpin', { token, label: 'Test   logins' });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.records).toEqual([]);
+  });
+
+  it("lets a crew member pin and unpin for its orchestrator only among its own pins there, never the orchestrator's own or another crew member's", async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const sides = [];
+    for (const name of ['impl', 'review']) {
+      const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name, prompt: 'Print your board identity' });
+      sides.push({ worker, ...(await agentSideOf(setup, worker.sessionId)) });
+    }
+    const [impl, review] = sides as [(typeof sides)[number], (typeof sides)[number]];
+    const pins = async () =>
+      (await setup.client.call('agent.list'))
+        .find((each) => each.sessionId === lead.agent.sessionId)!
+        .records.flatMap((record) => (record.kind === 'pin' ? [[record.from?.name ?? 'lead', record.target.kind === 'note' ? record.target.text : record.key]] : []));
+
+    await lead.connection.call('board.record', { token: lead.token, kind: 'pin', note: "The lead's logins", label: 'Logins' });
+    await lead.connection.call('board.record', { token: lead.token, kind: 'pin', url: 'https://example.com/x' });
+    // The same label and link from each crew member stand beside the lead's own, each saying whose it is.
+    for (const each of [impl, review]) {
+      await each.connection.call('board.record', { token: each.token, kind: 'pin', note: `${each.worker.name}'s logins`, label: 'Logins', forOrchestrator: true });
+      await each.connection.call('board.record', { token: each.token, kind: 'pin', url: 'https://example.com/x', forOrchestrator: true });
+    }
+    expect(await pins()).toEqual([
+      ['lead', "The lead's logins"],
+      ['lead', 'https://example.com/x'],
+      ['impl', "impl's logins"],
+      ['impl', `from:${impl.worker.sessionId}:https://example.com/x`],
+      ['review', "review's logins"],
+      ['review', `from:${review.worker.sessionId}:https://example.com/x`],
+    ]);
+
+    // Unpinning for the orchestrator takes off the crew member's own alone.
+    await impl.connection.call('board.unpin', { token: impl.token, label: 'Logins', forOrchestrator: true });
+    await impl.connection.call('board.unpin', { token: impl.token, url: 'https://example.com/x', forOrchestrator: true });
+    await expect(impl.connection.call('board.unpin', { token: impl.token, url: 'https://example.com/x', forOrchestrator: true })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/no pin https:\/\/example.com\/x on your orchestrator's sidebar that you pinned there/),
+    });
+    expect(await pins()).toEqual([
+      ['lead', "The lead's logins"],
+      ['lead', 'https://example.com/x'],
+      ['review', "review's logins"],
+      ['review', `from:${review.worker.sessionId}:https://example.com/x`],
+    ]);
+  });
+
+  it('pins for the orchestrator that started it, on that sidebar only, saying who pinned it', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
+    const workerSide = await agentSideOf(setup, worker.sessionId);
+    const records = async (sessionId: string) => (await setup.client.call('agent.list')).find((each) => each.sessionId === sessionId)!.records;
+
+    const pinned = await workerSide.connection.call('board.record', { token: workerSide.token, kind: 'pin', url: 'https://example.com/report', forOrchestrator: true });
+    expect(pinned).toMatchObject({ kind: 'pin', from: { sessionId: worker.sessionId, name: 'worker' } });
+    expect(await records(lead.agent.sessionId)).toContainEqual(pinned);
+    expect(await records(worker.sessionId)).toEqual([]);
+    await workerSide.connection.call('board.unpin', { token: workerSide.token, url: 'https://example.com/report', forOrchestrator: true });
+    expect((await records(lead.agent.sessionId)).filter((record) => record.kind === 'pin')).toEqual([]);
+    await expect(lead.connection.call('board.record', { token: lead.token, kind: 'pin', url: 'https://example.com', forOrchestrator: true })).rejects.toMatchObject({
+      message: expect.stringMatching(/no orchestrator started you/),
+    });
+  });
+
+  it('reads a pinned Markdown or HTML file for its Doc tab, and lets the user delete a pin with Undo', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    writeFileSync(join(agent.worktree, 'report.html'), '<h1>Report</h1>');
+    const report = realpathSync(join(agent.worktree, 'report.html'));
+    const read = () => setup.client.call('agent.readDoc', { sessionId: agent.sessionId, path: report });
+
+    await expect(read()).rejects.toMatchObject({ message: expect.stringMatching(/is not one of .*docs or pins/) });
+    await connection.call('board.record', { token, kind: 'pin', path: 'report.html' });
+    expect(await read()).toEqual({ path: report, text: '<h1>Report</h1>' });
+    const remove = (deleted: boolean) => setup.client.call('agent.setRecordDeleted', { sessionId: agent.sessionId, kind: 'pin', key: report, deleted });
+    expect((await remove(true)).records[0]!.deletedAt).toEqual(expect.any(String));
+    await expect(read()).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    expect((await remove(false)).records[0]!.deletedAt).toBeNull();
+    expect(await read()).toMatchObject({ text: '<h1>Report</h1>' });
+
+    // Made a link since it was pinned, it is not read through to where the link leads.
+    writeFileSync(join(agent.worktree, 'other.txt'), 'secret');
+    rmSync(report);
+    symlinkSync(join(agent.worktree, 'other.txt'), report);
+    await expect(read()).rejects.toMatchObject({ message: expect.stringMatching(/is a link now/) });
+  });
+
+  it('is `pin` and `unpin` over the CLI and the MCP', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token } = await agentSide(setup, setup.zone.id);
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token };
+    const run = async (command: string, args: string[]) => {
+      let out = '';
+      const code = await runBoardCommand(command, args, { out: (text) => (out += text), err: (text) => (out += text), env });
+      return { code, out };
+    };
+    writeFileSync(join(agent.worktree, 'notes.md'), 'notes');
+    const notes = realpathSync(join(agent.worktree, 'notes.md'));
+    expect(await run('pin', [join(agent.worktree, 'notes.md'), '--label', 'Notes'])).toEqual({ code: 0, out: `Pinned Notes (${notes}) on your sidebar.\n` });
+    expect(await run('pin', ['https://example.com/a'])).toEqual({ code: 0, out: 'Pinned https://example.com/a on your sidebar.\n' });
+    expect(await run('pin', ['--note', 'Use port 5174', '--label', 'Port'])).toEqual({ code: 0, out: 'Pinned the note Port on your sidebar.\n' });
+    expect(await run('pin', ['--note', 'No label'])).toEqual({ code: 2, out: expect.stringMatching(/a note needs --label/) });
+    expect(await run('pin', ['a.md', '--note', 'Both'])).toEqual({ code: 2, out: expect.stringMatching(/pin a file, a link or --note/) });
+    expect(await run('pin', ['a.md', '--for', 'lead'])).toEqual({ code: 2, out: expect.stringMatching(/--for takes only orchestrator/) });
+    expect(await run('unpin', ['https://example.com/a'])).toEqual({ code: 0, out: 'Unpinned https://example.com/a from your sidebar.\n' });
+    expect(await run('unpin', ['--label', 'Port'])).toEqual({ code: 0, out: 'Unpinned the note Port from your sidebar.\n' });
+
+    const mcp = mcpAs(setup, token);
+    expect(await mcp.callTool('pin', { url: 'https://example.com/b', label: 'B' })).toMatchObject({ isError: false, text: 'Pinned B (https://example.com/b) on your sidebar.' });
+    expect(await mcp.callTool('pin', { note: 'Hi' })).toMatchObject({ isError: true, text: expect.stringMatching(/a note needs a label/) });
+    expect(await mcp.callTool('unpin', { path: notes })).toMatchObject({ isError: false, text: `Unpinned Notes (${notes}) from your sidebar.` });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === agent.sessionId)!.records.map((record) => record.key)).toEqual([
+      'https://example.com/b',
+    ]);
   });
 
   it('is `record pr|doc` over the CLI and record_pr and record_doc over the MCP', async () => {

@@ -12,6 +12,7 @@ export function registerAskIpc(daemon: DaemonLink): void {
   passthroughVoid(daemon, ASK_IPC.place, 'ask.place', (sessionId: string, askId: string, at: { x: number; y: number }) => ({ sessionId, askId, at }));
   passthrough(daemon, ASK_IPC.plans, 'plan.list', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, ASK_IPC.decide, 'plan.decide', (sessionId: string, planId: string, outcome: PlanOutcome, comments: string) => ({ sessionId, planId, outcome, comments }));
+  passthrough(daemon, ASK_IPC.editPlan, 'plan.edit', (sessionId: string, planId: string, body: string) => ({ sessionId, planId, body }));
   // Documents agents show: the user reads them, and their edits and comments go to the agent.
   passthrough(daemon, ASK_IPC.readDoc, 'doc.read', (documentId: string) => ({ documentId }));
   passthrough(daemon, ASK_IPC.saveDoc, 'doc.save', (documentId: string, text: string, baseVersion: number, force?: boolean) => ({ documentId, text, baseVersion, ...(force === true ? { force } : {}) }));

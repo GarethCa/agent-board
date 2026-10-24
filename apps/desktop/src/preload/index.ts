@@ -62,6 +62,7 @@ const api: AgentBoardApi = {
     kill: (sessionId) => invoke(SESSION_IPC.kill, sessionId),
     cwd: (sessionId) => invoke(SESSION_IPC.cwd, sessionId),
     revealFolder: (path) => invoke(SESSION_IPC.revealFolder, path),
+    revealFile: (path) => invoke(SESSION_IPC.revealFile, path),
     onExited: (listener) => subscribe(SESSION_IPC.exited, listener),
   },
   zones: {
@@ -154,6 +155,10 @@ const api: AgentBoardApi = {
     place: (sessionId, askId, at) => invoke(ASK_IPC.place, sessionId, askId, at),
     plans: (sessionId) => invoke(ASK_IPC.plans, sessionId),
     decide: (sessionId, planId, outcome, comments) => invoke(ASK_IPC.decide, sessionId, planId, outcome, comments),
+    editPlan: (sessionId, planId, body) => invoke(ASK_IPC.editPlan, sessionId, planId, body),
+    markUnsavedEdit: (sessionId, planId, changed) => invoke(ASK_IPC.markUnsavedEdit, sessionId, planId, changed),
+    unsavedEdits: () => invoke(ASK_IPC.unsavedEdits),
+    onUnsavedEditsChanged: (listener) => subscribe(ASK_IPC.unsavedEditsChanged, listener),
     readDoc: (documentId) => invoke(ASK_IPC.readDoc, documentId),
     saveDoc: (documentId, text, baseVersion, force) => invoke(ASK_IPC.saveDoc, documentId, text, baseVersion, force),
     commentDoc: (documentId, text) => invoke(ASK_IPC.commentDoc, documentId, text),

@@ -129,13 +129,14 @@ export function useTileMoves({
     };
   }, []);
 
-  // A tile with no place yet was slotted in by the board: save that place, so it stays put as other tiles move.
+  // A tile with no place yet was slotted in by the board: save that place, so it stays put as other tiles move. Only
+  // while it still has none: an orchestrator arranging its zone as it starts the agent may place it first.
   useEffect(() => {
     if (!loaded) return;
     for (const node of nodes) {
       if (!isSessionTile(node) || node.dragging === true) continue;
       if (subjectOf(node.data).position !== null || pending.current.has(node.id)) continue;
-      moveTile(node.id, node.data, savedMove(node.data, { zoneId: node.parentId ?? null, x: node.position.x, y: node.position.y }));
+      moveTile(node.id, node.data, savedMove(node.data, { zoneId: node.parentId ?? null, x: node.position.x, y: node.position.y, ifUnplaced: true }));
     }
   }, [loaded, nodes, pending, moveTile]);
 

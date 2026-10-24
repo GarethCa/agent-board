@@ -4,11 +4,11 @@ import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, closeAgent, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
+import { agents, closeAgent, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, showDetails, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from './render.ts';
 import { scratch } from './scratch.ts';
-import { untilStill, viewTransform } from './board-helpers.ts';
+import { centreOf, drag, settledBox, untilStill, viewTransform } from './board-helpers.ts';
 
 // Visual regression for the Workbench theme. Baselines are per platform (`-linux`, `-darwin`) and both are committed;
 // a test runs against the ones for the platform it is on, and fails, never skips, if they are missing. `pnpm visual:update`
@@ -1500,6 +1500,42 @@ test("the dark theme: a review doc in its implementer's session window", async (
   }
 });
 
+test("an agent's sidebar: the document it showed, and a file, a link and a note it pinned", async () => {
+  needsBaselines('sidebar-pins');
+  const { dir, repo, env } = scratch('ask-plan');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pins: notes/report.md');
+    await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    await tile(window).getByTestId('tile-docs').click();
+    await showDetails(sessionWindow(window));
+    const details = sessionWindow(window).getByRole('complementary', { name: 'Session details' });
+    await expect(details.getByTestId('details-pin')).toHaveCount(4);
+    // The sections above folded, so Documents and Pins show whole.
+    for (const label of ['Controls', 'Folder (live)', 'Issue', 'Last message', 'Worktree and branch', 'PR and checks', 'Gate', 'Crew', 'Hand-off docs']) {
+      await details.getByRole('region', { name: label }).locator('.ui-section-head').click();
+    }
+    // Scrolled to its end, with no overlay scrollbar, which shows a while after a scroll.
+    await window.addStyleTag({ content: '.session-details-sections { scrollbar-width: none; }' });
+    await details.locator('.session-details-sections').evaluate((sections) => sections.scrollTo(0, sections.scrollHeight));
+    await pinRandomText(window);
+    await ignorePointer(window);
+    await settle(window);
+    // Each time it was shown or pinned is the clock's.
+    const when = details.locator('[data-testid="details-document"] .ui-row-meta, [data-testid="details-pin"]:not(:last-child) .ui-row-meta');
+    await expect.soft(details).toHaveScreenshot('sidebar-pins.png', { ...SHOT, mask: [when] });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('first-run onboarding: each step, with nothing installed', async () => {
   const shots = ['onboarding-welcome', 'onboarding-connect', 'onboarding-tour', 'onboarding-finish'];
   needsBaselines(...shots);
@@ -1552,14 +1588,14 @@ const THEMES = [
   { theme: 'dark', suffix: '-dark' },
 ] as const;
 
-/** Launches on the gallery (`#gallery`) in `theme`. */
-async function launchGallery(dataDir: string, theme: 'light' | 'dark') {
+/** Launches on the gallery (`#gallery`) in `theme`, a theme of `scheme`'s mode. */
+async function launchGallery(dataDir: string, theme: string, scheme: 'light' | 'dark' = theme === 'dark' ? 'dark' : 'light') {
   const launched = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS);
   await listFinishedTurns(launched.window);
   const { window } = launched;
   await window.setViewportSize(VIEWPORT);
   // Playwright pins the page to light; the setting has the window in its mode, as macOS would.
-  await window.emulateMedia({ colorScheme: theme });
+  await window.emulateMedia({ colorScheme: scheme });
   await window.evaluate(() => {
     location.hash = '#gallery';
     location.reload();
@@ -1580,6 +1616,26 @@ for (const { theme, suffix } of THEMES) {
       await settle(window);
       await expect.soft(window.getByTestId('tile-gallery')).toHaveScreenshot(`tile-states${suffix}.png`, SHOT);
       await expect.soft(window.getByTestId('character-gallery')).toHaveScreenshot(`character-gallery${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+// A shape's colours are the theme's: each slot's fill and outline, and a fixed colour, in a dark pack and another.
+for (const theme of ['catppuccin-mocha', 'gruvbox-dark']) {
+  test(`shapes in every theme colour and a fixed one: the shape colours gallery, ${theme}`, async () => {
+    needsBaselines(`gallery-shape-colours-${theme}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, 'dark');
+    try {
+      const gallery = window.getByTestId('gallery-shape-colours');
+      await expect(gallery).toBeVisible();
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(gallery).toHaveScreenshot(`gallery-shape-colours-${theme}.png`, SHOT);
     } finally {
       await app.close();
       await removeDataDir(dataDir);
@@ -1890,6 +1946,46 @@ for (const { theme, suffix } of [
     }
   });
 
+  test(`a plan shown on the board: its card beside the waiting agent, and Review plan's decision beside it, ${theme}`, async () => {
+    needsBaselines(`plan-card${suffix}`, `plan-card-review${suffix}`);
+    const { dir, repo, env } = scratch('ask-plan');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+    );
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Plan doc on the board: docs/migration.md');
+      const card = window.getByTestId('plan-card');
+      await expect(card.getByTestId('plan-card-stamp')).toHaveText('waiting on you', { timeout: TURN_MS });
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await pinRandomText(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`plan-card${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await card.getByTestId('plan-card-review-button').click();
+      await expect(window.getByTestId('plan-card-review')).toBeVisible();
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`plan-card-review${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test(`a document an agent shows: its card beside the tile, open and as a slim bar, and its Document tab, read and in Edit, ${theme}`, async () => {
     needsBaselines(`doc-card${suffix}`, `doc-card-bar${suffix}`, `doc-tab${suffix}`, `doc-tab-edit${suffix}`);
     const { dir, repo, env } = scratch('ask-plan');
@@ -1945,6 +2041,54 @@ for (const { theme, suffix } of [
       restorePointer = await ignorePointer(window);
       await settle(window);
       await expect.soft(window.locator('body')).toHaveScreenshot(`doc-tab-edit${suffix}.png`, meta);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`a document card dragged taller by its corner shows more of its page, ${theme}`, async () => {
+    needsBaselines(`doc-card-resized${suffix}`);
+    const { dir, repo, env } = scratch('ask-plan');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+    );
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Doc on the board: docs/long-plan.md');
+      const card = window.getByTestId('doc-card');
+      const preview = card.getByTestId('doc-card-preview');
+      await expect(preview).toContainText('Step 14', { timeout: TURN_MS });
+      await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      const shownLines = () =>
+        preview.evaluate((body) => {
+          const end = body.getBoundingClientRect().bottom;
+          return [...body.querySelectorAll('li')].filter((line) => line.getBoundingClientRect().bottom <= end).length;
+        });
+      const before = await shownLines();
+
+      await card.click();
+      const corner = centreOf(await settledBox(window.locator('.react-flow__resize-control.handle.bottom.right')));
+      await drag(window, corner, { x: corner.x + 60, y: corner.y + 90 });
+      await expect.poll(shownLines).toBeGreaterThan(before);
+      // Nothing selected: a click on bare board below the zone.
+      await window.mouse.click(VIEWPORT.width / 2, VIEWPORT.height - 40);
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`doc-card-resized${suffix}.png`, SHOT);
       await restorePointer();
     } finally {
       await app.close();

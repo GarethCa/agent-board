@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  BookOpen,
   Bot,
   CalendarClock,
   CircleDot,
@@ -10,6 +11,7 @@ import {
   GitPullRequest,
   OctagonX,
   Pause,
+  Pin,
   Play,
   Rows2,
   ShieldCheck,
@@ -21,7 +23,7 @@ import {
 import type { ControlId } from './controls';
 
 /** The details' sections that have an icon, which the icon rail opens the strip at. */
-export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'gate' | 'crew' | 'docs' | 'subagents' | 'schedule' | 'status';
+export type SectionId = 'controls' | 'panes' | 'issue' | 'worktree' | 'pulls' | 'gate' | 'crew' | 'docs' | 'documents' | 'pins' | 'subagents' | 'schedule' | 'status';
 
 /**
  * The one place the details' icons are chosen: the icon rail draws them as buttons, and the expanded strip draws the
@@ -34,6 +36,8 @@ const SECTION_COMPONENTS: Partial<Record<SectionId, LucideIcon>> = {
   gate: ShieldCheck,
   crew: UsersRound,
   docs: FileStack,
+  documents: BookOpen,
+  pins: Pin,
   subagents: Bot,
   schedule: CalendarClock,
   status: FileText,

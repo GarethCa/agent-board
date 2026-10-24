@@ -77,7 +77,7 @@
   --shadow-picked: 0 0 0 3px var(--picked-halo);
   --crew-edge: color-mix(in srgb, var(--accent) 55%, transparent); /* an orchestrator's crew frame, dashed */
   --crew-halo: color-mix(in srgb, var(--accent) 25%, transparent); /* round an orchestrator's tile, and a lit family's */
-  /* The board master: its tile's edge and badge, its rails, and the Master button and panel. The teal of a running command. */
+  /* The Captain: its tile's edge and badge, its rails, and the Captain button and panel. The teal of a running command. */
   --master: var(--state-on-command);
   --master-ink: var(--state-on-command-ink);
   --master-soft: var(--state-on-command-soft);
@@ -289,28 +289,44 @@
   --link-card-icon-size: 16px;
 
   /*
-   * Text items and shapes. An item's own colours are its data (TEXT_COLORS, SHAPE_FILLS, SHAPE_STROKES in the
-   * protocol), set as --item-color, --shape-fill, --shape-stroke and --swatch. TextNode reads --text-item-
-   * leading and --text-item-padding to size itself as it is typed in.
+   * Text items, shapes and connectors. An item's colours are theme colour slots (COLOR_SLOTS, FILL_SLOTS in the
+   * protocol), drawn through these tokens and set as --item-color, --shape-fill, --shape-stroke and --swatch. TextNode
+   * reads --text-item-leading and --text-item-padding to size itself as it is typed in.
    */
-  --paint-ink: #2b2a27; /* text, a connector or an outline in Ink, drawn on the desk */
+  --paint-accent: #364fc7; /* text, a connector, an outline or a shape's text in a slot, drawn on the desk or a fill */
+  --paint-ink: #2b2a27;
   --paint-grey: #6f6a60;
   --paint-red: #c92a2a;
   --paint-orange: #d9480f;
+  --paint-yellow: #c16400;
   --paint-green: #2f9e44;
+  --paint-teal: #087f5b;
+  --paint-cyan: #0c8599;
   --paint-blue: #3b5bdb;
   --paint-violet: #6741d9;
-  --shape-fill-yellow: #fff3bf; /* a shape's fill: paper, like a note's (White is a note's white) */
-  --shape-fill-green: #d3f9d8;
-  --shape-fill-blue: #d0ebff;
-  --shape-fill-pink: #ffdeeb;
-  --shape-ink-ink: #2b2a27; /* text in a filled shape, on its paper: the stored colour in this theme */
-  --shape-ink-grey: #6f6a60;
-  --shape-ink-red: #c92a2a;
-  --shape-ink-orange: #d9480f;
-  --shape-ink-green: #2f9e44;
-  --shape-ink-blue: #3b5bdb;
+  --paint-pink: #c2255c;
+  --shape-fill-accent: #dfe3f6; /* a shape's fill in a slot: the slot's paint, 16% into the tile */
+  --shape-fill-yellow: #f5e6d6;
+  --shape-fill-green: #deefe1;
+  --shape-fill-teal: #d7ebe5;
+  --shape-fill-cyan: #d8ebef;
+  --shape-fill-blue: #e0e5f9;
+  --shape-fill-violet: #e7e1f9;
+  --shape-fill-pink: #f5dce5;
+  --shape-fill-red: #f6dddd;
+  --shape-fill-orange: #f9e2d9;
+  --shape-ink-accent: #364fc7; /* a shape's text on its fill in a slot: the slot's paint, nudged to AA on every fill */
+  --shape-ink-ink: #2b2a27;
+  --shape-ink-grey: #68645a;
+  --shape-ink-red: #c12828;
+  --shape-ink-orange: #b23b0c;
+  --shape-ink-yellow: #9a5000;
+  --shape-ink-green: #227231;
+  --shape-ink-teal: #077252;
+  --shape-ink-cyan: #0a6d7d;
+  --shape-ink-blue: #3a59d7;
   --shape-ink-violet: #6741d9;
+  --shape-ink-pink: #be245a;
   --text-item-body-size: 16px;
   --text-item-leading: 1.25;
   --text-item-padding: var(--space-2);
@@ -342,8 +358,8 @@
 
   /*
    * Connectors: thin neutral annotation lines, drawn from a round handle on the middle of an object's side.
-   * A connector's own colour is its data (TEXT_COLORS in the protocol), set as --connector-color. Flow edges (M2) are
-   * the coloured ones, drawn from square ports.
+   * A connector's own colour is a slot's (SLOT_COLORS in the protocol), drawn as the slot and set as --connector-color.
+   * Flow edges (M2) are the coloured ones, drawn from square ports.
    */
   --connector-line: #8a8370;
   --connector-width: 1.5px;
@@ -673,7 +689,7 @@
   --size-rail-token-height: 24px;
   --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
   --size-edge-rules: 384px; /* the Edge rules panel's width */
-  --size-master-panel: 360px; /* the board master's docked panel's width */
+  --size-master-panel: 360px; /* the Captain's docked panel's width */
   --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
   --size-edge-file: 120px; /* the least its payload file field narrows to before it wraps under the switch */
   --size-edge-history-time: 64px; /* its history's times: "14:01", "Fri 17:40" */
@@ -720,6 +736,7 @@
   --size-swatch: 18px; /* a colour swatch */
   --size-slider-value: 36px; /* the room for a menu slider's value */
   --size-swatch-lg: 20px; /* a colour swatch on a text item's or shape's bar */
+  --size-swatch-ring: 1.5px; /* a fill's swatch's ring, in its outline's colour, and a fixed colour's mark's edge */
   --size-divider: 7px; /* the grab area between split panes */
   --size-divider-overhang: calc(var(--size-divider) / 2); /* how far a grab area reaches over each neighbour */
   --size-tooltip: 240px; /* a tooltip's widest */
@@ -967,26 +984,41 @@
   --sticky-white: #d6d3cc;
   --sticky-white-ink: #26231c;
 
-  /* Text, connectors and outlines on the desk: lifted so they read on it */
+  /* Text, connectors and outlines on the desk: lifted so they read on it; fills tinted into the dark tile */
+  --paint-accent: #9fb2ff;
   --paint-ink: #ece8df;
   --paint-grey: #a39d90;
   --paint-red: #ff8787;
   --paint-orange: #ffa94d;
+  --paint-yellow: #ffd43b;
   --paint-green: #69db7c;
+  --paint-teal: #38d9a9;
+  --paint-cyan: #3bc9db;
   --paint-blue: #91a7ff;
   --paint-violet: #b197fc;
-  --shape-fill-yellow: #d9cfa2;
-  --shape-fill-green: #b3d4b8;
-  --shape-fill-blue: #b1c8d9;
-  --shape-fill-pink: #d9bdc8;
-  /* Text in a filled shape: darkened to read on the dimmed fills */
-  --shape-ink-ink: #2b2a27;
-  --shape-ink-grey: #534f48;
-  --shape-ink-red: #9b2020;
-  --shape-ink-orange: #8f300a;
-  --shape-ink-green: #1b5c27;
-  --shape-ink-blue: #2e47ab;
-  --shape-ink-violet: #5536b4;
+  --paint-pink: #f783ac;
+  --shape-fill-accent: #383a45;
+  --shape-fill-yellow: #473f26;
+  --shape-fill-green: #2f4030;
+  --shape-fill-teal: #274038;
+  --shape-fill-cyan: #283e40;
+  --shape-fill-blue: #353845;
+  --shape-fill-violet: #3b3645;
+  --shape-fill-pink: #463238;
+  --shape-fill-red: #473332;
+  --shape-fill-orange: #473829;
+  --shape-ink-accent: #9fb2ff;
+  --shape-ink-ink: #ece8df;
+  --shape-ink-grey: #b0aba0;
+  --shape-ink-red: #ff8787;
+  --shape-ink-orange: #ffa94d;
+  --shape-ink-yellow: #ffd43b;
+  --shape-ink-green: #69db7c;
+  --shape-ink-teal: #38d9a9;
+  --shape-ink-cyan: #3bc9db;
+  --shape-ink-blue: #91a7ff;
+  --shape-ink-violet: #b49bfc;
+  --shape-ink-pink: #f788af;
 
   /* Flow edges: a lighter line, so a thin one shows on the dark desk */
   --flow-edge: #6c86f0;

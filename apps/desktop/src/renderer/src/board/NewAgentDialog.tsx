@@ -62,23 +62,30 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
   /** A group (a zone with no repo of its own) asks which repo the agent works in; a repo zone's agent works in its own. */
   const group = zone === undefined || zone.repoRoot === null;
   const defaultRepo = zone?.defaultRepo ?? null;
-  const [repo, setRepo] = useState<RepoValue>(defaultRepo === null ? { kind: 'scratch' } : { kind: 'folder', path: defaultRepo, branch: null });
+  /** Where its agent runs given no repo: the group's own folder, while the group has no default repo. */
+  const groupFolder = group && defaultRepo === null ? (zone?.groupFolder ?? null) : null;
+  const [pickedRepo, setRepo] = useState<RepoValue>(defaultRepo === null ? { kind: 'scratch' } : { kind: 'folder', path: defaultRepo, branch: null });
   const [baseBranch, setBaseBranch] = useState('');
   /** The new branch as typed: '' takes the one made from the agent's name (or its issue's). */
   const [newBranch, setNewBranch] = useState('');
   /** Whether the user has picked a repo, which the last used must not then replace as it loads. */
   const userPicked = useRef(false);
+  /** The same, for what it shows: an orchestrator starts with no repo until the user picks one. */
+  const [repoChosen, setRepoChosen] = useState(false);
   const pickRepo = (next: RepoValue, byUser = true) => {
     userPicked.current ||= byUser;
+    if (byUser) setRepoChosen(true);
     setRepo(next);
     setBaseBranch(next.kind === 'folder' ? (next.branch ?? '') : '');
     setError(undefined);
   };
-  /** A group with no repo of its own to review has no checked-out branch to offer. */
-  const ownBranch = !group || repo.kind === 'folder';
   const [prompt, setPrompt] = useState('');
   /** An orchestrator works in the repo's own checkout by default, or in a worktree like any agent. */
   const orchestrator = isOrchestratorRole(role);
+  // An orchestrator in a group with no repo works in the group's own folder, its agents each picking their repo.
+  const repo: RepoValue = orchestrator && groupFolder !== null && !repoChosen ? { kind: 'none' } : pickedRepo;
+  /** A group with no repo of its own to review has no checked-out branch to offer. */
+  const ownBranch = !group || repo.kind === 'folder';
   const [checkout, setCheckout] = useState<'main' | 'worktree'>('main');
   /** The orchestrator template the task was filled with, while it is still what the task says. */
   const [template, setTemplate] = useState<string>();
@@ -223,6 +230,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         <RepoField
           value={repo}
           defaultRepo={defaultRepo}
+          groupFolder={groupFolder}
           baseBranch={baseBranch}
           branch={newBranch}
           reviewer={reviews(role)}
@@ -237,6 +245,14 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
           onBranch={setNewBranch}
           onError={setError}
         />
+      )}
+      {orchestrator && repo.kind === 'none' && (
+        <div className="ui-field">
+          <span className="ui-field-name">Checkout</span>
+          <Hint data-testid="checkout-no-repo">
+            No repo: runs in {groupFolder}. Agents it starts pick their repo per task.
+          </Hint>
+        </div>
       )}
       {orchestrator && hasRepoCheckout && (
         <div className="ui-field">

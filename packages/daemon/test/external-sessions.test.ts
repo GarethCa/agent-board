@@ -130,6 +130,7 @@ function host(options: { agentSessions?: string[]; zones?: { repoRoot: string; f
   const events: DaemonEvent[] = [];
   const external = createExternalSessionHost({
     db,
+    groupsDir: '/groups',
     isAgentSession: (id) => options.agentSessions?.includes(id) ?? false,
     broadcast: (event) => events.push(event),
     log: () => {},
@@ -299,7 +300,7 @@ describe('external sessions', () => {
       migrate(db, MIGRATIONS.slice(0, 27));
       db.exec("INSERT INTO external_sessions (id, harness, session_id, cwd, state, ended_at) VALUES ('claude:s1', 'claude', 's1', '/', 'done', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))");
       migrate(db);
-      const external = createExternalSessionHost({ db, isAgentSession: () => false, broadcast: () => {}, log: () => {} });
+      const external = createExternalSessionHost({ db, groupsDir: '/groups', isAgentSession: () => false, broadcast: () => {}, log: () => {} });
       onTestFinished(() => external.stop());
       expect(unsortedGroups(db)).toHaveLength(1);
 
@@ -318,7 +319,7 @@ describe('external sessions', () => {
         INSERT INTO shells (id, zone_id, name, cwd, layout, x, y) VALUES ('sh', 'a', 'sh', '/', '{}', 500, 40);
         INSERT INTO external_sessions (id, harness, session_id, cwd, state) VALUES ('claude:s1', 'claude', 's1', '/', 'idle');`);
       migrate(db);
-      const external = createExternalSessionHost({ db, isAgentSession: () => false, broadcast: () => {}, log: () => {} });
+      const external = createExternalSessionHost({ db, groupsDir: '/groups', isAgentSession: () => false, broadcast: () => {}, log: () => {} });
       onTestFinished(() => external.stop());
       // The tile at x 500 is 256 wide, and the zone has 20 padding past it: drawn 776 wide, not the 300 stored.
       expect(unsortedGroups(db)[0]).toMatchObject({ x: 776 + 40, y: 50 });
@@ -332,7 +333,7 @@ describe('external sessions', () => {
         INSERT INTO external_sessions (id, harness, session_id, cwd, state, x, y) VALUES ('claude:s3', 'claude', 's3', '/', 'idle', 1, 2);`);
       migrate(db);
       const events: DaemonEvent[] = [];
-      const external = createExternalSessionHost({ db, isAgentSession: () => false, broadcast: (event) => events.push(event), log: () => {} });
+      const external = createExternalSessionHost({ db, groupsDir: '/groups', isAgentSession: () => false, broadcast: (event) => events.push(event), log: () => {} });
       onTestFinished(() => external.stop());
 
       const [unsorted] = unsortedGroups(db);

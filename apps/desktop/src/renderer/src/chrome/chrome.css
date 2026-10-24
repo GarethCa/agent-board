@@ -1034,7 +1034,7 @@
 }
 
 /*
- * The board master (ADR-0019): its button beside Needs you, in its teal, and its panel docked on the right of the
+ * The Captain (ADR-0019): its button beside Needs you, in its teal, and its panel docked on the right of the
  * board under the top islands, as the Edge rules panel is: Watching and For you on top, its chat filling the rest.
  */
 .master-glyph {
@@ -1259,7 +1259,7 @@
 }
 
 /*
- * In a narrower window the island would reach the creation toolbar: the Master button drops its word, then itself
+ * In a narrower window the island would reach the creation toolbar: the Captain button drops its word, then itself
  * (⌘⇧M and the master's tile still reach it). The widths are where the islands would otherwise meet.
  */
 @media (max-width: 1239px) {

@@ -62,6 +62,7 @@ const zoneOf = (id: string, fields: Partial<Zone> = {}): Zone => ({
   clone: null,
   managedClone: false,
   defaultRepo: null,
+  groupFolder: null,
   createdAt: '',
   ...fields,
 });

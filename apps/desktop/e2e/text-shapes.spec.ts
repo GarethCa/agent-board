@@ -47,7 +47,7 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
     await expect.poll(async () => (await settledBox(texts)).height).toBeGreaterThan(bodyHeight);
     await expect
       .poll(async () => (await stored(dataDir))[0]?.data)
-      .toMatchObject({ size: 'h1', fontSize: 32, bold: true, italic: true, align: 'center', color: '#3b5bdb' });
+      .toMatchObject({ size: 'h1', fontSize: 32, bold: true, italic: true, align: 'center', color: '#3b5bdb', colorSlot: 'blue' });
 
     // Resized from a side (the left, which is on screen), it keeps that width and wraps.
     await texts.click();
@@ -108,7 +108,9 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
       .toMatchObject({
         shape: 'ellipse',
         fill: '#d3f9d8',
+        fillSlot: 'green',
         stroke: '#6741d9',
+        strokeSlot: 'violet',
         strokeWidth: 4,
         text: 'CI green?',
       });
@@ -140,6 +142,68 @@ test('makes a heading and a shape with text, restyles both, and keeps them acros
     await window.keyboard.press('Backspace');
     await expect(restoredShape).toHaveCount(0);
     await expect.poll(async () => (await stored(dataDir)).map((item) => item.kind)).toEqual(['text']);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test("a shape is drawn in the theme's colours, which follow a switch of theme, and a fixed colour stays as it is", async () => {
+  const dataDir = tempDataDir();
+  const app = await launchApp(dataDir);
+  try {
+    const window = await app.firstWindow();
+    await connectedDaemonPid(window);
+    await window.emulateMedia({ colorScheme: null });
+    const setTheme = (theme: string) => window.evaluate((theme) => globalThis.window.agentBoard.appearance.set({ mode: 'dark', theme }), theme);
+    await setTheme('catppuccin');
+    await expect(window.locator('html')).toHaveAttribute('data-theme', 'catppuccin-mocha');
+    const pane = (await window.locator('.react-flow__pane').boundingBox())!;
+    const shapes = window.getByTestId('shape');
+    for (const x of [160, 460]) {
+      await window.mouse.click(pane.x + pane.width - 20, pane.y + pane.height / 2);
+      await window.keyboard.press('s');
+      await drag(window, { x: pane.x + x, y: pane.y + 500 }, { x: pane.x + x + 200, y: pane.y + 610 });
+    }
+    await expect(shapes).toHaveCount(2);
+    const [slotted, fixed] = (await stored(dataDir)).sort((a, b) => a.x - b.x);
+    const shapeOf = (item: BoardItem) => window.locator(`.react-flow__node[data-id="item:${item.id}"]`).getByTestId('shape');
+    const look = (item: BoardItem) =>
+      shapeOf(item).evaluate((shape) => {
+        const style = getComputedStyle(shape);
+        return { stroke: style.getPropertyValue('--shape-stroke'), fill: style.getPropertyValue('--shape-fill') };
+      });
+    // A new shape is Accent on Tile, in Mocha's own colours, and the picker shows Mocha's.
+    expect(slotted!.data).toMatchObject({ stroke: '#364fc7', strokeSlot: 'accent', fill: '#ffffff', fillSlot: 'tile' });
+    await expect(shapeOf(slotted!)).toHaveAttribute('data-stroke', 'accent');
+    await expect(shapeOf(slotted!)).toHaveAttribute('data-fill', 'tile');
+
+    await shapeOf(slotted!).click();
+    const swatch = (name: string) => window.getByRole('button', { name, exact: true }).evaluate((button) => getComputedStyle(button).backgroundColor);
+    expect(await swatch('Stroke blue')).toBe('rgb(137, 180, 250)');
+    await window.getByRole('button', { name: 'Stroke blue', exact: true }).click();
+    await window.getByRole('button', { name: 'Fill blue', exact: true }).click();
+    await expect.poll(async () => (await stored(dataDir)).find((item) => item.id === slotted!.id)?.data).toMatchObject({ strokeSlot: 'blue', fillSlot: 'blue' });
+    const token = (name: string) => window.evaluate((name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), name);
+    const mocha = { stroke: await token('--paint-blue'), fill: await token('--shape-fill-blue') };
+    await expect.poll(async () => Object.fromEntries(Object.entries(await look(slotted!)).map(([key, value]) => [key, value.trim()]))).toEqual(mocha);
+
+    // # sets a fixed colour, which the bar shows as its own swatch.
+    await shapeOf(fixed!).click();
+    await window.getByRole('button', { name: 'Stroke: fixed colour' }).click();
+    await window.getByRole('textbox', { name: 'Hex colour' }).fill('E8590C');
+    await window.keyboard.press('Enter');
+    await expect.poll(async () => (await stored(dataDir)).find((item) => item.id === fixed!.id)?.data).toMatchObject({ stroke: '#e8590c', strokeSlot: null });
+    await expect(window.getByRole('button', { name: 'Stroke #e8590c, fixed' })).toHaveAttribute('aria-pressed', 'true');
+
+    // Switching theme recolours the slots and leaves the fixed colour be.
+    const strokeOf = (item: BoardItem) => shapeOf(item).locator('.shape-art').evaluate((art) => getComputedStyle(art.querySelector('path, rect, ellipse, polygon')!).stroke);
+    await setTheme('gruvbox');
+    await expect(window.locator('html')).toHaveAttribute('data-theme', 'gruvbox-dark');
+    const gruvbox = { stroke: await token('--paint-blue'), fill: await token('--shape-fill-blue') };
+    expect(gruvbox).not.toEqual(mocha);
+    await expect.poll(async () => Object.fromEntries(Object.entries(await look(slotted!)).map(([key, value]) => [key, value.trim()]))).toEqual(gruvbox);
+    expect(await strokeOf(fixed!)).toBe('rgb(232, 89, 12)');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

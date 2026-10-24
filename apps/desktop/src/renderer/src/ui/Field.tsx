@@ -172,25 +172,26 @@ export function Choices({ children, 'aria-label': label }: { children: ReactNode
 }
 
 type SwatchProps = {
-  /** The colour it shows: a zone's stored colour, or a stored preset as the theme draws it (board-colors.ts). */
+  /** The colour it shows: a zone's stored colour, or an item's colour as the theme draws it (board-colors.ts). */
   color: string;
   /** The colour's name. */
   'aria-label': string;
 };
 
-/** A colour to pick, as a toggle button: pressed while it is the colour in use. */
+/** A colour to pick, as a toggle button: pressed while it is the colour in use. Its `edge`, if given, rings it. */
 export function Swatch({
   color,
+  edge,
   pressed,
   className,
   ...rest
-}: SwatchProps & { pressed: boolean; onClick(): void; title?: string; className?: string }) {
+}: SwatchProps & { edge?: string; pressed: boolean; onClick(): void; title?: string; className?: string }) {
   return (
     <button
       type="button"
       className={cx('ui-swatch', className)}
       aria-pressed={pressed}
-      style={{ '--swatch': color } as CSSProperties}
+      style={{ '--swatch': color, ...(edge === undefined ? {} : { '--swatch-edge': edge }) } as CSSProperties}
       {...rest}
     />
   );

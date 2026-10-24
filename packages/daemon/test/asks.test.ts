@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
@@ -12,11 +12,11 @@ import { tempDataDir } from './helpers.ts';
 const START = new Date('2026-10-14T14:00:00.000Z');
 
 /** A host over a fresh database, with the changes it reports, on a fake clock. */
-function asks(db = memoryDb()) {
+function asks(db = memoryDb(), worktree?: string) {
   const clock = createFakeClock(START);
   const changes: [string, boolean][] = [];
   const placed: string[] = [];
-  const host = createAskHost({ db, clock, changed: (sessionId, began) => changes.push([sessionId, began]), placed: (sessionId) => placed.push(sessionId) });
+  const host = createAskHost({ db, clock, changed: (sessionId, began) => changes.push([sessionId, began]), touched: (sessionId) => placed.push(sessionId), worktree: () => worktree });
   return { db, clock, changes, placed, host };
 }
 
@@ -136,6 +136,7 @@ describe('plans an agent presents', () => {
     expect(await first).toEqual({
       version: 1,
       decision: { outcome: 'changes-requested', comments: 'Also bust on the nightly import', decidedAt: START.toISOString() },
+      edits: null,
     });
     expect(() => host.decide('s1', plan.id, 'approved', '')).toThrow(/decided already/);
 
@@ -144,7 +145,7 @@ describe('plans an agent presents', () => {
     expect((await second).version).toBe(2);
 
     // The history outlives the host: a restarted daemon reads it back.
-    const again = createAskHost({ db, changed: () => {}, placed: () => {} });
+    const again = createAskHost({ db, changed: () => {}, touched: () => {}, worktree: () => undefined });
     expect(again.plans('s1').map((each) => [each.version, each.format, each.body, each.decision?.outcome])).toEqual([
       [1, 'markdown', '# Goal\n\nFast pages', 'changes-requested'],
       [2, 'html', '<h1>v2</h1>', 'approved'],
@@ -167,7 +168,7 @@ describe('plans an agent presents', () => {
 
     // A plan still waiting as the daemon goes has no one to tell: it is withdrawn as the next one starts.
     void host.presentPlan('s1', { title: 'Plan', body: 'Steps', format: 'markdown' }, never());
-    expect(createAskHost({ db, changed: () => {}, placed: () => {} }).latestPlan('s1')).toMatchObject({ version: 3, decision: { outcome: 'withdrawn' } });
+    expect(createAskHost({ db, changed: () => {}, touched: () => {}, worktree: () => undefined }).latestPlan('s1')).toMatchObject({ version: 3, decision: { outcome: 'withdrawn' } });
   });
 
   it('waits on one thing at a time, and refuses an empty plan', () => {
@@ -188,6 +189,121 @@ describe('plans an agent presents', () => {
   });
 });
 
+describe('a plan the user edits before deciding', () => {
+  const steps = '## Steps\n\n- Add zone_id\n- Backfill from the board file\n- Make it NOT NULL\n';
+  const edited = '## Steps\n\n- Add zone_id\n- Backfill from the board file, with a down step\n- Make it NOT NULL\n';
+
+  it('keeps the edit as a version by the user, which the decision then applies to, with the diff from the agent’s', async () => {
+    const { host, placed } = asks();
+    const waited = host.presentPlan('s1', { title: 'Zone id migration', body: steps, format: 'markdown' }, never());
+    const agents = host.latestPlan('s1')!;
+    expect(agents.author).toBe('agent');
+
+    const mine = host.edit('s1', agents.id, edited);
+    expect(mine).toMatchObject({ version: 2, author: 'user', title: 'Zone id migration', decision: null, expiresAt: agents.expiresAt });
+    expect(host.latestPlan('s1')).toEqual(mine);
+    expect(placed).toEqual(['s1']);
+    // The agent's text is fixed: only the user's version is decided now.
+    expect(() => host.decide('s1', agents.id, 'approved', '')).toThrow(/you edited it: decide v2/);
+
+    // Edited again, it is the next version, and the diff is still from the agent's.
+    const again = host.edit('s1', mine.id, edited.replace('NOT NULL', 'NOT NULL, then index it'));
+    host.decide('s1', again.id, 'approved', '');
+    const result = await waited;
+    expect(result).toMatchObject({ version: 3, decision: { outcome: 'approved' } });
+    expect(result.edits).toEqual({
+      from: 1,
+      diff: [
+        '  - Add zone_id',
+        '- - Backfill from the board file',
+        '- - Make it NOT NULL',
+        '+ - Backfill from the board file, with a down step',
+        '+ - Make it NOT NULL, then index it',
+      ].join('\n'),
+      written: false,
+      problem: null,
+    });
+    expect(host.plans('s1').map((each) => [each.version, each.author, each.decision?.outcome])).toEqual([
+      [1, 'agent', 'edited'],
+      [2, 'user', 'edited'],
+      [3, 'user', 'approved'],
+    ]);
+  });
+
+  it('says nothing of edits when the user decided the agent’s own text', async () => {
+    const { host } = asks();
+    const waited = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown' }, never());
+    host.decide('s1', host.latestPlan('s1')!.id, 'approved', '');
+    expect((await waited).edits).toBeNull();
+  });
+
+  it('edits only the Markdown plan the agent waits on now, and only to something new', async () => {
+    const { host } = asks();
+    void host.presentPlan('s1', { title: 'Plan', body: '<h1>Plan</h1>', format: 'html' }, never());
+    expect(() => host.edit('s1', host.latestPlan('s1')!.id, '<h1>Mine</h1>')).toThrow(/HTML plan is view-only/);
+    host.decide('s1', host.latestPlan('s1')!.id, 'rejected', '');
+
+    void host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown' }, never());
+    const { id } = host.latestPlan('s1')!;
+    expect(() => host.edit('s1', id, steps)).toThrow(/nothing changed/);
+    expect(() => host.edit('s1', id, '  ')).toThrow(/must not be empty/);
+    host.decide('s1', id, 'rejected', '');
+    expect(() => host.edit('s1', id, edited)).toThrow(/decided already/);
+  });
+
+  it('writes the approved version to the plan’s file inside the agent’s worktree, and only on approval', async () => {
+    const worktree = tempDataDir();
+    const file = join(worktree, 'migration.md');
+    writeFileSync(file, steps);
+    const { host } = asks(memoryDb(), worktree);
+
+    const sent = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown', path: file }, never());
+    host.decide('s1', host.edit('s1', host.latestPlan('s1')!.id, edited).id, 'changes-requested', 'And test it on a copy');
+    expect((await sent).edits).toMatchObject({ written: false, problem: null });
+    expect(readFileSync(file, 'utf8')).toBe(steps);
+    expect(host.latestPlan('s1')!.path).toBe(file);
+
+    const approved = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown', path: file }, never());
+    host.decide('s1', host.edit('s1', host.latestPlan('s1')!.id, edited).id, 'approved', '');
+    expect((await approved).edits).toMatchObject({ written: true, problem: null });
+    expect(readFileSync(file, 'utf8')).toBe(edited);
+  });
+
+  it('never writes over a file that changed while the plan waited: the agent applies the edit itself', async () => {
+    const worktree = tempDataDir();
+    const file = join(worktree, 'migration.md');
+    writeFileSync(file, steps);
+    const { host } = asks(memoryDb(), worktree);
+
+    const waited = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown', path: file }, never());
+    const mine = host.edit('s1', host.latestPlan('s1')!.id, edited);
+    // Something else writes the file meanwhile: a background job of the agent's, or the user's own editor.
+    writeFileSync(file, `${steps}\n## Risks\n\n- The backfill is slow\n`);
+    host.decide('s1', mine.id, 'approved', '');
+
+    expect((await waited).edits).toMatchObject({ written: false, problem: expect.stringMatching(/changed since you showed it/) });
+    expect(readFileSync(file, 'utf8')).toBe(`${steps}\n## Risks\n\n- The backfill is slow\n`);
+  });
+
+  it('leaves a file it may not write for the agent to change, and says why', async () => {
+    const worktree = tempDataDir();
+    const elsewhere = tempDataDir();
+    writeFileSync(join(elsewhere, 'plan.md'), steps);
+    mkdirSync(join(worktree, 'docs'));
+    symlinkSync(join(elsewhere, 'plan.md'), join(worktree, 'docs', 'plan.md'));
+    const { host } = asks(memoryDb(), worktree);
+
+    const outside = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown', path: join(elsewhere, 'plan.md') }, never());
+    host.decide('s1', host.edit('s1', host.latestPlan('s1')!.id, edited).id, 'approved', '');
+    expect((await outside).edits).toMatchObject({ written: false, problem: expect.stringMatching(/outside your worktree/) });
+
+    const linked = host.presentPlan('s1', { title: 'Plan', body: steps, format: 'markdown', path: join(worktree, 'docs', 'plan.md') }, never());
+    host.decide('s1', host.edit('s1', host.latestPlan('s1')!.id, edited).id, 'approved', '');
+    expect((await linked).edits).toMatchObject({ written: false, problem: expect.stringMatching(/link/) });
+    expect(readFileSync(join(elsewhere, 'plan.md'), 'utf8')).toBe(steps);
+  });
+});
+
 describe('a plan’s source, as the present_plan tool takes it', () => {
   it('reads inline Markdown or HTML, or a file by its extension, and exactly one of them', () => {
     const dir = tempDataDir();
@@ -195,8 +311,8 @@ describe('a plan’s source, as the present_plan tool takes it', () => {
     writeFileSync(join(dir, 'plan.md'), '# Plan');
     expect(readPlanSource({ markdown: '# Plan' }, dir)).toEqual({ body: '# Plan', format: 'markdown' });
     expect(readPlanSource({ html: '<h1>Plan</h1>' }, dir)).toEqual({ body: '<h1>Plan</h1>', format: 'html' });
-    expect(readPlanSource({ path: 'plan.html' }, dir)).toEqual({ body: '<h1>Plan</h1>', format: 'html' });
-    expect(readPlanSource({ path: join(dir, 'plan.md') }, '/')).toEqual({ body: '# Plan', format: 'markdown' });
+    expect(readPlanSource({ path: 'plan.html' }, dir)).toEqual({ body: '<h1>Plan</h1>', format: 'html', path: join(dir, 'plan.html') });
+    expect(readPlanSource({ path: join(dir, 'plan.md') }, '/')).toEqual({ body: '# Plan', format: 'markdown', path: join(dir, 'plan.md') });
     expect(() => readPlanSource({}, dir)).toThrow(/exactly one of markdown, html or path/);
     expect(() => readPlanSource({ markdown: '# Plan', html: '<h1>Plan</h1>' }, dir)).toThrow(/exactly one/);
     expect(() => readPlanSource({ path: 'missing.md' }, dir)).toThrow(/can't read the plan/);

@@ -54,7 +54,8 @@ function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind
   const requests: { kind: NeedsYouKind; key: string }[] = [];
   if (agent.state === 'needs-permission' || agent.permissions.length > 0) requests.push({ kind: 'permission', key: 'permission' });
   if (agent.ask !== null) requests.push({ kind: 'asks', key: `asks:${agent.ask.id}` });
-  if (planPending(agent)) requests.push({ kind: 'plan', key: `plan:${agent.plan.id}:${agent.plan.version}` });
+  // By its wait, which a version the user edits keeps: their own edit is no new request.
+  if (planPending(agent)) requests.push({ kind: 'plan', key: `plan:${agent.plan.expiresAt}` });
   if (agent.flag?.to === 'user') requests.push({ kind: 'flagged', key: `flagged:${agent.flag.id}` });
   if (requests.length === 0 && needsYouKind(agent, settings.needsYouShows) === 'turn') requests.push({ kind: 'turn', key: 'turn' });
   return requests;

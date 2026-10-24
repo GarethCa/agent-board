@@ -14,9 +14,12 @@ import {
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
   type Agent,
-  type PlanDecision,
+  type AgentRecord,
+  type PlanEdits,
+  type PlanEnd,
   type SentToOrchestrator,
   type PlanFormat,
+  type PinRef,
   type RecordParams,
   roleLabel,
   type BoardCaller,
@@ -28,6 +31,8 @@ import {
   orchestrateScopeWords,
   type AgentNoteData,
   type BoardItem,
+  type Connector,
+  type ConnectorEnd,
   FLOW_CONDITION_KINDS,
   type FlowCondition,
   type FlowEdge,
@@ -35,12 +40,17 @@ import {
   type FlowEdgePayload,
   type FlowEdgeTrigger,
   type HandoffPayload,
+  relationOf,
+  SECTIONED_SHAPES,
+  SHAPE_SECTIONS,
+  type ShapeType,
   type Shell,
   statusLine,
   type WaitState,
   type Zone,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
+import { toldDiff } from './text-diff.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
 export class BoardError extends Error {}
@@ -114,23 +124,26 @@ export interface Board {
   shells: Shell[];
   edges: FlowEdge[];
   items: BoardItem[];
+  /** The board's connectors: annotation lines, and a diagram's relations. */
+  connectors: Connector[];
 }
 
 export async function readBoard(client: DaemonClient): Promise<Board> {
   // The board shows where each agent's worktree is now: it may have renamed its branch since a hook last said so.
   await client.call('agent.refreshBranches');
-  const [zones, agents, shells, edges, items] = await Promise.all([
+  const [zones, agents, shells, edges, items, connectors] = await Promise.all([
     client.call('zone.list'),
     client.call('agent.list'),
     client.call('shell.list'),
     client.call('flowEdge.list'),
     client.call('item.list'),
+    client.call('connector.list'),
   ]);
   // An agent's tabs are its own, not shell tiles on the board.
-  return { zones, agents, shells: shells.filter((shell) => shell.owner === null), edges, items };
+  return { zones, agents, shells: shells.filter((shell) => shell.owner === null), edges, items, connectors };
 }
 
-export const REF_KINDS = ['zone', 'agent', 'shell', 'edge', 'item'] as const;
+export const REF_KINDS = ['zone', 'agent', 'shell', 'edge', 'item', 'connector'] as const;
 export type RefKind = (typeof REF_KINDS)[number];
 
 /** Something a ref names. */
@@ -139,7 +152,8 @@ export type BoardObject =
   | { kind: 'agent'; agent: Agent }
   | { kind: 'shell'; shell: Shell }
   | { kind: 'edge'; edge: FlowEdge }
-  | { kind: 'item'; item: BoardItem };
+  | { kind: 'item'; item: BoardItem }
+  | { kind: 'connector'; connector: Connector };
 
 /** The fewest characters of an id a ref shows, however few would tell it apart. */
 const MIN_REF_LENGTH = 4;
@@ -172,7 +186,7 @@ export class BoardRefs {
 
   /** The objects of `kind`. */
   objects(kind: RefKind): BoardObject[] {
-    const { zones, agents, shells, edges, items } = this.board;
+    const { zones, agents, shells, edges, items, connectors } = this.board;
     switch (kind) {
       case 'zone':
         return zones.map((zone) => ({ kind, zone }));
@@ -184,6 +198,8 @@ export class BoardRefs {
         return edges.map((edge) => ({ kind, edge }));
       case 'item':
         return items.map((item) => ({ kind, item }));
+      case 'connector':
+        return connectors.map((connector) => ({ kind, connector }));
     }
   }
 
@@ -237,6 +253,8 @@ function idOf(object: BoardObject): string {
       return object.edge.id;
     case 'item':
       return object.item.id;
+    case 'connector':
+      return object.connector.id;
   }
 }
 
@@ -260,6 +278,8 @@ function describeObject(object: BoardObject): string {
       return 'edge';
     case 'item':
       return `${object.item.kind} ${JSON.stringify(cut(itemText(object.item), 40))}`;
+    case 'connector':
+      return `connector ${relationOf(object.connector) ?? 'with ends of its own'}`;
   }
 }
 
@@ -285,6 +305,34 @@ function itemText(item: BoardItem): string {
   if (item.kind === 'issue') return `${String(data.id ?? '')} ${String(data.title ?? '')}`.trim();
   if (item.kind === 'clock') return `${cronWords(String(data.cron ?? ''))}: ${String(data.prompt ?? '')}`;
   return typeof data.text === 'string' ? data.text : '';
+}
+
+/** A shape's kind, and its sections (a class's attributes and methods), a line each; none for another item. */
+function shapeOf(item: BoardItem): { shape: string; sections: { name: string; lines: string[] }[] } | undefined {
+  if (item.kind !== 'shape') return undefined;
+  const data = item.data as Record<string, unknown>;
+  const shape = typeof data.shape === 'string' ? data.shape : 'rectangle';
+  const sections = SECTIONED_SHAPES.includes(shape as ShapeType)
+    ? SHAPE_SECTIONS.map((name) => ({ name, lines: typeof data[name] === 'string' && data[name] !== '' ? (data[name] as string).split('\n') : [] }))
+    : [];
+  return { shape, sections };
+}
+
+/** A count of a shape's sections' lines, as its one-line summary gives them: `2 attributes, 1 method`. */
+function sectionCounts(sections: { name: string; lines: string[] }[]): string {
+  return sections.map(({ name, lines }) => plural(lines.length, name.replace(/s$/, ''))).join(', ');
+}
+
+/**
+ * A class's sections as `show` and `zone map` print them: each under a rule line, a line each; none for another item.
+ * With `limit`, each line is cut to `width` characters and each section to its first `lines`, saying how many more.
+ */
+export function shapeSectionLines(item: BoardItem, limit?: { lines: number; width: number }): string[] {
+  return (shapeOf(item)?.sections ?? []).flatMap(({ name, lines }) => {
+    const shown = limit === undefined ? lines : lines.slice(0, limit.lines).map((line) => cut(line, limit.width));
+    const more = lines.length - shown.length;
+    return [`── ${name}`, ...(lines.length === 0 ? ['(none)'] : shown), ...(more > 0 ? [`… and ${more} more`] : [])];
+  });
 }
 
 /** The agent that wrote an agent note, by ref and name; undefined for any other item. */
@@ -370,12 +418,14 @@ function shellJson(refs: BoardRefs, shell: Shell, caller: BoardCaller | null) {
 }
 
 function itemJson(refs: BoardRefs, item: BoardItem) {
+  const shape = shapeOf(item);
   return {
     ref: refs.of('item', item.id),
     id: item.id,
     kind: item.kind,
     zone: item.zoneId === null ? null : refs.of('zone', item.zoneId),
     text: itemText(item),
+    ...(shape === undefined ? {} : { shape: shape.shape, ...Object.fromEntries(shape.sections.map(({ name, lines }) => [name, lines])) }),
     ...(item.kind === 'link' || item.kind === 'issue' ? { url: (item.data as { url?: string }).url ?? null } : {}),
     ...(item.kind === 'agent-note' ? { by: refs.of('agent', (item.data as unknown as AgentNoteData).agent.sessionId) } : {}),
   };
@@ -422,7 +472,79 @@ function shellLine(refs: BoardRefs, shell: Shell, caller: BoardCaller | null): s
 export function itemLine(refs: BoardRefs, item: BoardItem): string {
   const text = itemText(item);
   const by = writtenBy(refs, item);
-  return `${refs.of('item', item.id)}  ${item.kind}${text === '' ? '' : `  ${JSON.stringify(cut(text, 60))}`}${by === undefined ? '' : `  by ${by}`}`;
+  const shape = shapeOf(item);
+  const kind = shape === undefined ? item.kind : `shape ${shape.shape}`;
+  const sections = shape === undefined || shape.sections.length === 0 ? '' : `  (${sectionCounts(shape.sections)})`;
+  return `${refs.of('item', item.id)}  ${kind}${text === '' ? '' : `  ${JSON.stringify(cut(text, 60))}`}${sections}${by === undefined ? '' : `  by ${by}`}`;
+}
+
+/** What a connector's end is fixed to: an item by its ref and text, else the tile or zone by its ref and name. */
+function connectorEndLabel(refs: BoardRefs, end: ConnectorEnd): string {
+  if (end.type === 'item') {
+    const item = refs.board.items.find((each) => each.id === end.id);
+    const text = item === undefined ? '' : cut(itemText(item), 30);
+    return `${refs.of('item', end.id)}${text === '' ? '' : ` ${JSON.stringify(text)}`}`;
+  }
+  if (end.type === 'external') return `external:${end.id.slice(0, 8)}`;
+  const named = end.type === 'zone' ? refs.board.zones.find((each) => each.id === end.id) : end.type === 'agent' ? refs.board.agents.find((each) => each.sessionId === end.id) : refs.board.shells.find((each) => each.id === end.id);
+  return `${refs.of(end.type, end.id)}${named === undefined ? '' : ` ${named.name}`}`;
+}
+
+/** A connector's relation as a class diagram reads it, else its ends and dash as drawn. */
+function connectorRelation(connector: Connector): string {
+  return relationOf(connector) ?? `${connector.startEnd}–${connector.endEnd}${connector.dashed ? ', dashed' : ''}`;
+}
+
+/** A connector's labels in a line, `from` end's, middle's and `to` end's, each only if it has one. */
+function connectorLabels(connector: Connector): string {
+  return (
+    [
+      ['label', connector.label],
+      ['from', connector.startLabel],
+      ['to', connector.endLabel],
+    ] as const
+  )
+    .filter(([, text]) => text !== '')
+    .map(([name, text]) => `${name} ${JSON.stringify(cut(text, 40))}`)
+    .join(', ');
+}
+
+export function connectorLine(refs: BoardRefs, connector: Connector): string {
+  const labels = connectorLabels(connector);
+  return `${refs.of('connector', connector.id)}  ${connectorEndLabel(refs, connector.from)} → ${connectorEndLabel(refs, connector.to)}  ${connectorRelation(connector)}${labels === '' ? '' : `  (${labels})`}`;
+}
+
+function connectorJson(refs: BoardRefs, connector: Connector) {
+  const end = (each: ConnectorEnd) => (each.type === 'external' ? `external:${each.id}` : refs.of(each.type, each.id));
+  return {
+    ref: refs.of('connector', connector.id),
+    id: connector.id,
+    from: end(connector.from),
+    to: end(connector.to),
+    relation: relationOf(connector) ?? null,
+    startEnd: connector.startEnd,
+    endEnd: connector.endEnd,
+    dashed: connector.dashed,
+    style: connector.style,
+    label: connector.label,
+    startLabel: connector.startLabel,
+    endLabel: connector.endLabel,
+  };
+}
+
+/** The zone a connector is listed under: its `from` end's (a zone itself, or what is in it); null for loose. */
+function connectorZone(refs: BoardRefs, connector: Connector): string | null {
+  const { type, id } = connector.from;
+  if (type === 'zone') return id;
+  if (type === 'item') return refs.board.items.find((each) => each.id === id)?.zoneId ?? null;
+  if (type === 'agent') return refs.board.agents.find((each) => each.sessionId === id)?.zoneId ?? null;
+  if (type === 'shell') return refs.board.shells.find((each) => each.id === id)?.zoneId ?? null;
+  return null;
+}
+
+/** The connectors listed under the zone `zoneId` (null for loose). */
+export function connectorsIn(refs: BoardRefs, zoneId: string | null): Connector[] {
+  return refs.board.connectors.filter((connector) => connectorZone(refs, connector) === zoneId);
 }
 
 export function zoneLine(refs: BoardRefs, zone: Zone): string {
@@ -483,7 +605,7 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
   const { zones, agents, shells, items } = refs.board;
   const sections = [...zones.map((zone) => zone.id), null].map((zoneId) => {
     const inZone = <T extends { zoneId: string | null }>(list: T[]) => list.filter((each) => each.zoneId === zoneId);
-    return { zoneId, agents: inZone(agents), shells: inZone(shells), items: inZone(items) };
+    return { zoneId, agents: inZone(agents), shells: inZone(shells), items: inZone(items), connectors: connectorsIn(refs, zoneId) };
   });
   const lines: string[] = [];
   for (const section of sections) {
@@ -492,6 +614,7 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
       ...section.agents.map((agent) => agentLine(refs, agent, caller)),
       ...section.shells.map((shell) => shellLine(refs, shell, caller)),
       ...section.items.map((item) => itemLine(refs, item)),
+      ...section.connectors.map((connector) => connectorLine(refs, connector)),
     ];
     if (zone === undefined && rows.length === 0) continue;
     lines.push(zone === undefined ? 'loose on the board' : zoneLine(refs, zone));
@@ -506,6 +629,7 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
           ...zoneJson(refs, zones.find((zone) => zone.id === section.zoneId)!),
           tiles: [...section.agents.map((agent) => agentJson(refs, agent, caller)), ...section.shells.map((shell) => shellJson(refs, shell, caller))],
           items: section.items.map((item) => itemJson(refs, item)),
+          connectors: section.connectors.map((connector) => connectorJson(refs, connector)),
         })),
       loose: {
         tiles: [
@@ -513,6 +637,7 @@ export function treeView(refs: BoardRefs, caller: BoardCaller | null): BoardView
           ...sections.at(-1)!.shells.map((shell) => shellJson(refs, shell, caller)),
         ],
         items: sections.at(-1)!.items.map((item) => itemJson(refs, item)),
+        connectors: sections.at(-1)!.connectors.map((connector) => connectorJson(refs, connector)),
       },
     },
   };
@@ -716,9 +841,35 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
       return { text: edgeLines(refs, object.edge).join('\n'), json: edgeJson(refs, object.edge) };
     case 'item': {
       const { item } = object;
+      const shape = shapeOf(item);
+      const joined = refs.board.connectors.filter((connector) => [connector.from, connector.to].some((end) => end.type === 'item' && end.id === item.id));
       return {
-        text: [`${ref}  ${item.kind}`, ...rows([['zone', inZone(refs, item.zoneId)], ['by', writtenBy(refs, item)]]), ...itemText(item).split('\n').map((line) => `  ${line}`)].join('\n'),
-        json: itemJson(refs, item),
+        text: [
+          `${ref}  ${shape === undefined ? item.kind : `shape ${shape.shape}`}`,
+          ...rows([['zone', inZone(refs, item.zoneId)], ['by', writtenBy(refs, item)]]),
+          ...itemText(item).split('\n').map((line) => `  ${line}`),
+          ...shapeSectionLines(item).map((line) => `  ${line}`),
+          ...(joined.length === 0 ? [] : ['  connectors', ...joined.map((connector) => `    ${connectorLine(refs, connector)}`)]),
+        ].join('\n'),
+        json: { ...itemJson(refs, item), ...(joined.length === 0 ? {} : { connectors: joined.map((connector) => refs.of('connector', connector.id)) }) },
+      };
+    }
+    case 'connector': {
+      const { connector } = object;
+      return {
+        text: [
+          `${ref}  connector`,
+          ...rows([
+            ['from', connectorEndLabel(refs, connector.from)],
+            ['to', connectorEndLabel(refs, connector.to)],
+            ['relation', connectorRelation(connector)],
+            ['style', connector.style],
+            ['label', connector.label === '' ? undefined : connector.label],
+            ['from label', connector.startLabel === '' ? undefined : connector.startLabel],
+            ['to label', connector.endLabel === '' ? undefined : connector.endLabel],
+          ]),
+        ].join('\n'),
+        json: connectorJson(refs, connector),
       };
     }
   }
@@ -784,6 +935,8 @@ export interface NewAgentOptions {
   /** Start it without its role's template: its first message is exactly `prompt`. */
   noTemplate?: boolean;
   name?: string;
+  /** In a group, the absolute path of the repo (or a folder in one) to cut its worktree from. */
+  repo?: string;
   branch?: string;
   /** The branch to cut it from, or an agent ref for that agent's branch. */
   base?: string;
@@ -844,6 +997,7 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
   // An agent's ref names its branch: a reviewer starts from its implementer's tip. A reviewer's names the branch it
   // reviews, so a follow-up can be based on the reviewer before it.
   let baseBranch = options.base;
+  let repo = options.repo;
   if (baseBranch !== undefined && /^agent:|^me$/.test(baseBranch)) {
     const agent = resolveAgent(refs, baseBranch, caller);
     if (agent.detached) {
@@ -851,6 +1005,9 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     }
     baseBranch = agent.reviews?.branch ?? agent.branch;
     if (baseBranch === '') throw new BoardError(`${options.base} has no branch to start from: it works outside git, or on a detached HEAD`);
+    // In a group, its agents each work in a repo of their own: the branch is the based-on agent's, so is the repo.
+    const target = refs.board.zones.find((zone) => zone.id === (zoneId ?? caller?.zoneId));
+    if (repo === undefined && target?.repoRoot === null) repo = agent.repoRoot;
   }
   const started = await session.client.call('orchestrator.spawn', {
     token,
@@ -861,6 +1018,7 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     ...(options.role === undefined ? {} : { role: options.role }),
     ...(options.noTemplate === true ? { noTemplate: true } : {}),
     ...(options.name === undefined ? {} : { name: options.name }),
+    ...(repo === undefined ? {} : { repo }),
     ...(options.branch === undefined ? {} : { branch: options.branch }),
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
@@ -1248,6 +1406,33 @@ export async function recordEntry(session: BoardSession, params: RecordParams, c
   return { text: `Recorded ${what} on ${where}.`, json: record };
 }
 
+/**
+ * `pin`: puts a file, a link or a labelled note on the caller's sidebar for the user to see, or with `forOrchestrator`,
+ * on its orchestrator's. A file's relative path is from `cwd`.
+ */
+export async function pinEntry(session: BoardSession, params: Extract<RecordParams, { kind: 'pin' }>, cwd: string): Promise<BoardView> {
+  const token = agentToken(session, 'pin on its sidebar');
+  const sent = params.path === undefined ? params : { ...params, path: resolvePath(cwd, params.path) };
+  const record = await session.client.call('board.record', { token, ...sent });
+  return { text: `Pinned ${pinName(record)} on ${record.kind === 'pin' && record.from !== null ? "your orchestrator's" : 'your'} sidebar.`, json: record };
+}
+
+/** `unpin`: takes a pin off the caller's sidebar, or its orchestrator's: a file by its path (from `cwd`), a link, or a note by its label. */
+export async function unpinEntry(session: BoardSession, ref: PinRef, cwd: string): Promise<BoardView> {
+  const token = agentToken(session, 'unpin from its sidebar');
+  const sent = ref.path === undefined ? ref : { ...ref, path: resolvePath(cwd, ref.path) };
+  const record = await session.client.call('board.unpin', { token, ...sent });
+  return { text: `Unpinned ${pinName(record)} from ${ref.forOrchestrator === true ? "your orchestrator's" : 'your'} sidebar.`, json: record };
+}
+
+/** A pin as a reply names it: a note by its label, a file or link by its label and itself, or itself. */
+function pinName(record: AgentRecord): string {
+  if (record.kind !== 'pin') return record.key;
+  if (record.target.kind === 'note') return `the note ${record.label ?? ''}`;
+  const where = record.target.kind === 'file' ? record.target.path : record.target.url;
+  return record.label === null ? where : `${record.label} (${where})`;
+}
+
 /** A wait in minutes, as a model reads it. */
 const minutes = (ms: number) => `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? '' : 's'}`;
 
@@ -1284,8 +1469,8 @@ export interface PlanSource {
   path?: string;
 }
 
-/** The body and format of a plan from exactly one of its sources; a file is read relative to `cwd`. */
-export function readPlanSource(source: PlanSource, cwd: string): { body: string; format: PlanFormat } {
+/** The body and format of a plan from exactly one of its sources; a file is read relative to `cwd`, and its path kept. */
+export function readPlanSource(source: PlanSource, cwd: string): { body: string; format: PlanFormat; path?: string } {
   const given = (['markdown', 'html', 'path'] as const).filter((key) => source[key] !== undefined);
   if (given.length !== 1) throw new BoardError('give the plan as exactly one of markdown, html or path');
   if (source.markdown !== undefined) return { body: source.markdown, format: 'markdown' };
@@ -1297,27 +1482,50 @@ export function readPlanSource(source: PlanSource, cwd: string): { body: string;
   } catch (error) {
     throw new BoardError(`can't read the plan at ${path}: ${(error as Error).message}`);
   }
-  return { body, format: /\.html?$/i.test(path) ? 'html' : 'markdown' };
+  return { body, format: /\.html?$/i.test(path) ? 'html' : 'markdown', path };
 }
 
-/** `present_plan`: shows the user a plan, its next version, and waits for their decision. */
+/**
+ * `show_doc` with `plan` (and `present_plan`, kept for agents that call it): shows the user a plan, its next version,
+ * and waits for their decision. With `onBoard`, its plan card goes beside the agent's tile.
+ */
 export async function presentPlan(
   session: BoardSession,
-  plan: PlanSpec,
+  plan: PlanSpec & { onBoard?: boolean },
 ): Promise<BoardView> {
   const token = agentToken(session, 'present a plan');
   const result = await session.client.call('board.presentPlan', { token, ...plan });
   if ('sentTo' in result) return { text: sentToLead(result, 'plan'), json: result };
-  const { version, decision } = result;
+  const { version, decision, edits } = result;
   const comments = decision.comments === '' ? '' : `\n\nTheir comments:\n${decision.comments}`;
-  const said: Record<PlanDecision['outcome'], string> = {
-    approved: `The user approved plan v${version}. Go ahead with it.${comments}`,
-    'changes-requested': `The user asked for changes to plan v${version}.${comments}\n\nRevise the plan and present it again.`,
-    rejected: `The user rejected plan v${version}. Don't carry it out.${comments}`,
-    'timed-out': `No decision on plan v${version} came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
-    withdrawn: `Plan v${version} was withdrawn before the user decided.`,
-  };
-  return { text: said[decision.outcome], json: { version, decision } };
+  const said: Record<PlanEnd['outcome'], string> =
+    edits === null
+      ? {
+          approved: `The user approved plan v${version}. Go ahead with it.${comments}`,
+          'changes-requested': `The user asked for changes to plan v${version}.${comments}\n\nRevise the plan and present it again.`,
+          rejected: `The user rejected plan v${version}. Don't carry it out.${comments}`,
+          'timed-out': `No decision on plan v${version} came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
+          withdrawn: `Plan v${version} was withdrawn before the user decided.`,
+        }
+      : {
+          approved:
+            `The user approved plan v${version}, their edit of your v${edits.from}. ${editedFile(plan.path, edits)}\n\n` +
+            `Their changes to your v${edits.from}:\n${toldDiff(edits.diff)}\n\nGo ahead with their version.${comments}`,
+          'changes-requested':
+            `The user asked for changes to plan v${edits.from}, and edited it (v${version}):\n${toldDiff(edits.diff)}${comments}\n\n` +
+            'Revise the plan with their changes and present it again.',
+          rejected: `The user rejected plan v${version}, their edit of your v${edits.from}. Don't carry it out.${comments}`,
+          'timed-out': `No decision on plan v${version}, the user's edit of your v${edits.from}, came within ${minutes(plan.timeoutMs ?? DEFAULT_PLAN_WAIT_MS)}. Don't carry it out yet: present it again, or ask.`,
+          withdrawn: `Plan v${version}, the user's edit of your v${edits.from}, was withdrawn before the user decided.`,
+        };
+  return { text: said[decision.outcome], json: { version, decision, edits } };
+}
+
+/** Where the user's approved version of a plan is now: its file, if it was written; else for the agent to apply. */
+function editedFile(path: string | undefined, edits: PlanEdits): string {
+  if (edits.written) return `${path} now holds their version.`;
+  if (path === undefined) return 'Carry out their version, not yours.';
+  return `${path} still holds yours (${edits.problem}): apply their changes to it.`;
 }
 
 /** A document as an agent shows it: one of its files, relative to `cwd`, with a title, on the board too if asked. */

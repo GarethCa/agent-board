@@ -30,7 +30,6 @@ import type { MenuEntry } from '../../ui';
 import { ITEM_KINDS } from '../items/kinds';
 import type { Alignment, Reorder } from './arrange';
 import type { SelectionSummary } from './use-editing';
-import { themedColor } from '../../board-colors';
 import { endOfNode } from '../connectors/endpoints';
 
 /** What the context menu's rows do. */
@@ -75,7 +74,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
     return [
       {
         label: colors.label,
-        swatches: colors.presets.map(({ name, value }) => ({ name, value, color: themedColor(value), pressed: shown.size === 1 && shown.has(value) })),
+        swatches: colors.presets.map(({ name, value, color }) => ({ name, value, color, pressed: shown.size === 1 && shown.has(value) })),
         onPick: (value) => actions.setColor(colors.patch, kind, value),
       },
     ];

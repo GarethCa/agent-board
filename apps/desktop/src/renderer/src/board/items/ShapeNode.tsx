@@ -1,9 +1,9 @@
 import { memo, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, useReactFlow, type NodeProps } from '@xyflow/react';
 import {
+  COLOR_SLOTS,
+  FILL_SLOTS,
   MAX_TEXT_LENGTH,
-  SHAPE_FILLS,
-  SHAPE_STROKES,
   SHAPE_STROKE_WIDTHS,
   TEXT_ALIGNS,
   SHAPE_SECTIONS,
@@ -14,12 +14,12 @@ import {
 } from '@agent-board/daemon/protocol';
 import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Code } from 'lucide-react';
 import { Button, Popover } from '../../ui';
-import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, FontSizeControl, ItemStyleBar } from './ItemStyleBar';
+import { BarButton, BarLabel, BarRow, BarSample, BarSeparator, BarSwatch, FontSizeControl, ItemStyleBar, SlotSwatches } from './ItemStyleBar';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
-import { shapeData } from './text-style';
+import { filledIn, fixedColor, inSlot, shapeData } from './text-style';
 import { tokenNumber } from '../../theme';
 import { DeleteButton } from './TextNode';
-import { shapeInk, themedColor } from '../../board-colors';
+import { fillToken, shapeColors, slotName, slotToken } from '../../board-colors';
 import { useDraftText } from './useDraftText';
 import { useFitResize, useGrowToFit, useWindowFocused } from './grow-to-fit';
 import { DEFAULT_SHAPE_SIZE, SHAPES, type LabelBox } from './shapes/catalogue';
@@ -77,15 +77,14 @@ function ChangeShape({ current, onPick }: { current: ShapeType; onPick(shape: Sh
 
 /** A shape's colours, for its outline and text, in the theme. */
 export function shapePaint(style: ShapeData): CSSProperties {
-  const onFill = style.fill !== null && SHAPES[style.shape].label.outside !== true;
+  const { fill, stroke, text } = shapeColors(style, SHAPES[style.shape].label.outside !== true);
   return {
-    '--shape-fill': style.fill === null ? 'none' : themedColor(style.fill),
-    '--shape-stroke': themedColor(style.stroke),
+    '--shape-fill': fill,
+    '--shape-stroke': stroke,
     // A section's rule is drawn as its outline is.
     '--shape-stroke-width': `${style.strokeWidth}px`,
     '--shape-stroke-style': style.dashed ? 'dashed' : 'solid',
-    // On a fill, the text is drawn for paper: a fill is light in every theme, as a note is.
-    '--item-color': onFill ? shapeInk(style.textColor) : themedColor(style.textColor),
+    '--item-color': text,
   } as CSSProperties;
 }
 
@@ -277,8 +276,8 @@ export const ShapeNode = memo(function ShapeNode({
       className="shape"
       data-testid="shape"
       data-shape={style.shape}
-      data-fill={style.fill ?? 'none'}
-      data-stroke={style.stroke}
+      data-fill={style.fill === null ? 'none' : (style.fillSlot ?? style.fill)}
+      data-stroke={style.strokeSlot ?? style.stroke}
       data-text-size={style.textSize}
       data-bold={style.bold}
       data-align={style.align}
@@ -307,27 +306,32 @@ export const ShapeNode = memo(function ShapeNode({
       <ItemStyleBar label="Shape style" visible={alone && !dragging}>
         <BarRow>
           <BarLabel>Fill</BarLabel>
-          {SHAPE_FILLS.map((preset) => (
+          {FILL_SLOTS.map((slot) => (
             <BarSwatch
-              key={preset.value}
-              name={`Fill ${preset.name.toLowerCase()}`}
-              value={preset.value}
-              pressed={style.fill === preset.value}
-              onPick={() => restyle({ fill: preset.value })}
+              key={slot}
+              name={`Fill ${slot}`}
+              title={`${slotName(slot)} · follows the theme`}
+              paint={fillToken(slot)}
+              edge={slot === 'tile' ? 'var(--raised-edge)' : slotToken(slot)}
+              pressed={style.fill !== null && style.fillSlot === slot}
+              onPick={() => restyle(filledIn(slot))}
             />
           ))}
-          <BarSwatch name="No fill" value={null} pressed={style.fill === null} onPick={() => restyle({ fill: null })} />
-          <BarSeparator />
+          {style.fill !== null && style.fillSlot === null && (
+            <BarSwatch name={`Fill ${style.fill}, fixed`} title={`${style.fill} · fixed`} paint={style.fill} fixed pressed onPick={() => undefined} />
+          )}
+          <BarSwatch name="No fill" paint={null} pressed={style.fill === null} onPick={() => restyle(filledIn(null))} />
+        </BarRow>
+        <BarRow>
           <BarLabel>Stroke</BarLabel>
-          {SHAPE_STROKES.map((preset) => (
-            <BarSwatch
-              key={preset.value}
-              name={`Stroke ${preset.name.toLowerCase()}`}
-              value={preset.value}
-              pressed={style.stroke === preset.value}
-              onPick={() => restyle({ stroke: preset.value })}
-            />
-          ))}
+          <SlotSwatches
+            label="Stroke"
+            slots={COLOR_SLOTS}
+            slot={style.strokeSlot}
+            color={style.stroke}
+            onPick={(slot) => restyle(inSlot('stroke', slot))}
+            onFixed={(hex) => restyle(fixedColor('stroke', hex))}
+          />
         </BarRow>
         <BarRow>
           {SHAPE_STROKE_WIDTHS.map((strokeWidth, index) => (

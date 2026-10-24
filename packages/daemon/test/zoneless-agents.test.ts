@@ -247,14 +247,13 @@ describe('zone-less agents', () => {
 });
 
 describe('group zones', () => {
-  it('start agents in their default repo, and ask for one when they have none', async () => {
+  it('start agents in their default repo, and in their own folder when they have none', async () => {
     const { client } = await agentDaemon();
     const repo = tempRepo();
     const group = await client.call('zone.addUnbound', { name: 'Onboarding', ...at });
 
-    await expect(client.call('agent.spawn', { zoneId: group.id, prompt: 'Go', ...SIZE })).rejects.toMatchObject({
-      message: 'Onboarding has no repo: pick one to start the agent in',
-    });
+    const plain = await client.call('agent.spawn', { zoneId: group.id, prompt: 'Go', ...SIZE });
+    expect(plain).toMatchObject({ zoneId: group.id, plainFolder: true, worktree: group.groupFolder, branch: '' });
     const withDefault = await client.call('zone.setDefaultRepo', { id: group.id, path: repo });
     expect(withDefault).toMatchObject({ kind: 'unbound', repoRoot: null, defaultRepo: repo });
 

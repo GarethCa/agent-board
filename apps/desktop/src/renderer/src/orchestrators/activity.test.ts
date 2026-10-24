@@ -43,6 +43,26 @@ describe('activityText', () => {
     expect(activityText(line({ action: 'remove-note', targetName: 'note “Ship it”' }))).toBe('removed note “Ship it”');
   });
 
+  it('says what it drew: the shapes it added, changed or removed, and the connectors it made between two of them', () => {
+    expect(activityText(line({ action: 'add-shape', targetName: 'shape “Order”' }))).toBe('drew shape “Order”');
+    expect(activityText(line({ action: 'edit-shape', targetName: 'shape “Order”' }))).toBe('edited shape “Order”');
+    expect(activityText(line({ action: 'remove-shape', targetName: 'shape “Order”' }))).toBe('removed shape “Order”');
+    expect(activityText(line({ action: 'connect', targetName: 'shape “Circle” → shape “Shape”' }))).toBe('connected shape “Circle” → shape “Shape”');
+    expect(activityText(line({ action: 'edit-connector', targetName: 'connector “holds”' }))).toBe('edited connector “holds”');
+    expect(activityText(line({ action: 'edit-connector', targetName: 'a connector' }))).toBe('edited a connector');
+    expect(activityText(line({ action: 'remove-connector', targetName: 'connector “holds”' }))).toBe('removed connector “holds”');
+    for (const [action, tried] of [
+      ['add-shape', 'tried to draw a shape'],
+      ['edit-shape', 'tried to edit a shape'],
+      ['remove-shape', 'tried to remove a shape'],
+      ['connect', 'tried to connect two items'],
+      ['edit-connector', 'tried to edit a connector'],
+      ['remove-connector', 'tried to remove a connector'],
+    ] as const) {
+      expect(activityText(line({ action, outcome: 'refused', targetName: null }))).toBe(tried);
+    }
+  });
+
   it('says which of the app’s default roles it set or removed', () => {
     expect(activityText(line({ action: 'set-role', targetName: 'designer' }))).toBe('set the default role designer');
     expect(activityText(line({ action: 'remove-role', targetName: 'designer' }))).toBe('removed the default role designer');

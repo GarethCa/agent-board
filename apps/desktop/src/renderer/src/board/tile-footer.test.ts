@@ -7,7 +7,7 @@ const pr = (number: number, state: PullRequest['state'] = 'open', checks: PullRe
   ({ number, title: `PR ${number}`, url: `https://github.com/o/r/pull/${number}`, state, checks }) as PullRequest;
 const schedule = { cron: '0 9 * * 2', prompt: 'Go', enabled: true, nextRunAt: null, lastRun: null } as AgentSchedule;
 const agent = (fields: Partial<Agent> = {}) =>
-  ({ model: null, role: null, roleName: null, issue: null, pullRequests: [], pushedPullRequests: [], schedule: null, muted: false, seen: false, notice: null, workFinishedAt: null, ...fields }) as Agent;
+  ({ model: null, role: null, roleName: null, issue: null, pullRequests: [], pushedPullRequests: [], schedule: null, muted: false, seen: false, notice: null, workFinishedAt: null, startup: null, ...fields }) as Agent;
 
 describe('a tile’s footer', () => {
   it('is empty for an agent with nothing to show', () => {
@@ -66,6 +66,16 @@ describe('a tile’s footer', () => {
   it('shows one shells chip after the rest when the agent has shells, however many, and none without', () => {
     expect(tileFooter(agent({ issue, muted: true }), 3).shown).toEqual([{ kind: 'issue', issue }, { kind: 'muted' }, { kind: 'shells' }]);
     expect(tileFooter(agent(), 0).shown).toEqual([]);
+  });
+
+  it('shows only the model, role and issue while the agent starts: no pull request, schedule, mute, shells or finished yet', () => {
+    const starting = agent({ model: 'opus', role: 'implementer', roleName: 'implementer', issue, pullRequests: [pr(1)], schedule, muted: true, workFinishedAt: '2026-01-01T00:00:00Z', startup: { output: null, failed: false } });
+    expect(tileFooter(starting, 2)).toEqual({
+      shown: [{ kind: 'model', model: 'opus' }, { kind: 'role', role: 'implementer', name: 'implementer' }, { kind: 'issue', issue }],
+      folded: [],
+    });
+    // Once live, the same agent shows them all.
+    expect(tileFooter({ ...starting, startup: null }, 2).shown.map((badge) => badge.kind)).toEqual(['model', 'role', 'issue', 'finished', 'pr', 'schedule', 'muted', 'shells']);
   });
 
   it('shows a mute as a bell, never folded on its own into a cryptic +1', () => {

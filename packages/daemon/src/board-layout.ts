@@ -20,6 +20,19 @@ export function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/**
+ * The upright box round `rect` turned `degrees` clockwise about its centre: what a rotated item takes up, for laying
+ * things out round it.
+ */
+export function rotatedBounds(rect: Rect, degrees: number): Rect {
+  if (degrees % 360 === 0) return rect;
+  const radians = (degrees * Math.PI) / 180;
+  const [cos, sin] = [Math.abs(Math.cos(radians)), Math.abs(Math.sin(radians))];
+  const width = rect.width * cos + rect.height * sin;
+  const height = rect.width * sin + rect.height * cos;
+  return { x: rect.x + rect.width / 2 - width / 2, y: rect.y + rect.height / 2 - height / 2, width, height };
+}
+
 /** `value`, kept between `low` and `high`. */
 export function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
@@ -368,17 +381,20 @@ export const CREW_PER_ROW = 3;
 /** How many rows down a new crew member is looked for a spot before the zone slots it as any other. */
 export const CREW_ROWS = 20;
 
-/** The spot `col` along and `row` down of the crew of the orchestrator at `at`. */
-const crewSlot = (at: { x: number; y: number }, col: number, row: number) => ({
-  x: at.x + AGENT_TILE_SIZE.width + CREW_GAP + col * (AGENT_TILE_SIZE.width + TILE_GAP),
+/** The spot `col` along and `row` down of the crew of the orchestrator at `at`, `width` wide as drawn. */
+const crewSlot = (at: { x: number; y: number }, width: number, col: number, row: number) => ({
+  x: at.x + width + CREW_GAP + col * (AGENT_TILE_SIZE.width + TILE_GAP),
   y: at.y + row * ROW_STEP,
 });
 
-/** Where the next of a crew goes beside its orchestrator at `at`: the first spot in its rows clear of `taken`. */
-export function crewSpot(at: { x: number; y: number }, taken: readonly Rect[]): { x: number; y: number } | undefined {
+/**
+ * Where the next of a crew goes beside its orchestrator at `at`, `width` wide as drawn (wider expanded), the first spot
+ * in its rows clear of `taken`: right of it, so never under it.
+ */
+export function crewSpot(at: { x: number; y: number }, taken: readonly Rect[], width: number = AGENT_TILE_SIZE.width): { x: number; y: number } | undefined {
   for (let row = 0; row < CREW_ROWS; row++) {
     for (let col = 0; col < CREW_PER_ROW; col++) {
-      const spot = crewSlot(at, col, row);
+      const spot = crewSlot(at, width, col, row);
       if (clearOf(footprint(spot), taken)) return spot;
     }
   }
@@ -421,7 +437,8 @@ export function slotUnplaced<T>(tiles: readonly T[], slotting: Slotting<T>): voi
     const from = slotting.orchestratorOf(tile);
     const orchestrator = from === undefined ? undefined : siblings.find((other) => slotting.agentOf(other) === from);
     const besideIt =
-      orchestrator && crewSpot(placeOf(orchestrator)!, [...siblings.map(slotting.footprint), ...inTheWay, ...(zoneId === undefined ? slotting.zones : [])]);
+      orchestrator &&
+      crewSpot(placeOf(orchestrator)!, [...siblings.map(slotting.footprint), ...inTheWay, ...(zoneId === undefined ? slotting.zones : [])], slotting.footprint(orchestrator).width);
     if (besideIt !== undefined) slotting.place(tile, besideIt);
     else if (zoneId === undefined) slotting.place(tile, freeSpotFor({ x: 0, y: 0 }, AGENT_TILE_SIZE, [...slotting.zones, ...siblings.map(slotting.rect)]));
     else slotting.place(tile, freeTileSlot(slotting.zoneWidth(zoneId), [...siblings.map(slotting.rect), ...inTheWay]));

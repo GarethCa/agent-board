@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useEffect, useState } from 'react';
-import { NodeToolbar, Position, useStore, type NodeProps } from '@xyflow/react';
+import { NodeResizer, NodeToolbar, Position, useStore, type NodeProps } from '@xyflow/react';
 import { ChevronsDownUp, ChevronsUpDown, Trash2 } from 'lucide-react';
-import { DOCUMENT_BAR_HEIGHT, DOCUMENT_CARD_SIZE, type Agent, type DocumentCardData, type DocumentSummary } from '@agent-board/daemon/protocol';
+import { DOCUMENT_BAR_HEIGHT, DOCUMENT_CARD_SIZE, DOCUMENT_MIN_SIZE, type Agent, type DocumentCardData, type DocumentSummary } from '@agent-board/daemon/protocol';
 import { useBoardCommands } from '../commands';
 import { HarnessMark } from '../HarnessMark';
 import { tileNodeId } from '../tiles';
@@ -24,6 +24,10 @@ export const DocumentCardsContext = createContext<DocumentCards>({ find: () => u
 /** A document card's data, as it was saved. */
 const documentCardData = (data: Record<string, unknown>): DocumentCardData => data as unknown as DocumentCardData;
 
+/** As much text as a tall card could show; the card's own height clips it, with a fade. */
+const PREVIEW_LINES = 80;
+const PREVIEW_LENGTH = 2000;
+
 /** The first lines of the document's text, read again as its version moves on; empty until read, or for a slim bar. */
 function usePreview(document: DocumentSummary | undefined, wanted: boolean): string {
   const [preview, setPreview] = useState('');
@@ -34,7 +38,7 @@ function usePreview(document: DocumentSummary | undefined, wanted: boolean): str
     if (id === undefined || !wanted) return;
     let current = true;
     window.agentBoard.asks.readDoc(id).then(
-      (read) => current && setPreview(read.text === null ? '' : format === 'html' ? htmlPreview(read.text) : previewLines(read.text, 8, read.title)),
+      (read) => current && setPreview(read.text === null ? '' : format === 'html' ? htmlPreview(read.text, PREVIEW_LENGTH) : previewLines(read.text, PREVIEW_LINES, read.title)),
       () => {},
     );
     return () => {
@@ -63,68 +67,82 @@ export const DocumentNode = memo(function DocumentNode({ data, selected: picked,
   const title = document?.title ?? card.title;
   const open = () => found !== undefined && cards.open(found.agent, found.document);
   const collapse = (collapsed: boolean) =>
-    update({ id: item.id, height: collapsed ? DOCUMENT_BAR_HEIGHT : DOCUMENT_CARD_SIZE.height, data: { collapsed } });
+    update({
+      id: item.id,
+      height: collapsed ? DOCUMENT_BAR_HEIGHT : (card.openHeight ?? DOCUMENT_CARD_SIZE.height),
+      data: collapsed ? { collapsed, openHeight: item.height } : { collapsed },
+    });
 
   return (
-    <div
-      className="doc-card"
-      data-testid="doc-card"
-      data-collapsed={card.collapsed || undefined}
-      data-gone={found === undefined || undefined}
-      onDoubleClick={(event) => {
-        // Not a new note on the board behind it.
-        event.stopPropagation();
-        open();
-      }}
-    >
-      <NodeToolbar isVisible={selected && !dragging} position={Position.Top} className="sticky-toolbar">
-        <IconButton
-          icon={card.collapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-          size="sm"
-          aria-label={card.collapsed ? 'Show the page' : 'Collapse to a bar'}
-          tooltip={card.collapsed ? 'Show the page' : 'Collapse to a bar'}
-          onClick={() => collapse(!card.collapsed)}
-        />
-        <IconButton
-          icon={<Trash2 />}
-          size="sm"
-          aria-label="Take it off the board"
-          tooltip={
-            <>
-              Take it off the board; it stays a tab of its agent
-              <Kbd>{keyText('edit.delete')}</Kbd>
-            </>
-          }
-          onClick={() => remove(item.id)}
-        />
-      </NodeToolbar>
-      <div className="doc-card-head">
-        <span className="doc-card-type">{docTypeTag(document?.format ?? card.format)}</span>
-        <span className="doc-card-file">{document?.path.split(/[\\/]/).at(-1) ?? card.title}</span>
-        {document?.writtenBy === 'user' && <span className="doc-card-edited">✎ you edited</span>}
-      </div>
-      <div className="doc-card-title">{title}</div>
-      {!card.collapsed && (
-        <div className="doc-card-body nowheel" data-testid="doc-card-preview">
-          {document?.format === 'html' ? <p>{preview}</p> : renderMarkdown(preview, openLink)}
+    <>
+      <NodeResizer
+        isVisible={selected}
+        color="var(--sticky-resizer)"
+        minWidth={DOCUMENT_MIN_SIZE.width}
+        minHeight={card.collapsed ? DOCUMENT_BAR_HEIGHT : DOCUMENT_MIN_SIZE.height}
+        maxHeight={card.collapsed ? DOCUMENT_BAR_HEIGHT : undefined}
+        onResizeEnd={(_event, { x, y, width, height }) => update({ id: item.id, x, y, width, height })}
+      />
+      <div
+        className="doc-card"
+        data-testid="doc-card"
+        data-collapsed={card.collapsed || undefined}
+        data-gone={found === undefined || undefined}
+        onDoubleClick={(event) => {
+          // Not a new note on the board behind it.
+          event.stopPropagation();
+          open();
+        }}
+      >
+        <NodeToolbar isVisible={selected && !dragging} position={Position.Top} className="sticky-toolbar">
+          <IconButton
+            icon={card.collapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+            size="sm"
+            aria-label={card.collapsed ? 'Show the page' : 'Collapse to a bar'}
+            tooltip={card.collapsed ? 'Show the page' : 'Collapse to a bar'}
+            onClick={() => collapse(!card.collapsed)}
+          />
+          <IconButton
+            icon={<Trash2 />}
+            size="sm"
+            aria-label="Take it off the board"
+            tooltip={
+              <>
+                Take it off the board; it stays a tab of its agent
+                <Kbd>{keyText('edit.delete')}</Kbd>
+              </>
+            }
+            onClick={() => remove(item.id)}
+          />
+        </NodeToolbar>
+        <div className="doc-card-head">
+          <span className="doc-card-type">{docTypeTag(document?.format ?? card.format)}</span>
+          <span className="doc-card-file">{document?.path.split(/[\\/]/).at(-1) ?? card.title}</span>
+          {document?.writtenBy === 'user' && <span className="doc-card-edited">✎ you edited</span>}
         </div>
-      )}
-      <div className="doc-card-foot">
-        <button
-          type="button"
-          className="doc-card-agent nodrag"
-          title={tileShown ? 'Select its tile' : `${card.agent.name} is no longer on the board`}
-          disabled={!tileShown}
-          onClick={() => focusSession(card.agent.sessionId)}
-        >
-          <HarnessMark harness={card.agent.harness} className="doc-card-mark" />
-          <span>{card.agent.name}</span>
-        </button>
-        {document !== undefined && <span className="doc-card-version">v{document.version}</span>}
-        <button type="button" className="doc-card-open nodrag" disabled={found === undefined} onClick={open}>
-          Open ↗
-        </button>
+        <div className="doc-card-title">{title}</div>
+        {!card.collapsed && (
+          <div className="doc-card-body nowheel" data-testid="doc-card-preview">
+            {document?.format === 'html' ? <p>{preview}</p> : renderMarkdown(preview, openLink)}
+          </div>
+        )}
+        <div className="doc-card-foot">
+          <button
+            type="button"
+            className="doc-card-agent nodrag"
+            title={tileShown ? 'Select its tile' : `${card.agent.name} is no longer on the board`}
+            disabled={!tileShown}
+            onClick={() => focusSession(card.agent.sessionId)}
+          >
+            <HarnessMark harness={card.agent.harness} className="doc-card-mark" />
+            <span>{card.agent.name}</span>
+          </button>
+          {document !== undefined && <span className="doc-card-version">v{document.version}</span>}
+          <button type="button" className="doc-card-open nodrag" disabled={found === undefined} onClick={open}>
+            Open ↗
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 });

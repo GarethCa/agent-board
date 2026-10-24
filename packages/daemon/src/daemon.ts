@@ -48,6 +48,7 @@ import { daemonPaths, prepareSocketDir } from './paths.ts';
 import {
   DAEMON_VERSION,
   DOCUMENT_CARD_SIZE,
+  PLAN_CARD_SIZE,
   eventLine,
   PROTOCOL_VERSION,
   lineSplitter,
@@ -57,6 +58,7 @@ import {
   type DaemonHealth,
   type DaemonMethods,
   type DocumentCardData,
+  type PlanCardData,
   type DocumentSummary,
   type Harness,
   type SessionInfo,
@@ -90,7 +92,7 @@ import { setupHandlers } from './setup-checks.ts';
 import { viewStateHandlers } from './view-state.ts';
 import { createZoneSources, type ZoneSources } from './zone-sources.ts';
 import { linkedWorktrees, removeManagedClone, zoneDissolveHandlers } from './zone-dissolve.ts';
-import { createZoneTable, zoneHandlers } from './zones.ts';
+import { createZoneTable, inGroupFolder, zoneHandlers } from './zones.ts';
 
 export interface DaemonOptions {
   /** Holds the database, socket, lock and log. Created if missing. */
@@ -271,6 +273,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const dataDirGraceMs = options.dataDirGraceMs ?? DEFAULT_DATA_DIR_GRACE_MS;
   const paths = daemonPaths(options.dataDir);
   mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 });
+  // Groups' own folders, where their agents with no repo run: made one by one, as each is first used.
+  const groupsDir = join(paths.dataDir, 'groups');
 
   prepareSocketDir(paths);
   const releaseLock = await acquireDaemonLock(paths.lock, paths.socket);
@@ -351,6 +355,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1 UNION SELECT 1 FROM agent_conversations WHERE harness_session_id = ?1');
     const externalSessions = createExternalSessionHost({
       db,
+      groupsDir,
       isAgentSession: (id) => isAgentSession.get(id) !== undefined,
       broadcast,
       log,
@@ -495,6 +500,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         plan: commandPlan,
         run: (command, cwd, timeoutMs) => conditionShell.run(command, cwd, timeoutMs),
         headCommit: async (cwd) => {
+          // A group's own folder is outside git: nothing to ask it.
+          if (inGroupFolder(groupsDir, cwd)) return undefined;
           const head = await runGit(cwd, ['rev-parse', 'HEAD']);
           return head.ok ? head.stdout : undefined;
         },
@@ -509,7 +516,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const stopFollowingTimeZone = followSystemTimeZone({ log });
     const roleTemplates = createRoleTemplates(db);
     // An agent's questions and plans: it is `waiting` while one waits on the user.
-    const asks = createAskHost({ db, changed: (sessionId, began) => agents.waitChanged(sessionId, began), placed: (sessionId) => agents.waitChanged(sessionId, false) });
+    const asks = createAskHost({
+      db,
+      changed: (sessionId, began) => agents.waitChanged(sessionId, began),
+      touched: (sessionId) => agents.waitChanged(sessionId, false),
+      worktree: (sessionId) => agents.get(sessionId)?.worktree,
+      addCard: (sessionId) => addPlanCard(sessionId),
+      wrote: (sessionId, path) => documents.userWrote(sessionId, path),
+      log,
+    });
     // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
     const documents = createDocumentHost({
       db,
@@ -526,6 +541,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       sessions,
       worktreesDir: options.worktreesDir ?? defaultWorktreesDir(),
       reviewsDir: join(options.dataDir, 'reviews'),
+      groupsDir,
       scratchDir: options.scratchDir ?? (process.env.AGENT_BOARD_SCRATCH_DIR || join(homedir(), '.agent-board', 'scratch')),
       // The zone table is made below; agents remember folders only once they spawn.
       rememberFolder: (path) => zoneTable.rememberFolder(path),
@@ -566,7 +582,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         flowEdges.dropAgent(sessionId);
         gates.forget(sessionId);
         asks.forget(sessionId);
-        removeDocumentCards(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s document cards off the board: ${(error as Error).message}`));
+        removeDocumentCards(sessionId).catch((error: unknown) => log(`could not take ${sessionId}'s document and plan cards off the board: ${(error as Error).message}`));
         documents.forget(sessionId);
         selectionAsks.forget(sessionId);
         clocks.agentRemoved(sessionId);
@@ -602,7 +618,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const leavingZone = itemsLeavingZone(db, broadcast);
     // Sources is created just below; no clone runs before then.
     const reposDir = options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos'));
-    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir);
+    const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir, groupsDir);
     const sources: ZoneSources = createZoneSources({
       db,
       zones: zoneTable,
@@ -633,7 +649,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       log,
     });
-    // The board master (ADR-0019): started only from the app, in a folder of its own.
+    // The Captain (ADR-0019): started only from the app, in a folder of its own.
     const boardMaster = createBoardMaster({
       dir: join(paths.dataDir, 'master'),
       spawn: (params, place) => agents.spawn(params, undefined, place),
@@ -872,6 +888,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     /** The document cards on the board, of `sessionId`'s documents or of the one document. */
     const documentCards = async (match: (data: DocumentCardData) => boolean) =>
       (await call('item.list', undefined)).filter((item) => item.kind === 'document' && match(item.data as unknown as DocumentCardData));
+    /** The plan cards on the board of the agent `sessionId`'s plans. */
+    const planCards = async (sessionId: string) =>
+      (await call('item.list', undefined)).filter((item) => item.kind === 'plan' && (item.data as unknown as PlanCardData).agent.sessionId === sessionId);
     // A document shown on the board is a card beside its agent's tile, joined to it; one card for each document, the
     // check and the making one step for each document, so two shows at once make one card.
     const addingCards = new Set<string>();
@@ -890,9 +909,29 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         addingCards.delete(document.id);
       }
     }
-    // An agent's document cards go with it, as its documents do.
+    // A plan shown on the board is one card for the agent, beside its tile, showing its latest plan: a later version
+    // updates it in place. Made one at a time for each agent, as a document's is.
+    const addingPlanCards = new Set<string>();
+    async function addPlanCard(sessionId: string): Promise<void> {
+      if (addingPlanCards.has(sessionId)) return;
+      addingPlanCards.add(sessionId);
+      try {
+        if ((await planCards(sessionId)).length > 0) return;
+        const agent = agents.get(sessionId);
+        const plan = asks.latestPlan(sessionId);
+        if (agent === undefined || plan === null) return;
+        const size = PLAN_CARD_SIZE;
+        const spot = (await spotBesideAgent(call, sessionId, size)) ?? { zoneId: agent.zoneId, x: 0, y: 0 };
+        const data: PlanCardData = { agent: agentNoteAuthor(agent), title: plan.title };
+        await call('item.create', { kind: 'plan', ...spot, ...size, data: { ...data } });
+      } finally {
+        addingPlanCards.delete(sessionId);
+      }
+    }
+    // An agent's document and plan cards go with it, as its documents and plans do.
     async function removeDocumentCards(sessionId: string): Promise<void> {
-      for (const card of await documentCards((data) => data.agent.sessionId === sessionId)) await call('item.delete', { id: card.id }).catch(() => null);
+      const cards = [...(await documentCards((data) => data.agent.sessionId === sessionId)), ...(await planCards(sessionId))];
+      for (const card of cards) await call('item.delete', { id: card.id }).catch(() => null);
     }
     listeners.push((event) => {
       if (event.type === 'agent.updated') documents.observe(event.agent);

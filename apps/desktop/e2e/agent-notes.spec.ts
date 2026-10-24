@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { agentNoteSize } from '@agent-board/daemon/agent-notes';
 import { MAX_AGENT_NOTE_HEIGHT, type BoardItem } from '@agent-board/daemon/protocol';
-import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
+import { agents, launch, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
 import { withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -115,6 +115,82 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
     expect(await window.evaluate(() => globalThis.window.agentBoard.view.get('agentNoteLook'))).toBe('terminal');
     await agentNotesLook(window, 'Document');
     await expect(note).toHaveAttribute('data-look', 'document');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an agent note's tether goes round the tiles in its way: a reviewer a tile gap from the note, and an expanded tile", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    for (const prompt of ['Run the crew', 'Fix checkout flake', 'Review the fix']) await spawnAgent(window, 'monorepo', prompt);
+    await expect(tile(window)).toHaveCount(3);
+    for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    const [lead, fixer, reviewer] = await agents(window);
+    const [zone] = await zones(window);
+    // The lead's tile above, expanded; under it a lane as an arrange lays one out: the implementer, its reviewer two
+    // slots on, and the lead's note on the implementer in the slot past the reviewer, a tile gap from it. Its straight
+    // tether runs across the reviewer. A second note, left of the lead, on the reviewer: its straight tether runs
+    // across the expanded tile.
+    const [past, left] = await window.evaluate(
+      async ({ zoneId, lead, fixer, reviewer }) => {
+        const board = globalThis.window.agentBoard;
+        await board.agents.move(lead.sessionId, { zoneId, x: 300, y: 40 });
+        await board.agents.move(fixer, { zoneId, x: 20, y: 900 });
+        await board.agents.move(reviewer, { zoneId, x: 564, y: 900 });
+        const note = (x: number, y: number, about: string) =>
+          board.items.create({
+            kind: 'agent-note',
+            zoneId,
+            x,
+            y,
+            width: 256,
+            height: 200,
+            data: {
+              text: '**Round 2 of 3**\n\n- implementer: `2 of 3` done\n- reviewer: changes requested',
+              agent: { sessionId: lead.sessionId, name: lead.name, harness: 'claude', role: 'orchestrator' },
+              about,
+              writtenAt: '2026-01-01T00:00:00.000Z',
+              editedByUser: false,
+            },
+          });
+        return [(await note(836, 900, fixer)).id, (await note(20, 40, reviewer)).id];
+      },
+      { zoneId: zone!.id, lead: { sessionId: lead!.sessionId, name: lead!.name }, fixer: fixer!.sessionId, reviewer: reviewer!.sessionId },
+    );
+    const tetherOf = (noteId: string) => window.locator(`.react-flow__edge[data-id="tether:item:${noteId}"]`).getByTestId('agent-note-tether');
+    // The board draws only what is in view.
+    const fitView = () => window.getByRole('button', { name: /^Fit view/ }).click();
+    await fitView();
+    await expect(window.getByTestId('agent-note-tether')).toHaveCount(2);
+    await expect(tetherOf(past!)).toHaveAttribute('data-routed', 'true');
+    // Round the reviewer's box, not through it: every point along it, on the screen, outside the tile's, both read
+    // at once, so a view still easing to fit moves them together.
+    const throughReviewer = await tetherOf(past!).evaluate((element) => {
+      const path = element as SVGPathElement;
+      const reviewer = [...document.querySelectorAll("[data-testid='agent-tile']")].find((tile) => tile.textContent.includes('Review the fix'))!;
+      const box = reviewer.getBoundingClientRect();
+      const toScreen = path.getScreenCTM()!;
+      const length = path.getTotalLength();
+      return Array.from({ length: 101 }, (_, step) => path.getPointAtLength((length * step) / 100))
+        .map(({ x, y }) => new DOMPoint(x, y).matrixTransform(toScreen))
+        .filter(({ x, y }) => x > box.left && x < box.right && y > box.top && y < box.bottom).length;
+    });
+    expect(throughReviewer).toBe(0);
+    // The lead's tile is clear of the second note's line until it expands into it.
+    await expect(tetherOf(left!)).not.toHaveAttribute('data-routed');
+
+    await tileAction(tile(window).filter({ hasText: 'Run the crew' }), 'Expand in place');
+    await expect(window.getByTestId('expanded-tile')).toBeVisible();
+    await fitView();
+    await expect(tetherOf(left!)).toHaveAttribute('data-routed', 'true');
+    await expect(tetherOf(past!)).toHaveAttribute('data-routed', 'true');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

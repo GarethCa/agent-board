@@ -12,17 +12,19 @@ const TETHER_EDGE_PREFIX = 'tether:';
 const TETHER_Z_INDEX = 0;
 
 const isAgentNote = (node: Node): node is ItemNodeType => isItemNode(node) && node.data.item.kind === 'agent-note';
-const isDocumentCard = (node: Node): node is ItemNodeType => isItemNode(node) && node.data.item.kind === 'document';
+/** A document or plan card: a card of what its agent showed, tied to its tile. */
+const isAgentCard = (node: ItemNodeType): boolean => node.data.item.kind === 'document' || node.data.item.kind === 'plan';
+const isShownCard = (node: Node): node is ItemNodeType => isItemNode(node) && isAgentCard(node);
 
 export const isTether = (edge: Edge): boolean => edge.type === TETHER_EDGE_TYPE;
 
 /**
  * A tether from each agent note to the tile of the agent it is about (an answer, its author's), and from each document
- * card to the agent that showed it, while that tile is on the board.
+ * or plan card to the agent that showed it, while that tile is on the board.
  */
 export function agentNoteTethers(nodes: readonly Node[]): Edge[] {
   const onBoard = new Set(nodes.map((node) => node.id));
-  return nodes.filter((node) => isAgentNote(node) || isDocumentCard(node)).flatMap((note) => {
+  return nodes.filter((node) => isAgentNote(node) || isShownCard(node)).flatMap((note) => {
     const subject = tetheredTo(note);
     if (subject === undefined) return [];
     const tile = tileNodeId('agent', subject);
@@ -47,9 +49,9 @@ export function agentNoteTethers(nodes: readonly Node[]): Edge[] {
   });
 }
 
-/** The session of the agent an agent note or document card is tied to, if any. */
+/** The session of the agent an agent note, document card or plan card is tied to, if any. */
 function tetheredTo(node: ItemNodeType): string | undefined {
-  if (node.data.item.kind === 'document') return (node.data.item.data as { agent: { sessionId: string } }).agent.sessionId;
+  if (isAgentCard(node)) return (node.data.item.data as { agent: { sessionId: string } }).agent.sessionId;
   // The agent a note is about, when it says (an orchestrator's note on a crew member); an answer to the user's
   // question, its author's. A note about no agent has none: no connector leads to the orchestrator that wrote it.
   const { agent, about, asked } = agentNoteData(node.data.item.data);

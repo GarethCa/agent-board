@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createPullRequest, deleteRemoteBranch, mergePullRequest, pullRequestDetails, pullRequestOfUrl, shortIssueId, type PullRequest } from '@agent-board/tracker';
-import { cleanupProblem, inCheckoutWhy, inRepoCheckout, isOpenPullRequest, mergeBlocked, openPullRequestBlocked, pullRequestBody, shortCommit, type GateCleanup } from './gate-rules.ts';
+import { cleanupProblem, inCheckoutWhy, inRepoCheckout, isOpenPullRequest, mergeBlocked, noRepoWhy, openPullRequestBlocked, pullRequestBody, shortCommit, type GateCleanup } from './gate-rules.ts';
 import { boardCaller, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { GateHost } from './gates.ts';
 import { runGit } from './git.ts';
@@ -79,6 +79,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
   const openPullRequest = async (sessionId: string, { draft }: { draft: boolean }): Promise<PullRequest> => {
     await options.refreshBranch(sessionId);
     const agent = requireAgent(sessionId);
+    if (agent.plainFolder) throw invalidParams(noRepoWhy(agent.name));
     if (inRepoCheckout(agent)) throw invalidParams(inCheckoutWhy(agent.name));
     if (agent.ownedBranch === '') throw invalidParams(`${agent.name} has no branch to open a pull request of.`);
     const open = options.pullRequests(sessionId).find(isOpenPullRequest);
@@ -134,6 +135,7 @@ export function gateActionHandlers<Context extends BoardConnection>(options: Gat
       const cleanup = cleanupParam(fields);
       await options.refreshBranch(sessionId);
       const agent = requireAgent(sessionId);
+      if (agent.plainFolder) throw invalidParams(noRepoWhy(agent.name));
       if (inRepoCheckout(agent)) throw invalidParams(inCheckoutWhy(agent.name));
       const pr = options.pullRequests(sessionId).find((each) => each.number === number);
       const ref = pr === undefined ? undefined : pullRequestOfUrl(pr.url);

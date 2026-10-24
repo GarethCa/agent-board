@@ -3,8 +3,8 @@
 // rewrite by the agent is a new version. The user's edits to a Markdown document are written to the file, and the agent is told what
 // changed, typed at its prompt once it is ready for its next message, as a crew flag is (`crew-flags.ts`).
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
+import { basename, isAbsolute, relative } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { boardCaller, isOwnLiveSession, type BoardCallerSources, type BoardConnection } from './board.ts';
 import { systemClock, type Clock } from './clock.ts';
@@ -24,16 +24,14 @@ import {
 import type { RpcHandlers } from './rpc.ts';
 import type { RunStart } from './schedules.ts';
 import { documentFormat, documentTitle } from './document-names.ts';
-import { lineDiff } from './text-diff.ts';
+import { lineDiff, toldDiff } from './text-diff.ts';
+import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
 import type { AgentHost } from './agents.ts';
 
 type DocumentMethods = Pick<DaemonMethods, 'board.showDoc' | 'doc.read' | 'doc.save' | 'doc.comment'>;
 
 /** How often the files of live agents' documents are looked at for a rewrite. */
 const DOCUMENT_POLL_MS = 1_500;
-
-/** The longest diff typed at an agent's prompt: past it, the agent is told to read the file. */
-const MAX_TOLD_DIFF = 6_000;
 
 /** States of a live agent at its prompt: only these are worth trying to tell. */
 const AT_PROMPT: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting']);
@@ -68,6 +66,11 @@ export interface DocumentHost {
    * since it was shown, and, unless `force`, one written since `baseVersion`.
    */
   save(documentId: string, text: string, baseVersion: number, force?: boolean): DocumentSummary;
+  /**
+   * The user's text was written to the agent's file at `path` (a plan's approved edit): if it is one of the agent's
+   * documents, the write is the user's next version, not an agent's rewrite. The agent is told by the plan's answer.
+   */
+  userWrote(sessionId: string, path: string): void;
   /** The user's comments on the document, for its agent. */
   comment(documentId: string, text: string): void;
   /** Looks at every live agent's documents' files for a rewrite. */
@@ -131,42 +134,11 @@ function readText(path: string): { text: string } | { problem: string } {
   }
 }
 
-/** The real path of `path`, links resolved; `path` itself if it can't be resolved. */
-function realPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
-/** Whether `path` is inside `folder`. */
-function isInside(folder: string, path: string): boolean {
-  const inside = relative(folder, path);
-  return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside);
-}
-
 /** The path as the agent knows it: relative to its worktree when inside it. */
 function pathFor(agent: Agent | undefined, path: string): string {
   if (agent === undefined) return path;
   const worktree = realPath(agent.worktree);
   return isInside(worktree, path) ? relative(worktree, path) : path;
-}
-
-/**
- * Writes `text` to the file at `path` whole, through a file beside it renamed over it, so a reader never sees half of
- * it; it keeps the file's mode.
- */
-function writeWhole(path: string, text: string, mode: number): void {
-  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-  try {
-    writeFileSync(temporary, text);
-    chmodSync(temporary, mode & 0o7777);
-    renameSync(temporary, path);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
 }
 
 export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
@@ -267,17 +239,10 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
   };
 
   /** Why the user can't save over the document's file now, if they can't: not editable, gone, or made a link. */
-  const whyNotWritable = (document: DocumentRow): string | undefined => {
+  const whyNotSaved = (document: DocumentRow): string | undefined => {
     if (document.format !== 'markdown') return 'an HTML document is view-only: comment on it instead';
     if (document.editable !== 1) return 'it is outside its agent\'s worktree, so it is view-only here: edit it there';
-    let link: boolean;
-    try {
-      link = lstatSync(document.path).isSymbolicLink();
-    } catch {
-      return 'the file is gone: it was moved or deleted since it was shown';
-    }
-    if (link || realPath(document.path) !== document.path) return 'the file has been made a link since it was shown, so it isn\'t written: show it again';
-    return undefined;
+    return whyNotWritable(document.path);
   };
 
   const host: DocumentHost = {
@@ -321,7 +286,7 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
 
     save(documentId, text, baseVersion, force = false) {
       let document = row(documentId);
-      const refused = whyNotWritable(document);
+      const refused = whyNotSaved(document);
       if (refused !== undefined) throw invalidParams(refused);
       if (text.length > MAX_PLAN_LENGTH) throw invalidParams(`the document must be at most ${MAX_PLAN_LENGTH} characters`);
       // Its text, whatever its stat says: a rewrite that kept its time is still one.
@@ -355,10 +320,20 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
           overwritten && document.written_by === 'agent'
             ? `[agent-board] The user kept their version of ${where} over your v${document.version} (now v${saved.version}), which undoes your changes since v${baseVersion}. The file is already changed:`
             : `[agent-board] The user edited ${where} (v${saved.version}). The file is already changed; you don't need to apply this:`;
-        const body = diff.length <= MAX_TOLD_DIFF ? diff : `${diff.slice(0, MAX_TOLD_DIFF)}\n… (more: read the file)`;
-        queue(saved.session_id, `${head}\n${body}`);
+        queue(saved.session_id, `${head}\n${toldDiff(diff)}`);
       }
       return toSummary(saved);
+    },
+
+    userWrote(sessionId, path) {
+      const document = selectByPath.get(sessionId, path) as unknown as DocumentRow | undefined;
+      if (document === undefined) return;
+      const read = readText(path);
+      if (!('text' in read) || hashOf(read.text) === document.hash) return;
+      const { mtimeMs, size } = statSync(path);
+      seenStat.set(document.id, `${mtimeMs}:${size}`);
+      recordWrite(document, read.text, 'user');
+      changed(sessionId);
     },
 
     comment(documentId, text) {

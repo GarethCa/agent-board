@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { launch, screen, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { centreOf, drag, settledBox } from './board-helpers.ts';
 
 // An agent shows the user a document through the board MCP: a Document tab in its window, and a card on the board. The
 // user edits a Markdown one there, which writes the file and tells the agent what changed. The fake claude's
@@ -149,5 +150,89 @@ test('esc leaves Edit with nothing written, and an HTML document is view-only wi
     await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
     await expect(screen(window)).toContainText('The user commented on bench.html (v1):', { timeout: TURN_MS });
     await expect(screen(window)).toContainText('Was this with WAL on?', { timeout: TURN_MS });
+  });
+});
+
+test('a selected document card resizes from a side and a corner, undoes in one step, and keeps its size through the slim bar', async () => {
+  await withApp(async (page) => {
+    await spawn(page, 'Doc on the board: docs/long-plan.md');
+    const card = page.getByTestId('doc-card');
+    // How many of the preview's lines show whole inside the card, not clipped.
+    const shownLines = () =>
+      card.getByTestId('doc-card-preview').evaluate((body) => {
+        const end = body.getBoundingClientRect().bottom;
+        return [...body.querySelectorAll('li')].filter((line) => line.getBoundingClientRect().bottom <= end).length;
+      });
+    await expect(card.getByTestId('doc-card-preview')).toContainText('Step 14');
+    const linesBefore = await shownLines();
+    await expect(card).toBeVisible();
+    const saved = () =>
+      page.evaluate(() => window.agentBoard.items.list().then((all) => all.filter((item) => item.kind === 'document').map(({ width, height }) => [width, height])[0]));
+    const [width0, height0] = (await saved())!;
+
+    // Dragging the right side wider shows more of the page.
+    await card.click();
+    const side = await settledBox(page.locator('.react-flow__resize-control.line.right'));
+    const from = centreOf(side);
+    await drag(page, from, { x: from.x + 80, y: from.y });
+    await expect.poll(saved).toEqual([width0! + 80, height0]);
+
+    // A corner changes both; one undo step takes the corner drag back.
+    const corner = centreOf(await settledBox(page.locator('.react-flow__resize-control.handle.bottom.right')));
+    await drag(page, corner, { x: corner.x + 20, y: corner.y + 70 });
+    await expect.poll(saved).toEqual([width0! + 100, height0! + 70]);
+    // The preview fills the taller page: more of the document shows.
+    await expect.poll(shownLines).toBeGreaterThan(linesBefore);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect.poll(saved).toEqual([width0! + 80, height0]);
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect.poll(saved).toEqual([width0! + 100, height0! + 70]);
+
+    // The slim bar keeps its height; showing the page again restores the user's size.
+    await page.getByRole('button', { name: 'Collapse to a bar' }).click();
+    await expect(card).toHaveAttribute('data-collapsed', 'true');
+    await expect.poll(saved).toEqual([width0! + 100, 76]);
+    await page.getByRole('button', { name: 'Show the page' }).click();
+    await expect.poll(saved).toEqual([width0! + 100, height0! + 70]);
+  });
+});
+
+test("an agent's sidebar lists the documents it showed and what it pinned, each opening where it belongs; the user deletes a pin with Undo", async () => {
+  await withApp(async (window) => {
+    const agent = await spawn(window, 'Pins: notes/report.md');
+    await expect.poll(async () => (await latest(window, agent)).records.filter((record) => record.kind === 'pin').length, { timeout: TURN_MS }).toBe(4);
+    await agentTile(window, agent).getByTestId('tile-docs').click();
+    // The strip opens collapsed; its rail's Pins opens it.
+    await sessionWindow(window).getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Pins' }).click();
+    const details = sessionWindow(window).getByRole('complementary', { name: 'Session details' });
+
+    // The document it showed, which opens its Document tab.
+    const documents = details.getByTestId('details-document');
+    await expect(documents).toHaveCount(1);
+    await expect(documents).toContainText('Release 1.4 plan');
+    await expect(documents).toContainText('v1 · shown');
+
+    const pins = details.getByTestId('details-pin');
+    await expect(pins).toHaveCount(4);
+    await expect(pins.nth(0)).toContainText('Report');
+    await expect(pins.nth(1)).toContainText('shot.png');
+    await expect(pins.nth(2)).toContainText('localhost:9/preview');
+    await expect(pins.nth(3)).toContainText('Test logins');
+    await expect(pins.nth(3)).toContainText('Seeded 3 users: ann, bob, cy');
+
+    // A pinned Markdown file opens in a Doc tab; a link in a web tab.
+    await pins.nth(0).getByRole('button').first().click();
+    await expect(sessionWindow(window).getByTestId('doc-view').getByTestId('doc-body')).toContainText('Merge the flake fix first');
+    await pins.nth(2).getByRole('button').first().click();
+    await expect(sessionWindow(window).getByRole('tab', { name: 'localhost:9' })).toBeVisible();
+    await documents.getByRole('button').click();
+    await expect(docView(window)).toBeVisible();
+
+    // The user deletes a pin, and Undo brings it back.
+    await pins.nth(3).hover();
+    await pins.nth(3).getByRole('button', { name: 'Delete record' }).click();
+    await window.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(async () => (await latest(window, agent)).records.find((record) => record.key === 'note:Test logins')?.deletedAt).toBeNull();
+    await expect(pins.nth(3)).not.toHaveAttribute('data-gone');
   });
 });

@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
-import { TEXT_FONT_SIZES } from '@agent-board/daemon/protocol';
+import { useState, type ReactNode } from 'react';
+import { TEXT_FONT_SIZES, type ColorSlot } from '@agent-board/daemon/protocol';
 import { Minus, Plus } from 'lucide-react';
 import { stepFontSize } from './text-style';
 import { NodeToolbar, Position } from '@xyflow/react';
-import { Button, Swatch } from '../../ui';
-import { themedColor } from '../../board-colors';
+import { Button, Input, Popover, Swatch } from '../../ui';
+import { slotName, slotToken } from '../../board-colors';
 
 /** The bar above a selected text item or shape: floats over it, keeping its size at any zoom. */
 export function ItemStyleBar({ label, visible, children }: { label: string; visible: boolean; children: ReactNode }) {
@@ -24,27 +24,131 @@ export const BarSeparator = () => <span className="item-bar-sep" aria-hidden="tr
 
 export const BarLabel = ({ children }: { children: ReactNode }) => <span className="item-bar-label">{children}</span>;
 
-/** A colour to pick, `null` for none (drawn struck through). */
+/**
+ * A colour to pick, as the board draws it (`paint`), `null` for none (drawn struck through). A fill's is ringed in
+ * `edge`, its outline's colour; a `fixed` one, which no theme changes, is marked so.
+ */
 export function BarSwatch({
   name,
-  value,
+  paint,
+  edge,
+  fixed = false,
+  title,
   pressed,
   onPick,
 }: {
   name: string;
-  value: string | null;
+  paint: string | null;
+  edge?: string;
+  fixed?: boolean;
+  title?: string;
   pressed: boolean;
   onPick: () => void;
 }) {
   return (
     <Swatch
       className="item-bar-swatch"
-      data-none={value === null || undefined}
-      color={value === null ? 'transparent' : themedColor(value)}
+      data-none={paint === null || undefined}
+      data-fixed={fixed || undefined}
+      edge={edge}
+      color={paint ?? 'transparent'}
       aria-label={name}
+      title={title}
       pressed={pressed}
       onClick={onPick}
     />
+  );
+}
+
+const HEX = /^#?([0-9a-f]{6})$/i;
+
+/** The `#` at the end of a row of colours: a fixed `#rrggbb` to type, which stays as it is in every theme. */
+function FixedColorButton({ name, color, onPick }: { name: string; color: string; onPick(hex: string): void }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(color);
+  const typed = HEX.exec(draft.trim())?.[1];
+  const pick = () => {
+    if (typed === undefined) return;
+    setOpen(false);
+    onPick(`#${typed.toLowerCase()}`);
+  };
+  return (
+    <Popover
+      aria-label={name}
+      className="item-bar-hex"
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setDraft(color);
+        setOpen(next);
+      }}
+      side="bottom"
+      content={
+        <form
+          className="item-bar-hex-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            pick();
+          }}
+        >
+          <Input
+            size="sm"
+            aria-label="Hex colour"
+            aria-invalid={typed === undefined || undefined}
+            value={draft}
+            spellCheck={false}
+            autoFocus
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <Button size="sm" type="submit" disabled={typed === undefined}>
+            Set
+          </Button>
+          <span className="item-bar-hex-hint">Stays the same in every theme</span>
+        </form>
+      }
+    >
+      <Button variant="ghost" size="sm" className="item-bar-button item-bar-hex-button" aria-label={name} tooltip="Fixed colour">
+        #
+      </Button>
+    </Popover>
+  );
+}
+
+/**
+ * A row's theme colours to pick (`slots`), each named `label` and the slot, then the fixed colour the item has, if it
+ * has one, and the `#` that sets one.
+ */
+export function SlotSwatches({
+  label,
+  slots,
+  slot,
+  color,
+  onPick,
+  onFixed,
+}: {
+  label: string;
+  slots: readonly ColorSlot[];
+  /** The slot the item's colour is in, or null for a fixed `color`. */
+  slot: ColorSlot | null;
+  color: string;
+  onPick(slot: ColorSlot): void;
+  onFixed(hex: string): void;
+}) {
+  return (
+    <>
+      {slots.map((each) => (
+        <BarSwatch
+          key={each}
+          name={`${label} ${each}`}
+          title={`${slotName(each)} · follows the theme`}
+          paint={slotToken(each)}
+          pressed={slot === each}
+          onPick={() => onPick(each)}
+        />
+      ))}
+      <BarSeparator />
+      {slot === null && <BarSwatch name={`${label} ${color}, fixed`} title={`${color} · fixed`} paint={color} fixed pressed onPick={() => onFixed(color)} />}
+      <FixedColorButton name={`${label}: fixed colour`} color={color} onPick={onFixed} />
+    </>
   );
 }
 

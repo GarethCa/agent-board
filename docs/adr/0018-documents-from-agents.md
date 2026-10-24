@@ -34,16 +34,16 @@ An agent often has more to show than its terminal reads well: a design, a findin
 
 - **A document card is a board item** (`document`), not drawn from the document as a question card is (ADR-0014): the user moves it, collapses it to a slim bar, and takes it off the board, and it survives a restart with the board. Its data is the document's id and its agent as they were then (name, harness, role), so it still says whose it was; what it shows of the document (version, "you edited", the first lines) is read from the agent's documents as they are now.
 - **It is put beside its agent's tile**, to its right or the nearest spot clear of what is there (`spotBesideAgent`), and tied to it by the agent note's dashed tether. One card per document: showing it on the board again adds none.
-- **Taking it off the board leaves the document**, a tab of its agent and counted on its tile.
+- **Taking it off the board leaves the document**, a tab of its agent and counted on its tile, and listed in its sidebar's Documents section (ADR-0010).
 
 ## Plans are documents with a decision
 
-- **`show_doc` with `plan`** reads the file and presents it as `present_plan` does, waiting for the decision; `present_plan` stays as it was, so either works. A plan keeps its own versioned store and its held call (ADR-0014): a plan's body is the version decided on, kept even once the file moves on, which a live document can't be.
-- **The Plan tab reads as a document** with its type tag (PLAN) beside its title and the decision bar under it.
+- **`show_doc` with `plan`** reads the file and presents it as `present_plan` does, waiting for the decision, and with `on_board` puts a plan card beside the agent's tile; it is the documented way in, and `present_plan` is kept for agents that call it. A plan keeps its own versioned store and its held call (ADR-0014): a plan's body is the version decided on, kept even once the file moves on, which a live document can't be. The plan keeps its file's real path, so an approved edit of the user's is written there.
+- **The Plan tab reads as a document** with its type tag (PLAN) beside its title and the decision bar under it, and edits a waiting Markdown plan as the Document tab does. Saving makes the user's version, not a write to the file: a decision is on a fixed text (ADR-0014), and the file is written only once that version is approved.
 
 ## Considered options
 
 - **Only sending the diff, for the agent to apply.** Rejected by the user: the file would disagree with what the user sees until the agent acts, and an agent mid-turn might never apply it.
 - **Storing each version's text**, as plans do. Rejected for documents: the file is the agent's working copy and changes often; a copy per write would grow without bound, and git already keeps what matters. A plan keeps its body because its decision is about that text.
 - **A document card drawn from the document, like a question card.** Rejected: a card the user placed and collapsed should stay where they left it across restarts, which a board item already does, with undo, selection and zones.
-- **Folding plans into the documents table.** Deferred: a plan given inline has no file, and its held call and versions are already settled (ADR-0014). The fold is in the tool and the tab. The rest (a plan from a file as a document with a decision, its card on the board, and editing it before approving it, "approved, with your edits") is a follow-up of its own.
+- **Folding plans into the documents table.** Rejected: a plan given inline has no file, and its held call and versions are already settled (ADR-0014). The fold is in the tool, the tab and the card: a plan's card and its edit before approval ("Approve with my edits") are the plan's own (ADR-0014), on its own store.

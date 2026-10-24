@@ -14,7 +14,7 @@ export interface NeedsYouProps {
   onOpen(agent: Agent): void;
   /** Opens the board menu at its settings. */
   onSettings(): void;
-  /** Opens or closes the board master's panel. */
+  /** Opens or closes the Captain's panel. */
   onMaster(): void;
   /** Whether the master's panel is open. */
   masterOpen: boolean;
@@ -22,7 +22,7 @@ export interface NeedsYouProps {
 
 /**
  * The top-right island (chrome C): the Needs-you pill, which says how many agents wait for you and opens the inbox
- * over the board, the quiet count of agents on a command beside it, the board master's button, with the same count, and
+ * over the board, the quiet count of agents on a command beside it, the Captain's button, with the same count, and
  * a gear that opens the board menu at its settings.
  */
 export function NeedsYou({ agents, onOpen, onSettings, onMaster, masterOpen }: NeedsYouProps) {
@@ -70,16 +70,16 @@ export function NeedsYou({ agents, onOpen, onSettings, onMaster, masterOpen }: N
         className="master-button"
         data-testid="master-button"
         aria-pressed={masterOpen}
-        aria-label="Master"
-        title={`The board master (${keyText('move.master')})`}
+        aria-label="Captain"
+        title={`The Captain (${keyText('move.master')})`}
         icon={
           <span className="master-glyph" aria-hidden>
-            M
+            C
           </span>
         }
         onClick={onMaster}
       >
-        <span className="master-button-label">Master</span>
+        <span className="master-button-label">Captain</span>
         {count > 0 && <span className="master-button-count">{count}</span>}
       </Button>
       <ToolButton size="sm" icon={<SettingsIcon />} label="Settings" hint="Settings, in the board menu" onClick={onSettings} />

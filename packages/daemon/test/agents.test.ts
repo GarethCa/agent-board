@@ -225,17 +225,6 @@ describe('Claude agents', () => {
     expect(start.payload.cwd).toBe(agent.cwd);
   });
 
-  it('refuses to start an agent in an unbound zone with no default repo, unless it is given a repo', async () => {
-    const { client } = await agentDaemon('output');
-    const zone = await client.call('zone.addUnbound', { name: 'Ideas', x: 0, y: 0 });
-
-    await expect(client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE })).rejects.toMatchObject({
-      code: RPC_ERROR.invalidParams,
-      message: 'Ideas has no repo: pick one to start the agent in',
-    });
-    expect(await client.call('agent.list')).toEqual([]);
-  });
-
   it('marks a rate-limited turn, and a crash as failed', async () => {
     const limited = await agentDaemon('rate-limit');
     const zone = await addZone(limited.client, tempRepo());
@@ -411,6 +400,18 @@ describe('Claude agents', () => {
       { zoneId: other.id, position: across.position },
       { zoneId: zone.id, position: within.position },
     ]);
+  });
+
+  it('saves the slot the board worked out for a tile with no place only while it has none: a place given meanwhile stays', async () => {
+    const first = await agentDaemon('output');
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go', ...SIZE });
+    const slot = { sessionId: agent.sessionId, zoneId: zone.id, x: 1020, y: 44, ifUnplaced: true };
+    // Placed (by an arrange) before the board's slot is saved: the slot is not saved over it.
+    await first.client.call('agent.move', { sessionId: agent.sessionId, zoneId: zone.id, x: 292, y: 748 });
+    expect((await first.client.call('agent.move', slot)).position).toMatchObject({ x: 292, y: 748 });
+    const other = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go too', ...SIZE });
+    expect((await first.client.call('agent.move', { ...slot, sessionId: other.sessionId })).position).toMatchObject({ x: 1020, y: 44 });
   });
 
   it('moves anywhere: into another repo\'s zone, an unbound zone or loose on the board, keeping its own repo, across a restart', async () => {

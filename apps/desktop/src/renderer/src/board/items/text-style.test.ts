@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TEXT_FONT_SIZE, MIN_TEXT_FONT_SIZE } from '@agent-board/daemon/protocol';
+import { MAX_TEXT_FONT_SIZE, MIN_TEXT_FONT_SIZE, SHAPE_TYPES } from '@agent-board/daemon/protocol';
 import { clampFontSize, completeShapeData, newShapeData, shapeData, stepFontSize, textData } from './text-style';
 
 describe('textData font size', () => {
@@ -59,6 +59,10 @@ describe('shapeData text style', () => {
     expect(newShapeData('rectangle').mono).toBe(false);
   });
 
+  it("reads a new shape of every kind as it was made, a class's mono and all", () => {
+    for (const shape of SHAPE_TYPES) expect(shapeData({ shape }), shape).toEqual(newShapeData(shape));
+  });
+
   it('keeps a font size within what a text item may have, and drops one that is not a number', () => {
     expect(shapeData({ fontSize: 4 }).fontSize).toBe(MIN_TEXT_FONT_SIZE);
     expect(shapeData({ fontSize: 9999 }).fontSize).toBe(MAX_TEXT_FONT_SIZE);
@@ -70,6 +74,21 @@ describe('shapeData text style', () => {
     expect(shapeData({ align: 'justify' }).align).toBe('center');
     expect(shapeData({ align: 'right', mono: true })).toMatchObject({ align: 'right', mono: true });
     expect(shapeData({ mono: 'yes' }).mono).toBe(false);
+  });
+});
+
+describe('colour slots', () => {
+  it('reads a slot while its colour is still the stored one, and the colour alone once something set only the colour', () => {
+    expect(textData({ color: '#3b5bdb', colorSlot: 'blue' }).colorSlot).toBe('blue');
+    expect(textData({ color: '#c92a2a', colorSlot: 'blue' }).colorSlot).toBe('red');
+    expect(textData({ color: '#123456', colorSlot: 'blue' }).colorSlot).toBeNull();
+    expect(textData({ color: '#3b5bdb', colorSlot: null }).colorSlot).toBeNull();
+    expect(textData({ color: '#3b5bdb', colorSlot: 'constructor' }).colorSlot).toBe('blue');
+    expect(shapeData({ fill: '#d3f9d8', fillSlot: 'yellow', stroke: '#e8590c', strokeSlot: 'blue', textColor: '#2b2a27', textColorSlot: 'ink' })).toMatchObject({
+      fillSlot: 'green',
+      strokeSlot: null,
+      textColorSlot: 'ink',
+    });
   });
 });
 

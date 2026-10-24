@@ -9,7 +9,7 @@ import { join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { stopGroup } from './flow-conditions.ts';
 import { applyGateEvent, finishGateSteps, lineStep, parseGateLine } from './gate-output.ts';
-import { failurePaste, gateCommandArgv, noGateCommand, shortCommit, type GateRun } from './gate-rules.ts';
+import { failurePaste, gateCommandArgv, noGateCommand, noRepoWhy, shortCommit, type GateRun } from './gate-rules.ts';
 import { runGit } from './git.ts';
 import { invalidParams, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import { lineSplitter, type Agent, type DaemonEvent, type DaemonMethods, type GateLog, type GateStatus } from './protocol.ts';
@@ -176,7 +176,8 @@ export function createGateHost(options: GateHostOptions): GateHost {
   }
 
   async function readWorktree(agent: Agent): Promise<WorktreeState> {
-    if (!existsSync(agent.worktree)) return { head: null, branch: null, uncommitted: 0 };
+    // Outside git, as its group's own folder is, there is nothing for git to read.
+    if (agent.plainFolder || !existsSync(agent.worktree)) return { head: null, branch: null, uncommitted: 0 };
     const [head, branch, status] = await Promise.all([
       runGit(agent.worktree, ['rev-parse', '--verify', '--quiet', 'HEAD']),
       runGit(agent.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
@@ -230,6 +231,7 @@ export function createGateHost(options: GateHostOptions): GateHost {
   async function start(sessionId: string): Promise<GateRun> {
     const agent = requireAgent(sessionId);
     if (running.has(sessionId)) throw invalidParams(`The gate is already running for ${agent.name}.`);
+    if (agent.plainFolder) throw invalidParams(noRepoWhy(agent.name));
     const { command, zone } = options.command(sessionId);
     if (command === null) throw invalidParams(noGateCommand(zone));
     let argv: string[];

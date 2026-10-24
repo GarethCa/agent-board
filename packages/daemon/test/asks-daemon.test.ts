@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
-import { BOARD_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type Harness } from '../src/protocol.ts';
+import { readFileSync } from 'node:fs';
+import { BOARD_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type Harness, type PlanCardData } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -113,6 +114,31 @@ describe('an agent asking the user through the board MCP', () => {
     await expect(client.call('plan.decide', { sessionId: agent.sessionId, planId: second.plan!.id, outcome: 'rejected' })).rejects.toThrow(/decided already/);
   });
 
+  it('puts a plan from a file on the board, takes the user’s edit, and approves their version into the file', async () => {
+    const { client, recorder, start, until } = await askDaemon();
+    const agent = await start('Plan doc on the board: docs/migration.md');
+    const shown = await until(agent.sessionId, (seen) => seen.plan?.decision === null);
+    expect(shown.plan).toMatchObject({ version: 1, title: 'Zone id migration', author: 'agent' });
+    const file = shown.plan!.path!;
+    expect(file).toMatch(/docs\/migration\.md$/);
+    await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'plan')).toHaveLength(1);
+    const [card] = (await client.call('item.list')).filter((item) => item.kind === 'plan');
+    expect(card!.data as unknown as PlanCardData).toEqual({ agent: expect.objectContaining({ sessionId: agent.sessionId }), title: 'Zone id migration' });
+    expect(card!.zoneId).toBe(agent.zoneId);
+
+    const edited = readFileSync(file, 'utf8').replace('- Backfill from the board file', '- Backfill from the board file, with a down step');
+    const mine = await client.call('plan.edit', { sessionId: agent.sessionId, planId: shown.plan!.id, body: edited });
+    expect(mine).toMatchObject({ version: 2, author: 'user', decision: null });
+    expect((await until(agent.sessionId, (seen) => seen.plan?.version === 2)).state).toBe('waiting');
+    await client.call('plan.decide', { sessionId: agent.sessionId, planId: mine.id, outcome: 'approved' });
+    await recorder.waitForText(agent.sessionId, 'The user approved plan v2, their edit of your v1.');
+    await recorder.waitForText(agent.sessionId, '+ - Backfill from the board file, with a down step');
+    expect(readFileSync(file, 'utf8')).toBe(edited);
+
+    await client.call('agent.delete', { sessionId: agent.sessionId, force: true });
+    await expect.poll(async () => (await client.call('item.list')).filter((item) => item.kind === 'plan')).toEqual([]);
+  });
+
   it.each<Harness>(['claude', 'codex'])('lets a %s agent ask for a question card on the board, which only the user moves', async (harness) => {
     const { daemon, client, recorder, start, until } = await askDaemon();
     const agent = await start('Identify, then ask on the board: Which cache? | Redis | CDN only', harness);
@@ -134,7 +160,7 @@ describe('an agent asking the user through the board MCP', () => {
     await recorder.waitForText(agent.sessionId, 'The user answered: Redis');
   });
 
-  it('keeps the answering to the user: a connection holding the agent’s board token can’t answer, decide or read plans', async () => {
+  it('keeps the answering to the user: a connection holding the agent’s board token can’t answer, decide, edit or read plans', async () => {
     const { daemon, client, recorder, start, until } = await askDaemon();
     const agent = await start('Identify, then ask: Which cache? | Redis | CDN only');
     const { ask } = await until(agent.sessionId, (seen) => seen.ask !== null);
@@ -146,6 +172,7 @@ describe('an agent asking the user through the board MCP', () => {
     await expect(asAgent.call('ask.answer', { sessionId: agent.sessionId, askId: ask!.id, answer: { option: 0 } })).rejects.toMatchObject(refused);
     await expect(asAgent.call('plan.decide', { sessionId: agent.sessionId, planId: 'p', outcome: 'approved' })).rejects.toMatchObject(refused);
     await expect(asAgent.call('plan.list', { sessionId: agent.sessionId })).rejects.toMatchObject(refused);
+    await expect(asAgent.call('plan.edit', { sessionId: agent.sessionId, planId: 'p', body: '# Mine' })).rejects.toMatchObject(refused);
     expect((await client.call('agent.list'))[0]!.ask?.id).toBe(ask!.id);
 
     // The user's own connection answers it.

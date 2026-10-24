@@ -21,6 +21,7 @@ const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [st
   issue: ['issue card', 'issue cards'],
   'agent-note': ['agent note', 'agent notes'],
   document: ['document', 'documents'],
+  plan: ['plan card', 'plan cards'],
   clock: ['clock', 'clocks'],
   zone: ['zone', 'zones'],
   agent: ['agent', 'agents'],

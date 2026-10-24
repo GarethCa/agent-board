@@ -93,6 +93,17 @@ function isManagedClonePath(reposDir: string, path: string): boolean {
   return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside) && inside.split(sep).length === 2;
 }
 
+/** A group's own folder (`Zone.groupFolder`), where its agents with no repo run: `<groupsDir>/<zone id>`. */
+export function groupFolder(groupsDir: string, zoneId: string): string {
+  return join(groupsDir, zoneId);
+}
+
+/** Whether `path` is a group's own folder, or in one: a plain folder the app made, outside git. */
+export function inGroupFolder(groupsDir: string, path: string): boolean {
+  const inside = relative(groupsDir, path);
+  return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside);
+}
+
 /** The `zones` table, shared by the `zone.*` handlers and the clones they start. */
 export interface ZoneTable {
   get(id: string): Zone;
@@ -127,6 +138,8 @@ export function createZoneTable(
   cloneProgress: (id: string) => Pick<ZoneClone, 'phase' | 'percent'> | undefined,
   /** Where managed clones are (`<reposDir>/<owner>/<repo>`). */
   reposDir: string,
+  /** Where groups' own folders are (`groupFolder`). */
+  groupsDir: string,
 ): ZoneTable {
   const selectAll = db.prepare('SELECT * FROM zones ORDER BY rowid');
   const selectOne = db.prepare('SELECT * FROM zones WHERE id = ?');
@@ -187,6 +200,7 @@ export function createZoneTable(
         : { repo: row.clone_repo, path: row.clone_path, phase: null, percent: null, ...cloneProgress(row.id) },
     managedClone: row.repo_root !== null && row.folder === '' && isManagedClonePath(reposDir, row.repo_root),
     defaultRepo: row.default_repo,
+    groupFolder: row.repo_root === null ? groupFolder(groupsDir, row.id) : null,
     createdAt: row.created_at,
   });
   const find = (id: string) => {

@@ -99,6 +99,12 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.addNote': 'add-note',
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
+  'orchestrator.addShape': 'add-shape',
+  'orchestrator.editShape': 'edit-shape',
+  'orchestrator.removeShape': 'remove-shape',
+  'orchestrator.connect': 'connect',
+  'orchestrator.editConnector': 'edit-connector',
+  'orchestrator.removeConnector': 'remove-connector',
   'orchestrator.addClock': 'add-clock',
   'orchestrator.removeClock': 'remove-clock',
   'orchestrator.setRole': 'set-role',
@@ -617,15 +623,19 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               throw outOfScope(`you are ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes: ask the agent that started you to start it`);
             }
             if (!SCOPES[me.orchestrate].zone(me, zone)) throw outOfScope(`${zone.name} is outside your scope (${scopeText(me)})`);
-            // The board master's lead in a zone whose switch is off could start no one: the user hears of it instead (ADR-0019).
+            // The Captain's lead in a zone whose switch is off could start no one: the user hears of it instead (ADR-0019).
             if (me.agent?.master === true && !zone.agentsOrchestrate && isOrchestratorRole(optionalStringParam(p, 'role') ?? null)) {
               throw invalidParams(
                 `${zone.name} doesn't let its agents orchestrate, so an orchestrator started there could start no one: tell the user with agent-board needs-you, who can turn its Let agents orchestrate on or start its orchestrator`,
               );
             }
             checkText(prompt);
+            // A group's agent works in the repo it is given; a bound zone's, in the zone's own.
+            const repo = optionalStringParam(p, 'repo');
+            if (repo !== undefined && !isAbsolute(repo)) throw invalidParams(`repo path must be absolute, got ${repo}`);
+            if (repo !== undefined && zone.repoRoot !== null) throw invalidParams(`${zone.name} is bound to its own repo: its agents work there`);
             const baseBranch = optionalStringParam(p, 'baseBranch');
-            const repoRoot = zone.repoRoot ?? zone.defaultRepo;
+            const repoRoot = repo ?? zone.repoRoot ?? zone.defaultRepo;
             if (baseBranch !== undefined) {
               if (repoRoot === null) throw invalidParams(`${zone.name} has no repo to cut a branch from`);
               await checkBaseConfig(repoRoot, baseBranch);
@@ -639,6 +649,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 role: optionalStringParam(p, 'role'),
                 noTemplate: optionalBooleanParam(p, 'noTemplate'),
                 name: optionalStringParam(p, 'name'),
+                ...(repo === undefined ? {} : { repo: { path: repo } }),
                 branch: optionalStringParam(p, 'branch'),
                 baseBranch,
                 issueId: optionalStringParam(p, 'issueId'),

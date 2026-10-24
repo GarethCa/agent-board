@@ -9,6 +9,8 @@ import {
   BOARD_ITEM_KINDS,
   CLOCK_ACTIONS,
   CLOCK_RESULTS,
+  COLOR_SLOTS,
+  FILL_SLOTS,
   HARNESSES,
   IMAGE_EXTENSIONS,
   issueCardProblem,
@@ -67,6 +69,11 @@ function checkColor(owner: string, data: Record<string, unknown>, key: string, a
   if (typeof value !== 'string' || !HEX_COLOR.test(value)) {
     throw invalidParams(`${owner}'s ${key} must be #rrggbb${allowNone ? ' or null' : ''}`);
   }
+}
+
+/** A colour's theme slot: one of `slots`, or null for its `#rrggbb` as it is. Missing in data saved before slots. */
+function checkSlot(owner: string, data: Record<string, unknown>, key: string, slots: readonly string[]): void {
+  if (data[key] !== undefined && data[key] !== null) checkOneOf(owner, data, key, slots);
 }
 
 function checkOneOf(owner: string, data: Record<string, unknown>, key: string, options: readonly unknown[]): void {
@@ -133,6 +140,13 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkOneOf('a document card', data, 'format', PLAN_FORMATS);
     checkBoolean('a document card', data, 'collapsed');
   },
+  plan: (data) => {
+    const agent = data.agent as Record<string, unknown> | undefined;
+    if (!isObject(agent) || typeof agent.sessionId !== 'string' || typeof agent.name !== 'string' || !isOneOf(HARNESSES, agent.harness)) {
+      throw invalidParams("a plan card's agent must be { sessionId, name, harness, role }");
+    }
+    checkText('a plan card', data, 'title');
+  },
   image: (data) => {
     if (!isImageRef(data, IMAGE_ITEM_EXTENSIONS)) throw invalidParams("an image's data must be a stored image's sha256 and ext");
   },
@@ -173,6 +187,7 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkBoolean(owner, data, 'italic');
     checkBoolean(owner, data, 'wrap');
     checkColor(owner, data, 'color');
+    checkSlot(owner, data, 'colorSlot', COLOR_SLOTS);
   },
   clock: (data) => {
     const owner = 'a clock';
@@ -207,6 +222,9 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkColor(owner, data, 'fill', true);
     checkColor(owner, data, 'stroke');
     checkColor(owner, data, 'textColor');
+    checkSlot(owner, data, 'fillSlot', FILL_SLOTS);
+    checkSlot(owner, data, 'strokeSlot', COLOR_SLOTS);
+    checkSlot(owner, data, 'textColorSlot', COLOR_SLOTS);
     if (typeof data.strokeWidth !== 'number' || !(data.strokeWidth >= 0 && data.strokeWidth <= 20)) {
       throw invalidParams("a shape's strokeWidth must be a number from 0 to 20");
     }

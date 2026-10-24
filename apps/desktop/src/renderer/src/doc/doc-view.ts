@@ -55,10 +55,13 @@ export function changedLineCount(before: string, after: string): number {
   return Math.max(added, removed, 1);
 }
 
-/** The Edit bar's hint: the keys while nothing is changed (each undefined while the key setting turns it off), else how much is. */
-export function editHint(changed: number, saveKey: string | undefined, cancelKey: string | undefined): string {
+/**
+ * The Edit bar's hint: the keys while nothing is changed (each undefined while the key setting turns it off), else how
+ * much is, and what saving does besides (`does`).
+ */
+export function editHint(changed: number, saveKey: string | undefined, cancelKey: string | undefined, does = 'tells the agent'): string {
   const count = `${changed} ${changed === 1 ? 'change' : 'changes'}`;
-  if (changed > 0) return saveKey === undefined ? `${count} · Save tells the agent` : `${count} · ${saveKey} saves and tells the agent`;
+  if (changed > 0) return saveKey === undefined ? `${count} · Save ${does}` : `${count} · ${saveKey} saves and ${does}`;
   return saveKey === undefined || cancelKey === undefined ? 'Cancel or Save' : `${cancelKey} cancels · ${saveKey} saves`;
 }
 

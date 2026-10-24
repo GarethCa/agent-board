@@ -131,6 +131,7 @@ describe('subagents on a Hybrid tile', () => {
         reviewCap: 3,
         ownsWorktree: true,
         master: false,
+        plainFolder: false,
         orchestrate: null,
         spawnedBy: null,
         startup: null,

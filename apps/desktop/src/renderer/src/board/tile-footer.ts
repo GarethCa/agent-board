@@ -40,6 +40,8 @@ export function tileFooter(agent: Agent, shells = 0): TileFooter {
   if (agent.model !== null) shown.push({ kind: 'model', model: agent.model });
   if (agent.role !== null) shown.push({ kind: 'role', role: agent.role, name: agent.roleName });
   if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
+  // Until its session's first hook, nothing else can apply: no work to finish, branch to put up, schedule to run or shell to open.
+  if (isStarting(agent)) return { shown, folded: [] };
   if (agent.workFinishedAt !== null) shown.push({ kind: 'finished', at: agent.workFinishedAt });
   const pullRequests = [...agent.pullRequests.map((pr) => ({ kind: 'pr' as const, pr })), ...agent.pushedPullRequests.map((pr) => ({ kind: 'pr' as const, pr, pushed: true as const }))];
   shown.push(...pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS));
@@ -49,6 +51,11 @@ export function tileFooter(agent: Agent, shells = 0): TileFooter {
 
   const folded = pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((badge) => badgeLine(badge, shells));
   return { shown, folded };
+}
+
+/** Whether the agent is still starting: its tile shows its start's steps, and only the badges that already apply. */
+export function isStarting(agent: Agent): boolean {
+  return agent.startup !== null && !agent.startup.failed;
 }
 
 /** A pull request's checks, in words. */

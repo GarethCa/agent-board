@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.6.1 (2026-10-24)
+
+- Arrange respects expanded tiles: lanes keep their own widths, new crew lands in its lane, turned items stay clear
+- An agent's sidebar lists every document it showed, and an agent can pin a file, a link or a note there
+- Plan card baselines show the Captain button, renamed from Master after they were taken
+- Shapes, text and connectors use the theme's twelve colour slots, with tinted fills, Accent on Tile and # for a fixed colour
+- Tethers route round a tile a tile gap from their note, at half the clearance where the whole doesn't fit
+- The board master is the Captain
+- Plans can be edited before approving (Approve with my edits), and a plan card on the board opens the decision
+- A starting tile fits: name, current step and harness, the rest folded into +N
+- An agent in a group with no repo runs in the group's own folder, outside git
+- Agents draw and read diagrams: shape and connector tools, and the board read shows a shape's sections and a connector's relation
+- A document card resizes by dragging its sides, and keeps its size through the slim bar
+- A note added near an expanded agent tile lands beside it, not under it
+
 ## v0.6.0 (2026-10-23)
 
 - A sturdier, faster release: retries for flaky e2e and visual tests, and reuse of a green main run

@@ -139,6 +139,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   reviewCap: 3,
   ownsWorktree: true,
   master: false,
+  plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
   unsent: null,
@@ -227,6 +228,41 @@ const STARTING: Agent = {
   subagents: [],
   pullRequests: [],
   startup: { output: '✻ Welcome to Claude Code · loading MCP…', failed: false },
+};
+/**
+ * A start an orchestrator made: a long name, an issue, a role, its orchestrator's status line, a repo outside its zone's
+ * and a model. It still fits its tile, the extra badges in the "+N"; the status line, "from" chip and repo tag stay hidden
+ * until its first hook.
+ */
+const STARTING_BY_ORCHESTRATOR: Agent = {
+  ...STARTING,
+  sessionId: 'gallery-starting-orchestrated',
+  name: 'Rework the movable sessions follow-up so the dock keeps up',
+  role: 'implementer',
+  roleName: 'implementer',
+  issue: { provider: 'linear', id: 'ACME-184', title: 'Movable sessions follow-up', url: '' },
+  spawnedBy: 'gallery-orchestrator',
+  status: { summary: 'Starting up', progress: null, updatedAt: AT, setBy: 'web-app orchestrator' },
+  startup: { output: '✻ Welcome to Claude Code · loading MCP servers and the project’s settings…', failed: false },
+};
+/** A reviewer an orchestrator started: while it starts its "Review · r1" leads its long name, in place of a subtitle row. */
+const STARTING_REVIEWER: Agent = {
+  ...STARTING_BY_ORCHESTRATOR,
+  sessionId: 'gallery-starting-reviewer',
+  name: 'Rework the movable sessions follow-up so the dock keeps up · review r1',
+  role: 'reviewer',
+  roleName: 'reviewer',
+  reviewOf: 'gallery-starting-orchestrated',
+};
+/** A start an orchestrator made whose harness exited: with its long name and status line it still shows its error, Retry and Delete inside the tile. */
+const START_EXITED_BY_ORCHESTRATOR: Agent = {
+  ...STARTING_BY_ORCHESTRATOR,
+  sessionId: 'gallery-start-exited-orchestrated',
+  state: 'failed',
+  notice: null,
+  endedAt: AT,
+  exitCode: 1,
+  startup: { output: 'ANTHROPIC_API_KEY not set: export it, or log in with claude login, then retry the start', failed: true },
 };
 const START_EXITED: Agent = {
   ...galleryAgent('failed'),
@@ -338,6 +374,24 @@ export function TileGallery() {
             <HybridTile id={`start:${start.sessionId}`} tile={{ label: start.name, harness: start.harness, start }} />
           </div>
         ))}
+        <div style={AGENT_TILE_SIZE}>
+          <HybridTile
+            id={STARTING_BY_ORCHESTRATOR.sessionId}
+            tile={{
+              label: STARTING_BY_ORCHESTRATOR.name,
+              harness: STARTING_BY_ORCHESTRATOR.harness,
+              agent: STARTING_BY_ORCHESTRATOR,
+              repo: 'monorepo-with-a-long-name',
+              from: { sessionId: 'gallery-orchestrator', name: 'web-app orchestrator' },
+            }}
+          />
+        </div>
+        <div style={AGENT_TILE_SIZE}>
+          <HybridTile id={STARTING_REVIEWER.sessionId} tile={{ label: STARTING_REVIEWER.name, harness: STARTING_REVIEWER.harness, agent: STARTING_REVIEWER }} />
+        </div>
+        <div style={AGENT_TILE_SIZE}>
+          <HybridTile id={START_EXITED_BY_ORCHESTRATOR.sessionId} tile={{ label: START_EXITED_BY_ORCHESTRATOR.name, harness: START_EXITED_BY_ORCHESTRATOR.harness, agent: START_EXITED_BY_ORCHESTRATOR }} />
+        </div>
         {[STARTING, START_EXITED].map((agent) => (
           <div key={agent.sessionId} style={AGENT_TILE_SIZE}>
             <HybridTile id={agent.sessionId} tile={{ label: agent.name, harness: agent.harness, agent }} />

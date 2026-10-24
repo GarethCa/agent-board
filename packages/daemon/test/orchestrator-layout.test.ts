@@ -120,6 +120,26 @@ describe('orchestrator.move', () => {
     expect(moved).toMatchObject({ x: slot.x + 2 * AGENT_TILE_SIZE.width + CREW_GAP + TILE_GAP, y: slot.y });
   });
 
+  it('slots the crew of an expanded lead beside it, right of its expanded edge, then down that side, never under it', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    await setup.client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: setup.zone.id, x: 40, y: 80 });
+    const open = { width: 960, height: 600 };
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${me.agent.sessionId}`, ...open }] });
+    const crew = [];
+    for (const name of ['one', 'two', 'three', 'four']) crew.push(await me.connection.call('orchestrator.spawn', { token: me.token, name }));
+    const { things } = await me.connection.call('orchestrator.map', { token: me.token });
+    const at = (agent: Agent) => things.find((thing) => thing.key === `agent:${agent.sessionId}`)!;
+    const right = 40 + open.width + CREW_GAP;
+    // Three to a row, as beside a compact lead.
+    expect(crew.map((agent) => [at(agent).x, at(agent).y])).toEqual([
+      [right, 80],
+      [right + COLUMN, 80],
+      [right + 2 * COLUMN, 80],
+      [right, 80 + ROW_STEP],
+    ]);
+  });
+
   it('moves a note, and grows the zone to hold what it moves there', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
@@ -271,6 +291,26 @@ describe('orchestrator.arrange', () => {
     // The user's note stays where it was.
     expect(rects.get('item:user note')).toMatchObject({ x: note.x, y: note.y });
     expect(await lastLine(setup.client)).toMatchObject({ action: 'arrange', targetName: 'web', outcome: 'done', detail: '4 tiles by issue, in rows' });
+  });
+
+  it("never lays a tile over the user's text or shapes, a rotated one by the room it takes turned", async () => {
+    const setup = await layoutDaemon();
+    const { me } = await messyCrew(setup);
+    const style = { size: 'body', fontSize: 14, minHeight: 0, bold: false, italic: false, align: 'left', color: '#2b2a27', wrap: false };
+    const shape = { shape: 'rectangle', fill: '#d3f9d8', stroke: '#2f9e44', strokeWidth: 2, dashed: false, textSize: 'body', fontSize: 14, bold: false, align: 'left', mono: false, attributes: '', methods: '', textColor: '#2b2a27' };
+    const zoneId = setup.zone.id;
+    await setup.client.call('item.create', { kind: 'text', zoneId, x: 320, y: 50, width: 200, height: 40, data: { ...style, text: 'Sprint goals' } });
+    await setup.client.call('item.create', { kind: 'shape', zoneId, x: 40, y: 420, width: 240, height: 140, data: { ...shape, text: 'box' } });
+    // A bar 600 by 40 turned upright: it takes 40 by 600 about its centre, not the box it was drawn in.
+    const bar = await setup.client.call('item.create', { kind: 'shape', zoneId, x: 240, y: 600, width: 600, height: 40, data: { ...shape, text: 'bar' } });
+    await setup.client.call('item.update', { id: bar.id, rotation: 90 });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const rects = await rectsIn(setup.client, zoneId);
+    expect(rects.get('item:Sprint goals')).toMatchObject({ x: 320, y: 50 });
+    expect(rects.get('item:box')).toMatchObject({ x: 40, y: 420 });
+    rects.set('item:bar', { x: 520, y: 320, width: 40, height: 600 });
+    expectNoOverlap(rects);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).overlaps).toEqual([]);
   });
 
   it('lays out a tile expanded in place at its expanded size, so nothing is under it', async () => {
@@ -781,6 +821,53 @@ describe('the zone map and arranging by itself', () => {
     expect([map.overlaps, map.offGrid]).toEqual([[], []]);
   });
 
+  it('with its own tile expanded and auto on, starts each agent below or right of it, the map clean', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const open = { width: 960, height: 600 };
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(me.agent), ...open }] });
+    await me.connection.call('orchestrator.arrange', { token: me.token, auto: true });
+    const crew = [];
+    for (const name of ['one', 'two', 'three']) crew.push(await me.connection.call('orchestrator.spawn', { token: me.token, name }));
+    const rects = await rectsIn(setup.client, setup.zone.id);
+    const at = { ...rects.get('lead')!, ...open };
+    rects.set('lead', at);
+    expectNoOverlap(rects);
+    for (const agent of crew) {
+      const tile = rects.get(agent.name)!;
+      expect(tile.y >= at.y + at.height || tile.x >= at.x + at.width).toBe(true);
+    }
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map.lanes.map((lane) => lane.slots.implementer)).toEqual(crew.map((agent) => [key(agent)]));
+    // Each lane's tiles beside its label, not out past the expanded tile's width.
+    expect({ overlaps: map.overlaps, offGrid: map.offGrid, widestGap: map.widestGap }).toEqual({ overlaps: [], offGrid: [], widestGap: 0 });
+  });
+
+  it("in rows, keeps each lane's tiles and note side by side when another lane's tile is expanded", async () => {
+    const setup = await layoutDaemon();
+    const { me, impl } = await crewWithLanes(setup);
+    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(impl), width: 1340, height: 600 }] });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map.lanes).toHaveLength(2);
+    // The one slot is the rail's room between the implementer and its reviewer, kept in every lane: not the expanded width.
+    expect({ overlaps: map.overlaps, offGrid: map.offGrid, widestGap: map.widestGap }).toEqual({ overlaps: [], offGrid: [], widestGap: 1 });
+  });
+
+  it('with auto off, maps a tile expanded after the arrange as the board draws it: what it grew over pushed aside, no overlap', async () => {
+    const setup = await layoutDaemon();
+    const { me, impl } = await crewWithLanes(setup);
+    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(impl), width: 960, height: 600 }] });
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map.arrange.auto).toBe(false);
+    // Laid out at its expanded size, it is.
+    expect(map.things.find((thing) => thing.key === key(impl))).toMatchObject({ width: 960, height: 600 });
+    expect(map.overlaps).toEqual([]);
+  });
+
   it('lays lanes out as columns or cards, its note under its label as tall as its text needs, and back as rows', async () => {
     const setup = await layoutDaemon();
     const { me, impl, review } = await crewWithLanes(setup);
@@ -1083,6 +1170,89 @@ describe('notes an orchestrator makes', () => {
     expectNoOverlap(rects);
   });
 
+  describe.each([{ auto: false }, { auto: true }])('a note near an agent, auto-arrange $auto', ({ auto }) => {
+    const OPEN = { width: 960, height: 600 };
+
+    /** A crew of the lead with the first worker expanded in place (or not), then the zone's map: what a note near it leaves. */
+    async function noteNear(expanded: boolean, near: 'worker' | 'me', extra: object = {}) {
+      const setup = await layoutDaemon();
+      const me = await lead(setup, setup.zone.id);
+      const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
+      const target = near === 'worker' ? worker : me.agent;
+      // Expanded before the zone is laid out, so everything starts clear of it; the note is the only thing that could land on it.
+      if (expanded) await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${target.sessionId}`, ...OPEN }] });
+      await me.connection.call('orchestrator.arrange', { token: me.token, ...(auto ? { auto: true } : {}) });
+      const note = await me.connection.call('orchestrator.addNote', { token: me.token, text: 'Waiting on review', near: { kind: 'agent', id: target.sessionId }, ...extra });
+      const rects = await rectsIn(setup.client, setup.zone.id);
+      if (expanded) rects.set(target.name, { ...rects.get(target.name)!, ...OPEN });
+      return { setup, me, note, rects, map: await me.connection.call('orchestrator.map', { token: me.token }) };
+    }
+
+    it.each([
+      ['a compact tile', false, 'worker'],
+      ['an expanded tile', true, 'worker'],
+      ['the orchestrator\'s own expanded tile', true, 'me'],
+    ] as const)('leaves the map clean beside %s, expanded before the arrange (coverage; the regressions are below)', async (_name, expanded, near) => {
+      const { rects, map } = await noteNear(expanded, near);
+      expectNoOverlap(rects);
+      expect(map.overlaps).toEqual([]);
+    });
+
+    it.each(['worker', 'user'] as const)("keeps it off %s's tile, expanded after the zone was arranged, whatever the note's slot held", async (who) => {
+      const setup = await layoutDaemon();
+      const me = await lead(setup, setup.zone.id);
+      const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+      const user = await userAgent(setup.client, setup.zone.id, 'user');
+      await me.connection.call('orchestrator.arrange', { token: me.token, ...(auto ? { auto: true } : {}) });
+      const target = who === 'user' ? user : worker;
+      await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${target.sessionId}`, ...OPEN }] });
+      const note = await me.connection.call('orchestrator.addNote', { token: me.token, text: 'Waiting on review', near: { kind: 'agent', id: target.sessionId } });
+      const rects = await rectsIn(setup.client, setup.zone.id);
+      rects.set(target.name, { ...rects.get(target.name)!, ...OPEN });
+      const tile = rects.get(target.name)!;
+      const placed = (await setup.client.call('item.list')).find((item) => item.id === note.id)!;
+      // The expansion itself is drawn pushing its neighbours aside; what the note did is not to sit under it.
+      expect(clearOf(sizedFootprint(tile, tile), [{ x: placed.x, y: placed.y, width: placed.width, height: placed.height }])).toBe(true);
+      if (auto) expectNoOverlap(rects);
+    });
+
+    it("keeps an appended cluster note where it is when no tile is in its way, even as it grows", async () => {
+      const setup = await layoutDaemon();
+      const me = await lead(setup, setup.zone.id);
+      const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
+      await me.connection.call('orchestrator.arrange', { token: me.token, ...(auto ? { auto: true } : {}) });
+      const sticky = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note' && item.data.members !== undefined && String(item.data.text).includes('worker'))!;
+      const near = { kind: 'agent' as const, id: worker.sessionId };
+      for (let line = 0; line < 12; line++) await me.connection.call('orchestrator.addNote', { token: me.token, text: `line ${line} of what the worker is doing`, near });
+      const now = (await setup.client.call('item.list')).find((item) => item.id === sticky.id)!;
+      expect([now.x, now.y]).toEqual([sticky.x, sticky.y]);
+    });
+
+    it('appends the text, with the note below everything, when beside the tile would grow the zone over another', async () => {
+      const setup = await layoutDaemon();
+      const me = await lead(setup, setup.zone.id);
+      const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+      await me.connection.call('orchestrator.arrange', { token: me.token });
+      const web = (await setup.client.call('zone.list')).find((zone) => zone.id === setup.zone.id)!;
+      await setup.client.call('zone.update', { id: setup.other.id, x: web.x + web.width + 20, y: web.y, width: 600, height: 400 });
+      await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${worker.sessionId}`, ...OPEN }] });
+      const note = await me.connection.call('orchestrator.addNote', { token: me.token, text: 'Waiting on review', near: { kind: 'agent', id: worker.sessionId } });
+      expect(note.data.text).toContain('Waiting on review');
+      const tile = { ...(await rectsIn(setup.client, setup.zone.id)).get('worker')!, ...OPEN };
+      expect(clearOf(sizedFootprint(tile, tile), [{ x: note.x, y: note.y, width: note.width, height: note.height }])).toBe(true);
+    });
+
+    it('puts it beside an expanded tile on the side asked, never on it', async () => {
+      const { note, rects, map } = await noteNear(true, 'worker', { side: 'right' });
+      const tile = rects.get('worker')!;
+      expect(note.x).toBeGreaterThanOrEqual(tile.x + tile.width);
+      expectNoOverlap(rects);
+      expect(map.overlaps).toEqual([]);
+    });
+  });
+
   it('puts a note at the grid cell nearest --at, moving what is there aside', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
@@ -1131,10 +1301,48 @@ describe('notes an orchestrator makes', () => {
     await expect(me.connection.call('orchestrator.addNote', { token: me.token, text: 'x', kind: 'text', color: 'plaid' })).rejects.toMatchObject({
       message: expect.stringMatching(/#rrggbb or one of/),
     });
+    // Any theme colour by name, stored as its light colour, which the board draws as the theme's.
+    const teal = await me.connection.call('orchestrator.addNote', { token: me.token, text: 'Teal', kind: 'text', color: 'Teal' });
+    expect(teal.data).toMatchObject({ color: '#087f5b', colorSlot: 'teal' });
+    // A colour set writes over the slot the user picked: by name, the slot; as #rrggbb, fixed, though it is a slot's.
+    await setup.client.call('item.update', { id: teal.id, data: { color: '#3b5bdb', colorSlot: 'blue' } });
+    expect((await me.connection.call('orchestrator.editNote', { token: me.token, id: teal.id, color: 'red' })).data).toMatchObject({ color: '#c92a2a', colorSlot: 'red' });
+    expect((await me.connection.call('orchestrator.editNote', { token: me.token, id: teal.id, color: '#3B5BDB' })).data).toMatchObject({ color: '#3b5bdb', colorSlot: null });
+    expect((await me.connection.call('orchestrator.addNote', { token: me.token, text: 'Ink', kind: 'text' })).data).toMatchObject({ colorSlot: 'ink' });
   });
 });
 
 describe('the layout tools and commands', () => {
+  it('draws a class diagram with the shape and connector tools, and reads it back with board', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const env = { ...process.env, AGENT_BOARD_SOCKET: setup.daemon.socketPath, AGENT_BOARD_IDENTITY: me.token };
+    const mcp = new McpClient({ command: TEST_CLI_LAUNCHER.command, args: [...TEST_CLI_LAUNCHER.args, 'mcp'], env }, tempDataDir());
+    await mcp.initialize();
+
+    const order = await mcp.callTool('add_shape', { shape: 'class', text: 'Order', attributes: ['+ id: UUID'], methods: ['+ total(): Money'] });
+    expect(order).toMatchObject({ text: expect.stringMatching(/^Added item:\S+ {2}shape class {2}"Order" {2}\(1 attribute, 1 method\)/), isError: false });
+    const orderRef = /item:\w+/.exec(order.text)![0];
+    const line = await mcp.callTool('add_shape', { shape: 'class', text: 'LineItem', methods: '+ subtotal(): Money\n+ qty(): int', near: orderRef, side: 'right' });
+    expect(line).toMatchObject({ text: expect.stringContaining('(0 attributes, 2 methods)'), isError: false });
+    const lineRef = /item:\w+/.exec(line.text)![0];
+    expect(await mcp.callTool('add_shape', { shape: 'class', text: 'X', methods: [1] })).toMatchObject({ text: expect.stringContaining('methods must be an array of strings'), isError: true });
+
+    const joined = await mcp.callTool('connect', { from: orderRef, to: lineRef, relation: 'composition', to_label: '1..*' });
+    expect(joined).toMatchObject({ text: expect.stringMatching(/^Connected connector:\w+ {2}item:\w+ "Order" → item:\w+ "LineItem" {2}composition {2}\(to "1\.\.\*"\)/), isError: false });
+    const connectorRef = /connector:\w+/.exec(joined.text)![0];
+    expect(await mcp.callTool('edit_connector', { connector: connectorRef, from_label: '1' })).toMatchObject({ text: expect.stringContaining('(from "1", to "1..*")'), isError: false });
+    expect((await mcp.callTool('board', {})).text).toContain(`${connectorRef}  ${orderRef} "Order" → ${lineRef} "LineItem"  composition`);
+    // Its hints name the tools, not the commands.
+    const summary = (await mcp.callTool('map', {})).text;
+    expect(summary).toMatch(/\ndiagram {2}\(2 shapes, 1 connector; members with sections: true\)/);
+    expect(summary.slice(summary.indexOf('\ndiagram'))).not.toContain('agent-board');
+    // MCP has no `show`: the map is the diagram's whole read, a class's members and all.
+    expect((await mcp.callTool('map', { sections: true })).text).toMatch(/\ndiagram {2}\(2 shapes.*"LineItem".*\n {4}── methods\n {4}\+ subtotal\(\): Money\n {4}\+ qty\(\): int\n/s);
+    expect(await mcp.callTool('edit_shape', { item: lineRef, text: 'Line' })).toMatchObject({ text: expect.stringContaining('"Line"'), isError: false });
+    expect(await mcp.callTool('remove_connector', { connector: connectorRef })).toMatchObject({ isError: false });
+  });
+
   it('moves, arranges and makes notes over the MCP tools, and groups over the CLI, as the orchestrator', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
@@ -1253,5 +1461,117 @@ describe('orchestrator.addClock and removeClock', () => {
     await expect(me.connection.call('orchestrator.removeClock', { token: me.token, id: users.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
     await me.connection.call('orchestrator.removeClock', { token: me.token, id: fresh.id });
     expect((await setup.client.call('item.list')).filter((item) => item.kind === 'clock').map((item) => item.id).sort()).toEqual([messaging.id, users.id].sort());
+  });
+});
+
+describe('orchestrators drawing a diagram', () => {
+  it('draws a class sized for its sections, marked as its own, and changes only the shapes its crew drew', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const order = await me.connection.call('orchestrator.addShape', {
+      token: me.token,
+      shape: 'class',
+      text: 'Order',
+      attributes: '+ id: UUID\n+ placedAt: Date',
+      methods: '+ total(): Money',
+      fill: 'blue',
+    });
+    expect(order).toMatchObject({ kind: 'shape', zoneId: setup.zone.id, data: { shape: 'class', text: 'Order', methods: '+ total(): Money', fill: '#d0ebff', fillSlot: 'blue', mono: true } });
+    expect(order.height).toBeGreaterThan(160);
+    expect(await lastLine(setup.client)).toMatchObject({ orchestratorId: me.agent.sessionId, action: 'add-shape', targetName: 'shape “Order”', outcome: 'done' });
+    expectNoOverlap(await rectsIn(setup.client, setup.zone.id));
+
+    const edited = await me.connection.call('orchestrator.editShape', { token: me.token, id: order.id, methods: '+ total(): Money\n+ cancel(): void' });
+    expect(edited.data).toMatchObject({ text: 'Order', methods: '+ total(): Money\n+ cancel(): void' });
+    const users = await setup.client.call('orchestrator.addShape', { shape: 'rectangle', text: 'Theirs', zoneId: setup.zone.id });
+    await expect(me.connection.call('orchestrator.editShape', { token: me.token, id: users.id, text: 'Mine' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/that shape was not made by you/),
+    });
+    await expect(me.connection.call('orchestrator.editShape', { token: me.token, id: order.id, shape: 'blob' as never })).rejects.toMatchObject({ message: expect.stringMatching(/shape must be one of/) });
+    await expect(me.connection.call('orchestrator.addShape', { token: me.token, shape: 'rectangle', text: 'Cart', methods: 'x' })).rejects.toMatchObject({
+      message: expect.stringMatching(/a rectangle has no methods/),
+    });
+    await expect(me.connection.call('orchestrator.addShape', { token: me.token, shape: 'class', text: 'X', fill: 'tartan' })).rejects.toMatchObject({ message: expect.stringMatching(/fill is none, #rrggbb/) });
+    await expect(me.connection.call('orchestrator.addShape', { token: me.token, shape: 'class', text: 'Far', zoneId: setup.other.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    // Made a class, a rectangle takes a class's mono.
+    const plain = await me.connection.call('orchestrator.addShape', { token: me.token, shape: 'rectangle', text: 'Cart' });
+    expect(plain.data).toMatchObject({ mono: false, fill: '#ffffff', fillSlot: 'tile', strokeSlot: 'accent' });
+    expect((await me.connection.call('orchestrator.editShape', { token: me.token, id: plain.id, fill: '#d0ebff' })).data).toMatchObject({ fill: '#d0ebff', fillSlot: null });
+    expect((await me.connection.call('orchestrator.editShape', { token: me.token, id: plain.id, fill: 'none' })).data).toMatchObject({ fill: null, fillSlot: null });
+    expect((await me.connection.call('orchestrator.editShape', { token: me.token, id: plain.id, shape: 'class', attributes: 'items: Item[]' })).data).toMatchObject({ shape: 'class', mono: true });
+    // Removed only its own, as shapes, never by the note commands.
+    await expect(me.connection.call('orchestrator.removeShape', { token: me.token, id: users.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await expect(me.connection.call('orchestrator.removeNote', { token: me.token, id: order.id })).rejects.toMatchObject({ message: expect.stringMatching(/the note commands change only notes/) });
+    await me.connection.call('orchestrator.removeShape', { token: me.token, id: order.id });
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'remove-shape', targetName: 'shape “Order”', outcome: 'done' });
+  });
+
+  it("changes the shapes and connectors an agent of its crew made, and removing its shape takes the user's connectors on it too", async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const worker = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'worker' });
+    const crews = await setup.client.call('orchestrator.addShape', { shape: 'class', text: 'Crew', zoneId: setup.zone.id, at: { x: 40, y: 400 } });
+    const users = await setup.client.call('orchestrator.addShape', { shape: 'class', text: 'User', zoneId: setup.zone.id, at: { x: 600, y: 400 } });
+    const line = await setup.client.call('orchestrator.connect', { from: crews.id, to: users.id });
+    markMadeBy(setup, crews.id, worker.sessionId);
+    const db = new DatabaseSync(daemonPaths(setup.dataDir).database);
+    db.prepare('UPDATE connectors SET made_by = ? WHERE id = ?').run(worker.sessionId, line.id);
+    db.close();
+
+    expect((await me.connection.call('orchestrator.editShape', { token: me.token, id: crews.id, text: 'Crew2' })).data.text).toBe('Crew2');
+    expect(await me.connection.call('orchestrator.editConnector', { token: me.token, id: line.id, label: 'uses' })).toMatchObject({ label: 'uses' });
+    // A connector the user drew onto the crew's shape: the agent can't remove it, but it goes with the shape, as with a note.
+    const theirs = await setup.client.call('connector.create', { from: { type: 'item', id: users.id, side: 'top' }, to: { type: 'item', id: crews.id, side: 'top' } });
+    await expect(me.connection.call('orchestrator.removeConnector', { token: me.token, id: theirs.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await me.connection.call('orchestrator.removeShape', { token: me.token, id: crews.id });
+    expect(await setup.client.call('connector.list')).toEqual([]);
+  });
+
+  it('connects loose items only at board scope', async () => {
+    const setup = await layoutDaemon();
+    const a = await setup.client.call('orchestrator.addShape', { shape: 'rectangle', text: 'A', zoneId: null, at: { x: 0, y: 2000 } });
+    const b = await setup.client.call('orchestrator.addShape', { shape: 'rectangle', text: 'B', zoneId: null, at: { x: 600, y: 2000 } });
+    const zoned = await lead(setup, setup.zone.id);
+    await expect(zoned.connection.call('orchestrator.connect', { token: zoned.token, from: a.id, to: b.id })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/shape “A” is outside your scope/),
+    });
+    await setup.client.call('agent.setOrchestrate', { sessionId: zoned.agent.sessionId, scope: 'board' });
+    expect(await zoned.connection.call('orchestrator.connect', { token: zoned.token, from: a.id, to: b.id })).toMatchObject({ from: { side: 'right' }, to: { side: 'left' } });
+  });
+
+  it('connects two items in its scope as a relation reads, sides facing, and changes only the connectors its crew made', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const parent = await me.connection.call('orchestrator.addShape', { token: me.token, shape: 'class', text: 'Shape', at: { x: 400, y: 40 } });
+    const users = await setup.client.call('orchestrator.addShape', { shape: 'class', text: 'Circle', zoneId: setup.zone.id, at: { x: 400, y: 400 } });
+    const far = await setup.client.call('orchestrator.addShape', { shape: 'class', text: 'Far', zoneId: setup.other.id });
+
+    // The child below its parent: joined top to bottom, a hollow triangle by the parent.
+    const inherits = await me.connection.call('orchestrator.connect', { token: me.token, from: users.id, to: parent.id, relation: 'inheritance', startLabel: 'child' });
+    expect(inherits).toMatchObject({ from: { type: 'item', id: users.id, side: 'top' }, to: { type: 'item', id: parent.id, side: 'bottom' }, endEnd: 'triangle', dashed: false, startLabel: 'child' });
+    expect(await lastLine(setup.client)).toMatchObject({ orchestratorId: me.agent.sessionId, action: 'connect', targetName: 'shape “Circle” → shape “Shape”', outcome: 'done' });
+    // Made with no relation, it is the board's own arrow.
+    expect(await me.connection.call('orchestrator.connect', { token: me.token, from: parent.id, to: users.id })).toMatchObject({ startEnd: 'none', endEnd: 'arrow' });
+
+    await expect(me.connection.call('orchestrator.connect', { token: me.token, from: parent.id, to: far.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await expect(me.connection.call('orchestrator.connect', { token: me.token, from: parent.id, to: parent.id })).rejects.toMatchObject({ message: expect.stringMatching(/two different items/) });
+    await expect(me.connection.call('orchestrator.connect', { token: me.token, from: parent.id, to: users.id, relation: 'friendship' as never })).rejects.toMatchObject({
+      message: expect.stringMatching(/relation must be one of/),
+    });
+    await expect(me.connection.call('orchestrator.connect', { token: me.token, from: parent.id, to: users.id, label: 'ring\u0007' })).rejects.toMatchObject({
+      message: expect.stringMatching(/no other control character/),
+    });
+
+    const edited = await me.connection.call('orchestrator.editConnector', { token: me.token, id: inherits.id, relation: 'realisation', label: 'implements' });
+    expect(edited).toMatchObject({ endEnd: 'triangle', dashed: true, label: 'implements', startLabel: 'child' });
+    await expect(me.connection.call('orchestrator.editConnector', { token: me.token, id: inherits.id })).rejects.toMatchObject({ message: expect.stringMatching(/give the relation/) });
+    const theirs = await setup.client.call('connector.create', { from: { type: 'item', id: users.id, side: 'right' }, to: { type: 'item', id: parent.id, side: 'right' } });
+    await expect(me.connection.call('orchestrator.editConnector', { token: me.token, id: theirs.id, label: 'x' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await expect(me.connection.call('orchestrator.removeConnector', { token: me.token, id: theirs.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await me.connection.call('orchestrator.removeConnector', { token: me.token, id: inherits.id });
+    expect((await setup.client.call('connector.list')).map((each) => each.id)).not.toContain(inherits.id);
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'remove-connector', targetName: 'connector “implements”', outcome: 'done' });
   });
 });

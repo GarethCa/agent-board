@@ -75,6 +75,22 @@ describe('a zone map', () => {
     expect(piled.overlaps).toEqual([['agent:lead', 'shell:gate']]);
   });
 
+  it('counts no overlap a tile expanded in place makes over what it was clear of compact, which the board pushes aside', () => {
+    const tile = (key: string, x: number, y: number, size = AGENT_TILE_SIZE): ZoneMapThing => ({ key, itemKind: null, name: key, state: 'idle', x, y, ...size });
+    const open = tile('agent:open', 20, 44, { width: 960, height: 600 });
+    const things = [open, tile('agent:beside', 292, 44), tile('agent:under', 20, 220), tile('agent:piled', 30, 50)];
+    const map = buildZoneMap({
+      lanes: { top: [], lanes: [] },
+      things,
+      parts: new Map(),
+      arrange: DEFAULT_ARRANGE_SETTINGS,
+      compact: new Map([['agent:open', { x: 20, y: 44, ...AGENT_TILE_SIZE }]]),
+    });
+    // One on top of it compact still overlaps it.
+    expect(map.overlaps).toEqual([['agent:open', 'agent:piled']]);
+    expect(buildZoneMap({ lanes: { top: [], lanes: [] }, things, parts: new Map(), arrange: DEFAULT_ARRANGE_SETTINGS }).overlaps).toHaveLength(3);
+  });
+
   it('reads a lane laid out as a column along its column, and one laid out as cards only for the grid', () => {
     const columns = arrangedZone(crew, undefined, 'columns');
     expect([columns.overlaps, columns.offGrid, columns.widestGap]).toEqual([[], [], 0]);

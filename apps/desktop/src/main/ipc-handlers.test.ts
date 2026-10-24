@@ -26,6 +26,7 @@ const { registerOrchestratorIpc } = await import('./orchestrators');
 const { registerPullRequestIpc } = await import('./pull-requests');
 const { registerGateIpc } = await import('./gates');
 const { registerAskIpc } = await import('./asks');
+const { registerUnsavedPlanEditIpc } = await import('./unsaved-plan-edits');
 const { registerReviewIpc } = await import('./reviews');
 const { registerShellIpc } = await import('./shells');
 const { registerTrackerIpc } = await import('./trackers');
@@ -56,7 +57,8 @@ describe('the channels main handles', () => {
     ['connectors', registerConnectorIpc, ['connector:create', 'connector:delete', 'connector:list', 'connector:update']],
     ['external', registerExternalIpc, ['external:dismiss', 'external:hooksStatus', 'external:list', 'external:move', 'external:resume', 'external:resumePlan', 'external:setHooksEnabled']],
     ['flow edges', registerFlowEdgeIpc, ['flow-edge:approve', 'flow-edge:commands', 'flow-edge:create', 'flow-edge:delete', 'flow-edge:drop', 'flow-edge:lastPayload', 'flow-edge:list', 'flow-edge:preview', 'flow-edge:send', 'flow-edge:setSettings', 'flow-edge:settings', 'flow-edge:update']],
-    ['asks', registerAskIpc, ['ask:answer', 'ask:place', 'doc:comment', 'doc:read', 'doc:save', 'plan:decide', 'plan:list']],
+    ['asks', registerAskIpc, ['ask:answer', 'ask:place', 'doc:comment', 'doc:read', 'doc:save', 'plan:decide', 'plan:edit', 'plan:list']],
+    ['unsaved plan edits', registerUnsavedPlanEditIpc, ['plan:markUnsavedEdit', 'plan:unsavedEdits']],
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
     ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:clocks', 'item:create', 'item:delete', 'item:import-image', 'item:list', 'item:update']],
     ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity']],

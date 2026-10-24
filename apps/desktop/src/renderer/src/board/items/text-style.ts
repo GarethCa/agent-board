@@ -1,15 +1,19 @@
 import {
-  SHAPE_FILLS,
-  SHAPE_STROKES,
+  FILL_SLOT_COLORS,
+  SLOT_COLORS,
   SHAPE_STROKE_WIDTHS,
   SHAPE_TYPES,
   TEXT_ALIGNS,
-  TEXT_COLORS,
   TEXT_FONT_SIZES,
   TEXT_SIZES,
   LEGACY_TEXT_FONT_SIZES,
   MAX_TEXT_FONT_SIZE,
   MIN_TEXT_FONT_SIZE,
+  colorSlotOf,
+  fillSlotOf,
+  type ColorSlot,
+  type FillSlot,
+  newShapeData as newProtocolShapeData,
   type ShapeData,
   type ShapeType,
   type TextData,
@@ -23,6 +27,13 @@ const pick = <T extends string>(options: readonly T[], value: unknown, fallback:
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 const flag = (value: unknown, fallback = false) => (typeof value === 'boolean' ? value : fallback);
 const color = (value: unknown, fallback: string) => (typeof value === 'string' ? value : fallback);
+/**
+ * The slot of a colour stored as `hex`: the one its data names, none (null) for a fixed colour, or `hex`'s own. A
+ * slot whose colour is no longer `hex` is stale, the colour since set by something that sets only the colour (an app
+ * or a daemon from before slots), so `hex`'s own is read then too.
+ */
+const slot = <Slot extends string>(colors: Record<Slot, string>, value: unknown, hex: string, of: (hex: string) => Slot | null): Slot | null =>
+  value === null ? null : typeof value === 'string' && Object.hasOwn(colors, value) && colors[value as Slot] === hex.toLowerCase() ? (value as Slot) : of(hex);
 
 /** A font size kept within what a text item may have. */
 export const clampFontSize = (px: number): number =>
@@ -40,6 +51,7 @@ export function stepFontSize(px: number, direction: 1 | -1): number {
 /** A text item's data, with defaults for anything missing or of the wrong type. */
 export function textData(data: Record<string, unknown>): TextData {
   const size = pick(TEXT_SIZES, data.size, 'body');
+  const textColor = color(data.color, SLOT_COLORS.ink);
   return {
     text: text(data.text),
     size,
@@ -51,10 +63,23 @@ export function textData(data: Record<string, unknown>): TextData {
     bold: flag(data.bold),
     italic: flag(data.italic),
     align: pick(TEXT_ALIGNS, data.align, 'left'),
-    color: color(data.color, TEXT_COLORS[0].value),
+    color: textColor,
+    colorSlot: slot(SLOT_COLORS, data.colorSlot, textColor, colorSlotOf),
     wrap: flag(data.wrap),
   };
 }
+
+/** The data that colours an item in `slot`: its stored colour (`key`) and its slot. */
+export const inSlot = <Key extends string>(key: Key, slot: ColorSlot): Record<Key, string> & Record<`${Key}Slot`, ColorSlot> =>
+  ({ [key]: SLOT_COLORS[slot], [`${key}Slot`]: slot }) as Record<Key, string> & Record<`${Key}Slot`, ColorSlot>;
+
+/** The data that fills a shape in `slot`, or with none. */
+export const filledIn = (slot: FillSlot | null): Pick<ShapeData, 'fill' | 'fillSlot'> =>
+  slot === null ? { fill: null, fillSlot: null } : { fill: FILL_SLOT_COLORS[slot], fillSlot: slot };
+
+/** The data that colours an item a fixed `hex`, in no slot: it stays as it is in every theme. */
+export const fixedColor = <Key extends string>(key: Key, hex: string): Record<Key, string> & Record<`${Key}Slot`, null> =>
+  ({ [key]: hex.toLowerCase(), [`${key}Slot`]: null }) as Record<Key, string> & Record<`${Key}Slot`, null>;
 
 /** A new text item's data. */
 export const newTextData = (): TextData => textData({});
@@ -62,10 +87,16 @@ export const newTextData = (): TextData => textData({});
 /** A shape's data, with defaults for anything missing or of the wrong type. */
 export function shapeData(data: Record<string, unknown>): ShapeData {
   const shape = pick(SHAPE_TYPES, data.shape, 'rectangle');
+  // A new shape is Accent on the tile.
+  const fill = data.fill === null ? null : color(data.fill, FILL_SLOT_COLORS.tile);
+  const stroke = color(data.stroke, SLOT_COLORS.accent);
+  const textColor = color(data.textColor, SLOT_COLORS.ink);
   return {
     shape,
-    fill: data.fill === null ? null : color(data.fill, SHAPE_FILLS[0].value),
-    stroke: color(data.stroke, SHAPE_STROKES[0].value),
+    fill,
+    fillSlot: fill === null ? null : slot(FILL_SLOT_COLORS, data.fillSlot, fill, fillSlotOf),
+    stroke,
+    strokeSlot: slot(SLOT_COLORS, data.strokeSlot, stroke, colorSlotOf),
     strokeWidth: typeof data.strokeWidth === 'number' ? data.strokeWidth : SHAPE_STROKE_WIDTHS[1],
     dashed: flag(data.dashed),
     text: text(data.text),
@@ -77,7 +108,8 @@ export function shapeData(data: Record<string, unknown>): ShapeData {
     mono: flag(data.mono, SHAPES[shape].sections !== undefined),
     attributes: text(data.attributes),
     methods: text(data.methods),
-    textColor: color(data.textColor, TEXT_COLORS[0].value),
+    textColor,
+    textColorSlot: slot(SLOT_COLORS, data.textColorSlot, textColor, colorSlotOf),
   };
 }
 
@@ -88,8 +120,8 @@ export function shapeData(data: Record<string, unknown>): ShapeData {
  */
 export const completeShapeData = (data: Record<string, unknown>): Record<string, unknown> => ({ ...shapeData(data), ...data });
 
-/** A new shape's data. */
-export const newShapeData = (shape: ShapeType = 'rectangle'): ShapeData => shapeData({ shape });
+/** A new shape's data: the protocol's, which the daemon draws an agent's shapes with too. */
+export const newShapeData = (shape: ShapeType = 'rectangle'): ShapeData => newProtocolShapeData(shape);
 
 let canvas: CanvasRenderingContext2D | null | undefined;
 

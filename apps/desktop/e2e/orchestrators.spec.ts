@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, SHELL_ENV, spawnAgent, tile, TURN_MS, zoneNamed } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -185,6 +185,52 @@ test('an orchestrator scatters its crew about its zone, then arranges it: itself
     await expect(lines.nth(0)).toContainText('arranged monorepo');
     await expect(lines.filter({ hasText: /^.*moved impl/ })).toHaveCount(1);
     await expect(lines.filter({ hasText: /^.*moved review/ })).toHaveCount(1);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an orchestrator expanded in place, arranging by itself, starts its crew below it in lanes beside their labels, none under it', async () => {
+  // A turn to start, three agents started by the CLI, and an arrange after each: the waits below, and a turn to spare.
+  test.setTimeout(11 * TURN_MS);
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    const lead = 'Arrange by itself, then start three';
+    await spawnAgent(window, 'monorepo', lead);
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    const leadTile = agentTile(window, lead);
+    await expect(leadTile).toHaveAttribute('data-state', 'waiting', { timeout: 2 * TURN_MS });
+    await tileAction(leadTile, 'Expand in place');
+    await expect(window.getByTestId('expanded-tile')).toHaveCount(1);
+    const me = (await agents(window)).find((agent) => agent.spawnedBy === null)!;
+    await window.evaluate((sessionId) => globalThis.window.agentBoard.sessions.write(sessionId, 'go\r'), me.sessionId);
+
+    // Each CLI command starts the app's executable as Node: a turn's worth of time each.
+    await expect.poll(async () => (await agents(window)).length, { timeout: 4 * TURN_MS }).toBe(4);
+    // The board draws only what is in view, and the lead expanded fills it: fit, then the crew are tiles beside it.
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await expect(tile(window)).toHaveCount(3);
+    const box = async (name: string) => (await agentTile(window, name).boundingBox())!;
+    await expect
+      .poll(
+        async () => {
+          const [open, ...crew] = await Promise.all([window.getByTestId('expanded-tile').boundingBox().then((each) => each!), box('one'), box('two'), box('three')]);
+          return {
+            // Below it, each lane's tile beside its label rather than out past the expanded tile's width.
+            below: crew.every((each) => each.y >= open.y + open.height),
+            besideLabels: crew.every((each) => each.x > open.x && each.x < open.x + open.width / 2),
+            apart: crew.every((each, index) => crew.slice(index + 1).every((other) => each.y + each.height <= other.y || other.y + other.height <= each.y)),
+          };
+        },
+        { timeout: 4 * TURN_MS },
+      )
+      .toEqual({ below: true, besideLabels: true, apart: true });
   } finally {
     await app.close();
     await removeDataDir(dataDir);

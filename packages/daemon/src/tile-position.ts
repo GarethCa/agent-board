@@ -22,14 +22,16 @@ export function moveParams(fields: Record<string, unknown>): TileMove {
     y: finiteNumberParam(fields, 'y'),
     z: fields.z === undefined ? undefined : finiteNumberParam(fields, 'z'),
     toFront: optionalBooleanParam(fields, 'toFront'),
+    ifUnplaced: optionalBooleanParam(fields, 'ifUnplaced'),
   };
 }
 
 /**
  * Saves `move` as the place of the tile `id` with `update`, a statement taking (zone, x, y, z, id). Without a z, the
- * tile keeps the stacking order it had at `from`.
+ * tile keeps the stacking order it had at `from`. A move `ifUnplaced` of a tile with a place (`from`) saves nothing.
  */
 export function saveMove(db: DatabaseSync, update: StatementSync, id: string, from: TilePosition | null, move: TileMove): void {
+  if (move.ifUnplaced === true && from !== null) return;
   const z = move.toFront === true ? frontZ(db) : (move.z ?? from?.z ?? null);
   update.run(move.zoneId, move.x, move.y, z, id);
 }

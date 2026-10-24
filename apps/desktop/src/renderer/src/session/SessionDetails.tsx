@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { neighbourOf, paneIds } from '@agent-board/daemon/pane-layout';
 import { INTERRUPT_KEY, roleLabel, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { Copy, FolderOpen, PanelLeftClose, PanelLeftOpen, RotateCw, X } from 'lucide-react';
+import { ClipboardList, Copy, FileText, FolderOpen, Globe, PanelLeftClose, PanelLeftOpen, RotateCw, StickyNote, X } from 'lucide-react';
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
 import { agentSetupLine, branchLine } from '../board/AgentSetup';
@@ -16,8 +16,8 @@ import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
 import { useGateRun } from '../gate/GatesProvider';
 import { gated } from '../gate/gate-view';
 import { requestTab } from './tab-request';
-import { docName, docSurfaceOf, gateSurfaceOf } from './tabs';
-import { crewSection, docSection, pullRequestSection, sectionCount, subagentSection, type SidebarRow, type SidebarSection } from './sidebar-records';
+import { docName, docSurfaceOf, documentSurfaceOf, gateSurfaceOf, planSurfaceOf } from './tabs';
+import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection, type PinRow, type SidebarRow, type SidebarSection } from './sidebar-records';
 import { useLiveAgents } from './use-live-board';
 import { recordDeleter, type RecordDeleter } from './record-deletes';
 import { runGateShortcut } from './window-keys';
@@ -51,17 +51,19 @@ export interface SessionDetailsProps {
   onOpenLink(url: string): void;
   /** Opens one of the agent's pull requests in a PR tab. */
   onOpenPullRequest?(pr: Pick<PullRequest, 'url'>): void;
-  /** Shows a surface as a tab of the window: a hand-off doc, or an agent of its crew. */
+  /** Shows a surface as a tab of the window: a hand-off doc, a document, or an agent of its crew. */
   onOpenSurface?(surface: Surface): void;
+  /** Shows a link in a web tab of the window: a pinned one. */
+  onOpenWeb?(url: string): void;
 }
 
 /**
  * The session window's details, on its LEFT (V and W): a strip of sections (controls, a shell's panes, the agent's
- * issue, worktree, pull requests, crew, hand-off docs, subagents and schedule) in the board menu's section style, or the
- * same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
+ * issue, worktree, pull requests, crew, hand-off docs, documents, pins, subagents and schedule) in the board menu's
+ * section style, or the same collapsed to an icon rail, whose actions act and whose facts open the strip at their section.
  */
 export function SessionDetails(props: SessionDetailsProps) {
-  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest, onOpenSurface } = props;
+  const { sessionId, agent, external, shell, focusedPane, onFocusPane, onSplit, live, onProblem, collapsed, onCollapsed, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb } = props;
   // In an agent's window, the agent's own pane, unless a shell pane in one of its tabs has the keyboard.
   const agentFocused = agent !== undefined && (focusedPane === undefined || focusedPane === agent.sessionId);
   const width = useDetailsWidth();
@@ -126,6 +128,8 @@ export function SessionDetails(props: SessionDetailsProps) {
             {gated(agent) && fact('gate', 'Merge gate')}
             {fact('crew', 'Crew')}
             {fact('docs', 'Hand-off docs')}
+            {fact('documents', 'Documents')}
+            {fact('pins', 'Pins')}
             {fact('subagents', subagentsLabel(agent))}
             {fact('schedule', 'Schedule')}
           </>
@@ -192,6 +196,7 @@ export function SessionDetails(props: SessionDetailsProps) {
             onOpenLink={onOpenLink}
             onOpenPullRequest={onOpenPullRequest ?? ((pr) => onOpenLink(pr.url))}
             onOpenSurface={onOpenSurface}
+            onOpenWeb={onOpenWeb ?? onOpenLink}
             onProblem={onProblem}
           />
         )}
@@ -271,6 +276,7 @@ function AgentSections({
   onOpenLink,
   onOpenPullRequest,
   onOpenSurface,
+  onOpenWeb,
   onProblem,
 }: {
   agent: Agent;
@@ -278,6 +284,7 @@ function AgentSections({
   onOpenLink(url: string): void;
   onOpenPullRequest(pr: Pick<PullRequest, 'url'>): void;
   onOpenSurface: ((surface: Surface) => void) | undefined;
+  onOpenWeb(url: string): void;
   onProblem(problem: string | undefined): void;
 }) {
   const { issue, schedule } = agent;
@@ -288,6 +295,15 @@ function AgentSections({
   const pulls = pullRequestSection(agent, records.fading);
   const crew = crewSection(agent, agents ?? [], records.fading);
   const docs = docSection(agent, records.fading);
+  const documents = documentSection(agent);
+  const pins = pinSection(agent, records.fading);
+  /** What clicking a pin does, by how it opens; nothing for a note, which shows all it has. */
+  const openPin = ({ target, opens }: PinRow): (() => void) | undefined => {
+    if (target.kind === 'link') return () => onOpenWeb(target.url);
+    if (target.kind !== 'file') return undefined;
+    if (opens === 'doc') return onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, target.path)));
+    return () => void window.agentBoard.sessions.revealFile(target.path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`));
+  };
   const subagents = subagentSection(agent);
   return (
     <>
@@ -367,6 +383,51 @@ function AgentSections({
             title: `${each.item.path}: opens in a Doc tab`,
             onClick: onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, each.item.path))),
           })}
+        />
+      </Section>
+      <Section label="Documents" icon={<SectionIcon id="documents" />} meta={documents.length === 0 ? 'None' : String(documents.length)} {...sectionProps('documents')}>
+        {documents.length === 0 ? (
+          <Hint>It hasn&rsquo;t shown you a document.</Hint>
+        ) : (
+          <ul className="details-list">
+            {documents.map((row) => (
+              <li key={row.key} data-testid="details-document">
+                <PanelRow
+                  as={onOpenSurface ? 'button' : 'div'}
+                  title={row.kind === 'plan' ? 'Open its Plan tab' : `${row.document.path}: opens in its Document tab`}
+                  onClick={onOpenSurface && (() => onOpenSurface(row.kind === 'plan' ? planSurfaceOf(agent.sessionId) : documentSurfaceOf(row.document)))}
+                  mark={row.kind === 'plan' ? <ClipboardList className="details-row-icon" /> : <SectionIcon id="documents" className="details-row-icon" />}
+                  name={row.name}
+                  meta={[row.kind === 'plan' ? 'plan' : undefined, `v${row.version}`, `shown ${shortWhen(row.at)}`].filter(Boolean).join(' · ')}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+      <Section label="Pins" icon={<SectionIcon id="pins" />} meta={sectionCount(pins.rows)} {...sectionProps('pins')}>
+        <RecordList
+          section={pins}
+          empty="Nothing pinned. An agent pins what it wants you to see."
+          records={records}
+          what={(row) => row.item.name}
+          row={(each) => {
+            const { target, from } = each.item;
+            const pinnedBy = from === null ? undefined : `from ${from.name}`;
+            return {
+              name: each.item.name,
+              meta:
+                target.kind === 'note' ? (
+                  <span className="details-pin-note">{target.text}</span>
+                ) : (
+                  [pinnedBy, recordedWhen(each)].filter(Boolean).join(' · ')
+                ),
+              mark: target.kind === 'note' ? <StickyNote className="details-row-icon" /> : target.kind === 'link' ? <Globe className="details-row-icon" /> : <FileText className="details-row-icon" />,
+              title: target.kind === 'note' ? target.text : target.kind === 'link' ? `${target.url}: opens in a web tab` : `${target.path}: ${each.item.opens === 'doc' ? 'opens in a Doc tab' : 'shows it in its folder'}`,
+              onClick: openPin(each.item),
+              testId: 'details-pin',
+            };
+          }}
         />
       </Section>
       <Section label="Subagents" icon={<SectionIcon id="subagents" />} meta={sectionCount(subagents.rows)} {...sectionProps('subagents')}>

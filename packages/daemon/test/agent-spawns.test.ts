@@ -38,6 +38,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0) {
     },
     worktreesDir: '/worktrees',
     scratchDir: '/scratch',
+    groupsDir: '/groups',
     rememberFolder: unused,
     harnessPaths: {
       path: (harness) => (harness === 'codex' ? '/bin/codex' : '/bin/claude'),
