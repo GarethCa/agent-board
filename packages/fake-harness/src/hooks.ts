@@ -30,6 +30,8 @@ export interface HookRunOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   supportsHttp: boolean;
+  /** Events whose `http` hooks the harness skips, as Claude skips them for `SessionStart`. */
+  httpSkippedEvents?: readonly string[];
   matcherSyntax: MatcherSyntax;
   defaultTimeoutSeconds: number;
   /** Per-event default and cap, e.g. Codex runs SessionEnd hooks for 1 s by default and at most 3 s. */
@@ -108,7 +110,7 @@ export async function runHooks(
       const seconds = handler.timeout ?? limits?.defaultSeconds ?? options.defaultTimeoutSeconds;
       const timeoutMs = Math.min(seconds, limits?.maxSeconds ?? Infinity) * 1000;
       if (handler.type === 'command' && handler.command) return runCommand(handler, body, timeoutMs, options);
-      if (handler.type === 'http' && handler.url && options.supportsHttp) return runHttp(handler, body, timeoutMs, options);
+      if (handler.type === 'http' && handler.url && options.supportsHttp && !options.httpSkippedEvents?.includes(event)) return runHttp(handler, body, timeoutMs, options);
       return Promise.resolve(undefined);
     }),
   );

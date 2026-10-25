@@ -877,8 +877,20 @@ export function createAgentSpawns(
 }
 
 /**
- * The `claude --settings` that sends every hook event to the daemon as an `http` hook (ADR-0004). The token is
- * interpolated from the session's environment by Claude, so it never appears on the command line. Claude waits on a
+ * The command that posts a `SessionStart` hook to the daemon. Claude runs no `http` hook for `SessionStart`, so that
+ * one event is a `command` hook: curl sends its stdin to the session's hook URL with its token, both read from the
+ * session's environment by the shell, so neither is on Claude's command line. `-q` (first) skips the user's
+ * `~/.curlrc` and `--noproxy '*'` any proxy in their environment, either of which could lose or garble the post. It
+ * prints the daemon's answer, and nothing (exiting 0) when the daemon can't be reached, so a start never fails on it.
+ */
+const CLAUDE_SESSION_START_COMMAND =
+  `curl -q -sf --noproxy '*' -m ${HOOK_TIMEOUT_S - 1} -X POST -H 'content-type: application/json' ` +
+  `-H "Authorization: Bearer $${HOOK_TOKEN_ENV}" --data-binary @- "$${HOOK_URL_ENV}" || true`;
+
+/**
+ * The `claude --settings` that sends every hook event to the daemon (ADR-0004): as an `http` hook, the token
+ * interpolated from the session's environment by Claude so it never appears on the command line, except
+ * `SessionStart`, which Claude runs only as a `command` hook (`CLAUDE_SESSION_START_COMMAND`). Claude waits on a
  * PermissionRequest hook a little longer than the daemon holds it (`permissionHoldMs`), so the daemon's no-decision
  * answer, not a timeout, is what hands the prompt back to the terminal.
  */
@@ -895,7 +907,15 @@ export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
     hooks: Object.fromEntries(
       CLAUDE_HOOK_EVENTS.map((event) => [
         event,
-        [{ hooks: [handler(event === 'PermissionRequest' ? permissionTimeout : HOOK_TIMEOUT_S)] }],
+        [
+          {
+            hooks: [
+              event === 'SessionStart'
+                ? { type: 'command', command: CLAUDE_SESSION_START_COMMAND, timeout: HOOK_TIMEOUT_S }
+                : handler(event === 'PermissionRequest' ? permissionTimeout : HOOK_TIMEOUT_S),
+            ],
+          },
+        ],
       ]),
     ),
   };

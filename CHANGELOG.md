@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.4 (2026-10-25)
+
+- SessionStart is a command hook, since Claude runs no http hook for it
+
 ## v0.6.3 (2026-10-24)
 
 - Type the first prompt only on SessionStart or Send, show the trust-screen hint, flag a stalled one

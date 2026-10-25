@@ -65,10 +65,15 @@ export const CODEX_HOOK_EVENTS = [
   'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt', 'PreCompact', 'PostCompact',
 ] as const;
 
-/** A `claude --settings` object that sends every event to `url` as an http hook. */
+/**
+ * A `claude --settings` object that sends every event to `url` as an http hook, except `SessionStart`, which Claude
+ * runs only as a `command` hook: that one posts with curl (without `http`'s headers).
+ */
 export function claudeHookSettings(url: string, http: { headers?: Record<string, string>; allowedEnvVars?: string[] } = {}): { hooks: HooksConfig } {
   const hooks: HooksConfig = {};
   for (const event of CLAUDE_HOOK_EVENTS) hooks[event] = [{ hooks: [{ type: 'http', url, timeout: 10, ...http }] }];
+  const command = `curl -q -sf --noproxy '*' -m 9 -X POST -H 'content-type: application/json' --data-binary @- '${url}' || true`;
+  hooks.SessionStart = [{ hooks: [{ type: 'command', command, timeout: 10 }] }];
   return { hooks };
 }
 

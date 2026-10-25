@@ -59,6 +59,8 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
         cwd,
         env: { ...env, CLAUDE_PROJECT_DIR: cwd },
         supportsHttp: true,
+        // Claude runs no `http` hook for `SessionStart` (checked against claude 2.1.310): only `command` ones.
+        httpSkippedEvents: ['SessionStart'],
         matcherSyntax: 'claude',
         defaultTimeoutSeconds: 600,
       },
