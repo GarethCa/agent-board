@@ -325,7 +325,16 @@ describe('fake claude', () => {
       env: { AGENT_BOARD_TOKEN: 'tok-123', SECRET: 'nope' },
     });
 
-    expect(recorder.headers[0]).toMatchObject({ authorization: 'Bearer tok-123', 'x-leak': '' });
+    // The last hook is an http one (SessionStart, the first, is a command hook).
+    expect(recorder.headers.at(-1)).toMatchObject({ authorization: 'Bearer tok-123', 'x-leak': '' });
+  });
+
+  it('runs no http hook for SessionStart, as Claude runs only command ones for it', async () => {
+    const allHttp = { hooks: { SessionStart: [{ hooks: [{ type: 'http', url: recorder.url }] }], Stop: [{ hooks: [{ type: 'http', url: recorder.url }] }] } };
+
+    await runFake('claude', { scenario: 'output', args: ['-p', '--settings', JSON.stringify(allHttp), 'fix the tests'] });
+
+    expect(recorder.events.map((event) => event.hook_event_name)).toEqual(['Stop']);
   });
 
   it('also loads hooks from ~/.claude/settings.json (how external sessions are seen)', async () => {
