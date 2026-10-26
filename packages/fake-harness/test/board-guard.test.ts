@@ -61,4 +61,14 @@ describe('board guard', () => {
     const kept = /^ {4}(AGENT_BOARD_[A-Z0-9_ |]+)\) ;;$/m.exec(script)?.[1]?.split(' | ');
     expect(kept).toEqual([...RUN_KNOBS]);
   });
+
+  it("drops agent-board's own FORCE_HYPERLINK with its marker in scripts/check-local.sh, and keeps a user's", () => {
+    const script = readFileSync(fileURLToPath(new URL('../../../scripts/check-local.sh', import.meta.url)), 'utf8');
+    const scrub = /^if \[ -n "\$\{AGENT_BOARD_FORCED_HYPERLINK.*?^done$/ms.exec(script)?.[0];
+    expect(scrub).toBeDefined();
+    const run = (env: Record<string, string>) =>
+      spawnSync('sh', ['-c', `${scrub}\nprintf '%s' "\${FORCE_HYPERLINK:-unset}"`], { env: { PATH: process.env.PATH!, ...env }, encoding: 'utf8' }).stdout;
+    expect(run({ FORCE_HYPERLINK: '1', AGENT_BOARD_FORCED_HYPERLINK: '1' })).toBe('unset');
+    expect(run({ FORCE_HYPERLINK: '1' })).toBe('1');
+  });
 });

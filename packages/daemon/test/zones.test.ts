@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { DaemonRpcError } from '../src/client.ts';
 import { RPC_ERROR, zoneSnapshot } from '../src/protocol.ts';
 import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
 
@@ -59,16 +58,13 @@ describe('zones over the socket', () => {
     expect(zone).toMatchObject({ kind: 'folder', repoRoot: repo, folder: 'apps' });
   });
 
-  it('rejects a folder that is not in a git repo, with a message saying so', async () => {
+  it('adds a folder outside git as a group whose own folder it is', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const plain = tempPlainFolder();
 
-    const error = await client.call('zone.add', { path: plain, ...at }).catch((e: unknown) => e);
+    const zone = await client.call('zone.add', { path: plain, ...at });
 
-    expect(error).toBeInstanceOf(DaemonRpcError);
-    expect(error).toMatchObject({ code: RPC_ERROR.invalidParams });
-    expect((error as Error).message).toBe(`${plain} is not inside a git repository`);
-    expect(await client.call('zone.list')).toEqual([]);
+    expect(zone).toMatchObject({ kind: 'unbound', repoRoot: null, groupFolder: plain, name: basename(plain) });
   });
 
   it('rejects a path that is missing or is not a folder', async () => {

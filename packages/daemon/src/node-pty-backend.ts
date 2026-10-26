@@ -88,8 +88,10 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 }
 
 /**
- * node-pty 1.1.0's prebuilt `spawn-helper` is published without its execute bit, so every spawn fails with
- * "posix_spawnp failed" (microsoft/node-pty#850). Restore the bit before the first spawn.
+ * node-pty 1.1.0's prebuilt `spawn-helper` was published without its execute bit, so every spawn failed with
+ * "posix_spawnp failed" (microsoft/node-pty#850). The version we ship has it, but an install that lost it (an
+ * older copy, a source build, an unpacker that drops modes) would fail the same way, so restore the bit before the
+ * first spawn.
  */
 function ensureSpawnHelperExecutable(log: (message: string) => void): void {
   if (process.platform === 'win32') return;

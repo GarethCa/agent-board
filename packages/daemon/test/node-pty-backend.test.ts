@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, fstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isatty } from 'node:tty';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { isProcessAlive } from '../src/pid.ts';
 import { createNodePtyBackend } from '../src/node-pty-backend.ts';
@@ -129,6 +130,23 @@ describe('node-pty terminal backend', () => {
     expect(() => terminals.write('nope', 'x')).toThrow(/no terminal/);
   });
 
+  it.skipIf(process.platform === 'win32')('leaves no terminal open once its process has exited', async () => {
+    const terminals = backend();
+    const before = { terminals: openTerminals(), fds: openFds() };
+
+    for (let i = 0; i < 20; i++) {
+      terminals.spawn(shOptions(`t${i}`, 'exit 0'));
+      await watch(terminals, `t${i}`).waitForExit();
+    }
+
+    // Each terminal the backend opened, and every other it made on the way, is closed: a long-running daemon
+    // that kept even one per spawn would run the machine out of PTYs. (An earlier test's may close meanwhile.)
+    expect(openTerminals()).toBeLessThanOrEqual(before.terminals);
+    // Nor does a spawn keep any other descriptor, such as the kqueue that watches for its exit. A few may come and
+    // go with the test runner's own work; one per spawn is twenty.
+    expect(openFds()).toBeLessThanOrEqual(before.fds + 5);
+  });
+
   it('reports a command that cannot be started as an exit with a failure code', async () => {
     const terminals = backend();
     terminals.spawn({ ...shOptions('t1'), command: '/no/such/shell' });
@@ -138,6 +156,24 @@ describe('node-pty terminal backend', () => {
     expect(terminals.list()).toEqual([]);
   });
 });
+
+/** How many file descriptors this process has open. */
+function openFds(): number {
+  return readdirSync('/dev/fd').length;
+}
+
+/** How many of this process's file descriptors are terminals: a PTY's master or slave side. */
+function openTerminals(): number {
+  return readdirSync('/dev/fd').filter((name) => {
+    const fd = Number(name);
+    try {
+      return fstatSync(fd).isCharacterDevice() && isatty(fd);
+    } catch {
+      // The descriptor `readdirSync` itself had open, closed again since.
+      return false;
+    }
+  }).length;
+}
 
 /** Reads the pid a script wrote to `file`, once it has, and kills that process when the test ends. */
 async function recordedPid(file: string): Promise<number> {

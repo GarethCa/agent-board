@@ -37,7 +37,7 @@ function arrangedZone(
   ].map(move);
   const parts = new Map(clusters.flatMap((cluster) => [[`${cluster.key}#label`, `item:${cluster.key}-label`] as const, [`${cluster.key}#note`, `item:${cluster.key}-note`] as const]));
   const arrange = { ...DEFAULT_ARRANGE_SETTINGS, by, layout };
-  return { zoneId: 'z', name: 'web', ...size, arrange, spacing, things, ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, spacing, arranged: positions }) };
+  return { zoneId: 'z', name: 'web', ...size, arrange, spacing, unmeasured: false, things, ...buildZoneMap({ lanes: lanesOf(tiles, links), things, parts, arrange, spacing, arranged: positions }) };
 }
 
 /** A ref as the CLI writes one: its kind and the start of its id. */

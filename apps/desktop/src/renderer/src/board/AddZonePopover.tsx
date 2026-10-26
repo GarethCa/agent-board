@@ -471,11 +471,15 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
               ) : (
                 <ul className="add-zone-list" aria-label="Chosen folder">
                   <li className="add-zone-row" data-picked>
-                    <FolderGit2 className="add-zone-row-icon" />
+                    {folder.repoRoot === null ? <FolderOpen className="add-zone-row-icon" /> : <FolderGit2 className="add-zone-row-icon" />}
                     <span className="add-zone-row-main">
                       <span className="add-zone-row-title add-zone-mono">{tildify(folder.path, home)}</span>
                       <span className="add-zone-row-detail add-zone-mono">
-                        {folder.path === folder.repoRoot ? 'Repo' : `In the repo at ${tildify(folder.repoRoot, home)}`}
+                        {folder.repoRoot === null
+                          ? 'Outside git: agents here work in this folder, with no worktree'
+                          : folder.path === folder.repoRoot
+                            ? 'Repo'
+                            : `In the repo at ${tildify(folder.repoRoot, home)}`}
                         {folder.gitHubRepo !== null && ` · origin ${folder.gitHubRepo}`}
                       </span>
                     </span>

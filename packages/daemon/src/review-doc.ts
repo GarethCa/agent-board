@@ -127,17 +127,22 @@ export interface ReviewPromptOptions {
   /** The implementer's name, and the branch whose work is reviewed. */
   implementer: string;
   branch: string;
-  /** What its branch is compared with: the branch it left. */
+  /** What its branch is compared with: the branch it left, or, for a branch begun with no commit before it, the empty tree. */
   base: string;
+  /** Its branch began with no commit before it (in a repo with none yet): all of it is the work, compared with `base`. */
+  wholeBranch?: boolean;
   /** The last round's doc, for a later round. */
   previous?: string;
 }
 
 /** What a reviewer agent is started with: review the branch's diff, change nothing, and reply with the doc only. */
-export function reviewPrompt({ round, implementer, branch, base, previous }: ReviewPromptOptions): string {
+export function reviewPrompt({ round, implementer, branch, base, wholeBranch = false, previous }: ReviewPromptOptions): string {
+  const what = wholeBranch
+    ? `Its branch began in a repo with no commits, so all of it is new: review every file on it (\`git diff ${base} HEAD\`)`
+    : `Review its changes since \`${base}\`, where it started (\`git diff ${base}...HEAD\`)`;
   return [
     `You are the reviewer for round ${round} of the work of ${implementer}, on branch \`${branch}\`, checked out here.`,
-    `Review its changes since \`${base}\`, where it started (\`git diff ${base}...HEAD\`): hunt for bugs, missing tests, style that doesn't match the code around it, and repetition. Read the code around the diff and run the tests if you need to. Do not change any files.`,
+    `${what}: hunt for bugs, missing tests, style that doesn't match the code around it, and repetition. Read the code around the diff and run the tests if you need to. Do not change any files.`,
     ...(previous === undefined
       ? []
       : [`The last round's review asked for the changes below. Strike through the title of each finding that is now fixed (\`- ~~**<finding>**~~ …\`), and keep the ones that aren't.\n\n${previous}`]),

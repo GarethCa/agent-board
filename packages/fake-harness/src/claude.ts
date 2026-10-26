@@ -6,7 +6,8 @@ import { hasFlag, listFlag, parseArgs, stringFlag, type FlagSpec } from './args.
 import { ConfigError, mergeHooks, parseHooksJson, readHooksFile, validateMatchers, type HooksConfig } from './hooks.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
 import { parseClaudeMcpConfig, type McpServerConfig } from './mcp.ts';
-import { toolOutput, type ConversationMessage, type Invocation, type Transcript } from './session.ts';
+import { type ConversationMessage, type Invocation, type Transcript } from './session.ts';
+import { toolOutput } from './tool-output.ts';
 
 const FLAGS: FlagSpec = {
   valued: new Set([
@@ -48,6 +49,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
     dialect: {
       harness: 'claude',
       displayName: 'Claude',
+      version: CLAUDE_VERSION,
       interactive: !hasFlag(args, '-p', '--print'),
       sessionId,
       cwd,

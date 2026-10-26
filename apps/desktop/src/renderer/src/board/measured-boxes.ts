@@ -1,0 +1,154 @@
+// How this window draws the board, said to the daemon (`layout.measured`) so an orchestrator's arrange and zone map
+// see what the user sees: tiles and items pushed aside by an expanded tile, text items as big as their text, and the
+// height each agent note's text needs. Only the window in front says it, a moment after what it draws changes.
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import type { Node } from '@xyflow/react';
+import { measuredText, type BoxRect, type ExpandedBox, type LayoutMeasured, type MeasuredBox } from '@agent-board/daemon/protocol';
+import { CAPTURE_FRAME } from './capture-mode';
+import type { ExpandedTiles } from './expanded';
+import { useWindowFocused } from './items/grow-to-fit';
+import type { AgentNoteLook } from './items/agent-note-look';
+
+/**
+ * An agent note's height for its text (`text`), measured `width` wide, drawn as `look` says, with what else is drawn
+ * round its text (`noteFitContext`).
+ */
+export interface NoteFit {
+  width: number;
+  height: number;
+  text: string;
+  context: string;
+}
+
+/**
+ * What a note's height for its text depends on besides its text and width: the look notes are drawn in, the question
+ * it answers and the edits it suggests. A fit measured with any of them otherwise is not said.
+ */
+export function noteFitContext(look: AgentNoteLook, data: Record<string, unknown>): string {
+  const asked = typeof data.asked === 'string' ? data.asked : '';
+  const edits = Array.isArray(data.suggestions) ? data.suggestions.length : 0;
+  return JSON.stringify([look, asked, edits]);
+}
+
+type Size = { width: number; height: number };
+
+/** How long what is drawn must hold still before it is said: a drag or an expanding tile says it once, at its end. */
+const SETTLE_MS = 250;
+
+/** What the daemon keys tiles and items by, as the board's node ids are. */
+const MEASURED = /^(agent|shell|external|item):/;
+
+/** Half a pixel: what is drawn and what is saved are rounded differently. */
+const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+const sameRect = (a: BoxRect, b: BoxRect) => near(a.x, b.x) && near(a.y, b.y) && near(a.width, b.width) && near(a.height, b.height);
+
+const boxOf = (node: Node, size: Size | undefined): BoxRect => ({
+  x: node.position.x,
+  y: node.position.y,
+  width: size?.width ?? node.width ?? node.measured?.width ?? 0,
+  height: size?.height ?? node.height ?? node.measured?.height ?? 0,
+});
+
+/** A board item's data, from its node, if it is one. */
+const itemData = (node: Node): Record<string, unknown> | undefined => (node.data as { item?: { data?: Record<string, unknown> } }).item?.data;
+
+/**
+ * The boxes to say of `nodes` (where tiles and items are saved) drawn as `shown` (pushed aside by an expanded tile or
+ * not): each one drawn elsewhere, or other than its size (`sizes`, a text item's by its text), and each agent note with
+ * its height for its text (`fits`) at the width it is drawn, measured in `look` and as it is now.
+ */
+export function measuredBoxes(
+  nodes: readonly Node[],
+  shown: readonly Node[],
+  sizes: ReadonlyMap<string, Size>,
+  fits: ReadonlyMap<string, NoteFit>,
+  look: AgentNoteLook,
+): MeasuredBox[] {
+  const saved = new Map(nodes.map((node) => [node.id, node]));
+  return shown.flatMap((node) => {
+    const at = saved.get(node.id);
+    if (at === undefined || !MEASURED.test(node.id)) return [];
+    const box = { key: node.id, saved: boxOf(at, undefined), drawn: boxOf(node, sizes.get(node.id)) };
+    const fit = fits.get(node.id);
+    const holds = fit !== undefined && near(fit.width, box.saved.width) && fit.context === noteFitContext(look, itemData(node) ?? {});
+    if (holds) return [{ ...box, fits: { height: fit.height, text: measuredText(fit.text) } }];
+    return sameRect(box.saved, box.drawn) ? [] : [box];
+  });
+}
+
+/** The tiles `expanded` among `nodes`: where each is saved, at its expanded size. What the rest are drawn round. */
+export function expandedBoxes(nodes: readonly Node[], expanded: ExpandedTiles): ExpandedBox[] {
+  const saved = new Map(nodes.map((node) => [node.id, node]));
+  return expanded.flatMap((tile) => {
+    const node = saved.get(tile.id);
+    return node === undefined ? [] : [{ key: tile.id, x: node.position.x, y: node.position.y, width: tile.width, height: tile.height }];
+  });
+}
+
+/** Whether two reports say the same. */
+export function sameReport(a: LayoutMeasured, b: LayoutMeasured): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// What the items drawn now measured of themselves, by node id. Kept once an item is no longer drawn (off screen, where
+// the board draws nothing): a note's fit is said only while its width and what else is drawn round its text are as they
+// were, and the daemon uses it only while the note says the same; a text item's size only while it is saved as it was,
+// though text changed while it was off screen goes unmeasured until it is drawn again.
+const drawnSizes = new Map<string, Size>();
+const noteFits = new Map<string, NoteFit>();
+const listeners = new Set<() => void>();
+let version = 0;
+const changed = () => {
+  version++;
+  for (const listener of listeners) listener();
+};
+
+/** A text item's size as its text takes it, as it is drawn. */
+export function reportDrawnSize(id: string, size: Size): void {
+  const was = drawnSizes.get(id);
+  if (was !== undefined && near(was.width, size.width) && near(was.height, size.height)) return;
+  drawnSizes.set(id, size);
+  changed();
+}
+
+/** An agent note's height for its text, as it is drawn. */
+export function reportNoteFit(id: string, fit: NoteFit): void {
+  const was = noteFits.get(id);
+  if (was !== undefined && near(was.width, fit.width) && near(was.height, fit.height) && was.text === fit.text && was.context === fit.context) return;
+  noteFits.set(id, fit);
+  changed();
+}
+
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+};
+
+/**
+ * Says how this window draws `nodes` as `shown`, round the tiles `expanded`, to the daemon, a moment after it changes,
+ * while this window is the one in front (and again each time it comes to the front). Once it is no longer in front it
+ * says so (`away`), so an arrange waits on no measure from it. A capture window says nothing.
+ */
+export function useMeasuredBoxes(nodes: readonly Node[], shown: readonly Node[], expanded: ExpandedTiles, look: AgentNoteLook): void {
+  const focused = useWindowFocused();
+  const measuredVersion = useSyncExternalStore(subscribe, () => version);
+  const sent = useRef<LayoutMeasured | undefined>(undefined);
+  const say = (report: LayoutMeasured) => {
+    sent.current = report;
+    window.agentBoard.view.measured(report).catch(() => {
+      sent.current = undefined;
+    });
+  };
+  useEffect(() => {
+    if (CAPTURE_FRAME !== undefined) return;
+    if (!focused) {
+      if (sent.current !== undefined && sent.current.away !== true) say({ ...sent.current, away: true });
+      return;
+    }
+    const timer = setTimeout(() => {
+      const report = { boxes: measuredBoxes(nodes, shown, drawnSizes, noteFits, look), expanded: expandedBoxes(nodes, expanded) };
+      if (sent.current === undefined || !sameReport(sent.current, report)) say(report);
+    }, SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [focused, nodes, shown, expanded, look, measuredVersion]);
+}

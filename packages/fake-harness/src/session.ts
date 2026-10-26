@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { runHooks, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
 import { execFile } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
+import * as demo from './demo.ts';
 import { drawRateLimitMenu, rateLimitMenuRows, RATE_LIMIT_CONTINUE, RATE_LIMIT_STOP_ROW } from './rate-limit-menu.ts';
 
 /** One message of a conversation, as a resumed session shows it again. */
@@ -27,18 +30,12 @@ export interface Transcript {
   turnComplete(turnId: string, lastMessage: string): void;
 }
 
-/** A tool's response as text: a shell's stdout and stderr, other objects as JSON. */
-export function toolOutput(response: unknown): string {
-  if (typeof response === 'string') return response;
-  const { stdout, stderr } = (response ?? {}) as { stdout?: unknown; stderr?: unknown };
-  if (typeof stdout === 'string') return [stdout, stderr].filter((text) => typeof text === 'string' && text !== '').join('\n');
-  return JSON.stringify(response);
-}
-
 /** Everything that differs between the fake claude and the fake codex, named for the behaviour it switches. */
 export interface Dialect {
   harness: HarnessName;
   displayName: string;
+  /** The version it reports, which a demo's welcome box shows. */
+  version: string;
   sessionId: string;
   cwd: string;
   model: string;
@@ -76,6 +73,10 @@ export interface Dialect {
   sessionEndReason?: string;
   /** Pause between streamed words and tool steps. */
   stepDelayMs: number;
+  /** With more than 0, text streams a character at a time, this long apart, instead of a word at a time. */
+  typeMs: number;
+  /** Draws its terminal as the real TUI looks (`demo.ts`), for the `demo-*` scenarios; plain lines otherwise. */
+  demo: boolean;
   /** How long the session sits at the prompt before `idle_prompt` fires (real Claude: about 60 s). */
   idleNotifyMs: number;
 }
@@ -83,7 +84,7 @@ export interface Dialect {
 /** What a fake CLI was asked to do: answer at once (its version, its login), or run a session. */
 export type Invocation =
   | { reply: string; stream?: 'stdout' | 'stderr'; exitCode?: number }
-  | { dialect: Omit<Dialect, 'stepDelayMs' | 'idleNotifyMs'>; prompt: string | undefined; warnings?: string[] };
+  | { dialect: Omit<Dialect, 'stepDelayMs' | 'idleNotifyMs' | 'typeMs' | 'demo'>; prompt: string | undefined; warnings?: string[] };
 
 const MATCH_FIELD: Record<string, string> = {
   PreToolUse: 'tool_name',
@@ -190,6 +191,8 @@ export class FakeSession {
    * names that source instead of its own (`compact`, as Claude's after a compaction).
    */
   async start(): Promise<void> {
+    const { harness, cwd, model, version, shellEnv } = this.dialect;
+    if (this.dialect.demo) this.printLines(demo.welcome(harness, { cwd, model, version, home: shellEnv.HOME }));
     if (this.resumed) {
       for (const { role, text } of this.dialect.transcript.history()) this.print(role === 'user' ? `> ${text}\n` : `${text}\n`);
     }
@@ -201,7 +204,8 @@ export class FakeSession {
     this.inTurn = true;
     this.interrupted = false;
     this.turnId = randomUUID();
-    this.print(`> ${prompt}\n`);
+    if (this.dialect.demo) this.printLines(demo.userPrompt(this.dialect.harness, prompt));
+    else this.print(`> ${prompt}\n`);
     this.dialect.transcript.userPrompt(prompt, this.turnId);
     const lost = this.promptTyped && this.promptHooksToLose > 0;
     this.promptTyped = false;
@@ -232,13 +236,24 @@ export class FakeSession {
   }
 
   /**
-   * Streams text to the terminal word by word, then records it as one assistant message. `atOnce` prints it whole, after
-   * one step, for text whose length is not the scenario's to pace (what a server sent).
+   * Streams text to the terminal word by word (a character at a time with `typeMs`), then records it as one assistant
+   * message. `atOnce` prints it whole, after one step, for text whose length is not the scenario's to pace (what a
+   * server sent).
    */
   async say(text: string, atOnce = false): Promise<void> {
-    for (const word of atOnce ? [text] : text.split(/(?<= )/)) {
-      this.print(word);
-      await this.pause();
+    const shown = this.dialect.demo ? demo.assistantText(this.dialect.harness, text).join('\n') : text;
+    if (!atOnce && this.dialect.typeMs > 0) {
+      // A colour code goes out whole, with the character after it: only what shows is typed.
+      // eslint-disable-next-line no-control-regex -- the demo's colour codes
+      for (const [character] of shown.matchAll(/(?:\x1b\[[0-9;]*m)*[^]/g)) {
+        this.print(character);
+        await this.sleep(this.dialect.typeMs);
+      }
+    } else {
+      for (const word of atOnce ? [shown] : shown.split(/(?<= )/)) {
+        this.print(word);
+        await this.pause();
+      }
     }
     this.print('\n');
     this.dialect.transcript.assistantText(text);
@@ -257,17 +272,21 @@ export class FakeSession {
     inside?: SubagentScope,
   ): Promise<boolean> {
     const id = toolUseId();
+    const { harness, cwd } = this.dialect;
     if (!inside) this.dialect.transcript.toolUse(id, name, input);
-    this.print(`● ${name}(${JSON.stringify(input)})\n`);
+    if (this.dialect.demo) this.printLines([demo.toolHeading(harness, name, input, cwd)]);
+    else this.print(`● ${name}(${JSON.stringify(input)})\n`);
     await this.fire('PreToolUse', { ...inside, tool_name: name, tool_input: input, tool_use_id: id });
 
     if (needsPermission && !(await this.askPermission(name, input, inside))) {
       if (!inside) this.dialect.transcript.toolResult(id, 'The user denied this tool call.', true);
-      this.print('  ⎿ Denied\n');
+      if (this.dialect.demo) this.printLines(demo.toolDenied(harness));
+      else this.print('  ⎿ Denied\n');
       return false;
     }
 
     await this.pause();
+    if (this.dialect.demo) this.printLines(demo.toolResult(harness, name, input, response, cwd));
     if (!inside) this.dialect.transcript.toolResult(id, response, false);
     await this.fire('PostToolUse', { ...inside, tool_name: name, tool_input: input, tool_response: response, tool_use_id: id });
     return true;
@@ -286,7 +305,8 @@ export class FakeSession {
       }),
     );
     await this.runTool(this.shellTool, { command, description: command }, { stdout, stderr, interrupted: false });
-    this.print(`${stdout}${stderr}`);
+    // A demo's tool call shows its output already.
+    if (!this.dialect.demo) this.print(`${stdout}${stderr}`);
     return stdout;
   }
 
@@ -349,7 +369,7 @@ export class FakeSession {
       throw error;
     }
     await this.runTool(`mcp__${server}__${tool}`, args, { content: [{ type: 'text', text: result.text }], isError: result.isError });
-    this.print(`${result.text}\n`);
+    if (!this.dialect.demo) this.print(`${result.text}\n`);
     return result;
   }
 
@@ -370,14 +390,16 @@ export class FakeSession {
     const agentId = randomUUID().replaceAll('-', '').slice(0, 17);
     const input = { description: task, prompt: task, subagent_type: agentType };
     this.dialect.transcript.toolUse(id, this.dialect.subagentToolName, input);
-    this.print(`● ${this.dialect.subagentToolName}(${agentType}: ${task})\n`);
+    if (this.dialect.demo) this.printLines([demo.toolHeading(this.dialect.harness, agentType, { description: task }, this.dialect.cwd)]);
+    else this.print(`● ${this.dialect.subagentToolName}(${agentType}: ${task})\n`);
     await this.fire('PreToolUse', { tool_name: this.dialect.subagentToolName, tool_input: input, tool_use_id: id });
     await this.fire('SubagentStart', { agent_id: agentId, agent_type: agentType });
     await this.pause();
     if (typeof result === 'function') {
       result = await result({ agent_id: agentId, agent_type: agentType });
-      this.print(`${result}\n`);
+      if (!this.dialect.demo) this.print(`${result}\n`);
     }
+    if (this.dialect.demo) this.printLines(demo.toolResult(this.dialect.harness, agentType, {}, result, this.dialect.cwd));
     const agentTranscriptPath = this.dialect.transcript.subagent(agentId, agentType, task, result, id);
     await this.fire('SubagentStop', {
       stop_hook_active: false,
@@ -393,6 +415,52 @@ export class FakeSession {
       tool_response: { content: [{ type: 'text', text: result }] },
       tool_use_id: id,
     });
+  }
+
+  /**
+   * The spinner a TUI shows while the model thinks, `frames` frames a step apart, then cleared. With no step delay it
+   * shows one frame, so a test's output stays short. Demo only: elsewhere it does nothing.
+   */
+  async think(frames = 6): Promise<void> {
+    if (!this.dialect.demo) return;
+    const shown = this.dialect.stepDelayMs > 0 ? frames : 1;
+    for (let frame = 0; frame < shown; frame++) {
+      this.print(`\r\x1b[2K${demo.spinner(this.dialect.harness, frame)}`);
+      await this.pause();
+    }
+    this.print('\r\x1b[2K');
+  }
+
+  /** Updates its todo list with the harness's own tool: Claude's `TodoWrite`, Codex's `update_plan`. */
+  async updateTodos(todos: demo.Todo[]): Promise<void> {
+    if (this.dialect.harness === 'codex') {
+      await this.runTool('update_plan', { plan: todos.map(({ content, status }) => ({ step: content, status })) }, 'Plan updated');
+      return;
+    }
+    const input = { todos: todos.map((todo) => ({ ...todo, activeForm: todo.content })) };
+    await this.runTool('TodoWrite', input, { oldTodos: [], newTodos: input.todos });
+  }
+
+  /** Writes `text` to `path` (relative to its folder) for real, as a file-writing tool call: Claude's `Write`, Codex's `apply_patch`. */
+  async writeFile(path: string, text: string): Promise<void> {
+    const file = resolve(this.dialect.cwd, path);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    if (this.dialect.harness === 'codex') await this.runTool('apply_patch', { path: file, content: text }, 'Success');
+    else await this.runTool('Write', { file_path: file, content: text }, { type: 'create', filePath: file, content: text });
+  }
+
+  /**
+   * An edit of `path` shown as its diff, one hunk: Claude's `Edit` tool (its `structuredPatch` answer), Codex's
+   * `apply_patch`. The file is not touched: a demo's repo need not have it.
+   */
+  async edit(path: string, hunk: demo.PatchHunk): Promise<void> {
+    const file = resolve(this.dialect.cwd, path);
+    const side = (mark: string) => hunk.lines.filter((line) => line[0] !== mark).map((line) => line.slice(1)).join('\n');
+    const [oldString, newString] = [side('+'), side('-')];
+    const response = { filePath: file, oldString, newString, structuredPatch: [{ ...hunk, oldLines: oldString.split('\n').length, newLines: newString.split('\n').length }] };
+    if (this.dialect.harness === 'codex') await this.runTool('apply_patch', { path: file }, response);
+    else await this.runTool('Edit', { file_path: file, old_string: oldString, new_string: newString }, response);
   }
 
   /** Ends the turn. */
@@ -612,7 +680,8 @@ export class FakeSession {
     const decision = permissionDecision(await this.fire('PermissionRequest', fields));
     if (decision) return decision === 'allow';
 
-    this.print(`Do you want to allow ${name}? (y/n) `);
+    if (this.dialect.demo) this.printLines(demo.permissionPrompt(this.dialect.harness, input, this.dialect.cwd));
+    else this.print(`Do you want to allow ${name}? (y/n) `);
     if (this.dialect.notificationEvents) {
       await this.fire('Notification', {
         message: `${this.dialect.displayName} needs your permission to use ${name}`,
@@ -621,7 +690,8 @@ export class FakeSession {
       });
     }
     const answer = await this.readLine();
-    return answer !== undefined && /^y(es)?$/i.test(answer.trim());
+    if (answer === undefined) return false;
+    return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
   }
 
   private async fire(event: string, fields: Record<string, unknown>): Promise<HookOutput[]> {
@@ -646,9 +716,15 @@ export class FakeSession {
     process.stdout.write(text);
   }
 
+  private printLines(lines: string[]): void {
+    this.print(`${lines.join('\n')}\n`);
+  }
+
   private pause(): Promise<void> {
-    return this.untilInterrupted(
-      this.dialect.stepDelayMs > 0 ? new Promise((resolve) => setTimeout(resolve, this.dialect.stepDelayMs)) : Promise.resolve(),
-    );
+    return this.sleep(this.dialect.stepDelayMs);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return this.untilInterrupted(ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
   }
 }

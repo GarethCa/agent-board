@@ -7,7 +7,8 @@ import { ConfigError, mergeHooks, readHooksFile, validateMatchers, type HooksCon
 import { codexMcpServers } from './mcp.ts';
 import { parseTomlValue } from './toml.ts';
 import { appendJsonl, readJsonlFile } from './jsonl.ts';
-import { toolOutput, type ConversationMessage, type Invocation, type Transcript } from './session.ts';
+import { type ConversationMessage, type Invocation, type Transcript } from './session.ts';
+import { toolOutput } from './tool-output.ts';
 
 const FLAGS: FlagSpec = {
   valued: new Set([
@@ -71,6 +72,7 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
     dialect: {
       harness: 'codex',
       displayName: 'Codex',
+      version: CODEX_VERSION,
       interactive: subcommand !== 'exec' && subcommand !== 'e',
       sessionId,
       cwd,

@@ -245,6 +245,7 @@ import { useZoneResize } from './use-zone-resize';
 import { isQuestionNodeId, QUESTION_CARD_TYPE, questionTethers, type QuestionNodeType } from './question-cards';
 import { QuestionCardNode } from './QuestionCardNode';
 import { useQuestionCards } from './use-question-cards';
+import { useMeasuredBoxes } from './measured-boxes';
 import { CAPTURE_FRAME, captureViewport, edgesAmong, nodesInZone, useCaptureReady } from './capture-mode';
 
 // Module-level so React Flow never sees a new object and re-mounts every node.
@@ -681,6 +682,7 @@ function BoardView() {
   const questionCards = useQuestionCards(agents, shown, report('move the question card'));
   const clockStatuses = useClockStatuses(report, loaded);
   useCaptureReady(loaded);
+  useMeasuredBoxes(nodes, shown, expandedRef.current, agentNoteLook);
   applyCardChanges.current = questionCards.apply;
   const drawn = useMemo(() => (questionCards.cards.length === 0 ? shown : [...shown, ...(questionCards.cards as unknown as BoardNode[])]), [shown, questionCards.cards]);
 
@@ -2463,6 +2465,13 @@ function BoardView() {
           void reloadExternals();
           toasts.show({ tone: 'success', message: `${group.name} is a group again: its agents keep their repos` });
         }, report('unbind the zone'));
+      },
+      initRepo(zone) {
+        setNotice(undefined);
+        window.agentBoard.zones.initRepo(zone.id).then((bound) => {
+          setNodes((current) => withZone(current, bound));
+          toasts.show({ tone: 'success', message: `${bound.name} is a git repo now: new agents get worktrees of their own` });
+        }, report('make it a git repo'));
       },
       pickDefaultRepo: setDefaultRepoZone,
       tidy: (zone) => tidyZone(zone.id),

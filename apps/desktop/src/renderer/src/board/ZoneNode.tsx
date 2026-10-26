@@ -102,6 +102,8 @@ export const BindZoneContext = createContext<(zone: Zone, as: ZoneBinding) => vo
  */
 export interface ZoneBindingActions {
   unbind(zone: Zone): void;
+  /** Makes a group's folder of the user's a git repo, with no commit, and binds the zone to it. */
+  initRepo(zone: Zone): void;
   /** Asks for a group's default repo, to set or clear it. */
   pickDefaultRepo(zone: Zone): void;
   /** Lays its tiles out in rows, in reading order, and fits its height to them. */
@@ -132,6 +134,7 @@ export interface ZoneBindingActions {
 }
 export const ZoneBindingContext = createContext<ZoneBindingActions>({
   unbind: () => {},
+  initRepo: () => {},
   pickDefaultRepo: () => {},
   tidy: () => {},
   setSpacing: () => {},
@@ -259,7 +262,9 @@ export const ZoneNode = memo(function ZoneNode({
     clone !== null
       ? `Cloning ${clone.repo} into ${clone.path}`
       : zone.repoRoot === null
-      ? 'A group: bound to no repo'
+      ? zone.userFolder
+        ? `${zone.groupFolder}, outside git: its agents share it`
+        : 'A group: bound to no repo'
       : zone.folder === ''
         ? zone.repoRoot
         : `${zone.repoRoot}/${zone.folder}`;
@@ -506,6 +511,16 @@ export const ZoneNode = memo(function ZoneNode({
                       onSelect: () => binding.pickDefaultRepo(zone),
                     }
                   : { label: 'Unbind', icon: <Unlink />, hint: 'Its agents keep their repos, and it keeps its issues', onSelect: () => binding.unbind(zone) },
+                ...(zone.userFolder
+                  ? [
+                      {
+                        label: 'Make it a git repo',
+                        icon: <GitBranch />,
+                        hint: 'git init, with no commit: new agents then get worktrees of their own',
+                        onSelect: () => binding.initRepo(zone),
+                      },
+                    ]
+                  : []),
                 {
                   label: zone.boardMcp ? 'Turn off board MCP' : 'Turn on board MCP',
                   icon: <Plug />,

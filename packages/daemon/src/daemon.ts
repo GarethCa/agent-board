@@ -24,6 +24,7 @@ import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import { boardMcpHandlers } from './board-mcp.ts';
 import { openBoardSession } from './board-ops.ts';
 import { createCaptureHost } from './zone-captures.ts';
+import { createLayoutMeasures } from './layout-measures.ts';
 import { layoutHandlers, spotBesideAgent, type DaemonCall } from './orchestrator-layout.ts';
 import { agentNoteAuthor } from './agent-notes.ts';
 import { createOrchestratorHost, type OrchestratorHost } from './orchestrators.ts';
@@ -142,6 +143,8 @@ export interface DaemonOptions {
   permissionHoldMs?: number;
   /** How long a picture of a zone is waited for from the app: 15 s by default (`zone-captures.ts`). */
   captureTimeoutMs?: number;
+  /** How long an arrange waits for the app to measure the notes it wrote: 1.5 s by default (`layout-measures.ts`). */
+  measureWaitMs?: number;
   /** How often agents at their prompt are looked at for commands left running in the background: 5 s by default. */
   backgroundPollMs?: number;
   /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
@@ -732,6 +735,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     const orchestratorHandlers = orchestrators.handlers<SessionSubscriber & BoardConnection>();
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
+    const measures = createLayoutMeasures({ mayReport: captures.serves, ...(options.measureWaitMs === undefined ? {} : { waitMs: options.measureWaitMs }) });
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
@@ -809,9 +813,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection as SessionSubscriber & BoardConnection),
         close: async (params, connection) => orchestratorHandlers['orchestrator.close'](params as never, connection as SessionSubscriber & BoardConnection),
         capture: captures.request,
+        measures,
         warn: log,
       }),
       ...captures.handlers,
+      ...measures.handlers,
       ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...documents.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),

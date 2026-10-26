@@ -107,6 +107,7 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.setTracker', { id, tracker }),
   );
   ipcMain.handle(ZONE_IPC.unbind, (_event, id: string) => daemon.call('zone.unbind', { id }));
+  ipcMain.handle(ZONE_IPC.initRepo, (_event, id: string) => daemon.call('zone.initRepo', { id }));
   ipcMain.handle(ZONE_IPC.setDefaultRepo, (_event, id: string, path: string | null) =>
     daemon.call('zone.setDefaultRepo', { id, path }),
   );

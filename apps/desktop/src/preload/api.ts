@@ -102,6 +102,7 @@ import type {
   PlanSummary,
   DocumentContent,
   DocumentSummary,
+  LayoutMeasured,
 } from '@agent-board/daemon/protocol';
 import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
@@ -225,6 +226,7 @@ export const ZONE_IPC = {
   configure: 'zone:configure',
   setTracker: 'zone:setTracker',
   unbind: 'zone:unbind',
+  initRepo: 'zone:initRepo',
   setDefaultRepo: 'zone:setDefaultRepo',
   roleTemplates: 'zone:roleTemplates',
   setRoleTemplate: 'zone:setRoleTemplate',
@@ -278,6 +280,8 @@ export interface ZonesApi {
   setTracker(id: string, tracker: ZoneTracker | null): Promise<Zone>;
   /** Unbinds the zone back into a group: no repo, tracker or default repo. Its agents keep their own repos. */
   unbind(id: string): Promise<Zone>;
+  /** Makes a group's folder of the user's a git repo (`git init`, no commit) and binds the zone to it. */
+  initRepo(id: string): Promise<Zone>;
   /** Sets a group's default repo (a repo, or a folder in one), or clears it with null. */
   setDefaultRepo(id: string, path: string | null): Promise<Zone>;
   /** The zone's prompt template for each role. */
@@ -1250,6 +1254,7 @@ export interface WindowsApi {
 export const VIEW_IPC = {
   get: 'view:get',
   set: 'view:set',
+  measured: 'view:measured',
 } as const;
 
 /** How the app left the board (its viewport, its session windows), kept by the daemon so it outlives a restart. */
@@ -1258,6 +1263,11 @@ export interface ViewApi {
   get(key: string): Promise<unknown>;
   /** Saves `value` (JSON, up to 64 KiB) under `key`; null forgets it. */
   set(key: string, value: unknown): Promise<void>;
+  /**
+   * Says how this window draws the board now (`layout.measured`), replacing what was said before: kept in the daemon's
+   * memory only, and said again by main when it reconnects.
+   */
+  measured(report: LayoutMeasured): Promise<void>;
 }
 
 export const APPEARANCE_IPC = {

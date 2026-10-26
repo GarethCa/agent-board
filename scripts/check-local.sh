@@ -59,7 +59,10 @@ case "${AGENT_BOARD_GATE:-}:$log_dir" in 1:/*) marks=1 ;; esac
 # Run from inside an agent on a live board, the steps would inherit its AGENT_BOARD_* (where its hooks and socket are,
 # who the agent is) and the tests' daemons, fakes and app would talk to that board. Keep only the run knobs,
 # the list RUN_KNOBS in packages/fake-harness/src/board-guard.ts. packages/fake-harness/test/board-guard.test.ts checks the two
-# match by reading the kept names from the one `case` line below, indented four spaces: keep that shape.
+# match by reading the kept names from the one `case` line below, indented four spaces: keep that shape. A
+# FORCE_HYPERLINK that carries agent-board's marker was set for the agent, not by the user, so it goes with the marker,
+# as scrubBoardEnv drops it; kept, the tests' app would take it for the user's own.
+if [ -n "${AGENT_BOARD_FORCED_HYPERLINK:-}" ]; then unset FORCE_HYPERLINK; fi
 for var in $(env | sed -n 's/^\(AGENT_BOARD_[A-Za-z0-9_]*\)=.*/\1/p'); do
   case $var in
     AGENT_BOARD_GATE | AGENT_BOARD_E2E_WORKERS | AGENT_BOARD_E2E_LOCK | AGENT_BOARD_E2E_LOCK_WAIT_MIN | AGENT_BOARD_HEADED | AGENT_BOARD_E2E_SHOTS) ;;

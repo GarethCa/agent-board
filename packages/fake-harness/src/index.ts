@@ -25,6 +25,8 @@ export interface FakeHarnessEnvOptions {
   home: string;
   /** Pause between streamed words and tool steps. Defaults to 0. */
   stepDelayMs?: number;
+  /** With more than 0, streamed text comes a character at a time, this many ms apart, instead of a word a step. Defaults to 0. */
+  typeMs?: number;
   /** How long an idle Claude session waits before firing `idle_prompt`. Defaults to 0; the real CLI waits about 60 s. */
   idleNotifyMs?: number;
   /** Replay the scenario for every later prompt too, instead of a plain turn. Defaults to false. */
@@ -77,6 +79,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_SCENARIO: options.scenario,
     FAKE_HARNESS_STEP_DELAY_MS: String(options.stepDelayMs ?? 0),
     FAKE_HARNESS_IDLE_NOTIFY_MS: String(options.idleNotifyMs ?? 0),
+    FAKE_HARNESS_TYPE_MS: String(options.typeMs ?? 0),
     FAKE_HARNESS_REPEAT: options.repeat ? '1' : '0',
     FAKE_HARNESS_MCP_CANCEL: options.mcpCancel === false ? '0' : '1',
     FAKE_HARNESS_START_DELAY_MS: String(options.startDelayMs ?? 0),

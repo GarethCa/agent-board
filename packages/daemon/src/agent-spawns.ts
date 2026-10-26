@@ -45,7 +45,7 @@ import {
   nameSlug,
   removeWorktree,
 } from './worktrees.ts';
-import { groupFolder, initProject, resolveZoneFolder } from './zones.ts';
+import { groupFolder, initProject, resolveZoneFolder, zoneFolder } from './zones.ts';
 
 /** Codex's flag that runs untrusted hooks without review (ADR-0004). */
 export const CODEX_BYPASS_FLAG = '--dangerously-bypass-hook-trust';
@@ -189,6 +189,7 @@ export function createAgentSpawns(
        owns_worktree, harness_session_id, orchestrate, spawned_by, reviews_branch, reviews_head)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  const setPlainFolder = db.prepare('UPDATE agents SET plain_folder = 1 WHERE session_id = ?');
   const selectNames = db.prepare('SELECT name FROM agents');
   const setReadOnly = db.prepare('UPDATE agents SET read_only = 1 WHERE session_id = ?');
   const setMaster = db.prepare('UPDATE agents SET master = 1 WHERE session_id = ?');
@@ -336,7 +337,9 @@ export function createAgentSpawns(
     }
     if (repo !== undefined) {
       if (!isAbsolute(repo.path)) throw invalidParams(`repo path must be absolute, got ${repo.path}`);
-      return resolveZoneFolder(repo.path);
+      const found = await zoneFolder(repo.path);
+      if (found.repoRoot === null) throw invalidParams(`${found.path} is not in a git repo: add a zone for it to run agents there outside git, or pick a repo`);
+      return found;
     }
     if (zone === undefined) throw invalidParams('pick a repo to start the agent in');
     if (zone.repo_root !== null) return { repoRoot: zone.repo_root, folder: zone.folder };
@@ -466,7 +469,8 @@ export function createAgentSpawns(
     if (inGroup && (reviewer || params.branch !== undefined || params.baseBranch !== undefined)) {
       throw invalidParams(`${zone.name} has no repo for a branch, base branch or reviewer: give the agent one to work in`);
     }
-    const folder = inGroup ? groupFolder(options.groupsDir, zone.id) : undefined;
+    // The folder outside git the group was added for, else the one the app makes for it.
+    const folder = inGroup ? (zone.group_folder ?? groupFolder(options.groupsDir, zone.id)) : undefined;
     const at: FolderPlace | undefined = place ?? (folder === undefined ? undefined : { cwd: folder, repoRoot: folder, readOnly: false });
     // The repo's own checkout, with no worktree, is the user's to give (ADR-0011): an orchestrator's agents each get their own.
     const mainCheckout = params.checkout === 'main' && at === undefined;
@@ -485,7 +489,7 @@ export function createAgentSpawns(
     reservedNames.set(id, shownName);
     const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, spawnedBy: spawnedBy ?? null };
     const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
-      startAgent({ id, shownName, params, spawnedBy, place: at, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
+      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
     const progress = starts.open(shown, {
       retry: (again, allow) => void run(again, allow).catch(() => {}),
       dismissed: () => reservedNames.delete(id),
@@ -508,6 +512,8 @@ export function createAgentSpawns(
       params: SpawnAgentParams;
       spawnedBy: string | undefined;
       place: FolderPlace | undefined;
+      /** Its place is its group's own folder, outside git. */
+      plain: boolean;
       used: { template: string | null } | undefined;
       zone: ZoneRow | undefined;
       harness: Harness;
@@ -521,7 +527,7 @@ export function createAgentSpawns(
     },
     progress: StartProgress,
   ): Promise<Agent> => {
-    const { id, shownName, params, spawnedBy, place, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
+    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
     const { zoneId, prompt = '', name, issueId, cols, rows } = params;
     const role = choice?.role ?? null;
     // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
@@ -570,13 +576,14 @@ export function createAgentSpawns(
           : { repoRoot: place.repoRoot, folder: '', undo: undefined };
       if (undoRepo !== undefined) undo.unshift(undoRepo);
       stillWanted();
-      // Timed inside the repo's queue, so a step that gives up frees it for the next start in the repo.
-      const { branch, worktree, baseCommit, reviews } = place !== undefined ? { branch: '', worktree: place.cwd, baseCommit: null, reviews: null } : mainCheckout ? await within(inMainCheckout(repoRoot), 'reading the checkout') : await inRepoQueue(repoRoot, () => within((async () => {
+      // Timed inside the repo's queue, so a step that gives up frees it for the next start in the repo. `owns` is whether
+      // a worktree and branch were made for it, which deleting it removes.
+      const { branch, worktree, baseCommit, reviews, owns } = place !== undefined ? { branch: '', worktree: place.cwd, baseCommit: null, reviews: null, owns: false } : mainCheckout ? { ...(await within(inMainCheckout(repoRoot), 'reading the checkout')), owns: false } : await inRepoQueue(repoRoot, () => within((async () => {
         if (reviewer) {
           const reviewed = params.baseBranch ?? (await checkedOutBranch(repoRoot).catch(wrapInvalid));
           const worktree = freeWorktreePath(agentWorktreePath(options.worktreesDir, repoRoot, `${reviewed}-review`));
           const head = await addDetachedWorktree(repoRoot, worktree, reviewed).catch(wrapInvalid);
-          return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head } };
+          return { branch: '', worktree, baseCommit: head, reviews: { branch: reviewed, head }, owns: true };
         }
         const branch =
           typedBranch !== undefined
@@ -585,16 +592,26 @@ export function createAgentSpawns(
               ? await freeBranchName(repoRoot, fromIssue.branch)
               : agentBranchName(agentName);
         const worktree = agentWorktreePath(options.worktreesDir, repoRoot, branch);
-        await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid);
-        // What its work is reviewed against: the commit it started from.
-        const head = await runGit(worktree, ['rev-parse', 'HEAD']);
-        return { branch, worktree, baseCommit: head.ok ? head.stdout : null, reviews: null };
-      })(), 'creating the worktree', (made) => removeWorktree(repoRoot, made.worktree, made.branch)));
+        // A repo with no commits yet, and a git too old to branch a worktree from none: it works in the repo's own
+        // checkout instead, as an orchestrator in the main checkout does (ADR-0011). Nothing is committed for it.
+        if (!(await addWorktree(repoRoot, worktree, branch, params.baseBranch).catch(wrapInvalid))) {
+          // A branch asked for by name can't be had there: said so, rather than dropped.
+          if (typedBranch !== undefined) {
+            throw invalidParams(`${basename(repoRoot)} has no commits yet, and this git is too old (before 2.42) to start ${typedBranch} with none: update git, or start the agent without a branch`);
+          }
+          return { ...(await inMainCheckout(repoRoot)), owns: false };
+        }
+        // What its work is reviewed against: the commit it started from, or, on a branch begun with no commit
+        // before it, the empty tree, as all of the branch is its work.
+        const head = await runGit(worktree, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+        const base = head.ok ? head : await runGit(worktree, ['hash-object', '-t', 'tree', '/dev/null']);
+        return { branch, worktree, baseCommit: base.ok ? base.stdout : null, reviews: null, owns: true };
+      })(), 'creating the worktree', async (made) => {
+        if (made.owns) await removeWorktree(repoRoot, made.worktree, made.branch);
+      }));
       // A folder it was put in is not its own: it stays.
-      if (place === undefined && !mainCheckout) {
-        undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
-        progress.step('worktree', 'done', branch || basename(worktree));
-      }
+      if (owns) undo.unshift(() => removeWorktree(repoRoot, worktree, branch));
+      if (place === undefined && !mainCheckout) progress.step('worktree', 'done', branch || basename(worktree));
       stillWanted();
       progress.step('launch', 'now');
       // The tile shows the issue already: describe the work by the typed task, else the issue's own description.
@@ -660,7 +677,7 @@ export function createAgentSpawns(
         tile.position === null ? null : frontZ(db),
         null,
         baseCommit,
-        place === undefined && !mainCheckout ? 1 : 0,
+        owns ? 1 : 0,
         null,
         orchestrate,
         spawnedBy ?? null,
@@ -673,6 +690,7 @@ export function createAgentSpawns(
         options.promptQueued(id);
       }
       if (readOnly) setReadOnly.run(id);
+      if (plain) setPlainFolder.run(id);
       if (place?.master === true) setMaster.run(id);
       if (spawnedBy !== undefined) {
         setCrewDepth.run(spawnedBy, id);

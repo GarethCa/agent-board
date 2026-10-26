@@ -1,6 +1,6 @@
 {
   "name": "@agent-board/desktop",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -11,6 +11,7 @@
     "test:e2e": "playwright test --project app --project perf",
     "test:visual": "playwright test --project visual",
     "readme:screenshots": "playwright test --project readme",
+    "promo:spike": "playwright test --project promo",
     "package": "rm -rf dist && electron-vite build && electron-builder --dir && node ../../scripts/app-install/main.ts",
     "test:e2e:packaged": "playwright test --project packaged"
   },
@@ -47,7 +48,7 @@
     "highlight.js": "^11.11.2",
     "lowlight": "^3.3.0",
     "lucide-react": "1.48.0",
-    "node-pty": "1.1.0",
+    "node-pty": "1.2.0-beta.15",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",

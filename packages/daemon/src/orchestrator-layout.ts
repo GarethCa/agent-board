@@ -81,6 +81,7 @@ import {
   type ArrangeResult,
   type BoardArrangeResult,
   type ArrangeSettings,
+  type ExpandedBox,
   type BoardItem,
   type BoardPlace,
   type Connector,
@@ -110,6 +111,7 @@ import { buildZoneMap } from './zone-map.ts';
 import { facingSides, shapeSize } from './diagram.ts';
 import { layOutDiagram, MAX_MERMAID_LENGTH, parseMermaid } from './mermaid.ts';
 import type { CaptureHost } from './zone-captures.ts';
+import type { LayoutMeasures } from './layout-measures.ts';
 import { zoneSketch, type SketchLine } from './zone-sketch.ts';
 
 export type LayoutMethods = Pick<
@@ -149,6 +151,8 @@ export interface LayoutHandlerOptions {
   warn?: (message: string) => void;
   /** Asks the app for a picture of a zone (`zone-captures.ts`). */
   capture: CaptureHost['request'];
+  /** How the app draws the board, as it measured it (`layout-measures.ts`). */
+  measures: LayoutMeasures;
 }
 
 /** Where each orchestrator's arrange settings are kept (`ArrangeSettings`), by its session id. */
@@ -617,6 +621,13 @@ async function readLayoutBoard(call: DaemonCall): Promise<Board> {
   };
 }
 
+/** The tiles expanded in place on `board`: where each is saved, at its expanded size. */
+function expandedOf(board: Board): ExpandedBox[] {
+  return placedOf(board)
+    .filter((each) => board.compact[each.key] !== undefined)
+    .map((each) => ({ key: each.key, x: each.rect.x, y: each.rect.y, width: each.rect.width, height: each.rect.height }));
+}
+
 /** The space a zone's spacing keeps between its edge and what it holds. */
 const paddingOf = (zone: Pick<Zone, 'spacing'>): number => SPACING_GAPS[zone.spacing].padding;
 
@@ -646,6 +657,7 @@ export function layoutHandlers<Context extends BoardConnection>({
   spawn,
   close,
   capture,
+  measures,
   warn = () => {},
 }: LayoutHandlerOptions): RpcHandlers<LayoutMethods & Pick<DaemonMethods, 'orchestrator.spawn' | 'orchestrator.close'>, Context> {
   const zoneMadeBy = db.prepare('SELECT made_by FROM zones WHERE id = ?');
@@ -656,6 +668,18 @@ export function layoutHandlers<Context extends BoardConnection>({
   const markConnector = db.prepare('UPDATE connectors SET made_by = ? WHERE id = ?');
   /** Arranges, one at a time per zone. */
   const arranging = keyedQueue();
+
+  /**
+   * `placed` as the app draws it, if it measured it: an item as big as it is drawn (a text item as its text takes), and
+   * given the tiles expanded now (`at`, `expandedOf`), where it is drawn: pushed aside by them, if they are the ones it
+   * was drawn round. A tile keeps the size the daemon gives it.
+   */
+  const asDrawn = (placed: Placed, at?: readonly ExpandedBox[]): Placed => {
+    const drawn = measures.drawn(placed.key, placed.rect, placed.kind === 'item', at ?? []);
+    if (drawn === undefined) return placed;
+    const size = placed.kind === 'item' ? { width: drawn.width, height: drawn.height } : { width: placed.rect.width, height: placed.rect.height };
+    return { ...placed, rect: { ...(at !== undefined ? { x: drawn.x, y: drawn.y } : { x: placed.rect.x, y: placed.rect.y }), ...size } };
+  };
 
   const madeBy = (statement: typeof zoneMadeBy, id: string): string | null =>
     (statement.get(id) as { made_by: string | null } | undefined)?.made_by ?? null;
@@ -974,10 +998,12 @@ export function layoutHandlers<Context extends BoardConnection>({
   /**
    * How tall each of `clusters`' notes needs to be for its text to show (`notes`, by slot key, what fills them), by
    * cluster key: what it says now if an arrange writes it again, else its own text, and a height it keeps
-   * (`heldHeight`). A sticky's text shrinks to fit its slot instead, so it needs nothing more.
+   * (`heldHeight`). The height is the app's measure of its text, else an estimate: the notes estimated are `guessed`, by
+   * cluster key. A sticky's text shrinks to fit its slot instead, so it needs nothing more.
    */
-  const noteHeightsOf = (me: Orchestrator, clusters: readonly ArrangedCluster[], notes: ReadonlyMap<string, BoardItem>, standing: (id: string) => string) =>
-    new Map(
+  const noteHeightsOf = (me: Orchestrator, clusters: readonly ArrangedCluster[], notes: ReadonlyMap<string, BoardItem>, standing: (id: string) => string) => {
+    const guessed = new Set<string>();
+    const heights = new Map(
       clusters.map((cluster) => {
         const known = notes.get(`${cluster.key}${CLUSTER_NOTE_SLOT}`);
         const said = noteSays(cluster, standing);
@@ -985,10 +1011,15 @@ export function layoutHandlers<Context extends BoardConnection>({
         const agentNote = known === undefined ? me.agent !== null : known.kind === 'agent-note' || (me.agent !== null && !edited(known));
         if (!agentNote) return [cluster.key, 0] as const;
         const keep = known !== undefined && (edited(known) || known.data.arrangeText === said);
-        const needs = agentNoteSize(keep ? String(known.data.text) : said, CLUSTER_NOTE_SIZE.width, 0).height;
+        const text = keep ? String(known.data.text) : said;
+        const measured = known === undefined ? undefined : measures.fits({ key: `item:${known.id}`, width: CLUSTER_NOTE_SIZE.width, text });
+        if (measured === undefined) guessed.add(cluster.key);
+        const needs = measured ?? agentNoteSize(text, CLUSTER_NOTE_SIZE.width, 0).height;
         return [cluster.key, Math.max(needs, (known && heldHeight(known, keep)) ?? 0)] as const;
       }),
     );
+    return { heights, guessed };
+  };
 
   /**
    * The agent notes `me`'s crew put in a cluster's slot before an arrange, by that cluster's note slot key: one made
@@ -1162,14 +1193,18 @@ export function layoutHandlers<Context extends BoardConnection>({
     if (id === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to ${what}`);
     const board = await readBoard();
     const zone = checkDestination(me, board, id)!;
+    const expanded = expandedOf(board);
     const things = placedOf(board)
       .filter((each) => each.zoneId === zone.id)
       .map((each): ZoneMapThing => {
         const item = each.kind === 'item' ? board.items.find((one) => one.id === each.id) : undefined;
         const agent = each.kind === 'agent' ? board.agents.find((one) => one.sessionId === each.id) : undefined;
+        // A turned item as the upright box it takes up, so the map shows (and lints) the room it really takes.
+        const box = (placed: Placed) => (item === undefined ? placed.rect : takenBy(placed));
+        const [saved, shown] = [box(each), box(asDrawn(each, expanded))];
         return { key: each.key, itemKind: item?.kind ?? null, name: item === undefined ? each.name : cutText(noteText(item), 60) || item.kind, state: agent?.state ?? null,
-          // A turned item as the upright box it takes up, so the map shows (and lints) the room it really takes.
-          ...(item === undefined ? each.rect : takenBy(each)),
+          ...shown,
+          ...(shown.x === saved.x && shown.y === saved.y ? {} : { saved: { x: saved.x, y: saved.y } }),
         };
       });
     const { parts, stale } = clusterParts(me, zone.id, board.items);
@@ -1189,7 +1224,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       width: zone.width,
       obstacles: placedOf(board)
         .filter((each) => each.zoneId === zone.id && !ids.has(each.key) && !own.has(each.key))
-        .map(takenBy),
+        .map((each) => takenBy(asDrawn(each))),
       clusters: arrange.by === 'issue' && arrange.layout !== 'grid',
       noteHeights,
     }).positions;
@@ -1200,6 +1235,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       height: zone.height,
       arrange,
       spacing: zone.spacing,
+      unmeasured: !measures.live(),
       things,
       ...buildZoneMap({
         lanes,
@@ -1209,6 +1245,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         spacing: zone.spacing,
         compact: new Map(things.flatMap((thing) => (board.compact[thing.key] === undefined ? [] : [[thing.key, { x: thing.x, y: thing.y, ...board.compact[thing.key]! }] as const]))),
         arranged,
+        measured: measures.live(),
       }),
     };
     return { map, zone };
@@ -1235,37 +1272,89 @@ export function layoutHandlers<Context extends BoardConnection>({
     return access.logged(me, 'arrange', entry, () => arranging(zoneId ?? '', async () => {
       const changed = changes();
       if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to arrange`);
-      const board = await readBoard();
-      const zone = checkDestination(me, board, zoneId)!;
-      entry.on = { id: zone.id, name: zone.name };
-      // Kept only once the arrange is sure to go ahead: a refused one keeps nothing.
-      const { by, layout } = { ...(await settingsOf(me)), ...changed };
-      const inZone = placedOf(board).filter((each) => each.zoneId === zone.id);
-      const tiles = crewOf(me, board, zone);
-      const moving = new Set(tiles.map((tile) => tile.id));
-      // What an arrange of its crew made before (each cluster's label and note) it places again, in place.
-      const clusters = by === 'issue' && layout !== 'grid';
-      const { parts, stale } = clusterParts(me, zone.id, board.items);
-      const ownParts = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
-      const links = await linksOf();
-      const keep = (excluding: ReadonlySet<string>) => inZone.filter((each) => !moving.has(each.key) && !excluding.has(each.key)).map(takenBy);
-      const standing = (id: string) => {
-        const tile = tiles.find((each) => each.id === id)!;
-        const agent = board.agents.find((each) => tileSizeKey('agent', each.sessionId) === id);
-        return standingOf(tile.name, agent);
+      /** The zone and its crew as they are now, and the lanes the crew falls into, from a first pass. */
+      const read = async () => {
+        const board = await readBoard();
+        const zone = checkDestination(me, board, zoneId)!;
+        entry.on = { id: zone.id, name: zone.name };
+        // Kept only once the arrange is sure to go ahead: a refused one keeps nothing.
+        const { by, layout } = { ...(await settingsOf(me)), ...changed };
+        // What it lays out round is as big as the app draws it.
+        const inZone = placedOf(board)
+          .filter((each) => each.zoneId === zone.id)
+          .map((each) => asDrawn(each));
+        const tiles = crewOf(me, board, zone);
+        const moving = new Set(tiles.map((tile) => tile.id));
+        // What an arrange of its crew made before (each cluster's label and note) it places again, in place.
+        const clusters = by === 'issue' && layout !== 'grid';
+        const { parts, stale } = clusterParts(me, zone.id, board.items);
+        const ownParts = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
+        const links = await linksOf();
+        const keep = (excluding: ReadonlySet<string>) => inZone.filter((each) => !moving.has(each.key) && !excluding.has(each.key)).map(takenBy);
+        const standing = (id: string) => {
+          const tile = tiles.find((each) => each.id === id)!;
+          const agent = board.agents.find((each) => tileSizeKey('agent', each.sessionId) === id);
+          return standingOf(tile.name, agent);
+        };
+        // An agent note its crew left in a cluster's slot (`note add --near`) is that cluster's note: not in the way of
+        // the layout. Who is in a cluster doesn't depend on where anything is, so the clusters are read from a first pass.
+        const { spacing } = zone;
+        const grid = zoneGrid(spacing);
+        const first = clusters ? arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: keep(ownParts), clusters }).clusters : [];
+        const byHand = clusters ? handPlaced(me, inZone, board.items, parts, first) : new Map<string, BoardItem>();
+        const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
+        // Each lane makes room for its note at the height its text needs.
+        // Read afresh, as `placeClusters` reads each: the user may have edited one in the app since the board was read.
+        const current = new Map((await call('item.list', undefined)).map((item) => [item.id, item]));
+        const filling = [...matchParts(first, parts).matched, ...byHand].map(([slot, item]) => [slot, current.get(item.id) ?? item] as const);
+        const noteHeights = noteHeightsOf(me, first, new Map(filling), standing);
+        return { board, zone, by, layout, inZone, tiles, clusters, parts, stale, links, standing, spacing, grid, first, byHand, obstacles, filling, noteHeights };
       };
-      // An agent note its crew left in a cluster's slot (`note add --near`) is that cluster's note: not in the way of
-      // the layout. Who is in a cluster doesn't depend on where anything is, so the clusters are read from a first pass.
-      const { spacing } = zone;
-      const grid = zoneGrid(spacing);
-      const first = clusters ? arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: keep(ownParts), clusters }).clusters : [];
-      const byHand = clusters ? handPlaced(me, inZone, board.items, parts, first) : new Map<string, BoardItem>();
-      const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
-      // Each lane makes room for its note at the height its text needs.
-      // Read afresh, as `placeClusters` reads each: the user may have edited one in the app since the board was read.
-      const current = new Map((await call('item.list', undefined)).map((item) => [item.id, item]));
-      const filling = [...matchParts(first, parts).matched, ...byHand].map(([slot, item]) => [slot, current.get(item.id) ?? item] as const);
-      const noteHeights = noteHeightsOf(me, first, new Map(filling), standing);
+      let now = await read();
+      // A lane's agent note about to say something new says it first, in place, so the app can measure what its text
+      // takes; the lanes are laid out once it has, or once it is past waiting for. Only notes already there: a new lane's
+      // note, or an old sticky's that gives way to one, is estimated, as nothing else is written before the arrange is
+      // sure to go ahead. Refused, the notes written first say what they said before (`undo`).
+      const undo: { id: string; was: Pick<BoardItem, 'width' | 'height' | 'data'>; wrote: Record<string, unknown> }[] = [];
+      // What a note said before, put back only while it still says what was written in its place: an edit the user made
+      // meanwhile stays.
+      const rollBack = async () => {
+        const items = new Map((undo.length === 0 ? [] : await call('item.list', undefined)).map((item) => [item.id, item]));
+        for (const { id, was, wrote } of undo.splice(0)) {
+          const now = items.get(id);
+          if (now === undefined || Object.entries(wrote).some(([field, value]) => JSON.stringify(now.data[field]) !== JSON.stringify(value))) continue;
+          const data = Object.fromEntries(Object.keys(wrote).map((field) => [field, was.data[field] ?? null]));
+          await call('item.update', { id, width: was.width, height: was.height, data });
+        }
+      };
+      if (now.clusters && me.agent !== null && measures.live() && now.noteHeights.guessed.size > 0) {
+        const filled = new Map(now.filling);
+        const notes = now.first.flatMap((cluster) => {
+          const known = filled.get(`${cluster.key}${CLUSTER_NOTE_SLOT}`);
+          if (!now.noteHeights.guessed.has(cluster.key) || known?.kind !== 'agent-note') return [];
+          const said = noteSays(cluster, now.standing);
+          const keep = edited(known) || known.data.arrangeText === said;
+          return [{ known, keep, text: keep ? String(known.data.text) : said }];
+        });
+        try {
+          for (const { known, keep, text } of notes) {
+            // As `placeClusters` writes it: its own text, so the next arrange writes it again. Kept, it has nothing new
+            // to say, only perhaps a width to be measured at.
+            const wrote = keep ? {} : saying('agent-note', text, me.name);
+            if (keep && known.width === CLUSTER_NOTE_SIZE.width) continue;
+            undo.push({ id: known.id, was: known, wrote });
+            await call('item.update', { id: known.id, width: CLUSTER_NOTE_SIZE.width, data: wrote });
+          }
+          await measures.measured(notes.map(({ known, text }) => ({ key: `item:${known.id}`, width: CLUSTER_NOTE_SIZE.width, text })));
+          now = await read();
+        } catch (error) {
+          await rollBack();
+          throw error;
+        }
+      }
+      const { board, zone, by, layout, inZone, tiles, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
+      const noteHeights = now.noteHeights.heights;
+      const unmeasured = !measures.live() || (clusters && now.noteHeights.guessed.size > 0);
       // Laid out round `stay` too: the parts it could find no room to park, left where they are.
       const plan = (stay: readonly Rect[]) => {
         const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: [...obstacles, ...stay], clusters, noteHeights });
@@ -1317,8 +1406,13 @@ export function layoutHandlers<Context extends BoardConnection>({
       if (laid.parkKeys.length > 0 && laid.parked.length === 0) laid = plan(laid.toPark.map((item) => ({ x: item.x, y: item.y, width: item.width, height: item.height })));
       const { arranged, positions, matched, left, toPark, parked, sizeWith } = laid;
       const { width, height } = sizeWith(parked);
-      // Checked before anything moves, so a refused arrange leaves the zone as it was.
-      checkGrowth(board, zone, { width, height }, 'arranged,');
+      // Checked before anything moves, so a refused arrange leaves the zone as it was: its notes written first too.
+      try {
+        checkGrowth(board, zone, { width, height }, 'arranged,');
+      } catch (error) {
+        await rollBack();
+        throw error;
+      }
       await keepSettings(me, changed);
       for (const item of stale) await call('item.delete', { id: item.id });
       const moved: LayoutMoved[] = [];
@@ -1346,7 +1440,7 @@ export function layoutHandlers<Context extends BoardConnection>({
           if (item !== undefined && (item.x !== at.x || item.y !== at.y)) await call('item.update', { id: item.id, ...at });
         }
       }
-      return { zoneId: zone.id, width, height, moved };
+      return { zoneId: zone.id, width, height, moved, unmeasured };
     }));
   };
 
