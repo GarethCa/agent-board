@@ -63,22 +63,61 @@ export async function freeTypedBranch(repoRoot: string, branch: string): Promise
   return branch;
 }
 
+/** Whether the repo has a commit yet: one just made with `git init` has none, its HEAD naming a branch to come. */
+async function hasCommit(repoRoot: string): Promise<boolean> {
+  return (await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).ok;
+}
+
+/**
+ * Why there is nothing to start from at the repo's branch `branch`, which has no commit: the repo has none yet, the
+ * branch is one checked out with none yet (an agent's in a repo that had none), or there is no such branch.
+ */
+export async function noBranchWhy(repoRoot: string, branch: string): Promise<string> {
+  if (!(await hasCommit(repoRoot))) return `${basename(repoRoot)} has no commits yet: there is nothing to start from until it has a first commit`;
+  const listed = await runGit(repoRoot, ['worktree', 'list', '--porcelain']);
+  if (listed.ok && listed.stdout.split('\n').includes(`branch refs/heads/${branch}`)) {
+    return `${branch} has no commits yet: there is nothing to start from until it has one`;
+  }
+  return `${basename(repoRoot)} has no branch ${branch}`;
+}
+
+/** The first git that can add a worktree on a branch with no commits (`git worktree add --orphan`). */
+const ORPHAN_WORKTREE_GIT = [2, 42];
+
+/** Whether the git on PATH can add a worktree on a branch with no commits, by its version. */
+async function canAddOrphanWorktree(dir: string): Promise<boolean> {
+  // `git version 2.50.1 (Apple Git-155)`, `git version 2.42.0.windows.1`.
+  const version = /(\d+)\.(\d+)/.exec((await runGit(dir, ['--version'])).stdout);
+  if (version === null) return false;
+  const [major, minor] = [Number(version[1]), Number(version[2])];
+  return major > ORPHAN_WORKTREE_GIT[0]! || (major === ORPHAN_WORKTREE_GIT[0] && minor >= ORPHAN_WORKTREE_GIT[1]!);
+}
+
 /**
  * Creates `branch` at the tip of the repo's branch `base`, or at the commit `base.commit`, (its current HEAD without),
- * checked out in a new worktree at `path`.
+ * checked out in a new worktree at `path`. In a repo with no commits yet, given no base, the new branch has none either
+ * (`--orphan`): nothing is committed for it. Resolves false, having made nothing, when git is too old for that (before
+ * 2.42), so the caller can do without a worktree.
  */
-export async function addWorktree(repoRoot: string, path: string, branch: string, base?: string | { commit: string }): Promise<void> {
+export async function addWorktree(repoRoot: string, path: string, branch: string, base?: string | { commit: string }): Promise<boolean> {
   let start = 'HEAD';
   if (typeof base === 'object') {
     start = base.commit;
   } else if (base !== undefined) {
     const found = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${base}^{commit}`]);
-    if (!found.ok) throw new Error(`${basename(repoRoot)} has no branch ${base}`);
+    if (!found.ok) throw new Error(await noBranchWhy(repoRoot, base));
     start = `refs/heads/${base}`;
+  } else if (!(await hasCommit(repoRoot))) {
+    if (!(await canAddOrphanWorktree(repoRoot))) return false;
+    mkdirSync(dirname(path), { recursive: true });
+    const orphan = await runGit(repoRoot, ['worktree', 'add', '--orphan', '-b', branch, path]);
+    if (!orphan.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${orphan.stderr}`);
+    return true;
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = await runGit(repoRoot, ['worktree', 'add', '-b', branch, path, start]);
   if (!added.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${added.stderr}`);
+  return true;
 }
 
 /**
@@ -87,7 +126,7 @@ export async function addWorktree(repoRoot: string, path: string, branch: string
  */
 export async function addDetachedWorktree(repoRoot: string, path: string, branch: string): Promise<string> {
   const found = await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
-  if (!found.ok) throw new Error(`${basename(repoRoot)} has no branch ${branch}`);
+  if (!found.ok) throw new Error(await noBranchWhy(repoRoot, branch));
   mkdirSync(dirname(path), { recursive: true });
   const added = await runGit(repoRoot, ['worktree', 'add', '--detach', path, found.stdout]);
   if (!added.ok) throw new Error(`could not create a worktree for ${basename(repoRoot)}: ${added.stderr}`);

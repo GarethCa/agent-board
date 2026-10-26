@@ -85,6 +85,8 @@ const NO_CHECK_GLOBS = [
   // The Linux visual tooling is on-request, outside the gate; it and its baselines run nothing beyond the native `visual` step.
   'scripts/visual-linux.sh',
   'docker/**',
+  // The board recordings run on request, in a Playwright project of their own that no gate step runs.
+  'apps/desktop/e2e/capture/**',
 ];
 
 export const SMOKE_SPECS = ['acceptance.spec.ts', 'app.spec.ts', 'tiles.spec.ts', 'session.spec.ts'];
@@ -224,7 +226,7 @@ export function selectChecks(changed: readonly string[], exists: (file: string) 
     return plan;
   }
 
-  plan.unit = files.filter((file) => /\.(ts|tsx|css|json)$/.test(file) && !isSpec(file) && !file.startsWith('docs/'));
+  plan.unit = files.filter((file) => /\.(ts|tsx|css|json)$/.test(file) && !file.startsWith('apps/desktop/e2e/') && !file.startsWith('docs/'));
   plan.reasons.push(
     plan.unit.length > 0 ? `unit: vitest related on ${plan.unit.length} changed file(s)` : 'unit: skipped, no code changed',
   );

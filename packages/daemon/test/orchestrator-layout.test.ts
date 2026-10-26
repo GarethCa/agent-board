@@ -5,10 +5,10 @@ import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testin
 import { agentNoteSize } from '../src/agent-notes.ts';
 import { BOARD_ARRANGE_GAP } from '../src/arrange-board.ts';
 import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
-import { AGENT_TILE_SIZE, clearOf, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
+import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { daemonPaths } from '../src/paths.ts';
-import { AGENT_NOTE_SIZE, BOARD_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type Zone } from '../src/protocol.ts';
+import { AGENT_NOTE_SIZE, BOARD_ERROR, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type BoardItem, type DaemonEvent, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
 // Orchestrators laying out their zone: move, arrange, groups and notes, each checked against the orchestrator's scope,
@@ -950,9 +950,11 @@ describe('the zone map and arranging by itself', () => {
 
   it('keeps a lane’s note at a height it was grown or resized to while its text stays, and makes room for it', async () => {
     const setup = await layoutDaemon();
-    const { me, impl } = await crewWithLanes(setup);
+    const { me, impl, review } = await crewWithLanes(setup);
     const other = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
-    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other review', role: 'reviewer', baseBranch: other.branch });
+    const otherReview = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other review', role: 'reviewer', baseBranch: other.branch });
+    // Each with a line of its own, so a lane's note says the same while its agents start and end their turns.
+    for (const { sessionId } of [impl, review, other, otherReview]) await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId, summary: 'Working' });
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const first = (await me.connection.call('orchestrator.map', { token: me.token })).lanes[0]!.note!;
     const noteOf = async () => (await setup.client.call('item.list')).find((item) => `item:${item.id}` === first)!;
@@ -1736,5 +1738,297 @@ describe('orchestrator.arrangeBoard', () => {
       message: expect.stringMatching(/whole board/),
     });
     expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)).toMatchObject({ x: 3000, y: 0 });
+  });
+});
+
+describe('sizes the app measured', () => {
+  const key = (agent: Agent) => `agent:${agent.sessionId}`;
+
+  async function measuredDaemon({ measureWaitMs }: { measureWaitMs?: number } = {}) {
+    const dataDir = tempDataDir();
+    const daemon = await startTestDaemon({
+      dataDir,
+      worktreesDir: tempDataDir(),
+      agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200 }),
+      ...(measureWaitMs === undefined ? {} : { measureWaitMs }),
+    });
+    const client = await connectTestClient(daemon);
+    const recorder = recordEvents(client);
+    await client.call('settings.set', { arrangeSpacing: 'normal' });
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, width: 1200, height: 600, name: 'web' });
+    const other = await client.call('zone.add', { path: tempRepo('other'), x: 3000, y: 0, name: 'other' });
+    for (const { id } of [zone, other]) await client.call('zone.configure', { id, agentsOrchestrate: false });
+    return { daemon, client, recorder, zone, other, repo: '', dataDir };
+  }
+
+  /**
+   * Connects as the app (the connection that serves captures) and its window: `report` says how it draws the board now,
+   * round the tiles `expanded`, and, with `fits`, every agent note is measured again as it changes, at the height `fits`
+   * gives its text, as the board measures a note it draws.
+   */
+  async function app(setup: Setup, fits?: (text: string) => number) {
+    const client = await connectTestClient(setup.daemon);
+    await client.call('capture.serve');
+    let boxes: MeasuredBox[] = [];
+    let expanded: ExpandedBox[] = [];
+    let away = false;
+    const notes = new Map<string, BoardItem>();
+    const send = () => client.call('layout.measured', { boxes: [...boxes, ...[...notes.values()].map(noteBox)], expanded, away });
+    const noteBox = (item: BoardItem): MeasuredBox => {
+      const box = { x: item.x, y: item.y, width: item.width, height: item.height };
+      return { key: `item:${item.id}`, saved: box, drawn: box, fits: { height: fits!(String(item.data.text)), text: measuredText(String(item.data.text)) } };
+    };
+    if (fits !== undefined) {
+      for (const item of await client.call('item.list')) if (item.kind === 'agent-note') notes.set(item.id, item);
+      client.onEvent((event: DaemonEvent) => {
+        if (event.type === 'item.updated' && event.item.kind === 'agent-note') {
+          notes.set(event.item.id, event.item);
+          if (!away) void send();
+        }
+      });
+    }
+    await send();
+    return {
+      client,
+      report: async (measured: MeasuredBox[], round: ExpandedBox[] = []) => {
+        boxes = measured;
+        expanded = round;
+        await send();
+      },
+      /** Its window is no longer in front: it says so, and nothing more. */
+      leave: async () => {
+        away = true;
+        await send();
+      },
+    };
+  }
+
+  /** A lead with an implementer and its reviewer, arranged. */
+  async function arrangedCrew(setup: Setup) {
+    const me = await lead(setup, setup.zone.id);
+    const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
+    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    return { me, impl, review };
+  }
+
+  it('maps a zone as unmeasured with no app window, and measured while one reports', async () => {
+    const setup = await measuredDaemon();
+    const { me } = await arrangedCrew(setup);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).unmeasured).toBe(true);
+    const window = await app(setup);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).unmeasured).toBe(false);
+    window.client.close();
+    await expect.poll(async () => (await me.connection.call('orchestrator.map', { token: me.token })).unmeasured).toBe(true);
+  });
+
+  it('maps a tile where the app draws it pushed aside by an expanded one, holding the lint to where it is saved', async () => {
+    const setup = await measuredDaemon();
+    const { me, impl, review } = await arrangedCrew(setup);
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(impl), width: 960, height: 600 }] });
+    const before = await me.connection.call('orchestrator.map', { token: me.token });
+    const [implAt, reviewAt] = [impl, review].map((agent) => before.things.find((thing) => thing.key === key(agent))!);
+    const saved = { x: reviewAt!.x, y: reviewAt!.y, width: reviewAt!.width, height: reviewAt!.height };
+    const window = await app(setup);
+
+    // Pushed clear below the expanded tile, as the board draws what it grew over.
+    const expanded = { x: implAt!.x, y: implAt!.y, width: 960, height: 600 };
+    const under = before.things.filter((thing) => thing.key !== key(impl) && rectsOverlap(thing, expanded));
+    const pushedAside = (thing: Rect) => ({ ...thing, y: thing.y + 600 + TILE_GAP + PERCH_ROOM });
+    const others = under.filter((thing) => thing.key !== key(review)).map((thing) => {
+      const box = { x: thing.x, y: thing.y, width: thing.width, height: thing.height };
+      return { key: thing.key, saved: box, drawn: pushedAside(box) };
+    });
+    const clear = pushedAside(saved);
+    const round = [{ key: key(impl), ...expanded }];
+    await window.report([{ key: key(review), saved, drawn: clear }, ...others], round);
+    const pushed = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(pushed.things.find((thing) => thing.key === key(review))).toMatchObject({ x: clear.x, y: clear.y, saved: { x: saved.x, y: saved.y } });
+    // Held to where it is saved, nothing is further off the grid than it was before it was drawn aside.
+    expect({ overlaps: pushed.overlaps, offGrid: pushed.offGrid, unmeasured: pushed.unmeasured }).toEqual({ overlaps: [], offGrid: before.offGrid, unmeasured: false });
+
+    // Left under it, where the board found no room to push it: the lint says so.
+    await window.report([{ key: key(review), saved, drawn: { ...saved, x: implAt!.x + 100 } }, ...others], round);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).overlaps).toEqual([[key(impl), key(review)]]);
+
+    // Measured where it was saved before, it no longer holds: it is mapped where it is saved now.
+    await window.report([{ key: key(review), saved: { ...saved, x: saved.x + 8 }, drawn: clear }, ...others], round);
+    const mappedAt = async () => (await me.connection.call('orchestrator.map', { token: me.token })).things.find((thing) => thing.key === key(review));
+    expect(await mappedAt()).toMatchObject({ x: saved.x, y: saved.y });
+
+    // Drawn round an expanded tile that has since closed, with no word from the window since, it is where it is saved.
+    await window.report([{ key: key(review), saved, drawn: clear }, ...others], round);
+    expect(await mappedAt()).toMatchObject({ x: clear.x, y: clear.y });
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [] });
+    const collapsed = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(collapsed.things.find((thing) => thing.key === key(review))).toMatchObject({ x: saved.x, y: saved.y });
+    expect(collapsed.things.find((thing) => thing.key === key(review))!.saved).toBeUndefined();
+    // So too once it is expanded to another size.
+    await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: key(impl), width: 1000, height: 600 }] });
+    expect(await mappedAt()).toMatchObject({ x: saved.x, y: saved.y });
+  });
+
+  it("maps a text item at the size the app draws it, and arranges round that", async () => {
+    const setup = await measuredDaemon();
+    const { me } = await arrangedCrew(setup);
+    const text = await setup.client.call('item.create', { kind: 'text', zoneId: setup.zone.id, x: 900, y: 40, width: 120, height: 24, data: { text: 'a long heading', size: 'body', align: 'left', bold: false, italic: false, wrap: true, minHeight: 0, color: '#000000' } });
+    const saved = { x: text.x, y: text.y, width: text.width, height: text.height };
+    const window = await app(setup);
+    await window.report([{ key: `item:${text.id}`, saved, drawn: { ...saved, width: 260, height: 300 } }]);
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect(map.things.find((thing) => thing.key === `item:${text.id}`)).toMatchObject({ width: 260, height: 300 });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const rects = await rectsIn(setup.client, setup.zone.id);
+    rects.set('item:a long heading', { ...saved, width: 260, height: 300 });
+    expectNoOverlap(rects);
+  });
+
+  it("sizes a lane's note to the height the app measures its text at, below a high estimate, and says it measured", async () => {
+    const setup = await measuredDaemon();
+    const { me } = await arrangedCrew(setup);
+    const long = Array.from({ length: 14 }, (_, index) => `- step ${index + 1} of the review is done`).join('\n');
+    const written = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+    await setup.client.call('item.update', { id: written.id, data: { text: long, editedByUser: true } });
+    // The app draws this text shorter than the daemon's estimate.
+    const measured = 200;
+    await app(setup, (text) => (text.includes('step 14') ? measured : AGENT_TILE_SIZE.height - 40));
+    const result = await me.connection.call('orchestrator.arrange', { token: me.token });
+    expect(result.unmeasured).toBe(false);
+    const note = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+    expect(note.data.text).toBe(long);
+    expect(agentNoteSize(String(note.data.text), note.width, 0).height).toBeGreaterThan(measured);
+    expect(note.height).toBe(measured);
+    const map = await me.connection.call('orchestrator.map', { token: me.token });
+    expect({ overlaps: map.overlaps, offGrid: map.offGrid, unmeasured: map.unmeasured }).toEqual({ overlaps: [], offGrid: [], unmeasured: false });
+  });
+
+  it("estimates a lane's note it couldn't have measured in time, and says so", async () => {
+    const setup = await measuredDaemon({ measureWaitMs: 50 });
+    const { me, impl } = await arrangedCrew(setup);
+    await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary: 'Fixing the review' });
+    // A window that reports, but never measures notes.
+    await app(setup);
+    const result = await me.connection.call('orchestrator.arrange', { token: me.token });
+    expect(result.unmeasured).toBe(true);
+    const note = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+    expect(note.height).toBe(Math.max(AGENT_TILE_SIZE.height, agentNoteSize(String(note.data.text), note.width, 0).height));
+  });
+
+  it('arranges from estimates with no app window, and says so', async () => {
+    const setup = await measuredDaemon();
+    const { me } = await arrangedCrew(setup);
+    expect((await me.connection.call('orchestrator.arrange', { token: me.token })).unmeasured).toBe(true);
+  });
+
+  it("writes a lane's new text into its note first, then sizes the lane to the height the app measures it at", async () => {
+    for (const measured of [150, 420]) {
+      const setup = await measuredDaemon();
+      const { me, impl } = await arrangedCrew(setup);
+      const said = 'step 9 of the review is under way';
+      // Measured as the app draws it: whatever the estimate, this text takes `measured` once it is in the note.
+      await app(setup, (text) => (text.includes(said) ? measured : AGENT_TILE_SIZE.height - 40));
+      await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary: said });
+      const result = await me.connection.call('orchestrator.arrange', { token: me.token });
+      expect(result.unmeasured, String(measured)).toBe(false);
+      const note = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+      expect(note.data.text).toContain(said);
+      expect(note.height, String(measured)).toBe(Math.max(AGENT_TILE_SIZE.height, measured));
+      expect(agentNoteSize(String(note.data.text), note.width, 0).height).not.toBe(note.height);
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      expect({ overlaps: map.overlaps, offGrid: map.offGrid }).toEqual({ overlaps: [], offGrid: [] });
+    }
+  });
+
+  it("keeps a lane's note saying where its agents stand, arrange after measured arrange", async () => {
+    const setup = await measuredDaemon();
+    const { me, impl } = await arrangedCrew(setup);
+    await app(setup, (text) => (text.includes('status') ? 300 : AGENT_TILE_SIZE.height - 40));
+    const noteOf = async () => (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+    for (const [summary, height] of [
+      ['first status ONE', 300],
+      ['second status TWO', 300],
+      ['all done', AGENT_TILE_SIZE.height],
+    ] as const) {
+      await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary });
+      expect((await me.connection.call('orchestrator.arrange', { token: me.token })).unmeasured, summary).toBe(false);
+      const note = await noteOf();
+      expect(note.data.text, summary).toContain(summary);
+      // Its own text, which the next arrange writes again: never taken for someone's edit.
+      expect({ arrangeText: note.data.arrangeText, editedByUser: note.data.editedByUser }, summary).toEqual({ arrangeText: note.data.text, editedByUser: false });
+      expect(note.height, summary).toBe(height);
+    }
+  });
+
+  it('puts back the notes it wrote first when the arrange is refused, and writes no new lane before it goes ahead', async () => {
+    const setup = await measuredDaemon();
+    const { me, impl } = await arrangedCrew(setup);
+    // Another zone right under this one: a lane grown taller would grow the zone over it.
+    await setup.client.call('zone.update', { id: setup.other.id, x: 0, y: 610, width: 1200, height: 400 });
+    await app(setup, (text) => (text.includes('long story') ? 480 : AGENT_TILE_SIZE.height - 40));
+    await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary: 'a long story' });
+    // A new lane, whose label and note an arrange that goes ahead would make.
+    await me.connection.call('orchestrator.spawn', { token: me.token, name: 'other' });
+    const items = async () => (await setup.client.call('item.list')).map(({ id, kind, x, y, width, height, data }) => ({ id, kind, x, y, width, height, text: data.text }));
+    const before = await items();
+    await expect(me.connection.call('orchestrator.arrange', { token: me.token })).rejects.toThrow(/over other/);
+    expect(await items()).toEqual(before);
+  });
+
+  it('leaves a note the user edited while the arrange waited as they wrote it, when the arrange is refused', async () => {
+    const setup = await measuredDaemon({ measureWaitMs: 300 });
+    const { me, impl } = await arrangedCrew(setup);
+    await setup.client.call('zone.update', { id: setup.other.id, x: 0, y: 610, width: 1200, height: 400 });
+    // The app's window: once the arrange writes its new text into the note, the user edits it, long, and the window
+    // measures what they wrote.
+    const window = await connectTestClient(setup.daemon);
+    await window.call('capture.serve');
+    await window.call('layout.measured', { boxes: [], expanded: [] });
+    const mine = 'mine now, and a long story of my own';
+    let edited: Promise<unknown> | undefined;
+    window.onEvent((event: DaemonEvent) => {
+      if (edited !== undefined || event.type !== 'item.updated' || event.item.kind !== 'agent-note' || !String(event.item.data.text).includes('a long story')) return;
+      edited = window.call('item.update', { id: event.item.id, data: { text: mine, editedByUser: true } }).then((item) => {
+        const box = { x: item.x, y: item.y, width: item.width, height: item.height };
+        return window.call('layout.measured', { boxes: [{ key: `item:${item.id}`, saved: box, drawn: box, fits: { height: 480, text: measuredText(mine) } }], expanded: [] });
+      });
+    });
+    await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary: 'a long story' });
+    await expect(me.connection.call('orchestrator.arrange', { token: me.token })).rejects.toThrow(/over other/);
+    expect(edited).toBeDefined();
+    const note = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note')!;
+    expect(note.data).toMatchObject({ text: mine, editedByUser: true });
+  });
+
+  it("doesn't wait for a window that says it is away, and says the arrange is unmeasured", async () => {
+    const setup = await measuredDaemon({ measureWaitMs: 60_000 });
+    const { me, impl } = await arrangedCrew(setup);
+    const window = await app(setup, () => 200);
+    await window.leave();
+    await me.connection.call('orchestrator.setStatus', { token: me.token, sessionId: impl.sessionId, summary: 'Fixing the review' });
+    const started = Date.now();
+    const result = await me.connection.call('orchestrator.arrange', { token: me.token });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result.unmeasured).toBe(true);
+  });
+
+  it('takes boxes from the app only, and refuses a malformed one', async () => {
+    const setup = await measuredDaemon();
+    const { me } = await arrangedCrew(setup);
+    await expect(me.connection.call('layout.measured', { boxes: [], expanded: [] })).rejects.toThrow(/not open to a session's board token/);
+    // Only the app's connection, the one that serves captures, may say how the board is drawn.
+    await expect(setup.client.call('layout.measured', { boxes: [], expanded: [] })).rejects.toThrow(/only the app's window/);
+    expect((await me.connection.call('orchestrator.map', { token: me.token })).unmeasured).toBe(true);
+    const { client } = await app(setup);
+    const box = { x: 0, y: 0, width: 10, height: 10 };
+    for (const params of [
+      { boxes: [{ key: 'agent:x', saved: box }], expanded: [] },
+      { boxes: [{ key: 'agent:x', saved: box, drawn: { ...box, width: Number.NaN } }], expanded: [] },
+      { boxes: [{ key: 7, saved: box, drawn: box }], expanded: [] },
+      { boxes: 'all', expanded: [] },
+      { boxes: [], expanded: [{ key: 'agent:x', x: 0 }] },
+      { boxes: [], expanded: [], away: 'yes' },
+    ]) {
+      await expect(client.call('layout.measured', params as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    }
   });
 });

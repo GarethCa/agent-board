@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { demoScripts } from './demo-scenarios.ts';
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection', 'background'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection', 'background', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -556,6 +557,8 @@ const scripts: Record<FakeScenario, Script> = {
       await session.stop();
     }
   },
+
+  ...demoScripts,
 
   /** The turn fails on a rate limit (Claude's StopFailure; Codex prints the error only). */
   async 'rate-limit'(session, prompt) {

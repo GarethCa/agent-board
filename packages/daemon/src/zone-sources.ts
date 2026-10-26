@@ -12,7 +12,7 @@ import type { DaemonMethods, GitHubRepoSource, RecentFolder, Zone } from './prot
 import type { RpcHandlers } from './rpc.ts';
 import { defaultBranchOf } from './worktrees.ts';
 import { zoneTrackerParam, type TrackerHost } from './trackers.ts';
-import { newZoneParams, type CloneFolders, type ZoneTable } from './zones.ts';
+import { newZoneParams, zoneFolder, type CloneFolders, type ZoneTable } from './zones.ts';
 
 type SourceMethods = Pick<
   DaemonMethods,
@@ -255,11 +255,14 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
         const wanted = fields.repo === undefined ? undefined : stringParam(fields, 'repo').trim().toLowerCase();
         const picked = stringParam(fields, 'path');
         if (!isAbsolute(picked)) throw invalidParams(`path must be absolute, got ${picked}`);
-        // The folder may be a link or hold `..`: it is judged, and bound, as the folder it really is.
-        const path = await realpath(picked).catch(() => undefined);
-        if (path === undefined) throw invalidParams(`${picked} is not a folder`);
-        const top = await runGit(path, ['rev-parse', '--show-toplevel']);
-        if (!top.ok) throw invalidParams(`${path} is not inside a git repository`);
+        // The folder may be a link or hold `..`: it is judged, and bound, as the folder it really is. A repo git can't
+        // read is refused with git's reason; only a folder outside git has no repo.
+        const found = await zoneFolder(picked);
+        const { path } = found;
+        if (found.repoRoot === null) {
+          if (wanted !== undefined) throw invalidParams(`${path} is not a git repo, so not a copy of ${wanted}`);
+          return { path, repoRoot: null, gitHubRepo: null, name: basename(path) };
+        }
         const origin = await runGit(path, ['remote', 'get-url', 'origin']);
         const gitHubRepo = (origin.ok ? gitHubRepoOf(origin.stdout) : undefined) ?? null;
         if (wanted !== undefined && gitHubRepo !== wanted) {
@@ -269,8 +272,7 @@ export function createZoneSources(options: ZoneSourceOptions): ZoneSources {
               : `That folder's origin is ${gitHubRepo}, not ${wanted}`,
           );
         }
-        const repoRoot = await realpath(top.stdout);
-        const folder = relative(repoRoot, path);
+        const { repoRoot, folder } = found;
         return { path, repoRoot, gitHubRepo, name: folder === '' ? basename(repoRoot) : `${basename(repoRoot)}/${folder}` };
       },
       'zone.checkoutState': async (params) => {

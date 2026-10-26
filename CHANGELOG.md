@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.5 (2026-10-26)
+
+- Bump node-pty so each terminal stops leaking a PTY on macOS (fixes posix_spawnp failed)
+- Pin the lane note test's crew lines so their turns ending can't rewrite the note mid-test
+- Agents start in a new folder or a brand-new repo (no git, or no commits yet)
+- Record the board offscreen at 60 fps and 2x into ffmpeg (promo capture spike)
+- Arrange and the zone map use sizes the app measures: notes as tall as their text, things where they're drawn, unmeasured when no window is open
+- Bump dev tooling: vitest 5.0.5, eslint 10.13, typescript-eslint 8.72, @types/node 26.6.5
+- The gate drops agent-board's own FORCE_HYPERLINK with its marker
+- SPINNER_FRAMES stays module-private (knip on main)
+- The demo welcome test uses the leak rule's fake home paths
+- Demo scenarios in the fake harness that look like Claude Code and Codex
+
 ## v0.6.4 (2026-10-25)
 
 - SessionStart is a command hook, since Claude runs no http hook for it

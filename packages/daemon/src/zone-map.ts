@@ -20,6 +20,8 @@ export interface ZoneMapInput {
   compact?: ReadonlyMap<string, Rect>;
   /** Where an arrange as set would put each tile of the crew now, by key (`arrangeTiles`): what its tiles are held to. */
   arranged?: ReadonlyMap<string, Point>;
+  /** Whether `things` are where the app measured it draws them, pushed aside by an expanded tile or not. */
+  measured?: boolean;
 }
 
 const rectOf = (thing: ZoneMapThing): Rect => ({ x: thing.x, y: thing.y, width: thing.width, height: thing.height });
@@ -35,11 +37,13 @@ const onGrid = (thing: ZoneMapThing, arranged: ReadonlyMap<string, Point>, grid:
 };
 
 /** The map of a zone: its lanes, the rest above them, and what is amiss. */
-export function buildZoneMap({ lanes, things, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map() }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid'> {
+export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map(), measured = false }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid'> {
   // Every gap is measured past the one this spacing's arrange keeps, in this spacing's slots.
   const grid = zoneGrid(spacing);
   const { column: columnStep, row: rowStep } = grid;
   const { tile: tileGap, lane: laneKept } = grid.gaps;
+  // Its layout is read where things are saved: a tile only drawn aside, clear of an expanded one, is where it belongs.
+  const things = drawn.map((thing) => (thing.saved === undefined ? thing : { ...thing, ...thing.saved }));
   const byKey = new Map(things.map((thing) => [thing.key, thing]));
   const part = (key: string) => {
     const item = parts.get(key);
@@ -57,14 +61,14 @@ export function buildZoneMap({ lanes, things, parts, arrange, spacing = 'normal'
   const top = [...lead, ...things.filter((thing) => !inLanes.has(thing.key) && !lead.includes(thing.key)).map((thing) => thing.key)];
 
   // A tile expanded in place pushes what it grew over aside on the board, for as long as it is open, without moving it
-  // where it is kept: two things overlap only if they did with every expanded tile compact. The lint so trusts the
-  // board's push: where the board finds no room to push something clear (`clearOfExpanded` in the app's displace), it
-  // is left under the expanded tile, and the lint doesn't say so.
+  // where it is kept. Measured, things overlap where the app draws them on top of each other. Unmeasured, two things
+  // overlap only if they did with every expanded tile compact: the lint so trusts the board's push, and where the board
+  // finds no room to push something clear (`clearOfExpanded` in the app's displace), it can't say so.
   const asLaidOut = (thing: ZoneMapThing) => compact.get(thing.key) ?? rectOf(thing);
   const overlapping: [string, string][] = [];
-  things.forEach((thing, index) => {
-    for (const other of things.slice(index + 1)) {
-      if (overlaps(rectOf(thing), rectOf(other)) && overlaps(asLaidOut(thing), asLaidOut(other))) overlapping.push([thing.key, other.key]);
+  drawn.forEach((thing, index) => {
+    for (const other of drawn.slice(index + 1)) {
+      if (overlaps(rectOf(thing), rectOf(other)) && (measured || overlaps(asLaidOut(thing), asLaidOut(other)))) overlapping.push([thing.key, other.key]);
     }
   });
 
@@ -171,7 +175,7 @@ export function lintLine(map: ZoneMap, ref: RefOf): string {
 /** The map's first line: the zone, its size, and how it is arranged. */
 function headLine(map: ZoneMap, zoneRef: string): string {
   const { by, layout, auto } = map.arrange;
-  return `zone ${zoneRef} ${map.name} · ${Math.round(map.width)}×${Math.round(map.height)} · by ${by}, in ${layout} · ${map.spacing} spacing · auto-arrange ${auto ? 'on' : 'off'}`;
+  return `zone ${zoneRef} ${map.name} · ${Math.round(map.width)}×${Math.round(map.height)} · by ${by}, in ${layout} · ${map.spacing} spacing · auto-arrange ${auto ? 'on' : 'off'}${map.unmeasured ? ' · unmeasured' : ''}`;
 }
 
 const isDone = (thing: ZoneMapThing | undefined) => thing?.state === 'done';

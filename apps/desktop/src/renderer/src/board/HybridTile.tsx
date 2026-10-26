@@ -132,6 +132,9 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   const fitted = useFittedLines();
   const ask = askOf(agent);
   // An orchestrator in the repo's own checkout says when that checkout is dirty or off its default branch, until it is not.
+  // With no worktree of its own (a folder outside git, or a repo with no commits on a git too old for a worktree), it
+  // shares where it works; an orchestrator in the main checkout chose that, and its Checkout row said so.
+  const notIsolated = agent.plainFolder ? 'shared folder, no worktree' : inRepoCheckout(agent) && agent.branch === '' && !agent.master && !isOrchestratorRole(agent.roleName) ? 'repo checkout, no worktree' : undefined;
   const checkoutWarning = useCheckoutWarning(isOrchestratorRole(agent.roleName) && inRepoCheckout(agent) && agent.endedAt === null ? agent.repoRoot : undefined, true);
   // Until its session's first hook, the tile shows its start's steps where its task goes.
   const { startup } = agent;
@@ -274,12 +277,18 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
               {repo}
             </Tag>
           )}
-          {startup === null && (
-            <>
-              <GitBranch aria-hidden />
-              {branchLine(agent)}
-            </>
-          )}
+          {startup === null &&
+            (notIsolated !== undefined ? (
+              <span className="hybrid-tile-shared" data-testid="not-isolated" title={`Not isolated: it works in ${agent.worktree} itself, shared with any other agent there`}>
+                <Folder aria-hidden />
+                {notIsolated}
+              </span>
+            ) : (
+              <>
+                <GitBranch aria-hidden />
+                {branchLine(agent)}
+              </>
+            ))}
         </span>
       )}
       {!starting && checkoutWarning !== undefined && (

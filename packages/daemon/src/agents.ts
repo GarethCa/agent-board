@@ -444,6 +444,8 @@ export interface AgentRow extends PositionColumns {
   read_only: number;
   /** 1 for the Captain (migration 0060): at most one agent. */
   master: number;
+  /** 1 for an agent started in a group's folder of the user's, outside git (migration 0065): `Agent.plainFolder`. */
+  plain_folder: number;
   /** A reviewer's: the branch it reviews, and the commit it checked out detached. Null for any other agent. */
   reviews_branch: string | null;
   reviews_head: string | null;
@@ -483,6 +485,8 @@ export interface ZoneRow {
   repo_root: string | null;
   /** An unbound zone's default repo, or null. */
   default_repo: string | null;
+  /** A group's folder of the user's, outside git, or null for the one the app makes (`Zone.groupFolder`). */
+  group_folder: string | null;
   /** The repo it is cloning, while it is: it is unbound until the clone finishes. */
   clone_repo: string | null;
   folder: string;
@@ -508,7 +512,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
   const zoneColumns =
-    'id, name, repo_root, folder, default_repo, codex_bypass_hook_trust, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
+    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
@@ -807,7 +811,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       reviewCap: row.review_cap ?? DEFAULT_REVIEW_CAP,
       ownsWorktree: row.owns_worktree === 1,
       master: row.master === 1,
-      plainFolder: inGroupFolder(options.groupsDir, row.worktree),
+      // Agents in the app's own group folders from before the column are still known by where they run.
+      plainFolder: row.plain_folder === 1 || inGroupFolder(options.groupsDir, row.worktree),
       orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
       records: records.of(row.session_id),

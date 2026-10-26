@@ -14,6 +14,8 @@ const READY_TIMEOUT_MS = 10_000;
 export interface CaptureOptions {
   daemon: Pick<DaemonLink, 'call' | 'onEvent' | 'onConnected'>;
   openBoard(frame: CaptureFrame): BrowserWindow;
+  /** Once this connection serves captures, and so is the app's: what is said only from the app's connection. */
+  served?(): void;
 }
 
 const picture = (image: NativeImage): Picture => ({
@@ -41,7 +43,7 @@ function captureWindow(window: BrowserWindow, drawn: () => Promise<void>): Captu
   };
 }
 
-export function registerCaptures({ daemon, openBoard }: CaptureOptions): void {
+export function registerCaptures({ daemon, openBoard, served }: CaptureOptions): void {
   /** The board windows waiting to settle, by their contents' id: each resolves as its board says it is ready. */
   const settled = new Map<number, () => void>();
   ipcMain.on(CAPTURE_IPC.ready, (event) => settled.get(event.sender.id)?.());
@@ -82,7 +84,10 @@ export function registerCaptures({ daemon, openBoard }: CaptureOptions): void {
   });
   // Each connection, the first and every one after the daemon restarts, offers to take pictures.
   daemon.onConnected(() => {
-    daemon.call('capture.serve').catch((error: unknown) => console.error('agent-board: could not offer to take pictures:', error));
+    daemon.call('capture.serve').then(
+      () => served?.(),
+      (error: unknown) => console.error('agent-board: could not offer to take pictures:', error),
+    );
   });
 }
 

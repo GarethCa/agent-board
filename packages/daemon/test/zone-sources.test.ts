@@ -197,7 +197,7 @@ describe('using a local copy of a GitHub repo', () => {
     mkdirSync(plain);
     const local = tempRepo('local');
 
-    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: plain })).rejects.toThrow('not inside a git repository');
+    await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: plain })).rejects.toThrow('is not a git repo, so not a copy of acme/app');
     await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: local })).rejects.toThrow('no GitHub origin');
     await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: join(plain, 'gone') })).rejects.toThrow('not a folder');
     await expect(client.call('zone.checkFolder', { repo: 'acme/app', path: 'relative/dir' })).rejects.toThrow('absolute');

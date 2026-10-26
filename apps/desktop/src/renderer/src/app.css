@@ -562,6 +562,10 @@ kbd {
   height: 12px;
 }
 
+.hybrid-tile-shared {
+  display: contents;
+}
+
 .hybrid-tile-branch svg {
   flex: none;
   width: var(--icon-xs);

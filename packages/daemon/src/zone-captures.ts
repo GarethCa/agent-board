@@ -31,6 +31,8 @@ export type Captured = Omit<CaptureDelivery, 'id'>;
 
 export interface CaptureHost {
   handlers: RpcHandlers<CaptureMethods, SessionSubscriber & BoardConnection>;
+  /** Whether `connection` is the one that takes pictures: the app's. */
+  serves(connection: BoardConnection): boolean;
   /** Asks the app for a picture and waits for it. Rejects at once with no app to ask, and after the timeout. */
   request(job: Omit<CaptureRequestedEvent, 'type' | 'id' | 'deadline'>): Promise<Captured>;
 }
@@ -80,6 +82,7 @@ export function createCaptureHost({ timeoutMs = DEFAULT_CAPTURE_TIMEOUT_MS, cloc
         return null;
       },
     },
+    serves: (connection) => connection === server,
     request(job) {
       const to = server;
       if (to === undefined) return Promise.reject(new Error("the app isn't open: a picture of a zone needs its window"));

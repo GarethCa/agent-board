@@ -8,7 +8,7 @@ import type { AgentHost } from './agents.ts';
 import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
-import { checkedBranchName } from './worktrees.ts';
+import { checkedBranchName, noBranchWhy } from './worktrees.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { invalidParams, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
@@ -504,8 +504,12 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
       throw invalidParams(`${JSON.stringify(base)} is not a branch name`);
     });
     const ref = `refs/heads/${name}`;
-    if (!(await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok) throw invalidParams(`there is no branch ${name}`);
-    const diff = await runGit(repoRoot, ['diff', '--name-only', '--end-of-options', 'HEAD', ref, '--', ...PROJECT_CONFIG_PATHS]);
+    if (!(await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok) throw invalidParams(await noBranchWhy(repoRoot, name));
+    // A repo with no commits yet has no HEAD to compare with: against the empty tree, any project config differs.
+    const head = (await runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).ok
+      ? 'HEAD'
+      : (await runGit(repoRoot, ['hash-object', '-t', 'tree', '/dev/null'])).stdout;
+    const diff = await runGit(repoRoot, ['diff', '--name-only', '--end-of-options', head, ref, '--', ...PROJECT_CONFIG_PATHS]);
     if (!diff.ok) throw invalidParams(`could not compare ${name} with the repo's HEAD: ${diff.stderr.trim()}`);
     if (diff.stdout.trim() !== '') {
       throw outOfScope(

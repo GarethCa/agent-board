@@ -15,6 +15,7 @@ import { clampTextHeight, resizedText, textItemSize } from './text-layout';
 import { clampFontSize, fixedColor, inSlot, textData, textMetrics } from './text-style';
 import { slotPaint } from '../../board-colors';
 import { useDraftText } from './useDraftText';
+import { reportDrawnSize } from '../measured-boxes';
 
 const SIZE_LABELS: Record<TextSize, string> = {
   h1: 'Heading 1',
@@ -112,6 +113,8 @@ export const TextNode = memo(function TextNode({ id, data, selected, dragging, w
   useEffect(() => {
     if (editing) updateNode(id, size);
   }, [editing, updateNode, id, size.width, size.height]);
+  // As big as its text takes it, which an arrange lays out round.
+  useEffect(() => reportDrawnSize(id, size), [id, size.width, size.height]);
 
   /** Changes the style, and the size that goes with it. */
   const restyle = (patch: Partial<TextData>) =>

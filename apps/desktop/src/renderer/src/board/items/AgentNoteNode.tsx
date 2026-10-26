@@ -14,6 +14,7 @@ import { parseMarkdown } from './sticky-text';
 import { renderInline, renderMarkdown } from './StickyNode';
 import { useDraftText } from './useDraftText';
 import { useFitResize, useGrowToFit, useWindowFocused } from './grow-to-fit';
+import { noteFitContext, reportNoteFit } from '../measured-boxes';
 import { keyText } from '../../keys/registry';
 
 const MIN_AGENT_NOTE_WIDTH = 200;
@@ -27,6 +28,21 @@ function noteHeightToFit(root: HTMLElement | null, height: number): number {
   const body = root?.querySelector<HTMLElement>('.agent-note-body');
   if (!body || body.clientHeight === 0) return 0;
   return Math.min(MAX_AGENT_NOTE_HEIGHT, Math.ceil(height + body.scrollHeight - body.clientHeight));
+}
+
+/**
+ * The height a note `height` tall needs for its text, shorter or taller (at most `MAX_AGENT_NOTE_HEIGHT`), or 0 if it
+ * can't be measured: its text laid out at its own height for a moment, never drawn so. No least: what holds it sets that.
+ */
+function noteHeightForText(root: HTMLElement | null, height: number): number {
+  const body = root?.querySelector<HTMLElement>('.agent-note-body');
+  if (!body || body.clientHeight === 0) return 0;
+  const drawn = body.offsetHeight;
+  const flex = body.style.flex;
+  body.style.flex = '0 0 auto';
+  const own = body.offsetHeight;
+  body.style.flex = flex;
+  return Math.min(MAX_AGENT_NOTE_HEIGHT, Math.ceil(height + own - drawn));
 }
 
 /**
@@ -86,6 +102,12 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
     },
     [focused, width ?? item.width, look, editing ? draft : shown, note.asked, edits],
   );
+  // The height its text needs, for an arrange to size it to: shorter as well as taller than it is.
+  useLayoutEffect(() => {
+    if (editing) return;
+    const fits = noteHeightForText(root.current, height ?? item.height);
+    if (fits > 0) reportNoteFit(id, { width: width ?? item.width, height: fits, text: note.text, context: noteFitContext(look, item.data) });
+  }, [id, editing, width ?? item.width, height ?? item.height, look, note.text, note.asked, edits]);
 
   const badge = (
     <button

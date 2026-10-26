@@ -88,6 +88,7 @@ const api: AgentBoardApi = {
     configure: (id, settings) => invoke(ZONE_IPC.configure, id, settings),
     setTracker: (id, tracker) => invoke(ZONE_IPC.setTracker, id, tracker),
     unbind: (id) => invoke(ZONE_IPC.unbind, id),
+    initRepo: (id) => invoke(ZONE_IPC.initRepo, id),
     setDefaultRepo: (id, path) => invoke(ZONE_IPC.setDefaultRepo, id, path),
     roleTemplates: (id) => invoke(ZONE_IPC.roleTemplates, id),
     setRoleTemplate: (id, role, body) => invoke(ZONE_IPC.setRoleTemplate, id, role, body),
@@ -308,6 +309,7 @@ const api: AgentBoardApi = {
   view: {
     get: (key) => invoke(VIEW_IPC.get, key),
     set: (key, value) => invoke(VIEW_IPC.set, key, value),
+    measured: (report) => invoke(VIEW_IPC.measured, report),
   },
   appearance: {
     initial: appearanceFromQuery(new URLSearchParams(location.search).get(WINDOW_QUERY.appearance)),

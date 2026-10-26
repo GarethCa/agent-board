@@ -64,7 +64,10 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
   const defaultRepo = zone?.defaultRepo ?? null;
   /** Where its agent runs given no repo: the group's own folder, while the group has no default repo. */
   const groupFolder = group && defaultRepo === null ? (zone?.groupFolder ?? null) : null;
-  const [pickedRepo, setRepo] = useState<RepoValue>(defaultRepo === null ? { kind: 'scratch' } : { kind: 'folder', path: defaultRepo, branch: null });
+  // A group added for a folder of the user's outside git starts its agents in that folder.
+  const [pickedRepo, setRepo] = useState<RepoValue>(
+    defaultRepo !== null ? { kind: 'folder', path: defaultRepo, branch: null } : zone?.userFolder === true ? { kind: 'none' } : { kind: 'scratch' },
+  );
   const [baseBranch, setBaseBranch] = useState('');
   /** The new branch as typed: '' takes the one made from the agent's name (or its issue's). */
   const [newBranch, setNewBranch] = useState('');
@@ -237,8 +240,8 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
           inPlace={inMain}
           reviewsPicked={reviews(role) && reviewed !== ''}
           onRecents={(found) => {
-            // The last used is the repo to start with, unless the group names one or the user has picked.
-            if (found[0] !== undefined && defaultRepo === null && !userPicked.current) pickRepo({ kind: 'folder', path: found[0].path, branch: found[0].branch }, false);
+            // The last used is the repo to start with, unless the group names one, or a folder of the user's, or the user has picked.
+            if (found[0] !== undefined && defaultRepo === null && zone?.userFolder !== true && !userPicked.current) pickRepo({ kind: 'folder', path: found[0].path, branch: found[0].branch }, false);
           }}
           onPick={pickRepo}
           onBaseBranch={setBaseBranch}

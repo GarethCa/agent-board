@@ -69,3 +69,21 @@ Each agent's git worktree is created at `~/.agent-board/worktrees/<repo-name>-<r
   the user clicks it, one level deep in `~/code`, `~/src`, `~/Developer`, `~/projects` and `~/GitHub`.
 - Nothing changes for the user's checkout: agents still work in their own worktrees under the worktree root, cut from
   it, as for any zone bound to a folder.
+
+**New folders and new repos**:
+
+- A repo with no commits yet (just made with `git init`) has no commit to cut a worktree from, and the app never makes
+  one for the user. An agent started there gets a worktree at the usual place on a new branch with no commits either
+  (`git worktree add --orphan`, git 2.42 and later), and owns it as any agent does. Where git is too old for that, it
+  works in the repo's own checkout instead, owning no branch, as an orchestrator in the main checkout does (ADR-0011),
+  and its tile says it isn't isolated; a branch asked for by name is refused there rather than dropped. Whether git can
+  is read from `git --version`, never from its (translated) messages. A base branch, a reviewer, or a reviewer of an
+  agent that has made no commit is refused, saying the repo has no commits yet. Once such a branch has commits, its
+  work is all of it: its review compares it with the empty tree, as does the project-config check of an orchestrator's
+  `--base` on it.
+- A folder is outside git only when git says it is not in a repository and no `.git` is in it or above it. A repo git
+  can't read (dubious ownership, a bare repo, a damaged `.git`) is refused with git's reason, never taken as a plain
+  folder, whose agents would share the user's checkout.
+- A folder outside git can be a zone: a group whose own folder it is. Its agents work in that folder itself, with no
+  worktree or branch, as in a group's own folder (ADR-0011). A zone's **Make it a git repo** runs `git init` there on the
+  user's click, with no commit, and binds the zone to it; its agents from then on get worktrees as above.

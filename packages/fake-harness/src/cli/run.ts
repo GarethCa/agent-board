@@ -31,6 +31,8 @@ export async function runFakeCli(harness: HarnessName, invoke: () => Invocation)
     ...invocation.dialect,
     stepDelayMs: Number(process.env.FAKE_HARNESS_STEP_DELAY_MS ?? 0),
     idleNotifyMs: Number(process.env.FAKE_HARNESS_IDLE_NOTIFY_MS ?? 0),
+    typeMs: Number(process.env.FAKE_HARNESS_TYPE_MS ?? 0),
+    demo: scenario.startsWith('demo-'),
   });
   await play(session, scenario, invocation.prompt, process.env.FAKE_HARNESS_REPEAT === '1');
 }

@@ -157,27 +157,30 @@ export interface Zone {
    */
   defaultRepo: string | null;
   /**
-   * A group's own folder, outside git, which the app makes in its data directory on first use: where an agent started
-   * in the group runs when it has no repo (none given, and no default repo). Null for every bound zone.
+   * A group's own folder, outside git: where an agent started in the group runs when it has no repo (none given, and no
+   * default repo). The folder outside git the zone was added for (`zone.add`), else one the app makes in its data
+   * directory on first use. Null for every bound zone.
    */
   groupFolder: string | null;
+  /** Whether `groupFolder` is the folder of the user's the zone was added for, which `zone.initRepo` can make a repo. */
+  userFolder: boolean;
   createdAt: string;
 }
 
 /**
  * A zone as it can be made again (`zone.restore`): what a user set on it, not what is derived or in flight. A zone that
- * was bound to a repo has the `repoRoot` and `folder` it was bound to; a group has neither.
+ * was bound to a repo has the `repoRoot` and `folder` it was bound to; a group has neither, and its `groupFolder`.
  */
 export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder };
 }
 
 /**
@@ -254,11 +257,11 @@ export interface CheckoutState {
 export interface CheckedFolder {
   /** The folder, resolved: a repo's root, or a folder inside it. */
   path: string;
-  /** The root of the git repo it is in. */
-  repoRoot: string;
+  /** The root of the git repo it is in, or null for a folder outside git. */
+  repoRoot: string | null;
   /** The lowercase `owner/repo` of that repo's GitHub `origin`, or null when it has none. */
   gitHubRepo: string | null;
-  /** The name a zone for it gets: the repo's, then the folder in it (`monorepo/apps/web`). */
+  /** The name a zone for it gets: the repo's, then the folder in it (`monorepo/apps/web`); a folder outside git's own. */
   name: string;
 }
 
@@ -1710,9 +1713,9 @@ export interface Agent {
   master: boolean;
   /**
    * Whether it runs in its group's own folder (`Zone.groupFolder`), outside git: it has no worktree or branch, and the
-   * app runs no git there (no branch reads, gate, pull requests or checkout warning). Deleting it leaves the folder.
-   * Read from where it runs, inside the data directory's `groups`, not kept: a daemon on another data directory doesn't
-   * know an agent of this one's as such.
+   * app runs no git there (no branch reads, gate, pull requests or checkout warning). Deleting it leaves the folder,
+   * which the group's other agents with no repo share. Kept as it was started, so it stays one if the folder is made a
+   * git repo later.
    */
   plainFolder: boolean;
   /**
@@ -2618,12 +2621,67 @@ export type ArrangeBy = (typeof ARRANGE_BYS)[number];
 export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid'] as const;
 export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
-/** What `orchestrator.arrange` did: the zone, its size now, and where each tile it moved went. */
+/**
+ * What `orchestrator.arrange` did: the zone, its size now, and where each tile it moved went. `unmeasured` when it laid
+ * the zone out from saved sizes and estimates alone: no app window measured what it draws (`layout.measured`), or a
+ * lane's note wasn't measured in time.
+ */
 export interface ArrangeResult {
   zoneId: string;
   width: number;
   height: number;
   moved: LayoutMoved[];
+  unmeasured: boolean;
+}
+
+/** A box on the board, px: relative to its zone, or a board position when loose. */
+export interface BoxRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A tile or item as the app draws it (`layout.measured`), by its key (`agent:<id>`, `shell:<id>`, `item:<id>`):
+ * `saved`, the box the app had for it when it measured, which says whether the measure still holds; `drawn`, where and
+ * how big it is drawn (a text item at the size its text takes, a tile pushed aside by an expanded one); and for an agent
+ * note, the height its text needs at its width (`fits`), with the text it was measured for (`measuredText`).
+ */
+export interface MeasuredBox {
+  key: string;
+  saved: BoxRect;
+  drawn: BoxRect;
+  fits?: { height: number; text: string };
+}
+
+/** A tile expanded in place as the app draws it: its key, where it is saved and its expanded size. */
+export interface ExpandedBox extends BoxRect {
+  key: string;
+}
+
+/**
+ * What the app says of how it draws the board (`layout.measured`): its boxes, and the tiles expanded in place as it
+ * drew them, which where it drew the rest depends on. `away` once its window is no longer in front: it says nothing
+ * more until it is again, so nothing waits on it.
+ */
+export interface LayoutMeasured {
+  boxes: MeasuredBox[];
+  expanded: ExpandedBox[];
+  away?: boolean;
+}
+
+/** The most boxes one `layout.measured` takes. */
+export const MAX_MEASURED_BOXES = 5000;
+
+/**
+ * A short fingerprint of a note's text, which a measure of its height is for: the measure holds only while the note
+ * says the same. FNV-1a, with the length.
+ */
+export function measuredText(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return `${text.length}:${(hash >>> 0).toString(16)}`;
 }
 
 /** What `orchestrator.arrangeBoard` did: where each zone and each loose tile it moved went. */
@@ -2640,10 +2698,13 @@ export interface ZoneMapThing {
   name: string;
   /** An agent's state; null for a shell or an item. */
   state: AgentState | null;
+  /** Where and how big it is drawn: measured by the app when it was, else as saved. */
   x: number;
   y: number;
   width: number;
   height: number;
+  /** Where it is saved, when it is drawn elsewhere (pushed aside by an expanded tile): what the lint holds it to. */
+  saved?: { x: number; y: number };
 }
 
 /** A lane of a zone's map: its tiles by slot, by key, and its label's and note's (null for none). */
@@ -2670,6 +2731,8 @@ export interface ZoneMap {
   arrange: ArrangeSettings;
   /** The zone's spacing, which its arrange uses and the gaps it reports are past. */
   spacing: ArrangeSpacing;
+  /** Whether no app window measured what it draws: everything is where and as big as it is saved, or estimated. */
+  unmeasured: boolean;
   /** The lead and the shells, then whatever is in no lane (notes, cards, tiles out of scope). */
   top: string[];
   lanes: ZoneMapLane[];
@@ -3294,7 +3357,8 @@ export interface DaemonMethods {
   'zone.list': { params: undefined; result: Zone[] };
   /**
    * Adds a zone for a folder picked by the user, at board position (x, y): a git root becomes a repo zone, a folder
-   * inside a repo a folder zone. Fails with `invalidParams` if the folder is missing or not inside a git repo.
+   * inside a repo a folder zone, and a folder outside git a group whose own folder (`groupFolder`) it is, named after
+   * it. Fails with `invalidParams` if the folder is missing.
    */
   'zone.add': { params: { path: string } & NewZoneParams; result: Zone };
   /**
@@ -3327,9 +3391,10 @@ export interface DaemonMethods {
    */
   'zone.githubRepos': { params: undefined; result: GitHubRepoSource[] };
   /**
-   * Looks at a folder the user picked: it must be a git repo's root, or a folder inside one. Nothing is bound. Fails with
-   * `invalidParams` for a path that is not absolute, not a folder, or not in a git repo. With `repo` set it must also be
-   * a copy of that GitHub repo, its `origin` being that repo; the failure names the repo it is the copy of instead.
+   * Looks at a folder the user picked: a git repo's root, a folder inside one, or a folder outside git (`repoRoot`
+   * null). Nothing is bound. Fails with `invalidParams` for a path that is not absolute or not a folder. With `repo` set
+   * it must be a copy of that GitHub repo, its `origin` being that repo; the failure names the repo it is the copy of
+   * instead, or says it is not a git repo.
    */
   'zone.checkFolder': { params: { path: string; repo?: string }; result: CheckedFolder };
   /**
@@ -3351,6 +3416,13 @@ export interface DaemonMethods {
    * repos, and its shells keep running where they are. Fails with `invalidParams` for an unknown zone or one still cloning.
    */
   'zone.unbind': { params: { id: string }; result: Zone };
+  /**
+   * Makes a group's folder of the user's (`groupFolder`, one `zone.add` was given outside git) a git repo with `git
+   * init`, and binds the zone to it. No commit is made: its agents then get worktrees on branches with none yet. A
+   * folder the user made a repo meanwhile is bound as it is. Its agents already running there stay plain-folder ones.
+   * Fails with `invalidParams` for an unknown zone, a bound one, or a group whose folder is the app's.
+   */
+  'zone.initRepo': { params: { id: string }; result: Zone };
   /**
    * Sets an unbound zone's default repo to the git repo (or folder in one) `path` is, or clears it with null. Fails with
    * `invalidParams` for an unknown or bound zone, or a `path` that is not absolute or not in a git repo.
@@ -3681,6 +3753,13 @@ export interface DaemonMethods {
    * (`ZoneMap`). It moves nothing.
    */
   'orchestrator.map': { params: { token?: string; zoneId?: string }; result: ZoneMap };
+  /**
+   * The app saying how it draws the board now (`LayoutMeasured`), from its window in front, a moment after what it
+   * draws changes: every box drawn other than saved, every agent note's height for its text, and the tiles expanded as
+   * it drew them. Each call replaces the last; they are kept in memory only, until the connection closes. Only the
+   * connection that serves captures (the app's) may call it. Arrange and the zone map prefer them to estimates.
+   */
+  'layout.measured': { params: LayoutMeasured; result: null };
   /**
    * A picture of a zone in its scope (its own by default), as a PNG (`ZoneScreenshot`): the board as the app draws it
    * (`board`, with every terminal's text hidden), or a plain drawing of the boxes and lines the daemon knows (`lofi`).

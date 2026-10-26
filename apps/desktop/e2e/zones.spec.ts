@@ -45,13 +45,13 @@ async function addZone(window: Page): Promise<void> {
 const zoneNamed = (window: Page, name: string): Locator =>
   window.getByTestId('zone').filter({ has: window.getByTestId('zone-tab').getByText(name, { exact: true }) });
 
-test('adds repo and folder zones from the folder picker, rejects non-git folders, and keeps the layout across an app and daemon restart', async () => {
+test('adds repo and folder zones from the folder picker, rejects a folder that is gone, and keeps the layout across an app and daemon restart', async () => {
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'ab-e2e-zones-')));
   const repo = join(scratch, 'monorepo');
   mkdirSync(join(repo, 'apps', 'web'), { recursive: true });
   execFileSync('git', ['init', '--quiet', repo]);
-  const plain = join(scratch, 'not-a-repo');
-  mkdirSync(plain);
+  // Picked, then gone before the daemon looks at it.
+  const gone = join(scratch, 'gone');
   const dataDir = tempDataDir();
 
   let app = await launchApp(dataDir);
@@ -75,10 +75,10 @@ test('adds repo and folder zones from the folder picker, rejects non-git folders
     expect(a!.x + a!.width <= b!.x || b!.x + b!.width <= a!.x || a!.y + a!.height <= b!.y || b!.y + b!.height <= a!.y).toBe(true);
 
     // A folder the daemon refuses keeps Add zone open, saying why.
-    await pickFolderNext(app, plain);
+    await pickFolderNext(app, gone);
     const popover = await openAddZone(window, 'File browser');
     await popover.getByRole('button', { name: 'Choose a folder…' }).click();
-    await expect(popover.getByRole('alert')).toHaveText(`${plain} is not inside a git repository`);
+    await expect(popover.getByRole('alert')).toHaveText(`${gone} is not a folder`);
     await window.keyboard.press('Escape');
     await expect(popover).toBeHidden();
     // Counted in the daemon, not on screen: the board draws only the zones in view, and the view has just moved to

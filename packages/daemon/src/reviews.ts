@@ -136,18 +136,23 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
     (selectByReviewer.all(sessionId) as unknown as RoundRow[]).find((row) => toRound(row).status === 'reviewing');
 
   /**
-   * What the implementer's work is compared with: the commit it started from. For an agent from before that was kept,
-   * its repo's checked-out branch, or else the commit its repo's checkout is at; never `HEAD`, which in the reviewer's
-   * worktree is the work itself.
+   * What the implementer's work is compared with: the commit it started from, or the empty tree for a branch begun in a
+   * repo with no commits (`wholeBranch`). For an agent from before that was kept, its repo's checked-out branch, or else
+   * the commit its repo's checkout is at; never `HEAD`, which in the reviewer's worktree is the work itself.
    */
-  const baseOf = async (implementer: Agent): Promise<string> => {
+  const baseOf = async (implementer: Agent): Promise<{ base: string; wholeBranch: boolean }> => {
     const { base_commit: kept } = selectBaseCommit.get(implementer.sessionId) as { base_commit: string | null };
-    if (kept !== null) return kept;
+    if (kept !== null) {
+      const kind = await runGit(implementer.repoRoot, ['cat-file', '-t', kept]);
+      return { base: kept, wholeBranch: kind.ok && kind.stdout === 'tree' };
+    }
+    // A checked-out branch with no commit yet names nothing to compare with.
     const branch = await runGit(implementer.repoRoot, ['branch', '--show-current']);
-    if (branch.ok && branch.stdout !== '') return branch.stdout;
-    const commit = await runGit(implementer.repoRoot, ['rev-parse', 'HEAD']);
-    if (!commit.ok) throw invalidParams(`can't tell what ${implementer.name}'s work started from: ${commit.stderr}`);
-    return commit.stdout;
+    const born = branch.ok && branch.stdout !== '' && (await runGit(implementer.repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch.stdout}^{commit}`])).ok;
+    if (born) return { base: branch.stdout, wholeBranch: false };
+    const commit = await runGit(implementer.repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if (!commit.ok) throw invalidParams(`can't tell what ${implementer.name}'s work started from: ${implementer.repoRoot} has no commits yet`);
+    return { base: commit.stdout, wholeBranch: false };
   };
 
   /** Deletes the reviewers of the implementer's rounds that are still on the board, then tells of those rounds. */
@@ -173,7 +178,7 @@ export function createReviewHost(options: ReviewHostOptions): ReviewHost {
     insert.run(id, sessionId, number);
     try {
       const previous = rounds.findLast((round) => round.doc !== null)?.doc ?? undefined;
-      const prompt = reviewPrompt({ round: number, implementer: implementer.name, branch: implementer.branch, base: await baseOf(implementer), previous });
+      const prompt = reviewPrompt({ round: number, implementer: implementer.name, branch: implementer.branch, ...(await baseOf(implementer)), previous });
       const reviewer = await agents.spawnReviewer({
         of: sessionId,
         name: reviewerName(implementer.name, number),

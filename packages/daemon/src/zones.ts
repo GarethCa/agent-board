@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { gateCommandArgv } from './gate-rules.ts';
 import { runGit } from './git.ts';
@@ -34,6 +35,7 @@ type ZoneMethods = Pick<
   | 'zone.addUnbound'
   | 'zone.bind'
   | 'zone.unbind'
+  | 'zone.initRepo'
   | 'zone.setDefaultRepo'
   | 'zone.update'
   | 'zone.configure'
@@ -69,6 +71,8 @@ interface ZoneRow {
   clone_made_owner: number | null;
   /** An unbound zone's default repo; null for none, and for a bound zone. */
   default_repo: string | null;
+  /** A group's folder of the user's, outside git (`Zone.groupFolder`); null for the one the app makes, and a bound zone. */
+  group_folder: string | null;
   created_at: string;
 }
 
@@ -83,6 +87,8 @@ export interface NewZone extends ZoneLayout {
   tracker: ZoneTracker | null;
   /** Its spacing; the default for new zones in the settings without. */
   spacing?: ArrangeSpacing;
+  /** A group's folder of the user's, outside git, that its agents with no repo run in; the app makes one without. */
+  groupFolder?: string | null;
   /** The clone it waits for, and which folders the daemon made for it, so a failed clone removes only those. */
   clone?: { repo: string; path: string; madeFolder: boolean; madeOwner: boolean };
 }
@@ -154,16 +160,16 @@ export function createZoneTable(
   const selectCloning = db.prepare('SELECT * FROM zones WHERE clone_repo IS NOT NULL ORDER BY rowid');
   const insert = db.prepare(
     `INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, tracker_provider, tracker_scope,
-       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing, group_folder)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  // A bound zone's repo is its own: binding drops a group's default repo.
+  // A bound zone's repo is its own: binding drops a group's default repo, and its folder.
   const bind = db.prepare(
-    `UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, clone_repo = NULL, clone_path = NULL,
+    `UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, group_folder = NULL, clone_repo = NULL, clone_path = NULL,
        clone_made_folder = NULL, clone_made_owner = NULL WHERE id = ? AND repo_root IS NULL`,
   );
   const bindNotCloning = db.prepare(
-    'UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL WHERE id = ? AND repo_root IS NULL AND clone_repo IS NULL',
+    'UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, group_folder = NULL WHERE id = ? AND repo_root IS NULL AND clone_repo IS NULL',
   );
   const clearClone = db.prepare(
     'UPDATE zones SET clone_repo = NULL, clone_path = NULL, clone_made_folder = NULL, clone_made_owner = NULL WHERE id = ?',
@@ -209,7 +215,8 @@ export function createZoneTable(
         : { repo: row.clone_repo, path: row.clone_path, phase: null, percent: null, ...cloneProgress(row.id) },
     managedClone: row.repo_root !== null && row.folder === '' && isManagedClonePath(reposDir, row.repo_root),
     defaultRepo: row.default_repo,
-    groupFolder: row.repo_root === null ? groupFolder(groupsDir, row.id) : null,
+    groupFolder: row.repo_root === null ? (row.group_folder ?? groupFolder(groupsDir, row.id)) : null,
+    userFolder: row.repo_root === null && row.group_folder !== null,
     createdAt: row.created_at,
   });
   const find = (id: string) => {
@@ -247,6 +254,8 @@ export function createZoneTable(
         zone.clone === undefined ? null : Number(zone.clone.madeFolder),
         zone.clone === undefined ? null : Number(zone.clone.madeOwner),
         zone.spacing ?? newZoneSpacing(),
+        // The folder the app would make for it is kept as none: it is found again from the zone's id.
+        zone.groupFolder == null || zone.groupFolder === groupFolder(groupsDir, id) ? null : zone.groupFolder,
       );
       if (zone.repoRoot !== null) rememberFolder(folderPath(zone.repoRoot, zone.folder));
       announce(id);
@@ -307,6 +316,7 @@ export function zoneHandlers<Context>(
   const unbind = db.prepare(`UPDATE zones SET repo_root = NULL, folder = '', default_repo = NULL WHERE id = ?`);
   const updateDefaultRepo = db.prepare('UPDATE zones SET default_repo = ? WHERE id = ?');
   const agentCount = db.prepare('SELECT count(*) AS n FROM agents WHERE zone_id = ?');
+  const selectGroupFolder = db.prepare('SELECT group_folder FROM zones WHERE id = ?');
   /**
    * Binds of one zone run one at a time, so a second sees the first's result and is refused before it touches the
    * disk. New projects are made one at a time, across zones too, so a second bind to the same folder finds it no
@@ -326,8 +336,13 @@ export function zoneHandlers<Context>(
       const path = stringParam(fields, 'path');
       if (!isAbsolute(path)) throw invalidParams(`path must be absolute, got ${path}`);
       const look = newZoneParams(fields, zones);
-      const { repoRoot, folder } = await resolveZoneFolder(path);
+      const found = await zoneFolder(path);
       const tracker = await checkedTracker(fields, trackers);
+      // A folder outside git is a group whose own folder it is: its agents run there, with no worktree or branch.
+      if (found.repoRoot === null) {
+        return zones.insert({ ...look, name: look.name ?? basename(found.path), repoRoot: null, folder: '', tracker, groupFolder: found.path });
+      }
+      const { repoRoot, folder } = found;
       const name = look.name ?? (folder === '' ? basename(repoRoot) : `${basename(repoRoot)}/${folder}`);
       return zones.insert({ ...look, name, repoRoot, folder, tracker });
     },
@@ -373,6 +388,26 @@ export function zoneHandlers<Context>(
         if (zone.clone !== null) throw stillCloning(zone);
         unbind.run(id);
         return changed(id);
+      });
+    },
+    'zone.initRepo': (params) => {
+      const id = stringParam(paramsObject(params), 'id');
+      return queue(`zone ${id}`, async () => {
+        const zone = zones.get(id);
+        if (zone.repoRoot !== null) throw invalidParams(`${zone.name} is a git repo already`);
+        const folder = (selectGroupFolder.get(id) as { group_folder: string | null } | undefined)?.group_folder ?? null;
+        if (folder === null) throw invalidParams(`${zone.name} has no folder of yours to make a git repo of`);
+        if (!(await stat(folder).catch(() => undefined))?.isDirectory()) {
+          throw invalidParams(`${folder} is gone: add a zone for the folder where it is now`);
+        }
+        // `git init` alone, on the user's click: no commit is made for them. Its agents then get worktrees with none.
+        if ((await gitToplevel(folder)) === null) {
+          const made = await runGit(folder, ['init', '--quiet']);
+          if (!made.ok) throw invalidParams(`could not make ${folder} a git repo: ${made.stderr}`);
+        }
+        const { repoRoot, folder: inRepo } = await resolveZoneFolder(folder);
+        if (!zones.bind(id, repoRoot, inRepo)) throw noZone(id);
+        return zones.get(id);
       });
     },
     'zone.setDefaultRepo': async (params) => {
@@ -461,6 +496,8 @@ export function zoneHandlers<Context>(
       const repoRoot = fields.repoRoot === undefined || fields.repoRoot === null ? null : stringParam(fields, 'repoRoot');
       if (repoRoot !== null && !isAbsolute(repoRoot)) throw invalidParams(`repoRoot must be absolute, got ${repoRoot}`);
       const boundFolder = optionalStringParam(fields, 'folder') ?? '';
+      const ownFolder = fields.groupFolder === undefined || fields.groupFolder === null ? null : stringParam(fields, 'groupFolder');
+      if (ownFolder !== null && !isAbsolute(ownFolder)) throw invalidParams(`groupFolder must be absolute, got ${ownFolder}`);
       // A snapshot from before zones had a spacing is of a zone laid out at normal's gaps, as the migration keeps those.
       const spacing = fields.spacing === undefined ? 'normal' : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
       return queue(`zone ${id}`, async () => {
@@ -470,7 +507,10 @@ export function zoneHandlers<Context>(
         const repo = folder === null ? null : folderPath(folder.repoRoot, folder.folder);
         // A zone that was bound to a repo is bound again if it still is one; if not, it comes back as the group it is.
         const bound = repoRoot === null ? null : await resolveZoneFolder(folderPath(repoRoot, boundFolder)).catch(() => null);
-        zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing });
+        // A group's folder of the user's comes back while it is still a folder outside git; else the app's is used.
+        const plain = ownFolder === null || bound !== null ? null : await zoneFolder(ownFolder).catch(() => null);
+        const kept = plain?.repoRoot === null ? plain.path : null;
+        zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing, groupFolder: kept });
         updateFillOpacity.run(fillOpacity, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
@@ -534,9 +574,20 @@ export async function resolveZoneFolder(path: string): Promise<{ repoRoot: strin
   const real = await realpath(path).catch(() => undefined);
   if (real === undefined || !(await stat(real)).isDirectory()) throw invalidParams(`${path} is not a folder`);
   const toplevel = await gitToplevel(real);
-  if (toplevel === undefined) throw invalidParams(`${path} is not inside a git repository`);
+  if (toplevel === null) throw invalidParams(`${path} is not inside a git repository`);
   const repoRoot = await realpath(toplevel);
   return { repoRoot, folder: relative(repoRoot, real).split(sep).join('/') };
+}
+
+/**
+ * A picked folder as a zone takes it: resolved as `resolveZoneFolder` does when it is in a git repo, else the folder
+ * itself, resolved, with no repo (a group's own folder, outside git).
+ */
+export async function zoneFolder(path: string): Promise<{ path: string; repoRoot: string; folder: string } | { path: string; repoRoot: null }> {
+  const real = await realpath(path).catch(() => undefined);
+  if (real === undefined || !(await stat(real)).isDirectory()) throw invalidParams(`${path} is not a folder`);
+  if ((await gitToplevel(real)) === null) return { path: real, repoRoot: null };
+  return { path: real, ...(await resolveZoneFolder(real)) };
 }
 
 /**
@@ -583,10 +634,24 @@ export async function initProject(
   return { repoRoot, folder: '', undo };
 }
 
-/** The working-tree root containing `dir`, or undefined if `dir` is not in a git work tree. */
-async function gitToplevel(dir: string): Promise<string | undefined> {
-  const { ok, stdout } = await runGit(dir, ['rev-parse', '--show-toplevel']);
-  return ok ? stdout || undefined : undefined;
+/**
+ * The root of the git work tree `dir` is in, or null when it is outside git: git says it is not in a repository (read
+ * in the C locale) and there is no `.git` in it or above it. A repo git won't read (one it finds of dubious ownership,
+ * a bare repo, a damaged `.git`) is never taken as outside git: it is refused with git's reason.
+ */
+async function gitToplevel(dir: string): Promise<string | null> {
+  const { ok, stdout, stderr } = await runGit(dir, ['rev-parse', '--show-toplevel'], undefined, { LC_ALL: 'C' });
+  if (ok && stdout !== '') return stdout;
+  if (!ok && stderr.includes('not a git repository') && !dotGitAbove(dir)) return null;
+  throw invalidParams(`git can't read ${dir} as a repo: ${stderr || 'it has no work tree'}`);
+}
+
+/** Whether `dir`, or a folder above it, has a `.git`: a repo is there, whether or not git can read it. */
+function dotGitAbove(dir: string): boolean {
+  for (let at = dir; ; at = dirname(at)) {
+    if (existsSync(join(at, '.git'))) return true;
+    if (dirname(at) === at) return false;
+  }
 }
 
 /** A zone's layout from wire params, at least `MIN_ZONE_SIZE`. */

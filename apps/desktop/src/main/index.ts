@@ -22,6 +22,7 @@ import { registerPullRequestIpc } from './pull-requests';
 import { registerGateIpc } from './gates';
 import { registerAskIpc } from './asks';
 import { registerCaptures } from './captures';
+import { DEMO_SCALE, registerDemoCapture } from './demo-capture';
 import { CAPTURE_QUERY, captureSize } from '../shared/capture';
 import { registerUnsavedPlanEditIpc } from './unsaved-plan-edits';
 import { registerReviewIpc } from './reviews';
@@ -50,6 +51,8 @@ app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: descri
 const dataDir = app.getPath('userData');
 const idleTimeoutMs = process.env.AGENT_BOARD_DAEMON_IDLE_TIMEOUT_MS;
 const permissionHoldMs = process.env.AGENT_BOARD_PERMISSION_HOLD_MS;
+/** Demo mode records the board for the promo (demo-capture.ts). Never in a packaged build. */
+const demo = !app.isPackaged && process.env.AGENT_BOARD_DEMO === '1';
 
 /** Connects to the daemon, starting `agent-board daemon` detached (so it outlives the app) if none runs. */
 const daemonConnection: EnsureDaemonOptions = {
@@ -84,7 +87,8 @@ function openWindow(
     x,
     y,
     hidden = false,
-  }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean } = {},
+    offscreenScale,
+  }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean; offscreenScale?: number } = {},
 ): BrowserWindow {
   const window = new BrowserWindow({
     width,
@@ -94,6 +98,8 @@ function openWindow(
     title,
     // A capture window: its page is exactly its size, and it is never shown.
     ...(hidden ? { useContentSize: true, enableLargerThanScreen: true } : {}),
+    // A recorded window may be bigger than the screen: it is never shown.
+    ...(offscreenScale === undefined ? {} : { enableLargerThanScreen: true }),
     // The desk of the theme it opens in, so it never flashes the other one before the page paints.
     backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
     ...chromeOptions(process.platform, WINDOW_QUERY.popOut in query ? 'pop-out' : 'board'),
@@ -102,7 +108,8 @@ function openWindow(
     show: !backgroundMode && !hidden,
     webPreferences: {
       // Headless, the page paints into a bitmap rather than the window, so it renders (and Playwright screenshots it) unshown.
-      offscreen: headless || hidden,
+      // A scale paints that many device pixels per CSS pixel, which an offscreen page otherwise paints at one.
+      offscreen: headless && offscreenScale !== undefined ? { deviceScaleFactor: offscreenScale } : headless || hidden,
       sandbox: true,
       contextIsolation: true,
       preload: join(import.meta.dirname, '../preload/index.cjs'),
@@ -143,13 +150,16 @@ function openBoard(showing?: WindowTarget): BrowserWindow {
   // Benchmarks fill the board with placeholder tiles and sticky notes (see e2e/board-perf.spec.ts). Never in a packaged build.
   const placeholders = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_TILES;
   const stickies = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_STICKIES;
-  const window = openWindow({
-    // Tests keep onboarding from opening by itself on their empty boards, packaged or not; onboarding.spec.ts opts in.
-    ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
-    ...(placeholders ? { placeholders } : {}),
-    ...(stickies ? { stickies } : {}),
-    ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),
-  });
+  const window = openWindow(
+    {
+      // Tests keep onboarding from opening by itself on their empty boards, packaged or not; onboarding.spec.ts opts in.
+      ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
+      ...(placeholders ? { placeholders } : {}),
+      ...(stickies ? { stickies } : {}),
+      ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),
+    },
+    demo ? { offscreenScale: DEMO_SCALE } : {},
+  );
   board = window;
   window.on('closed', () => {
     if (board === window) board = undefined;
@@ -201,8 +211,10 @@ const poppedWindows = registerWindowIpc({
 // Pictures of zones for orchestrators, each in a hidden board window framed on its zone.
 registerCaptures({
   daemon,
+  served: () => view.remeasure(),
   openBoard: (frame) => openWindow({ [CAPTURE_QUERY]: JSON.stringify(frame), onboarding: 'off' }, { ...captureSize(frame), hidden: true }),
 });
+if (demo) registerDemoCapture(() => board);
 registerTabDragIpc({ board: () => board, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });
 const openAgent = registerAgentOpening(() => board ?? openBoard());
 

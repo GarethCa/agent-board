@@ -16,7 +16,7 @@ const child = spawn('claude', ['--settings', JSON.stringify(claudeHookSettings(h
 // hooks.events now fills with SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, …
 ```
 
-`fakeHarnessEnv` puts `bin/` first on PATH, sets `HOME` to a temp dir (so `~/.claude` and `~/.codex` are never the real ones), and picks the scenario. `stepDelayMs` slows the streamed output down for e2e tests. `idleNotifyMs` sets how long an idle Claude session waits before `idle_prompt`.
+`fakeHarnessEnv` puts `bin/` first on PATH, sets `HOME` to a temp dir (so `~/.claude` and `~/.codex` are never the real ones), and picks the scenario. `stepDelayMs` slows the streamed output down for e2e tests. `typeMs` (`FAKE_HARNESS_TYPE_MS`) streams text a character at a time, that many ms apart, instead of a word a step, as a model types on screen. `idleNotifyMs` sets how long an idle Claude session waits before `idle_prompt`.
 
 ## Lifetime
 
@@ -49,6 +49,12 @@ Set with `FAKE_HARNESS_SCENARIO` (default `output`).
 | `crash`      | Dies mid-turn: stderr message, exit 1, no `Stop` or `SessionEnd`.                                                                |
 | `rate-limit` | Claude: `StopFailure` with `error: "rate_limit"`, then the screen `rateLimitScreen` picks (below). Codex has no such event and only prints the error. |
 | `markdown`   | Runs four tool calls in a row (`Read` ×2, the shell tool, `Grep`) and replies with a line of Markdown; then waits on stdin and answers in Markdown: a heading, the message's lines as a list, and a `ts` code block. |
+| `demo-plan` | A planner in the made-up `storefront` repo, for videos and screenshots (below): reads the cart code, lists its todos and writes `plan.md` for real, a plan for issue `ACME-12`. |
+| `demo-implement` | An implementer: sends an `Explore` subagent (held for `FAKE_HARNESS_SUBAGENT_WORK_MS`), shows its edit as a red/green diff, runs `npm test` (`12 passed`), needs permission for `rm -rf dist` as in `permission` (answered `1` or `y` at its prompt), pushes, opens `https://github.com/acme/storefront/pull/12` and writes `.agent-board/handover.md` for real. Each later prompt is a review's findings: it fixes them, tests again (`13 passed`), pushes and writes the handover again. |
+| `demo-review` | A reviewer of that pull request, ending on a review doc as `review` does: changes requested (a blocker, a major, a minor) in round 1, approved in round 2 with the blocker and major struck through. The round is the one the prompt names (`reviewer for round N`), else how many prompts it has had: each later prompt is the next round. |
+| `demo-codex` | Work in a second made-up repo, `billing-api`, meant for a Codex tile: a plan, a search, a diff, `npm run migrate` needing permission, and `npm test` (`8 passed`). |
+
+**The demo look.** The `demo-*` scenarios tell one story across a board's agents and draw their terminal as the real TUIs look: Claude Code 2.x's welcome box, `✻ Thinking…` spinner frames, `⏺ Bash(npm test)` / `⎿  12 passed` tool blocks, a red/green diff, a todo list (`TodoWrite`), and the model's Markdown drawn (headings and **bold** bold, ~~struck~~ text struck, code coloured, items bulleted); under the fake `codex`, Codex's own (`>_ OpenAI Codex`, `• Ran npm test`, `└ 8 passed`, `update_plan`). A permission box takes its rows' numbers: Claude's `1` and `2` (or `y`) allow and `3` denies, Codex's `1` (or `y`) allows and `2` denies. Every other scenario prints plain lines. The look is display only: hooks, transcripts and `last_assistant_message` get the plain text and the tools' real inputs and responses, so a demo reviewer's doc reads as any review doc. Only `plan.md` and `.agent-board/handover.md` are written; every other tool's answer is canned. Pace a take with `stepDelayMs` (spinner frames and tool steps) and `typeMs` (text).
 
 Whenever a Claude session sits at the prompt after `Stop`, it fires `Notification` `idle_prompt` after `FAKE_HARNESS_IDLE_NOTIFY_MS`. The default is 0, so the notification follows `Stop` immediately; real Claude waits about 60 s. Tests of the state machine should set a delay, so they also see the stretch where `Stop` means idle.
 
