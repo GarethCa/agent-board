@@ -266,6 +266,45 @@ describe('a zone map', () => {
     expect(laneTable(alone, 'zone:z', ref).split('\n').at(-1)).toMatch(/^lint {2}ok · /);
   });
 
+  it('calls a zone mostly empty when a wide band across it holds nothing, whatever lies at its far edges', () => {
+    const lint = (things: ZoneMapThing[], width: number, height: number) => {
+      const tiles = [agent('lead', { lead: true })];
+      const map: ZoneMap = { zoneId: 'z', name: 'web', width, height, arrange: DEFAULT_ARRANGE_SETTINGS, spacing: 'normal', unmeasured: false, things, ...buildZoneMap({ lanes: lanesOf(tiles, []), things, parts: new Map(), arrange: DEFAULT_ARRANGE_SETTINGS }) };
+      return laneTable(map, 'zone:z', ref).split('\n').at(-1)!;
+    };
+    const thing = (key: string, itemKind: string | null, x: number, y: number, width: number, height: number): ZoneMapThing => ({ key, itemKind, name: key, state: null, x, y, width, height });
+    // Two clocks, a note and a diagram on the left, and the orchestrator expanded at the far right: its corner fills the
+    // box round them all, but the zone between is empty.
+    const spread = [
+      thing('item:clock-a', 'clock', 20, 44, 256, 76),
+      thing('item:clock-b', 'clock', 292, 44, 256, 76),
+      thing('item:note', 'agent-note', 20, 160, 256, 120),
+      thing('item:diagram', 'shape', 600, 300, 416, 368),
+      thing('agent:lead', null, 3923 - 960 - 20, 44, 960, 600),
+    ];
+    expect(lint(spread, 3923, 1810)).toMatch(/^lint {2}check · .* · zone mostly empty: \d+ empty columns across it$/);
+    // Everything below a wide empty band on top.
+    const low = [thing('agent:lead', null, 20, 900, 960, 600), thing('item:clock-a', 'clock', 1000, 900, 256, 76)];
+    expect(lint(low, 1300, 1540)).toMatch(/^lint {2}check · .* · zone mostly empty: \d+ empty rows across it$/);
+    // Packed from the top-left, nothing is empty.
+    const packed = [thing('agent:lead', null, 20, 44, 960, 600), thing('item:clock-a', 'clock', 996, 44, 256, 76)];
+    expect(lint(packed, 1272, 680)).toMatch(/^lint {2}ok · /);
+  });
+
+  it('says an empty band beside a gap already named only when that gap runs the other way', () => {
+    const last = (map: ZoneMap) => laneTable(map, 'zone:z', ref).split('\n').at(-1)!;
+    // The last lane four rows down: those empty rows are the gap between lanes, said once.
+    const apart = arrangedZone(crew, (thing) => (thing.key.includes('ACME-12') || thing.key === 'agent:impl-b' ? { ...thing, y: thing.y + 4 * ROW_STEP } : thing));
+    expect(last(apart)).not.toContain('mostly empty');
+    // And three empty columns before a card past the lanes, across them: a band of its own.
+    const right = Math.max(...apart.things.map((thing) => thing.x + thing.width));
+    const things = [...apart.things, { key: 'item:far', itemKind: 'sticky', name: 'far', state: null, x: right + 16 + 3 * GRID_COLUMN, y: 44, width: 200, height: 200 }];
+    const parts = new Map(apart.lanes.flatMap((lane) => [[`${lane.key}#label`, lane.labelItem!] as const, [`${lane.key}#note`, lane.note!] as const]));
+    const map: ZoneMap = { ...apart, things, ...buildZoneMap({ lanes: lanesOf(crew, []), things, parts, arrange: DEFAULT_ARRANGE_SETTINGS }) };
+    expect(map.laneGap).toBe(4);
+    expect(last(map)).toMatch(/· zone mostly empty: 3 empty columns across it$/);
+  });
+
   it('reads as a lane table: a line per lane, a cell per slot, then where the next lane goes and the lint', () => {
     expect(laneTable(arrangedZone(crew), 'zone:z', ref)).toBe(
       [

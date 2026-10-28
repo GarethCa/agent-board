@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { MIGRATIONS, migrate, schemaVersion, type Migration } from '../src/migrate.ts';
@@ -11,6 +12,17 @@ const TWO_STEPS: Migration[] = [
   { version: 1, name: 'zones', sql: 'CREATE TABLE zones (id TEXT PRIMARY KEY);' },
   { version: 2, name: 'tiles', sql: 'CREATE TABLE tiles (id TEXT PRIMARY KEY, zone_id TEXT REFERENCES zones(id));' },
 ];
+
+describe('MIGRATIONS', () => {
+  it('lists every .sql file in the migrations folder, in order, with its text', () => {
+    const dir = new URL('../src/migrations/', import.meta.url);
+    const files = readdirSync(dir).filter((name) => name.endsWith('.sql')).sort();
+    expect(MIGRATIONS.map((m) => `${String(m.version).padStart(4, '0')}_${m.name}.sql`)).toEqual(files);
+    for (const m of MIGRATIONS) {
+      expect(m.sql).toBe(readFileSync(new URL(`${String(m.version).padStart(4, '0')}_${m.name}.sql`, dir), 'utf8'));
+    }
+  });
+});
 
 describe('migrate', () => {
   it('brings an empty database to the latest version', () => {

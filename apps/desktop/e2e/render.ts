@@ -10,6 +10,14 @@ import { join } from 'node:path';
  * and time zone, so no date or number is formatted differently.
  */
 export const RENDER_ARGS = ['--disable-gpu', '--force-device-scale-factor=1', '--font-render-hinting=none', '--disable-lcd-text', '--lang=en-US'];
+/**
+ * The board recordings' render profile, unlike the pinned one above: the GPU on and the platform's own text rendering,
+ * for the app at its best rather than byte-stable. Demo mode paints at two device pixels per CSS pixel; the recording
+ * specs draw it in the Workbench light theme, in a window a little smaller than 720p (`RECORDING_SIZE`), so the UI is
+ * a little larger in a 1080p cut. (A page zoom would do it too, but the board's chrome lays out past the window then.)
+ */
+export const PROMO_RENDER_ARGS = ['--lang=en-US'];
+export const RECORDING_SIZE = '1152x648';
 export const RENDER_ENV = { TZ: 'UTC', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' };
 export const VIEWPORT = { width: 1280, height: 800 };
 

@@ -70,6 +70,7 @@ import {
   editShape,
   exportDiagram,
   moveTile,
+  noteSizeOf,
   pointOf,
   removeConnector,
   removeGroup,
@@ -195,7 +196,8 @@ ORCHESTRATING
                         Start an agent with <prompt> as its first message. In a group, --repo
                         <path> picks the repo it works in, task by task.
   send <ref> [--] <message>
-                        Send an agent its next message, once its turn has ended.
+                        Send an agent its next message, once its turn has ended. Also, from
+                        any agent, a reply to an agent that messaged it.
   wait [<ref>...] [--crew] [--until finished]
                         Wait until each agent's turn has ended: it is at its prompt, needs
                         the user, or has stopped; or until it says its work is finished.
@@ -550,10 +552,10 @@ by themselves with edge add, reviewer to impl (findings back) and impl to review
 keep one of the two manual: two auto edges in a loop re-trigger each other, and a loop of them is
 refused. Never join them to your own tile: lines from you to every agent you start only clutter the board.
 
-Keep the crew tidy as it grows: arrange lays out your zone, you and the shells on the top row,
-then a lane per issue (or unit of work): its label, its implementer, its reviewer, its follow-up
-reviewer, then an agent note saying where each agent stands, each slot a column that lines up
-down the lanes. Send fix rounds back
+Keep the crew tidy as it grows: arrange lays out your zone, you, the shells and the clocks you
+or your crew made on the top row (the user's clocks stay put), then a lane per issue (or unit
+of work): its label, its implementer, its reviewer, its follow-up reviewer, then an agent note
+saying where each agent stands, each slot a column that lines up down the lanes. Send fix rounds back
 to the same implementer and reviewer, so each unit stays one pair. move, zone and note do the
 rest:
   agent-board arrange                        or: --by role, --by state, --layout columns
@@ -618,10 +620,16 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
   send: {
     usage: 'agent-board send <ref> [--file <path>] [--] <message>',
     text: `Sends the agent <message> (or the text of --file) as its next message, as the user typing it
-would. Only once its turn has ended: wait for it first, or interrupt it. Never to an agent
+would. Only once its turn has ended: wait for it first, or interrupt it. To an agent still
+starting it is queued until its session is up, after its first prompt. Never to an agent
 that needs the user's permission, and never a harness command (a message starting with ! or
 a /command other than a plugin's /plugin:command). Only printable text, tabs and line
 breaks: no control characters.
+
+Any agent may send back to an agent that messaged it, for an hour after its latest message,
+even one outside its scope, and even if it may not orchestrate: a message it couldn't otherwise
+answer ends with a line naming who sent it. That opens a reply and nothing more: no wait,
+read, interrupt, restart or close, and the answer opens no way back.
 
   --file <path>   Read the message from a file.
   --json          Print the agent as JSON.`,
@@ -863,7 +871,8 @@ the zone over another zone is refused.
     text: `Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
 orchestrator: you first, then
 
-  --by issue   a lane per issue (the default), a row each, below you and the shells: its
+  --by issue   a lane per issue (the default), a row each, below you, the shells and your
+               crew's clocks: its
                label in the first column; then a column per slot, the same in every lane:
                the implementer (and the others doing the work), the reviewer (anything that
                reviews another), the follow-up reviewer, a second of one slot in a column
@@ -882,9 +891,9 @@ orchestrator: you first, then
                reviewers), each reviewer under the agent it reviews
   --by state   a row per state, the ones needing the user first
 
-and, by role or state, shells last. --layout columns turns each row into a column instead:
-you and the shells stacked first, then a column per lane, its label with its note below it on
-top, then its tiles under them in slot order. --layout cards makes each lane a card instead,
+and, by role or state, shells and your crew's clocks last. --layout columns turns each row into
+a column instead: you, the shells and your crew's clocks stacked first, then a column per lane,
+its label with its note below it on top, then its tiles under them in slot order. --layout cards makes each lane a card instead,
 two across (three past four lanes), a free column and row between them: its label and note,
 implementer and reviewers on one row, its follow-up reviewers under them. --layout grid fills
 the zone's width in the same order
@@ -942,11 +951,11 @@ loose on the board, where they were.
 
 \`zone map\` reads your zone (or <ref>, in your scope) as \`arrange\` sees it, moving nothing: a
 line per lane with a cell per slot (implementer, reviewer, follow-up, notes), each tile's ref,
-name and state, a free slot as ·, and you, the shells and what is in no lane on the top line;
-then where the next lane goes, which lanes are all done, and a lint line: things on top of
-each other, the widest gap in a lane (in slots), the space between lanes, a label far from its
-tiles, a zone mostly empty, and the tiles not where an arrange would put them, or out of
-their lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
+name and state, a free slot as ·, and you, the shells, your crew's clocks and what is in no
+lane on the top line; then where the next lane goes, which lanes are all done, and a lint line:
+things on top of each other, the widest gap in a lane (in slots), the space between lanes, a
+label far from its tiles, a zone mostly empty (a band of empty columns or rows across it), and
+the tiles not where an arrange would put them, or out of their lane's row (a tile dragged by hand), all of which the next arrange puts right. \`arrange\`
 prints it after every arrange. --boxes draws the zone in characters instead, about one to
 40 px, a key on each tile and note and a legend below: overlaps (#) and gaps show where they
 really are, whatever the layout, at about three times the length. A zone with a diagram ends
@@ -976,7 +985,7 @@ first: a picture costs a model far more to read.
   note: {
     usage:
       'agent-board note add [--text <text> | [--] <text>] [--kind sticky|text] [--color <c>] [--to <zone ref>] [--at <x>,<y>] ' +
-      '[--near <ref> [--side <s>]] | note edit <ref> [--text <text>] [--color <c>] | note remove <ref>',
+      '[--near <ref> [--side <s>]] | note edit <ref> [--text <text>] [--color <c>] [--size <w>x<h>] | note remove <ref>',
     text: `Notes on the board for an orchestrator (\`agent-board help orchestrate\`), marked as made by
 you. From an agent, \`note add\` makes an agent note: a typed card with your badge (your name
 and role) and the time, never one of the user's stickies, so it has no colour (--color is
@@ -995,7 +1004,12 @@ character.
 shell, or outside agent-board, any note or text. Rewriting an agent note the user edited makes
 it yours again. \`note remove\` removes such a link card too.
 
+\`note edit --size\` resizes an agent note, as dragging its corner does: it keeps that size when
+you arrange (the lane is laid out round it) and when the app restarts, and text that doesn't
+fit scrolls, with a \`more\` cue. It is at least 200x96 and at most 1200x1440.
+
   --text <text>    Its text (or give it after --).
+  --size <w>x<h>   An agent note's width and height, for \`note edit\`, such as 360x240.
   --kind <k>       sticky or text. From an agent, a note with no --kind is an agent note and
                    --kind sticky makes a signed sticky; elsewhere sticky is the default.
   --color <c>      A sticky note's yellow, orange, pink, violet, blue, green, grey or white;
@@ -1306,7 +1320,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   move: ['to', 'at', 'near', 'side'],
   arrange: ['by', 'layout', 'auto'],
   zone: ['group', 'name', 'color', 'at', 'size', 'boxes', 'sections', 'style', 'out'],
-  note: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'],
+  note: ['text', 'kind', 'color', 'size', 'to', 'at', 'near', 'side'],
   shape: ['text', 'attribute', 'method', 'fill', 'kind', 'to', 'at', 'near', 'side'],
   connect: ['relation', 'style', 'label', 'from-label', 'to-label'],
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
@@ -1698,6 +1712,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const [sub, ...rest] = positionals;
       const place = { to: string('to'), at: string('at'), near: string('near'), side: string('side') };
       const color = string('color');
+      if (sub !== 'edit' && string('size') !== undefined) throw new UsageError('--size is only for `note edit`');
       if (sub === 'add') {
         if (rest.length > 0 && string('text') !== undefined) throw new UsageError('give the text or --text, not both');
         const noteText = string('text') ?? rest.join(' ');
@@ -1710,8 +1725,10 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       if (placed !== undefined) throw new UsageError(`--${placed} is only for \`note add\` (move a note with \`agent-board move\`)`);
       if (sub === 'edit') {
         if (rest.length !== 1) throw new UsageError('give one note ref');
-        if (string('text') === undefined && color === undefined) throw new UsageError('give its new --text or --color');
-        return async (session) => print(await editNote(session, rest[0]!, { text: string('text'), color }));
+        const size = string('size');
+        if (string('text') === undefined && color === undefined && size === undefined) throw new UsageError('give its new --text, --color or --size');
+        if (size !== undefined) checked(() => noteSizeOf(size));
+        return async (session) => print(await editNote(session, rest[0]!, { text: string('text'), color, size }));
       }
       if (sub === 'remove') {
         if (rest.length !== 1) throw new UsageError('give one note ref');

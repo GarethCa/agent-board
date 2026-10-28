@@ -13,12 +13,24 @@ const SIZE = { cols: 120, rows: 40 };
 
 /**
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with one zone whose agents may orchestrate.
- * With `noSessionStart`, its fakes fire no `SessionStart`.
+ * With `noSessionStart`, its fakes fire no `SessionStart`; with `trustScreen`, they show Claude's trust screen first;
+ * with `loseEnters` (after `loseEntersAfter` lines), they lose Enters, each pressed again `submitConfirmMs` later.
  */
-async function flagDaemon(options: { clock?: Clock; noSessionStart?: boolean } = {}) {
+async function flagDaemon(
+  options: { clock?: Clock; noSessionStart?: boolean; trustScreen?: boolean; loseEnters?: number; loseEntersAfter?: number; submitConfirmMs?: number } = {},
+) {
   const daemon = await startTestDaemon({
     worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, noSessionStart: options.noSessionStart }),
+    agentEnv: fakeHarnessEnv({
+      scenario: 'orchestrate',
+      home: tempDataDir(),
+      idleNotifyMs: 200,
+      noSessionStart: options.noSessionStart,
+      trustScreen: options.trustScreen,
+      loseEnters: options.loseEnters,
+      loseEntersAfter: options.loseEntersAfter,
+    }),
+    submitConfirmMs: options.submitConfirmMs,
     ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
   const client = await connectTestClient(daemon);
@@ -126,6 +138,26 @@ describe('an agent flagging the user', () => {
     expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).flag).toEqual(own);
   });
 
+  it('keeps its own flag beside a message never delivered behind a first prompt left unsent, and stands alone again once that is cleared', async () => {
+    const clock = createFakeClock(new Date());
+    // Its own line goes up; every Enter after it is lost, so its first prompt stays unsent.
+    const setup = await flagDaemon({ clock, noSessionStart: true, loseEnters: 10, loseEntersAfter: 1, submitConfirmMs: 100 });
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    const { token, connection } = await agentSideOf(setup, agent.sessionId);
+    const own = (await connection.call('board.needsYou', { token, reason: 'Which docs?' })).flag!;
+    expect(await setup.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, agent.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId });
+    const lost = await untilAgent(setup.recorder, agent.sessionId, (a) => a.undelivered.length > 0);
+    expect(lost.unsent).toBe('Its first prompt');
+    expect(lost.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/not delivered.*Also: Which docs\?$/) });
+
+    expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toEqual(own);
+  });
+
   it('refuses a blank or overlong reason', async () => {
     const setup = await flagDaemon();
     const { token, connection } = await topLevel(setup);
@@ -168,7 +200,7 @@ describe("a crew member's flag", () => {
     expect(heard.events).toContainEqual(expect.objectContaining({ kind: 'flagged', sessionId: member.agent.sessionId, detail: "can't reproduce it on CI, only locally" }));
   });
 
-  it('goes to its orchestrator when its first prompt stalls, whose send is refused, leaving the flag, until the user sends it', async () => {
+  it('goes to its orchestrator when its first prompt stalls, whose send waits, leaving the flag, until the user sends it', async () => {
     const clock = createFakeClock(new Date());
     const setup = await flagDaemon({ clock, noSessionStart: true });
     // No session says it is up: the lead's first prompt is given up on too, and the user sends it.
@@ -185,13 +217,32 @@ describe("a crew member's flag", () => {
     await setup.recorder.waitForText(lead.agent.sessionId, 'flaky fixer');
     expect(setup.recorder.screenText(lead.agent.sessionId)).toContain("needs you: its session never said it was up, so its first prompt isn't typed");
 
-    // Its orchestrator can't type it: its message is refused, and the flag stays for it to pass on.
-    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: member.sessionId, text: 'Go on' })).rejects.toThrow(
-      "session isn't up yet",
-    );
+    // Its orchestrator can't type it: its message waits until it is up, and the flag stays for it to pass on.
+    await setup.client.call('session.attach', { sessionId: member.sessionId });
+    const sent = await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: member.sessionId, text: 'Go on' });
+    expect(sent.queuedUntilUp).toBe(1);
     expect((await setup.client.call('agent.list')).find((a) => a.sessionId === member.sessionId)?.flag).toEqual(stalled.flag);
 
     expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: member.sessionId })).flag).toBeNull();
+    await setup.recorder.waitForText(member.sessionId, '> Fix the flaky test');
+  });
+
+  it("goes to the user, never its orchestrator, when a crew member waits on Claude's trust screen", async () => {
+    const setup = await flagDaemon({ trustScreen: true });
+    const leadAgent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Print your board identity', ...SIZE });
+    await untilAgent(setup.recorder, leadAgent.sessionId, (a) => a.trustFolder !== null);
+    await setup.client.call('agent.trustFolder', { sessionId: leadAgent.sessionId });
+    const lead = { agent: leadAgent, ...(await agentSideOf(setup, leadAgent.sessionId)) };
+    const member = await lead.connection.call('orchestrator.spawn', { token: lead.token, prompt: 'Fix the flaky test', name: 'flaky fixer' });
+
+    const asking = await untilAgent(setup.recorder, member.sessionId, (a) => a.trustFolder !== null);
+    expect(asking.flag).toMatchObject({ to: 'user', reason: `Claude is asking whether to trust this folder: ${member.cwd}` });
+    expect(setup.recorder.screenText(lead.agent.sessionId)).not.toContain('flaky fixer');
+
+    await setup.client.call('session.attach', { sessionId: member.sessionId });
+    await setup.client.call('agent.trustFolder', { sessionId: member.sessionId });
+    await setup.recorder.waitForText(member.sessionId, '> Fix the flaky test');
+    expect((await setup.client.call('agent.list')).find((a) => a.sessionId === member.sessionId)).toMatchObject({ trustFolder: null, flag: null });
   });
 
   it("waits for its orchestrator to be ready, as a hand-off does: never typed over the user's half-typed line", async () => {

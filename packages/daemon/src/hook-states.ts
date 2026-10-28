@@ -47,6 +47,11 @@ interface HookStateOptions<Row extends HookStateRow> {
   onCommand?(sessionId: string): boolean;
   /** Whether a first prompt waits to be typed at the agent once its session is up, not given on its command line. */
   firstPromptDue?(sessionId: string): boolean;
+  /**
+   * Whether the agent's session says it is up by its screen, not a hook (a Codex agent's first prompt waits on its
+   * composer): its output, however long its start takes, is then no sign of hooks not arriving.
+   */
+  upByScreen?(sessionId: string): boolean;
   /** The agent left `starting` without a hook: its output came, or it gave up waiting. */
   startingEnded(sessionId: string): void;
   /** The agent's own turn ended with `finalMessage`. */
@@ -113,6 +118,16 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
   const giveUpStarting = (sessionId: string) => {
     if (stopStarting(sessionId)) options.startingEnded(sessionId);
   };
+  /**
+   * The starting agent's session is up, its first prompt still to be typed: its output from now (the prompt drawn as
+   * it is typed) is no sign of hooks not arriving, and it stays `starting` for `STARTING_MAX_MS` more.
+   */
+  const markUp = (sessionId: string) => {
+    const entry = starting.get(sessionId);
+    if (entry === undefined) return;
+    entry.cancel();
+    starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS), up: true });
+  };
 
   /** Whether the agent's last message asks the user something (`asksSomething`). */
   const asking = (sessionId: string) => asksSomething(lastMessages.get(sessionId));
@@ -140,14 +155,21 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     /** The agent's session printed something: past the grace, an agent still `starting` with no hook at all stops. */
     outputSeen(sessionId: string) {
       const entry = starting.get(sessionId);
-      if (entry !== undefined && entry.up !== true && clock.now() - entry.since >= STARTING_OUTPUT_GRACE_MS) giveUpStarting(sessionId);
+      if (entry === undefined || entry.up === true || options.upByScreen?.(sessionId) === true) return;
+      if (clock.now() - entry.since >= STARTING_OUTPUT_GRACE_MS) giveUpStarting(sessionId);
     },
 
     /** Whether the live agent sits at its prompt between turns, asking you nothing. */
     isAtPrompt: (row: Row) => atPrompt(row),
 
+    /** Whether the user has a draft at the agent's prompt they typed and haven't submitted (`draftAfterInput`). */
+    isDrafting: (sessionId: string) => drafting.has(sessionId),
+
     /** Whether the agent's session has yet to send its first hook, with a first prompt queued. */
     isStarting: (sessionId: string) => starting.has(sessionId),
+
+    /** The starting Codex agent's composer is up (Codex fires no hook before its first prompt): as `markUp`. */
+    composerUp: (sessionId: string) => markUp(sessionId),
 
     /** Whether the starting agent's session is up, its first prompt still to go up: what it prints now is its prompt. */
     isUp: (sessionId: string) => starting.get(sessionId)?.up === true,
@@ -219,14 +241,11 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
      */
     onHook(row: Row, payload: Record<string, unknown>, signal: AbortSignal): Promise<HookReply> | undefined {
       const sessionId = row.session_id;
-      // Its session is up, its first prompt still to be typed: it stays `starting` until that prompt's own hook, its
-      // output from now (the prompt drawn as it is typed) no sign of hooks not arriving, for `STARTING_MAX_MS` more.
-      const typingFirst = payload.hook_event_name === 'SessionStart' && options.firstPromptDue?.(sessionId) === true;
-      const startEntry = typingFirst ? starting.get(sessionId) : undefined;
-      if (startEntry !== undefined) {
-        startEntry.cancel();
-        starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS), up: true });
-      }
+      // Claude's session is up, its first prompt still to be typed: it stays `starting` until that prompt's own hook.
+      // (Codex fires `SessionStart` only with a prompt: one while its first is still due is of a turn begun by hand.)
+      const typingFirst =
+        row.harness === 'claude' && payload.hook_event_name === 'SessionStart' && options.firstPromptDue?.(sessionId) === true;
+      if (typingFirst) markUp(sessionId);
       const prompted = !typingFirst && stopStarting(sessionId);
       if (payload.hook_event_name === 'UserPromptSubmit') {
         interrupted.delete(sessionId);

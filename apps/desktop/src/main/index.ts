@@ -156,6 +156,8 @@ function openBoard(showing?: WindowTarget): BrowserWindow {
       ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
       ...(placeholders ? { placeholders } : {}),
       ...(stickies ? { stickies } : {}),
+      // The renderer reads demo mode from here alone, so a packaged build, where `demo` is never set, can't reach it.
+      ...(demo ? { [WINDOW_QUERY.demo]: '1' } : {}),
       ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),
     },
     demo ? { offscreenScale: DEMO_SCALE } : {},

@@ -481,6 +481,10 @@ export interface StickyData {
 export const AGENT_NOTE_SIZE = { width: 272, height: 120 };
 /** The tallest an agent note grows to show its text: past it, it scrolls. The user can resize it taller. */
 export const MAX_AGENT_NOTE_HEIGHT = 480;
+/** The least an agent note can be resized to: its tab, a line of text and its footer still fit. */
+export const MIN_AGENT_NOTE_SIZE = { width: 200, height: 96 };
+/** The most an agent note can be resized to, by hand or `note edit --size`: a few lane slots wide, and a few screenfuls of text tall. */
+export const MAX_AGENT_NOTE_SIZE = { width: 1200, height: 3 * MAX_AGENT_NOTE_HEIGHT };
 
 /** The agent that wrote an agent note, as it was then: the note still says who wrote it once its tile has gone. */
 export interface AgentNoteAuthor {
@@ -1517,9 +1521,10 @@ export type NeedsYouKind = 'permission' | 'asks' | 'plan' | 'flagged' | 'turn';
 /** The agent fields the needs-you rule reads. */
 export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'flag'>;
 
-/** Why the live agent is in the needs-you inbox under `shows`, or null if it isn't. */
+/** Why the agent is in the needs-you inbox under `shows` (an ended one only for its flag), or null if it isn't. */
 export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsYouKind | null {
-  if (agent.endedAt !== null) return null;
+  // Only a flag that outlives its session (what was never delivered to it) keeps an ended agent here.
+  if (agent.endedAt !== null) return agent.flag?.to === 'user' ? 'flagged' : null;
   if (agent.state === 'needs-permission' || agent.permissions.length > 0) return 'permission';
   if (agent.ask !== null) return 'asks';
   if (planPending(agent)) return 'plan';
@@ -1540,7 +1545,7 @@ export function waitsForYou(agent: NeedsYouFacts, shows: NeedsYouShows): boolean
  * flags them (opening its session clears a flag, so one still standing is unread). It counts, and shows needs-you.
  */
 export function needsYouNow(agent: NeedsYouFacts & Pick<Agent, 'seen'>, shows: NeedsYouShows): boolean {
-  if (agent.endedAt === null && agent.flag?.to === 'user') return true;
+  if (agent.flag?.to === 'user') return true;
   return needsYouKind(agent, shows) !== null && !agent.seen;
 }
 
@@ -1747,15 +1752,41 @@ export interface Agent {
    * been given up on saying so: still `starting` past its limits, or relaunched a minute ago with no `SessionStart`.
    * Nothing is typed at it blind, as Enter on a startup screen would answer it; the tile offers it to send
    * (`agent.typeFirstPrompt`), and the agent is flagged (`flag`), unless it flags something of its own, until it is
-   * typed or the user opens the agent. Null otherwise, and once its `SessionStart` comes (not one after a compaction:
-   * it is typed then) or its session ends.
+   * typed or the user opens the agent. Null otherwise, while Claude's trust screen is up (`trustFolder`), and once
+   * its `SessionStart` comes (not one after a compaction: it is typed then), its prompt shows on its screen (it is
+   * typed then too), or its session ends.
    */
   untypedPrompt: string | null;
+  /**
+   * The folder Claude's trust screen asks about, while the live Claude agent's first prompt waits on it: Claude shows
+   * it in a folder it has never opened, and fires no `SessionStart` until it is answered. The flag says so to the user,
+   * never an orchestrator; `agent.trustFolder` answers it as the user asks, and the first prompt is typed once the
+   * session is up. Nothing is typed there otherwise, as Enter picks `No, exit`. Null otherwise.
+   */
+  trustFolder: string | null;
+  /** How many messages sent before the live agent's session was up wait to be typed, after its first prompt. */
+  queuedUntilUp: number;
+  /**
+   * What was sent to the agent before its session was up and never typed, oldest first: its session ended first, its
+   * first prompt was left unsent, or a question or permission prompt was up when its turn came. Its sender heard it was
+   * queued, so it is kept, and flagged to the user (a flag that outlives its session), until the user resends it
+   * (`agent.resendUndelivered`) or clears it (`agent.clearUndelivered`). A hand-off goes back to its edge instead.
+   */
+  undelivered: UndeliveredMessage[];
   /**
    * Its harness starting: while it is `starting`, and kept once it ended before its session's first hook (it never
    * came up). Null otherwise.
    */
   startup: AgentStartup | null;
+}
+
+/** Something sent to an agent before its session was up and never typed (`Agent.undelivered`). */
+export interface UndeliveredMessage {
+  /** What it was: `A message`, `A scheduled run`. */
+  what: string;
+  text: string;
+  /** Why it wasn't typed. */
+  reason: string;
 }
 
 /** An agent's harness starting, as its tile shows it (`Agent.startup`). */
@@ -2733,7 +2764,7 @@ export interface ZoneMap {
   spacing: ArrangeSpacing;
   /** Whether no app window measured what it draws: everything is where and as big as it is saved, or estimated. */
   unmeasured: boolean;
-  /** The lead and the shells, then whatever is in no lane (notes, cards, tiles out of scope). */
+  /** The lead, the shells and the clocks its crew made, then whatever is in no lane (notes, cards, tiles out of scope). */
   top: string[];
   lanes: ZoneMapLane[];
   things: ZoneMapThing[];
@@ -2743,6 +2774,8 @@ export interface ZoneMap {
   laneGap: number;
   /** The farthest a lane's label lies from its nearest tile, in slots along the lane past the gap kept. */
   labelGap: number;
+  /** The widest band of grid columns, and of rows, running right across the zone with nothing in it, past the gap kept. */
+  emptyBands: { columns: number; rows: number };
   offGrid: string[];
 }
 
@@ -3529,7 +3562,8 @@ export interface DaemonMethods {
    * `invalidParams` for an unknown or ended agent, empty text, or an agent that needs permission (the text would land
    * in its permission dialog).
    */
-  'agent.answer': { params: SessionRef & { text: string; paste?: boolean }; result: null };
+  /** `queued` when the agent's session wasn't up yet: the message is typed once it is, after its first prompt. */
+  'agent.answer': { params: SessionRef & { text: string; paste?: boolean }; result: { queued: boolean } };
   /**
    * The agent's conversation from its harness's transcript, for the chat view: the entries from `since` on, read
    * as the transcript grows. Pass back the `generation` last got; entries start again at 0 when it changes. Fails with
@@ -3574,11 +3608,28 @@ export interface DaemonMethods {
    */
   'agent.clearUnsent': { params: SessionRef; result: Agent };
   /**
+   * Sends again, in order, what was sent to the agent before its session was up and never typed (`Agent.undelivered`),
+   * and resolves with the agent, `undelivered` cleared, and its flag: each as a message, an ended agent started again
+   * with the first. Fails with `invalidParams` for one with none, keeping what it couldn't send.
+   */
+  'agent.resendUndelivered': { params: SessionRef; result: Agent };
+  /** Forgets what was never delivered to the agent (`Agent.undelivered`), and its flag; resolves with the agent. */
+  'agent.clearUndelivered': { params: SessionRef; result: Agent };
+  /**
    * Types the agent's first prompt its session never said it was up for (`Agent.untypedPrompt`), as the user asked,
    * and resolves with the agent, `untypedPrompt` cleared, and the flag it raised with it: it is typed and submitted as
-   * a delivery is, kept as its unsent message if no turn starts on it. Fails with `invalidParams` for an unknown agent or one with none.
+   * a delivery is, kept as its unsent message if no turn starts on it. Fails with `invalidParams` for an unknown agent or one with none,
+   * and while Claude's trust screen is up (`Agent.trustFolder`), where Enter would pick `No, exit`.
    */
   'agent.typeFirstPrompt': { params: SessionRef; result: Agent };
+  /**
+   * Answers Claude's trust screen (`Agent.trustFolder`) as the user asked: moves its pointer to `Yes, I trust this
+   * folder` and presses Enter once its screen shows the pointer there, never before. Claude then trusts the folder from
+   * now on, as it records itself; the board writes nothing of it. Its first prompt is typed once its session is up.
+   * Resolves with the agent. Fails with `invalidParams` for an unknown agent, one not on the trust screen, or one whose
+   * pointer did not move there (answer it in its terminal).
+   */
+  'agent.trustFolder': { params: SessionRef; result: Agent };
   /**
    * Ends the agent's session and resolves with it `done` (not `failed`: the user stopped it). Its worktree and branch
    * stay. Fails with `invalidParams` for an unknown or ended agent.
@@ -3793,7 +3844,7 @@ export interface DaemonMethods {
    */
   'orchestrator.addNote': { params: { token?: string; text: string; kind?: NoteKind; color?: string } & LayoutPlace; result: BoardItem };
   /** Changes the text or colour of a note it (or its crew) made; a user-side caller any sticky note or text item. */
-  'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string }; result: BoardItem };
+  'orchestrator.editNote': { params: { token?: string; id: string; text?: string; color?: string; width?: number; height?: number }; result: BoardItem };
   /** Deletes a note it (or its crew) made; a user-side caller any sticky note or text item. */
   'orchestrator.removeNote': { params: { token?: string; id: string }; result: null };
   /**

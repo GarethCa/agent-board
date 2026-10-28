@@ -37,7 +37,7 @@ const onGrid = (thing: ZoneMapThing, arranged: ReadonlyMap<string, Point>, grid:
 };
 
 /** The map of a zone: its lanes, the rest above them, and what is amiss. */
-export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map(), measured = false }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid'> {
+export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = 'normal', compact = new Map(), arranged = new Map(), measured = false }: ZoneMapInput): Pick<ZoneMap, 'top' | 'lanes' | 'overlaps' | 'widestGap' | 'laneGap' | 'labelGap' | 'offGrid' | 'emptyBands'> {
   // Every gap is measured past the one this spacing's arrange keeps, in this spacing's slots.
   const grid = zoneGrid(spacing);
   const { column: columnStep, row: rowStep } = grid;
@@ -79,7 +79,7 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   let widestGap = 0;
   let labelGap = 0;
   const [across, extent] = along === 'row' ? (['y', 'height'] as const) : (['x', 'width'] as const);
-  // The top row (the lead and the shells) is the first span in rows; in columns it lies beside the lanes, so how far
+  // The top row (the lead, the shells and the crew's clocks) is the first span in rows; in columns it lies beside the lanes, so how far
   // below it they start is measured on its own.
   const topThings = lead.map((key) => byKey.get(key)!);
   const spans: { start: number; end: number }[] =
@@ -137,7 +137,27 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   if (along === 'column' && topThings.length > 0 && lanesTop !== Infinity) {
     laneGap = Math.max(laneGap, Math.round((lanesTop - Math.min(...topThings.map((thing) => thing.y))) / rowStep));
   }
-  return { top, lanes: mapped, overlaps: overlapping, widestGap, laneGap, labelGap, offGrid: [...offGrid] };
+  return { top, lanes: mapped, overlaps: overlapping, widestGap, laneGap, labelGap, offGrid: [...offGrid], emptyBands: emptyBands(things, grid) };
+}
+
+/**
+ * The widest band of grid columns, and of grid rows, running right across the zone with nothing in it: from its first
+ * slot to the first thing, or between one thing and the next, past the gap an arrange keeps (a tile gap across, a lane
+ * gap down). What lies past the last thing is the zone being bigger than its contents (`spareSlots`).
+ */
+function emptyBands(things: readonly ZoneMapThing[], grid: ZoneGrid): ZoneMap['emptyBands'] {
+  const widest = (axis: 'x' | 'y', step: number, kept: number) => {
+    const spans = things.map((thing) => ({ start: thing[axis], end: thing[axis] + (axis === 'x' ? thing.width : thing.height) })).sort((a, b) => a.start - b.start);
+    let reach = grid.origin[axis];
+    // Before the first thing, from the first slot, which keeps no gap before it.
+    let band = Math.max(0, Math.round(((spans[0]?.start ?? reach) - reach) / step));
+    for (const span of spans) {
+      band = Math.max(band, Math.round((span.start - reach - kept) / step));
+      reach = Math.max(reach, span.end);
+    }
+    return band;
+  };
+  return { columns: widest('x', grid.column, grid.gaps.tile), rows: widest('y', grid.row, grid.gaps.lane) };
 }
 
 /** How a map names the things in it: by ref (`agent:9c1e`), as the board CLI does. */
@@ -163,10 +183,18 @@ export function lintLine(map: ZoneMap, ref: RefOf): string {
   const gapText = `widest gap ${map.widestGap} slot${map.widestGap === 1 ? '' : 's'}`;
   const offText = map.offGrid.length === 0 ? '0 off-grid' : `${map.offGrid.length} off-grid (${map.offGrid.map(ref).join(', ')})`;
   const spare = spareSlots(map);
+  // A band no wider than a gap already named the same way is that gap, not said again: in rows, the gaps in a lane and
+  // to its label are columns and the gap between lanes rows; down columns, the gaps in a lane are rows, and the gap
+  // between lanes columns, or rows from the top row down to the lanes.
+  const [inLane, betweenLanes] = [Math.max(map.widestGap, map.labelGap), map.laneGap];
+  const [columnsNamed, rowsNamed] = map.arrange.layout === 'columns' ? [betweenLanes, Math.max(inLane, betweenLanes)] : [inLane, betweenLanes];
+  const { columns, rows } = map.emptyBands;
+  const empty = [...(columns > MAX_GAP && columns > columnsNamed ? [`${columns} empty columns`] : []), ...(rows > MAX_GAP && rows > rowsNamed ? [`${rows} empty rows`] : [])];
   const spread = [
     ...(map.laneGap > MAX_GAP ? [`${map.laneGap} slots between lanes`] : []),
     ...(map.labelGap > MAX_GAP && map.labelGap > map.widestGap ? [`label ${map.labelGap} slots from its tiles`] : []),
     ...(spare.columns > MAX_GAP || spare.rows > MAX_GAP ? [`zone ${spare.columns} columns and ${spare.rows} rows bigger than its contents`] : []),
+    ...(empty.length === 0 ? [] : [`zone mostly empty: ${empty.join(' and ')} across it`]),
   ];
   const ok = map.overlaps.length === 0 && map.offGrid.length === 0 && map.widestGap <= MAX_GAP && spread.length === 0;
   return `lint  ${ok ? 'ok' : 'check'} · ${overlapText} · ${gapText} · ${offText}${spread.length === 0 ? '' : ` · ${spread.join(' · ')}`}`;

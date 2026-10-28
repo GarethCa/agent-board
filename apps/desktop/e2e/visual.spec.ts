@@ -10,6 +10,7 @@ import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShe
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from './render.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox, untilStill, viewTransform } from './board-helpers.ts';
+import { crowdedPanel, LONG } from './master-helpers.ts';
 
 // Visual regression for the Workbench theme. Baselines are per platform (`-linux`, `-darwin`) and both are committed;
 // a test runs against the ones for the platform it is on, and fails, never skips, if they are missing. `pnpm visual:update`
@@ -1137,8 +1138,12 @@ test('two agents stacked one above the other, joined both ways by edges made wit
     );
     await expect(window.getByTestId('flow-edge')).toHaveCount(1);
     await expect(window.getByTestId('rail-token')).toHaveCount(1);
+    // The zone grows round the moved tiles over a few frames, and the rail follows them: fit and shoot only once the tiles and the rail's line hold still.
+    await nodesStill(window);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
+    await nodesStill(window);
+    await untilStill(() => window.getByTestId('flow-edge').evaluate((rail) => `${rail.getAttribute('d')} ${rail.getAttribute('data-routed')}`));
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
     await settle(window);
@@ -1555,6 +1560,53 @@ test("an agent's sidebar: the document it showed, and a file, a link and a note 
     // Each time it was shown or pinned is the clock's.
     const when = details.locator('[data-testid="details-document"] .ui-row-meta, [data-testid="details-pin"]:not(:last-child) .ui-row-meta');
     await expect.soft(details).toHaveScreenshot('sidebar-pins.png', { ...SHOT, mask: [when] });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Captain's panel with names, paths and code too long to fit: cut or wrapped, and above the dock with a window minimised", async () => {
+  needsBaselines('master-panel', 'master-panel-dock');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+  try {
+    await listFinishedTurns(window);
+    await window.setViewportSize(VIEWPORT);
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database', { name: LONG });
+    await expect(tile(window).first()).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    await crowdedPanel(window, '2026-01-01T14:31:00.000Z');
+    const panel = window.getByTestId('master-panel');
+    await expect(panel.getByTestId('master-digest')).toBeVisible();
+    // Watching folded and For you dragged taller, so the whole digest (its path, link, code span and block) is in frame.
+    await panel.getByTestId('master-fold-watching').click();
+    const grab = (await panel.getByTestId('master-for-you-handle').boundingBox())!;
+    await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
+    await window.mouse.down();
+    await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2 + 250, { steps: 5 });
+    await window.mouse.up();
+    // The chat's brief is the same every run; its scrollbar shows a while after a scroll.
+    await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
+    await pinRandomText(window);
+    let restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('master-panel.png', SHOT);
+    await restorePointer();
+
+    // A window minimised to the dock: the panel ends above it, the zoom bar beside it.
+    await tile(window).first().dblclick();
+    await window.getByRole('button', { name: 'Minimise session window' }).click();
+    await expect(window.getByTestId('dock-item')).toHaveCount(1);
+    await pinRandomText(window);
+    restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('master-panel-dock.png', SHOT);
+    await restorePointer();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

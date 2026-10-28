@@ -42,9 +42,9 @@ function box(lines: string[], border: string, { title, centre = false }: { title
 /** Claude's mascot, as its welcome box draws it. */
 const MASCOT = [' ▐▛███▜▌ ', '▝▜█████▛▘', '  ▘▘ ▝▝  '];
 
-/** A model as Claude Code names it: `claude-opus-5-5` is `Opus 5.5`. */
+/** A model as Claude Code names it: `claude-opus-5-5` is `Opus 5.5`, and a dated `claude-sonnet-4-20250514` is `Sonnet 4`. */
 export function modelName(model: string): string {
-  const match = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(model);
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?!\d)/.exec(model);
   if (match === null) return model;
   return `${match[1]![0]!.toUpperCase()}${match[1]!.slice(1)} ${match[2]}${match[3] === undefined ? '' : `.${match[3]}`}`;
 }

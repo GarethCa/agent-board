@@ -55,6 +55,9 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.sendUnsent, 'agent.sendUnsent', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.clearUnsent, 'agent.clearUnsent', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.typeFirstPrompt, 'agent.typeFirstPrompt', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.trustFolder, 'agent.trustFolder', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.resendUndelivered, 'agent.resendUndelivered', (sessionId: string) => ({ sessionId }));
+  passthrough(daemon, AGENT_IPC.clearUndelivered, 'agent.clearUndelivered', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.stop, 'agent.stop', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.pause, 'agent.pause', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.resume, 'agent.resume', (sessionId: string) => ({ sessionId }));

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CODEX_HOOK_EVENTS, codexHooksJson } from '../src/index.ts';
 import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
-import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, type RunFakeOptions } from './run-fake.ts';
+import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilStdout, type RunFakeOptions } from './run-fake.ts';
 
 afterAll(removeTempDirs);
 
@@ -201,6 +201,51 @@ describe('fake codex', () => {
 
     const exec = await runWithHooks({ scenario: 'output', args: ['exec', TRUST, 'go'], input: ['ignored'] });
     expect(exec.names.filter((name) => name === 'UserPromptSubmit')).toHaveLength(1);
+  });
+
+  it('fires no hook before its first prompt, as the real TUI fires SessionStart only with it, and draws its composer with its status line', async () => {
+    const home = tempDir('fake-home-');
+    const cwd = tempDir('fake-cwd-');
+    const log = join(tempDir('hook-log-'), 'events.jsonl');
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify(codexHooksJson(`{ cat; echo; } >> '${log}'`)));
+    const { child, done } = startFake('codex', { scenario: 'output', args: [TRUST, '-m', 'gpt-5.5'], home, cwd });
+
+    await untilStdout(child, `gpt-5.5 default · ${cwd}`);
+    await sleep(200);
+    expect(existsSync(log)).toBe(false);
+    child.stdin.end('fix the tests\n');
+    await done;
+
+    expect(readJsonl(log).map((event) => event.hook_event_name)).toEqual(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']);
+    expect(readJsonl(log)[0]).toMatchObject({ source: 'startup' });
+  });
+
+  it('keeps its composer and status line drawn under each prompt it takes, as the real TUI does through a turn', async () => {
+    const cwd = tempDir('fake-cwd-');
+    const result = await runFake('codex', { scenario: 'output', args: [TRUST], cwd, input: ['fix the tests', 'and the docs'] });
+
+    for (const prompt of ['> fix the tests', '> and the docs']) {
+      const after = result.stdout.slice(result.stdout.indexOf(prompt));
+      expect(after.indexOf('› Ask Codex to do anything')).toBeLessThan(after.indexOf(`default · ${cwd}`));
+      expect(after.indexOf('› Ask Codex to do anything')).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(['folder-trust', 'hooks-review'])('with FAKE_HARNESS_START_SCREEN=%s draws its composer, then that screen over it, and its status line only once Enter answers it', async (screen) => {
+    const cwd = tempDir('fake-cwd-');
+    const { child, done } = startFake('codex', { scenario: 'output', args: [TRUST], cwd, env: { FAKE_HARNESS_START_SCREEN: screen } });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+
+    await untilStdout(child, screen === 'folder-trust' ? '1. Trust and continue' : '2. Trust all and continue');
+    expect(stdout).toContain('› Ask Codex to do anything');
+    await sleep(200);
+    expect(stdout).not.toContain(' · ' + cwd);
+    child.stdin.write('\n');
+    await untilStdout(child, `default · ${cwd}`);
+    child.stdin.end();
+    expect((await done).code).toBe(0);
   });
 
   it('SIGINT (Ctrl-C) interrupts the turn: an Interrupt hook and no Stop, then the next prompt', async () => {

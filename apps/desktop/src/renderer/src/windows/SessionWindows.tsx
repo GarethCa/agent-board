@@ -194,12 +194,12 @@ const idAttributes = ({ kind, id }: WindowTarget) =>
 const DOCK_AVOIDS = '.island-bottom-left, .island-bottom-right, .board-minimap';
 
 /** What mounting or unmounting makes the dock measure again: what it avoids, and the Edge rules panel that moves the zoom bar. */
-const DOCK_CHROME = `${DOCK_AVOIDS}, .edge-rules`;
+const DOCK_CHROME = `${DOCK_AVOIDS}, .edge-rules, .master-panel`;
 
 /**
  * Keeps the dock on the bottom row between the zones pill (bottom left) and the zoom bar (bottom right), centred in the
  * room between them and scrolling sideways when its pills do not fit (`useSidewaysScroll`). It sets `--dock-left` and
- * `--dock-right` on the board, the room the dock leaves each side: what shows in its row at that side of the board, plus a gap,
+ * `--dock-right` on the board (and `--dock-lift`, how far a docked panel's bottom is raised to end above the dock), the room the dock leaves each side: what shows in its row at that side of the board, plus a gap,
  * measured again whenever the window, the board or any of them changes size, or the board's chrome mounts or unmounts
  * (the zones pill when the first zone is added, the Edge rules panel moving the zoom bar). The zones pill is capped, and gives
  * way to the dock's minimum width (`.zone-jump`), so the dock keeps it however many zones there are; it never collapses or moves up a row. Also scrolls
@@ -225,7 +225,8 @@ function useDockScroll(ids: readonly string[]): RefObject<HTMLDivElement | null>
       for (const thing of avoided()) {
         const box = thing.getBoundingClientRect();
         if (box.width === 0 || box.bottom <= row.top || box.top >= row.bottom) continue;
-        if ((box.x < edge.x + edge.width / 2) !== (side === 'left')) continue;
+        // The zones pill is the left's, the zoom bar and minimap the right's, even where docked panels push them past the middle.
+        if ((thing.matches('.island-bottom-left') ? 'left' : 'right') !== side) continue;
         most = Math.max(most, side === 'left' ? box.right - edge.left : edge.right - box.left);
       }
       return `${Math.round(most + tokenNumber('--size-dock-gap'))}px`;
@@ -235,13 +236,17 @@ function useDockScroll(ids: readonly string[]): RefObject<HTMLDivElement | null>
     const clear = () => {
       container.style.setProperty('--dock-right', taken('right'));
       container.style.setProperty('--dock-left', taken('left'));
+      // The docked panels (the Captain's) end at the dock's top edge, a gap above it.
+      container.style.setProperty('--dock-lift', `${Math.round(container.getBoundingClientRect().bottom - dock.getBoundingClientRect().top + tokenNumber('--size-dock-gap') - tokenNumber('--island-inset'))}px`);
     };
     clear();
     const observer = new ResizeObserver(clear);
-    const watched = new Set<Element>();
+    const watched = new Set<Element>([dock]);
+    observer.observe(dock);
     // The islands and the minimap come and go, so what is watched is looked at again whenever the page's markup changes.
     const watch = () => {
-      for (const thing of [container, ...avoided()]) {
+      // The docked panels move the zoom bar and minimap as they are resized, so they are watched too.
+      for (const thing of [container, ...avoided(), ...container.querySelectorAll('.edge-rules, .master-panel')]) {
         if (watched.has(thing)) continue;
         watched.add(thing);
         observer.observe(thing);
@@ -265,6 +270,7 @@ function useDockScroll(ids: readonly string[]): RefObject<HTMLDivElement | null>
       observer.disconnect();
       container.style.removeProperty('--dock-left');
       container.style.removeProperty('--dock-right');
+      container.style.removeProperty('--dock-lift');
     };
   }, [drawn]);
   // The newest arrival, else (nothing new) nothing moves.

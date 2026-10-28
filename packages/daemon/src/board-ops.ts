@@ -1079,12 +1079,16 @@ export async function removeDefaultRole(session: BoardSession, name: string, zon
   return { text: zone === undefined ? `Removed the default role ${shown}.` : `Removed ${zone.name}'s template for ${shown}.`, json: { removed: shown } };
 }
 
-/** `send`: the agent's next message. */
+/** `send`: the agent's next message, queued until its session is up if it isn't yet. */
 export async function sendToAgent(session: BoardSession, ref: string, text: string): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
-  await session.client.call('orchestrator.send', { token, sessionId: agent.sessionId, text });
+  const sent = await session.client.call('orchestrator.send', { token, sessionId: agent.sessionId, text });
   const fresh = await freshAgentLine(session, agent.sessionId);
-  return { text: `Sent to ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+  const queued = sent.queuedUntilUp > 0;
+  return {
+    text: queued ? `Queued until it's up, after its first prompt: ${fresh.line}` : `Sent to ${fresh.line}`,
+    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), queued },
+  };
 }
 
 /** `wait`: until the agents' turns end (or `until`'s states), or the timeout. With `crew`, its crew's too. */

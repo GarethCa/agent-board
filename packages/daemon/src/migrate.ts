@@ -9,7 +9,7 @@ export interface Migration {
 
 /** The schema, from `migrations/NNNN_name.sql`. Forward-only: never edit a shipped file, add a new one. */
 export const MIGRATIONS: readonly Migration[] = Object.entries(
-  import.meta.glob<string>('./migrations/*.sql', { query: '?raw', import: 'default', eager: true }),
+  import.meta.glob('./migrations/*.sql', { query: '?raw', import: 'default', eager: true }),
 )
   .map(([path, sql]) => {
     const match = /\/(\d+)_([\w-]+)\.sql$/.exec(path);

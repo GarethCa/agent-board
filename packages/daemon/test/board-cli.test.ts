@@ -146,6 +146,25 @@ describe('reading the board', () => {
     expect(json.loose.tiles.map((tile: { ref: string }) => tile.ref)).toEqual([ref('agent', webAgent.sessionId), ref('shell', loose.id)]);
   });
 
+  it("sizes an agent note with `note edit --size`, which the user's own sticky refuses", async () => {
+    const { client, env, ideas, fixTests } = await board();
+    const author = { sessionId: fixTests.sessionId, name: 'fix-tests', harness: 'claude', role: null };
+    const note = await client.call('item.create', {
+      kind: 'agent-note',
+      zoneId: ideas.id,
+      x: 300,
+      y: 20,
+      ...AGENT_NOTE_SIZE,
+      data: { text: 'Digest', agent: author, writtenAt: new Date().toISOString(), editedByUser: false },
+    });
+    expect(await run(env, 'note', 'edit', ref('item', note.id), '--size', '400x300')).toMatchObject({ code: 0 });
+    expect((await client.call('item.list')).find((item) => item.id === note.id)).toMatchObject({ width: 400, height: 300, data: { text: 'Digest', userSized: true } });
+    expect(await run(env, 'note', 'edit', ref('item', note.id), '--size', '320,200', '--text', 'Digest two')).toMatchObject({ code: 0 });
+    expect((await client.call('item.list')).find((item) => item.id === note.id)).toMatchObject({ width: 320, height: 200, data: { text: 'Digest two' } });
+    const sticky = (await client.call('item.list')).find((item) => item.kind === 'sticky')!;
+    expect(await run(env, 'note', 'edit', ref('item', sticky.id), '--size', '400x300')).toMatchObject({ code: 1, err: expect.stringContaining('only an agent note can be given a size') });
+  });
+
   it("shows an agent note's kind and the agent that wrote it, in the tree and by ref", async () => {
     const { client, env, ideas, fixTests } = await board();
     const author = { sessionId: fixTests.sessionId, name: 'fix-tests', harness: 'claude', role: null };
@@ -421,7 +440,11 @@ describe('laying out the board from the command line', () => {
     await usage(['zone', 'bind', 'zone:1'], 'the zone commands are');
     await usage(['note', 'add'], 'give the note its text');
     await usage(['note', 'add', '--kind', 'poster', '--', 'hi'], '--kind must be sticky or text');
-    await usage(['note', 'edit', 'item:1'], 'give its new --text or --color');
+    await usage(['note', 'edit', 'item:1'], 'give its new --text, --color or --size');
+    await usage(['note', 'edit', 'item:1', '--size', 'big'], '--size is <width>x<height>');
+    await usage(['note', 'edit', 'item:1', '--size', '100x50'], '--size is at least 200x96');
+    await usage(['note', 'edit', 'item:1', '--size', '3600x2400'], '--size is at most 1200x1440');
+    await usage(['note', 'add', '--size', '300x200', '--', 'hi'], '--size is only for `note edit`');
     await usage(['note', 'edit', 'item:1', '--near', 'a'], '--near is only for `note add`');
     await usage(['note', 'remove'], 'give one note ref');
   });

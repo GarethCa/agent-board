@@ -551,10 +551,13 @@
   --layer-chrome: 10; /* the islands floating over the board: over its panels (5), under a session window */
   --layer-window: 20; /* a session window shown on the board */
   --layer-dock: 21; /* the dock, over a shown session window */
+  --layer-panel: 22; /* the Captain's docked panel: over the dock, which ends under it */
+  --layer-notice: 23; /* a notice over the board's chrome, the docked panel included */
   --layer-dialog: 30; /* a modal dialog and its scrim */
   --layer-popover: 40; /* menus and popovers, which a dialog may open */
   --layer-toast: 50;
   --layer-tooltip: 60;
+  --layer-demo-cursor: 70; /* demo mode's drawn pointer, over everything */
 
   /* Spacing: --space-N is N × 4px */
   --space-px: 1px;
@@ -798,6 +801,16 @@
   --motion-pulse: 700ms; /* one pulse of a tile ⌘K showed */
   --motion-record-fade: 5s; /* a deleted sidebar record fading out while its Undo is up */
   --pulse-count: 2; /* how many times it pulses */
+  --motion-demo-ripple: 450ms; /* demo mode: a click's ripple spreading */
+
+  /* Demo mode (demo/demo-mode.ts): the drawn pointer, the same in every theme as a system pointer is, and a click's ripple. */
+  --demo-cursor-fill: #111111;
+  --demo-cursor-edge: #ffffff;
+  --demo-ripple: color-mix(in srgb, var(--accent) 45%, transparent);
+  --size-demo-cursor: 22px;
+  --size-demo-ripple: 44px;
+  /* How much bigger a document grows on its way along a flow edge in demo mode, so the hand-off reads in a video. */
+  --demo-handoff-scale: 1.7;
   --ease-in: cubic-bezier(0.42, 0, 1, 1); /* leaving */
   --ease-in-out: cubic-bezier(0.42, 0, 0.58, 1); /* back and forth */
   --ease-out: cubic-bezier(0, 0, 0.58, 1); /* arriving */

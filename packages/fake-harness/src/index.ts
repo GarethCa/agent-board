@@ -1,6 +1,7 @@
 import { delimiter } from 'node:path';
 import { fakeBinDir } from './paths.ts';
 import { scrubBoardSessionEnv } from './board-guard.ts';
+import type { CodexStartScreen } from './codex-screens.ts';
 import type { FakeScenario } from './scenarios.ts';
 
 export { fakeBinDir } from './paths.ts';
@@ -9,6 +10,7 @@ export { installHarnessGuard, harnessGuardGlobalSetup, guardChildProcess, realHa
 export { BOARD_SESSION_VARS, RUN_KNOBS, scrubBoardSessionEnv, scrubBoardEnv } from './board-guard.ts';
 export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
+export { CODEX_START_SCREENS, type CodexStartScreen } from './codex-screens.ts';
 export {
   RATE_LIMIT_CONTINUE,
   RATE_LIMIT_CREDITS_ROW,
@@ -18,6 +20,7 @@ export {
   drawRateLimitMenu,
   rateLimitMenuRows,
 } from './rate-limit-menu.ts';
+export { TRUST_NO_ROW, TRUST_YES_ROW, drawPromptBox, drawTrustScreen } from './trust-screen.ts';
 
 export interface FakeHarnessEnvOptions {
   scenario: FakeScenario;
@@ -42,6 +45,11 @@ export interface FakeHarnessEnvOptions {
   startFailure?: string;
   /** With `startFailure`: only the first start under `home` fails, the ones after it start as usual. Defaults to false. */
   startFailureOnce?: boolean;
+  /**
+   * The startup screen the fake Codex shows over its composer before its session is up (`folder-trust`,
+   * `hooks-review`), until Enter answers it. None by default.
+   */
+  startScreen?: CodexStartScreen;
   /** Fire no `SessionStart` as the session starts, its other hooks running as usual. Defaults to false. */
   noSessionStart?: boolean;
   /** The source its `SessionStart` names, as Claude's after a compaction does `compact`. Defaults to its own (`startup`, `resume`). */
@@ -63,6 +71,13 @@ export interface FakeHarnessEnvOptions {
    * `menu-credits-first` with its usage-credits row first). None by default: just the error.
    */
   rateLimitScreen?: 'prompt' | 'menu' | 'menu-credits-first';
+  /**
+   * Show Claude's folder-trust screen as the session starts, firing no hook until it is answered, as Claude does in a
+   * folder it has never opened; with `late-start`, its `SessionStart` only comes as the first keys are typed at the
+   * prompt it draws then, landing before the Enter after them; with `slow-prompt`, a line of its own shows for a second
+   * before that prompt. Defaults to false.
+   */
+  trustScreen?: boolean | 'late-start' | 'slow-prompt';
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
@@ -85,12 +100,14 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_START_DELAY_MS: String(options.startDelayMs ?? 0),
     FAKE_HARNESS_START_FAIL: options.startFailure ?? '',
     FAKE_HARNESS_START_FAIL_ONCE: options.startFailureOnce ? '1' : '0',
+    FAKE_HARNESS_START_SCREEN: options.startScreen ?? '',
     FAKE_HARNESS_NO_SESSION_START: options.noSessionStart ? '1' : '0',
     FAKE_HARNESS_START_SOURCE: options.sessionStartSource ?? '',
     FAKE_HARNESS_LOSE_ENTERS: String(options.loseEnters ?? 0),
     FAKE_HARNESS_LOSE_ENTERS_AFTER: String(options.loseEntersAfter ?? 0),
     FAKE_HARNESS_LOSE_PROMPT_HOOKS: String(options.losePromptHooks ?? 0),
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
+    FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',
   };
 }
 

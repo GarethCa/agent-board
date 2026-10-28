@@ -261,7 +261,7 @@ describe('default agent names', () => {
 });
 
 describe('launching codex', () => {
-  const base = { command: 'codex', hookShimPath: '/Users/me/.agent-board/bin/agent-board-hook', prompt: '-fix it', zoneBypassHookTrust: true };
+  const base = { command: 'codex', hookShimPath: '/Users/me/.agent-board/bin/agent-board-hook', zoneBypassHookTrust: true };
 
   it('passes every hook as a -c override running the shim, hides the hook env from tool shells, and bypasses trust', () => {
     const cwd = tempDataDir();
@@ -276,9 +276,12 @@ describe('launching codex', () => {
     expect(overrides.filter((o) => o.startsWith('hooks.')).map((o) => o.slice(6, o.indexOf('=')))).toEqual(Object.keys(CODEX_HOOK_TIMEOUTS));
     expect(overrides).toContain('hooks.SessionEnd=[{hooks=[{type="command",command="\\"/Users/me/.agent-board/bin/agent-board-hook\\" codex",timeout=3}]}]');
     expect(overrides).toContain('shell_environment_policy.exclude=["AGENT_BOARD_HOOK_*"]');
+    // The status line its screen is read by to type its first prompt, whatever the user's own config sets it to.
+    expect(overrides).toContain('tui.status_line=["model-with-reasoning","current-dir"]');
     expect(overrides.some((o) => o.startsWith('mcp_servers.'))).toBe(false);
-    // The prompt comes last, after `--`, so one starting with a dash is not read as a flag.
-    expect(args.slice(-3)).toEqual(['--dangerously-bypass-hook-trust', '--', '-fix it']);
+    // No prompt: it is typed once Codex is up, never on its command line, where any `pkill -f` would find it.
+    expect(args.at(-1)).toBe('--dangerously-bypass-hook-trust');
+    expect(args).not.toContain('--');
   });
 
   it('runs the board MCP server from the CLI over stdio, passing it the board env, when given the CLI', () => {
@@ -299,10 +302,10 @@ describe('launching codex', () => {
     expect(codexLaunch({ ...base, zoneBypassHookTrust: false, cwd, worktree: cwd }).args).not.toContain('--dangerously-bypass-hook-trust');
   });
 
-  it('starts a read-only agent in Codex’s read-only sandbox, before its prompt', () => {
+  it('starts a read-only agent in Codex’s read-only sandbox', () => {
     const cwd = tempDataDir();
-    const { args } = codexLaunch({ ...base, cwd, worktree: cwd, readOnly: true, prompt: 'Review' });
-    expect(args.slice(-4)).toEqual(['-s', 'read-only', '--', 'Review']);
+    const { args } = codexLaunch({ ...base, cwd, worktree: cwd, readOnly: true });
+    expect(args.slice(-2)).toEqual(['-s', 'read-only']);
     expect(codexLaunch({ ...base, cwd, worktree: cwd }).args).not.toContain('read-only');
   });
 

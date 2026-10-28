@@ -1,16 +1,16 @@
 import { expect, type Page } from '@playwright/test';
 import { fakeBinDir } from '@agent-board/fake-harness';
-import type { Agent, NewZoneParams, Zone } from '@agent-board/daemon/protocol';
 import { createFakeGitHub, createTempKeychain, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { agents, launch, listFinishedTurns, screen, sessionWindow, setClickOpens, tile, tileAction } from './agent-helpers.ts';
+import { demoReady, makeRepo, pinPaths, pinRandomLooks, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
 import { openAddZone, removeDataDir, tempDataDir, test } from './launch.ts';
-import { ignorePointer, pinRandomText, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
+import { ignorePointer, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
 import { scratch } from './scratch.ts';
 
 // The README's screenshots, made by `pnpm readme:screenshots`. The app runs on the fake claude with a seeded demo
@@ -27,23 +27,6 @@ async function write(name: string, png: Buffer): Promise<void> {
   await sharp(png).png({ palette: true, quality: 90, effort: 10, compressionLevel: 9 }).toFile(join(OUT, `${name}.png`));
 }
 
-/** Waits until the board's view and every node on it have stopped moving (Fit View and an expanding tile animate), so the shot never catches a frame part-way. */
-async function stillBoard(page: Page): Promise<void> {
-  let last = '';
-  let stable = 0;
-  await expect
-    .poll(async () => {
-      const now = await page.evaluate(() =>
-        [...document.querySelectorAll<HTMLElement>('.react-flow__viewport, .react-flow__node')]
-          .map((element) => `${element.style.transform}|${JSON.stringify(element.getBoundingClientRect())}`)
-          .join(';'),
-      );
-      stable = now === last ? stable + 1 : 0;
-      last = now;
-      return stable;
-    }, { intervals: [100] })
-    .toBeGreaterThanOrEqual(5);
-}
 
 /** Shoots the whole window once the page is still. Taken through the DevTools protocol, scaled to two device pixels per CSS pixel for retina screens: Playwright's own screenshot of an Electron window is at one. */
 async function shoot(page: Page, name: string): Promise<void> {
@@ -77,209 +60,6 @@ async function shootWithPage(page: Page, webPage: Page, area: { x: number; y: nu
   await restorePointer();
 }
 
-/**
- * A `claude` that picks the fake's scenario from the task, so one board holds agents in every state. Each task's words
- * choose the scenario; the rest of the fake is untouched.
- */
-function scenarioPicker(dir: string): string {
-  const bin = join(dir, 'picker-bin');
-  mkdirSync(bin);
-  const script = `#!/bin/sh
-case "$*" in
-  *"Pick a cache"*) FAKE_HARNESS_SCENARIO=waiting ;;
-  *"Clear build output"*) FAKE_HARNESS_SCENARIO=permission ;;
-  *"Prune old jobs"*) FAKE_HARNESS_SCENARIO=subagent-ask FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
-  *"reviewer for round"*) FAKE_HARNESS_SCENARIO=review ;;
-  *"Lead two"*) FAKE_HARNESS_SCENARIO=orchestrate ;;
-  *"on the board:"*) FAKE_HARNESS_SCENARIO=orchestrate ;;
-  *"Hit the rate limit"*) FAKE_HARNESS_SCENARIO=orchestrate FAKE_HARNESS_RATE_LIMIT_SCREEN=menu-credits-first ;;
-  *"Trace session store"* | *"Resize images"*) FAKE_HARNESS_SCENARIO=subagents-working FAKE_HARNESS_SUBAGENT_WORK_MS=600000 ;;
-  *) FAKE_HARNESS_SCENARIO=output FAKE_HARNESS_IDLE_NOTIFY_MS=600000 ;;
-esac
-export FAKE_HARNESS_SCENARIO FAKE_HARNESS_SUBAGENT_WORK_MS FAKE_HARNESS_IDLE_NOTIFY_MS FAKE_HARNESS_RATE_LIMIT_SCREEN
-exec "${join(fakeBinDir, 'claude')}" "$@"
-`;
-  writeFileSync(join(bin, 'claude'), script);
-  chmodSync(join(bin, 'claude'), 0o755);
-  return bin;
-}
-
-/**
- * Rewrites the machine's own paths in the page's text (temp folders, this checkout) to ordinary ones, so no shot shows
- * where it was made. Nothing else is touched: the app's labels, versions and states are what it drew.
- */
-async function pinPaths(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const node = walker.currentNode as Text;
-      node.data = node.data
-        .replace(/\/(?:private\/)?(?:var|Users)\/\S*?\/(claude|codex)(?=\s|$|…)/g, '/usr/local/bin/$1')
-        .replace(/\/(?:private\/)?(?:var|Users)\/\S*?\/gh(?=\s|$|…)/g, '/opt/homebrew/bin/gh')
-        .replace(/\/(?:private\/)?(?:var|Users)\/\S*?\/repos\/(\S+?)(?=\s|$|…)/g, '~/agent-board/repos/$1')
-        .replace(/\/(?:private\/)?(?:var|Users)\/[^\s…]*…?/g, '~/code/…');
-    }
-  });
-}
-
-/**
- * What differs from run to run, fixed, so that drawing the shots again on an unchanged UI gives the same pixels: the
- * random suffix of each branch (a short hash of the rest, which is what it looks like), and the seconds a permission
- * request has waited.
- */
-async function pinRandomLooks(page: Page): Promise<void> {
-  await pinRandomText(page);
-  // The seconds left on a held permission request tick on every second: drawn as a fixed "12 s" in their place.
-  await page.addStyleTag({
-    content: `.inbox-prompt-countdown { visibility: hidden; position: relative; }
-      .inbox-prompt-countdown::after { content: '12 s'; visibility: visible; position: absolute; left: 0; top: 0; white-space: nowrap; }`,
-  });
-  await page.evaluate(() => {
-    // Subagents started together start in either order: perched in the order of their labels, as one run had them.
-    for (const perch of document.querySelectorAll("[data-testid='subagent-perch']")) {
-      const label = (child: Element) => child.querySelector('svg')?.getAttribute('aria-label') ?? '';
-      for (const child of [...perch.children].sort((a, b) => label(a).localeCompare(label(b)))) perch.append(child);
-    }
-    // The time a review round came in is the clock's: drawn as a fixed one.
-    for (const when of document.querySelectorAll('.review-round-when')) when.textContent = when.textContent!.replace(/\d{1,2}:\d{2} [AP]M/, '9:41 AM');
-    // The times an edge's history lists are the clock's too.
-    for (const when of document.querySelectorAll('.edge-rules-history time')) when.textContent = when.textContent!.replace(/\d{1,2}:\d{2}/, '9:41');
-    const hash = (text: string) => {
-      let value = 0;
-      for (const char of text) value = (value * 31 + char.charCodeAt(0)) >>> 0;
-      return value.toString(16).padStart(8, '0').slice(0, 6);
-    };
-    // A reviewer's tile says which branch it reviews, in words that still carry that branch's random suffix.
-    for (const tile of document.querySelectorAll("[data-testid='agent-tile']")) {
-      const words = document.createTreeWalker(tile, NodeFilter.SHOW_TEXT);
-      while (words.nextNode()) {
-        const node = words.currentNode as Text;
-        node.data = node.data.replace(/\b([a-z][a-z0-9-]*?)-[0-9a-f]{6}\b(?!-)/g, (_all, slug: string) => `${slug}-000000`);
-      }
-    }
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const node = walker.currentNode as Text;
-      // `pinRandomText` (render.ts) has set every branch's random suffix to six zeros: give each a hash of its own name.
-      node.data = node.data.replace(/([a-z][a-z0-9-]*)-000000/g, (_all, slug: string) => `${slug}-${hash(slug)}`);
-    }
-  });
-}
-
-/** A repo called `name` under `dir` with one commit. */
-function makeRepo(dir: string, name: string): string {
-  const repo = join(dir, name);
-  mkdirSync(repo, { recursive: true });
-  writeFileSync(join(repo, 'README.md'), `# ${name}\n`);
-  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]);
-  git('init', '--quiet');
-  git('add', '.');
-  git('-c', 'user.name=Demo', '-c', 'user.email=demo@example.com', 'commit', '--quiet', '-m', 'initial');
-  return repo;
-}
-
-/** Zones, agents, stickies, a shape, a text and two connectors: a board someone has been using for a day. */
-async function seedBoard(page: Page, dir: string): Promise<void> {
-  const zones = await page.evaluate(
-    async ({ web, api }) => {
-      const added = async (path: string, params: NewZoneParams) => {
-        const result = await window.agentBoard.zones.addFolder(path, params);
-        if (result.status !== 'added') throw new Error(result.message);
-        return result.zone;
-      };
-      return {
-        web: await added(web, { x: 0, y: 0, width: 840, height: 440, color: '#4c6ef5' }),
-        api: await added(api, { x: 920, y: 0, width: 640, height: 440, color: '#12b886' }),
-      };
-    },
-    { web: makeRepo(dir, 'web-app'), api: makeRepo(dir, 'api-service') },
-  );
-  const spawn = (zone: Zone, prompt: string, x: number, y: number) =>
-    page.evaluate(
-      async (params) => {
-        const result = await window.agentBoard.agents.spawn(params);
-        if (result.status !== 'started') throw new Error(result.message);
-        return result.agent;
-      },
-      { zoneId: zone.id, prompt, position: { x, y }, cols: 100, rows: 30 },
-    );
-  const agents: Agent[] = [];
-  // Short tasks: the tile's name, branch and message all come from them, and must fit.
-  agents.push(await spawn(zones.web, 'Fix checkout flake', 30, 60));
-  agents.push(await spawn(zones.web, 'Pick a cache', 480, 60));
-  agents.push(await spawn(zones.web, 'Clear build output', 30, 240));
-  agents.push(await spawn(zones.web, 'Resize images', 480, 240));
-  agents.push(await spawn(zones.api, 'Prune old jobs', 30, 60));
-  agents.push(await spawn(zones.api, 'Trace session store', 340, 60));
-
-  const item = (params: object) => page.evaluate((p) => window.agentBoard.items.create(p as never), params);
-  await item({
-    kind: 'sticky',
-    zoneId: zones.api.id,
-    x: 30,
-    y: 250,
-    width: 230,
-    height: 150,
-    data: { text: '**Ship Friday**\n\n- checkout fix\n- cache decision', color: '#fff3a3' },
-  });
-  const rule = await item({
-    kind: 'sticky',
-    zoneId: null,
-    x: 40,
-    y: 520,
-    width: 230,
-    height: 130,
-    data: { text: 'Review every PR **before** it merges', color: '#ffd8a8' },
-  });
-  const shape = await item({
-    kind: 'shape',
-    zoneId: null,
-    x: 500,
-    y: 550,
-    width: 220,
-    height: 90,
-    data: { shape: 'rounded', fill: '#d0ebff', stroke: '#3b5bdb', strokeWidth: 2.5, dashed: false, text: 'Release 1.0', textSize: 'body', bold: true, textColor: '#2b2a27' },
-  });
-  await item({
-    kind: 'text',
-    zoneId: null,
-    x: 20,
-    y: -90,
-    width: 420,
-    height: 50,
-    data: { text: 'Launch week', size: 'h1', bold: true, italic: false, align: 'left', color: '#2b2a27', wrap: false },
-  });
-  await page.evaluate(
-    async ({ from, to, ruleId, shapeId }) => {
-      await window.agentBoard.connectors.create({
-        from: { type: 'agent', id: from, side: 'right' },
-        to: { type: 'agent', id: to, side: 'left' },
-        label: 'hands off',
-      });
-      await window.agentBoard.connectors.create({ from: { type: 'item', id: ruleId, side: 'right' }, to: { type: 'item', id: shapeId, side: 'left' } });
-    },
-    { from: agents[0]!.sessionId, to: agents[1]!.sessionId, ruleId: rule.id, shapeId: shape.id },
-  );
-}
-
-/**
- * Waits, on conditions and not on time, until every tile of the demo board shows what it will be shot with: its state, the
- * exact command or question it is stuck on, its subagents' characters, and the Needs-you count. The agents run on their own
- * clocks, so a shot taken before this could catch one a moment early.
- */
-async function demoReady(page: Page): Promise<void> {
-  const named = (name: string) => tile(page).filter({ has: page.getByText(name, { exact: true }) });
-  const within = { timeout: 30_000 };
-  await expect(named('Fix checkout flake')).toHaveAttribute('data-state', 'idle', within);
-  // A tile says what its agent is doing, not the question or command it is stuck on: those are in the inbox below.
-  await expect(named('Pick a cache')).toHaveAttribute('data-needs-you', 'true', within);
-  await expect(named('Clear build output')).toHaveAttribute('data-needs-you', 'true', within);
-  await expect(named('Prune old jobs')).toHaveAttribute('data-needs-you', 'true', within);
-  await expect(named('Prune old jobs').getByTestId('character')).toHaveCount(2, within);
-  await expect(named('Resize images').getByTestId('character')).toHaveCount(3, within);
-  await expect(named('Trace session store').getByTestId('character')).toHaveCount(3, within);
-  await expect(page.getByTestId('inbox-count')).toContainText('3 need you', within);
-}
 
 test('the README screenshots: the board, an expanded tile, the session window, the inbox and Add zone', async () => {
   const { dir, env } = scratch('output');
@@ -303,6 +83,8 @@ test('the README screenshots: the board, an expanded tile, the session window, t
     await seedBoard(window, dir);
     await expect(tile(window)).toHaveCount(6);
     await demoReady(window);
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(window);
     await window.getByRole('button', { name: 'Fit View' }).click();
     await pinRandomLooks(window);
     await pinPaths(window);
@@ -365,6 +147,8 @@ test('the README screenshots: the board in the dark theme', async () => {
     await seedBoard(window, dir);
     await expect(tile(window)).toHaveCount(6);
     await demoReady(window);
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(window);
     await window.getByRole('button', { name: 'Fit View' }).click();
     await pinRandomLooks(window);
     await pinPaths(window);
@@ -434,6 +218,8 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
       [await reviewer.getAttribute('data-session-id'), zone.id],
     );
 
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
     await stillBoard(page);
     const rules = page.getByRole('complementary', { name: 'Edge rules' });
@@ -442,8 +228,22 @@ test('the README screenshots: flows, the review doc and the chat view', async ()
     await expect(rules).toContainText('Write the code');
     await expect(rules).toContainText('no pull request yet');
     await expect(rules.getByTestId('edge-rules-preview')).toContainText('The checkout validates the cart');
+    // The panel slides in: zoom steps are taken about the pane's centre, so let it come to rest first.
+    let panel = '';
+    let panelStill = 0;
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await rules.boundingBox());
+        panelStill = now === panel ? panelStill + 1 : 0;
+        panel = now;
+        return panelStill;
+      }, { intervals: [100] })
+      .toBeGreaterThanOrEqual(5);
+    await stillBoard(page);
     // Zoom out two steps and pan the board into the space left of the panel, so the panel covers no tile or edge.
+    // Each step settles before the next.
     await page.getByRole('button', { name: 'Zoom out' }).click();
+    await stillBoard(page);
     await page.getByRole('button', { name: 'Zoom out' }).click();
     await stillBoard(page);
     await page.keyboard.press('h');
@@ -526,6 +326,8 @@ test('the README screenshots: an orchestrator with its crew frame', async () => 
     for (const [index, worker] of crew.entries()) {
       await page.evaluate(([id, zoneId, x]) => window.agentBoard.agents.move(id as string, { zoneId: zoneId as string, x: x as number, y: 80 }), [worker.sessionId, zone.id, 480 + index * 330]);
     }
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
     await pinRandomLooks(page);
     await pinPaths(page);
@@ -549,7 +351,7 @@ test('the README screenshots: a board in use, with a question, a document, a clo
       if (result.status !== 'added') throw new Error(result.message);
       return result.zone;
     }, makeRepo(dir, 'storefront'));
-    // Each agent is named for its work; the fake claude is steered by the words of its first prompt, which the tiles' task lines show until the shot pins them.
+    // Each agent is named for its work; the fake claude is steered by its name, which becomes its worktree folder (`scenarioPicker`); the prompts only feed the task lines the tiles show until the shot pins them.
     const spawn = (name: string, prompt: string, x: number, y: number) =>
       page.evaluate(
         async (params) => {
@@ -619,6 +421,8 @@ test('the README screenshots: a board in use, with a question, a document, a clo
     );
     await expect(page.getByTestId('clock')).toHaveCount(1);
     await expect(tile(page).filter({ hasText: 'Tidy the changelog' })).toHaveAttribute('data-state', 'hibernated');
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
     const pinTasks = () =>
       page.evaluate((lines) => {
@@ -710,6 +514,8 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
       { zoneId: zone.id, prompt: 'Fix checkout flake', position: { x: 40, y: 80 }, cols: 100, rows: 30 },
     );
     await expect(tile(page)).toHaveAttribute('data-state', 'idle', { timeout: 30_000 });
+    // Fit View frames the nodes as they are: let them stop growing, shrinking and moving first.
+    await stillBoard(page);
     await page.getByRole('button', { name: 'Fit View' }).click();
     const pullRequest: FakeGitHubPullRequest = {
       repo: 'acme/storefront',

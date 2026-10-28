@@ -12,11 +12,13 @@ import './ui/ui.css';
 import './app.css';
 import './chrome/chrome.css';
 import './onboarding/onboarding.css';
+import './demo/demo.css';
 import { App } from './App';
 import { Gallery } from './Gallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
 import { CAPTURE_FRAME } from './board/capture-mode';
+import { DEMO } from './demo/demo-mode';
 import { ReviewsProvider } from './review/ReviewsProvider';
 import { GatesProvider } from './gate/GatesProvider';
 import { followTheme } from './themes';
@@ -39,6 +41,9 @@ followTheme();
 
 // A capture window shows the board's canvas alone (board/capture-mode.ts, app.css).
 if (CAPTURE_FRAME !== undefined) document.documentElement.dataset.capture = '';
+
+// Demo mode hides the chrome that only matters while developing (demo/demo-mode.ts, demo/demo.css).
+if (DEMO) document.documentElement.dataset.demo = '';
 
 // Whether the keys added since the key registry work: read as the window opens, and again as it comes to the front.
 followExtendedShortcuts();

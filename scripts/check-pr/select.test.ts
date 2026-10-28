@@ -58,8 +58,9 @@ describe('selectChecks', () => {
   });
 
   it('runs nothing for the board recordings, which no gate step runs', () => {
-    const plan = selectChecks(['apps/desktop/e2e/capture/capture-spike.spec.ts']);
-    expect(plan).toMatchObject({ full: false, unit: [], e2e: [], visual: false });
+    for (const file of ['apps/desktop/e2e/capture/capture-spike.spec.ts', 'apps/desktop/e2e/capture/shots.ts']) {
+      expect(selectChecks([file])).toMatchObject({ full: false, unit: [], e2e: [], visual: false });
+    }
   });
 
   it('does not run e2e for a unit test change', () => {

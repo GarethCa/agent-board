@@ -94,6 +94,8 @@ import {
   type NoteKind,
   type ColorSlot,
   type FillSlot,
+  MAX_AGENT_NOTE_SIZE,
+  MIN_AGENT_NOTE_SIZE,
   newShapeData,
   type ShapeType,
   statusLine,
@@ -400,8 +402,15 @@ function standingOf(name: string, agent: Agent | undefined): string {
 
 /** The height an agent note needs to show `text`, if it is taller than `note` is: it only grows, keeping a size it was given. */
 function grownNote(note: BoardItem, text: string): { height?: number } {
+  // Sized by the user: it keeps its size, its text scrolling.
+  if (note.data.userSized === true) return {};
   const { height } = agentNoteSize(text, note.width, 0);
   return height > note.height ? { height } : {};
+}
+
+/** The size an agent note the user (or `note edit --size`) sized keeps through an arrange: its own, in both ways. */
+function userSize(note: BoardItem | undefined): Size | undefined {
+  return note?.kind === 'agent-note' && note.data.userSized === true ? { width: note.width, height: note.height } : undefined;
 }
 
 /**
@@ -592,6 +601,21 @@ function optionalSizeParam(fields: Record<string, unknown>, name: 'width' | 'hei
   return fields[name] === undefined ? undefined : finiteNumberParam(fields, name);
 }
 
+/** The width and height an `editNote` gives an agent note, both or neither, at least the least it can be resized to. */
+function noteSizeParams(fields: Record<string, unknown>): Size | undefined {
+  const width = optionalSizeParam(fields, 'width');
+  const height = optionalSizeParam(fields, 'height');
+  if (width === undefined && height === undefined) return undefined;
+  if (width === undefined || height === undefined) throw invalidParams('give the width and the height together');
+  if (width < MIN_AGENT_NOTE_SIZE.width || height < MIN_AGENT_NOTE_SIZE.height) {
+    throw invalidParams(`an agent note is at least ${MIN_AGENT_NOTE_SIZE.width}x${MIN_AGENT_NOTE_SIZE.height}`);
+  }
+  if (width > MAX_AGENT_NOTE_SIZE.width || height > MAX_AGENT_NOTE_SIZE.height) {
+    throw invalidParams(`an agent note is at most ${MAX_AGENT_NOTE_SIZE.width}x${MAX_AGENT_NOTE_SIZE.height}`);
+  }
+  return { width, height };
+}
+
 /** Everything on the board a layout reads, through the daemon's own methods. */
 async function readLayoutBoard(call: DaemonCall): Promise<Board> {
   const [zones, agents, shells, externals, items, sizes, unfolded, expanded] = await Promise.all([
@@ -746,7 +770,8 @@ export function layoutHandlers<Context extends BoardConnection>({
     if (place.near !== undefined) {
       const near = placedOf(board).find((each) => each.kind === place.near!.kind && each.id === place.near!.id);
       if (near === undefined) throw invalidParams(`no ${place.near.kind} ${place.near.id}`);
-      wanted = besideSpot(near.rect, place.side ?? 'below', size);
+      // Beside it where the app draws it: an expanded tile the board drew clear of something is not where it is saved.
+      wanted = besideSpot(asDrawn(near, expandedOf(board)).rect, place.side ?? 'below', size);
       if (zone !== undefined && wanted.x >= region.left && wanted.y >= region.top) return wanted;
     } else if (place.at !== undefined) {
       if (zone !== undefined) {
@@ -984,13 +1009,14 @@ export function layoutHandlers<Context extends BoardConnection>({
       const about = members[0] === undefined ? {} : { about: members[0] };
       // The height it is given and the text it is given it for, unless it keeps its own: the next arrange tells a height
       // it grew to from this one, while its text stays.
+      const own = userSize(known);
       const sized =
-        known !== undefined && heldHeight(known, keep) !== undefined ? {} : { arrangeHeight: cluster.noteSize.height, sizedFor: keep ? known?.data.text : said };
+        own !== undefined || (known !== undefined && heldHeight(known, keep) !== undefined) ? {} : { arrangeHeight: cluster.noteSize.height, sizedFor: keep ? known?.data.text : said };
       if (known?.kind === 'agent-note') data = { ...(keep ? {} : saying('agent-note', said, me.name)), members, ...about, ...sized };
       else if (known !== undefined) data = { ...(keep ? {} : saying('sticky', said, me.name)), color: typeof known.data.color === 'string' ? known.data.color : STICKY_COLORS[0].value, members };
       else if (author !== undefined) data = { ...agentNoteData(author, said, about), arrangeText: said, members, ...sized };
       else data = { text: stamped(said, me.name), arrangeText: said, color: STICKY_COLORS[0].value, members };
-      await put(slot, (known?.kind as 'sticky' | 'agent-note' | undefined) ?? (author === undefined ? 'sticky' : 'agent-note'), known, cluster.noteAt, cluster.noteSize, data);
+      await put(slot, (known?.kind as 'sticky' | 'agent-note' | undefined) ?? (author === undefined ? 'sticky' : 'agent-note'), known, cluster.noteAt, own ?? cluster.noteSize, data);
     }
     return used;
   };
@@ -1003,22 +1029,28 @@ export function layoutHandlers<Context extends BoardConnection>({
    */
   const noteHeightsOf = (me: Orchestrator, clusters: readonly ArrangedCluster[], notes: ReadonlyMap<string, BoardItem>, standing: (id: string) => string) => {
     const guessed = new Set<string>();
-    const heights = new Map(
+    const sizes = new Map(
       clusters.map((cluster) => {
         const known = notes.get(`${cluster.key}${CLUSTER_NOTE_SLOT}`);
         const said = noteSays(cluster, standing);
         // As `placeClusters` makes it: a sticky of the old kind nobody edited gives way to an agent note.
         const agentNote = known === undefined ? me.agent !== null : known.kind === 'agent-note' || (me.agent !== null && !edited(known));
-        if (!agentNote) return [cluster.key, 0] as const;
+        if (!agentNote) return [cluster.key, { width: 0, height: 0 }] as const;
+        // Sized by the user: its size is theirs, never measured, and its text scrolls.
+        const own = userSize(known);
+        if (own !== undefined) return [cluster.key, own] as const;
         const keep = known !== undefined && (edited(known) || known.data.arrangeText === said);
         const text = keep ? String(known.data.text) : said;
         const measured = known === undefined ? undefined : measures.fits({ key: `item:${known.id}`, width: CLUSTER_NOTE_SIZE.width, text });
         if (measured === undefined) guessed.add(cluster.key);
         const needs = measured ?? agentNoteSize(text, CLUSTER_NOTE_SIZE.width, 0).height;
-        return [cluster.key, Math.max(needs, (known && heldHeight(known, keep)) ?? 0)] as const;
+        return [cluster.key, { width: 0, height: Math.max(needs, (known && heldHeight(known, keep)) ?? 0) }] as const;
       }),
     );
-    return { heights, guessed };
+    // The width only a note sized by the user asks for: the rest are as wide as a lane's note is.
+    const heights = new Map([...sizes].map(([key, size]) => [key, size.height] as const));
+    const widths = new Map([...sizes].map(([key, size]) => [key, size.width] as const));
+    return { heights, widths, guessed };
   };
 
   /**
@@ -1134,7 +1166,11 @@ export function layoutHandlers<Context extends BoardConnection>({
     return agents.find((each) => each.sessionId === reviewer.sessionId) ?? reviewer;
   };
 
-  /** The tiles of `zone` that `me` arranges: the agents in its scope (itself the lead) and the shells. */
+  /**
+   * The tiles of `zone` that `me` arranges: the agents in its scope (itself the lead) and the shells; and the clocks it or
+   * its crew made there (on the user's side, any agent; never the user's own), which go on the top row with the shells,
+   * so where they were never decides where the lanes go.
+   */
   const crewOf = (me: Orchestrator, board: Board, zone: Zone): ArrangeTile[] => {
     const agentsHere = board.agents.filter((agent) => agent.zoneId === zone.id && access.reachesAgent(me, agent));
     const branches = new Map(agentsHere.filter((agent) => agent.branch !== '').map((agent) => [agent.branch, agent.sessionId]));
@@ -1169,6 +1205,24 @@ export function layoutHandlers<Context extends BoardConnection>({
           reviewOf: null,
           lead: false,
           ...(board.sizes[tileSizeKey('shell', shell.id)] === undefined ? {} : { size: board.sizes[tileSizeKey('shell', shell.id)] }),
+        })),
+      ...board.items
+        .filter((item) => {
+          // Never the user's own (made by no agent): what the user put down stays put, whoever arranges.
+          const by = item.kind === 'clock' && item.zoneId === zone.id && item.rotation === 0 ? madeBy(itemMadeBy, item.id) : null;
+          return by !== null && access.madeByCrew(me, by);
+        })
+        .map((item): ArrangeTile => ({
+          id: `item:${item.id}`,
+          name: 'clock',
+          kind: 'clock',
+          role: null,
+          issue: null,
+          state: null,
+          reviewOf: null,
+          lead: false,
+          createdAt: item.createdAt,
+          size: { width: item.width, height: item.height },
         })),
     ];
   };
@@ -1216,7 +1270,9 @@ export function layoutHandlers<Context extends BoardConnection>({
     // what the lint holds the tiles to, lanes being laid out in px.
     const ids = new Set(crew.map((tile) => tile.id));
     const own = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
-    const noteHeights = new Map([...parts].flatMap(([slot, item]) => (slot.endsWith(CLUSTER_NOTE_SLOT) ? [[clusterKeyOf(slot), item.height] as const] : [])));
+    const notes = [...parts].filter(([slot]) => slot.endsWith(CLUSTER_NOTE_SLOT));
+    const noteHeights = new Map(notes.map(([slot, item]) => [clusterKeyOf(slot), item.height] as const));
+    const noteWidths = new Map(notes.map(([slot, item]) => [clusterKeyOf(slot), userSize(item)?.width ?? 0] as const));
     const arranged = arrangeTiles(crew, links, {
       by: arrange.by,
       layout: arrange.layout,
@@ -1227,6 +1283,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         .map((each) => takenBy(asDrawn(each))),
       clusters: arrange.by === 'issue' && arrange.layout !== 'grid',
       noteHeights,
+      noteWidths,
     }).positions;
     const map: ZoneMap = {
       zoneId: zone.id,
@@ -1315,23 +1372,31 @@ export function layoutHandlers<Context extends BoardConnection>({
       // takes; the lanes are laid out once it has, or once it is past waiting for. Only notes already there: a new lane's
       // note, or an old sticky's that gives way to one, is estimated, as nothing else is written before the arrange is
       // sure to go ahead. Refused, the notes written first say what they said before (`undo`).
-      const undo: { id: string; was: Pick<BoardItem, 'width' | 'height' | 'data'>; wrote: Record<string, unknown> }[] = [];
+      const undo: { id: string; was: Pick<BoardItem, 'width' | 'height' | 'data'>; wrote: Record<string, unknown>; text: string; sized: Size }[] = [];
       // What a note said before, put back only while it still says what was written in its place: an edit the user made
-      // meanwhile stays.
+      // meanwhile stays. So do its width and height, each put back only while it is as it was written: a width the user
+      // gave it meanwhile stays, and so does a height, unless it is no taller than the app measured its new text at
+      // (the window in front grows a note to fit its text, which is the arrange's doing, not the user's).
       const rollBack = async () => {
         const items = new Map((undo.length === 0 ? [] : await call('item.list', undefined)).map((item) => [item.id, item]));
-        for (const { id, was, wrote } of undo.splice(0)) {
+        for (const { id, was, wrote, text, sized } of undo.splice(0)) {
           const now = items.get(id);
           if (now === undefined || Object.entries(wrote).some(([field, value]) => JSON.stringify(now.data[field]) !== JSON.stringify(value))) continue;
           const data = Object.fromEntries(Object.keys(wrote).map((field) => [field, was.data[field] ?? null]));
-          await call('item.update', { id, width: was.width, height: was.height, data });
+          const grown = Math.max(sized.height, measures.fits({ key: `item:${id}`, width: sized.width, text }) ?? 0);
+          // A pixel or two of slack: the app rounds the height it grows a note to and the height it measures apart.
+          // A note the user sized meanwhile (a drag during the wait) keeps the size they gave it, as it keeps its mark.
+          const userSized = userSize(now) !== undefined;
+          const sameWidth = !userSized && Math.abs(now.width - sized.width) < 0.5;
+          const sameHeight = !userSized && now.height > sized.height - 0.5 && now.height < grown + 2;
+          await call('item.update', { id, ...(sameWidth ? { width: was.width } : {}), ...(sameHeight ? { height: was.height } : {}), data });
         }
       };
       if (now.clusters && me.agent !== null && measures.live() && now.noteHeights.guessed.size > 0) {
         const filled = new Map(now.filling);
         const notes = now.first.flatMap((cluster) => {
           const known = filled.get(`${cluster.key}${CLUSTER_NOTE_SLOT}`);
-          if (!now.noteHeights.guessed.has(cluster.key) || known?.kind !== 'agent-note') return [];
+          if (!now.noteHeights.guessed.has(cluster.key) || known?.kind !== 'agent-note' || userSize(known) !== undefined) return [];
           const said = noteSays(cluster, now.standing);
           const keep = edited(known) || known.data.arrangeText === said;
           return [{ known, keep, text: keep ? String(known.data.text) : said }];
@@ -1342,7 +1407,7 @@ export function layoutHandlers<Context extends BoardConnection>({
             // to say, only perhaps a width to be measured at.
             const wrote = keep ? {} : saying('agent-note', text, me.name);
             if (keep && known.width === CLUSTER_NOTE_SIZE.width) continue;
-            undo.push({ id: known.id, was: known, wrote });
+            undo.push({ id: known.id, was: known, wrote, text, sized: { width: CLUSTER_NOTE_SIZE.width, height: known.height } });
             await call('item.update', { id: known.id, width: CLUSTER_NOTE_SIZE.width, data: wrote });
           }
           await measures.measured(notes.map(({ known, text }) => ({ key: `item:${known.id}`, width: CLUSTER_NOTE_SIZE.width, text })));
@@ -1353,11 +1418,11 @@ export function layoutHandlers<Context extends BoardConnection>({
         }
       }
       const { board, zone, by, layout, inZone, tiles, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
-      const noteHeights = now.noteHeights.heights;
+      const { heights: noteHeights, widths: noteWidths } = now.noteHeights;
       const unmeasured = !measures.live() || (clusters && now.noteHeights.guessed.size > 0);
       // Laid out round `stay` too: the parts it could find no room to park, left where they are.
       const plan = (stay: readonly Rect[]) => {
-        const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: [...obstacles, ...stay], clusters, noteHeights });
+        const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: [...obstacles, ...stay], clusters, noteHeights, noteWidths });
         const { positions } = arranged;
         // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
         // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited
@@ -1422,7 +1487,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         // A tile the board slotted is moved even to where it is drawn: it is saved there, so it stays.
         if (placed.saved && placed.rect.x === spot.x && placed.rect.y === spot.y) continue;
         await moveTo(placed, zone.id, spot);
-        moved.push({ target: { kind: placed.kind as 'agent' | 'shell', id: placed.id }, zoneId: zone.id, ...spot });
+        moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ...spot });
       }
       await growTo(zone, { width, height });
       entry.detail = `${tiles.length} tile${tiles.length === 1 ? '' : 's'} by ${by}, in ${layout}${how}`;
@@ -1743,7 +1808,11 @@ export function layoutHandlers<Context extends BoardConnection>({
             // Its place was made for the tiles' sizes then: a tile expanded since may cover it. Only then (a note it grew into is the arrange's to put right) does it move, beside
             // the agent at its real size, clear of everything; growing taller is left to the arrange, as an edit's is.
             const rect = { x: clusterSticky.x, y: clusterSticky.y, width: clusterSticky.width, height: clusterSticky.height };
-            const here = placedOf(board).filter((each) => each.zoneId === zone!.id && each.key !== `item:${clusterSticky.id}`);
+            // Where the app draws them: an expanded tile it drew clear of something covers the note there, not where it is saved.
+            const expanded = expandedOf(board);
+            const here = placedOf(board)
+              .filter((each) => each.zoneId === zone!.id && each.key !== `item:${clusterSticky.id}`)
+              .map((each) => asDrawn(each, expanded));
             const others = here.map(takenBy);
             const size = { width: rect.width, height: taller.height ?? rect.height };
             const padding = paddingOf(zone!);
@@ -1752,7 +1821,7 @@ export function layoutHandlers<Context extends BoardConnection>({
             const bottom = Math.max(padding, ...others.map((each) => each.y + each.height));
             const candidates = clearOf(rect, here.filter((each) => each.kind !== 'item').map(takenBy))
               ? []
-              : [besideSpot(nearAgent!.rect, 'right', size), { x: padding, y: bottom + SPACING_GAPS[zone!.spacing].tile }].map((wanted) => nearestFreeSpot(wanted, others, region, size)!);
+              : [besideSpot(asDrawn(nearAgent!, expanded).rect, 'right', size), { x: padding, y: bottom + SPACING_GAPS[zone!.spacing].tile }].map((wanted) => nearestFreeSpot(wanted, others, region, size)!);
             const spot = candidates.find((each) => coveredBy(board, zone!, grownTo(zone!, { ...each, ...size }, true)) === undefined);
             const grew = spot === undefined ? undefined : grownTo(zone!, { ...spot, ...size }, true);
             const updated = await call('item.update', { id: clusterSticky.id, data, ...taller, ...spot });
@@ -1799,16 +1868,26 @@ export function layoutHandlers<Context extends BoardConnection>({
           entry.on = { id: item.id, name: `note ${quoted(noteText(item))}` };
           const text = optionalStringParam(p, 'text');
           const color = optionalStringParam(p, 'color');
-          if (text === undefined && color === undefined) throw invalidParams('give the text or the colour');
+          const given = noteSizeParams(p);
+          if (text === undefined && color === undefined && given === undefined) throw invalidParams('give the text, the colour or the size');
+          if (given !== undefined && item.kind !== 'agent-note') throw invalidParams('only an agent note can be given a size');
           if (item.kind === 'agent-note') {
             // Its colour, which it hasn't, is ignored, as `addNote` ignores it.
-            if (text === undefined) return item;
+            if (text === undefined && given === undefined) return item;
+            // A size given is the user's kind of resize: an arrange keeps it, and the note no longer grows to its text.
+            if (text === undefined) {
+              // Bigger, it may reach what is round it: the zone arranges itself again, as for a text that grows it.
+              grew = given!.width > item.width || given!.height > item.height;
+              return call('item.update', { id: item.id, ...given, data: { userSized: true } });
+            }
             checkNoteText(text, 'sticky', 0);
             // Written again by an agent, it is its own again; by the user's side, the user's edit.
             const data = me.agent === null ? { text, editedByUser: true } : { text, writtenAt: new Date().toISOString(), editedByUser: false };
-            const grown = grownNote(item, text);
-            grew = grown.height !== undefined;
-            return call('item.update', { id: item.id, data, ...grown });
+            const sized = given ?? { width: item.width, height: item.height };
+            // A note with a size of the user's keeps it, its text scrolling; the rest only grow to their text.
+            const grown = given !== undefined || item.data.userSized === true ? {} : grownNote(item, text);
+            grew = grown.height !== undefined || (given !== undefined && (given.width > item.width || given.height > item.height));
+            return call('item.update', { id: item.id, data: given === undefined ? data : { ...data, userSized: true }, ...(given === undefined ? grown : sized) });
           }
           const kind = item.kind as NoteKind;
           if (text !== undefined) checkNoteText(text, kind, me.agent === null ? 0 : signatureLength(me.name));

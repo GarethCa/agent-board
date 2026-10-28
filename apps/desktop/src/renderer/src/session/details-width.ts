@@ -1,6 +1,8 @@
 // The width of the session details strip, one preference for every session window, pop-out and expanded tile: dragged
 // on the handle between the strip and the terminal, or stepped with the arrow keys; double-click resets it.
 
+import { storedValue } from '../stored-value';
+
 export const MIN_DETAILS_WIDTH = 200;
 /** The strip's width until one is chosen; the same as `--size-details`. */
 export const DEFAULT_DETAILS_WIDTH = 316;
@@ -9,7 +11,7 @@ const DETAILS_KEY_STEP = 16;
 /** The most of its window the strip takes. */
 const MAX_FRACTION = 0.5;
 
-const STORAGE_KEY = 'agent-board.details-width';
+const stored = storedValue('agent-board.details-width');
 
 /** What the strip is after a drag or key: collapsed to its icon rail, or open at a width. */
 export type DetailsSize = { collapsed: true } | { collapsed: false; width: number };
@@ -39,46 +41,16 @@ export function detailsAfterKey(key: string, width: number, collapsed: boolean, 
   return undefined;
 }
 
-let current: number | undefined = load();
-const listeners = new Set<() => void>();
-
-function load(): number | undefined {
-  try {
-    const stored = Number(localStorage.getItem(STORAGE_KEY));
-    return stored >= MIN_DETAILS_WIDTH ? stored : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** The chosen width, or the default while none is. */
 export function chosenDetailsWidth(): number {
-  return current ?? DEFAULT_DETAILS_WIDTH;
+  const width = Number(stored.get());
+  return width >= MIN_DETAILS_WIDTH ? width : DEFAULT_DETAILS_WIDTH;
 }
 
 /** Sets the width (undefined resets it to the default) and tells every strip. */
 export function setDetailsWidth(width: number | undefined): void {
-  current = width === undefined ? undefined : Math.max(MIN_DETAILS_WIDTH, Math.round(width));
-  try {
-    if (current === undefined) localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, String(current));
-  } catch {
-    // The width just doesn't outlast this run.
-  }
-  for (const listener of listeners) listener();
+  stored.set(width === undefined ? undefined : String(Math.max(MIN_DETAILS_WIDTH, Math.round(width))));
 }
 
 /** Hears every change of width, here or in another window of the app; returns how to stop. */
-export function onDetailsWidth(listener: () => void): () => void {
-  const fromOtherWindow = (event: StorageEvent) => {
-    if (event.key !== STORAGE_KEY) return;
-    current = load();
-    listener();
-  };
-  listeners.add(listener);
-  window.addEventListener('storage', fromOtherWindow);
-  return () => {
-    listeners.delete(listener);
-    window.removeEventListener('storage', fromOtherWindow);
-  };
-}
+export const onDetailsWidth = stored.subscribe;

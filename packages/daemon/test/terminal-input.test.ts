@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { answerInput, draftAfterInput } from '../src/terminal-input.ts';
+import { answerInput, draftAfterInput, submitsDraft } from '../src/terminal-input.ts';
+
+describe('submitsDraft', () => {
+  it('is Enter on a draft: one the user had, or text typed before it in the same write', () => {
+    expect(submitsDraft(true, '\r')).toBe(true);
+    expect(submitsDraft(false, 'Say hi\r')).toBe(true);
+    expect(submitsDraft(false, '\x1b[200~pasted\x1b[201~\r')).toBe(true);
+  });
+
+  it('is not Enter at an empty prompt or on a screen, nor a draft cleared before its Enter, nor text left unsent', () => {
+    expect(submitsDraft(false, '\r')).toBe(false);
+    expect(submitsDraft(false, '\rSay hi')).toBe(false);
+    expect(submitsDraft(true, '\x15\r')).toBe(false);
+    expect(submitsDraft(true, '\x03')).toBe(false);
+    expect(submitsDraft(false, '\x1b[B\r')).toBe(false);
+  });
+});
 
 describe('draftAfterInput', () => {
   it('starts a draft on typed or pasted text', () => {

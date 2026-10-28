@@ -161,7 +161,8 @@ describe.each<Harness>(['claude', 'codex'])('waking a paused %s agent', (harness
     const woken = await setup.client.call('agent.resume', { sessionId: agent.sessionId });
 
     expect(woken).toMatchObject({ endedAt: null, state: 'idle', hibernated: null });
-    expect((await hookAfter(setup, agent.sessionId, 'SessionStart', before)).payload).toMatchObject({ session_id: conversation });
+    // Codex fires its `SessionStart` only with a prompt: the wake with a message below shows its conversation.
+    if (harness === 'claude') expect((await hookAfter(setup, agent.sessionId, 'SessionStart', before)).payload).toMatchObject({ session_id: conversation });
     // At its prompt, not mid-turn: it takes a message, or a pause, again.
     expect(await listed(setup, agent.sessionId)).toMatchObject({ state: 'idle' });
     expect(await setup.client.call('agent.pause', { sessionId: agent.sessionId })).toMatchObject({ state: 'hibernated' });

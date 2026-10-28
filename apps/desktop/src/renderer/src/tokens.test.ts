@@ -168,6 +168,12 @@ const LOCAL = [
   // The dock sets how much room it leaves each side from script (`useDockScroll`).
   '--dock-left',
   '--dock-right',
+  '--dock-lift',
+  // The Captain's panel sets its width from script, and the panels docked on the right set the room they take, for the islands beside them.
+  '--master-panel-width',
+  '--master-room',
+  '--edge-room',
+  '--for-you-height',
   '--dock-room',
   '--radix-popover-content-available-height',
   '--pane-top',
@@ -290,6 +296,8 @@ const SAME_IN_EVERY_THEME = new Set([
   '--harness-claude',
   '--linear-mark',
   '--switch-knob',
+  '--demo-cursor-fill',
+  '--demo-cursor-edge',
   '--window-live',
   '--window-focus',
   '--window-selection',

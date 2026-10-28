@@ -11,6 +11,7 @@ import {
   continuesOnCredits,
   type AgentRole,
   type AgentSchedule,
+  type UndeliveredMessage,
   type ChecksState,
   planPending,
   type ExternalSession,
@@ -34,7 +35,7 @@ import { agentSetupLine, branchLine, modelLabel, roleText } from './AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
-import { FoldVertical, ArrowUpRight, Bell, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileSearch, FileText, Folder, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, Network, Pause, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, SendHorizontal, ShieldCheck, SquareArrowOutUpRight, Timer, Trash2, TriangleAlert, X } from 'lucide-react';
+import { FoldVertical, ArrowUpRight, Bell, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileSearch, FileText, Folder, FolderCheck, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, Network, Pause, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, SendHorizontal, ShieldCheck, SquareArrowOutUpRight, Timer, Trash2, TriangleAlert, X } from 'lucide-react';
 import { toolSummary } from '../../../shared/needs-you';
 import { Button, Chip, EditableName, FlowPill, HoverCard, IconButton, Menu, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename, type IconButtonProps, type MenuEntry } from '../ui';
 import { Character } from './Character';
@@ -94,7 +95,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && crewView.look !== 'off' && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
-  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, pauseAgent, sendUnsent, clearUnsent, typeFirstPrompt, restartAgent, rename, startReview, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
+  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, pauseAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, startReview, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
     useContext(TileActionsContext);
   const commands = useBoardCommands();
   const gate = useGateRun(agent.sessionId);
@@ -297,7 +298,18 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           {checkoutWarning}
         </span>
       )}
-      {startup !== null ? (
+      {agent.undelivered.length > 0 ? (
+        // Before all else: its sender heard it was queued, and nothing else says it never went.
+        <UndeliveredRow
+          fitted={fitted}
+          items={agent.undelivered}
+          onResend={() => resendUndelivered(agent.sessionId)}
+          onClear={() => clearUndelivered(agent.sessionId)}
+        />
+      ) : agent.trustFolder !== null ? (
+        // Before its startup lines: they show the trust screen's last line, which this answers.
+        <TrustRow fitted={fitted} folder={agent.trustFolder} onTrust={() => trustFolder(agent.sessionId)} />
+      ) : startup !== null ? (
         <>
           {/* Starting, only the step it is on, its worktree in the tooltip; a failed start keeps the worktree step above the one that failed. */}
           <StartSteps lines={starting ? agentStartLines(agent).slice(-1) : agentStartLines(agent)} title={starting ? agent.worktree : undefined} />
@@ -474,6 +486,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
             >
               +{folded.length}
             </Chip>
+            {agent.queuedUntilUp > 0 && (
+              <Chip className="hybrid-tile-queued" data-testid="tile-queued" title="Sent before its session was up: typed once it is, after its first prompt">
+                <Timer aria-hidden />
+                {agent.queuedUntilUp} queued until it&apos;s up
+              </Chip>
+            )}
             {!starting && crewFlags !== undefined && (
               <Chip className="hybrid-tile-crew-flags" data-testid="crew-flags" title="Crew members waiting for its answer: sending each a message clears its flag">
                 ⚑ {crewFlags} crew flag{crewFlags === 1 ? '' : 's'}
@@ -669,6 +687,97 @@ function UnsentRow({
       </Button>
       <Button size="xs" className="nodrag" data-testid="clear-unsent" disabled={pending !== undefined} onClick={() => run('clear', onClear)}>
         Clear
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * What was sent to the agent before its session was up and never typed: Resend sends it again (an ended agent starts
+ * again with it), Clear forgets it.
+ */
+function UndeliveredRow({
+  fitted,
+  items,
+  onResend,
+  onClear,
+}: {
+  fitted: (element: HTMLElement | null) => void;
+  items: readonly UndeliveredMessage[];
+  onResend(): Promise<void>;
+  onClear(): Promise<void>;
+}) {
+  const [pending, setPending] = useState<'resend' | 'clear'>();
+  const run = (which: 'resend' | 'clear', action: () => Promise<void>) => {
+    setPending(which);
+    void action().finally(() => setPending(undefined));
+  };
+  const what = items.length === 1 ? `${items[0]!.what} not delivered:` : `${items.length} messages not delivered:`;
+  return (
+    <span
+      ref={fitted}
+      className="hybrid-tile-body hybrid-tile-unsent"
+      role="note"
+      data-testid="tile-undelivered"
+      title={items.map((item) => `${item.what} (${item.reason}):\n${item.text}`).join('\n\n')}
+      onDoubleClick={stopPropagation}
+    >
+      <span className="hybrid-tile-text">
+        {pending === 'resend' ? (
+          'Resending…'
+        ) : (
+          <>
+            <strong>{what}</strong> {items.map((item) => item.text).join(' · ')}
+          </>
+        )}
+      </span>
+      <Button size="xs" variant="primary" icon={<SendHorizontal />} className="nodrag" data-testid="resend-undelivered" disabled={pending !== undefined} onClick={() => run('resend', onResend)}>
+        Resend
+      </Button>
+      <Button size="xs" className="nodrag" data-testid="clear-undelivered" disabled={pending !== undefined} onClick={() => run('clear', onClear)}>
+        Clear
+      </Button>
+    </span>
+  );
+}
+
+/**
+ * Claude's trust screen, which its first prompt waits on: Trust folder answers it `Yes, I trust this folder`, only on
+ * the user's click; the first prompt is typed once its session is up.
+ */
+function TrustRow({ fitted, folder, onTrust }: { fitted: (element: HTMLElement | null) => void; folder: string; onTrust(): Promise<void> }) {
+  const [pending, setPending] = useState(false);
+  return (
+    <span
+      ref={fitted}
+      className="hybrid-tile-body hybrid-tile-unsent"
+      role="note"
+      data-testid="tile-trust"
+      title={`Claude is asking whether to trust this folder before it starts:\n${folder}\n\nTrust folder answers "Yes, I trust this folder"; its first prompt is typed once it is up.`}
+      onDoubleClick={stopPropagation}
+    >
+      <span className="hybrid-tile-text">
+        {pending ? (
+          'Trusting its folder…'
+        ) : (
+          <>
+            <strong>Claude asks to trust this folder:</strong> {folder}
+          </>
+        )}
+      </span>
+      <Button
+        size="xs"
+        variant="primary"
+        icon={<FolderCheck />}
+        className="nodrag"
+        data-testid="trust-folder"
+        disabled={pending}
+        onClick={() => {
+          setPending(true);
+          void onTrust().finally(() => setPending(false));
+        }}
+      >
+        Trust folder
       </Button>
     </span>
   );

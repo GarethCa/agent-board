@@ -23,6 +23,9 @@ describe('demo renderer', () => {
     expect(modelName('claude-opus-5')).toBe('Opus 5');
     expect(modelName('claude-sonnet-5-5')).toBe('Sonnet 5.5');
     expect(modelName('gpt-5-codex')).toBe('gpt-5-codex');
+    // A dated id's date is no minor version.
+    expect(modelName('claude-sonnet-4-20250514')).toBe('Sonnet 4');
+    expect(modelName('claude-opus-4-1-20250805')).toBe('Opus 4.1');
   });
 
   it("draws the model's Markdown as the TUI does: headings and bold bold, struck text struck, code coloured, items bulleted", () => {
@@ -171,6 +174,14 @@ describe('demo scenarios on the fake claude', () => {
     expect(await typed({ FAKE_HARNESS_TYPE_MS: '10' })).toBeGreaterThanOrEqual(30);
     // A word a step, as without the knob, writes no lone letters.
     expect(await typed({ FAKE_HARNESS_STEP_DELAY_MS: '10' })).toBe(0);
+  });
+
+  it('types an emoji whole with FAKE_HARNESS_TYPE_MS, never as two halves', async () => {
+    const result = await runFake('claude', { scenario: 'waiting', args: ['-p', 'pick one'], input: ['Postgres 🚀'], env: { FAKE_HARNESS_TYPE_MS: '1' } });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Going with Postgres 🚀.');
+    expect(result.stdout).not.toContain('\uFFFD');
   });
 
   it('demo-implement: answering No at the permission box skips rm -rf dist and the build', async () => {

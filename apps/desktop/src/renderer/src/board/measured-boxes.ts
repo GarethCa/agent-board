@@ -90,10 +90,12 @@ export function sameReport(a: LayoutMeasured, b: LayoutMeasured): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-// What the items drawn now measured of themselves, by node id. Kept once an item is no longer drawn (off screen, where
-// the board draws nothing): a note's fit is said only while its width and what else is drawn round its text are as they
-// were, and the daemon uses it only while the note says the same; a text item's size only while it is saved as it was,
-// though text changed while it was off screen goes unmeasured until it is drawn again.
+// What items measured of themselves, by node id. A text item's size is measured as it is drawn, and kept once it is no
+// longer drawn (off screen, where the board draws nothing): it is said only while the item is saved as it was, though
+// text changed while it was off screen goes unmeasured until it is drawn again. A note's fit is measured out of sight
+// (`AgentNoteMeasurer`), drawn or not, each time its text, width or what else is drawn round its text changes; it is
+// said only while its width and what is drawn round its text are as they were, and the daemon uses it only while the
+// note says the same.
 const drawnSizes = new Map<string, Size>();
 const noteFits = new Map<string, NoteFit>();
 const listeners = new Set<() => void>();
@@ -111,11 +113,28 @@ export function reportDrawnSize(id: string, size: Size): void {
   changed();
 }
 
-/** An agent note's height for its text, as it is drawn. */
-export function reportNoteFit(id: string, fit: NoteFit): void {
-  const was = noteFits.get(id);
-  if (was !== undefined && near(was.width, fit.width) && near(was.height, fit.height) && was.text === fit.text && was.context === fit.context) return;
-  noteFits.set(id, fit);
+/** Agent notes' heights for their text, by node id, as they are measured: said once for them all. */
+export function reportNoteFits(fits: ReadonlyMap<string, NoteFit>): void {
+  let any = false;
+  for (const [id, fit] of fits) {
+    const was = noteFits.get(id);
+    if (was !== undefined && near(was.width, fit.width) && near(was.height, fit.height) && was.text === fit.text && was.context === fit.context) continue;
+    noteFits.set(id, fit);
+    any = true;
+  }
+  if (any) changed();
+}
+
+/** Whether agent note `id`'s height for its text is known as it is now: `width` wide, saying `text`, drawn round `context`. */
+export function noteFitKnown(id: string, { width, text, context }: Omit<NoteFit, 'height'>): boolean {
+  const fit = noteFits.get(id);
+  return fit !== undefined && near(fit.width, width) && fit.text === text && fit.context === context;
+}
+
+/** Forgets every agent note's height for its text, so each is measured again: in a font just loaded, text takes another. */
+export function forgetNoteFits(): void {
+  if (noteFits.size === 0) return;
+  noteFits.clear();
   changed();
 }
 
@@ -124,6 +143,9 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
+/** Draws again each time an item says what it measured of itself. */
+export const useMeasuresChanged = (): number => useSyncExternalStore(subscribe, () => version);
+
 /**
  * Says how this window draws `nodes` as `shown`, round the tiles `expanded`, to the daemon, a moment after it changes,
  * while this window is the one in front (and again each time it comes to the front). Once it is no longer in front it
@@ -131,7 +153,7 @@ const subscribe = (listener: () => void) => {
  */
 export function useMeasuredBoxes(nodes: readonly Node[], shown: readonly Node[], expanded: ExpandedTiles, look: AgentNoteLook): void {
   const focused = useWindowFocused();
-  const measuredVersion = useSyncExternalStore(subscribe, () => version);
+  const measuredVersion = useMeasuresChanged();
   const sent = useRef<LayoutMeasured | undefined>(undefined);
   const say = (report: LayoutMeasured) => {
     sent.current = report;
