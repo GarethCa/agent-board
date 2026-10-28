@@ -665,7 +665,8 @@ describe('an answer sent mid-turn', () => {
   it.each(['claude', 'codex'] as const)(
     'is submitted once the turn of a %s agent whose TUI lost its Enter ends, once only',
     async (harness) => {
-      const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 1 }, 200);
+      // Its first prompt, typed at its prompt, loses no Enter: the answer after it does.
+      const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 1, loseEntersAfter: 1 }, 200);
       const b = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'review', harness, prompt: 'Work slowly', ...SIZE });
       await setup.client.call('session.attach', { sessionId: b.sessionId });
       // As soon as it reads as working: Codex does from its SessionStart, before its first prompt's own hook.
@@ -771,7 +772,8 @@ describe('continuing a rate-limited agent on credits', () => {
 describe('an answer queued in a turn that does not end on its Stop', () => {
   /** A fake agent given `prompt`, whose TUI loses its first typed Enter, sent an answer once its turn is under way. */
   async function queuedIn(prompt: string, harness: Harness = 'claude') {
-    const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 1 }, 200);
+    // Its first prompt, typed at its prompt, loses no Enter: the message after it does.
+    const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 1, loseEntersAfter: 1 }, 200);
     const { agent: a } = await agentSide(setup, 'impl');
     const b = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'review', harness, prompt, ...SIZE });
     await setup.client.call('session.attach', { sessionId: b.sessionId });

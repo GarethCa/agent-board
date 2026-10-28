@@ -28,6 +28,8 @@ import {
   type TileSide,
   type ZoneMap,
   type ZoneScreenshot,
+  MAX_AGENT_NOTE_SIZE,
+  MIN_AGENT_NOTE_SIZE,
 } from './protocol.ts';
 import { toMermaid } from './mermaid.ts';
 import { boxPicture, laneTable, lintLine } from './zone-map.ts';
@@ -44,6 +46,20 @@ export function sizeOf(text: string): { width: number; height: number } {
   const match = /^\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*$/.exec(text);
   if (match === null || Number(match[1]) < 1 || Number(match[2]) < 1) throw new BoardError('--size is width,height, such as 720,480');
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** An agent note's size as typed: `<width>x<height>` (or `width,height`), between the least and the most a note can be resized to. */
+export function noteSizeOf(text: string): { width: number; height: number } {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*[x,×]\s*(\d+(?:\.\d+)?)\s*$/i.exec(text);
+  if (match === null) throw new BoardError('--size is <width>x<height>, such as 360x240');
+  const size = { width: Number(match[1]), height: Number(match[2]) };
+  if (size.width < MIN_AGENT_NOTE_SIZE.width || size.height < MIN_AGENT_NOTE_SIZE.height) {
+    throw new BoardError(`--size is at least ${MIN_AGENT_NOTE_SIZE.width}x${MIN_AGENT_NOTE_SIZE.height}`);
+  }
+  if (size.width > MAX_AGENT_NOTE_SIZE.width || size.height > MAX_AGENT_NOTE_SIZE.height) {
+    throw new BoardError(`--size is at most ${MAX_AGENT_NOTE_SIZE.width}x${MAX_AGENT_NOTE_SIZE.height}`);
+  }
+  return size;
 }
 
 /** What a layout command's options say where to put something, as typed: refs and words, not yet checked. */
@@ -357,10 +373,16 @@ function noteId(refs: BoardRefs, text: string, caller: BoardCaller | null): stri
   return object.item.id;
 }
 
-/** `note edit`: the text or colour of a note the caller (or its crew) made. */
-export async function editNote(session: BoardSession, ref: string, options: { text?: string; color?: string }): Promise<BoardView> {
+/** `note edit`: the text, colour or size (`<w>x<h>`, an agent note's) of a note the caller (or its crew) made. */
+export async function editNote(session: BoardSession, ref: string, options: { text?: string; color?: string; size?: string }): Promise<BoardView> {
+  const { size, ...fields } = options;
   const refs = new BoardRefs(await readBoard(session.client));
-  const item = await session.client.call('orchestrator.editNote', { token: session.token, id: noteId(refs, ref, session.caller), ...options });
+  const item = await session.client.call('orchestrator.editNote', {
+    token: session.token,
+    id: noteId(refs, ref, session.caller),
+    ...fields,
+    ...(size === undefined ? {} : noteSizeOf(size)),
+  });
   return { text: `Changed ${itemLine(refs, item)}.${colourIgnored(item, options.color)}`, json: item };
 }
 

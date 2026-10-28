@@ -231,6 +231,66 @@ test("approving and denying a permission from the inbox answer the agent's Permi
   });
 });
 
+test('a permission asked by the Captain, loose on the board in no zone, reaches the inbox and can be answered there', async () => {
+  await withApp(scratch('permission'), async (window) => {
+    const captain = await window.evaluate(() => self.agentBoard.agents.startMaster({ harness: 'claude', cols: 120, rows: 32 }));
+    expect(captain).toMatchObject({ orchestrate: 'board', zoneId: null });
+    const asking = item(window, captain.sessionId);
+    await openInbox(window);
+    await expect(asking).toContainText('Wants to use Bash');
+    await expect(count(window)).toHaveAttribute('data-count', '1');
+    await asking.getByRole('button', { name: 'Allow' }).click();
+    await expect(asking).not.toContainText('Wants to use Bash');
+  });
+});
+
+test("a permission asked by the Captain can be answered from the Captain's panel too", async () => {
+  await withApp(scratch('permission'), async (window) => {
+    const captain = await window.evaluate(() => self.agentBoard.agents.startMaster({ harness: 'claude', cols: 120, rows: 32 }));
+    await window.getByTestId('master-button').click();
+    const row = window.getByTestId('master-for-you-item').filter({ hasText: captain.name });
+    await expect(row).toContainText('Wants to use Bash');
+    await row.getByRole('button', { name: `Allow Bash for ${captain.name}` }).click();
+    await expect(row).toHaveCount(0);
+  });
+});
+
+test('a permission asked by a plain agent loose on the board, in no zone, reaches the inbox and can be answered there', async () => {
+  const setup = scratch('permission');
+  await withApp(setup, async (window) => {
+    const sessionId = await window.evaluate(
+      (path) => self.agentBoard.agents.start({ zoneId: null, harness: 'claude', repo: { path }, prompt: 'Clean up', position: { x: 2400, y: 1600 }, cols: 120, rows: 32 }),
+      setup.repo,
+    );
+    const asking = item(window, sessionId);
+    await openInbox(window);
+    await expect(asking).toContainText('Wants to use Bash');
+    await asking.getByRole('button', { name: 'Allow' }).click();
+    await expect(asking).not.toContainText('Wants to use Bash');
+  });
+});
+
+test("a long tool input is clamped in the Captain's panel, so Allow and Deny stay in view until it is shown whole", async () => {
+  await withApp(scratch('long-permission'), async (window) => {
+    const captain = await window.evaluate(() => self.agentBoard.agents.startMaster({ harness: 'claude', cols: 120, rows: 32 }));
+    await window.getByTestId('master-button').click();
+    const panel = window.getByTestId('master-panel');
+    const row = panel.getByTestId('master-for-you-item').filter({ hasText: captain.name });
+    const allow = row.getByRole('button', { name: `Allow Bash for ${captain.name}` });
+    await expect(allow).toBeInViewport();
+    await expect(row.getByRole('button', { name: `Deny Bash for ${captain.name}` })).toBeInViewport();
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const input = row.getByTestId('inbox-tool-input');
+    await row.getByRole('button', { name: 'Show all' }).click();
+    await expect(input).toHaveAttribute('data-open', 'true');
+    await expect(allow).toBeAttached();
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await row.getByRole('button', { name: 'Show less' }).click();
+    await allow.click();
+    await expect(row).toHaveCount(0);
+  });
+});
+
 test('a permission the inbox held too long falls back to the terminal, and answering it there clears the item', async () => {
   await withApp(
     scratch('permission'),

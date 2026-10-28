@@ -5,6 +5,8 @@ status: accepted
 
 Agent state comes from each harness's **hook system**, posted to the daemon; the chat view comes from the harness's **transcript file**; we never infer state by reading terminal output.
 
+Two narrow exceptions read the screen the daemon keeps of a terminal, to decide a step, never an agent's state: Continue on credits reads Claude's rate-limit menu, and a starting Claude agent's first prompt reads Claude's trust screen and its prompt (below). Each matches the screen text recorded from a real build and only acts on what it recognises.
+
 ## Claude Code (verified against code.claude.com/docs, Claude Code 2.1.x)
 
 - **Injection.** For sessions the app spawns, hooks are passed per session with `claude --settings <json>`, so we never edit the user's settings. Hooks are `type: "http"` hooks to the daemon carrying the session token, except `SessionStart`: Claude runs no `http` hook for it (found in v0.6.3, when the first prompt began waiting on it), so it is a `command` hook that posts its stdin with curl, the URL and token read from the session's environment.
@@ -307,29 +309,85 @@ PTY.
 
 **The first prompt, typed**, as built (`packages/daemon/src/agent-spawns.ts` `launch`, `deliveries.ts` `firstPrompt`):
 
-- **Off the command line.** A Claude agent's harness starts with no task in its argv: `ps` shows its binary, flags,
-  session id and `--settings`, never the prompt. Any `pkill -f <word>` run on the machine matches every process whose
+- **Off the command line.** An agent's harness, Claude's or Codex's, starts with no task in its argv: `ps` shows its
+  binary, flags, session id (or `resume <id>`) and settings, never the prompt. Any `pkill -f <word>` run on the machine matches every process whose
   command line names the word, so a prompt in argv let another agent's `pkill -f vite` end every agent whose task
   mentioned vitest. Every launch goes through `launch`: a spawn, a reviewer, a restart, a retried start and a wake with
   a message alike.
 - **Typed once its session is up.** The task is queued in the agent's typing queue (the one delivered messages use) at
-  launch. It is typed, as a bracketed paste, on the session's `SessionStart` (Claude fires it at launch), then
+  launch. It is typed, as a bracketed paste, on the session's `SessionStart` (Claude fires it at launch; Codex's
+  screen stands in for it, below), then
   submitted as any delivery is. Only `SessionStart` says the session is up: any other hook of its own is of a turn the
-  user began by hand, which the task would be pasted into, left unsent. Until then nothing else is typed at the agent: a message, hand-off,
-  scheduled run or pause is refused at once, saying its session isn't up yet (a hand-off is skipped or queued as for a busy agent),
-  so nothing goes before the task.
-- **Never blind.** A session whose `SessionStart` hasn't come (a startup screen waiting for the user, hooks turned off
-  or failing) is never typed at, as Enter on a startup screen would answer it. Once it is given up on (its `starting`
-  limits, or a minute after a relaunch with no `SessionStart`), the tile shows the task, untyped, with Send and, in
-  plain text, to answer its terminal first: the user types it once its terminal is at its prompt
-  (`agent.typeFirstPrompt`). The agent is flagged too (`Agent.flag`), so its orchestrator, else the user, hears of it
-  away from the board, unless it already flags something of its own. Like any flag, the flag goes when the user opens
-  the agent, and it also goes once the task is typed or the session ends; the tile keeps offering the task until it is
-  typed. A `SessionStart` coming later types it as usual, but not one after a compaction (`source: compact`), which
-  can come mid-turn. A session that ends first types nothing.
+  user began by hand, which the task would be pasted into, left unsent. Until then nothing else is typed at the agent:
+  a message or scheduled run sent meanwhile is **queued** behind the task (`Agent.queuedUntilUp`, and `send` says
+  "queued until it's up") and typed after it, in order, as the user's own message is; a pause is refused. A hand-off
+  is busy at once, as for an agent at work, so its edge keeps it and tries again, never holding its sender handing off
+  for as long as the agent takes to come up. One relaunched before it came up keeps what was queued for its new
+  session. Nothing queued is ever dropped unsaid: one never typed (its session ended first, its prompt holds the task
+  unsent, or a question or permission prompt is up when its turn comes) is kept on the agent (`Agent.undelivered`, in
+  the daemon's memory) and flagged to the user, a flag that outlives its session and opening it, until the user
+  resends it (`agent.resendUndelivered`, an ended agent started again with the first) or clears it. A flag the agent
+  already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared.
+- **Claude's trust screen.** In a folder Claude has never opened it shows a trust screen first ("Quick safety check
+  … ❯ No, exit / Yes, I trust this folder" in 2.1.312) and fires no `SessionStart` until it is answered. While the
+  task waits, the daemon reads the agent's screen (`startup-screen.ts`) a moment after its output, on the daemon's
+  clock. It is the trust screen only with its title or its yes row on it, never a `No, exit` row alone. On the trust
+  screen the agent is flagged to the user, never its orchestrator, which can't answer it and shouldn't decide it:
+  `Claude is asking whether to trust this folder: <path>` (opening the agent leaves this flag up), and its tile and
+  the Needs-you row offer **Trust folder** (`agent.trustFolder`). Only that click answers it, through
+  `answerTrustScreen`, which any caller may use: Down, then Enter once the screen shows the pointer on the yes row, so
+  Enter never lands on `No, exit`. Claude records the trust itself; the
+  board never writes `~/.claude.json`. Nothing is typed there otherwise, Send included.
+- **Its prompt, seen.** Once the trust screen has been answered (by Trust folder or in the terminal), or the agent has
+  been given up on (below), Claude's prompt on its screen (a pointer line between the rules framing it) types the task
+  as `SessionStart` would. The read just after the trust screen goes may catch Claude mid-redraw, so a screen that is
+  neither is only flagged if a later read still finds it so. Before then only `SessionStart` does, so a prompt drawn as Claude starts is never typed at
+  ahead of its hooks. Whichever comes first types it, once.
+- **Never blind.** A session whose `SessionStart` hasn't come and whose screen shows neither (another startup screen,
+  hooks turned off or failing) is never typed at, as Enter on a startup screen would answer it. Once it is given up on
+  (its `starting` limits, or a minute after a relaunch with no `SessionStart`), the tile shows the task, untyped, with
+  Send and, in plain text, to answer its terminal first: the user types it once its terminal is at its prompt
+  (`agent.typeFirstPrompt`), the fallback. The agent is flagged too (`Agent.flag`), with the last lines its terminal
+  shows, so its orchestrator, else the user, hears of it away from the board, unless it already flags something of its
+  own. Like any flag, the flag goes when the user opens the agent, and it also goes once the task is typed or the
+  session ends; the tile keeps offering the task until it is typed. A `SessionStart` coming later types it as usual,
+  but not one after a compaction (`source: compact`), which can come mid-turn. A session that ends first types
+  nothing.
 - **State.** Until that prompt's own `UserPromptSubmit`, the agent stays `starting`, its row `idle` (at its prompt), for
   a minute more from its `SessionStart`: its `SessionStart` no longer shows it `running`, and what it prints from then
   on (its prompt) is neither its startup output nor a sign of hooks not arriving. One that exits in between is a failed
   start, as before.
-- **Codex keeps it in argv.** The Codex TUI fires `SessionStart` with its first prompt, not at launch, so there is no
-  hook that says it is ready to be typed at; a Codex agent's task is still its last argument.
+- **Codex: its screen says it is up.** The Codex TUI fires `SessionStart` with its first prompt, not at launch, and
+  has no option to read the prompt from a file or stdin, so its task is typed once its screen shows its session up
+  (`codex-screen.ts`). Checked against the real `codex-cli 0.162.0-alpha.17.2` started with no prompt, in a throwaway
+  `CODEX_HOME` with an unreachable model provider, so no tokens were spent:
+  - It draws its composer (`› Ask Codex to do anything`) at once, as it loads. A folder-trust screen ("Folder
+    access", in a repo not yet trusted) or a hooks review ("Hooks need review", with the bypass flag off) then takes
+    its place, a list whose pointer row (`› 1. Trust and continue`) looks like the composer. So the composer alone
+    is not a sign it is up: typing at it then would answer that screen.
+  - Once every such screen is through, it draws the composer again with its status line under it: model, reasoning
+    effort and folder (`gpt-5.5 high · ~/work/proj`). That pair, the last `›` line on screen not a list's pointer row
+    and the status line next under it, is what says it is up (`codexComposerUp`). A slow MCP server doesn't hold it
+    back: its warnings come later, on the shortcuts line.
+  - The status line is the user's to configure (`[tui] status_line`): another list draws another line
+    (`Context 100% left · …`), and an empty one draws none, either of which would never read as up. So `codexLaunch`
+    sets it for every agent (`-c tui.status_line=["model-with-reasoning","current-dir"]`), as it sets the hooks.
+  - The screen is read once the session's output has gone quiet for 300 ms. When it says the session is up, the
+    agent's start is marked up (as Claude's `SessionStart` does) and its task typed as Claude's is. Until then its
+    output, however long its start takes, is no sign of hooks not arriving: only the minute-long limits give it up.
+  - Codex keeps its composer and status line drawn through a turn, so the screen alone can't tell a turn the user
+    began by hand. A draft of the user's at the composer is never typed over: the task waits while they have one.
+    Enter on that draft, or a `SessionStart` or `UserPromptSubmit` while the task is untyped, is a turn of theirs:
+    the screen is no longer watched, and the tile offers the task with Send at once, never typing it into or after
+    their turn. Enter counts as sending a draft only once the composer has been seen up: before then, what the user
+    types (a row's number and Enter) answers a startup screen, and the task is typed by itself after it.
+  - Never blind: a screen that never looks up (a startup screen waiting for the user, a TUI that changed its
+    layout) leaves the task untyped, and the stall above offers it with Send. Once the user answers the startup
+    screen, its composer comes up and the task is typed by itself.
+  - Rejected: `codex queue --thread <id> --message <text>`, which needs the thread's id, and Codex makes no thread
+    before its first prompt. `codex resume` was checked on the fake only (no conversation exists in a throwaway home
+    without a turn); it goes through the same check, and the stall is the net if its screen differs.
+  - The screens are an alpha build's and may change: re-check them when Codex is upgraded, with the notices it can
+    draw after it loads (a new-model notice, an update prompt), which the screen check would have to read as not up.
+    The folder-trust screen's second row depends on how Codex is started (`Back to Agent Command Center` with its
+    shared daemon, `Quit` without).

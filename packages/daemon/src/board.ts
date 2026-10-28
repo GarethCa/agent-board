@@ -37,7 +37,8 @@ export interface BoardConnection {
  * `BOARD_CALLER_METHODS` refuses it with `BOARD_ERROR.notAllowed`, however it reached the socket (the CLI, its `rpc`,
  * the MCP server), but for `ORCHESTRATOR_METHODS` while `mayOrchestrate` says its session may (ADR-0011), which each
  * of those methods checks again for the token it is given, and for `USER_SIDE_METHODS` while its session is on the
- * user's side: a shell turns an agent's orchestrating on and off, and changes no setting. A connection that
+ * user's side: a shell turns an agent's orchestrating on and off, and changes no setting. `orchestrator.send`
+ * also passes as a reply to an agent that messaged the session's (`repliesTo`), which it checks again. A connection that
  * never presents one is the user's, and keeps the whole API.
  */
 export function guardBoardCallers<Context extends BoardConnection>(
@@ -46,6 +47,8 @@ export function guardBoardCallers<Context extends BoardConnection>(
     mayOrchestrate(sessionId: string): boolean;
     /** Whether the session acts for the user (`BoardCaller.side`). */
     actsForUser(sessionId: string): boolean;
+    /** Whether the agent `sessionId` may send to `to` as a reply to an agent that messaged it. */
+    repliesTo(sessionId: string, to: unknown): boolean;
     /** Why the session may not orchestrate, for the refusal. */
     notOrchestrating(sessionId: string): string;
     /** Hears an orchestrator method refused here, to log the attempt. */
@@ -62,6 +65,9 @@ export function guardBoardCallers<Context extends BoardConnection>(
           const session = context.boardSession;
           if (session === undefined) return handler(params, context);
           if (userSide && orchestrators.actsForUser(session)) return handler(params, context);
+          if (method === 'orchestrator.send' && orchestrators.repliesTo(session, (params as { sessionId?: unknown } | null)?.sessionId)) {
+            return handler(params, context);
+          }
           if (!(orchestrating && orchestrators.mayOrchestrate(session))) {
             const reason = orchestrating
               ? `${method} is only for an orchestrator. ${orchestrators.notOrchestrating(session)}`

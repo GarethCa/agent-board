@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
-import { ClipboardList, SquareArrowOutUpRight, Timer } from 'lucide-react';
+import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PlanSummary } from '@agent-board/daemon/protocol';
+import { ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Timer } from 'lucide-react';
 import { Button, EmptyState, ErrorText, Input, Kbd } from '../ui';
 import { useAction } from '../use-action';
+import { PermissionRow } from './PermissionRow';
 import { KIND_TAGS } from './kind-tags';
 import { HarnessMark } from '../board/HarnessMark';
 import { HARNESSES } from '../harness';
-import { heldPrompts, needsYouEntries, secondsLeft, sinceText, toolSummary, waitLeft } from '../../../shared/needs-you';
+import { heldPrompts, needsYouEntries, secondsLeft, sinceText, waitLeft } from '../../../shared/needs-you';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { planSurfaceOf } from '../session/tabs';
 import { requestTab } from '../session/tab-request';
@@ -169,8 +170,12 @@ function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number 
   );
 }
 
-/** A flag an agent raised for a look: its reason, and who it came through. It has nothing to answer: Open is the action. */
+/**
+ * A flag an agent raised for a look: its reason, and who it came through. It has nothing to answer: Open is the action,
+ * but for Claude's trust screen, which Trust folder answers (`Agent.trustFolder`).
+ */
 function FlagRow({ agent, flag, now }: { agent: Agent; flag: AgentFlag; now: number }) {
+  const { busy, error, run } = useAction();
   return (
     <>
       <blockquote className="inbox-item-message" data-testid="inbox-flag" title={flag.reason}>
@@ -182,8 +187,37 @@ function FlagRow({ agent, flag, now }: { agent: Agent; flag: AgentFlag; now: num
             via <span className="inbox-crew">{flag.via}</span> ·
           </>
         )}{' '}
-        {HARNESSES[agent.harness].label} · {sinceText(flag.at, now)} · clears when you open it
+        {HARNESSES[agent.harness].label} · {sinceText(flag.at, now)} · {agent.trustFolder !== null ? 'clears once its folder is trusted' : agent.undelivered.length > 0 ? 'clears once it is resent or cleared' : 'clears when you open it'}
       </p>
+      {agent.undelivered.length > 0 && (
+        <div className="inbox-item-actions">
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<SendHorizontal />}
+            loading={busy}
+            aria-label={`Resend what was not delivered to ${agent.name}`}
+            onClick={() => run(() => window.agentBoard.agents.resendUndelivered(agent.sessionId))}
+          >
+            Resend
+          </Button>
+        </div>
+      )}
+      {agent.trustFolder !== null && (
+        <div className="inbox-item-actions">
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<FolderCheck />}
+            loading={busy}
+            aria-label={`Trust ${agent.name}'s folder`}
+            onClick={() => run(() => window.agentBoard.agents.trustFolder(agent.sessionId))}
+          >
+            Trust folder
+          </Button>
+        </div>
+      )}
+      {error && <ErrorText>{error}</ErrorText>}
     </>
   );
 }
@@ -205,41 +239,6 @@ function PlanRow({ agent, plan, now, onShow }: { agent: Agent; plan: PlanSummary
         <Timer aria-hidden />
         <span>{plan.expiresAt === null ? 'Waits for your decision' : `Waits ${waitLeft(plan.expiresAt, now)} for your decision`}</span>
       </p>
-    </div>
-  );
-}
-
-function PermissionRow({ agent, prompt, now }: { agent: Agent; prompt: PermissionPrompt; now: number }) {
-  const { busy, error, run } = useAction();
-  const decide = (behavior: 'allow' | 'deny') =>
-    run(() => window.agentBoard.agents.decidePermission(agent.sessionId, prompt.id, { behavior }));
-  const summary = toolSummary(prompt);
-  return (
-    <div className="inbox-prompt" data-testid="inbox-prompt" data-held={prompt.heldUntil !== null}>
-      <p className="inbox-item-tool">
-        {prompt.subagent ? `Its ${prompt.subagent.type} subagent wants` : 'Wants'} to use <strong>{prompt.toolName}</strong>
-      </p>
-      {summary && (
-        <code className="inbox-item-input" data-testid="inbox-tool-input" title={summary}>
-          {summary}
-        </code>
-      )}
-      {prompt.heldUntil !== null ? (
-        <div className="inbox-item-actions">
-          <span className="inbox-prompt-countdown" title="Then its terminal asks instead">
-            {secondsLeft(prompt, now)} s
-          </span>
-          <Button size="sm" variant="danger" disabled={busy} aria-label={`Deny ${prompt.toolName} for ${agent.name}`} onClick={() => decide('deny')}>
-            Deny
-          </Button>
-          <Button size="sm" variant="primary" disabled={busy} aria-label={`Allow ${prompt.toolName} for ${agent.name}`} onClick={() => decide('allow')}>
-            Allow
-          </Button>
-        </div>
-      ) : (
-        <p className="inbox-item-note">Asking in its terminal now: open it to answer.</p>
-      )}
-      {error && <ErrorText>{error}</ErrorText>}
     </div>
   );
 }

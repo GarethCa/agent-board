@@ -11,9 +11,10 @@ const MAX_TIMER_MS = 60_000;
 
 /**
  * How a run or a delivery went: started, or not and why; `busy` when only because the agent can't take it now.
- * `unsent` when it was typed at a live agent's prompt but no turn started: it is still there, unsent.
+ * `unsent` when it was typed at a live agent's prompt but no turn started: it is still there, unsent. `queued` when the
+ * agent's session wasn't up yet: it is typed once it is, after its first prompt.
  */
-export type RunStart = { started: true; unsent?: boolean } | { started: false; reason: string; busy?: boolean };
+export type RunStart = { started: true; unsent?: boolean; queued?: boolean } | { started: false; reason: string; busy?: boolean };
 
 /** A clock as the scheduler fires it: its item id, its zone and its data. */
 export interface FiringClock {

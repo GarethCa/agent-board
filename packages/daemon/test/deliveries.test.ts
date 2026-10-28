@@ -32,6 +32,8 @@ function setup(rows: Row[], notReady?: string) {
   const writes: [string, string][] = [];
   const relaunches: { sessionId: string; prompt: string | undefined; why: string; codexSessionId: string | null | undefined }[] = [];
   const announced: { sessionId: string; handingOff: boolean }[] = [];
+  /** What was handed back, never typed: `sessionId what: text (reason)`. */
+  const undelivered: string[] = [];
   const byId = new Map(rows.map((each) => [each.session_id, each]));
   const clock = createFakeClock(new Date('2026-10-22T10:00:00Z'));
   const prompt: { now: PromptNow } = { now: 'at-prompt' };
@@ -55,6 +57,7 @@ function setup(rows: Row[], notReady?: string) {
     },
     promptNow: () => prompt.now,
     announce: (sessionId) => void announced.push({ sessionId, handingOff: deliveries.isHandingOff(sessionId) }),
+    undelivered: (sessionId, what, text, reason) => void undelivered.push(`${sessionId} ${what}: ${text} (${reason})`),
     log: () => {},
     clock,
     submitConfirmMs: 1_000,
@@ -78,33 +81,93 @@ function setup(rows: Row[], notReady?: string) {
     await flush();
   };
 
-  return { deliveries, writes, relaunches, announced, prompt, shown, ready, advance, land };
+  return { deliveries, writes, relaunches, announced, undelivered, prompt, shown, ready, advance, land };
 }
 
 describe('deliveries', () => {
-  it("types an agent's first prompt only once its session is up, refusing what is sent to it before then", async () => {
-    const { deliveries, writes, land, advance } = setup([row('a'), row('from')]);
+  it("types an agent's first prompt only once its session is up, then the messages and runs sent to it before then, in order", async () => {
+    const { deliveries, writes, land, advance, prompt } = setup([row('a'), row('from', { name: 'planner' })]);
     const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
     deliveries.firstPrompt('a', 'Fix the tests\nthen push', up);
     // However long its session takes: nothing is typed blind, and nothing else is typed first.
     await advance(5_000);
-    await expect(deliveries.answer('a', 'Also lint')).rejects.toThrow("a's session isn't up yet: its first prompt goes first");
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    // A hand-off is busy at once, for its edge to keep and try again: never holding its sender handing off meanwhile.
     expect(await deliveries.deliver('from', 'a', 'plan', 'the plan')).toEqual({
       started: false,
       reason: "its session isn't up yet: its first prompt goes first",
       busy: true,
     });
-    expect(deliveries.runScheduled('a', 'Nightly')).toMatchObject({ started: false, reason: "its session isn't up yet: its first prompt goes first" });
+    expect(deliveries.isHandingOff('from')).toBe(false);
+    expect(deliveries.runScheduled('a', 'Nightly')).toEqual({ started: true, queued: true });
+    expect(deliveries.queuedUntilUp('a')).toBe(2);
     expect(deliveries.isNotUp('a')).toBe(true);
     expect(writes).toEqual([]);
 
     comeUp(true);
     await land('a');
     expect(deliveries.isNotUp('a')).toBe(false);
-    expect(writes).toEqual([
+    expect(writes.slice(0, 2)).toEqual([
       ['a', '\x1b[200~Fix the tests\rthen push\x1b[201~'],
       ['a', '\r'],
     ]);
+    // At work on its first prompt: each queued message gets one Enter, which queues it for after that turn.
+    prompt.now = 'working';
+    for (let each = 0; each < 3; each += 1) {
+      deliveries.outputSeen('a');
+      await advance(200);
+    }
+    expect(writes.slice(2).map(([, data]) => data)).toEqual(['Also lint', '\r', 'Nightly', '\r']);
+    expect(deliveries.queuedUntilUp('a')).toBe(0);
+  });
+
+  it('hands back the messages and runs queued for an agent whose session ended before it was up', async () => {
+    const a = row('a');
+    const { deliveries, writes, land, undelivered } = setup([a]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests', up);
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    expect(deliveries.runScheduled('a', 'Nightly')).toEqual({ started: true, queued: true });
+    a.ended_at = '2026-10-22T10:00:01Z';
+    comeUp(false);
+    await land('a');
+    expect(writes).toEqual([]);
+    expect(undelivered).toEqual(['a A message: Also lint (a has ended)', 'a A scheduled run: Nightly (a has ended)']);
+    expect(deliveries.queuedUntilUp('a')).toBe(0);
+  });
+
+  it('hands back what was queued behind a first prompt left unsent, never typing onto it', async () => {
+    const { deliveries, writes, advance, undelivered } = setup([row('a')]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests', up);
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    comeUp(true);
+    // No turn starts on it: Enter is pressed again while its prompt holds only it, then it is kept unsent.
+    await advance(30_000);
+    expect(deliveries.unsent('a')).toBe('Its first prompt');
+    expect(writes.map(([, data]) => data)).not.toContain('Also lint');
+    expect(undelivered).toEqual([`a A message: Also lint (a message typed at its prompt was never sent)`]);
+  });
+
+  it('keeps what was queued for an agent relaunched before it came up for its new session, after that one\'s first prompt', async () => {
+    const { deliveries, writes, land, advance, prompt, undelivered } = setup([row('a')]);
+    const first = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests', first.promise);
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    first.resolve(false);
+    const second = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests again', second.promise);
+    await land('a');
+    expect(writes).toEqual([]);
+    expect(deliveries.queuedUntilUp('a')).toBe(1);
+
+    second.resolve(true);
+    await land('a');
+    prompt.now = 'working';
+    deliveries.outputSeen('a');
+    await advance(200);
+    expect(writes.map(([, data]) => data)).toEqual(['\x1b[200~Fix the tests again\x1b[201~', '\r', 'Also lint', '\r']);
+    expect(undelivered).toEqual([]);
   });
 
   it('types no first prompt once the session it waited on has ended, and takes messages again', async () => {

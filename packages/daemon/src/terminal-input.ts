@@ -26,6 +26,21 @@ export function draftAfterInput(drafting: boolean, data: string): boolean {
 }
 
 /**
+ * Whether `data` written at the prompt presses Enter on a draft: one the user had before it (`drafting`), or text it
+ * types before that Enter. Ctrl-C and Ctrl-U clear a draft first, as in `draftAfterInput`.
+ */
+export function submitsDraft(drafting: boolean, data: string): boolean {
+  let draft = drafting;
+  for (const key of data.replace(ESCAPE_SEQUENCE, '')) {
+    if (key === '\r') {
+      if (draft) return true;
+    } else if (LINE_ENDED.test(key)) draft = false;
+    else if (TYPED.test(key)) draft = true;
+  }
+  return false;
+}
+
+/**
  * Control characters a message may not carry: all but tab and the line break, so no text in it can press keys at the
  * prompt or end a paste early.
  */

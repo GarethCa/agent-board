@@ -112,8 +112,8 @@ interface AgentSpawnOptions
   records: Pick<AgentRecordStore, 'put'>;
   /** The agent was started with a first prompt, which its session has yet to take up. */
   promptQueued(sessionId: string): void;
-  /** Types `prompt` at the Claude agent just launched as session `sessionId`, once its session is up. */
-  typeFirstPrompt(sessionId: string, prompt: string): void;
+  /** Types `prompt` at the `harness` agent just launched as session `sessionId`, once its session is up. */
+  typeFirstPrompt(sessionId: string, prompt: string, harness: Harness): void;
   /**
    * Watches the agent just launched: a bypassed Codex agent's worktree for project config, and a Codex agent carrying
    * on conversation `codexSessionId` for `codex resume` failing.
@@ -216,8 +216,8 @@ export function createAgentSpawns(
 
   /**
    * Starts the agent's harness in `cwd` as session `id`, with a new hook token, and `task` (if any) as its first
-   * message: typed at Claude's prompt once its session is up, so that no `pkill -f` naming a word of it ends the agent
-   * (Codex, which fires no hook before its first prompt, still takes it on its command line). With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
+   * message: typed at its prompt once its session is up (Claude's `SessionStart`, Codex's composer drawn up), so that
+   * no `pkill -f` naming a word of it ends the agent. With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
    * is known (else it starts afresh). Returns whether Codex runs with the hook-trust bypass flag. Throws
    * `AGENT_ERROR.projectCodexConfig` for a Codex agent whose worktree has Codex config, unless allowed.
    */
@@ -253,7 +253,6 @@ export function createAgentSpawns(
         worktree,
         resume: spec.resume?.codexSessionId ?? undefined,
         readOnly: spec.readOnly,
-        prompt: task,
       });
       if (codex.projectConfig !== undefined && !spec.allowProjectCodexConfig) {
         throw new RpcMethodError(AGENT_ERROR.projectCodexConfig, projectConfigWarning(codex.projectConfig, options.hookShimPath));
@@ -294,7 +293,7 @@ export function createAgentSpawns(
       ...spec.size,
       hookTokenSha256: hashToken(token),
     });
-    if (harness === 'claude' && task !== undefined) options.typeFirstPrompt(id, task);
+    if (task !== undefined) options.typeFirstPrompt(id, task, harness);
     return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
   };
 
@@ -948,6 +947,9 @@ const BOARD_MCP_SERVER = 'agent-board';
  */
 export const FORCED_HYPERLINK_ENV = 'AGENT_BOARD_FORCED_HYPERLINK';
 
+/** The status line Codex draws under its composer for an agent: its model and reasoning effort, then its folder. */
+const CODEX_STATUS_LINE = '["model-with-reasoning","current-dir"]';
+
 /** The board env Codex passes its stdio board MCP server (ADR-0010). */
 const BOARD_MCP_ENV = [BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_SESSION_ENV, BOARD_ZONE_ENV];
 
@@ -988,14 +990,14 @@ export interface CodexLaunchOptions {
   model?: string;
   /** In Codex's read-only sandbox (`-s read-only`). */
   readOnly?: boolean;
-  /** The first message; none leaves Codex at its prompt. */
-  prompt?: string;
 }
 
 /**
  * How to start `codex` for an agent (ADR-0004): every hook event as a `-c` override running the forwarder, the
  * `AGENT_BOARD_HOOK_*` env (hook URL and token) hidden from the model's shell commands, the board MCP server
- * (ADR-0010) over stdio when it has `boardCli`, and the hook-trust bypass flag when the zone has it on. Use it for every launch of a Codex agent, a resume included.
+ * (ADR-0010) over stdio when it has `boardCli`, and the hook-trust bypass flag when the zone has it on. Never a prompt: one
+ * on its command line would let any `pkill -f` naming a word of it end the agent. Use it for every launch of a Codex
+ * agent, a resume included.
  *
  * The flag skips review for every hook in the session, not just ours, and hooks run outside Codex's sandbox. So when
  * the worktree has Codex config of its own where Codex loads it from (the start folder up to the worktree root),
@@ -1010,6 +1012,9 @@ export function codexLaunch(options: CodexLaunchOptions): HarnessLaunch & { proj
   ]));
   // The hook URL and token stay out of the model's shell commands; the board env (ADR-0010) is for them.
   args.push('-c', `shell_environment_policy.exclude=[${JSON.stringify(`${HOOK_ENV_PREFIX}*`)}]`);
+  // Its first prompt is typed once its screen shows the composer with this line under it (`codexComposerUp`): the
+  // user's own `[tui] status_line` may draw another, or none, so the board sets it.
+  args.push('-c', `tui.status_line=${CODEX_STATUS_LINE}`);
   if (options.boardCli !== undefined) {
     // Codex gives an MCP server only a few env vars of its own unless told which others to pass.
     args.push(
@@ -1028,7 +1033,6 @@ export function codexLaunch(options: CodexLaunchOptions): HarnessLaunch & { proj
   if (options.zoneBypassHookTrust && projectConfig === undefined) args.push(CODEX_BYPASS_FLAG);
   if (options.model !== undefined) args.push('-m', options.model);
   if (options.readOnly === true) args.push('-s', 'read-only');
-  if (options.prompt !== undefined) args.push('--', options.prompt);
   return projectConfig === undefined ? { command: options.command, args } : { command: options.command, args, projectConfig };
 }
 

@@ -18,7 +18,7 @@ const SIZE = { cols: 120, rows: 40 };
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with two zones of one repo and one of another.
  * Their agents may not orchestrate unless a test lets them: the zones' setting is off.
  */
-async function orchestrateDaemon(options: { dataDir?: string; home?: string; log?: (message: string) => void } = {}) {
+async function orchestrateDaemon(options: { dataDir?: string; home?: string; log?: (message: string) => void; replyWindowMs?: number } = {}) {
   const daemon = await startOrchestrateDaemon(options);
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -34,10 +34,21 @@ async function orchestrateDaemon(options: { dataDir?: string; home?: string; log
 type Setup = Awaited<ReturnType<typeof orchestrateDaemon>>;
 
 /** A daemon whose agents play the `orchestrate` scenario, in `dataDir` and with the fakes' `home` (fresh by default). */
-function startOrchestrateDaemon({ dataDir, home = tempDataDir(), log }: { dataDir?: string; home?: string; log?: (message: string) => void }) {
+function startOrchestrateDaemon({
+  dataDir,
+  home = tempDataDir(),
+  log,
+  replyWindowMs,
+}: {
+  dataDir?: string;
+  home?: string;
+  log?: (message: string) => void;
+  replyWindowMs?: number;
+}) {
   return startTestDaemon({
     ...(dataDir === undefined ? {} : { dataDir }),
     ...(log === undefined ? {} : { log }),
+    ...(replyWindowMs === undefined ? {} : { replyWindowMs }),
     worktreesDir: tempDataDir(),
     agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home, idleNotifyMs: 200 }),
   });
@@ -1337,7 +1348,10 @@ describe('pausing and waking an agent', () => {
     expect(await mcp.callTool('pause', { agent: ref })).toMatchObject({ isError: false, text: expect.stringMatching(/^Paused agent:/) });
     before = setup.recorder.events.length;
     expect(await mcp.callTool('send', { agent: ref, text: 'Also add a test' })).toMatchObject({ isError: false });
-    expect((await hookAfter(setup, before, worker.sessionId, 'UserPromptSubmit')).payload).toMatchObject({ prompt: 'Also add a test' });
+    // It may not orchestrate, so it is told it may answer the lead.
+    expect((await hookAfter(setup, before, worker.sessionId, 'UserPromptSubmit')).payload).toMatchObject({
+      prompt: `Also add a test\n\n[agent-board] From ${lead.agent.name} (agent:${lead.agent.sessionId.slice(0, 8)}), who you may answer with \`agent-board send agent:${lead.agent.sessionId.slice(0, 8)} -- '…'\`.`,
+    });
 
     const log = await setup.client.call('orchestrator.activity', { orchestratorId: lead.agent.sessionId });
     expect(log.map(({ action, outcome, targetId }) => `${action} ${outcome} ${targetId}`).reverse()).toEqual([
@@ -1706,18 +1720,18 @@ describe('an agent still starting', () => {
     expect(waited.agents[0]!.state).not.toBe('starting');
   });
 
-  it('refuses a message, saying why, until its session is up and its first prompt gone up first, then takes it', async () => {
+  it('queues a message until its session is up, typing it after its first prompt', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
     const worker = await connection.call('orchestrator.spawn', { token, name: 'eager', prompt: 'Write the handover' });
     expect(worker.state).toBe('starting');
 
-    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' })).rejects.toThrow(
-      "eager's session isn't up yet: its first prompt goes first",
-    );
-    const waited = await connection.call('orchestrator.wait', { token, sessionIds: [worker.sessionId] });
-    expect(waited.agents[0]!.state).not.toBe('starting');
-    await expect(connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' })).resolves.toBeDefined();
+    await setup.client.call('session.attach', { sessionId: worker.sessionId });
+    const sent = await connection.call('orchestrator.send', { token, sessionId: worker.sessionId, text: 'Carry on' });
+    expect(sent.queuedUntilUp).toBe(1);
+    await setup.recorder.waitForText(worker.sessionId, '> Carry on');
+    const screen = setup.recorder.screenText(worker.sessionId);
+    expect(screen.indexOf('Write the handover')).toBeLessThan(screen.indexOf('> Carry on'));
   });
 });
 
@@ -2199,5 +2213,174 @@ describe('agents recording their own sidebar', () => {
       'acme/web#4',
       realpathSync(join(agent.worktree, 'notes.md')),
     ]);
+  });
+});
+
+describe('replying to an agent that messaged it', () => {
+  /** The ref a message names its sender by. */
+  const refOf = (agent: Agent) => `agent:${agent.sessionId.slice(0, 8)}`;
+  /** Waits, as the user, until each agent's turn has ended: a message is sent only between turns. */
+  const settled = (setup: Setup, ...sessionIds: string[]) => setup.client.call('orchestrator.wait', { sessionIds });
+
+  it('lets an orchestrator answer a wider one only once that one messaged it, with send alone', async () => {
+    const setup = await orchestrateDaemon();
+    const captain = await agentSide(setup, setup.other.id, 'board');
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const bystander = await agentSide(setup, setup.other.id, 'board');
+    await settled(setup, captain.agent.sessionId, lead.agent.sessionId, bystander.agent.sessionId);
+    const reply = () => lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'The zone is green' });
+
+    await expect(reply()).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+
+    await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
+    // The message says who sent it, and how to answer.
+    await setup.recorder.waitForText(lead.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
+
+    await expect(reply()).resolves.toMatchObject({ sessionId: captain.agent.sessionId });
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ orchestratorId: lead.agent.sessionId, action: 'send', outcome: 'done', targetId: captain.agent.sessionId });
+
+    // Only to the agent that messaged it.
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: bystander.agent.sessionId, text: 'Hello' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    // And only a message: nothing else reaches it.
+    const others = [
+      lead.connection.call('orchestrator.interrupt', { token: lead.token, sessionId: captain.agent.sessionId }),
+      lead.connection.call('orchestrator.restart', { token: lead.token, sessionId: captain.agent.sessionId }),
+      lead.connection.call('orchestrator.close', { token: lead.token, sessionId: captain.agent.sessionId }),
+      lead.connection.call('orchestrator.read', { token: lead.token, sessionId: captain.agent.sessionId }),
+      lead.connection.call('orchestrator.wait', { token: lead.token, sessionIds: [captain.agent.sessionId] }),
+      lead.connection.call('orchestrator.addEdge', { token: lead.token, from: lead.agent.sessionId, to: captain.agent.sessionId }),
+    ];
+    for (const call of others) await expect(call).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+  });
+
+  it('lets an agent that may not orchestrate answer the agent that messaged it, and no other', async () => {
+    const setup = await orchestrateDaemon();
+    const captain = await agentSide(setup, setup.other.id, 'board');
+    const plain = await agentSide(setup, setup.zone.id);
+    const neighbour = await userAgent(setup.client, setup.zone.id, 'neighbour');
+    await settled(setup, captain.agent.sessionId, plain.agent.sessionId, neighbour.sessionId);
+    const reply = () => plain.connection.call('orchestrator.send', { token: plain.token, sessionId: captain.agent.sessionId, text: 'Done here' });
+
+    await expect(reply()).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed, message: expect.stringMatching(/only for an orchestrator/) });
+
+    await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: plain.agent.sessionId, text: 'Report back' });
+    await setup.recorder.waitForText(plain.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
+
+    await expect(reply()).resolves.toMatchObject({ sessionId: captain.agent.sessionId });
+    // As the hint says: with the CLI.
+    await settled(setup, captain.agent.sessionId);
+    let out = '';
+    const io = { out: (text: string) => (out += text), err: (text: string) => (out += text), env: { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: plain.token } };
+    expect(await runBoardCommand('send', [refOf(captain.agent), '--', 'And the tests pass'], io)).toBe(0);
+    expect(out).toMatch(/^Sent to /);
+    await expect(plain.connection.call('orchestrator.send', { token: plain.token, sessionId: neighbour.sessionId, text: 'Hello' })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+    });
+    await expect(plain.connection.call('orchestrator.interrupt', { token: plain.token, sessionId: captain.agent.sessionId })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+    });
+    await expect(plain.connection.call('orchestrator.spawn', { token: plain.token, name: 'child' })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+  });
+
+  it('grants nothing for a message that was refused', async () => {
+    const setup = await orchestrateDaemon();
+    const captain = await agentSide(setup, setup.other.id, 'board');
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    await settled(setup, captain.agent.sessionId, lead.agent.sessionId);
+    await expect(captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: '/config' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Yes?' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+  });
+
+  it('answers over the MCP as over the CLI', async () => {
+    const setup = await orchestrateDaemon();
+    const captain = await agentSide(setup, setup.other.id, 'board');
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    await settled(setup, captain.agent.sessionId, lead.agent.sessionId);
+    const mcp = mcpAs(setup, lead.token);
+    expect(await mcp.callTool('send', { agent: refOf(captain.agent), text: 'The zone is green' })).toMatchObject({ isError: true });
+
+    await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
+    await setup.recorder.waitForText(lead.agent.sessionId, `agent-board send ${refOf(captain.agent)}`);
+    expect(await mcp.callTool('send', { agent: refOf(captain.agent), text: 'The zone is green' })).toMatchObject({ isError: false });
+  });
+
+  it('opens no path back: an answer gives the agent answered no reach it lacks', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const helper = await agentSide(setup, setup.zone.id);
+    await settled(setup, lead.agent.sessionId, helper.agent.sessionId);
+    await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: helper.agent.sessionId, text: 'Look at the tests' });
+    await setup.recorder.waitForText(helper.agent.sessionId, `agent-board send ${refOf(lead.agent)}`);
+    await settled(setup, helper.agent.sessionId);
+    await helper.connection.call('orchestrator.send', { token: helper.token, sessionId: lead.agent.sessionId, text: 'They pass' });
+
+    // The user takes the helper out of the lead's zone: the lead's answer from it opened no way back in.
+    await setup.client.call('agent.move', { sessionId: helper.agent.sessionId, zoneId: setup.other.id, x: 0, y: 0 });
+    await settled(setup, helper.agent.sessionId, lead.agent.sessionId);
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: helper.agent.sessionId, text: 'More' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+  });
+
+  it('closes once the agent that asked is let reach wider, so no narrower agent steers a wider one (G14)', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const peer = await agentSide(setup, setup.zone.id, 'zone');
+    await settled(setup, lead.agent.sessionId, peer.agent.sessionId);
+    await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: peer.agent.sessionId, text: 'Ready?' });
+    await settled(setup, peer.agent.sessionId);
+    await peer.connection.call('orchestrator.send', { token: peer.token, sessionId: lead.agent.sessionId, text: 'Ready.' });
+    await settled(setup, lead.agent.sessionId);
+
+    await setup.client.call('agent.setOrchestrate', { sessionId: peer.agent.sessionId, scope: 'board' });
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: peer.agent.sessionId, text: 'Close everything' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/wider than yours/),
+    });
+  });
+
+  it("opens none to the sender's own crew, which answers in its turn's last message", async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
+    const workerSide = await agentSideOf(setup, worker.sessionId);
+    await settled(setup, worker.sessionId, lead.agent.sessionId);
+    await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: worker.sessionId, text: 'Also add a test' });
+    await setup.recorder.waitForText(worker.sessionId, 'Done: Also add a test.');
+    expect(setup.recorder.screenText(worker.sessionId)).not.toContain('agent-board send');
+    await settled(setup, lead.agent.sessionId);
+    await expect(workerSide.connection.call('orchestrator.send', { token: workerSide.token, sessionId: lead.agent.sessionId, text: 'Done' })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+    });
+  });
+
+  it('lasts only its window from the message', async () => {
+    const setup = await orchestrateDaemon({ replyWindowMs: 1000 });
+    const captain = await agentSide(setup, setup.other.id, 'board');
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    await settled(setup, captain.agent.sessionId, lead.agent.sessionId);
+    await captain.connection.call('orchestrator.send', { token: captain.token, sessionId: lead.agent.sessionId, text: 'How is the zone?' });
+    await settled(setup, lead.agent.sessionId);
+    await new Promise((done) => setTimeout(done, 1100));
+    await expect(lead.connection.call('orchestrator.send', { token: lead.token, sessionId: captain.agent.sessionId, text: 'Green' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+  });
+
+  it('adds no reply hint to a message the agent could answer anyway', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const peer = await agentSide(setup, setup.zone.id, 'zone');
+    await settled(setup, peer.agent.sessionId);
+    await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: peer.agent.sessionId, text: 'Carry on' });
+    await setup.recorder.waitForText(peer.agent.sessionId, 'Done: Carry on.');
+    expect(setup.recorder.screenText(peer.agent.sessionId)).not.toContain('agent-board send');
   });
 });

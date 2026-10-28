@@ -2,7 +2,7 @@ import type {} from './import-meta-glob.ts';
 
 /** brand/cli-banner.txt, inlined at build time like the migrations. */
 const [TEMPLATE = ''] = Object.values(
-  import.meta.glob<string>('../../../brand/cli-banner.txt', { query: '?raw', import: 'default', eager: true }),
+  import.meta.glob('../../../brand/cli-banner.txt', { query: '?raw', import: 'default', eager: true }),
 );
 
 /**

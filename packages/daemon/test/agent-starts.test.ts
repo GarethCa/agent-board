@@ -266,12 +266,10 @@ describe('starting an agent', () => {
     expect(agent.agent.branch).toMatch(/^go-/);
   });
 
-  it('retries a harness that exited as it started with the same first message, and shows a second failure the same way', async () => {
+  it('retries a harness that exited as it started, and shows a second failure the same way, its task never on its command line', async () => {
     const { client, recorder } = await startDaemon({ startFailure: 'ANTHROPIC_API_KEY not set' });
     const zone = await addZone(client, tempRepo());
 
-    // A Codex agent, whose first message is on its command line for the fake to show: a Claude agent's is typed once its
-    // session is up, which a failed start never is.
     const { sessionId } = await client.call('agent.start', { zoneId: zone.id, harness: 'codex', prompt: 'Go', role: 'implementer', ...SIZE });
     const failed = (event: DaemonEvent): event is AgentUpdatedEvent =>
       isUpdate(sessionId)(event) && event.agent.startup?.failed === true && event.agent.startup.output === 'ANTHROPIC_API_KEY not set';
@@ -282,9 +280,10 @@ describe('starting an agent', () => {
     // Starting again: its tile shows the start, not a plain ended agent, and then fails again.
     await recorder.waitFor((event): event is AgentUpdatedEvent => isUpdate(sessionId)(event) && event.agent.state === 'starting' && recorder.events.indexOf(event) >= before);
     await recorder.waitFor((event): event is AgentUpdatedEvent => failed(event) && recorder.events.indexOf(event) >= before);
-    // Its first message again, the implementer's template first, as the fake shows from its saved screen.
+    // The fake prints the task it was given on its command line as it fails: none, as its task waits to be typed.
     await client.call('session.attach', { sessionId });
-    await recorder.waitForText(sessionId, 'task: You are the implementer');
+    await recorder.waitForText(sessionId, 'ANTHROPIC_API_KEY not set');
+    expect(recorder.screenText(sessionId)).not.toContain('implementer');
   });
 
   it("retries a Claude agent that exited as it started by typing its whole first message once, at its prompt, never on its command line", async () => {

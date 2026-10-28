@@ -141,6 +141,8 @@ export interface DaemonOptions {
    * prompt takes over: `DEFAULT_PERMISSION_HOLD_MS` by default.
    */
   permissionHoldMs?: number;
+  /** How long an agent may answer a message from another agent: an hour by default (`reply-paths.ts`). */
+  replyWindowMs?: number;
   /** How long a picture of a zone is waited for from the app: 15 s by default (`zone-captures.ts`). */
   captureTimeoutMs?: number;
   /** How long an arrange waits for the app to measure the notes it wrote: 1.5 s by default (`layout-measures.ts`). */
@@ -706,6 +708,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       broadcast,
       log,
+      ...(options.replyWindowMs === undefined ? {} : { replyWindowMs: options.replyWindowMs }),
     });
     listeners.push((event) => orchestrators.onEvent(event));
     listeners.push((event) => clocks.onEvent(event));

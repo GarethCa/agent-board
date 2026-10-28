@@ -82,6 +82,11 @@ interface DeliveryOptions<Row extends DeliveryRow> {
   pausing(sessionId: string): Promise<void> | undefined;
   /** Tells every client the agent changed. */
   announce(sessionId: string): void;
+  /**
+   * What was sent to the agent before it was up (`what`: `A message`, `A scheduled run`), as `text`, was never typed,
+   * and why: its sender heard it was queued, so it is handed back for the user to see and resend.
+   */
+  undelivered(sessionId: string, what: string, text: string, reason: string): void;
   log(message: string): void;
   clock?: Clock;
   /** How long Enter first gets to start a turn (`DEFAULT_SUBMIT_CONFIRM_MS`). */
@@ -127,8 +132,18 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * after, is no news that it was taken.
    */
   const interruptedWith = new Set<string>();
-  /** Agents whose first prompt waits for their session to come up: nothing else is typed at them until it has. */
-  const notUp = new Set<string>();
+  /**
+   * Agents whose first prompt waits for their session to come up, with what settles it: nothing else is typed at them
+   * until it has. A relaunch's own replaces the one before, which then leaves it in place as it settles.
+   */
+  const notUp = new Map<string, Promise<boolean>>();
+  /**
+   * Agents whose first prompt is being typed now, its session up: a `SessionStart` landing meanwhile (Claude's prompt
+   * seen on its screen typed it first) still leaves it at its prompt for that prompt's Enter.
+   */
+  const typingFirst = new Set<string>();
+  /** Per agent not up when they came, how many messages wait to be typed after its first prompt (`queueUntilUp`). */
+  const waitingUp = new Map<string, number>();
 
   const setUnsent = (sessionId: string, kept: { what: string; lines: number } | undefined) => {
     interruptedWith.delete(sessionId);
@@ -311,6 +326,52 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     if (row === undefined) return 'the agent has been deleted';
     return row.ended_at !== null ? 'its session has ended' : whyNotReadyNow(sessionId, row, evenAsking);
   };
+
+  /**
+   * Types `line` at the agent whose session isn't up yet once it is, after its first prompt and whatever else came
+   * before it, as the user's own message is: an agent at work on its first prompt takes it as queued for after that
+   * turn (`pressEnter`). One relaunched before it came up waits on for its new session, behind that one's first prompt.
+   * Resolves with how it went: not typed if its session ends first, or holds its first prompt unsent, or a permission
+   * prompt or question is up when its turn comes (`whyNotAnswer`), which its caller hands back (`undelivered`), never
+   * dropping it. Messages and scheduled runs only: a hand-off is busy until the agent is up, for its edge to retry.
+   */
+  const queueUntilUp = async (sessionId: string, line: string, what: string): Promise<Typed> => {
+    options.log(`${what} to ${sessionId} is queued until its session is up`);
+    recount(waitingUp, sessionId, 1);
+    announce(sessionId);
+    try {
+      for (;;) {
+        const typed = await typeInput(sessionId, line, what, () => (notUp.has(sessionId) ? NOT_UP_REASON : whyNotAnswer(sessionId)), true);
+        if (typed.typed || !notUp.has(sessionId)) {
+          if (!typed.typed) options.log(`${what} queued for ${sessionId} until it was up was not typed: ${typed.reason}`);
+          return typed;
+        }
+      }
+    } catch (error) {
+      // The agent was deleted meanwhile (`whyNotAnswer` found none).
+      return { typed: false, reason: (error as Error).message };
+    } finally {
+      recount(waitingUp, sessionId, -1);
+      // Its daemon closed meanwhile: nothing is told.
+      try {
+        announce(sessionId);
+      } catch (error) {
+        options.log(`could not tell clients of ${sessionId}'s queued messages: ${(error as Error).message}`);
+      }
+    }
+  };
+
+  /**
+   * Queues `text`, typed as `line`, for the agent not up yet (`queueUntilUp`), handing it to `undelivered` if it is
+   * never typed: the sender has heard it was queued, so it is never dropped unsaid.
+   */
+  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string) =>
+    void queueUntilUp(sessionId, line, what)
+      .then((typed) => {
+        if (!typed.typed) options.undelivered(sessionId, what, text, typed.reason);
+      })
+      // Its daemon closed meanwhile, its database with it: it goes with the daemon's memory.
+      .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
 
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
   const beingPaused = (row: Row) => row.ended_at === null && row.hibernated_at !== null;
@@ -511,30 +572,43 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * Types `prompt` at the just-launched agent's prompt as its first message, once `ready` resolves true (its session
      * is up), ahead of anything else typed at it: so it never sits in the harness's argv, where any `pkill -f` naming a
      * word of it would end the agent. Until `ready` settles, nothing else is typed at the agent, and what is sent to
-     * it is refused at once, saying its session isn't up yet. Never typed blind: nothing is typed if `ready` resolves
-     * false (its session ended first). Kept as its unsent message if no turn starts on it.
+     * it waits behind it (`queueUntilUp`). Never typed blind: nothing is typed if `ready` resolves false (its session
+     * ended first). Kept as its unsent message if no turn starts on it.
      */
     firstPrompt(sessionId: string, prompt: string, ready: Promise<boolean>) {
-      notUp.add(sessionId);
       const settled = ready.then(
         (up) => up,
         () => false,
       );
-      void settled.then(() => notUp.delete(sessionId));
+      notUp.set(sessionId, settled);
+      void settled.then(() => notUp.get(sessionId) === settled && notUp.delete(sessionId));
       const ended = () => (getRow(sessionId)?.ended_at === null ? undefined : 'its session has ended');
       inTurn(sessionId, async () => {
-        if (await settled) await typeNow(sessionId, answerInput(prompt, true), 'Its first prompt', ended, false);
+        if (!(await settled)) return;
+        typingFirst.add(sessionId);
+        try {
+          await typeNow(sessionId, answerInput(prompt, true), 'Its first prompt', ended, false);
+        } finally {
+          typingFirst.delete(sessionId);
+        }
       }).catch((error: unknown) => options.log(`typing ${sessionId}'s first prompt failed: ${(error as Error).message}`));
     },
 
     /** Whether the agent's first prompt waits for its session to come up, so nothing else is typed at it yet. */
     isNotUp: (sessionId: string) => notUp.has(sessionId),
 
+    /** Whether the agent's first prompt is being typed now (`typingFirst`). */
+    isTypingFirst: (sessionId: string) => typingFirst.has(sessionId),
+
+    /** How many messages sent to the agent before its session was up still wait to be typed (`queueUntilUp`). */
+    queuedUntilUp: (sessionId: string): number => waitingUp.get(sessionId) ?? 0,
+
     /**
      * Sends `text` as the agent's next message. A paused agent is woken with it as its first message (held until its
-     * harness starts, never typed into a terminal still starting), carrying on its conversation.
+     * harness starts, never typed into a terminal still starting), carrying on its conversation. One whose session isn't
+     * up yet gets it once it is, after its first prompt (`queueUntilUp`): resolves at once, `queued`.
      */
-    async answer(sessionId: string, text: string, paste = false) {
+    async answer(sessionId: string, text: string, paste = false): Promise<{ queued: boolean }> {
       // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
       const pausing = options.pausing(sessionId);
       if (pausing !== undefined) await pausing;
@@ -544,15 +618,18 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         const row = getRow(sessionId)!;
         const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
         if (!woken.started) throw invalidParams(`${agent.name} can't be woken: ${woken.reason}`);
-        return;
+        return { queued: false };
       }
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
       // Its state says so while any permission prompt, its own or a subagent's, is pending.
       if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
       if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
-      if (notUp.has(sessionId)) throw invalidParams(`${agent.name}'s session isn't up yet: its first prompt goes first, so send this once it has`);
+      if (notUp.has(sessionId)) {
+        queueOrHandBack(sessionId, answerInput(text, paste), 'A message', text);
+        return { queued: true };
+      }
       const typed = await typeInput(sessionId, answerInput(text, paste), 'A message', () => whyNotAnswer(sessionId), true);
-      if (typed.typed) return;
+      if (typed.typed) return { queued: false };
       // Refused, never typed: the caller still has it.
       throw invalidParams(
         typed.reason === UNSENT_REASON ? `${agent.name} has a message typed at its prompt that was never sent: send or clear it first` : typed.reason,
@@ -565,6 +642,10 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       // A paused agent carries on its conversation, Codex's too; an ended one starts Codex on a new one, as always.
       if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
       if (beingPaused(row)) return { started: false, reason: 'it was being paused' };
+      if (notUp.has(sessionId)) {
+        queueOrHandBack(sessionId, oneLine(prompt), 'A scheduled run', prompt);
+        return { started: true, queued: true };
+      }
       const reason = unsent.has(sessionId) ? UNSENT_REASON : whyNotReadyNow(sessionId, row);
       if (reason !== undefined) return { started: false, reason };
       typeLine(sessionId, prompt, 'A scheduled run', () => stillReady(sessionId, false)).then(
@@ -599,6 +680,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const row = getRow(to);
       if (row === undefined) return { started: false, reason: 'the agent has been deleted' };
       if (oneLine(text) === '') return { started: false, reason: 'there was nothing to send' };
+      // An agent not up yet is busy, at once (`whyNotReadyNow`): its edge keeps the hand-off and tries again, never
+      // holding `from` handing off for as long as the agent takes to come up.
       const reason = row.ended_at !== null ? undefined : unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
       const fromName = getRow(from)?.name ?? 'another agent';

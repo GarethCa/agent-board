@@ -112,6 +112,12 @@ export interface TileActions {
   clearUnsent(sessionId: string): Promise<void>;
   /** Types the first prompt its session never said it was up for; settles once done (or failing that, said why). */
   typeFirstPrompt(sessionId: string): Promise<void>;
+  /** Answers Claude's trust screen with `Yes, I trust this folder`; settles once done (or failing that, said why). */
+  trustFolder(sessionId: string): Promise<void>;
+  /** Sends again what was sent before the agent was up and never typed; settles once done (or failing that, said why). */
+  resendUndelivered(sessionId: string): Promise<void>;
+  /** Forgets what was never delivered to the agent; settles once done (or failing that, said why). */
+  clearUndelivered(sessionId: string): Promise<void>;
   /** Restarts an ended agent, asking first if the shell its pane dropped into is running something. */
   restartAgent(sessionId: string): void;
   /** Starts a shell tile's panes stopped by a restart again; settles once it has (or failing that, said why). */
@@ -179,6 +185,9 @@ export const TileActionsContext = createContext<TileActions>({
   sendUnsent: async () => {},
   clearUnsent: async () => {},
   typeFirstPrompt: async () => {},
+  trustFolder: async () => {},
+  resendUndelivered: async () => {},
+  clearUndelivered: async () => {},
   restartAgent: () => {},
   resumeShell: async () => {},
   startReview: () => {},

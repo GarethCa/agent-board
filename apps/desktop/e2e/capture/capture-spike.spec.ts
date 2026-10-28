@@ -1,13 +1,15 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { NewZoneParams } from '@agent-board/daemon/protocol';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEMO_ENCODERS, type DemoCapture, type DemoCaptureOptions, type DemoEncoder } from '../../src/main/demo-capture.ts';
+import type { DemoCapture, DemoCaptureOptions, DemoEncoder } from '../../src/main/demo-capture.ts';
 import { launch, tile } from '../agent-helpers.ts';
+import { makeRepo } from '../demo-board.ts';
 import { removeDataDir, tempDataDir, test } from '../launch.ts';
-import { RENDER_ENV } from '../render.ts';
+import { PROMO_RENDER_ARGS, RENDER_ENV } from '../render.ts';
 import { scratch } from '../scratch.ts';
+import { checkFfmpeg, FFMPEG, OUT, settings } from './shots.ts';
 
 // Whether the board can be recorded for the promo: its offscreen paints at 60 fps and two device pixels per CSS pixel,
 // piped to ffmpeg, through one camera flight and one run cycle of the working agents' characters. Run on its own by
@@ -17,50 +19,6 @@ import { scratch } from '../scratch.ts';
 // PROMO_ENCODER the encoder (default prores) and PROMO_FFMPEG the ffmpeg binary. CPU is in % of one core, for both the
 // app (Chromium's figure for each of its processes, summed) and ffmpeg (ps).
 test.use({ viewport: null });
-
-/** Unlike the visual spec's: the GPU on and the platform's own text rendering, for the app at its best rather than byte-stable. */
-const PROMO_ARGS = ['--lang=en-US'];
-const OUT = process.env.PROMO_OUT ?? join(import.meta.dirname, '..', '..', 'test-results', 'promo');
-// The run's own AGENT_BOARD_* variables never reach the app (global-setup.ts), so the binary comes in under another name.
-const FFMPEG = process.env.PROMO_FFMPEG;
-
-/** The window's CSS size and the encoder, from PROMO_SIZE and PROMO_ENCODER, or a failure that says what they take. */
-function settings(): { width: number; height: number; encoder: DemoEncoder } {
-  const size = process.env.PROMO_SIZE ?? '1280x720';
-  const encoder = process.env.PROMO_ENCODER ?? 'prores';
-  const match = /^([1-9]\d{2,3})x([1-9]\d{2,3})$/.exec(size);
-  if (match === null) throw new Error(`PROMO_SIZE is ${size}: give the window's CSS size as WIDTHxHEIGHT, such as 1280x720`);
-  if (!Object.hasOwn(DEMO_ENCODERS, encoder)) throw new Error(`PROMO_ENCODER is ${encoder}: give one of ${Object.keys(DEMO_ENCODERS).join(', ')}`);
-  return { width: Number(match[1]), height: Number(match[2]), encoder: encoder as DemoEncoder };
-}
-
-/** Fails at once, saying what to do, unless the ffmpeg the app will run starts and has the encoder: a recording needs both. */
-function checkFfmpeg(encoder: DemoEncoder): void {
-  const binary = FFMPEG ?? 'ffmpeg';
-  const codec = DEMO_ENCODERS[encoder][1];
-  const run = spawnSync(binary, ['-hide_banner', '-encoders'], { encoding: 'utf8', timeout: 15_000 });
-  const why =
-    run.error?.message ??
-    (run.status === 0 ? undefined : `it exited with ${run.status ?? run.signal}: ${run.stderr.trim().split('\n').slice(0, 3).join(' ')}`) ??
-    (new RegExp(`\\s${codec}\\s`).test(run.stdout) ? undefined : `it has no ${codec} encoder`);
-  if (why === undefined) return;
-  throw new Error(
-    `ffmpeg (${binary}) can't record: ${why}. Set PROMO_FFMPEG to an ffmpeg that runs and has ${codec}, or PROMO_ENCODER to one this ffmpeg has ` +
-      `(${Object.keys(DEMO_ENCODERS).join(', ')}). Where Homebrew's ffmpeg fails to load a library, \`brew reinstall ffmpeg\` fixes it.`,
-  );
-}
-
-/** A repo called `name` under `dir` with one commit. */
-function makeRepo(dir: string, name: string): string {
-  const repo = join(dir, name);
-  mkdirSync(repo, { recursive: true });
-  writeFileSync(join(repo, 'README.md'), `# ${name}\n`);
-  const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]);
-  git('init', '--quiet');
-  git('add', '.');
-  git('-c', 'user.name=Demo', '-c', 'user.email=demo@example.com', 'commit', '--quiet', '-m', 'initial');
-  return repo;
-}
 
 /** Two zones far enough apart for a flight between them, two agents in the first and one in the second. */
 async function seedBoard(page: Page, dir: string): Promise<void> {
@@ -189,7 +147,7 @@ test('the promo capture spike: a camera flight and a run cycle at 60 fps and 2x'
   // Every agent keeps three subagents at work for ten minutes, so their characters move all through the recording.
   const { dir, env } = scratch('subagents-working');
   const dataDir = tempDataDir();
-  const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, FAKE_HARNESS_SUBAGENT_WORK_MS: '600000', AGENT_BOARD_DEMO: '1', ...(FFMPEG === undefined ? {} : { AGENT_BOARD_FFMPEG: FFMPEG }) }, PROMO_ARGS);
+  const { app, window: page } = await launch(dataDir, { ...env, ...RENDER_ENV, FAKE_HARNESS_SUBAGENT_WORK_MS: '600000', AGENT_BOARD_DEMO: '1', ...(FFMPEG === undefined ? {} : { AGENT_BOARD_FFMPEG: FFMPEG }) }, PROMO_RENDER_ARGS);
   try {
     await app.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0]!.setContentSize(width, height), [WIDTH, HEIGHT] as const);
     await expect.poll(() => page.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([WIDTH, HEIGHT]);

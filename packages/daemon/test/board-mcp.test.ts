@@ -174,8 +174,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'map', command: 'zone', positional: ['zone'], options: ['boxes', 'sections'] },
     // The CLI writes the picture to a file (--out) as the tool hands it to the model.
     { tool: 'zone_screenshot', command: 'zone', positional: ['zone'], options: ['style'] },
-    { tool: 'add_note', command: 'note' },
-    { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color'] },
+    { tool: 'add_note', command: 'note', options: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'] },
+    { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color', 'size'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
     {
       tool: 'add_shape',

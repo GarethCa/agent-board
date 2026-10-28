@@ -87,6 +87,7 @@ const NO_CHECK_GLOBS = [
   'docker/**',
   // The board recordings run on request, in a Playwright project of their own that no gate step runs.
   'apps/desktop/e2e/capture/**',
+  'scripts/promo-capture.sh',
 ];
 
 export const SMOKE_SPECS = ['acceptance.spec.ts', 'app.spec.ts', 'tiles.spec.ts', 'session.spec.ts'];

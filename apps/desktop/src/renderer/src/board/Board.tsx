@@ -246,7 +246,9 @@ import { isQuestionNodeId, QUESTION_CARD_TYPE, questionTethers, type QuestionNod
 import { QuestionCardNode } from './QuestionCardNode';
 import { useQuestionCards } from './use-question-cards';
 import { useMeasuredBoxes } from './measured-boxes';
+import { AgentNoteMeasurer } from './items/AgentNoteMeasurer';
 import { CAPTURE_FRAME, captureViewport, edgesAmong, nodesInZone, useCaptureReady } from './capture-mode';
+import { useDemoCamera } from '../demo/use-demo-camera';
 
 // Module-level so React Flow never sees a new object and re-mounts every node.
 const nodeTypes: NodeTypes = {
@@ -948,6 +950,9 @@ function BoardView() {
       sendUnsent: (sessionId) => window.agentBoard.agents.sendUnsent(sessionId).then(agentHeard, report('send the message')),
       clearUnsent: (sessionId) => window.agentBoard.agents.clearUnsent(sessionId).then(agentHeard, report('clear the message')),
       typeFirstPrompt: (sessionId) => window.agentBoard.agents.typeFirstPrompt(sessionId).then(agentHeard, report('send its first prompt')),
+      trustFolder: (sessionId) => window.agentBoard.agents.trustFolder(sessionId).then(agentHeard, report('trust its folder')),
+      resendUndelivered: (sessionId) => window.agentBoard.agents.resendUndelivered(sessionId).then(agentHeard, report('resend what was not delivered')),
+      clearUndelivered: (sessionId) => window.agentBoard.agents.clearUndelivered(sessionId).then(agentHeard, report('clear what was not delivered')),
       restartAgent: (sessionId) => restartAgent(sessionId, false),
       resumeShell: (shell) =>
         Promise.all(shell.stoppedPanes.map((sessionId) => window.agentBoard.shells.resumePane(shell.id, sessionId))).then(
@@ -1038,6 +1043,8 @@ function BoardView() {
         .map((zone) => ({ id: zone.id, ...layoutOf(zone) })),
     [getNodes],
   );
+  // The camera a recording spec drives, in demo mode only, beside the board's own moves (flyTo, bringIntoView).
+  useDemoCamera(useCallback((zoneId: string) => zoneLayouts().find((zone) => zone.id === zoneId), [zoneLayouts]));
 
   const placeSession = usePlaceSession({
     zones: () => getNodes().filter(isZone).map((node) => node.data.zone),
@@ -2007,7 +2014,8 @@ function BoardView() {
       if (state?.type === 'item') {
         const { item } = state;
         const { id, zoneId, x, y, width, height, z, rotation } = item;
-        const data = item.kind === 'shape' ? completeShapeData(item.data) : item.data;
+        // An agent note's size mark is explicit, so undoing the step that set it clears it (a data update merges).
+        const data = item.kind === 'shape' ? completeShapeData(item.data) : item.kind === 'agent-note' ? { userSized: false, ...item.data } : item.data;
         if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, rotation, data });
         else putItem(item);
       }
@@ -3185,6 +3193,7 @@ function BoardView() {
       {/* A capture window draws the canvas alone (capture-mode.ts): no chrome, panel, dialog or session window over the zone. */}
       {CAPTURE_FRAME === undefined && (
         <>
+          <AgentNoteMeasurer nodes={nodes} look={agentNoteLook} />
           {cheatSheet.sheet}
           <BoardChrome
             onKeyboardHelp={cheatSheet.open}

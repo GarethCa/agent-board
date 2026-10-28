@@ -735,6 +735,9 @@ export const AGENT_IPC = {
   sendUnsent: 'agent:sendUnsent',
   clearUnsent: 'agent:clearUnsent',
   typeFirstPrompt: 'agent:typeFirstPrompt',
+  trustFolder: 'agent:trustFolder',
+  resendUndelivered: 'agent:resendUndelivered',
+  clearUndelivered: 'agent:clearUndelivered',
   stop: 'agent:stop',
   pause: 'agent:pause',
   resume: 'agent:resume',
@@ -816,6 +819,12 @@ export interface AgentsApi {
   clearUnsent(sessionId: string): Promise<Agent>;
   /** Types the first prompt its session never said it was up for (`Agent.untypedPrompt`); resolves with the agent. */
   typeFirstPrompt(sessionId: string): Promise<Agent>;
+  /** Answers Claude's trust screen with `Yes, I trust this folder` (`Agent.trustFolder`); resolves with the agent. */
+  trustFolder(sessionId: string): Promise<Agent>;
+  /** Sends again what was sent before the agent was up and never typed (`Agent.undelivered`); resolves with the agent. */
+  resendUndelivered(sessionId: string): Promise<Agent>;
+  /** Forgets what was never delivered to the agent (`Agent.undelivered`); resolves with the agent. */
+  clearUndelivered(sessionId: string): Promise<Agent>;
   /** Ends the agent's session, keeping its worktree and branch; resolves with it done. */
   stop(sessionId: string): Promise<Agent>;
   /** Pauses the idle agent (hibernated), ending its session to free what it held; resolves with it paused. */
@@ -1078,7 +1087,7 @@ export interface WindowTarget {
  * window instead of the board; `show`, `kind` and `title` open the board with that window shown.
  */
 /** A renderer window's query: what it shows, and the Appearance setting it opens in (`appearance`). */
-export const WINDOW_QUERY = { popOut: 'popOut', show: 'show', kind: 'kind', title: 'title', appearance: 'appearance' } as const;
+export const WINDOW_QUERY = { popOut: 'popOut', show: 'show', kind: 'kind', title: 'title', appearance: 'appearance', demo: 'demo' } as const;
 
 /** The window target a renderer's query names under `idKey`, if any. */
 export function windowTargetFrom(query: URLSearchParams, idKey: string): WindowTarget | undefined {

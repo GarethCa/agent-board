@@ -111,3 +111,29 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Esc closes the board menu with the focus back on its button, whose tooltip stays shut over its open menu", async () => {
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    const button = window.getByRole('button', { name: 'Board menu' });
+    const menu = window.getByRole('dialog', { name: 'Board menu' });
+    await button.dispatchEvent('click');
+    await expect(menu).toBeVisible();
+    // As the focus comes back to the button a moment after the menu last closed, by when it may be open again.
+    await button.evaluate((element: HTMLElement) => element.focus());
+    await expect(button).toBeFocused();
+    await expect(window.locator('.ui-tooltip')).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    // Shut, the button's tooltip shows on focus as ever.
+    await button.evaluate((element: HTMLElement) => element.blur());
+    await button.evaluate((element: HTMLElement) => element.focus());
+    await expect(window.locator('.ui-tooltip')).toHaveText(/Zones, agents and settings/);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

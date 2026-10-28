@@ -444,7 +444,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'send',
     description:
       "Send an agent its next message, once its turn has ended (wait first). Never to one that needs the user's " +
-      'permission, and never a harness command. As `agent-board send`.',
+      "permission, and never a harness command. To one still starting it is queued until it's up, after its first " +
+      'prompt. You may also reply to an agent that messaged you, even outside your scope. As `agent-board send`.',
     inputSchema: {
       type: 'object',
       properties: { agent: AGENT_REF, text: { type: 'string' } },
@@ -596,7 +597,8 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'arrange',
     description:
-      "Lay out your zone's tiles that you may move, on its grid: you and the shells first, then a lane per issue or branch " +
+      "Lay out your zone's tiles that you may move, on its grid: you, the shells and the clocks you or your crew made first " +
+      "(the user's clocks stay put), then a lane per issue or branch " +
       'ticket (its label; its implementer, reviewer and follow-up reviewer, each slot a column lining up down the lanes, a ' +
       'rail apart where an edge joins them; then a note you sign saying what each agent is doing), or a row per role or ' +
       'state. Arranging again moves the notes with their lanes, keeping any edited text, and fits the zone to what it ' +
@@ -674,10 +676,16 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   },
   {
     name: 'edit_note',
-    description: 'Change the text (or text item\'s colour) of a note you, or an agent you started, made. As `agent-board note edit`.',
+    description:
+      'Change the text (or text item\'s colour, or an agent note\'s size) of a note you, or an agent you started, made. As `agent-board note edit`.',
     inputSchema: {
       type: 'object',
-      properties: { note: { type: 'string', description: 'The note, by ref (item:31f0).' }, text: { type: 'string' }, color: { type: 'string' } },
+      properties: {
+        note: { type: 'string', description: 'The note, by ref (item:31f0).' },
+        text: { type: 'string' },
+        color: { type: 'string' },
+        size: { type: 'string', description: 'An agent note\'s size, <width>x<height> such as 360x240 (200x96 to 1200x1440). An arrange keeps it, and text that does not fit scrolls.' },
+      },
       required: ['note'],
       additionalProperties: false,
     },
@@ -1132,8 +1140,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   edit_note: async (session, args) => {
     const text = stringArg(args, 'text', true);
     const color = stringArg(args, 'color', true);
-    if (text === undefined && color === undefined) throw new BoardError('give the text or the color');
-    return (await editNote(session, stringArg(args, 'note'), { text, color })).text;
+    const size = stringArg(args, 'size', true);
+    if (text === undefined && color === undefined && size === undefined) throw new BoardError('give the text, the color or the size');
+    return (await editNote(session, stringArg(args, 'note'), { text, color, size })).text;
   },
   remove_note: async (session, args) => (await removeNote(session, stringArg(args, 'note'))).text,
   add_shape: async (session, args) => (await addShape(session, { ...shapeArgs(args), shape: stringArg(args, 'shape'), ...placeArgs(args) })).text,

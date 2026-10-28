@@ -89,6 +89,7 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
         eventTimeouts: { SessionEnd: { defaultSeconds: 1, maxSeconds: 3 }, Interrupt: { defaultSeconds: 1, maxSeconds: 3 } },
       },
       transcript: new CodexRollout(codexHome, sessionId, cwd, model, resumeId !== undefined),
+      sessionStartWithFirstPrompt: true,
       notificationEvents: false,
       interruptEvent: true,
       stopFailureEvent: false,

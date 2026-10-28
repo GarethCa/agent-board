@@ -866,7 +866,7 @@
   position: fixed;
   bottom: var(--space-6);
   left: 50%;
-  z-index: var(--layer-dock);
+  z-index: var(--layer-notice);
   translate: -50% 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-toast);

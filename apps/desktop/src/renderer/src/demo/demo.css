@@ -1,0 +1,79 @@
+/* Demo mode (demo/demo-mode.ts), for recording the promo. */
+
+/* The chrome that only matters while developing: the daemon's build and status, the restart banner, and a held
+   permission's seconds ticking down. */
+:root[data-demo] :is(.build-mismatch, .daemon-status, .restart-banner, .inbox-prompt-countdown) {
+  display: none;
+}
+
+/* A document on its way along a flow edge grows as it leaves and shrinks as it arrives, from the end of the rail it
+   sits off, so the hand-off reads at a video's size even with the board zoomed out. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-demo] .rail-token[data-sliding] .rail-token-body {
+    transform-origin: left center;
+    animation: demo-handoff-grow var(--motion-handoff) var(--ease-in-out);
+  }
+
+  :root[data-demo] .rail-token[data-sliding][data-side='left'] .rail-token-body {
+    transform-origin: right center;
+  }
+
+  :root[data-demo] .rail-token[data-sliding][data-side='top'] .rail-token-body {
+    transform-origin: center bottom;
+  }
+
+  :root[data-demo] .rail-token[data-sliding][data-side='bottom'] .rail-token-body {
+    transform-origin: center top;
+  }
+}
+
+@keyframes demo-handoff-grow {
+  25%,
+  75% {
+    scale: var(--demo-handoff-scale);
+  }
+}
+
+.demo-cursor-layer {
+  position: fixed;
+  z-index: var(--layer-demo-cursor);
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Its tip is at the pointer. */
+.demo-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: auto;
+  height: var(--size-demo-cursor);
+  fill: var(--demo-cursor-fill);
+  stroke: var(--demo-cursor-edge);
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+}
+
+.demo-cursor-ripple {
+  position: absolute;
+  top: calc(var(--size-demo-ripple) / -2);
+  left: calc(var(--size-demo-ripple) / -2);
+  width: var(--size-demo-ripple);
+  height: var(--size-demo-ripple);
+  border-radius: var(--radius-pill);
+  background: var(--demo-ripple);
+  animation: demo-ripple var(--motion-demo-ripple) var(--ease-out) forwards;
+}
+
+@keyframes demo-ripple {
+  from {
+    opacity: 1;
+    scale: 0.2;
+  }
+
+  to {
+    opacity: 0;
+    scale: 1;
+  }
+}

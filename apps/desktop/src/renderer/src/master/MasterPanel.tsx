@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Crosshair, SquareArrowOutUpRight, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { ChevronDown, ChevronRight, Crosshair, SquareArrowOutUpRight, X } from 'lucide-react';
 import { NEW_AGENT_SIZE } from '@agent-board/daemon/board-layout';
 import type { Agent, BoardItem, Zone } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, StatusPill, Tag, ToolButton } from '../ui';
 import { useAction } from '../use-action';
 import { agentPill, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
-import { needsYouEntries } from '../../../shared/needs-you';
+import { heldPrompts, needsYouEntries } from '../../../shared/needs-you';
+import { PermissionRow } from '../inbox/PermissionRow';
+import { useNow } from '../inbox/use-now';
 import { KIND_TAGS } from '../inbox/kind-tags';
 import { ChatView } from '../session/ChatView';
 import { Composer } from '../session/Composer';
@@ -15,6 +17,23 @@ import { canRestart, exitText, RestartAgent } from '../session/RestartAgent';
 import type { RunsChoice } from '../session/chat';
 import { clockTime } from '../board/items/agent-note';
 import { askLine, boardMaster, latestDigest, watchRows } from './master-view';
+import { PanelHandle } from './PanelHandle';
+import { usePanelRoom } from './use-panel-room';
+import {
+  clampForYouHeight,
+  clampPanelWidth,
+  DEFAULT_PANEL_WIDTH,
+  maxForYouHeight,
+  maxPanelWidth,
+  MIN_FOR_YOU_HEIGHT,
+  MIN_PANEL_WIDTH,
+  setForYouHeight,
+  setPanelWidth,
+  useFolded,
+  useForYouHeight,
+  usePanelWidth,
+  type PanelSection,
+} from './panel-layout';
 
 interface MasterPanelProps {
   agents: readonly Agent[];
@@ -42,6 +61,17 @@ const RUNS: RunsChoice = { mode: 'auto', at: 0 };
 export function MasterPanel({ agents, zones, items, focusRequest, onClose, onShowAgent, onShowZone, onOpenAgent, onOpenLink }: MasterPanelProps) {
   const master = boardMaster(agents);
   const panel = useRef<HTMLElement>(null);
+  // The board it sits on bounds its width; the width is the user's, kept across reloads.
+  const chosen = usePanelWidth();
+  const { board, taken } = usePanelRoom(panel);
+  const width = board === 0 ? chosen : clampPanelWidth(chosen, board, taken);
+  // The islands at the bottom right and the dock make room for it (`:root:has(.master-panel)`), whatever its width.
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty('--master-panel-width', `${width}px`);
+    return () => {
+      document.documentElement.style.removeProperty('--master-panel-width');
+    };
+  }, [width]);
   // Esc in the panel closes it, as it does a popover; the chat's own keys come first.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
@@ -53,7 +83,18 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label="Captain" onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label="Captain" style={{ width }} onKeyDown={onKeyDown}>
+      <PanelHandle
+        orientation="vertical"
+        label="Resize the Captain’s panel"
+        testId="master-panel-handle"
+        value={width}
+        min={MIN_PANEL_WIDTH}
+        max={board === 0 ? DEFAULT_PANEL_WIDTH : maxPanelWidth(board, taken)}
+        grow={-1}
+        onChange={(next) => setPanelWidth(clampPanelWidth(next, board, taken))}
+        onReset={() => setPanelWidth(undefined)}
+      />
       <header className="master-panel-head">
         <span className="master-glyph" aria-hidden>
           C
@@ -71,7 +112,7 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
       ) : (
         <>
           <Watching agents={agents} zones={zones} onShowAgent={onShowAgent} onShowZone={onShowZone} />
-          <ForYou agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />
+          <ForYou panel={panel} agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />
           {/* Dark in every theme, as a session window's chat is. */}
           <section className="master-panel-chat" data-surface="window" aria-label="Chat with the Captain">
             {canRestart(master) && (
@@ -120,15 +161,13 @@ function Watching({ agents, zones, onShowAgent, onShowZone }: Pick<MasterPanelPr
   const shows = useNeedsYouShows();
   const rows = watchRows(zones, agents);
   const watched = rows.filter((row) => row.lead !== undefined).length;
+  const [folded] = useFolded('watching');
   return (
     <section className="master-panel-section" aria-label="Watching">
-      <h3>
-        Watching
-        <small>
-          {watched} orchestrator{watched === 1 ? '' : 's'} · {zones.length} zone{zones.length === 1 ? '' : 's'}
-        </small>
-      </h3>
-      {rows.length === 0 ? (
+      <FoldHeading section="watching" title="Watching">
+        {watched} orchestrator{watched === 1 ? '' : 's'} · {zones.length} zone{zones.length === 1 ? '' : 's'}
+      </FoldHeading>
+      {folded ? null : rows.length === 0 ? (
         <p className="master-panel-muted">No zones yet.</p>
       ) : (
         <ul className="master-watch">
@@ -142,7 +181,7 @@ function Watching({ agents, zones, onShowAgent, onShowZone }: Pick<MasterPanelPr
                 onClick={() => (lead === undefined ? onShowZone(zone.id) : onShowAgent(lead.sessionId))}
               >
                 <span className="master-watch-dot" aria-hidden />
-                <b>{zone.name}</b>
+                <b title={zone.name}>{zone.name}</b>
                 {lead === undefined ? (
                   <span className="master-watch-state master-panel-muted">no orchestrator</span>
                 ) : (
@@ -161,17 +200,48 @@ function Watching({ agents, zones, onShowAgent, onShowZone }: Pick<MasterPanelPr
 }
 
 /** What needs you, the Needs-you list's rows, then the master's latest digest note. */
-function ForYou({ agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<MasterPanelProps, 'agents' | 'zones' | 'items' | 'onOpenAgent' | 'onOpenLink'> & { master: Agent }) {
+function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<MasterPanelProps, 'agents' | 'zones' | 'items' | 'onOpenAgent' | 'onOpenLink'> & { panel: RefObject<HTMLElement | null>; master: Agent }) {
   const entries = needsYouEntries(agents, useNeedsYouShows());
+  const now = useNow(entries.some((entry) => heldPrompts(entry.agent).length > 0));
   const digest = latestDigest(items, master.sessionId);
-  const [digestOpen, setDigestOpen] = useState(true);
+  const [digestFolded, toggleDigest] = useFolded('digest');
+  const [folded] = useFolded('for-you');
+  const chosen = useForYouHeight();
+  const section = useRef<HTMLElement>(null);
+  // How tall it may be dragged (what the header, the other sections and a chat's least leave it), and how tall it is now.
+  const measure = () => {
+    const aside = panel.current;
+    const own = section.current;
+    if (!aside || !own) return { max: MIN_FOR_YOU_HEIGHT, now: MIN_FOR_YOU_HEIGHT };
+    const others = [...aside.querySelectorAll<HTMLElement>(':scope > .master-panel-head, :scope > .master-panel-section')].reduce((sum, child) => (child === own ? sum : sum + child.offsetHeight), 0);
+    return { max: maxForYouHeight(aside.clientHeight, others), now: own.offsetHeight };
+  };
+  const [room, setRoom] = useState({ max: MIN_FOR_YOU_HEIGHT, now: MIN_FOR_YOU_HEIGHT });
+  useLayoutEffect(() => {
+    const aside = panel.current;
+    const own = section.current;
+    if (!aside || !own) return;
+    setRoom(measure());
+    const observer = new ResizeObserver(() => setRoom(measure()));
+    observer.observe(aside);
+    observer.observe(own);
+    return () => observer.disconnect();
+  }, [panel, folded, chosen]);
+  // Longer than the panel has room for, the CSS gives it back down to the least.
+  const height = chosen === undefined || folded ? undefined : Math.max(MIN_FOR_YOU_HEIGHT, chosen);
   return (
-    <section className="master-panel-section master-panel-for-you" aria-label="For you">
-      <h3>
-        For you
-        <small>{entries.length === 0 ? 'nothing' : `${entries.length} in Needs you`}</small>
-      </h3>
-      {entries.length > 0 && (
+    <>
+    <section
+      ref={section}
+      className="master-panel-section master-panel-for-you"
+      aria-label="For you"
+      data-sized={height === undefined ? undefined : ''}
+      style={height === undefined ? undefined : ({ '--for-you-height': `${height}px` } as CSSProperties)}
+    >
+      <FoldHeading section="for-you" title="For you">
+        {entries.length === 0 ? 'nothing' : `${entries.length} in Needs you`}
+      </FoldHeading>
+      {!folded && entries.length > 0 && (
         <ul className="master-for-you">
           {entries.map(({ agent, kind }) => {
             const tag = KIND_TAGS[kind];
@@ -183,10 +253,14 @@ function ForYou({ agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<
                     {tag.icon}
                     {tag.label}
                   </Tag>
-                  <b>{agent.name}</b>
-                  {zone && <small>{zone.name}</small>}
+                  <b title={agent.name}>{agent.name}</b>
+                  {zone && <small title={zone.name}>{zone.name}</small>}
                 </div>
-                <p>{askLine(agent, kind)}</p>
+                {kind === 'permission' && agent.permissions.length > 0 ? (
+                  agent.permissions.map((prompt) => <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} />)
+                ) : (
+                  <p>{askLine(agent, kind)}</p>
+                )}
                 <Button size="sm" variant="ghost" icon={<SquareArrowOutUpRight />} aria-label={`Open ${agent.name}`} onClick={() => onOpenAgent(agent)}>
                   Open
                 </Button>
@@ -195,16 +269,44 @@ function ForYou({ agents, zones, items, master, onOpenAgent, onOpenLink }: Pick<
           })}
         </ul>
       )}
-      {digest === undefined ? (
+      {folded ? null : digest === undefined ? (
         <p className="master-panel-muted">No digest yet: the Captain writes one in a note beside its tile.</p>
       ) : (
         <div className="master-digest" data-testid="master-digest">
-          <button type="button" className="master-digest-head" aria-expanded={digestOpen} onClick={() => setDigestOpen(!digestOpen)}>
+          <button type="button" className="master-digest-head" aria-expanded={!digestFolded} onClick={toggleDigest}>
             Digest <small>{clockTime(digest.writtenAt)}</small>
           </button>
-          {digestOpen && <Markdown text={digest.text} onOpenLink={onOpenLink} />}
+          {!digestFolded && <Markdown text={digest.text} onOpenLink={onOpenLink} />}
         </div>
       )}
     </section>
+    {!folded && (
+      <PanelHandle
+        orientation="horizontal"
+        label="Resize the For you list"
+        testId="master-for-you-handle"
+        value={room.now}
+        min={MIN_FOR_YOU_HEIGHT}
+        max={room.max}
+        grow={1}
+        onChange={(next) => setForYouHeight(clampForYouHeight(next, measure().max))}
+        onReset={() => setForYouHeight(undefined)}
+      />
+    )}
+    </>
+  );
+}
+
+/** A section's heading, which folds the section to it and back (the fold outlasts a reload). */
+function FoldHeading({ section, title, children }: { section: PanelSection; title: string; children: ReactNode }) {
+  const [folded, toggle] = useFolded(section);
+  return (
+    <h3>
+      <button type="button" className="master-fold" aria-expanded={!folded} aria-label={`${folded ? 'Unfold' : 'Fold'} ${title}`} data-testid={`master-fold-${section}`} onClick={toggle}>
+        {folded ? <ChevronRight aria-hidden /> : <ChevronDown aria-hidden />}
+        {title}
+      </button>
+      <small>{children}</small>
+    </h3>
   );
 }

@@ -141,6 +141,30 @@ test("a Claude agent whose session never says it is up offers its task on its ti
   }
 });
 
+test("a Claude agent on Claude's trust screen offers Trust folder on its tile, and its task is typed once that answers it", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  env.FAKE_HARNESS_TRUST_SCREEN = '1';
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    const trust = tile(window).getByTestId('tile-trust');
+    await expect(trust).toHaveText(/^Claude asks to trust this folder: \//, { timeout: TURN_MS });
+    await expect(tile(window).getByTestId('tile-untyped')).toBeHidden();
+
+    await trust.getByRole('button', { name: 'Trust folder' }).click();
+    await expect(trust).toBeHidden();
+    await tile(window).dblclick();
+    await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a rate-limited Claude agent's tile offers Continue on credits, which closes Claude's menu picking no row and resumes its turn", async () => {
   const { dir, repo, env } = scratch('rate-limit');
   const dataDir = tempDataDir();

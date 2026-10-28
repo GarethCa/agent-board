@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { packagedApp } from './packaged-app.ts';
 import { test, BACKGROUND_ENV, connectedDaemonPid, removeDataDir, tempDataDir } from './launch.ts';
 
-test('the packaged app launches, starts its own daemon, and runs a shell session in a PTY', async () => {
+test('the packaged app launches, starts its own daemon, runs a shell session in a PTY, and ignores demo mode', async () => {
   const appPath = packagedApp(fileURLToPath(new URL('..', import.meta.url)));
   const dataDir = tempDataDir();
   const app = await electron.launch({
@@ -17,6 +17,8 @@ test('the packaged app launches, starts its own daemon, and runs a shell session
       ...BACKGROUND_ENV,
       AGENT_BOARD_DATA_DIR: dataDir,
       AGENT_BOARD_HOOK_SHIM: join(dataDir, 'bin', 'agent-board-hook'),
+      // Demo mode is for recording the promo from a dev build: a packaged app ignores it.
+      AGENT_BOARD_DEMO: '1',
     },
   });
   try {
@@ -24,6 +26,9 @@ test('the packaged app launches, starts its own daemon, and runs a shell session
     await expect(window).toHaveTitle(/^agent-board · [0-9a-f]{7,}(-dirty)? · \d{4}-\d{2}-\d{2}$/);
     const pid = await connectedDaemonPid(window);
     await expect(window.getByTestId('build-mismatch')).toHaveCount(0);
+    expect(await window.evaluate(() => 'demo' in document.documentElement.dataset)).toBe(false);
+    expect(await window.evaluate(() => self.__demo)).toBeUndefined();
+    expect(await app.evaluate(() => 'agentBoardDemo' in globalThis)).toBe(false);
 
     // The daemon is the packaged executable run as Node, and node-pty loads in it.
     expect(execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8' }).trim()).toBe(

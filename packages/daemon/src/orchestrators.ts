@@ -10,6 +10,8 @@ import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
 import { checkedBranchName, noBranchWhy } from './worktrees.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
+import { refOf } from './crew-flags.ts';
+import { createReplyPaths } from './reply-paths.ts';
 import { invalidParams, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
@@ -181,6 +183,8 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
   /** Deletes the agent with its worktree and branch, as `agent.delete` without `force` does. */
   deleteAgent(sessionId: string, why: string): Promise<void>;
+  /** How long an agent may answer a message from another: an hour by default. */
+  replyWindowMs?: number;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
 }
@@ -222,6 +226,8 @@ export interface OrchestratorHost {
   mayOrchestrate(sessionId: string): boolean;
   /** Whether the session acts for the user (`BoardCaller.side`). */
   actsForUser(sessionId: string): boolean;
+  /** Whether the agent `sessionId` may send to `to` as a reply: `to` messaged it, within the window (`reply-paths.ts`). */
+  repliesTo(sessionId: string, to: unknown): boolean;
   /**
    * Throws `outOfScope` unless the agent `from` may name `to` in a hand-off with no edge: an agent in its scope
    * (its zone, unless the user let it orchestrate wider) or one it started, not itself, and not an orchestrator whose
@@ -296,6 +302,15 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   });
   /** Each wait's check, run on every agent update. */
   const waiters = new Set<{ check(): void; finish(timedOut: boolean): void }>();
+  /**
+   * Per agent, the agents that sent it a message by their own scope: it may send back to each for a while, and do
+   * nothing else to it its scope doesn't allow. Kept in memory: a daemon restart forgets them.
+   */
+  const replies = createReplyPaths({
+    ...(options.replyWindowMs === undefined ? {} : { windowMs: options.replyWindowMs }),
+    scopeOf: (sessionId) => agents.get(sessionId)?.orchestrate,
+  });
+  const repliesTo = (sessionId: string, to: unknown): boolean => replies.has(sessionId, to);
 
   const mayOrchestrate = (sessionId: string): boolean => sessionCaller(options, sessionId)?.orchestrate != null;
   const actsForUser = (sessionId: string): boolean => sessionCaller(options, sessionId)?.side === 'user';
@@ -416,6 +431,33 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     return { sessionId: agent.sessionId, name: agent.name, zoneId: agent.zoneId, repoRoot: agent.repoRoot, orchestrate: caller.orchestrate, agent };
   };
 
+  /**
+   * The agent answering, on a `send` to an agent that messaged it (`repliesTo`) and that its own scope, if it has one,
+   * doesn't reach; else undefined, and the send is an orchestrator's as any other. It has no scope to act at: only the
+   * send itself, checked as every send is but for the scope.
+   */
+  const replier = (params: Record<string, unknown>, connection: BoardConnection): Actor | undefined => {
+    const token = optionalStringParam(params, 'token');
+    if (token === undefined) return undefined;
+    const caller = boardCaller(options, token, connection);
+    if (caller.side !== 'agent' || !repliesTo(caller.tileId, params.sessionId)) return undefined;
+    const agent = agents.get(caller.tileId)!;
+    const to = agents.get(params.sessionId as string);
+    if (to !== undefined && maySteer(agent, to)) return undefined;
+    return { sessionId: agent.sessionId, name: agent.name };
+  };
+
+  /** Whether `agent` may send to `to` without a reply path: it orchestrates, and may steer `to`. */
+  const maySteer = (agent: Agent, to: Agent): boolean => {
+    if (agent.orchestrate === null) return false;
+    try {
+      checkSteerable({ sessionId: agent.sessionId, name: agent.name, zoneId: agent.zoneId, repoRoot: agent.repoRoot, orchestrate: agent.orchestrate, agent }, to);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   /** Whether `me` started `agent` (the user's side starts the user's own agents, so none). */
   const startedBy = (me: Orchestrator, agent: Agent): boolean => me.agent !== null && agent.spawnedBy === me.agent.sessionId;
 
@@ -475,7 +517,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
    * Runs `act` as `me` doing `action`, and logs it done or refused, with what `entry` holds by then (a spawn's agent
    * is its result).
    */
-  const logged = async <T,>(me: Orchestrator, action: OrchestratorAction, entry: Entry, act: () => Promise<T> | T): Promise<T> => {
+  const logged = async <T,>(me: Actor, action: OrchestratorAction, entry: Entry, act: () => Promise<T> | T): Promise<T> => {
     let result: T;
     try {
       result = await act();
@@ -572,6 +614,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     logActivity: record,
     mayOrchestrate,
     actsForUser,
+    repliesTo,
 
     checkHandoffTarget(from, to) {
       const agent = agentNamed(from);
@@ -601,6 +644,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         notifyWaiters();
       } else if (event.type === 'agent.removed') {
         awaitingTurn.delete(event.sessionId);
+        replies.forget(event.sessionId);
         crewEvents.forget(event.sessionId);
         notifyWaiters();
       }
@@ -675,13 +719,15 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
 
         'orchestrator.send': async (params, connection) => {
           const p = paramsObject(params);
-          const me = orchestrator('orchestrator.send', p, connection);
+          // An answer to an agent that messaged it passes scope (and needs no orchestrating), as nothing else does.
+          const reply = replier(p, connection);
+          const me = reply === undefined ? orchestrator('orchestrator.send', p, connection) : undefined;
           const entry: Entry = { detail: askedText(p) };
-          return logged(me, 'send', entry, async () => {
+          return logged(me ?? reply!, 'send', entry, async () => {
             const text = stringParam(p, 'text');
             const to = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(to);
-            checkSteerable(me, to);
+            if (me !== undefined) checkSteerable(me, to);
             checkText(text);
             if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
             if (to.permissions.length > 0 || to.state === 'needs-permission') {
@@ -692,15 +738,26 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (!SENDABLE_STATES.has(to.state)) {
               throw invalidParams(`${to.name} is ${to.state}: wait for its turn to end, or interrupt it, before sending`);
             }
+            // A message an agent sent by its own scope lets the receiver answer it (an answer opens nothing back), and
+            // one that couldn't otherwise is told how. Not its own crew, which answers in its turn's last message.
+            const sender = me?.agent ?? null;
+            const opens = sender !== null && !inCrewOf(sender, to.spawnedBy);
+            const hint =
+              sender !== null && opens && !maySteer(to, sender)
+                ? `\n\n[agent-board] From ${sender.name} (${refOf(sender)}), who you may answer with \`agent-board send ${refOf(sender)} -- '…'\`.`
+                : '';
             awaitingTurn.add(to.sessionId);
+            let queued: boolean;
             try {
-              await agents.answer(to.sessionId, text);
+              ({ queued } = await agents.answer(to.sessionId, `${text}${hint}`));
             } catch (error) {
               awaitingTurn.delete(to.sessionId);
               throw error;
             }
-            // Its orchestrator answered it: its flag is seen to.
-            if (to.flag !== null && to.spawnedBy === me.agent?.sessionId) return agents.clearFlag(to.sessionId);
+            if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId, me!.orchestrate);
+            // Its orchestrator answered it: its flag is seen to. Not by a message queued until it is up, which answers
+            // nothing yet.
+            if (!queued && to.flag !== null && to.spawnedBy === sender?.sessionId) return agents.clearFlag(to.sessionId);
             return agents.get(to.sessionId)!;
           });
         },

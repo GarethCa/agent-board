@@ -3,11 +3,25 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { runHooks, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
+import { CODEX_START_SCREENS, codexComposer, codexLoadingComposer, codexStartScreen, isCodexStartScreen } from './codex-screens.ts';
 import * as demo from './demo.ts';
 import { drawRateLimitMenu, rateLimitMenuRows, RATE_LIMIT_CONTINUE, RATE_LIMIT_STOP_ROW } from './rate-limit-menu.ts';
+import { drawPromptBox, drawTrustScreen } from './trust-screen.ts';
+
+/**
+ * Stops the terminal echoing what is typed while the session runs, as the real TUIs (which read their keys raw) don't
+ * echo it: a demo's screen shows each prompt once, as its own `>` line, and not the board's typing of it, paste
+ * markers and all. Lines are still read whole. Echo comes back as the process exits, for the shell its pane drops into.
+ */
+function quietTerminal(): void {
+  if (!process.stdin.isTTY) return;
+  const stty = (setting: string) => spawnSync('stty', [setting], { stdio: [process.stdin, 'ignore', 'ignore'] });
+  stty('-echo');
+  process.once('exit', () => stty('echo'));
+}
 
 /** One message of a conversation, as a resumed session shows it again. */
 export interface ConversationMessage {
@@ -48,6 +62,8 @@ export interface Dialect {
   interactive: boolean;
   /** Fires `Notification` (idle_prompt, permission_prompt). Claude only. */
   notificationEvents: boolean;
+  /** Fires `SessionStart` with its first prompt, not as it starts, as Codex's TUI does. Codex only. */
+  sessionStartWithFirstPrompt: boolean;
   /** Fires `Interrupt` when the user interrupts a turn. Codex only. */
   interruptEvent: boolean;
   /** Fires `StopFailure` when the API call fails. Claude only. */
@@ -100,6 +116,9 @@ const MATCH_FIELD: Record<string, string> = {
 
 const SESSION_SCOPED = new Set(['SessionStart', 'SessionEnd']);
 
+/** How long a session answered on its trust screen with `slow-prompt` shows a line of its own before its prompt. */
+const SLOW_PROMPT_MS = 1_000;
+
 /** The subagent a hook fires inside: its fields go on every hook it fires. */
 export interface SubagentScope {
   agent_id: string;
@@ -138,6 +157,8 @@ export class FakeSession {
   /** Rejects whatever the turn is waiting on, once it is interrupted. */
   private wake: (() => void) | undefined;
   private lastExitPress = 0;
+  /** Whether its `SessionStart` waits for its first prompt (`sessionStartWithFirstPrompt`) and has yet to fire. */
+  private sessionStartDue = false;
   /**
    * How many more Enters after text are lost, as a slow TUI loses one that lands before it has taken in the text:
    * `FAKE_HARNESS_LOSE_ENTERS`, 0 by default.
@@ -188,24 +209,76 @@ export class FakeSession {
   /**
    * Starts the session. A resumed one shows its conversation so far first, as the real TUIs do. With
    * `FAKE_HARNESS_NO_SESSION_START=1` it fires no `SessionStart`; with `FAKE_HARNESS_START_SOURCE`, its `SessionStart`
-   * names that source instead of its own (`compact`, as Claude's after a compaction).
+   * names that source instead of its own (`compact`, as Claude's after a compaction). With `FAKE_HARNESS_TRUST_SCREEN=1`
+   * a Claude session shows its folder-trust screen first, firing nothing until it is answered (`trustScreen`); with
+   * `late-start`, its `SessionStart` then waits for the first keys typed at its prompt; with `slow-prompt`, its prompt
+   * is drawn `SLOW_PROMPT_MS` after a line of its own. A Codex TUI draws its composer as it loads, then the startup
+   * screen `FAKE_HARNESS_START_SCREEN` names (until Enter answers it), then its composer with its status line, and fires
+   * its `SessionStart` with its first prompt.
    */
   async start(): Promise<void> {
     const { harness, cwd, model, version, shellEnv } = this.dialect;
-    if (this.dialect.demo) this.printLines(demo.welcome(harness, { cwd, model, version, home: shellEnv.HOME }));
+    if (this.dialect.demo) {
+      quietTerminal();
+      this.printLines(demo.welcome(harness, { cwd, model, version, home: shellEnv.HOME }));
+    }
     if (this.resumed) {
       for (const { role, text } of this.dialect.transcript.history()) this.print(role === 'user' ? `> ${text}\n` : `${text}\n`);
     }
+    const trust = process.env.FAKE_HARNESS_TRUST_SCREEN ?? '';
+    let redrawing: NodeJS.Timeout | undefined;
+    if ((trust === '1' || trust === 'late-start' || trust === 'slow-prompt') && harness === 'claude' && !this.resumed) {
+      await this.trustScreen();
+      // Its prompt drawn well before its `SessionStart`, which lands as the first keys typed at it are, read raw (the
+      // line reader still gets them) and the screen redrawn until it has, so it lands before the Enter after them.
+      if (trust === 'late-start' && process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+        const keys = await new Promise<Buffer | string>((resolve) => process.stdin.once('data', resolve));
+        this.print(keys.toString());
+        redrawing = setInterval(() => this.print('\x1b[0m'), 20);
+      }
+    }
+    if (harness === 'codex' && this.dialect.interactive) await this.codexStartup();
+    if (this.dialect.sessionStartWithFirstPrompt) this.sessionStartDue = true;
+    else {
+      try {
+        await this.fireSessionStart();
+      } finally {
+        if (redrawing !== undefined) {
+          clearInterval(redrawing);
+          process.stdin.setRawMode(false);
+        }
+      }
+    }
+  }
+
+  /** The Codex TUI's start: its composer as it loads, a startup screen to answer if any, then its composer up. */
+  private async codexStartup(): Promise<void> {
+    const screen = process.env.FAKE_HARNESS_START_SCREEN ?? '';
+    if (screen !== '') {
+      if (!isCodexStartScreen(screen)) this.crash(`unknown FAKE_HARNESS_START_SCREEN "${screen}" (expected one of ${CODEX_START_SCREENS.join(', ')})`);
+      this.printLines(codexLoadingComposer());
+      this.printLines(codexStartScreen(screen, this.dialect.cwd));
+      if ((await this.readTypedLine()) === undefined) return;
+    }
+    this.printLines(codexComposer(this.dialect.model, this.dialect.cwd));
+  }
+
+  private async fireSessionStart(): Promise<void> {
+    this.sessionStartDue = false;
     if (process.env.FAKE_HARNESS_NO_SESSION_START === '1') return;
     await this.fire('SessionStart', { source: process.env.FAKE_HARNESS_START_SOURCE || this.dialect.startSource, model: this.dialect.model });
   }
 
   async submit(prompt: string): Promise<void> {
+    if (this.sessionStartDue) await this.fireSessionStart();
     this.inTurn = true;
     this.interrupted = false;
     this.turnId = randomUUID();
     if (this.dialect.demo) this.printLines(demo.userPrompt(this.dialect.harness, prompt));
     else this.print(`> ${prompt}\n`);
+    // The Codex TUI keeps its composer and status line drawn through a turn, under what the turn prints.
+    if (this.dialect.harness === 'codex' && this.dialect.interactive && !this.dialect.demo) this.printLines(codexComposer(this.dialect.model, this.dialect.cwd));
     this.dialect.transcript.userPrompt(prompt, this.turnId);
     const lost = this.promptTyped && this.promptHooksToLose > 0;
     this.promptTyped = false;
@@ -243,9 +316,10 @@ export class FakeSession {
   async say(text: string, atOnce = false): Promise<void> {
     const shown = this.dialect.demo ? demo.assistantText(this.dialect.harness, text).join('\n') : text;
     if (!atOnce && this.dialect.typeMs > 0) {
-      // A colour code goes out whole, with the character after it: only what shows is typed.
+      // A colour code goes out whole, with the character after it: only what shows is typed. A character, not a UTF-16
+      // unit (the `u`), so an emoji is never sent as two halves.
       // eslint-disable-next-line no-control-regex -- the demo's colour codes
-      for (const [character] of shown.matchAll(/(?:\x1b\[[0-9;]*m)*[^]/g)) {
+      for (const [character] of shown.matchAll(/(?:\x1b\[[0-9;]*m)*[^]/gu)) {
         this.print(character);
         await this.sleep(this.dialect.typeMs);
       }
@@ -551,6 +625,36 @@ export class FakeSession {
     for (const [arrow] of keys.matchAll(/\x1b\[[AB]/g)) picked = Math.min(rows.length - 1, Math.max(0, picked + (arrow.endsWith('B') ? 1 : -1)));
     if (rows[picked] !== RATE_LIMIT_STOP_ROW) this.print(`Picked ${rows[picked]}: opened its page in your browser\n`);
     this.print('> \n');
+  }
+
+  /**
+   * Claude's folder-trust screen for its folder (`trust-screen.ts`): Up and Down move its pointer, which starts on
+   * `No, exit`, and Enter picks the row it is on. `No, exit` exits, as Claude does; the other row draws Claude's empty
+   * prompt, and the session goes on.
+   */
+  private async trustScreen(): Promise<void> {
+    let on: 'no' | 'yes' = 'no';
+    this.printLines(drawTrustScreen(this.dialect.cwd, on));
+    let held = '';
+    for (;;) {
+      const keys = await this.readKeys();
+      held += keys.replace(/[\r\n]/g, '');
+      // eslint-disable-next-line no-control-regex -- the arrow keys' escape sequences
+      for (const [arrow] of keys.matchAll(/\x1b\[[AB]/g)) on = arrow.endsWith('B') ? 'yes' : 'no';
+      if (/[\r\n]/.test(keys)) break;
+      this.print('\x1b[2J\x1b[H');
+      this.printLines(drawTrustScreen(this.dialect.cwd, on));
+    }
+    // Every key it read reaches the line reader too: the line they end is the screen's.
+    this.heldKeys = held;
+    this.print('\x1b[2J\x1b[H');
+    if (on === 'no') process.exit(1);
+    // Claude still drawing: a line of its own a while before its prompt.
+    if (process.env.FAKE_HARNESS_TRUST_SCREEN === 'slow-prompt') {
+      this.print('Starting Claude Code…\n');
+      await this.sleep(SLOW_PROMPT_MS);
+    }
+    this.printLines(drawPromptBox());
   }
 
   /**

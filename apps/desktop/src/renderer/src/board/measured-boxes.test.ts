@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@xyflow/react';
 import { measuredText } from '@agent-board/daemon/protocol';
-import { expandedBoxes, measuredBoxes, noteFitContext, sameReport } from './measured-boxes';
+import { expandedBoxes, forgetNoteFits, measuredBoxes, noteFitContext, noteFitKnown, reportNoteFits, sameReport } from './measured-boxes';
 
 const node = (id: string, x: number, y: number, size: { width: number; height: number }, more: Partial<Node> = {}): Node => ({
   id,
@@ -68,5 +68,27 @@ describe('the boxes a window says it draws', () => {
     expect(sameReport(report, { boxes: [{ ...box, drawn: { ...box.drawn, y: 8 } }], expanded: [] })).toBe(false);
     expect(sameReport(report, { boxes: [box], expanded: [{ key: 'agent:a', x: 0, y: 0, width: 960, height: 600 }] })).toBe(false);
     expect(sameReport(report, { ...report, away: true })).toBe(false);
+  });
+});
+
+describe('the heights agent notes measured for their text', () => {
+  const context = noteFitContext('document', {});
+  const fit = { width: 272, height: 180, text: 'all done', context };
+
+  it('knows a note measured as it is now, and not once its text, width or what is drawn round it changes', () => {
+    reportNoteFits(new Map([['item:n', fit]]));
+    expect(noteFitKnown('item:n', fit)).toBe(true);
+    expect(noteFitKnown('item:n', { ...fit, width: 272.2 })).toBe(true);
+    expect(noteFitKnown('item:n', { ...fit, text: 'more to do' })).toBe(false);
+    expect(noteFitKnown('item:n', { ...fit, width: 300 })).toBe(false);
+    expect(noteFitKnown('item:n', { ...fit, context: noteFitContext('terminal', {}) })).toBe(false);
+    expect(noteFitKnown('item:other', fit)).toBe(false);
+  });
+
+  it('forgets them all, to measure them again', () => {
+    reportNoteFits(new Map([['item:n', fit], ['item:m', { ...fit, text: 'another' }]]));
+    forgetNoteFits();
+    expect(noteFitKnown('item:n', fit)).toBe(false);
+    expect(noteFitKnown('item:m', { ...fit, text: 'another' })).toBe(false);
   });
 });

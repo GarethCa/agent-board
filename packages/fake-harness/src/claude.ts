@@ -67,6 +67,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
         defaultTimeoutSeconds: 600,
       },
       transcript: new ClaudeTranscript(projectDir, sessionId, cwd, model),
+      sessionStartWithFirstPrompt: false,
       notificationEvents: true,
       interruptEvent: false,
       stopFailureEvent: true,

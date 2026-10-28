@@ -648,10 +648,18 @@
   box-shadow: var(--shadow-island);
 }
 
-/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. */
-:root:has(.edge-rules) .island-bottom-right,
-:root:has(.edge-rules) .react-flow__panel.board-minimap {
-  right: calc(var(--island-inset) * 2 + var(--size-edge-rules));
+/* The Edge rules panel and the Captain's panel cover the right of the board: the zoom island and the minimap move clear of them. */
+:root:has(.edge-rules) {
+  --edge-room: calc(var(--island-inset) + var(--size-edge-rules));
+}
+
+:root:has(.master-panel):not(:has([data-testid='session-window'])) {
+  --master-room: calc(var(--island-inset) + var(--master-panel-width, var(--size-master-panel)));
+}
+
+:root:has(.edge-rules, .master-panel) .island-bottom-right,
+:root:has(.edge-rules, .master-panel) .react-flow__panel.board-minimap {
+  right: calc(var(--island-inset) + var(--edge-room, 0px) + var(--master-room, 0px));
 }
 
 .react-flow__panel.board-minimap svg {
@@ -1072,12 +1080,16 @@
 .master-panel {
   position: absolute;
   top: calc(var(--island-inset) * 2 + var(--island-height));
-  right: var(--island-inset);
-  bottom: var(--island-inset);
-  z-index: var(--layer-chrome);
+  /* Left of the Edge rules panel when both are open, and ending at the dock's top edge while the dock shows. */
+  right: calc(var(--island-inset) + var(--edge-room, 0px));
+  bottom: calc(var(--island-inset) + var(--dock-lift, 0px));
+  z-index: var(--layer-panel);
   display: flex;
   flex-direction: column;
+  /* The width is the user's (dragged on its left edge, set inline); this is the first paint's. */
+  box-sizing: border-box;
   width: var(--size-master-panel);
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-window);
@@ -1087,8 +1099,58 @@
   font-size: var(--font-size-sm);
 }
 
+/* The grab area on the panel's left edge, or on the line under the For you list; a line shows on hover, focus and drag. */
+.master-panel-handle {
+  position: relative;
+  z-index: var(--layer-raised);
+  flex: none;
+  outline: none;
+  touch-action: none;
+}
+
+.master-panel-handle[data-orientation='vertical'] {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--size-divider);
+  cursor: col-resize;
+}
+
+.master-panel-handle[data-orientation='horizontal'] {
+  height: var(--size-divider);
+  margin: calc(-1 * var(--size-divider-overhang)) 0;
+  cursor: row-resize;
+}
+
+.master-panel-handle::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.master-panel-handle[data-orientation='vertical']::after {
+  inset: 0 auto 0 0;
+  width: 2px;
+}
+
+.master-panel-handle[data-orientation='horizontal']::after {
+  inset: calc(50% - 1px) 0;
+}
+
+.master-panel-handle:hover::after,
+.master-panel-handle:focus-visible::after,
+.master-panel-handle[data-dragging]::after {
+  background: var(--window-divider-hover);
+}
+
+/* A session window shown on the board has the board's room: the panel waits behind it (it is over the dock, which is over the window). */
+:root:has([data-testid='session-window']) .master-panel {
+  display: none;
+}
+
 .master-panel-head {
   flex: none;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1098,16 +1160,22 @@
 
 .master-panel-head h2 {
   margin: 0;
+  flex: none;
   font-size: var(--font-size-md);
 }
 
 .master-panel-scope {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
 }
 
 .master-panel-actions {
+  flex: none;
   display: flex;
   gap: var(--space-1);
   margin-left: auto;
@@ -1115,7 +1183,12 @@
 
 .master-panel-section {
   flex: none;
+  box-sizing: border-box;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  /* Whatever a section holds wraps; nothing in the panel scrolls sideways. */
+  overflow-wrap: anywhere;
   gap: var(--space-1-5);
   padding: var(--space-2-5) var(--space-3);
   border-bottom: 1px solid var(--separator);
@@ -1125,13 +1198,39 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  min-width: 0;
   margin: 0;
   font-size: var(--font-size-sm);
 }
 
 .master-panel-section h3 small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-weight: normal;
+}
+
+/* A section's heading, which folds it. */
+.master-fold {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--weight-bold);
+  cursor: pointer;
+}
+
+.master-fold svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
 }
 
 .master-panel-muted {
@@ -1146,6 +1245,8 @@
 .master-watch,
 .master-for-you {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1-5);
   margin: 0;
   padding: 0;
@@ -1157,6 +1258,7 @@
   align-items: center;
   gap: var(--space-2);
   width: 100%;
+  min-width: 0;
   padding: var(--space-1) var(--space-1-5);
   border: 0;
   border-radius: var(--radius-sm);
@@ -1171,6 +1273,14 @@
   background: var(--hover);
 }
 
+.master-watch-row b,
+.master-for-you-head b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .master-watch-dot {
   flex: none;
   width: 9px;
@@ -1180,6 +1290,7 @@
 }
 
 .master-watch-state {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -1191,11 +1302,22 @@
 .master-panel-for-you {
   flex: none;
   max-height: 40%;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
+/* Sized by dragging the handle under it, for as tall as the user left it. */
+.master-panel-for-you[data-sized] {
+  flex: 0 1 auto;
+  height: var(--for-you-height);
+  min-height: 64px;
+  max-height: none;
+}
+
 .master-for-you-item {
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
   padding: var(--space-1-5) var(--space-2);
   border: 1px solid var(--state-waiting);
@@ -1219,13 +1341,20 @@
 }
 
 .master-for-you-head small {
+  flex: none;
+  max-width: 40%;
   margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-family: var(--font-mono);
 }
 
 .master-digest {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   padding: var(--space-1-5) var(--space-2);
   border: 1px dashed color-mix(in srgb, var(--master) 55%, var(--border));
@@ -1250,12 +1379,31 @@
 
 .master-panel-chat {
   display: flex;
-  flex: 1 1 auto;
+  /* Takes what the sections above leave, never less than a few messages: the For you list, sized by the user, gives way first. */
+  flex: 1 1 0;
+  min-height: 160px;
   flex-direction: column;
-  min-height: 0;
   overflow: hidden;
   background: var(--window-bg);
   color: var(--window-ink);
+}
+
+/* A code block or table wraps in the panel instead of scrolling sideways as it does in a session window. */
+.master-panel .chat-md-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.master-panel .chat-md table {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  overflow-wrap: anywhere;
+}
+
+.master-panel .chat-md,
+.master-panel-chat {
+  overflow-wrap: anywhere;
 }
 
 /*

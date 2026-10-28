@@ -51,7 +51,7 @@ function host(agents = new Map<string, Agent>()) {
       get: (id) => agents.get(id),
       list: () => [...agents.values()],
       fallbackOwner: () => undefined,
-      answer: async () => {},
+      answer: async () => ({ queued: false }),
       spawn: () => Promise.reject(new Error('not here')),
       interrupt: () => {
         throw new Error('not here');

@@ -53,7 +53,7 @@ kbd {
   position: absolute;
   top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
   left: 50%;
-  z-index: var(--layer-dock);
+  z-index: var(--layer-notice);
   translate: -50% 0;
 }
 
@@ -1687,8 +1687,21 @@ kbd {
 
 .inbox-prompt {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: var(--space-1-5);
+}
+
+.inbox-item-input[data-open] {
+  max-height: 12em;
+  overflow: auto;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inbox-item-expand {
+  align-self: flex-start;
 }
 
 .inbox-prompt + .inbox-prompt {
@@ -3547,6 +3560,26 @@ kbd {
   overflow: auto;
 }
 
+/* The cue that a note sized shorter than its text scrolls on: stuck to the foot of what shows, taking no room of its own. */
+.agent-note-more {
+  position: sticky;
+  bottom: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.agent-note-more > span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--font-size-2xs);
+  box-shadow: 0 0 var(--space-2) var(--space-2) var(--panel);
+}
+
 .agent-note-body p,
 .agent-note-body ul,
 .agent-note-body ol {
@@ -3628,6 +3661,21 @@ kbd {
 
 .agent-note-dismiss {
   color: var(--muted);
+}
+
+/* Notes laid out out of sight, each to measure the height its text needs. */
+.agent-note-measurer {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  visibility: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+
+/* Each note laid out on its own: its size is set, so measuring it lays out nothing else on the page. */
+.agent-note-measurer > * {
+  contain: strict;
 }
 
 /* The tether from a note to its agent's tile. */
@@ -3979,6 +4027,12 @@ kbd {
 .agent-note[data-look='terminal'] .agent-note-card {
   background: var(--window-bg);
   color: var(--window-ink);
+}
+
+.agent-note[data-look='terminal'] .agent-note-more > span {
+  background: var(--window-bg);
+  color: var(--window-ink-soft);
+  box-shadow: 0 0 var(--space-2) var(--space-2) var(--window-bg);
 }
 
 .agent-note[data-look='terminal'] .agent-note-foot,

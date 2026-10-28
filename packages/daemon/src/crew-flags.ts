@@ -27,7 +27,7 @@ export interface CrewFlags {
 }
 
 /** The ref an agent's message names it by: the start of its id, as `BoardRefs` resolves it. */
-const refOf = (agent: Pick<Agent, 'sessionId'>): string => `agent:${agent.sessionId.slice(0, 8)}`;
+export const refOf = (agent: Pick<Agent, 'sessionId'>): string => `agent:${agent.sessionId.slice(0, 8)}`;
 
 /** What the orchestrator reads of its crew's flags. */
 function crewFlagMessage(flagged: readonly Agent[]): string {

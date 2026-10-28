@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.6 (2026-10-28)
+
+- An agent may reply to an agent that messaged it, even outside its scope
+- Agent notes keep a size the user gives them (drag or note edit --size) through arrange and restart
+- Claude's trust screen flags the user with Trust folder, the first prompt types itself once Claude is up, and messages queue until then
+- MIN_CHAT_HEIGHT stays module-private (knip on main)
+- The README screenshot generator's fake claude picks its scenario by worktree folder
+- Answer a permission prompt from the Captain's panel, and pin that a loose agent's prompts reach the inbox
+- The Captain's panel no longer scrolls sideways, resizes and folds, and ends above the dock
+- Keep Codex agents' first prompt off argv: typed once Codex's screen shows its composer up
+- Place beside an expanded tile where it is drawn, arrange the crew's clocks on the top row, and lint a zone with an empty band as mostly empty
+- The stacked-agents rail shot waits for the tiles, zone and rail line to hold still before it fits and shoots
+- Arrange measures off-screen notes in a hidden element, a refused arrange keeps a size the user set, and Esc closes the board menu
+- Promo shots for pitch A: a shared demo board, one recording spec per storyboard shot with a cue log, and a first rough cut
+- Demo mode in the app hides dev chrome, scripts the camera, draws a cursor and grows hand-offs
+- A new migration no longer hides behind Vitest's cache
+
 ## v0.6.5 (2026-10-26)
 
 - Bump node-pty so each terminal stops leaking a PTY on macOS (fixes posix_spawnp failed)

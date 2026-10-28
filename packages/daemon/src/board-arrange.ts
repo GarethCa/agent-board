@@ -22,12 +22,12 @@ import {
 import { MIN_ZONE_SIZE, type AgentRole, type AgentState, type ArrangeBy, type ArrangeLayout, type ArrangeSpacing } from './protocol.ts';
 import { cutText } from './text-cut.ts';
 
-/** A tile to arrange: what it is grouped and ordered by. */
+/** A tile to arrange (or a clock its crew made, which goes on the top row as a shell does): what it is grouped and ordered by. */
 export interface ArrangeTile {
   /** Unique among the tiles. */
   id: string;
   name: string;
-  kind: 'agent' | 'shell';
+  kind: 'agent' | 'shell' | 'clock';
   role: AgentRole | null;
   /** Its linked issue's ID, or null. */
   issue: string | null;
@@ -67,6 +67,8 @@ export interface ArrangeOptions {
   clusters?: boolean;
   /** How tall each cluster's note needs to be to show its text, by the cluster's key: its lane makes room for it. */
   noteHeights?: ReadonlyMap<string, number>;
+  /** The width of a lane's note, by lane key, where it is wider than a slot: a note the user widened. */
+  noteWidths?: ReadonlyMap<string, number>;
   /** The zone's spacing (`SPACING_GAPS`): normal without. */
   spacing?: ArrangeSpacing;
 }
@@ -270,7 +272,8 @@ function roleColumns(chain: readonly ArrangeTile[]): Map<string, number> {
 
 function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by: ArrangeBy): Row[] {
   const lead = tiles.filter((tile) => tile.lead).toSorted(byTile);
-  const shells = tiles.filter((tile) => !tile.lead && tile.kind === 'shell').toSorted(byTile);
+  // The shells, then the clocks, in the order they were made: never where they are, so the same crew arranges the same way.
+  const shells = [...tiles.filter((tile) => !tile.lead && tile.kind === 'shell').toSorted(byTile), ...tiles.filter((tile) => tile.kind === 'clock').toSorted(byTile)];
   const chains = chainsOf(
     tiles.filter((tile) => !tile.lead && tile.kind === 'agent'),
     links,
@@ -280,7 +283,7 @@ function rowsOf(tiles: readonly ArrangeTile[], links: readonly ArrangeLink[], by
     if (row.length > 0) rows.push({ tiles: row, columns, unit });
   };
   if (by === 'issue') {
-    // The lead and the shells share the top row, above the lanes.
+    // The lead, the shells and the clocks share the top row, above the lanes.
     add([...lead, ...shells]);
     const units = new Map<string, ArrangeTile[]>();
     for (const chain of chains) {
@@ -447,7 +450,7 @@ export function arrangeTiles(
   const { gaps } = grid;
   const clusters: ArrangedCluster[] = [];
   // A lane's note is as tall as its text needs, and never less than its slot (`least`).
-  const noteSizeOf = (key: string, least: Size): Size => ({ width: least.width, height: Math.max(least.height, options.noteHeights?.get(key) ?? 0) });
+  const noteSizeOf = (key: string, least: Size): Size => ({ width: Math.max(least.width, options.noteWidths?.get(key) ?? 0), height: Math.max(least.height, options.noteHeights?.get(key) ?? 0) });
   const rows = rowsOf(tiles, links, options.by);
   let positions: Map<string, Point>;
   if (options.layout === 'columns' || options.layout === 'cards') {
@@ -579,7 +582,7 @@ const noteBelow = (labelAt: Point): Point => ({ x: labelAt.x, y: labelAt.y + CLU
 /** A row's tiles in the order a lane takes them: by slot (implementer, reviewer, follow-up), or as they are for a row by role or state. */
 const inSlotOrder = (row: Row): ArrangeTile[] => (row.unit ? LANE_SLOTS.flatMap((slot) => row.tiles.filter((tile) => slotOf(tile) === slot)) : row.tiles);
 
-/** Lanes as columns: the lead and shells stacked in the first, then a column per lane, its head cell first, its tiles under it. */
+/** Lanes as columns: the lead, the shells and the clocks stacked in the first, then a column per lane, its head cell first, its tiles under it. */
 function columnCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headOf: (row: Row) => Size): Cell[] {
   return rows.flatMap((row, column) => {
     const head = isCluster(row) ? [{ id: headId(laneKey(row.tiles)), size: headOf(row) }] : [];
@@ -604,7 +607,7 @@ function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
   });
   const across = lanes.length > 4 ? 3 : 2;
   const width = Math.max(1, ...cards.flat().map((cell) => cell.column + 1));
-  // Above lanes (by issue), the top row of the lead and the shells lines up with no card; by role or state, the rows
+  // Above lanes (by issue), the top row of the lead, the shells and the clocks lines up with no card; by role or state, the rows
   // are all top rows, lined up with each other but the lead's.
   const alone = (row: Row) => lanes.length > 0 || row.tiles.some((tile) => tile.lead);
   const cells: Cell[] = top.flatMap((row, index) =>

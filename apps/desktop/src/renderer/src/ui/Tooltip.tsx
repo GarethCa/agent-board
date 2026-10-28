@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 import * as RadixTooltip from '@radix-ui/react-tooltip';
 
 /** How long the pointer rests on a control before its tooltip shows, and the grace to move to the next one. */
@@ -22,11 +22,22 @@ interface TooltipProps {
   side?: 'top' | 'right' | 'bottom' | 'left';
 }
 
-/** A hint for the control under the pointer or with the focus. It describes the control; it never names it. */
+/** Whether `control` opens a menu or popover (as a Radix trigger says it does) that is open now. */
+const opensPopup = (control: HTMLElement | null) => control?.hasAttribute('aria-haspopup') === true && control.getAttribute('aria-expanded') === 'true';
+
+/**
+ * A hint for the control under the pointer or with the focus. It describes the control; it never names it. Never over
+ * the menu or popover its control has open: Esc closes the top one first, so it would take the Esc meant for the menu.
+ * (Focus comes back to the control a moment after its menu closes, as the menu may already be open again.)
+ */
 export function Tooltip({ content, children, side = 'top' }: TooltipProps) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
-    <RadixTooltip.Root>
-      <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
+    <RadixTooltip.Root open={open} onOpenChange={(next) => setOpen(next && !opensPopup(trigger.current))}>
+      <RadixTooltip.Trigger asChild ref={trigger}>
+        {children}
+      </RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content className="ui-tooltip" side={side} sideOffset={6} collisionPadding={8}>
           {content}

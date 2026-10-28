@@ -56,6 +56,9 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   startup: null,
   unsent: null,
   untypedPrompt: null,
+  trustFolder: null,
+  queuedUntilUp: 0,
+  undelivered: [],
   status: null,
   workFinishedAt: null,
   flag: null,
@@ -163,8 +166,12 @@ describe('the needs-you inbox', () => {
     }
   });
 
-  it('never lists an ended agent', () => {
-    expect(needsYou([agent('a', 'waiting', { endedAt: '2026-10-09T10:01:00.000Z', flag: flag('user') })], 'turns')).toEqual([]);
+  it('lists an ended agent only for a flag to the user, which the daemon keeps on one only for what was never delivered', () => {
+    const ended = { endedAt: '2026-10-09T10:01:00.000Z' };
+    expect(needsYou([agent('a', 'waiting', ended)], 'turns')).toEqual([]);
+    expect(needsYou([agent('a', 'needs-permission', ended)], 'turns')).toEqual([]);
+    const lost = agent('a', 'done', { ...ended, flag: flag('user') });
+    expect(needsYou([lost], 'explicit')).toEqual([lost]);
   });
 
   it("picks the prompts still held for the inbox, and counts down each one's hold", () => {
