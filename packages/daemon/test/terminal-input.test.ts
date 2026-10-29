@@ -49,12 +49,22 @@ describe('answerInput', () => {
     expect(answerInput('one\r\ntwo\n\nthree\n')).toBe('\x1b[200~one\rtwo\r\rthree\x1b[201~');
   });
 
+  it('pastes one line longer than 512 bytes, which a harness reading it as keys may not keep whole', () => {
+    const short = 'é'.repeat(256);
+    expect(answerInput(short)).toBe(short);
+    expect(answerInput(`${short}a`)).toBe(`\x1b[200~${short}a\x1b[201~`);
+  });
+
   it('pastes one line when asked to', () => {
     expect(answerInput('/tmp/shot.png', true)).toBe('\x1b[200~/tmp/shot.png\x1b[201~');
   });
 
   it('keeps control characters out of a paste, so its text cannot end it early or press keys', () => {
     expect(answerInput('a\x1b[201~\x03b\tc\nd')).toBe('\x1b[200~a[201~b\tc\rd\x1b[201~');
+  });
+
+  it('keeps C1 controls out too, as a one-character CSI could end a paste', () => {
+    expect(answerInput('a\x9b201~b\x85c\nd')).toBe('\x1b[200~a201~bc\rd\x1b[201~');
   });
 
   it('keeps them out of a typed line too, so it cannot press keys or start a paste', () => {

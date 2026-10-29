@@ -221,7 +221,7 @@ test("a one-way hand-off is a rail with a small arrow at the receiving end, its 
     // Delivered, it sits at the other end, saying when, with nothing to send.
     await expect(token).toHaveAttribute('data-state', 'delivered');
     await expect(token).toHaveAttribute('data-side', 'left');
-    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d$/);
+    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d( [AP]M)?$/);
     await expect(send).toHaveCount(0);
 
     // Enter on it opens its rules.

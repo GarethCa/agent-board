@@ -43,6 +43,9 @@ import {
   type ShapeType,
   type Shell,
   statusLine,
+  type UsagePriorities,
+  type UsageReading,
+  type UsageWindow,
   type WaitState,
   type Zone,
 } from './protocol.ts';
@@ -1542,5 +1545,92 @@ export async function showDoc(session: BoardSession, doc: DocSpec, cwd: string):
   return {
     text: `Showing “${shown.title}” (v${shown.version}) to the user as ${where}. It stays live: when you write the file again, they see the new version. ${editing}`,
     json: shown,
+  };
+}
+
+/** A time from now in words: `in 2h 5m`, `3 min ago`. */
+function fromNow(iso: string, now: number): string {
+  const ms = Date.parse(iso) - now;
+  const total = Math.round(Math.abs(ms) / 60_000);
+  const words = total < 60 ? `${total} min` : `${Math.floor(total / 60)}h ${total % 60}m`;
+  return ms >= 0 ? `in ${words}` : `${words} ago`;
+}
+
+/** The usage reading as lines: each window's used and left, when it resets, and how old it is. */
+export function usageText(usage: UsageReading, now = Date.now()): string {
+  if (usage.readAt === null) return "No usage reading yet: a Claude agent's status line posts one as it runs.";
+  const window = (label: string, each: UsageWindow | null) =>
+    each === null
+      ? `${label}: not in the reading`
+      : `${label}: ${Math.round(each.usedPercent)}% used, ${Math.round(each.remainingPercent)}% left${each.resetsAt === null ? '' : `, resets ${each.resetsAt} (${fromNow(each.resetsAt, now)})`}`;
+  const age = fromNow(usage.readAt, now);
+  return [
+    window('5-hour window', usage.fiveHour),
+    window('7-day window ', usage.sevenDay),
+    usage.stale ? `Stale: read ${age}, or a window has reset since. A Claude agent updates it as it runs.` : `Read ${age}.`,
+  ].join('\n');
+}
+
+/** `usage`: the newest plan usage reading. */
+export async function usageView(session: BoardSession): Promise<BoardView> {
+  const usage = await session.client.call('usage.get', { token: session.token });
+  return { text: usageText(usage), json: usage };
+}
+
+/** `usage priorities`: the pacing switch, the thresholds, and each zone's priority, hold and what the thresholds allow now. */
+export async function usagePrioritiesView(session: BoardSession): Promise<BoardView> {
+  const priorities = await session.client.call('usage.priorities', { token: session.token });
+  const refs = new BoardRefs(await readBoard(session.client));
+  const { fiveHourOnlyHigh, fiveHourPauseLow, sevenDayOnlyHigh } = priorities.thresholds;
+  const width = Math.max(0, ...priorities.zones.map((zone) => zone.name.length));
+  const zoneLine = (zone: UsagePriorities['zones'][number]) => {
+    const then = zone.hold !== null ? `held: ${zone.hold.reason} (since ${zone.hold.since})` : zone.pace.holdStarts !== null ? `may be held: ${zone.pace.holdStarts}` : 'within the thresholds';
+    const pause = zone.pace.pauseIdle === null ? '' : `; its idle agents may be paused`;
+    return `${refs.of('zone', zone.id)}  ${zone.name.padEnd(width)}  ${zone.priority.padEnd(6)}  ${then}${pause}`;
+  };
+  return {
+    text: [
+      priorities.pacing
+        ? 'Pacing by usage: on. You may hold starts and hand-offs, and pause idle agents, only where the thresholds allow.'
+        : 'Pacing by usage: off. Only the user turns it on, in Settings › Usage; until then every hold is refused.',
+      `Thresholds: only high-priority zones start new agents at 5h ${fiveHourOnlyHigh}% or 7d ${sevenDayOnlyHigh}%; low-priority zones' idle agents may be paused at 5h ${fiveHourPauseLow}%.`,
+      ...(priorities.zones.length === 0 ? ['No zones.'] : priorities.zones.map(zoneLine)),
+    ].join('\n'),
+    json: priorities,
+  };
+}
+
+/** The zone `ref` names. */
+async function zoneNamed(session: BoardSession, ref: string): Promise<{ refs: BoardRefs; zone: Zone }> {
+  const refs = new BoardRefs(await readBoard(session.client));
+  const object = refs.resolve(ref, session.caller);
+  if (object.kind !== 'zone') throw new BoardError(`${ref} is a ${object.kind}, not a zone`);
+  return { refs, zone: object.zone };
+}
+
+/** `usage hold`: places a budget hold on a zone. */
+export async function holdZone(session: BoardSession, ref: string): Promise<BoardView> {
+  const { refs, zone } = await zoneNamed(session, ref);
+  const held = await session.client.call('orchestrator.hold', { token: session.token, zoneId: zone.id });
+  return {
+    text: `Held ${refs.of('zone', zone.id)} ${zone.name}: ${held.usageHold?.reason}. No agent starts there, and hand-offs to its agents wait, until the hold is released.`,
+    json: held,
+  };
+}
+
+/** `usage release`: lifts a zone's budget hold. */
+export async function releaseZone(session: BoardSession, ref: string): Promise<BoardView> {
+  const { refs, zone } = await zoneNamed(session, ref);
+  const released = await session.client.call('orchestrator.release', { token: session.token, zoneId: zone.id });
+  return { text: `Released ${refs.of('zone', zone.id)} ${zone.name}: what waited on its hold goes on.`, json: released };
+}
+
+/** `usage pause`: pauses an idle agent for usage, saying why on its tile. */
+export async function usagePauseAgent(session: BoardSession, ref: string): Promise<BoardView> {
+  const { token, refs, agent } = await orchestratorTarget(session, ref);
+  const paused = await session.client.call('orchestrator.usagePause', { token, sessionId: agent.sessionId });
+  return {
+    text: `Paused ${refs.of('agent', agent.sessionId)} ${agent.name} for usage: ${paused.hibernated?.reason ?? ''}. The user can Override it on its tile.`,
+    json: agentJson(refs, paused, session.caller),
   };
 }

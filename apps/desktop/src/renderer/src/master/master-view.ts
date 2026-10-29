@@ -5,6 +5,7 @@ import { isOrchestratorRole, type Agent, type BoardItem, type NeedsYouKind, type
 import { tileNodeId } from '../board/tiles';
 import { agentNoteData } from '../board/items/agent-note';
 import { TETHER_EDGE_TYPE } from '../board/items/agent-note-tethers';
+import { zoneHold } from '../board/zone-priority';
 
 const RAIL_EDGE_PREFIX = 'master-rail:';
 /** Under the nodes, as a tether is: it leads to a tile, never across one. */
@@ -110,4 +111,32 @@ export function askLine(agent: Agent, kind: NeedsYouKind): string {
     case 'turn':
       return 'Its turn ended';
   }
+}
+
+/** A budget hold the user can Override: a zone held for usage, or an agent paused for it. */
+export interface UsageHoldEntry {
+  kind: 'zone' | 'agent';
+  /** The zone's id, or the agent's session id. */
+  id: string;
+  name: string;
+  /** What it is: `new starts and hand-offs held`, `paused`. */
+  what: string;
+  /** Why, as the hold says it: `5h at 86%, zone low priority`. */
+  reason: string;
+  /** The zone it is in, for an agent; null for a zone and a loose agent. */
+  zone: string | null;
+}
+
+/** The budget holds on the board, zones first, each with why: what the panel's For you lists with Override. */
+export function usageHolds(zones: readonly Zone[], agents: readonly Agent[]): UsageHoldEntry[] {
+  const zoneName = (id: string | null) => zones.find((zone) => zone.id === id)?.name ?? null;
+  return [
+    ...zones.flatMap((zone): UsageHoldEntry[] => {
+      const hold = zoneHold(zone);
+      return hold === null ? [] : [{ kind: 'zone', id: zone.id, name: zone.name, what: 'new starts and hand-offs held', reason: hold.reason, zone: null }];
+    }),
+    ...agents.flatMap((agent): UsageHoldEntry[] =>
+      agent.hibernated?.reason === undefined ? [] : [{ kind: 'agent', id: agent.sessionId, name: agent.name, what: 'paused', reason: agent.hibernated.reason, zone: zoneName(agent.zoneId) }],
+    ),
+  ];
 }

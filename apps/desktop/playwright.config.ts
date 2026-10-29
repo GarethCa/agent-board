@@ -3,6 +3,8 @@ import { cpus, loadavg } from 'node:os';
 import { defaultWorkers } from '../../scripts/e2e-lock/workers.ts';
 
 const PERF = /board-perf\.spec\.ts/;
+/** The rendering benchmark, run only by hand: `pnpm bench:render`. */
+const BENCH = /render-bench\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
 const VISUAL = /visual\.spec\.ts/;
 const README = /readme-screenshots\.spec\.ts/;
@@ -27,7 +29,7 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
   globalSetup: './e2e/global-setup.ts',
   projects: [
-    { name: 'app', testIgnore: [PERF, PACKAGED, VISUAL, README, PROMO] },
+    { name: 'app', testIgnore: [PERF, BENCH, PACKAGED, VISUAL, README, PROMO] },
     // Screenshots against per-platform baselines, run by `pnpm test:visual` and the visual steps of `pnpm check:local`.
     { name: 'visual', testMatch: VISUAL },
     // The README's screenshots, written to docs/assets/screenshots by `pnpm readme:screenshots`; no test run takes them.
@@ -36,6 +38,8 @@ export default defineConfig({
     { name: 'promo', testMatch: PROMO },
     // Frame timings are only meaningful with no other app running, so the benchmark waits for the rest.
     { name: 'perf', testMatch: PERF, dependencies: ['app'] },
+    // The rendering benchmark: no gate runs it.
+    { name: 'bench', testMatch: BENCH },
     // The .app from `pnpm package`, run on its own by `pnpm test:e2e:packaged` (it needs packaging first).
     { name: 'packaged', testMatch: PACKAGED },
   ],

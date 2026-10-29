@@ -46,25 +46,22 @@ for (const harness of ['Claude', 'Codex'] as const) {
       await composer.press('Enter');
       await expect(chat.getByTestId('chat-user')).toHaveText(['Pick a database', 'Postgres']);
       await expect(chat.getByTestId('chat-assistant').last()).toHaveText('Going with Postgres.');
-      // Its tool calls fold into one row once the turn has moved on; a click opens it.
-      const run = chat.getByTestId('chat-tool-run');
-      await expect(run).toHaveCount(1);
-      await expect(run.getByRole('button').first()).toHaveAttribute('aria-expanded', 'false');
-      await expect(run).toContainText('1 tool call');
-      await run.getByRole('button').first().click();
+      // Each call is a card, closed once the turn has moved on (cards are every chat's style until another is picked).
+      await expect(chat).toHaveAttribute('data-style', 'cards');
       const call = chat.getByTestId('chat-tool');
+      const line = call.getByTestId('chat-tool-line');
       await expect(call).toHaveCount(1);
       await expect(call).toContainText('echo "Postgres" > db.txt && echo saved');
-      // How it went, from what it printed: for Codex, from its exec script's report.
-      await expect(call.getByTestId('chat-tool-outcome')).toHaveText('saved');
-      await expect(call).toHaveAttribute('aria-expanded', 'false');
+      // How it went, from what it printed (for Codex, from its exec script's report), and how long it took.
+      await expect(call.getByTestId('chat-tool-outcome')).toHaveText(/^saved · \d+(\.\d)?s$/);
+      await expect(line).toHaveAttribute('aria-expanded', 'false');
       await expect(chat.getByLabel('Input')).toHaveCount(0);
 
-      // A click opens the call to show what went in.
-      await call.click();
-      await expect(call).toHaveAttribute('aria-expanded', 'true');
+      // A click opens the card to show what went in.
+      await line.click();
+      await expect(line).toHaveAttribute('aria-expanded', 'true');
       await expect(chat.getByLabel('Input')).toContainText('db.txt');
-      await call.click();
+      await line.click();
       await expect(chat.getByLabel('Input')).toHaveCount(0);
 
       // Back to the terminal, still attached, with everything that happened while the chat showed.
@@ -119,9 +116,9 @@ for (const harness of ['Claude', 'Codex'] as const) {
         return;
       }
       // Claude keeps a subagent's conversation in its own transcript, which its call opens.
+      // Expand all opened its card.
       const call = chat.getByTestId('chat-tool').filter({ hasText: 'Explore' });
       await expect(call.getByTestId('chat-tool-outcome')).toHaveText('done');
-      await call.click();
       const thread = chat.getByTestId('chat-subagent');
       await expect(thread.getByTestId('chat-user')).toHaveText('Find where sessions are created');
       await expect(thread.getByTestId('chat-assistant')).toHaveText(answer);
@@ -174,7 +171,7 @@ test("the chat's message box sends a message of several lines, and the agent's M
   }
 });
 
-test('a run of tool calls is one collapsed row that opens on a click; Expand all and Collapse all open and close every one', async () => {
+test('on the timeline rail, a run of tool calls is one collapsed line that opens on a click; Expand all and Collapse all open and close every one', async () => {
   const { repo, env } = scratch('markdown');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -184,14 +181,16 @@ test('a run of tool calls is one collapsed row that opens on a click; Expand all
     await spawnAgent(window, 'monorepo', 'Find the TODOs');
     await tile(window).dblclick();
     await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: 'Timeline' }).click();
     const chat = sessionWindow(window).getByTestId('chat-view');
+    await expect(chat).toHaveAttribute('data-style', 'timeline');
     await expect(chat.getByTestId('chat-assistant').last()).toContainText('Found one TODO', { timeout: TURN_MS });
 
-    // Four calls between two messages: one row, collapsed now that the turn moved on.
+    // Four calls between two messages: one line by their dots, collapsed now that the turn moved on.
     const run = chat.getByTestId('chat-tool-run');
     const line = run.getByRole('button').first();
     await expect(run).toHaveCount(1);
-    await expect(run).toContainText('4 tool calls · Read ×2, Bash, Grep');
+    await expect(run).toContainText('Read, Bash, Grep · 4 calls');
     await expect(line).toHaveAttribute('aria-expanded', 'false');
     await expect(chat.getByTestId('chat-tool')).toHaveCount(0);
 
@@ -324,5 +323,124 @@ test("an expanded tile's chat renders the agent's Markdown and opens its links w
     await second?.app.close().catch(() => {});
     await removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** What Claude puts on every transcript line, so a line written by hand reads as its own. */
+const ENVELOPE = { isSidechain: false, userType: 'external', version: '2.1.0' };
+
+/**
+ * Times, in the renderer, how long a sent message takes to show as a bubble, and how long a line written to the
+ * transcript takes to render. Both are printed, for the record; the bubble must show within a frame or so.
+ */
+test("a sent message shows in the chat at once, the transcript's writes render without waiting on a poll, and a paste in a message folds", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await tile(window).dblclick();
+    await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    const chat = sessionWindow(window).getByTestId('chat-view');
+    await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+
+    // When Enter goes down in the message box, and when a bubble with the message first shows.
+    await window.evaluate(() => {
+      const times: { sent?: number; shown?: number; written?: number } = {};
+      (globalThis as { __times?: typeof times }).__times = times;
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && times.sent === undefined) times.sent = performance.now();
+      }, { capture: true });
+      new MutationObserver(() => {
+        const users = [...document.querySelectorAll('[data-testid="chat-user"], [data-testid="chat-sent"]')];
+        if (times.shown === undefined && users.some((user) => user.textContent?.includes('Postgres'))) times.shown = performance.now();
+        const replies = [...document.querySelectorAll('[data-testid="chat-assistant"]')];
+        if (times.written === undefined && replies.some((reply) => reply.textContent?.includes('Written straight to the transcript.'))) times.written = Date.now();
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    const times = () => window.evaluate(() => (globalThis as { __times?: { sent?: number; shown?: number; written?: number } }).__times!);
+
+    const composer = sessionWindow(window).getByRole('textbox', { name: 'Message to the agent' });
+    await composer.fill('Postgres');
+    await composer.press('Enter');
+    // Then the transcript's copy takes its place: the one bubble, once.
+    await expect(chat.getByTestId('chat-user')).toHaveText(['Pick a database', 'Postgres']);
+    await expect(chat.getByTestId('chat-sent')).toHaveCount(0);
+    const { sent, shown } = await times();
+    const sendToBubble = shown! - sent!;
+    await expect(chat.getByTestId('chat-assistant').last()).toHaveText('Going with Postgres.');
+
+    // A line the harness writes to its transcript, timed from the write to its render.
+    const line = {
+      ...ENVELOPE,
+      type: 'assistant',
+      message: { id: 'msg_timed', type: 'message', role: 'assistant', model: 'fake', content: [{ type: 'text', text: 'Written straight to the transcript.' }], stop_reason: 'end_turn' },
+    };
+    const writtenAt = Date.now();
+    appendFileSync(transcriptIn(join(dir, 'home'), 'Claude'), `${JSON.stringify(line)}\n`);
+    await expect(chat.getByTestId('chat-assistant').last()).toHaveText('Written straight to the transcript.');
+    const writeToRender = (await times()).written! - writtenAt;
+    console.log(`chat timings: Send to bubble ${sendToBubble.toFixed(0)} ms, transcript write to render ${writeToRender} ms`);
+    test.info().annotations.push({ type: 'timings', description: `send→bubble ${sendToBubble.toFixed(0)} ms; write→render ${writeToRender} ms` });
+
+    // A block pasted into a message folds to its line count, with no tag text, and opens to exactly what was pasted.
+    const pasted = 'first line\n  second, indented\nthird';
+    const message = { ...ENVELOPE, type: 'user', message: { role: 'user', content: `Look:\n<pasted_content id="p1">\n${pasted}\n</pasted_content id="p1">` } };
+    appendFileSync(transcriptIn(join(dir, 'home'), 'Claude'), `${JSON.stringify(message)}\n`);
+    const block = chat.getByTestId('chat-user').last().getByTestId('chat-pasted');
+    await expect(block).toContainText('Pasted text (3 lines)');
+    await expect(chat).not.toContainText('pasted_content');
+    await block.getByText('Pasted text (3 lines)').click();
+    expect(await block.locator('pre').textContent()).toBe(pasted);
+
+    expect(sendToBubble).toBeLessThan(100);
+    expect(writeToRender).toBeLessThan(500);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a message sent while the agent is in a turn shows at once as queued, and as itself where the agent takes it, at its next step', async () => {
+  const { repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  // Every prompt plays the scenario, so a message from the chat can start its slow turn; one typed while it runs is
+  // taken at its next step, written as a queued command, as Claude writes it.
+  const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_REPEAT: '1', FAKE_HARNESS_QUEUE_MID_TURN: '1' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Get ready');
+    await tile(window).dblclick();
+    await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    const chat = sessionWindow(window).getByTestId('chat-view');
+    await expect(chat.getByTestId('chat-assistant').last()).toContainText('STATUS: done', { timeout: TURN_MS });
+
+    // Its next turn sleeps for five seconds in a shell.
+    const composer = sessionWindow(window).getByRole('textbox', { name: 'Message to the agent' });
+    await composer.fill('Work slowly');
+    await composer.press('Enter');
+    await expect(chat.getByTestId('chat-user').last()).toHaveText('Work slowly');
+    await expect(tile(window)).toHaveAttribute('data-state', /^(running|thinking)$/);
+
+    await composer.fill('Then tidy up');
+    await composer.press('Enter');
+    const bubble = chat.getByTestId('chat-sent');
+    await expect(bubble).toContainText('Then tidy up');
+    await expect(bubble.getByTestId('chat-sent-status')).toHaveText('queued: taken at its next step');
+
+    // The agent takes it after its shell call, in the same turn: the transcript's copy there, and no queued bubble.
+    await expect(chat.getByTestId('chat-user')).toHaveText(['Get ready', 'Work slowly', 'Then tidy up'], { timeout: TURN_MS });
+    await expect(bubble).toHaveCount(0);
+    await expect(chat.getByTestId('chat-assistant').last()).toHaveText('Slow work done.');
+    // Taken in that turn, it starts none of its own.
+    await expect(tile(window)).not.toHaveAttribute('data-state', /^(running|thinking)$/);
+    await expect(chat.getByTestId('chat-user')).toHaveCount(3);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
   }
 });

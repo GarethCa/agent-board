@@ -2,16 +2,25 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { defaultDataDir } from '../../packages/daemon/src/paths.ts';
 import { updateApp } from './update-app.ts';
 
-const USAGE = `usage: pnpm update:app [--no-launch] [--force] [--install-dir <dir>]
+const USAGE = `usage: pnpm update:app [--no-launch] [--no-restart] [--force] [--install-dir <dir>] [--data-dir <dir>]
 
 Brings this checkout up to date (git pull --ff-only), builds the app and installs it as ~/Applications/agent-board.app.
-It never runs on its own: you run it when you want the update. It quits the app, installs, and opens it again.
-Your sessions live in the daemon, so they keep running; if the daemon is older than the app, the app offers to restart it.
+It never runs on its own: you run it when you want the update. It quits the app, installs it, restarts the daemon on
+the new build and opens the app again. The restart resumes your agents and shells where they were, and says which;
+an agent mid-turn loses that turn, so pass --no-restart while agents are busy: the app then asks to restart the
+daemon before it shows the board.
   --no-launch    install without opening the app
+  --no-restart   leave the daemon running on the old build, with its sessions
   --force        build and install even if the installed app is already current
-  --install-dir  where to install the app (default: ~/Applications)`;
+  --install-dir  where to install the app (default: ~/Applications)
+  --data-dir     the app's data dir, whose daemon is restarted (default: $AGENT_BOARD_DATA_DIR, else
+                 ~/Library/Application Support/agent-board)
+
+Run inside agent-board (a board shell or an agent), it leaves the daemon running, as --no-restart: restarting it would
+end this run with it.`;
 
 function parse() {
   try {
@@ -20,8 +29,10 @@ function parse() {
       args: process.argv.slice(2).filter((arg, i) => !(i === 0 && arg === '--')),
       options: {
         'no-launch': { type: 'boolean', default: false },
+        'no-restart': { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
         'install-dir': { type: 'string' },
+        'data-dir': { type: 'string' },
         help: { type: 'boolean', short: 'h', default: false },
       },
     }).values;
@@ -48,6 +59,9 @@ try {
     installDir: resolve(process.env.INIT_CWD ?? process.cwd(), values['install-dir'] ?? join(homedir(), 'Applications')),
     launch: !values['no-launch'],
     force: values.force,
+    restart: !values['no-restart'],
+    // The app's own: `AGENT_BOARD_DATA_DIR` when set, as the app takes it, else its default.
+    dataDir: resolve(process.env.INIT_CWD ?? process.cwd(), values['data-dir'] ?? (process.env.AGENT_BOARD_DATA_DIR || defaultDataDir())),
     log: (message) => console.log(`update:app: ${message}`),
   });
 } catch (error) {

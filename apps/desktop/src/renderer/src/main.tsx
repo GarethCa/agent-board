@@ -14,6 +14,7 @@ import './chrome/chrome.css';
 import './onboarding/onboarding.css';
 import './demo/demo.css';
 import { App } from './App';
+import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
@@ -66,20 +67,24 @@ createRoot(root).render(
     <TooltipProvider>
       <ToastProvider>
         {popOut !== undefined ? (
-          <ReviewsProvider>
-            <GatesProvider>
-              <PopOutWindow target={popOut} />
-            </GatesProvider>
-          </ReviewsProvider>
+          <DaemonGate>
+            <ReviewsProvider>
+              <GatesProvider>
+                <PopOutWindow target={popOut} />
+              </GatesProvider>
+            </ReviewsProvider>
+          </DaemonGate>
         ) : location.hash === '#gallery' ? (
           // A dev gallery of every primitive, tile state and character pose, for checking how they look.
           <Gallery />
         ) : (
-          <ReviewsProvider>
-            <GatesProvider>
-              <App />
-            </GatesProvider>
-          </ReviewsProvider>
+          <DaemonGate>
+            <ReviewsProvider>
+              <GatesProvider>
+                <App />
+              </GatesProvider>
+            </ReviewsProvider>
+          </DaemonGate>
         )}
       </ToastProvider>
     </TooltipProvider>

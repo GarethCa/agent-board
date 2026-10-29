@@ -22,7 +22,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
   migrate(db);
   onTestFinished(() => db.close());
   const started: SessionSpec[] = [];
-  const typed: { sessionId: string; prompt: string }[] = [];
+  const typed: { sessionId: string; prompt: string | undefined }[] = [];
   const unused = (): never => {
     throw new Error('not used by a launch');
   };
@@ -117,6 +117,13 @@ describe("launching an agent's harness", () => {
     expect(session!.env.CLAUDECODE).toBeUndefined();
     expect(session!.env[HOOK_URL_ENV]).toBe(HOOK_URL);
     expect(session!.hookTokenSha256).toBe(hashToken(session!.env[HOOK_TOKEN_ENV]!));
+  });
+
+  it('holds what is sent to a claude agent with no task until its session is up, but not a codex one', () => {
+    const { spawns, typed } = setup();
+    spawns.launch(spec({ task: undefined }));
+    spawns.launch(spec({ id: 'b', harness: 'codex', task: undefined }));
+    expect(typed).toEqual([{ sessionId: 'a', prompt: undefined }]);
   });
 
   it("passes claude the compact window only when the setting is on, and never changes codex's env", () => {

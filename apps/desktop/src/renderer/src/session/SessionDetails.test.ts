@@ -10,6 +10,7 @@ const agent = {
   endedAt: null,
   issue: null,
   lastMessage: null,
+  compactingSince: null,
   branch: 'agent/x',
   model: null,
   role: null,

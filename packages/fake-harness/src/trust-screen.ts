@@ -37,3 +37,10 @@ export function drawTrustScreen(folder: string, on: 'no' | 'yes' = 'no'): string
 export function drawPromptBox(): string[] {
   return ['─'.repeat(80), '❯ ', '─'.repeat(80), '  ? for shortcuts'];
 }
+
+/**
+ * The line Claude 2.1.312 draws over its prompt box through a turn: a spinner glyph (`✻`, one of `·✢✳✶✻✽`, still under
+ * reduced motion) and its verb, then the time and tokens. The footer's `esc to interrupt` is left off, as a narrow
+ * terminal truncates it, a rebound key renames it and team mode replaces it.
+ */
+export const SPINNER_LINE = '✻ Cogitating… (5m 12s · ↓ 1.2k tokens)';

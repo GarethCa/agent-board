@@ -11,6 +11,11 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
+  holdZone,
+  releaseZone,
+  usagePauseAgent,
+  usagePrioritiesView,
+  usageView,
   presentPlan,
   readPlanSource,
   showDoc,
@@ -151,6 +156,18 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       "Every zone with its tiles (agents and shells, with state and status), items (a shape's text and sections) and " +
       'connectors (their ends, relation and labels). As `agent-board tree`.',
     inputSchema: NO_INPUT,
+  },
+  {
+    name: 'usage',
+    description:
+      "The plan's 5-hour and weekly usage (used, left, when each resets, when it was read, and whether it is stale), " +
+      "read from Claude agents' status lines, so no tokens are spent. With priorities: the user's zone priorities and " +
+      'usage thresholds, and whether they let the Captain pace work by usage. As `agent-board usage [priorities]`.',
+    inputSchema: {
+      type: 'object',
+      properties: { priorities: { type: 'boolean', description: "The user's priorities and thresholds instead of the reading." } },
+      additionalProperties: false,
+    },
   },
   {
     name: 'connections',
@@ -462,7 +479,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       `background work runs is not. With no agents, it waits on your crew (the agents you started, and theirs). With ` +
       `since, it waits instead for what happens to them next, each once: ${CREW_EVENT_KINDS.join(', ')}; it answers ` +
       `with each as a line (at most 100) and a cursor to pass as since next time: "now" the first time. Gives up ` +
-      `after ${MCP_WAIT_SECONDS} s by default, saying so: then call it again. As \`agent-board wait\` and ` +
+      `after ${MCP_WAIT_SECONDS} s by default, saying so (the result's timedOut is true): then call it again. As \`agent-board wait\` and ` +
       `\`agent-board watch\`.`,
     inputSchema: {
       type: 'object',
@@ -473,7 +490,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         any: { type: 'boolean', description: 'Until one of them is there, not all.' },
         since: { type: 'string', description: 'Wait for what happens after this cursor instead: "now", a cursor it answered with, or "all".' },
         kinds: { type: 'array', items: { type: 'string', enum: [...CREW_EVENT_KINDS] }, description: 'With since, only these.' },
-        timeout_seconds: { type: 'integer', minimum: 0, description: `How long to wait; ${MCP_WAIT_SECONDS} by default.` },
+        timeout_seconds: { type: 'integer', minimum: 0, description: `How long to wait; ${MCP_WAIT_SECONDS} by default. The result's timedOut says whether it gave up.` },
       },
       additionalProperties: false,
     },
@@ -532,6 +549,26 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'wake',
     description: 'Wake a paused agent, carrying on its conversation. As `agent-board wake`.',
+    inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
+  },
+  {
+    name: 'usage_hold',
+    description:
+      "The Captain's budget hold: no agent starts in the zone, and hand-offs to its agents wait, until it is released. " +
+      'Refused unless the user turned on pacing by usage, the reading is fresh, and the zone is past their threshold ' +
+      'for its priority (see usage with priorities). The user can Override it. As `agent-board usage hold`.',
+    inputSchema: { type: 'object', properties: { zone: { type: 'string', description: 'A zone ref.' } }, required: ['zone'], additionalProperties: false },
+  },
+  {
+    name: 'usage_release',
+    description: "Lift a zone's budget hold: what waited on it goes on. As `agent-board usage release`.",
+    inputSchema: { type: 'object', properties: { zone: { type: 'string', description: 'A zone ref.' } }, required: ['zone'], additionalProperties: false },
+  },
+  {
+    name: 'usage_pause',
+    description:
+      'Pause an idle agent for usage, as pause does, its tile saying why: only in a low-priority zone past the ' +
+      "user's pause threshold, under the same rules as usage_hold. Never mid-turn. As `agent-board usage pause`.",
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
   },
   {
@@ -906,8 +943,13 @@ type ToolContent = { type: 'text'; text: string } | { type: 'image'; data: strin
 
 interface ToolResult {
   content: ToolContent[];
+  /** What a tool says in fields as well as text: `wait`'s `timedOut`. */
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
+
+/** A tool's answer: its text, its content, or content with fields. */
+type ToolAnswer = string | ToolContent[] | { content: ToolContent[]; structuredContent: Record<string, unknown> };
 
 /** A tool argument that must be a string, or undefined when optional and absent. */
 function stringArg(args: Record<string, unknown>, name: string, optional: true): string | undefined;
@@ -966,9 +1008,10 @@ export interface BoardMcpContext {
 }
 
 /** What each tool does with a board session, its arguments and the caller's folder: the text the model reads, or what it sees. */
-const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<string | ToolContent[]>> = {
+const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<ToolAnswer>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
+  usage: async (session, args) => (await (args.priorities === true ? usagePrioritiesView(session) : usageView(session))).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
   record_pr: async (session, args, cwd) => {
@@ -1033,14 +1076,16 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (!Number.isInteger(seconds) || (seconds as number) < 0) throw new BoardError('timeout_seconds must be a whole number');
     const timeoutMs = (seconds as number) * 1000;
     if (since === undefined) {
-      return (await waitForAgents(session, agents as string[], { until: until as WaitState[] | undefined, any: any === true, crew: wholeCrew, timeoutMs })).text;
+      const view = await waitForAgents(session, agents as string[], { until: until as WaitState[] | undefined, any: any === true, crew: wholeCrew, timeoutMs });
+      return { content: [{ type: 'text', text: view.text }], structuredContent: { timedOut: view.timedOut } };
     }
     const news = await watchCrew(session, agents as string[], { crew: wholeCrew, since, kinds: kinds as CrewEventKind[] | undefined, timeoutMs });
-    return [
+    const text = [
       ...(news.missed ? ['Some were missed: the daemon keeps only the latest, or it restarted.'] : []),
       ...(news.timedOut ? ['Nothing yet.'] : news.lines),
       `Cursor ${news.cursor}: pass it as since next time to hear only what comes after.`,
     ].join('\n');
+    return { content: [{ type: 'text', text }], structuredContent: { timedOut: news.timedOut } };
   },
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
@@ -1053,6 +1098,9 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   pause: async (session, args) => (await pauseAgent(session, stringArg(args, 'agent'))).text,
   wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,
+  usage_hold: async (session, args) => (await holdZone(session, stringArg(args, 'zone'))).text,
+  usage_release: async (session, args) => (await releaseZone(session, stringArg(args, 'zone'))).text,
+  usage_pause: async (session, args) => (await usagePauseAgent(session, stringArg(args, 'agent'))).text,
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
   handoff: async (session, args) =>
     (
@@ -1231,7 +1279,7 @@ async function callTool(
   args: Record<string, unknown>,
   context: BoardMcpContext,
   signal: AbortSignal,
-): Promise<string | ToolContent[]> {
+): Promise<ToolAnswer> {
   const session = await context.openSession();
   if (signal.aborted) session.close();
   else signal.addEventListener('abort', () => session.close(), { once: true });
@@ -1267,7 +1315,8 @@ export function boardMcpHandlers(context: BoardMcpContext): RpcHandlers<McpMetho
       if (call === undefined) throw new RpcMethodError(RPC_ERROR.invalidParams, `no tool ${String(name)}`);
       try {
         const answer = await callTool(call, args, context, signal);
-        return { content: typeof answer === 'string' ? [{ type: 'text', text: answer }] : answer };
+        if (typeof answer === 'string') return { content: [{ type: 'text', text: answer }] };
+        return Array.isArray(answer) ? { content: answer } : answer;
       } catch (error) {
         // A refusal is the tool's answer, for the model to read; anything else is the server's failure.
         if (error instanceof BoardError || error instanceof DaemonRpcError) {

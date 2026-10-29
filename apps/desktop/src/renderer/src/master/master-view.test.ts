@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, BoardItem, Zone } from '@agent-board/daemon/protocol';
 import { tileNodeId } from '../board/tiles';
-import { askLine, boardMaster, latestDigest, masterRails, watchedOrchestrators, watchRows } from './master-view';
+import { askLine, boardMaster, latestDigest, masterRails, watchedOrchestrators, usageHolds, watchRows } from './master-view';
 
 const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
   ({
@@ -83,5 +83,27 @@ describe('the Captain', () => {
     expect(askLine(agent('q', { ask: { question: 'Which base?' } as Agent['ask'] }), 'asks')).toBe('Which base?');
     expect(askLine(agent('p', { permissions: [{ toolName: 'Bash' }] as Agent['permissions'] }), 'permission')).toBe('Asks to use Bash');
     expect(askLine(agent('p'), 'permission')).toBe('Asking for permission in its terminal');
+  });
+});
+
+describe('the budget holds the panel lists', () => {
+  it('lists nothing for zones and agents from a daemon that keeps no holds', () => {
+    expect(usageHolds([zone('z1', 'docs')], [agent('a1', { zoneId: 'z1', hibernated: { at: '2026-10-28T10:00:00Z', by: null, byId: null } })])).toEqual([]);
+  });
+
+  it('lists the zones held for usage, then the agents paused for it, each with why; a plain pause is not one', () => {
+    const held = { ...zone('z1', 'docs'), usageHold: { reason: '5h at 86%, zone low priority', since: '2026-10-28T10:00:00Z' } };
+    const free = { ...zone('z2', 'web'), usageHold: null };
+    const at = '2026-10-28T10:00:00Z';
+    const agents = [
+      agent('a1', { name: 'tuner', zoneId: 'z1', hibernated: { at, by: 'Captain', byId: 'm', reason: '5h at 96%, zone low priority' } }),
+      agent('a2', { name: 'other', zoneId: 'z2', hibernated: { at, by: null, byId: null } }),
+      agent('a3', { name: 'busy', zoneId: 'z2', hibernated: null }),
+    ];
+
+    expect(usageHolds([held, free], agents)).toEqual([
+      { kind: 'zone', id: 'z1', name: 'docs', what: 'new starts and hand-offs held', reason: '5h at 86%, zone low priority', zone: null },
+      { kind: 'agent', id: 'a1', name: 'tuner', what: 'paused', reason: '5h at 96%, zone low priority', zone: 'docs' },
+    ]);
   });
 });

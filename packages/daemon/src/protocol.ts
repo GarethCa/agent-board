@@ -124,6 +124,12 @@ export interface Zone {
    */
   codexBypassHookTrust: boolean;
   /**
+   * Whether Claude's trust screen (`Agent.trustFolder`) is answered by the daemon, as the user's click on Trust folder
+   * would, for the agents started in it: only in this zone's own folder and the worktrees made under it. Off by default;
+   * the user turns it on, when adding the zone or from its menu. Does nothing for a zone with no repo.
+   */
+  trustsFolder: boolean;
+  /**
    * Whether agents started from it get the board MCP server (`agent-board mcp`, ADR-0010), which tells them they are on
    * agent-board. On by default. Every session gets the `agent-board` CLI and its env either way.
    */
@@ -144,6 +150,10 @@ export interface Zone {
   tracker: ZoneTracker | null;
   /** How far apart a Tidy, and an orchestrator's arrange, put what is in it (`SPACING_GAPS`). */
   spacing: ArrangeSpacing;
+  /** The user's priority for it, which the usage thresholds speak in (`UsageThresholds`). Normal until set. */
+  priority: ZonePriority;
+  /** The budget hold on it, while there is one (`orchestrator.hold`); null otherwise. */
+  usageHold: UsageHold | null;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
   /**
@@ -175,12 +185,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'priority'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, priority } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, priority };
 }
 
 /**
@@ -211,6 +221,8 @@ export interface NewZoneParams {
   color?: string;
   /** A tracker scope to bind it to at once, checked as `zone.setTracker` checks it. */
   tracker?: ZoneTracker;
+  /** Whether Claude's trust screen is answered for its agents (`Zone.trustsFolder`); off without. Ignored for a group. */
+  trustsFolder?: boolean;
 }
 
 /** A folder a zone was made for before, which Add zone offers again. */
@@ -325,10 +337,98 @@ export function validZoneFillOpacity(value: unknown): value is number {
 /** A zone's settings. */
 export interface ZoneSettings {
   codexBypassHookTrust: boolean;
+  trustsFolder: boolean;
   boardMcp: boolean;
   agentsOrchestrate: boolean;
   gateCommand: string | null;
   spacing: ArrangeSpacing;
+  priority: ZonePriority;
+}
+
+/** A zone's priority, set by the user: the usage thresholds hold back normal and low zones first. */
+export const ZONE_PRIORITIES = ['high', 'normal', 'low'] as const;
+export type ZonePriority = (typeof ZONE_PRIORITIES)[number];
+
+/**
+ * A budget hold on a zone: while it lasts, no agent starts an agent in the zone, and hand-offs to its agents wait.
+ * `reason` says what the reading and the zone's priority were when it was placed ("5h at 86%, zone low priority").
+ */
+export interface UsageHold {
+  reason: string;
+  since: string;
+}
+
+/** One window of plan usage, from a reading: how much of it is used, in percent, and when it resets. */
+export interface UsageWindow {
+  usedPercent: number;
+  remainingPercent: number;
+  /** ISO time; null when the reading didn't say. */
+  resetsAt: string | null;
+}
+
+/**
+ * The newest plan usage reading: the 5-hour and weekly windows, as Claude Code passes them to its status line. Read
+ * from what Claude agents' status lines post, never by asking anyone, so it is only as new as the last Claude agent's
+ * status line. A window is null when no reading carried it, and both are with no reading yet.
+ */
+export interface UsageReading {
+  fiveHour: UsageWindow | null;
+  sevenDay: UsageWindow | null;
+  /** When it was read; null with no reading yet. */
+  readAt: string | null;
+  /** Whether it is too old, or one of its windows has reset since, to go by: always true with no reading. */
+  stale: boolean;
+}
+
+/** How old a usage reading may be before it is stale. */
+export const USAGE_STALE_MS = 15 * 60_000;
+
+/** The user's usage thresholds, each a used percentage, 1 to 100. */
+export interface UsageThresholds {
+  /** At this much of the 5-hour window, only high-priority zones start new agents. */
+  fiveHourOnlyHigh: number;
+  /** At this much of the 5-hour window, low-priority zones' idle agents may be paused. */
+  fiveHourPauseLow: number;
+  /** At this much of the weekly window, only high-priority zones start new agents. */
+  sevenDayOnlyHigh: number;
+}
+
+export const DEFAULT_USAGE_THRESHOLDS: UsageThresholds = { fiveHourOnlyHigh: 80, fiveHourPauseLow: 95, sevenDayOnlyHigh: 90 };
+
+/** What the thresholds allow in a zone now: why its starts may be held, and why its idle agents may be paused, or null. */
+export interface UsagePace {
+  holdStarts: string | null;
+  pauseIdle: string | null;
+}
+
+/**
+ * What the thresholds allow in a zone of `priority`, by `reading`: nothing with a stale reading. Starts may be held in
+ * a zone that isn't high once either window reaches its only-high threshold; idle agents may be paused in a low zone
+ * once the 5-hour window reaches its pause threshold.
+ */
+export function usagePace(reading: UsageReading, priority: ZonePriority, thresholds: UsageThresholds): UsagePace {
+  if (reading.stale) return { holdStarts: null, pauseIdle: null };
+  const zone = `zone ${priority} priority`;
+  const five = reading.fiveHour?.usedPercent;
+  const seven = reading.sevenDay?.usedPercent;
+  const holdStarts =
+    priority === 'high'
+      ? null
+      : five !== undefined && five >= thresholds.fiveHourOnlyHigh
+        ? `5h at ${Math.round(five)}%, ${zone}`
+        : seven !== undefined && seven >= thresholds.sevenDayOnlyHigh
+          ? `7d at ${Math.round(seven)}%, ${zone}`
+          : null;
+  const pauseIdle = priority === 'low' && five !== undefined && five >= thresholds.fiveHourPauseLow ? `5h at ${Math.round(five)}%, ${zone}` : null;
+  return { holdStarts, pauseIdle };
+}
+
+/** The user's usage priorities (`usage.priorities`): the switch, the thresholds, and each zone's priority, hold and pace. */
+export interface UsagePriorities {
+  /** Whether the user lets the Captain pace work by usage (`DaemonSettings.usagePacing`). */
+  pacing: boolean;
+  thresholds: UsageThresholds;
+  zones: { id: string; name: string; priority: ZonePriority; hold: UsageHold | null; pace: UsagePace }[];
 }
 
 /**
@@ -1342,6 +1442,12 @@ export interface DaemonSettings {
   notifyInFront: boolean;
   /** The spacing a new zone starts with (`Zone.spacing`). Roomy by default. */
   arrangeSpacing: ArrangeSpacing;
+  /**
+   * Whether the Captain may pace work by usage: hold starts and hand-offs in a zone, and pause its idle agents, within
+   * `usageThresholds`. Off by default; the daemon refuses every budget hold while it is off.
+   */
+  usagePacing: boolean;
+  usageThresholds: UsageThresholds;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1611,10 +1717,10 @@ export interface Agent {
   notice: string | null;
   /**
    * When it was paused (`agent.pause`, `orchestrator.pause`) and by whom: the orchestrator's name as it is now and its
-   * session id, or both null for the user. Set while it is `hibernated`; null once it wakes or is closed, and for an
-   * agent never paused.
+   * session id, or both null for the user, and with `reason` when it was paused for usage (`orchestrator.usagePause`).
+   * Set while it is `hibernated`; null once it wakes or is closed, and for an agent never paused.
    */
-  hibernated: { at: string; by: string | null; byId: string | null } | null;
+  hibernated: { at: string; by: string | null; byId: string | null; reason?: string } | null;
   /** The conversations it had before a fresh restart started a new one in its tile, oldest first; their transcripts stay on disk. */
   earlierConversations: EarlierConversation[];
   /** The tracker issue it works on, or null. */
@@ -1681,6 +1787,11 @@ export interface Agent {
    * (`Stop`), or the message of a mid-turn request for input. Null before then, and from each new prompt until then.
    */
   lastMessage: string | null;
+  /**
+   * Since when it has been compacting its conversation (its harness's `PreCompact` hook, until `PostCompact`, its turn
+   * ending or its next prompt); null while it isn't.
+   */
+  compactingSince: string | null;
   /**
    * When its own turn last ended with a final message (`Stop`), kept across a new prompt and a daemon restart; null
    * before its first. A manual edge out of it has something new to send once this is after its last delivery.
@@ -1764,6 +1875,11 @@ export interface Agent {
    * session is up. Nothing is typed there otherwise, as Enter picks `No, exit`. Null otherwise.
    */
   trustFolder: string | null;
+  /**
+   * Whether its zone's setting (`Zone.trustsFolder`) answered Claude's trust screen for it, in place of the user: its
+   * tile says "trusted by this zone's setting". Kept once answered.
+   */
+  trustedByZone: boolean;
   /** How many messages sent before the live agent's session was up wait to be typed, after its first prompt. */
   queuedUntilUp: number;
   /**
@@ -2247,17 +2363,36 @@ export interface BackgroundCommand {
  * One thing in an agent's conversation, as the chat view shows it, read from its harness's transcript by a
  * versioned adapter (`transcript-adapters.ts`). A tool's result is its own entry, joined to its call by `id`.
  */
-export type ChatEntry =
+export type ChatEntry = (
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
+  /**
+   * The model thinking before it answered or called a tool. Claude keeps the text of most of it to itself, so `text` is
+   * often empty: the entry then says only that it thought. `since` is the latest time a line before it in the
+   * transcript was written (a prompt, a tool's result, a background task's notification): it thought from then until `at`.
+   */
+  | { kind: 'thinking'; text: string; since?: string }
+  /** The conversation was compacted here: what comes before it was summarised for the model. */
+  | { kind: 'compacted' }
   /** `input` is the call's arguments, or the raw text of a tool that takes free text (Codex's `exec`). */
   | { kind: 'tool-call'; id: string; name: string; input: unknown }
   /** `agentId` names the subagent a Claude Agent call ran, whose own transcript `agent.subagentTranscript` reads. */
   | { kind: 'tool-result'; id: string; output: string; isError: boolean; agentId?: string }
   /** A message between Codex agents: a task handed to a subagent (its text is encrypted, so empty) or its answer. */
   | { kind: 'subagent-message'; from: string; to: string; text: string }
-  /** Something that happened to the turn, e.g. `Interrupted`. */
-  | { kind: 'notice'; text: string };
+  /**
+   * Something that happened to the turn, e.g. `Interrupted`; `forToolUse` when it was a tool call the user turned down
+   * or stopped, the call whose result comes just before it.
+   */
+  | { kind: 'notice'; text: string; forToolUse?: true }
+  /** A background task's report reached the model, a prompt the user didn't type and the chat doesn't show: it can start a turn. */
+  | { kind: 'notified' }
+  /** The turn ended, after `ms`, from its prompt to its last reply, as Claude counts it. */
+  | { kind: 'turn-ended'; ms: number }
+) & {
+  /** When the harness wrote it (ISO 8601), from its line of the transcript; missing from a line with no timestamp. */
+  at?: string;
+};
 
 /**
  * What `agent.transcript` read: the entries from `since` on, at most the latest 200. `none` until the agent's harness
@@ -2526,7 +2661,8 @@ export interface EarlierConversation {
  * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
  * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
  * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
- * the role's name their detail.
+ * the role's name their detail. `hold` and `release` place and lift a zone's budget hold, the zone their target; a pause
+ * for usage is a `pause` whose detail says why.
  */
 export const ORCHESTRATOR_ACTIONS = [
   'spawn',
@@ -2562,6 +2698,8 @@ export const ORCHESTRATOR_ACTIONS = [
   'set-role',
   'remove-role',
   'set-status',
+  'hold',
+  'release',
 ] as const;
 export type OrchestratorAction = (typeof ORCHESTRATOR_ACTIONS)[number];
 
@@ -3774,6 +3912,16 @@ export interface DaemonMethods {
   /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
   'orchestrator.wake': { params: { token?: string; sessionId: string }; result: Agent };
   /**
+   * Places a budget hold on the zone (`Zone.usageHold`), with why. Only the Captain, or the user's side, and only while
+   * the user lets the Captain pace work by usage, the reading is fresh and the zone's priority is past a threshold
+   * (`usagePace`); refused with why otherwise.
+   */
+  'orchestrator.hold': { params: { token?: string; zoneId: string }; result: Zone };
+  /** Lifts the zone's budget hold: what waited on it goes on. The Captain's, or the user's (their Override). */
+  'orchestrator.release': { params: { token?: string; zoneId: string }; result: Zone };
+  /** Pauses an idle agent for usage, as `orchestrator.pause` does, with why: under the same rules as `orchestrator.hold`. */
+  'orchestrator.usagePause': { params: { token?: string; sessionId: string }; result: Agent };
+  /**
    * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
    * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
    * edge into another orchestrator would steer it). A gate or script condition runs nothing until the user approves it
@@ -4129,6 +4277,10 @@ export interface DaemonMethods {
   'settings.get': { params: undefined; result: DaemonSettings };
   /** Changes the settings given. Keeping only paths drops the copies held now. */
   'settings.set': { params: Partial<DaemonSettings>; result: DaemonSettings };
+  /** The newest plan usage reading. */
+  'usage.get': { params: { token?: string } | undefined; result: UsageReading };
+  /** The user's usage priorities, as the Captain reads them. */
+  'usage.priorities': { params: { token?: string } | undefined; result: UsagePriorities };
   /** Every implementer's review rounds, by implementer and round. */
   'review.list': { params: undefined; result: ReviewRound[] };
   /**
@@ -4331,6 +4483,8 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.showDoc',
   'board.openPullRequest',
   'orchestrator.activity',
+  'usage.get',
+  'usage.priorities',
 ]);
 
 /**
@@ -4348,6 +4502,9 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.restart',
   'orchestrator.pause',
   'orchestrator.wake',
+  'orchestrator.hold',
+  'orchestrator.release',
+  'orchestrator.usagePause',
   'orchestrator.close',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',
@@ -4495,6 +4652,15 @@ export interface AgentUpdatedEvent {
   agent: Agent;
 }
 
+/**
+ * Sent to every client when the transcript of an agent whose conversation a client has read (`agent.transcript`) is
+ * written to, so its chat reads what it gained at once.
+ */
+export interface AgentTranscriptChangedEvent {
+  type: 'agent.transcriptChanged';
+  sessionId: string;
+}
+
 /** Sent to every client when an agent's start begins or changes (`AgentStart`): a step, its name, or its failure. */
 export interface AgentStartingEvent {
   type: 'agent.starting';
@@ -4511,6 +4677,12 @@ export interface AgentStartEndedEvent {
 export interface SettingsUpdatedEvent {
   type: 'settings.updated';
   settings: DaemonSettings;
+}
+
+/** Sent to every client when a newer usage reading comes in, or the last one goes stale. */
+export interface UsageUpdatedEvent {
+  type: 'usage.updated';
+  usage: UsageReading;
 }
 
 /** Sent to every client when an agent is deleted. */
@@ -4716,9 +4888,11 @@ export type DaemonEvent =
   | SessionExitedEvent
   | AgentUpdatedEvent
   | AgentRemovedEvent
+  | AgentTranscriptChangedEvent
   | AgentStartingEvent
   | AgentStartEndedEvent
   | SettingsUpdatedEvent
+  | UsageUpdatedEvent
   | OrchestratorActivityEvent
   | CaptureRequestedEvent;
 

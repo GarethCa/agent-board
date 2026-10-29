@@ -439,19 +439,26 @@
   white-space: nowrap;
 }
 
-/* Something the daemon said went wrong, under the toolbar. */
+/* Before the daemon answers, and on one from another build: the window shows only what the daemon gate says, in its middle. */
+.build-mismatch-screen {
+  display: grid;
+  height: 100vh;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.daemon-connecting {
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
 .build-mismatch {
-  position: absolute;
-  top: calc(var(--island-inset) + var(--island-height) + var(--space-2));
-  left: 50%;
-  z-index: var(--layer-chrome);
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
-  max-width: calc(100% - var(--space-8));
-  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
+  max-width: min(36rem, 100%);
+  padding: var(--space-3);
   background: var(--warning-soft);
   font-size: var(--font-size-sm);
-  translate: -50% 0;
 }
 
 /* The creation toolbar (top centre) */
@@ -1166,12 +1173,23 @@
 
 .master-panel-scope {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  white-space: pre;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
+}
+
+/* Both cut with an ellipsis; the scope gives way well before the model. */
+.master-panel-scope-what,
+.master-panel-scope-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.master-panel-scope-what {
+  flex-shrink: 100;
 }
 
 .master-panel-actions {
@@ -1420,4 +1438,154 @@
   .master-button.ui-button {
     display: none;
   }
+}
+
+/* The usage pill, beside the creation toolbar: the 5-hour and weekly windows, detail on hover. */
+
+.usage-pill {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + var(--space-2));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--island);
+  box-shadow: var(--shadow-island);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  translate: 0 -50%;
+}
+
+.usage-pill.is-hot {
+  box-shadow: var(--shadow-usage-hot);
+}
+
+.usage-pill.is-stale {
+  color: var(--muted);
+}
+
+.usage-pill-window {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.usage-pill-window em {
+  font-style: normal;
+  color: var(--muted);
+}
+
+.usage-pill-stale {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--flow-held);
+  color: var(--flow-held-ink);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.usage-bar {
+  display: inline-block;
+  width: 38px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+}
+
+.usage-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.usage-bar-5h > i {
+  background: var(--warning);
+}
+
+.usage-bar.is-wide {
+  width: 100%;
+  background: var(--on-inverse-soft);
+}
+
+.usage-pill.is-stale .usage-bar > i {
+  background: repeating-linear-gradient(135deg, var(--muted) 0 3px, transparent 3px 6px);
+}
+
+.usage-detail {
+  display: grid;
+  gap: var(--space-2);
+  width: 220px;
+  padding: var(--space-1) 0;
+}
+
+.usage-detail-window {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.usage-detail.is-stale .usage-detail-window {
+  opacity: 0.55;
+}
+
+.usage-detail-head,
+.usage-detail-foot {
+  display: flex;
+  justify-content: space-between;
+}
+
+.usage-detail-head {
+  font-weight: var(--weight-bold);
+}
+
+.usage-detail-foot,
+.usage-detail-fresh {
+  font-size: var(--font-size-xs);
+  opacity: 0.75;
+}
+
+.usage-detail-fresh {
+  padding-top: var(--space-1-5);
+  border-top: 1px solid var(--on-inverse-soft);
+}
+
+.usage-detail.is-stale .usage-detail-fresh {
+  opacity: 1;
+  font-weight: var(--weight-bold);
+}
+
+/* Settings › Usage */
+
+.usage-threshold {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.usage-threshold-text small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.usage-threshold input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.usage-warning {
+  padding: var(--space-1-75) var(--space-2-25);
+  border: 1px solid var(--warning-edge);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
 }

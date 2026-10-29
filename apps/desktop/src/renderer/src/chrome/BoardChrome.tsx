@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import type { Node } from '@xyflow/react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
-import { buildMismatch, BuildMismatch, useDaemonStatus } from '../DaemonStatus';
+import { useDaemonStatus } from '../DaemonStatus';
 import { isTyping } from '../board/use-tile-moves';
 import { pressed } from '../keys/registry';
 import { BoardMenu, type BoardMenuState } from './BoardMenu';
@@ -133,7 +133,6 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterO
         onFind={() => spotlight.current?.open()}
       />
       {loaded && <BoardSpotlight ref={spotlight} agents={agents} shells={shells} zones={zones} />}
-      {buildMismatch(status) && <BuildMismatch app={status.build} health={status.health} />}
       {loaded && (
         <>
           <CreateToolbar {...toolbar} />

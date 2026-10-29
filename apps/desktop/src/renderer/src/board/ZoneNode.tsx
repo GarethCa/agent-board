@@ -1,12 +1,14 @@
 import { createContext, memo, useContext, useId, useState, type CSSProperties, type ReactNode } from 'react';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
-import { ChevronDown, CircleDot, Ellipsis, FileText, FolderGit2, FolderPlus, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, Rows3, ShieldCheck, Unlink, X } from 'lucide-react';
+import { ChevronDown, CircleDot, Ellipsis, FileText, FolderCheck, FolderGit2, FolderPlus, Gauge, GitBranch, LayoutGrid, Link2, ListPlus, ListTodo, Network, Pencil, Plug, Plus, Rows3, ShieldCheck, Unlink, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming, type MenuEntry } from '../ui';
 import { folderLabel } from './folders';
 import { leastZoneSize, SPACING_GAPS, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
+import { PRIORITY_LABELS, priorityChip, zoneHold, zonePriority } from './zone-priority';
+import { ipcErrorMessage } from '../../../shared/errors';
 import {
   ARRANGE_SPACINGS,
   MIN_ZONE_SIZE,
@@ -14,10 +16,12 @@ import {
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
   ZONE_FILL_OPACITY,
+  ZONE_PRIORITIES,
   type ArrangeSpacing,
   type Zone,
   type ZoneBinding,
   type ZoneLayout,
+  type ZonePriority,
 } from '@agent-board/daemon/protocol';
 
 /**
@@ -123,6 +127,8 @@ export interface ZoneBindingActions {
   cancelFill(zone: Zone): void;
   /** Deletes a zone of any kind (after asking), leaving its tiles loose on the board where they are, and its notes and cards. */
   deleteZone(zone: Zone): void;
+  /** Whether Claude's trust screen is answered for the agents started in its folder (`Zone.trustsFolder`). */
+  setTrustsFolder(zone: Zone, on: boolean): void;
   /** Whether agents started in it get the board MCP server (ADR-0010). */
   setBoardMcp(zone: Zone, on: boolean): void;
   /** Lets the agents the user starts in the zone orchestrate there, or stops every agent in it orchestrating. */
@@ -145,6 +151,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   setFill: () => {},
   cancelFill: () => {},
   deleteZone: () => {},
+  setTrustsFolder: () => {},
   setBoardMcp: () => {},
   setAgentsOrchestrate: () => {},
   editGateCommand: () => {},
@@ -198,11 +205,54 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
   );
 }
 
+/**
+ * The zone's priorities to pick from, its own checked, and while it is held for usage, why, with Override. `failed`
+ * hears why a change didn't go through (a daemon from before priorities refuses one).
+ */
+function priorityEntries(zone: Zone, failed: (why: string) => void = () => {}): MenuEntry[] {
+  const hold = zoneHold(zone);
+  const fail = (what: string) => (error: unknown) => failed(`Couldn't ${what}: ${ipcErrorMessage(error)}`);
+  const pick = (priority: ZonePriority) => () => void window.agentBoard.zones.configure(zone.id, { priority }).catch(fail('set its priority'));
+  return [
+    ...ZONE_PRIORITIES.map((priority) => ({ label: PRIORITY_LABELS[priority], checked: zonePriority(zone) === priority, onSelect: pick(priority) })),
+    ...(hold === null
+      ? []
+      : [
+          'separator' as const,
+          { heading: `Held: ${hold.reason}` },
+          { label: 'Override', hint: 'Lift the hold: its starts and hand-offs go on', onSelect: () => void window.agentBoard.orchestrators.release(zone.id).catch(fail('lift the hold')) },
+        ]),
+  ];
+}
+
+/**
+ * The zone's priority on its tab, which the usage thresholds in Settings speak in, as a menu to change it; while the
+ * zone is held for usage, it says so, with why and Override in the menu. A change that fails says why on the chip.
+ */
+function PriorityChip({ zone }: { zone: Zone }) {
+  const [failed, setFailed] = useState<string>();
+  const chip = priorityChip(zone);
+  return (
+    <Menu entries={priorityEntries(zone, setFailed)} onOpenChange={(open) => open && setFailed(undefined)}>
+      <Chip
+        className="zone-tab-control zone-priority nodrag"
+        data-priority={zonePriority(zone)}
+        data-held={zoneHold(zone) !== null || undefined}
+        data-failed={failed === undefined ? undefined : ''}
+        aria-label={chip.label}
+        title={failed ?? chip.title}
+      >
+        {chip.text}
+      </Chip>
+    </Menu>
+  );
+}
+
 /** A chip on a zone's tab that can fold into its ⋯ menu. */
-type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy';
+type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy' | 'priority';
 
 /** The tab's chips, the first to fold into ⋯ first when the zone is too narrow for them all. */
-const FOLD_ORDER: readonly ZoneTabChip[] = ['tidy', 'issue', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
+const FOLD_ORDER: readonly ZoneTabChip[] = ['tidy', 'issue', 'priority', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
 
 /** A chip on the tab now, and what ⋯ offers in its place once it folds: nothing when ⋯ has it already. */
 interface TabChip {
@@ -402,18 +452,25 @@ export const ZoneNode = memo(function ZoneNode({
       entry: { label: 'New shell', icon: <Plus />, onSelect: () => newShell(zone) },
     },
     {
+      key: 'priority',
+      chip: <PriorityChip zone={zone} />,
+      entry: { label: 'Priority', icon: <Gauge />, entries: priorityEntries(zone) },
+    },
+    {
       key: 'tidy',
       chip: <TidyChips zone={zone} binding={binding} />,
       // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
       entry: clone === null ? undefined : { label: 'Tidy', icon: <LayoutGrid />, onSelect: () => binding.tidy(zone) },
     },
   ];
-  const foldable = FOLD_ORDER.filter((key) => chips.some((chip) => chip.key === key));
+  // A Normal zone that isn't held gives up its priority chip first: it is the one the user rarely changes.
+  const order = zonePriority(zone) === 'normal' && zoneHold(zone) === null ? (['priority', ...FOLD_ORDER.filter((key) => key !== 'priority')] as const) : FOLD_ORDER;
+  const foldable = order.filter((key) => chips.some((chip) => chip.key === key));
   // What changes the tab's width without changing the zone's.
-  const content = [zone.name, zone.tracker?.scope, zone.defaultRepo, clone?.phase, clone?.percent].join('\n');
+  const content = [zone.name, zone.tracker?.scope, zone.defaultRepo, clone?.phase, clone?.percent, zonePriority(zone), zoneHold(zone)?.reason].join('\n');
   const { stripRef, tabRef, folded } = useZoneTabFold(foldable, content);
   // Each folded chip's action, at the head of ⋯, the most needed first.
-  const foldedEntries = FOLD_ORDER.toReversed().flatMap((key) => {
+  const foldedEntries = order.toReversed().flatMap((key) => {
     const entry = folded.has(key) ? chips.find((chip) => chip.key === key)?.entry : undefined;
     return entry === undefined ? [] : [entry];
   });
@@ -521,6 +578,18 @@ export const ZoneNode = memo(function ZoneNode({
                       },
                     ]
                   : []),
+                ...(unbound
+                  ? []
+                  : [
+                      {
+                        label: zone.trustsFolder ? "Stop trusting this zone's folder" : "Trust this zone's folder for new agents",
+                        icon: <FolderCheck />,
+                        hint: zone.trustsFolder
+                          ? "New agents show Claude's trust prompt again, for you to answer"
+                          : "Claude's trust prompt is answered for agents started in this folder and its worktrees",
+                        onSelect: () => binding.setTrustsFolder(zone, !zone.trustsFolder),
+                      },
+                    ]),
                 {
                   label: zone.boardMcp ? 'Turn off board MCP' : 'Turn on board MCP',
                   icon: <Plug />,
@@ -560,7 +629,7 @@ export const ZoneNode = memo(function ZoneNode({
                 },
               ]}
             >
-              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, spacing, rename, colour, default repo, unbind, board MCP, orchestrating, gate command, role templates, delete" />
+              <Chip className="zone-tab-control nodrag" icon={<Ellipsis />} aria-label="Zone options" title="Tidy, spacing, rename, colour, default repo, unbind, trusting its folder, board MCP, orchestrating, gate command, role templates, delete" />
             </Menu>
           )}
         </div>

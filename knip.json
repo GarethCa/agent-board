@@ -54,9 +54,13 @@
       ]
     },
     "packages/daemon": {
+      "entry": [
+        "scripts/*.ts"
+      ],
       "project": [
         "src/**/*.ts",
-        "test/**/*.ts"
+        "test/**/*.ts",
+        "scripts/*.ts"
       ]
     }
   }

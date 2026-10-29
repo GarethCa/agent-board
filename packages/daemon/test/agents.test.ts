@@ -23,6 +23,7 @@ import {
   type SessionExitedEvent,
 } from '../src/protocol.ts';
 import type { Clock } from '../src/clock.ts';
+import { QUIET_TURN_MS } from '../src/quiet-turns.ts';
 import { createFakeClock } from './fake-clock.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -47,9 +48,25 @@ async function agentDaemon(
     /** The source its fakes' `SessionStart` names. */
     sessionStartSource?: string;
     /** Its fakes show Claude's trust screen first, as in a folder Claude has never opened (`late-start`: see the fakes). */
-    trustScreen?: boolean | 'late-start' | 'slow-prompt';
+    trustScreen?: boolean | 'late-start' | 'slow-prompt' | 'slow-redraw' | 'stuck-pointer';
     /** The startup screen its fake Codex shows over its composer until Enter answers it. */
     startScreen?: CodexStartScreen;
+    /** How long its fake Claude sits idle at its prompt before it compacts its conversation, as Claude's idle compaction. */
+    idleCompactMs?: number;
+    /** How long its fake Claude sits idle at its prompt before it says another session needs your input. */
+    idleNeedsInputMs?: number;
+    /** The message it says it with instead: a dialog of Claude's own, by its text. */
+    idleNeedsInputMessage?: string;
+    /** Its fake Claude's dialog is closed in its terminal this long after it opens, with no hook. */
+    dialogCloseMs?: number;
+    /** How many of its fakes' turns end with no `Stop` hook. */
+    loseStopHooks?: number;
+    /** How long its fakes take to exit after their `SessionEnd`, still reading what is typed. */
+    sessionEndExitMs?: number;
+    /** Its fake Claude draws its prompt box each time it sits at its prompt (`spinner`: under its spinner line). */
+    promptBox?: boolean | 'spinner';
+    /** Its fake Claude's first tool call never returns. */
+    hangTool?: boolean;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -68,6 +85,14 @@ async function agentDaemon(
       sessionStartSource: options.sessionStartSource,
       trustScreen: options.trustScreen,
       startScreen: options.startScreen,
+      idleCompactMs: options.idleCompactMs,
+      idleNeedsInputMs: options.idleNeedsInputMs,
+      idleNeedsInputMessage: options.idleNeedsInputMessage,
+      dialogCloseMs: options.dialogCloseMs,
+      loseStopHooks: options.loseStopHooks,
+      sessionEndExitMs: options.sessionEndExitMs,
+      promptBox: options.promptBox,
+      hangTool: options.hangTool,
     }),
     permissionHoldMs: options.permissionHoldMs,
     clock: options.clock,
@@ -291,6 +316,197 @@ describe('Claude agents', () => {
     await recorder.waitForText(agent.sessionId, '> Tidy the docs');
   });
 
+  it('holds a message to a Claude agent started with no task until its session is up, never typing it into its trust screen', async () => {
+    const { client, recorder } = await agentDaemon('output', { trustScreen: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    expect(await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.trustFolder !== null);
+    expect(asking).toMatchObject({ untypedPrompt: null, queuedUntilUp: 1, flag: { to: 'user' } });
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Also lint');
+
+    await client.call('agent.trustFolder', { sessionId: agent.sessionId });
+    const submitted = (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit';
+    await recorder.waitFor(submitted);
+    expect(recorder.events.filter(submitted).map((e) => e.payload.prompt)).toEqual(['Also lint']);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ trustFolder: null, flag: null, unsent: null, queuedUntilUp: 0 });
+  });
+
+  it('flags a Claude agent started with no task whose session never says it is up, and lets its first hook release what waits', async () => {
+    const clock = createFakeClock(new Date());
+    const { client, recorder } = await agentDaemon('output', { clock, noSessionStart: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    expect(await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+
+    clock.advance(60_000);
+    const flagged = await untilAgent(recorder, agent.sessionId, (a) => a.flag !== null);
+    expect(flagged.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/never said it was up.*messages to it wait.*Its terminal shows: \S/) });
+    expect(flagged.flag!.reason).not.toContain('Send');
+    expect(flagged.untypedPrompt).toBeNull();
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Also lint');
+
+    // The user's own turn is its session up: what waited goes after it.
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'Say hi\r' });
+    const submitted = (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit';
+    await recorder.waitFor((e): e is HookEvent => submitted(e) && e.payload.prompt === 'Also lint');
+    expect(recorder.events.filter(submitted).map((e) => e.payload.prompt)).toEqual(['Say hi', 'Also lint']);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ flag: null, unsent: null, queuedUntilUp: 0 });
+  });
+
+  it('hands back a message queued for a Claude agent with no task whose session ends before it is up, never typing it', async () => {
+    // It still reads what is typed for a while after its `SessionEnd`: long enough for a message to be taken up there.
+    const { client, recorder } = await agentDaemon('output', { noSessionStart: true, sessionEndExitMs: 3_000 });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    expect(await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+
+    // Ctrl-C twice in a row at its prompt quits Claude: its `SessionEnd` says it is going, never that it is up. Pressed
+    // until it does, as a loaded machine may start reading keys late.
+    for (let press = 0; press < 50 && (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!.endedAt === null; press += 1) {
+      await client.call('session.write', { sessionId: agent.sessionId, data: '\x03' });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const lost = await untilAgent(recorder, agent.sessionId, (a) => a.endedAt !== null && a.undelivered.length > 0);
+    expect(lost.undelivered).toEqual([{ what: 'A message', text: 'Also lint', reason: expect.stringContaining('ended') }]);
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Also lint');
+    expect(recorder.events.some((e) => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit')).toBe(false);
+  });
+
+  it('pauses a Claude agent with no task before its session is up only while nothing waits to be typed at it', async () => {
+    const { client, recorder } = await agentDaemon('output', { noSessionStart: true });
+    const zone = await addZone(client, tempRepo());
+    const holding = await client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    expect(await client.call('agent.answer', { sessionId: holding.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+    await expect(client.call('agent.pause', { sessionId: holding.sessionId })).rejects.toThrow("can't be paused: its session isn't up yet");
+
+    const empty = await client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+    await client.call('agent.pause', { sessionId: empty.sessionId });
+    await untilAgent(recorder, empty.sessionId, (a) => a.state === 'hibernated');
+  });
+
+  it("answers Claude's trust screen by itself in a zone that trusts its folder, and types the task once", async () => {
+    const logs: string[] = [];
+    const { client, recorder } = await agentDaemon('output', { trustScreen: true, log: (message) => void logs.push(message) });
+    const zone = await addZone(client, tempRepo());
+    expect(zone.trustsFolder).toBe(false);
+    await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+
+    const submitted = (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit';
+    await recorder.waitFor(submitted);
+    expect(recorder.events.filter(submitted).map((e) => e.payload.prompt)).toEqual(['Tidy the docs']);
+    // Never flagged to the user, never offered Trust folder: the zone's setting answered, and the tile says so.
+    expect(recorder.events.some((e) => e.type === 'agent.updated' && e.agent.sessionId === agent.sessionId && (e.agent.trustFolder !== null || e.agent.flag !== null))).toBe(false);
+    await untilAgent(recorder, agent.sessionId, (a) => a.trustedByZone);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ trustedByZone: true, trustFolder: null, flag: null, untypedPrompt: null });
+    expect(logs.filter((line) => line.includes("by its zone's setting"))).toHaveLength(1);
+  });
+
+  it("holds a trust screen that stays drawn after the zone's setting answers it as answered: the user is never flagged", async () => {
+    const { client, recorder } = await agentDaemon('output', { trustScreen: 'slow-redraw' });
+    const zone = await addZone(client, tempRepo());
+    await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit');
+    expect(recorder.events.some((e) => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && (e.agent.flag !== null || e.agent.trustFolder !== null))).toBe(false);
+    await untilAgent(recorder, agent.sessionId, (a) => a.trustedByZone);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ trustedByZone: true, flag: null });
+  });
+
+  it("types the task of an agent its zone's setting answered when Claude's prompt is drawn before its SessionStart comes", async () => {
+    const { client, recorder } = await agentDaemon('output', { trustScreen: 'late-start' });
+    const zone = await addZone(client, tempRepo());
+    await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit' && e.payload.prompt === 'Tidy the docs');
+    await untilAgent(recorder, agent.sessionId, (a) => a.trustedByZone);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ trustFolder: null, flag: null, untypedPrompt: null });
+  });
+
+  it("leaves a trust screen to the user when the zone's setting can't move its pointer to the yes row", async () => {
+    const logs: string[] = [];
+    const { client, recorder } = await agentDaemon('output', { trustScreen: 'stuck-pointer', log: (message) => void logs.push(message) });
+    const zone = await addZone(client, tempRepo());
+    await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.trustFolder !== null);
+    expect(asking).toMatchObject({ trustedByZone: false, flag: { to: 'user' } });
+    expect(logs.some((line) => line.includes('left to the user'))).toBe(true);
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
+  });
+
+  describe("a zone's setting answers only for agents in its own folder", () => {
+    it('flags an agent of the same repo running outside a folder zone, though its tile sits in that zone', async () => {
+      const clock = createFakeClock(new Date());
+      const { client, recorder } = await agentDaemon('output', { clock, trustScreen: true });
+      const repo = tempRepo();
+      const whole = await addZone(client, repo);
+      const folder = await client.call('zone.add', { path: join(repo, 'apps', 'web'), x: 400, y: 0 });
+      await client.call('zone.configure', { id: folder.id, trustsFolder: true });
+      const agent = await client.call('agent.spawn', { zoneId: whole.id, prompt: 'Tidy the docs', ...SIZE });
+      await client.call('session.attach', { sessionId: agent.sessionId });
+      await client.call('agent.move', { sessionId: agent.sessionId, zoneId: folder.id, x: 0, y: 0 });
+      const ticking = setInterval(() => clock.advance(100), 20);
+      try {
+        const asking = await untilAgent(recorder, agent.sessionId, (a) => a.trustFolder !== null);
+        expect(asking).toMatchObject({ trustedByZone: false, flag: { to: 'user' } });
+        expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
+      } finally {
+        clearInterval(ticking);
+      }
+    });
+
+    it("flags an agent of another repo whose tile sits in a trusting zone", async () => {
+      const clock = createFakeClock(new Date());
+      const { client, recorder } = await agentDaemon('output', { clock, trustScreen: true });
+      const trusting = await addZone(client, tempRepo());
+      await client.call('zone.configure', { id: trusting.id, trustsFolder: true });
+      const other = await client.call('zone.add', { path: tempRepo('other'), x: 400, y: 0 });
+      const agent = await client.call('agent.spawn', { zoneId: other.id, prompt: 'Tidy the docs', ...SIZE });
+      await client.call('session.attach', { sessionId: agent.sessionId });
+      await client.call('agent.move', { sessionId: agent.sessionId, zoneId: trusting.id, x: 0, y: 0 });
+      const ticking = setInterval(() => clock.advance(100), 20);
+      try {
+        const asking = await untilAgent(recorder, agent.sessionId, (a) => a.trustFolder !== null);
+        expect(asking).toMatchObject({ trustedByZone: false, flag: { to: 'user' } });
+      } finally {
+        clearInterval(ticking);
+      }
+    });
+
+    it("answers for an agent in a folder zone's own folder, in its worktree", async () => {
+      const { client, recorder } = await agentDaemon('output', { trustScreen: true });
+      const repo = tempRepo();
+      const folder = await client.call('zone.add', { path: join(repo, 'apps', 'web'), x: 0, y: 0 });
+      await client.call('zone.configure', { id: folder.id, trustsFolder: true });
+      const agent = await client.call('agent.spawn', { zoneId: folder.id, prompt: 'Tidy the docs', ...SIZE });
+      await client.call('session.attach', { sessionId: agent.sessionId });
+      await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit');
+      await untilAgent(recorder, agent.sessionId, (a) => a.trustedByZone);
+      expect((await client.call('agent.list'))[0]).toMatchObject({ trustedByZone: true, trustFolder: null, flag: null });
+    });
+  });
+
+  it("leaves Claude's trust screen to the user in a zone that doesn't trust its folder", async () => {
+    const { client, recorder } = await agentDaemon('output', { trustScreen: true });
+    const zone = await addZone(client, tempRepo());
+    await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    await client.call('zone.configure', { id: zone.id, trustsFolder: false });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.trustFolder !== null);
+    expect(asking).toMatchObject({ trustedByZone: false, flag: { to: 'user' } });
+  });
+
   it("flags Claude's trust screen to the user, never typing into it, and types the task once Trust folder answers it", async () => {
     const { client, recorder } = await agentDaemon('output', { trustScreen: true });
     const zone = await addZone(client, tempRepo());
@@ -425,6 +641,165 @@ describe('Claude agents', () => {
       (e): e is AgentUpdatedEvent => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId && e.agent.untypedPrompt === 'Tidy the docs',
     );
     expect(recorder.screenText(agent.sessionId)).not.toContain('Tidy the docs');
+  });
+
+  it('keeps waiting at its prompt, not running, when Claude compacts its conversation while idle', async () => {
+    const { client, recorder } = await agentDaemon('output', { idleNotifyMs: 100, idleCompactMs: 400 });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await untilState(recorder, agent.sessionId, 'waiting');
+    const compacted = await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart' && e.payload.source === 'compact',
+    );
+
+    const after = statesOf(recorder.events.slice(recorder.events.indexOf(compacted)), agent.sessionId);
+    expect(after).not.toContain('running');
+    const [listed] = await client.call('agent.list');
+    expect(listed).toMatchObject({ sessionId: agent.sessionId, state: 'waiting' });
+  });
+
+  it('takes a message at its prompt after Claude says another session needs input, its turn ended', async () => {
+    const { client, recorder } = await agentDaemon('output', { idleNeedsInputMs: 100, idleNotifyMs: 300 });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Tidy the docs');
+    const ended = await untilAgent(recorder, agent.sessionId, (a) => a.finishedAt !== null);
+    await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.payload.notification_type === 'agent_needs_input',
+    );
+    await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.payload.notification_type === 'idle_prompt',
+    );
+    const [listed] = await client.call('agent.list');
+    expect(listed).toMatchObject({ state: 'waiting', lastMessage: ended.lastMessage });
+
+    await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' });
+    await recorder.waitForText(agent.sessionId, 'Done: Also lint.');
+  });
+
+  it.each([
+    ['before its idle prompt', { idleNeedsInputMs: 100, idleNotifyMs: 600_000 }],
+    ['after its idle prompt', { idleNeedsInputMs: 400, idleNotifyMs: 100 }],
+  ])("refuses a message while a dialog of Claude's own is up at its prompt (%s), quoting it, and types nothing", async (_when, timing) => {
+    const notice = 'Auto mode has a classifier billing notice to acknowledge';
+    const { client, recorder } = await agentDaemon('output', { ...timing, idleNeedsInputMessage: notice });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Tidy the docs');
+    const waiting = await untilAgent(recorder, agent.sessionId, (a) => a.state === 'waiting' && a.lastMessage === notice);
+    expect(waiting.seen).toBe(false);
+
+    await expect(client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).rejects.toThrow(
+      `is waiting on a question or dialog of its own, "${notice}": answer it in its terminal`,
+    );
+    expect(recorder.screenText(agent.sessionId)).not.toContain('Also lint');
+  });
+
+  describe('whose Stop was lost', () => {
+    /** An agent of the fake claude on `clock`, with what the daemon logs, its quiet net's lines among them. */
+    const quietAgent = async (scenario: FakeScenario, fakes: Parameters<typeof agentDaemon>[1]) => {
+      const clock = createFakeClock(new Date());
+      const logged: string[] = [];
+      // No idle prompt: every hook after the turn's work is lost, the net's premise.
+      const daemon = await agentDaemon(scenario, { clock, idleNotifyMs: 600_000, log: (line) => logged.push(line), ...fakes });
+      const zone = await addZone(daemon.client, tempRepo());
+      const agent = await spawnAttached(daemon.client, zone.id, 'Tidy the docs');
+      // The net reads the transcript and the screen before it logs, which under a loaded full run takes longer than waitFor's 1 s default.
+      const netSaid = (said: RegExp) =>
+        vi.waitFor(() => expect(logged).toContainEqual(expect.stringMatching(new RegExp(`^agent ${agent.sessionId} ${said.source}`))), { timeout: 10_000 });
+      const stateNow = async () => (await daemon.client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!.state;
+      return { ...daemon, clock, logged, agent, netSaid, stateNow };
+    };
+
+    it('moves to idle when word of another session left it waiting, its turn over, and then takes a message', async () => {
+      const { clock, client, recorder, agent, netSaid } = await quietAgent('output', { loseStopHooks: 1, promptBox: true, idleNeedsInputMs: 100 });
+      await untilState(recorder, agent.sessionId, 'waiting');
+      await vi.waitFor(() => expect(recorder.screenText(agent.sessionId)).toContain('❯'));
+
+      clock.advance(QUIET_TURN_MS);
+      await untilState(recorder, agent.sessionId, 'idle');
+      await netSaid(/was waiting with no hook or output for 5 min, .*moved to idle, nothing of its own up/);
+      await client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' });
+      await recorder.waitForText(agent.sessionId, 'Done: Also lint.');
+    });
+
+    it("leaves a dialog of Claude's own up while its screen shows no prompt, saying so once, and frees it once closed in its terminal", async () => {
+      const notice = 'Auto mode has a classifier billing notice to acknowledge';
+      const { clock, recorder, agent, logged, stateNow, netSaid } = await quietAgent('output', {
+        idleNeedsInputMs: 100,
+        idleNeedsInputMessage: notice,
+        dialogCloseMs: 5_000,
+      });
+      await untilAgent(recorder, agent.sessionId, (a) => a.state === 'waiting' && a.lastMessage === notice);
+
+      const left = new RegExp(`^agent ${agent.sessionId} was waiting with no hook or output for 5 min, but its screen shows no prompt of Claude's between turns: left waiting$`);
+      clock.advance(QUIET_TURN_MS);
+      await vi.waitFor(() => expect(logged).toContainEqual(expect.stringMatching(left)));
+      // Looked at again, the dialog still up: nothing more to say.
+      clock.advance(QUIET_TURN_MS);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(logged.filter((line) => left.test(line))).toHaveLength(1);
+      expect(await stateNow()).toBe('waiting');
+
+      // The user closes it in its terminal: no hook comes, but its prompt is back.
+      await recorder.waitForText(agent.sessionId, '❯');
+      const closed = recorder.events.length;
+      clock.advance(QUIET_TURN_MS);
+      await untilState(recorder, agent.sessionId, 'idle', closed);
+      await netSaid(/was waiting with no hook or output for 5 min, .*moved to idle, nothing of its own up/);
+      expect(logged.filter((line) => left.test(line))).toHaveLength(1);
+    });
+
+    it("moves to idle once it has sat quiet at Claude's prompt, its transcript ended, and the log says why", async () => {
+      const { clock, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1, promptBox: true });
+      await vi.waitFor(() => expect(recorder.screenText(agent.sessionId)).toContain('❯'));
+      expect(await stateNow()).toBe('thinking');
+
+      clock.advance(QUIET_TURN_MS);
+      await untilState(recorder, agent.sessionId, 'idle');
+      await netSaid(/was thinking with no hook or output for 5 min, its transcript says its turn ended and its screen shows Claude's prompt: moved to idle/);
+    });
+
+    it('moves to idle when a permission denied on the board was the last its turn showed: that state is timed too', async () => {
+      const { clock, client, recorder, agent, netSaid } = await quietAgent('permission', { loseStopHooks: 1, promptBox: true });
+      const { permissions } = await untilState(recorder, agent.sessionId, 'needs-permission');
+      await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: permissions[0]!.id, behavior: 'deny', message: 'Keep dist' });
+      await untilState(recorder, agent.sessionId, 'running');
+      await recorder.waitForText(agent.sessionId, '❯');
+
+      clock.advance(QUIET_TURN_MS);
+      await untilState(recorder, agent.sessionId, 'idle');
+      await netSaid(/was running with no hook or output for 5 min, .*moved to idle/);
+    });
+
+    it("stays at work while a silent tool call holds its turn, though its screen shows only Claude's prompt box (reduced motion)", async () => {
+      const { clock, recorder, agent, netSaid, stateNow } = await quietAgent('output', { hangTool: true, promptBox: true });
+      await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'PreToolUse');
+      await recorder.waitForText(agent.sessionId, '❯');
+
+      clock.advance(QUIET_TURN_MS);
+      await netSaid(/was running with no hook or output for 5 min, but its transcript shows its turn under way: left at work$/);
+      expect(await stateNow()).toBe('running');
+    });
+
+    it("stays at work while Claude's spinner line is still drawn over its prompt box, its transcript ended", async () => {
+      const { clock, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1, promptBox: 'spinner' });
+      await recorder.waitForText(agent.sessionId, '❯');
+
+      clock.advance(QUIET_TURN_MS);
+      await netSaid(/was thinking with no hook or output for 5 min, but its screen shows no prompt of Claude's between turns: left at work$/);
+      expect(await stateNow()).toBe('thinking');
+    });
+
+    it("stays at work when Claude's screen shows no prompt, and is looked at again a spell later", async () => {
+      const { clock, logged, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1 });
+      await recorder.waitForText(agent.sessionId, 'All tests pass.');
+
+      clock.advance(QUIET_TURN_MS);
+      await netSaid(/.*but its screen shows no prompt of Claude's between turns: left at work$/);
+      clock.advance(QUIET_TURN_MS);
+      await vi.waitFor(() => expect(logged.filter((line) => line.includes('left at work'))).toHaveLength(2));
+      expect(await stateNow()).toBe('thinking');
+    });
   });
 
   it('starts a folder zone agent in that folder of its worktree', async () => {
@@ -907,6 +1282,28 @@ describe('Claude agents', () => {
       });
     });
 
+    it('holds a message to a Claude agent resumed with no new prompt until its session is up, then sends it', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('waiting', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Pick a database', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'waiting');
+      await first.daemon.stop();
+      // Its session never says it is up by a hook: only its prompt, drawn on its screen once it is given up on, does.
+      const clock = createFakeClock(new Date());
+      const second = await agentDaemon('waiting', { dataDir, home: first.home, clock, noSessionStart: true, promptBox: true });
+
+      await second.client.call('agent.resume', { sessionId: agent.sessionId });
+      await second.client.call('session.attach', { sessionId: agent.sessionId });
+      expect(await second.client.call('agent.answer', { sessionId: agent.sessionId, text: 'MariaDB' })).toEqual({ queued: true });
+      await second.recorder.waitForText(agent.sessionId, 'Which database should I use');
+      expect(second.recorder.screenText(agent.sessionId)).not.toContain('MariaDB');
+
+      clock.advance(60_000);
+      await second.recorder.waitForText(agent.sessionId, 'Done: MariaDB.');
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({ unsent: null, queuedUntilUp: 0 });
+    });
+
     it('starts a Claude agent that never had a turn fresh under the same id, instead of failing to resume it', async () => {
       const dataDir = tempDataDir();
       const first = await agentDaemon('waiting', { dataDir });
@@ -1308,7 +1705,7 @@ describe('the needs-you inbox', () => {
 
     await untilState(recorder, agent.sessionId, 'idle', answered);
     const { entries } = await client.call('agent.transcript', { sessionId: agent.sessionId });
-    expect(entries.filter((entry) => entry.kind === 'user')).toEqual([
+    expect(entries.filter((entry) => entry.kind === 'user')).toMatchObject([
       { kind: 'user', text: 'Pick a database' },
       { kind: 'user', text: 'SQLite,\nfor now' },
     ]);

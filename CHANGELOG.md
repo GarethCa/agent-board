@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.7 (2026-10-29)
+
+- The quiet-net tests wait up to 10 s for the net's log line, which a loaded full run can take more than 1 s to write
+- The kept-terminal flag reads location only where there is one, so tests that import the terminal pane under node load again
+- README screenshots show the zone priority chip and the chat's live states
+- The chat shows Claude Code's live states, in a style the user picks: cards, timeline rail or status line
+- Rendering deep dive: terminals are rebuilt as they come into view; a benchmark, ranked findings and a kept-terminal prototype
+- An agent whose turn ended takes messages when Claude says another session needs input
+- Every Claude launch waits for its session before anything is typed; a message left unsent flags the user
+- wait takes a duration for --timeout, documents exit 3 on a timeout, and the MCP wait tool returns timedOut
+- update:app restarts the daemon and resumes its sessions, and the app never renders another build's daemon (no more blank window)
+- Time assertions pass under a 12-hour locale: pin doc-view's clock, let the e2e delivered note carry AM/PM
+- A sent message shows in the chat at once, the transcript is pushed instead of polled, and a pasted block folds
+- The Captain sees 5h and weekly usage, and paces work by the user's zone priorities (opt-in)
+- A long message is pasted at an agent's prompt, so Claude keeps all of it; a resumed agent is shown to sit idle
+- A zone can trust its folder, so new Claude agents there skip the trust screen
+- An agent stays at its prompt when Claude compacts while idle, and a lost Stop no longer leaves it running
+
 ## v0.6.6 (2026-10-28)
 
 - An agent may reply to an agent that messaged it, even outside its scope

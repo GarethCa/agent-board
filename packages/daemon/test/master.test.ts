@@ -7,7 +7,7 @@ import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { daemonPaths } from '../src/paths.ts';
 import { masterPosition } from '../src/master.ts';
 import { BOARD_ERROR, RPC_ERROR, TILE_SLOT, type Agent } from '../src/protocol.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, insertFakeSession, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
@@ -182,6 +182,78 @@ describe('the Captain', () => {
       message: expect.stringContaining('needs-you'),
     });
     expect((await client.call('agent.list')).filter((agent) => agent.zoneId === zone.id)).toEqual([]);
+  });
+
+  it('paces work by usage only once the user lets it: holds a zone past the thresholds, which then starts no agent', async () => {
+    const setup = await masterDaemon();
+    const { client, daemon, dataDir } = setup;
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
+    await client.call('zone.configure', { id: zone.id, priority: 'low' });
+    const { token, connection } = await masterSide(setup);
+    // A Claude agent's status line posts the reading.
+    insertFakeSession(dataDir, { id: 'reader', hookToken: 'reader-token' });
+    const posted = await fetch(`http://127.0.0.1:${daemon.hookPort}/usage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token' },
+      body: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 86, resets_at: Date.now() / 1000 + 3600 } } }),
+    });
+    expect(posted.status).toBe(200);
+    expect(await connection.call('usage.get', { token })).toMatchObject({ fiveHour: { usedPercent: 86 }, stale: false });
+
+    await expect(connection.call('orchestrator.hold', { token, zoneId: zone.id })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+      message: expect.stringContaining('Settings › Usage'),
+    });
+    await expect(connection.call('settings.set', { token, usagePacing: true } as never)).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await client.call('settings.set', { usagePacing: true });
+
+    const held = await connection.call('orchestrator.hold', { token, zoneId: zone.id });
+
+    expect(held.usageHold).toMatchObject({ reason: '5h at 86%, zone low priority' });
+    await expect(connection.call('orchestrator.spawn', { token, zoneId: zone.id, prompt: 'Fix it' })).rejects.toMatchObject({
+      code: BOARD_ERROR.notAllowed,
+      message: expect.stringContaining('held for usage (5h at 86%, zone low priority)'),
+    });
+    expect((await client.call('agent.list')).filter((agent) => agent.zoneId === zone.id)).toEqual([]);
+    expect((await client.call('orchestrator.release', { zoneId: zone.id })).usageHold).toBeNull();
+  });
+
+  it("keeps its usage holds from the zone's own lead: no other agent lifts a zone's hold, or wakes or messages an agent it paused", async () => {
+    const setup = await masterDaemon();
+    const { client, daemon, dataDir } = setup;
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
+    await client.call('zone.configure', { id: zone.id, priority: 'low' });
+    const lead = await client.call('agent.spawn', { zoneId: zone.id, role: 'orchestrator', orchestrate: 'zone', name: 'web lead', ...SIZE });
+    const worker = await client.call('agent.spawn', { zoneId: zone.id, name: 'worker', ...SIZE });
+    for (const agent of [lead, worker]) await until(client, agent.sessionId, atPrompt);
+    const { token, connection } = await masterSide(setup);
+    await client.call('agent.answer', { sessionId: lead.sessionId, text: 'Print your board identity' });
+    const leadSide = await sideOf(setup, lead.sessionId);
+    await client.call('settings.set', { usagePacing: true });
+    insertFakeSession(dataDir, { id: 'reader', hookToken: 'reader-token' });
+    await fetch(`http://127.0.0.1:${daemon.hookPort}/usage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token' },
+      body: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 96, resets_at: Date.now() / 1000 + 3600 } } }),
+    });
+
+    await connection.call('orchestrator.hold', { token, zoneId: zone.id });
+    await connection.call('orchestrator.usagePause', { token, sessionId: worker.sessionId });
+    await until(client, worker.sessionId, (agent) => agent.state === 'hibernated');
+
+    const refused = { code: BOARD_ERROR.notAllowed, message: expect.stringContaining('only the Captain') };
+    await expect(leadSide.connection.call('orchestrator.release', { token: leadSide.token, zoneId: zone.id })).rejects.toMatchObject(refused);
+    await expect(leadSide.connection.call('orchestrator.wake', { token: leadSide.token, sessionId: worker.sessionId })).rejects.toMatchObject(refused);
+    await expect(leadSide.connection.call('orchestrator.restart', { token: leadSide.token, sessionId: worker.sessionId })).rejects.toMatchObject(refused);
+    await expect(leadSide.connection.call('orchestrator.send', { token: leadSide.token, sessionId: worker.sessionId, text: 'carry on' })).rejects.toMatchObject(refused);
+    expect((await client.call('agent.list')).find((agent) => agent.sessionId === worker.sessionId)).toMatchObject({
+      state: 'hibernated',
+      hibernated: { reason: '5h at 96%, zone low priority' },
+    });
+
+    // The Captain lifts what it placed.
+    await connection.call('orchestrator.wake', { token, sessionId: worker.sessionId });
+    expect((await connection.call('orchestrator.release', { token, zoneId: zone.id })).usageHold).toBeNull();
   });
 
   it('leaves the questions and plans of the leads it starts to the user: it can neither answer nor approve them', async () => {

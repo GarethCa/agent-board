@@ -14,7 +14,7 @@ import {
   type Harness,
   type OrchestratorActivityEvent,
 } from '../src/protocol.ts';
-import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, insertFakeSession, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
 
@@ -88,10 +88,18 @@ async function agentSide(setup: Setup, name: string) {
   return { agent, token, connection };
 }
 
-/** An agent the user started, at its prompt, attached so what it is typed can be read. */
+/**
+ * An agent the user started, at its prompt, attached so what it is typed can be read. A Claude one is waited on until
+ * its session is up: nothing is delivered to it before then.
+ */
 async function receiver(setup: Setup, name: string, harness: Harness = 'claude'): Promise<Agent> {
   const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name, harness, ...SIZE });
   await setup.client.call('session.attach', { sessionId: agent.sessionId });
+  if (harness === 'claude') {
+    await setup.recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
+    );
+  }
   return agent;
 }
 
@@ -99,6 +107,10 @@ const handover = (worktree: string, text: string, path = 'handover.md') => {
   mkdirSync(join(worktree, path, '..'), { recursive: true });
   writeFileSync(join(worktree, path), text);
 };
+
+/** What the agent's transcript says it was prompted, oldest first. */
+const userPrompts = async (setup: Setup, sessionId: string) =>
+  (await setup.client.call('agent.transcript', { sessionId })).entries.flatMap((entry) => (entry.kind === 'user' ? [entry.text] : []));
 
 /** The kinds of the edge's events, oldest first. */
 const historyOf = async (setup: Setup, id: string) =>
@@ -286,6 +298,35 @@ describe('handing off explicitly', () => {
     await setup.client.call('flowEdge.send', { id: edge.id });
     expect(await historyOf(setup, edge.id)).toEqual(['delivered', 'delivered', 'delivered']);
     expect(await setup.client.call('flowEdge.lastPayload', { id: edge.id })).toMatchObject({ text: 'And the signup test' });
+  });
+
+  it('skips a named hand-off to an agent paused for usage, or into a zone under a budget hold, saying why', async () => {
+    const dataDir = tempDataDir();
+    const setup = await handoffDaemon(0, dataDir);
+    const { token, connection } = await agentSide(setup, 'impl');
+    const b = await receiver(setup, 'review');
+    await setup.client.call('settings.set', { usagePacing: true });
+    await setup.client.call('zone.configure', { id: setup.zone.id, priority: 'low' });
+    insertFakeSession(dataDir, { id: 'reader', hookToken: 'reader-token' });
+    await fetch(`http://127.0.0.1:${setup.daemon.hookPort}/usage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token' },
+      body: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 96, resets_at: Date.now() / 1000 + 3600 } } }),
+    });
+    await setup.client.call('orchestrator.usagePause', { sessionId: b.sessionId });
+    await untilAgent(setup.recorder, b.sessionId, (agent) => agent.state === 'hibernated');
+
+    const [paused] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'Please review the login fix' });
+    expect(paused).toMatchObject({ outcome: 'skipped', reason: 'held: paused for usage, 5h at 96%, zone low priority' });
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === b.sessionId)?.state).toBe('hibernated');
+
+    // Woken by the user, it takes one; then its zone is held, and the next waits too.
+    await setup.client.call('agent.resume', { sessionId: b.sessionId });
+    await untilAgent(setup.recorder, b.sessionId, (agent) => agent.state !== 'hibernated');
+    await setup.client.call('orchestrator.hold', { zoneId: setup.zone.id });
+    const [held] = await connection.call('board.handoff', { token, to: b.sessionId, message: 'And the signup test' });
+    expect(held).toMatchObject({ outcome: 'skipped', reason: 'held: 5h at 96%, zone low priority' });
+    expect(await historyOf(setup, held!.edgeId)).toEqual(['skipped', 'skipped']);
   });
 
   it("keeps what a named hand-off carried, so Send replays it after a restart: JSON handed inline is no file", async () => {
@@ -587,6 +628,25 @@ describe('submitting a hand-off', () => {
     },
   );
 
+  it('hands off several KiB along an auto edge whole to a Claude agent, which keeps only the end of a line that long typed at it', async () => {
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
+    const { agent: a } = await agentSide(setup, 'impl');
+    const b = await receiver(setup, 'review');
+    await setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    const paragraph = (n: number) => Array.from({ length: 60 }, (_, index) => `p${n}w${index}`).join(' ');
+    const text = Array.from({ length: 8 }, (_, n) => paragraph(n)).join('\n\n');
+    expect(text.length).toBeGreaterThan(2_500);
+    handover(a.worktree, text);
+    await setup.client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, payload: 'handover', path: 'handover.md' });
+    const since = setup.recorder.events.length;
+
+    // Its turn's end hands off along the edge.
+    await setup.client.call('agent.answer', { sessionId: a.sessionId, text: 'Write it again' });
+
+    await untilTurnEnds(setup.recorder, b.sessionId, since);
+    expect(await userPrompts(setup, b.sessionId)).toEqual([`Hand-off from impl (its handover.md): ${text.replace(/\s+/g, ' ')}`]);
+  });
+
   it('shows a hand-off still unsent after every Enter on its agent, types nothing more after it, and sends it on Send', async () => {
     const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 4 }, 200);
     const { agent: a } = await agentSide(setup, 'impl');
@@ -598,6 +658,12 @@ describe('submitting a hand-off', () => {
 
     const stuck = await untilAgent(setup.recorder, b.sessionId, (seen) => seen.unsent !== null);
     expect(stuck).toMatchObject({ unsent: 'Hand-off from impl', state: 'idle' });
+    // The user is told why, and looking answers nothing: only Send or Clear does.
+    expect(stuck.flag).toMatchObject({
+      to: 'user',
+      reason: 'Hand-off from impl was typed at its prompt but not sent (no turn started on it after 3 presses of Enter): Send or Clear it on its tile',
+    });
+    expect((await setup.client.call('agent.markSeen', { sessionId: b.sessionId })).flag).toEqual(stuck.flag);
     expect((await setup.client.call('flowEdge.send', { id: edge.id })).lastDelivery).toMatchObject({
       delivered: false,
       reason: 'a message typed at its prompt was never sent',
@@ -610,7 +676,7 @@ describe('submitting a hand-off', () => {
 
     // Its fourth lost Enter is Send's first: the next submits it.
     const sent = await setup.client.call('agent.sendUnsent', { sessionId: b.sessionId });
-    expect(sent.unsent).toBeNull();
+    expect(sent).toMatchObject({ unsent: null, flag: null });
     await untilTurnEnds(setup.recorder, b.sessionId, stuck.at);
     await setup.recorder.waitForText(b.sessionId, '> Hand-off from impl');
     expect(setup.recorder.screenText(b.sessionId).split('> Hand-off from impl')).toHaveLength(2);
@@ -639,6 +705,26 @@ describe('submitting a hand-off', () => {
       kind: 'delivered',
       detail: 'handover.md (24 B)',
     });
+  });
+
+  it("folds a hand-off left unsent into the flag its agent already raised, and puts that flag back once it is sent", async () => {
+    // Every line typed after its first prompt loses its Enters: three the delivery presses, and Send's first.
+    const setup = await handoffDaemon(0, tempDataDir(), { loseEnters: 4, loseEntersAfter: 1 }, 200);
+    const { agent: a } = await agentSide(setup, 'impl');
+    const { agent: b, token, connection } = await agentSide(setup, 'review');
+    const own = (await connection.call('board.needsYou', { token, reason: 'Stuck on the schema' })).flag!;
+    handover(a.worktree, 'The login test is fixed.');
+    const edge = await setup.client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, trigger: 'manual', payload: 'handover', path: 'handover.md' });
+
+    await setup.client.call('flowEdge.send', { id: edge.id });
+
+    const stuck = await untilAgent(setup.recorder, b.sessionId, (seen) => seen.unsent !== null);
+    expect(stuck.flag).toMatchObject({
+      to: 'user',
+      reason: 'Hand-off from impl was typed at its prompt but not sent (no turn started on it after 3 presses of Enter): Send or Clear it on its tile. Also: Stuck on the schema',
+    });
+    const sent = await setup.client.call('agent.sendUnsent', { sessionId: b.sessionId });
+    expect(sent).toMatchObject({ unsent: null, flag: { reason: own.reason } });
   });
 
   it('clears a hand-off still unsent from the board, so deliveries type at it again', async () => {
@@ -709,7 +795,57 @@ describe('an answer sent mid-turn', () => {
   });
 });
 
+describe('after a restart', () => {
+  it('takes a resumed Claude agent sitting at its prompt as idle, so its edge hands on to it at the next turn end', async () => {
+    const dataDir = tempDataDir();
+    const agentEnv = fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir(), idleNotifyMs: 200, repeat: true });
+    const worktreesDir = tempDataDir();
+    const first = await startTestDaemon({ dataDir, worktreesDir, agentEnv });
+    const client = await connectTestClient(first);
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0, name: 'web' });
+    const a = await client.call('agent.spawn', { zoneId: zone.id, name: 'impl', prompt: 'Write the handover', ...SIZE });
+    const b = await client.call('agent.spawn', { zoneId: zone.id, name: 'review', prompt: 'Write the handover', ...SIZE });
+    const recorder = recordEvents(client);
+    for (const { sessionId } of [a, b]) await untilAgent(recorder, sessionId, (seen) => seen.state === 'waiting' || seen.state === 'idle');
+    client.close();
+    await first.stop();
+
+    const second = await startTestDaemon({ dataDir, worktreesDir, agentEnv, flowRecheckMs: 0 });
+    const again = await connectTestClient(second);
+    const after = recordEvents(again);
+    for (const { sessionId } of [a, b]) await again.call('agent.resume', { sessionId });
+    await after.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    await again.call('session.attach', { sessionId: b.sessionId });
+    // Resumed, not started afresh: it shows its conversation so far again.
+    await after.waitForText(b.sessionId, '> Write the handover');
+    expect((await again.call('agent.list')).find((each) => each.sessionId === b.sessionId)).toMatchObject({ state: 'idle' });
+    const edge = await again.call('flowEdge.create', { from: a.sessionId, to: b.sessionId, payload: 'handover', path: '.agent-board/handover.md' });
+
+    await again.call('agent.answer', { sessionId: a.sessionId, text: 'Write it again' });
+
+    await untilEdge(after, edge.id, (seen) => seen.deliveries === 1 && !seen.delivering);
+    await after.waitForText(b.sessionId, '> Hand-off from impl');
+    expect(await historyOf({ client: again } as Setup, edge.id)).toEqual(['delivered']);
+  });
+});
+
 describe('an answer to an agent between turns', () => {
+  it.each(['claude', 'codex'] as const)('sends the user a long one-line answer whole to a %s agent', async (harness) => {
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
+    const b = await receiver(setup, 'review', harness);
+    // Up, reading its keys: Codex fires no SessionStart before its first prompt, but draws its composer.
+    if (harness === 'codex') await setup.recorder.waitForText(b.sessionId, '? for shortcuts');
+    else await setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    const text = Array.from({ length: 400 }, (_, index) => `word${index}`).join(' ');
+    expect(text.length).toBeGreaterThan(2_000);
+    const since = setup.recorder.events.length;
+
+    await setup.client.call('agent.answer', { sessionId: b.sessionId, text });
+
+    await untilTurnEnds(setup.recorder, b.sessionId, since);
+    expect(await userPrompts(setup, b.sessionId)).toEqual([text]);
+  });
+
   it('types nothing at a rate-limited agent, whose harness may show a menu of what to do about it, and says why', async () => {
     const setup = await handoffDaemon(0, tempDataDir(), {}, 200);
     const b = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, name: 'review', prompt: 'Hit the rate limit', ...SIZE });

@@ -100,8 +100,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
-    const { codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, spacing } = settings;
-    return daemon.call('zone.configure', { id, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, spacing });
+    const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, priority } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, priority });
   });
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>
     daemon.call('zone.setTracker', { id, tracker }),
@@ -134,8 +134,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
 }
 
 /** Only the fields of a new zone the daemon takes, whatever else the renderer sent. */
-function newZone({ x, y, width, height, name, color, tracker }: NewZoneParams): NewZoneParams {
-  return { x, y, width, height, name, color, tracker };
+function newZone({ x, y, width, height, name, color, tracker, trustsFolder }: NewZoneParams): NewZoneParams {
+  return { x, y, width, height, name, color, tracker, trustsFolder };
 }
 
 /** Asks the user for a folder, then hands it to `use`; a folder the daemon refuses comes back with its reason. */

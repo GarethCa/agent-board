@@ -1,3 +1,5 @@
+import { appendFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { RPC_ERROR, type ChatEntry, type Harness } from '../src/protocol.ts';
@@ -7,10 +9,11 @@ const SIZE = { cols: 100, rows: 30 };
 
 /** Runs the fake harness's `subagent` scenario; resolves once its transcript has the turn's final message. */
 async function finishedSubagentRun(harness: Harness) {
+  const home = tempDataDir();
   const daemon = await startTestDaemon({
     dataDir: tempDataDir(),
     worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'subagent', home: tempDataDir(), idleNotifyMs: 60_000 }),
+    agentEnv: fakeHarnessEnv({ scenario: 'subagent', home, idleNotifyMs: 60_000 }),
   });
   const client = await connectTestClient(daemon);
   const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
@@ -18,11 +21,11 @@ async function finishedSubagentRun(harness: Harness) {
   await vi.waitFor(
     async () => {
       const { entries } = await client.call('agent.transcript', { sessionId: agent.sessionId });
-      expect(entries.at(-1)).toEqual({ kind: 'assistant', text: 'The explorer found where sessions are created.' });
+      expect(entries.at(-1)).toMatchObject({ kind: 'assistant', text: 'The explorer found where sessions are created.' });
     },
     { timeout: RUN_TIMEOUT - 5000, interval: 100 },
   );
-  return { client, agent };
+  return { client, agent, home };
 }
 
 const kinds = (entries: ChatEntry[]) => entries.map((entry) => entry.kind);
@@ -36,7 +39,7 @@ describe("an agent's conversation, from its transcript", () => {
     const chunk = await client.call('agent.transcript', { sessionId: agent.sessionId, since: 0 });
     expect(chunk.status).toBe('ok');
     expect(kinds(chunk.entries)).toEqual(['user', 'assistant', 'tool-call', 'tool-result', 'assistant']);
-    expect(chunk.entries[0]).toEqual({ kind: 'user', text: 'Map the code' });
+    expect(chunk.entries[0]).toMatchObject({ kind: 'user', text: 'Map the code' });
     const call = chunk.entries[2] as Extract<ChatEntry, { kind: 'tool-call' }>;
     expect(call).toMatchObject({ name: 'Agent', input: { subagent_type: 'Explore' } });
 
@@ -47,7 +50,7 @@ describe("an agent's conversation, from its transcript", () => {
     });
 
     const subagent = await client.call('agent.subagentTranscript', { sessionId: agent.sessionId, toolUseId: call.id });
-    expect(subagent.entries).toEqual([
+    expect(subagent.entries).toMatchObject([
       { kind: 'user', text: 'Find where sessions are created' },
       { kind: 'assistant', text: 'Sessions are created in src/daemon/sessions.ts.' },
     ]);
@@ -58,7 +61,20 @@ describe("an agent's conversation, from its transcript", () => {
     const chunk = await client.call('agent.transcript', { sessionId: agent.sessionId });
     expect(chunk.status).toBe('ok');
     expect(kinds(chunk.entries)).toEqual(['user', 'assistant', 'tool-call', 'subagent-message', 'subagent-message', 'tool-result', 'assistant']);
-    expect(chunk.entries[4]).toEqual({ kind: 'subagent-message', from: '/root/Explore', to: '/root', text: 'Sessions are created in src/daemon/sessions.ts.' });
+    expect(chunk.entries[4]).toMatchObject({ kind: 'subagent-message', from: '/root/Explore', to: '/root', text: 'Sessions are created in src/daemon/sessions.ts.' });
+  }, RUN_TIMEOUT);
+
+  it("tells every client once a transcript it has read is written to, so the chat reads it at once", async () => {
+    const { client, agent, home } = await finishedSubagentRun('claude');
+    const heard: string[] = [];
+    client.onEvent((event) => {
+      if (event.type === 'agent.transcriptChanged') heard.push(event.sessionId);
+    });
+    // Its transcript, written to as its harness would.
+    const projects = join(home, '.claude/projects');
+    const path = readdirSync(projects, { recursive: true, encoding: 'utf8' }).find((file) => file.endsWith('.jsonl') && !file.includes('subagents'));
+    appendFileSync(join(projects, path!), `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'One more thing' } })}\n`);
+    await vi.waitFor(() => expect(heard).toEqual([agent.sessionId]), { timeout: 5000, interval: 20 });
   }, RUN_TIMEOUT);
 
   it('fails for an agent that does not exist, or a bad since', async () => {

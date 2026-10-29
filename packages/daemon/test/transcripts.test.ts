@@ -25,13 +25,13 @@ describe('reading a transcript as it grows', () => {
     writeFileSync(path, `${claudeLines.slice(0, 7).join('\n')}\n`);
     const first = await reader.read('a', 'claude', path, 0);
     expect(first).toMatchObject({ status: 'ok', from: 0 });
-    expect(first.entries.map((entry) => entry.kind)).toEqual(['user', 'assistant']);
+    expect(first.entries.map((entry) => entry.kind)).toEqual(['user', 'thinking', 'assistant']);
 
     appendFileSync(path, `${claudeLines.slice(7, 9).join('\n')}\n`);
-    const next = await reader.read('a', 'claude', path, 2, first.generation);
-    expect(next).toMatchObject({ status: 'ok', generation: first.generation, from: 2 });
+    const next = await reader.read('a', 'claude', path, 3, first.generation);
+    expect(next).toMatchObject({ status: 'ok', generation: first.generation, from: 3 });
     expect(next.entries.map((entry) => entry.kind)).toEqual(['tool-call', 'tool-result']);
-    expect((await reader.read('a', 'claude', path, 4, first.generation)).entries).toEqual([]);
+    expect((await reader.read('a', 'claude', path, 5, first.generation)).entries).toEqual([]);
   });
 
   test('a line still being written waits for its line break, even split inside a character', async () => {
@@ -51,10 +51,10 @@ describe('reading a transcript as it grows', () => {
     const path = join(dir, 'session.jsonl');
     writeFileSync(path, `${claudeLines.slice(0, 9).join('\n')}\n`);
     const first = await reader.read('a', 'claude', path, 0);
-    expect(first.entries).toHaveLength(4);
+    expect(first.entries).toHaveLength(5);
 
     writeFileSync(path, `${claudeLines[2]}\n`);
-    const shorter = await reader.read('a', 'claude', path, 4, first.generation);
+    const shorter = await reader.read('a', 'claude', path, 5, first.generation);
     expect(shorter.generation).not.toBe(first.generation);
     expect(shorter).toMatchObject({ from: 0, entries: [{ kind: 'user' }] });
 
@@ -73,7 +73,7 @@ describe('reading a transcript as it grows', () => {
     const first = await reader.read('a', 'claude', path, 0);
     expect(first.entries).toHaveLength(MAX_CHUNK_ENTRIES);
     expect(first).toMatchObject({ from: MAX_KEPT_ENTRIES + 100 - MAX_CHUNK_ENTRIES, earlier: true });
-    expect(first.entries.at(-1)).toEqual({ kind: 'user', text: `prompt ${MAX_KEPT_ENTRIES + 99}` });
+    expect(first.entries.at(-1)).toMatchObject({ kind: 'user', text: `prompt ${MAX_KEPT_ENTRIES + 99}` });
     // A client far behind gets no more than the latest either; one asking from before what is kept, from what is.
     expect((await reader.read('a', 'claude', path, 0, first.generation)).from).toBe(first.from);
     appendFileSync(path, `${prompt(9999)}\n`);
@@ -92,7 +92,7 @@ describe('reading a transcript as it grows', () => {
     expect(chunk.status).toBe('ok');
     expect(chunk.earlier).toBe(true);
     expect(chunk.entries[0]).toMatchObject({ kind: 'user' });
-    expect(chunk.entries).toHaveLength(15);
+    expect(chunk.entries).toHaveLength(17);
 
     // Its first line still says which version wrote it.
     const future = join(dir, 'future.jsonl');
@@ -126,6 +126,104 @@ describe('reading a transcript as it grows', () => {
     const again = await reader.read('a', 'claude', path, 1, first.generation);
     expect(again.generation).not.toBe(first.generation);
     expect(again.entries).toHaveLength(1);
+  });
+});
+
+describe('watching a transcript it has read', () => {
+  /** Resolves with the keys `onChange` heard within `ms`. */
+  const heard = (keys: string[], ms: number) => new Promise<string[]>((resolve) => setTimeout(() => resolve([...keys]), ms));
+
+  test('says once, soon after a write, that the session\'s transcript changed', async () => {
+    const changed: string[] = [];
+    const reader = createTranscriptReader((key) => changed.push(key));
+    try {
+      const path = join(dir, 'session.jsonl');
+      writeFileSync(path, `${claudeLines[2]}\n`);
+      await reader.read('a', 'claude', path, 0);
+      expect(await heard(changed, 100)).toEqual([]);
+
+      // Two writes close together are one change.
+      appendFileSync(path, `${claudeLines[2]}\n`);
+      appendFileSync(path, `${claudeLines[2]}\n`);
+      expect(await heard(changed, 300)).toEqual(['a']);
+    } finally {
+      reader.close();
+    }
+  });
+
+  test('stops watching a session it forgot, and every one once closed', async () => {
+    const changed: string[] = [];
+    const reader = createTranscriptReader((key) => changed.push(key));
+    const one = join(dir, 'one.jsonl');
+    const two = join(dir, 'two.jsonl');
+    writeFileSync(one, `${claudeLines[2]}\n`);
+    writeFileSync(two, `${claudeLines[2]}\n`);
+    await reader.read('a', 'claude', one, 0);
+    await reader.read('b', 'claude', two, 0);
+    reader.forget('a');
+    appendFileSync(one, `${claudeLines[2]}\n`);
+    appendFileSync(two, `${claudeLines[2]}\n`);
+    expect(await heard(changed, 300)).toEqual(['b']);
+
+    reader.close();
+    appendFileSync(two, `${claudeLines[2]}\n`);
+    expect(await heard(changed, 300)).toEqual(['b']);
+  });
+
+  test('a file replaced just after a write still says it changed', async () => {
+    const changed: string[] = [];
+    const reader = createTranscriptReader((key) => changed.push(key));
+    try {
+      const path = join(dir, 'session.jsonl');
+      writeFileSync(path, `${claudeLines[2]}\n`);
+      await reader.read('a', 'claude', path, 0);
+      appendFileSync(path, `${claudeLines[2]}\n`);
+      rmSync(path);
+      writeFileSync(path, `${claudeLines[2]}\n`);
+      expect(await heard(changed, 300)).toEqual(['a']);
+    } finally {
+      reader.close();
+    }
+  });
+
+  test('a change not told yet when the session is forgotten, or the reader closed, is never told', async () => {
+    const changed: string[] = [];
+    const reader = createTranscriptReader((key) => changed.push(key));
+    const one = join(dir, 'one.jsonl');
+    const two = join(dir, 'two.jsonl');
+    writeFileSync(one, `${claudeLines[2]}\n`);
+    writeFileSync(two, `${claudeLines[2]}\n`);
+    await reader.read('a', 'claude', one, 0);
+    await reader.read('b', 'claude', two, 0);
+    // Replaced, so the watch ends at once while its change waits for writes to settle.
+    rmSync(one);
+    writeFileSync(one, `${claudeLines[2]}\n`);
+    rmSync(two);
+    writeFileSync(two, `${claudeLines[2]}\n`);
+    // Within the settle time: the replace has been heard, its change not told yet.
+    await heard(changed, 10);
+    reader.forget('a');
+    reader.close();
+    expect(await heard(changed, 300)).toEqual([]);
+  });
+
+  test('a file written over is watched again once it is read', async () => {
+    const changed: string[] = [];
+    const reader = createTranscriptReader((key) => changed.push(key));
+    try {
+      const path = join(dir, 'session.jsonl');
+      writeFileSync(path, `${claudeLines[2]}\n`);
+      await reader.read('a', 'claude', path, 0);
+      rmSync(path);
+      writeFileSync(path, `${claudeLines[2]}\n`);
+      await heard(changed, 300);
+      await reader.read('a', 'claude', path, 0);
+      changed.length = 0;
+      appendFileSync(path, `${claudeLines[2]}\n`);
+      expect(await heard(changed, 300)).toEqual(['a']);
+    } finally {
+      reader.close();
+    }
   });
 });
 

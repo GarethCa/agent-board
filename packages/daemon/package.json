@@ -20,6 +20,7 @@
     "./window-layout": "./src/window-layout.ts",
     "./web-url": "./src/web-url.ts",
     "./paths": "./src/paths.ts",
+    "./transcript-adapters": "./src/transcript-adapters.ts",
     "./pid": "./src/pid.ts",
     "./protocol": "./src/protocol.ts",
     "./repo-zone": "./src/repo-zone.ts",
@@ -28,7 +29,8 @@
     "./stop": "./src/stop.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bench:snapshot": "node scripts/snapshot-cost.ts"
   },
   "devDependencies": {
     "@agent-board/fake-harness": "workspace:*"

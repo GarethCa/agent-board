@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, Kbd, Textarea } from '../ui';
-import { useAction } from '../use-action';
 import { errorMessage } from '../../../shared/errors';
+import { agentAtWork } from './chat';
 import { composerBlock } from './composer-block';
 import { composerKey, droppedPath, insertAt } from './composer-input';
 import { keyText } from '../keys/registry';
+import { sentMessages } from './sent-messages';
 
 interface ComposerProps {
   agent: Agent;
@@ -16,7 +17,8 @@ interface ComposerProps {
 }
 
 /**
- * Sends the agent a message, as the needs-you inbox answers it: typed at its prompt and submitted. Enter sends;
+ * Sends the agent a message, as the needs-you inbox answers it: typed at its prompt and submitted. It shows in the
+ * chat at once, saying how it is getting on, until the transcript has it; a failure shows there, to retry. Enter sends;
  * Shift+Enter or Option+Enter make a new line, as in its terminal, and the lines reach it as one message. A pasted
  * image is kept where the agent can read it and its path put in the message, which is then pasted, as a terminal
  * pastes a dropped file.
@@ -27,7 +29,6 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
   const [pasting, setPasting] = useState(false);
   const [pasteError, setPasteError] = useState<string>();
   const field = useRef<HTMLTextAreaElement>(null);
-  const { busy, error, run } = useAction();
   const blocked = composerBlock(agent);
   // Each new request (⌘⇧M in the master's panel) puts the caret in the field.
   useEffect(() => {
@@ -35,14 +36,9 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
   }, [focusRequest]);
   const send = () => {
     if (text.trim() === '' || blocked !== undefined || pasting) return;
-    const withImage = images.some((path) => text.includes(path));
-    run(
-      () => window.agentBoard.agents.answer(agent.sessionId, text, withImage),
-      () => {
-        setText('');
-        setImages([]);
-      },
-    );
+    void sentMessages.send(agent.sessionId, text, images, agentAtWork(agent));
+    setText('');
+    setImages([]);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const action = composerKey(event.nativeEvent);
@@ -97,7 +93,7 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
           onPaste={onPaste}
         />
         {blocked === undefined && (
-          <Button type="submit" size="sm" variant="primary" loading={busy || pasting} disabled={text.trim() === ''}>
+          <Button type="submit" size="sm" variant="primary" loading={pasting} disabled={text.trim() === ''}>
             Send
             <Kbd className="composer-key">{keyText('window.send')}</Kbd>
           </Button>
@@ -108,7 +104,7 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
           <Kbd>{keyText('window.newLine')}</Kbd> new line · paste an image to attach it
         </p>
       )}
-      {(error ?? pasteError) && <ErrorText className="composer-error">{error ?? pasteError}</ErrorText>}
+      {pasteError && <ErrorText className="composer-error">{pasteError}</ErrorText>}
     </form>
   );
 }

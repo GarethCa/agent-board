@@ -73,6 +73,8 @@ export interface ClockHostOptions {
   agents: Pick<AgentHost, 'get' | 'runScheduled' | 'spawn' | 'finalMessage' | 'delete' | 'stop' | 'deliver' | 'announce'>;
   /** The daemon's own methods: clocks, notes and their changes are made as the board makes them. */
   call: DaemonCall;
+  /** Why the zone is held for usage, or undefined: a clock an agent made starts no agent there meanwhile. */
+  zoneHold?(zoneId: string | null): string | undefined;
   broadcast(event: DaemonEvent): void;
   log(message: string): void;
 }
@@ -102,16 +104,21 @@ export function createClockHost(options: ClockHostOptions): ClockHost {
 
   const fire = (firing: FiringClock, count: number): Fired => {
     const { data } = firing;
+    // A clock an agent made is that agent's doing: it lifts no budget hold, as the agent itself may not. The user's own
+    // clocks go on, as the user's own starts do.
+    const maker = (selectMadeBy.get(firing.id) as { made_by: string | null } | undefined)?.made_by ?? null;
     if (data.does === 'message') {
       const agent = agents.get(data.agent!);
       if (agent === undefined) return { started: false, reason: 'its agent is gone' };
+      if (maker !== null && agent.hibernated?.reason !== undefined) return { started: false, reason: `held: ${agent.name} is paused for usage, ${agent.hibernated.reason}` };
       return { ...agents.runScheduled(agent.sessionId, data.prompt), sessionId: agent.sessionId, agentName: agent.name };
     }
     // An orchestrator's clock starts its agents in its crew, so they are no shallower than it could start them.
-    const maker = (selectMadeBy.get(firing.id) as { made_by: string | null } | undefined)?.made_by ?? null;
     if (maker !== null && agents.get(maker) === undefined) return { started: false, reason: 'the orchestrator that made it is gone' };
     const onBoard = (selectRunAgents.all(firing.id) as { session_id: string }[]).filter((row) => agents.get(row.session_id) !== undefined).length;
     if (onBoard >= MAX_FRESH_ON_BOARD) return { started: false, reason: `${onBoard} agents it started are still on the board` };
+    const held = maker === null ? undefined : options.zoneHold?.(firing.zoneId);
+    if (held !== undefined) return { started: false, reason: `held: ${held}` };
     return { running: true, start: (runId) => void startFresh(firing, runId, count, maker ?? undefined) };
   };
   const selectRunAgents = options.db.prepare('SELECT DISTINCT session_id FROM clock_runs WHERE clock_id = ? AND session_id IS NOT NULL');

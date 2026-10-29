@@ -41,20 +41,27 @@ export function submitsDraft(drafting: boolean, data: string): boolean {
 }
 
 /**
- * Control characters a message may not carry: all but tab and the line break, so no text in it can press keys at the
- * prompt or end a paste early.
+ * Control characters a message may not carry: all but tab and the line break, C1 too (U+009B is a one-character CSI),
+ * so no text in it can press keys at the prompt or end a paste early.
  */
-const UNSENDABLE = /[\x00-\x08\x0b-\x1f\x7f]/g;
+const UNSENDABLE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 
 /**
- * What to write at an agent's prompt for a message, before the return that submits it: one line typed as it is, or
- * several lines (or one, with `paste`) as a bracketed paste, as a terminal pastes text, so the harness keeps its line
- * breaks and takes a path in it as a dropped file. Both harnesses turn on bracketed paste. Control characters are
- * dropped either way.
+ * The longest line typed at a prompt as keys. A terminal hands its reader at most 1 KiB at a time on macOS, and Claude
+ * keeps only the last read of a longer line typed with no paste around it: a 2,700-character message reached its
+ * transcript as its last 700 or so. A paste of any length arrives whole.
+ */
+const LONGEST_TYPED_LINE_BYTES = 512;
+
+/**
+ * What to write at an agent's prompt for a message, before the return that submits it: one short line typed as it is,
+ * or several lines, a long one (`LONGEST_TYPED_LINE_BYTES`), or one with `paste`, as a bracketed paste, as a terminal
+ * pastes text, so the harness keeps all of it and its line breaks, and takes a path in it as a dropped file. Both
+ * harnesses turn on bracketed paste. Control characters are dropped either way.
  */
 export function answerInput(text: string, paste = false): string {
   const message = text.replace(/\r\n?/g, '\n').replace(UNSENDABLE, '').trim();
-  if (!paste && !message.includes('\n')) return message;
+  if (!paste && !message.includes('\n') && Buffer.byteLength(message) <= LONGEST_TYPED_LINE_BYTES) return message;
   return `\x1b[200~${message.replaceAll('\n', '\r')}\x1b[201~`;
 }
 

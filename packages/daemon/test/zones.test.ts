@@ -171,6 +171,42 @@ describe('zones over the socket', () => {
     await expect(client.call('zone.setLook', { id: 'missing', name: 'x' })).rejects.toThrow(/no zone missing/);
   });
 
+  it("trusts a repo zone's folder for new agents only when asked: off by default, kept by undo, never for a group", async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.add', { path: tempRepo(), ...at });
+    expect(zone.trustsFolder).toBe(false);
+    const on = await client.call('zone.configure', { id: zone.id, trustsFolder: true });
+    expect(on).toEqual({ ...zone, trustsFolder: true });
+    await expect(client.call('zone.configure', { id: zone.id, trustsFolder: 'yes' as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    await client.call('zone.remove', { id: zone.id });
+    expect(await client.call('zone.restore', zoneSnapshot(on))).toMatchObject({ trustsFolder: true });
+
+    const asked = await client.call('zone.add', { path: tempRepo(), ...at, trustsFolder: true });
+    expect(asked.trustsFolder).toBe(true);
+    const group = await client.call('zone.addUnbound', { name: 'Ideas', ...at, trustsFolder: true });
+    expect(group.trustsFolder).toBe(false);
+    const plain = await client.call('zone.add', { path: tempPlainFolder(), ...at, trustsFolder: true });
+    expect(plain.trustsFolder).toBe(false);
+  });
+
+  it("trusts a folder only while its zone has a repo: unbinding, a failed bind elsewhere and a group all leave it off", async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.add', { path: tempRepo(), ...at, trustsFolder: true });
+    expect(zone.trustsFolder).toBe(true);
+
+    // Unbound it trusts nothing, and the repo it is bound to next was never opted in.
+    expect((await client.call('zone.unbind', { id: zone.id })).trustsFolder).toBe(false);
+    const rebound = await client.call('zone.bind', { id: zone.id, as: 'repo', path: tempRepo('other') });
+    expect(rebound).toMatchObject({ kind: 'repo', trustsFolder: false });
+
+    // A group can't be opted in, and a snapshot of one is restored with it off.
+    const group = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    await expect(client.call('zone.configure', { id: group.id, trustsFolder: true })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    const restored = await client.call('zone.restore', { ...zoneSnapshot(group), id: 'ideas-again', trustsFolder: true });
+    expect(restored.trustsFolder).toBe(false);
+    expect((await client.call('zone.configure', { id: group.id, trustsFolder: false })).trustsFolder).toBe(false);
+  });
+
   it('restores a dissolved group under its own id with everything it had', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });

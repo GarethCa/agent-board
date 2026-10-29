@@ -11,12 +11,14 @@ import { PermissionRow } from '../inbox/PermissionRow';
 import { useNow } from '../inbox/use-now';
 import { KIND_TAGS } from '../inbox/kind-tags';
 import { ChatView } from '../session/ChatView';
+import { ChatStyleButton } from '../session/ChatStyleSwitch';
 import { Composer } from '../session/Composer';
 import { Markdown } from '../session/Markdown';
 import { canRestart, exitText, RestartAgent } from '../session/RestartAgent';
 import type { RunsChoice } from '../session/chat';
 import { clockTime } from '../board/items/agent-note';
-import { askLine, boardMaster, latestDigest, watchRows } from './master-view';
+import { askLine, boardMaster, latestDigest, usageHolds, watchRows, type UsageHoldEntry } from './master-view';
+import { upperFirst } from '../upper-first';
 import { PanelHandle } from './PanelHandle';
 import { usePanelRoom } from './use-panel-room';
 import {
@@ -47,6 +49,8 @@ interface MasterPanelProps {
   onShowZone(zoneId: string): void;
   /** Opens the agent's session window. */
   onOpenAgent(agent: Agent): void;
+  /** Opens the agent's plans, in its session window. */
+  onOpenPlan(agent: Agent): void;
   onOpenLink(url: string): void;
 }
 
@@ -58,7 +62,7 @@ const RUNS: RunsChoice = { mode: 'auto', at: 0 };
  * of two views of the master, beside its tile: closing it stops nothing. With no master yet it offers to start one,
  * which only this click does.
  */
-export function MasterPanel({ agents, zones, items, focusRequest, onClose, onShowAgent, onShowZone, onOpenAgent, onOpenLink }: MasterPanelProps) {
+export function MasterPanel({ agents, zones, items, focusRequest, onClose, onShowAgent, onShowZone, onOpenAgent, onOpenPlan, onOpenLink }: MasterPanelProps) {
   const master = boardMaster(agents);
   const panel = useRef<HTMLElement>(null);
   // The board it sits on bounds its width; the width is the user's, kept across reloads.
@@ -100,8 +104,19 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
           C
         </span>
         <h2>Captain</h2>
-        <small className="master-panel-scope">{master === undefined ? 'not started' : `board scope · ${master.model ?? master.harness}`}</small>
+        {/* Short of room, its scope gives way before its model, and then the model is cut too. */}
+        <small className="master-panel-scope">
+          {master === undefined ? (
+            <span className="master-panel-scope-what">not started</span>
+          ) : (
+            <>
+              <span className="master-panel-scope-what">board scope</span>
+              <span className="master-panel-scope-model"> · {master.model ?? master.harness}</span>
+            </>
+          )}
+        </small>
         <span className="master-panel-actions">
+          {master !== undefined && <ChatStyleButton />}
           {master !== undefined && <ToolButton size="sm" icon={<Crosshair />} label="Show on board" onClick={() => onShowAgent(master.sessionId)} />}
           {master !== undefined && <ToolButton size="sm" icon={<SquareArrowOutUpRight />} label="Open its session window" onClick={() => onOpenAgent(master)} />}
           <ToolButton size="sm" icon={<X />} label="Close" hint="Close the panel: the Captain keeps running" onClick={onClose} />
@@ -122,7 +137,7 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
               </div>
             )}
             <div className="session-chat-view">
-              <ChatView agent={master} active onShowTerminal={() => onOpenAgent(master)} runs={RUNS} onOpenLink={onOpenLink} />
+              <ChatView agent={master} active onShowTerminal={() => onOpenAgent(master)} runs={RUNS} onOpenLink={onOpenLink} onOpenPlan={() => onOpenPlan(master)} />
             </div>
             <Composer agent={master} placeholder="Ask the Captain…" focusRequest={focusRequest} />
           </section>
@@ -269,6 +284,7 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
           })}
         </ul>
       )}
+      {!folded && <UsageHolds zones={zones} agents={agents} />}
       {folded ? null : digest === undefined ? (
         <p className="master-panel-muted">No digest yet: the Captain writes one in a note beside its tile.</p>
       ) : (
@@ -294,6 +310,42 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
       />
     )}
     </>
+  );
+}
+
+/**
+ * The budget holds on the board, each with why and Override: a zone held for usage (Override lifts the hold) and an
+ * agent paused for it (Override wakes it). They are the user's to undo, wherever the Captain put them.
+ */
+function UsageHolds({ zones, agents }: Pick<MasterPanelProps, 'zones' | 'agents'>) {
+  const holds = usageHolds(zones, agents);
+  const [pending, setPending] = useState<string>();
+  if (holds.length === 0) return null;
+  const override = (hold: UsageHoldEntry) => {
+    setPending(hold.id);
+    const done = hold.kind === 'zone' ? window.agentBoard.orchestrators.release(hold.id) : window.agentBoard.agents.resume(hold.id);
+    void done.catch(() => {}).finally(() => setPending(undefined));
+  };
+  return (
+    <ul className="master-for-you master-usage-holds" aria-label="Held for usage">
+      {holds.map((hold) => (
+        <li key={hold.id} className="master-for-you-item" data-testid="master-usage-hold" data-kind={hold.kind}>
+          <div className="master-for-you-head">
+            <Tag className="inbox-kind" data-kind="held">
+              held
+            </Tag>
+            <b title={hold.name}>{hold.name}</b>
+            {hold.zone !== null && <small title={hold.zone}>{hold.zone}</small>}
+          </div>
+          <p>
+            {upperFirst(hold.what)}: {hold.reason}
+          </p>
+          <Button size="sm" variant="ghost" disabled={pending === hold.id} aria-label={`Override the hold on ${hold.name}`} onClick={() => override(hold)}>
+            Override
+          </Button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

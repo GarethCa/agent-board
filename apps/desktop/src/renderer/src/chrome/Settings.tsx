@@ -5,6 +5,7 @@ import type { CrewLook } from '../board/crew-view';
 import type { AgentNoteLook } from '../board/items/agent-note-look';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
+import { ChatStyleSetting } from './ChatStyleSetting';
 import { CompactWindowSetting } from './CompactWindowSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { daemonStatusText, type DaemonStatusValue } from '../DaemonStatus';
@@ -14,6 +15,7 @@ import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { CliInstallSetting } from './CliInstallSetting';
 import { KeyboardSetting } from './KeyboardSetting';
 import { NotificationsSetting } from './NotificationsSetting';
+import { UsageSetting } from './UsageSetting';
 import { keyText } from '../keys/registry';
 
 export interface SettingsProps {
@@ -39,7 +41,7 @@ export interface SettingsProps {
 /**
  * The app's settings: sessions from other terminals, where held hand-offs are kept, the appearance (System, Light or
  * Dark), the paths of `claude` and `codex`, the context size Claude agents compact at, whether Claude agents print clickable links, what a double-click on a tile opens, the spacing new zones take, how an orchestrator's agents show, installing the command line, and the
- * daemon's status, how agent notes look, what Needs you lists and when it notifies, and whether the extended keyboard
+ * daemon's status, how agent notes look, what Needs you lists and when it notifies, how chats show an agent's states, the usage thresholds and pacing, and whether the extended keyboard
  * shortcuts work.
  */
 export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, muted }: SettingsProps) {
@@ -131,6 +133,8 @@ export function Settings({ status, onError, clickOpens, onClickOpens, crewLook, 
         </Choices>
       </Fieldset>
       <NotificationsSetting muted={muted} onError={onError} />
+      <ChatStyleSetting />
+      <UsageSetting onError={onError} />
       <SectionLabel as="h4">Keyboard</SectionLabel>
       <KeyboardSetting />
       <CliInstallSetting onError={onError} />

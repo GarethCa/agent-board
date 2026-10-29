@@ -315,12 +315,14 @@ const SAME_IN_EVERY_THEME = new Set([
   '--window-diff-added',
   '--window-diff-hunk',
   '--window-chat-subagent',
+  '--window-limit-soft',
   '--window-accent-hover',
   '--connector-line',
   '--reviewer-edge',
   '--step-done',
   '--shadow-tooltip',
   '--shadow-toast',
+  '--shadow-chat-pop',
 ]);
 
 /** Each scope's token declarations: `:root`, and each rule that re-points tokens for a part of the app. */

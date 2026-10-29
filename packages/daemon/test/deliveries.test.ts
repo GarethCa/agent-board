@@ -34,11 +34,13 @@ function setup(rows: Row[], notReady?: string) {
   const announced: { sessionId: string; handingOff: boolean }[] = [];
   /** What was handed back, never typed: `sessionId what: text (reason)`. */
   const undelivered: string[] = [];
+  /** What the user was told of messages given up on at a prompt, and of them going: `notSent`'s arguments. */
+  const notSent: unknown[][] = [];
   const byId = new Map(rows.map((each) => [each.session_id, each]));
   const clock = createFakeClock(new Date('2026-10-22T10:00:00Z'));
   const prompt: { now: PromptNow } = { now: 'at-prompt' };
-  /** The state the agents show. */
-  const shown: { state: AgentState } = { state: 'idle' };
+  /** The state the agents show, and what they last said. */
+  const shown: { state: AgentState; lastMessage?: string } = { state: 'idle' };
   /** Why the agents can't take a run now, if they can't. */
   const ready: { why: string | undefined } = { why: notReady };
   const deliveries = createDeliveries<Row>({
@@ -47,7 +49,7 @@ function setup(rows: Row[], notReady?: string) {
     requireAgent(sessionId) {
       const found = byId.get(sessionId);
       if (found === undefined) throw invalidParams(`no agent ${sessionId}`);
-      return { name: found.name, endedAt: found.ended_at, state: shown.state };
+      return { name: found.name, endedAt: found.ended_at, state: shown.state, lastMessage: shown.lastMessage ?? null };
     },
     whyNotReady: () => ready.why,
     pausing: () => undefined,
@@ -58,6 +60,7 @@ function setup(rows: Row[], notReady?: string) {
     promptNow: () => prompt.now,
     announce: (sessionId) => void announced.push({ sessionId, handingOff: deliveries.isHandingOff(sessionId) }),
     undelivered: (sessionId, what, text, reason) => void undelivered.push(`${sessionId} ${what}: ${text} (${reason})`),
+    notSent: (...args) => void notSent.push(args),
     log: () => {},
     clock,
     submitConfirmMs: 1_000,
@@ -81,7 +84,7 @@ function setup(rows: Row[], notReady?: string) {
     await flush();
   };
 
-  return { deliveries, writes, relaunches, announced, undelivered, prompt, shown, ready, advance, land };
+  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, advance, land };
 }
 
 describe('deliveries', () => {
@@ -101,12 +104,12 @@ describe('deliveries', () => {
     expect(deliveries.isHandingOff('from')).toBe(false);
     expect(deliveries.runScheduled('a', 'Nightly')).toEqual({ started: true, queued: true });
     expect(deliveries.queuedUntilUp('a')).toBe(2);
-    expect(deliveries.isNotUp('a')).toBe(true);
+    expect(deliveries.whyNotUp('a')).toBe("its session isn't up yet: its first prompt goes first");
     expect(writes).toEqual([]);
 
     comeUp(true);
     await land('a');
-    expect(deliveries.isNotUp('a')).toBe(false);
+    expect(deliveries.whyNotUp('a')).toBeUndefined();
     expect(writes.slice(0, 2)).toEqual([
       ['a', '\x1b[200~Fix the tests\rthen push\x1b[201~'],
       ['a', '\r'],
@@ -118,6 +121,31 @@ describe('deliveries', () => {
       await advance(200);
     }
     expect(writes.slice(2).map(([, data]) => data)).toEqual(['Also lint', '\r', 'Nightly', '\r']);
+    expect(deliveries.queuedUntilUp('a')).toBe(0);
+  });
+
+  it('holds what is sent to an agent launched with no first prompt until its session is up, then types it', async () => {
+    const { deliveries, writes, land, advance } = setup([row('a'), row('from', { name: 'planner' })]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', undefined, up);
+    await advance(5_000);
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    expect(await deliveries.deliver('from', 'a', 'plan', 'the plan')).toEqual({
+      started: false,
+      reason: "its session isn't up yet",
+      busy: true,
+    });
+    expect(deliveries.whyNotUp('a')).toBe("its session isn't up yet");
+    expect(writes).toEqual([]);
+
+    comeUp(true);
+    await land('a');
+    expect(deliveries.whyNotUp('a')).toBeUndefined();
+    // Nothing of its own is typed: the message is first.
+    expect(writes).toEqual([
+      ['a', 'Also lint'],
+      ['a', '\r'],
+    ]);
     expect(deliveries.queuedUntilUp('a')).toBe(0);
   });
 
@@ -175,7 +203,7 @@ describe('deliveries', () => {
     deliveries.firstPrompt('a', 'Fix the tests', Promise.resolve(false));
     await land('a');
     expect(writes).toEqual([]);
-    expect(deliveries.isNotUp('a')).toBe(false);
+    expect(deliveries.whyNotUp('a')).toBeUndefined();
   });
 
   it("types a hand-off at a live agent's prompt and submits it, showing the sender handing off until it lands", async () => {
@@ -393,18 +421,28 @@ describe('submitting what is typed', () => {
     expect(deliveries.unsent('a')).toBeUndefined();
   });
 
-  it('keeps a hand-off unsent, pressing nothing, when its agent went to work while it landed', async () => {
+  it('queues a hand-off with one Enter for after the turn its agent started while it landed, as an answer is', async () => {
     const { deliveries, writes, advance, prompt } = setup([row('from'), row('to')]);
     const delivered = deliveries.deliver('from', 'to', 'plan', 'the plan');
     await advance(1_000);
     prompt.now = 'working';
     await advance(1_000);
-    expect(await delivered).toEqual({ started: true, unsent: true });
-    expect(writes).toHaveLength(1);
+    expect(await delivered).toEqual({ started: true });
+    expect(writes.map(([, data]) => data)).toEqual([expect.stringContaining('the plan'), '\r']);
+    expect(deliveries.unsent('to')).toBeUndefined();
+
+    // That turn ends and none starts on it: Enter is pressed again, and it is unsent only if still none does.
+    prompt.now = 'at-prompt';
+    deliveries.turnEnded('to', true);
+    await advance(1_000);
+    deliveries.turnSeen('to');
+    await advance(1_000);
+    expect(writes.map(([, data]) => data)).toEqual([expect.stringContaining('the plan'), '\r', '\r']);
+    expect(deliveries.unsent('to')).toBeUndefined();
   });
 
   it('never presses Enter again on a prompt the user is typing at: it would send their words', async () => {
-    const { deliveries, writes, advance, prompt } = setup([row('a')]);
+    const { deliveries, writes, advance, prompt, notSent } = setup([row('a')]);
     const answered = deliveries.answer('a', 'the plan');
     await advance(2_000);
     prompt.now = 'typing';
@@ -412,6 +450,8 @@ describe('submitting what is typed', () => {
     await answered;
     expect(writes.map(([, data]) => data)).toEqual(['the plan', '\r']);
     expect(deliveries.unsent('a')).toBe('A message');
+    // The board's Send refuses a prompt the user typed at: they are told to see to it in its terminal.
+    expect(notSent).toEqual([['a', 'A message', 'you typed at its prompt meanwhile', true]]);
   });
 });
 
@@ -446,12 +486,15 @@ describe('an answer that waited its turn', () => {
     const { deliveries, writes, advance, prompt, shown } = setup([row('from'), row('a')]);
     const delivered = deliveries.deliver('from', 'a', 'plan', 'the plan');
     const answered = deliveries.answer('a', 'yes');
-    const refused = expect(answered).rejects.toMatchObject({ message: 'a is waiting on an answer to its question or plan' });
+    const refused = expect(answered).rejects.toMatchObject({
+      message: 'a is waiting on a question or dialog of its own, "Which branch should I use?": answer it in its terminal',
+    });
     await flush();
     deliveries.outputSeen('a');
     await advance(150);
     prompt.now = 'moved-on';
     shown.state = 'waiting';
+    shown.lastMessage = 'Which branch should I use?';
     deliveries.turnSeen('a');
     await delivered;
     await refused;
@@ -575,12 +618,14 @@ describe('an answer queued mid-turn', () => {
   });
 
   it('is kept unsent at once, with no Enter, when its turn hits a rate limit: its harness may show a menu there', async () => {
-    const { deliveries, writes, advance, prompt } = await queuedAnswer();
+    const { deliveries, writes, advance, prompt, notSent } = await queuedAnswer();
     deliveries.turnEnded('a', false, 'rate-limited');
     prompt.now = 'moved-on';
     expect(deliveries.unsent('a')).toBe('A message');
     await advance(20_000);
     expect(writes).toHaveLength(2);
+    // The user is told: only their Send moves it on once the limit lifts.
+    expect(notSent).toEqual([['a', 'A message', 'its turn hit a rate limit', false]]);
   });
 
   it('is kept unsent when the user interrupts its turn in the terminal, until they submit or clear what is there', async () => {

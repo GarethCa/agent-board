@@ -36,6 +36,7 @@ interface AgentLifecycleOptions
     | 'env'
     | 'onRemoving'
     | 'endTabs'
+    | 'onWoken'
     | 'isRunningSomething'
     | 'broadcast'
     | 'log'
@@ -77,7 +78,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
    * Ends the live agent's session as `stop` does, marked paused (`hibernated`) by `by` (null for the user), so its
    * pane keeps its last screen and drops into no shell. Its caller checks it may be paused.
    */
-  hibernate(sessionId: string, by: string | null, why: string): Promise<Agent>;
+  hibernate(sessionId: string, by: string | null, why: string, reason?: string): Promise<Agent>;
   /**
    * While the agent is being paused, what resolves once its session has ended (or failed to): what is sent to it
    * meanwhile then wakes it instead of being typed into a terminal that is going. Undefined while it isn't.
@@ -130,7 +131,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL WHERE session_id = ?');
   const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ? WHERE session_id = ?');
   const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
-  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ? WHERE session_id = ?');
+  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ?, hibernated_reason = ? WHERE session_id = ?');
   /** Live Codex agents running with the bypass flag, watched for project config appearing. */
   const guards = new Map<string, CodexConfigGuard>();
   const remove = db.prepare('DELETE FROM agents WHERE session_id = ?');
@@ -240,7 +241,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     subagents.set(sessionId, []);
     hookStates.relaunched(sessionId);
     // Whatever started it, it is awake now.
-    updateHibernated.run(null, null, sessionId);
+    updateHibernated.run(null, null, null, sessionId);
+    if (row.hibernated_reason !== null) options.onWoken?.(sessionId);
     updateNotice.run(noConversation && prompt === undefined && !fresh ? NO_CONVERSATION_NOTICE : null, sessionId);
     options.setState(sessionId, 'idle');
     options.unsee(sessionId);
@@ -428,7 +430,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     async stop(sessionId, why) {
       // A paused agent is closed as it is, never woken: a plain closed agent then, with its last screen and no shell.
       if (requireAgent(sessionId).state === 'hibernated') {
-        updateHibernated.run(null, null, sessionId);
+        updateHibernated.run(null, null, null, sessionId);
         options.log(`closed paused agent ${sessionId} for ${why}`);
         announce(sessionId);
         return get(sessionId)!;
@@ -436,10 +438,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       return stop(sessionId, why);
     },
 
-    hibernate(sessionId, by, why) {
-      updateHibernated.run(new Date().toISOString(), by, sessionId);
+    hibernate(sessionId, by, why, reason) {
+      updateHibernated.run(new Date().toISOString(), by, reason ?? null, sessionId);
       const pause = stop(sessionId, why).catch((error: unknown) => {
-        updateHibernated.run(null, null, sessionId);
+        updateHibernated.run(null, null, null, sessionId);
         throw error;
       });
       const settled = pause.then(

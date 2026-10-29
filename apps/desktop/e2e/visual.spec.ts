@@ -860,7 +860,9 @@ test('the dark theme: a busy board with notes, text, a shape and a flow edge, it
     const view = sessionWindow(window).getByRole('group', { name: 'View' });
     await view.getByRole('button', { name: 'Chat' }).click();
     await expect(sessionWindow(window).getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+    await expect(sessionWindow(window).getByTestId('chat-live')).toHaveAttribute('data-live', 'done');
     await pinRandomText(window);
+    await pinChatTimes(window);
     await ignorePointer(window);
     await settle(window);
     await expect.soft(window.locator('body')).toHaveScreenshot('dark-chat-view.png', SHOT);
@@ -1481,7 +1483,9 @@ for (const { theme, scheme } of [{ theme: 'light', scheme: 'light' }, { theme: '
       await expect(chat.getByRole('heading', { name: 'The plan' })).toBeVisible({ timeout: TURN_MS });
       // A draft of two lines, so the box shows how it grows.
       await box.fill('Then open the pull request\nand link the issue');
+      await expect(sessionWindow(window).getByTestId('chat-live')).toHaveAttribute('data-live', 'done');
       await pinRandomText(window);
+      await pinChatTimes(window);
       await ignorePointer(window);
       await settle(window);
       await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shot}.png`, SHOT);
@@ -1491,6 +1495,87 @@ for (const { theme, scheme } of [{ theme: 'light', scheme: 'light' }, { theme: '
       rmSync(dir, { recursive: true, force: true });
     }
   });
+}
+
+/**
+ * Times that differ run to run, pinned: those the chat counts or reads from the transcript to `4.1s`, and how long a
+ * held permission prompt has left to `20 s`.
+ */
+async function pinChatTimes(page: Page) {
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      node.data = node.data.replace(/\bwithin \d+ s\b/, 'within 20 s');
+      if (node.parentElement?.closest('.chat-frame') == null) continue;
+      node.data = node.data.replace(/\b(?:\d+h )?(?:\d+m )?\d+(?:\.\d)?s\b/g, '4.1s');
+    }
+  });
+}
+
+for (const style of ['Cards', 'Timeline', 'Status line'] as const) {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`the chat's states as ${style.toLowerCase()} in the ${theme} theme, in a session window and in the Captain's panel`, async () => {
+      const slug = style.toLowerCase().replace(' ', '-');
+      const prefix = theme === 'light' ? '' : 'dark-';
+      const shots = [`${prefix}chat-states-${slug}`, `${prefix}chat-states-${slug}-panel`];
+      needsBaselines(...shots);
+      const { dir, repo, env } = scratch('orchestrate');
+      const dataDir = tempDataDir();
+      // Each later prompt plays the scenario again by its words, as the first does.
+      const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, FAKE_HARNESS_REPEAT: '1', AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+      try {
+        await listFinishedTurns(window);
+        await window.setViewportSize(VIEWPORT);
+        await window.emulateMedia({ colorScheme: theme });
+        await pinFonts(window);
+        await pickFolderNext(app, repo);
+        await browseForZone(window);
+        // Thinking and a subagent, then a held permission prompt: most of the states, done and live.
+        await spawnAgent(window, 'monorepo', 'Think, then send a subagent');
+        await tile(window).dblclick();
+        await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+        await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: style }).click();
+        const chat = sessionWindow(window).getByTestId('chat-frame');
+        await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+        const box = sessionWindow(window).getByRole('textbox', { name: 'Message to the agent' });
+        await box.fill('Ask permission');
+        await box.press('Enter');
+        await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'permission', { timeout: TURN_MS });
+        await pinRandomText(window);
+        await pinChatTimes(window);
+        let restorePointer = await ignorePointer(window);
+        await settle(window);
+        await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shots[0]}.png`, SHOT);
+        await restorePointer();
+        // Denied from the chat, so nothing waits in the Captain's For you.
+        await chat.getByTestId('chat-live').getByRole('button', { name: 'Deny Bash' }).click();
+        await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+        await window.getByRole('button', { name: 'Close session window' }).click();
+
+        // The Captain, its usage limit hit, in its panel.
+        await window.getByTestId('master-button').click();
+        await window.getByTestId('master-start').click();
+        const panel = window.getByTestId('master-panel');
+        await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+        const ask = panel.getByRole('textbox', { name: 'Message to the agent' });
+        await ask.fill('Hit the rate limit');
+        await ask.press('Enter');
+        await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'rate-limited', { timeout: TURN_MS });
+        await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
+        await pinRandomText(window);
+        await pinChatTimes(window);
+        restorePointer = await ignorePointer(window);
+        await settle(window);
+        await expect.soft(panel).toHaveScreenshot(`${shots[1]}.png`, SHOT);
+        await restorePointer();
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 }
 
 test("the dark theme: a review doc in its implementer's session window", async () => {
@@ -1590,8 +1675,13 @@ test("the Captain's panel with names, paths and code too long to fit: cut or wra
     await window.mouse.down();
     await window.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2 + 250, { steps: 5 });
     await window.mouse.up();
-    // The chat's brief is the same every run; its scrollbar shows a while after a scroll.
+    // The chat's brief is the same every run; its scrollbar shows a while after a scroll. Its turn is shot once done,
+    // with its time pinned.
     await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
+    await expect(panel.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?'], { timeout: TURN_MS });
+    await expect.poll(() => tile(window).evaluateAll((tiles) => tiles.map((each) => each.getAttribute('data-state'))), { timeout: TURN_MS }).toEqual(['waiting', 'waiting']);
+    await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+    await pinChatTimes(window);
     await pinRandomText(window);
     let restorePointer = await ignorePointer(window);
     await settle(window);

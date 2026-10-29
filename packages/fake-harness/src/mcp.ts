@@ -18,9 +18,10 @@ export interface McpHttpServer {
   headers: Record<string, string>;
 }
 
-/** What a tool call returned: its text, and whether the tool said it failed. */
+/** What a tool call returned: its text, its fields if it gave any, and whether the tool said it failed. */
 export interface McpToolResult {
   text: string;
+  structured?: Record<string, unknown>;
   isError: boolean;
 }
 
@@ -184,10 +185,11 @@ export class McpClient {
     if (!(await this.listTools()).includes(name)) return { text: `No such tool available: ${name}`, isError: true };
     const result = (await this.request('tools/call', { name, arguments: args }, signal)) as {
       content?: { type: string; text?: string }[];
+      structuredContent?: Record<string, unknown>;
       isError?: boolean;
     };
     const text = (result.content ?? []).map((part) => part.text ?? '').join('\n');
-    return { text, isError: result.isError === true };
+    return { text, ...(result.structuredContent === undefined ? {} : { structured: result.structuredContent }), isError: result.isError === true };
   }
 
   private request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {

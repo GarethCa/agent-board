@@ -83,6 +83,7 @@ import { createBoardMaster } from './master.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createClockHost } from './clocks.ts';
 import { createSettings } from './settings.ts';
+import { createUsageHost } from './usage.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
 import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
@@ -379,6 +380,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         if (payload.hook_event_name === 'Stop') void pullRequests.refresh(sessionId);
         return agents.onHook(sessionId, payload, signal);
       },
+      // `usage` is created below, before any agent's status line can post.
+      onStatusLine: (_sessionId, payload) => usage.record(payload),
       externalTokenSha256: hashToken(externalToken),
       onExternalHook: (harness, payload) => {
         externalSessions.onHook(harness, payload).catch((error: Error) => log(`external hook failed: ${error.message}`));
@@ -469,6 +472,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         deliver: (...args) => agents.deliver(...args),
         announce: (sessionId) => agents.announce(sessionId),
       },
+      // `zoneTable` is created below, before any clock fires.
+      zoneHold: (zoneId) => (zoneId === null ? undefined : (zoneTable.find(zoneId)?.usageHold?.reason ?? undefined)),
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       broadcast,
       log,
@@ -516,6 +521,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         },
         now: () => new Date(),
       }),
+      heldFor: (sessionId) => usage.heldFor(sessionId),
       heldPayloads: () => settings.get().heldPayloads,
       recheckMs: options.flowRecheckMs ?? (Number(process.env.AGENT_BOARD_FLOW_RECHECK_MS) || DEFAULT_FLOW_RECHECK_MS),
       broadcast,
@@ -584,6 +590,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         clocks.turnEnded(sessionId);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
+      onWoken: () => flowEdges.recheckAll(),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
         flowEdges.turnBoundary(sessionId);
@@ -631,6 +638,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // Sources is created just below; no clone runs before then.
     const reposDir = options.reposDir ?? (process.env.AGENT_BOARD_REPOS_DIR || join(homedir(), '.agent-board', 'repos'));
     const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir, groupsDir, () => settings.get().arrangeSpacing);
+    const usage = createUsageHost({
+      db,
+      settings: () => settings.get(),
+      zones: zoneTable,
+      agents: { get: (sessionId) => agents.get(sessionId), pause: (...args) => agents.pause(...args) },
+      released: () => flowEdges.recheckAll(),
+      broadcast,
+      log,
+    });
     const sources: ZoneSources = createZoneSources({
       db,
       zones: zoneTable,
@@ -828,6 +844,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.orchestratorHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
+      ...usage.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');
@@ -1006,6 +1023,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         gates.stop();
         sweeper.stop();
         clocks.close();
+        usage.close();
         stopFollowingTimeZone();
         // A clone the daemon can't see through is cancelled, and its zone and folder go with it.
         await sources.close();

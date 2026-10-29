@@ -214,6 +214,23 @@ describe('clocks', () => {
     expect(skipped.runs[0]).toMatchObject({ outcome: 'skipped', reason: 'the orchestrator that made it is gone' });
   });
 
+  it("starts no fresh agent from an agent's clock in a zone held for usage, saying why; the user's own clocks go on", async () => {
+    const { client, recorder, clock, zone, dataDir } = await clockDaemon();
+    const maker = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Lead the work', ...SIZE });
+    const made = await freshClock(client, zone.id, { prompt: 'Check the deps' });
+    const own = await client.call('clock.add', { place: { zoneId: zone.id, x: 400, y: 40 }, data: { cron: '0 8 * * *', does: 'fresh', prompt: 'Tidy the docs' } });
+    const db = new DatabaseSync(daemonPaths(dataDir).database);
+    db.prepare('UPDATE board_items SET made_by = ? WHERE id = ?').run(maker.sessionId, made.id);
+    db.prepare("UPDATE zones SET usage_hold_reason = '5h at 86%, zone low priority', usage_hold_at = '2026-10-10T07:00:00Z' WHERE id = ?").run(zone.id);
+    db.close();
+
+    clock.advanceTo(EIGHT);
+
+    const held = await untilStatus(recorder, made.id, (status) => status.runs.length === 1);
+    expect(held.runs[0]).toMatchObject({ outcome: 'skipped', reason: 'held: 5h at 86%, zone low priority' });
+    await untilStatus(recorder, own.id, (status) => status.runs[0]?.outcome === 'done');
+  });
+
   it('starts no more fresh agents while three it started are still on the board', async () => {
     const { client, recorder, clock, zone } = await clockDaemon();
     const made = await freshClock(client, zone.id, { cron: '0 * * * *', fresh: { harness: 'claude', model: null, role: null, closeWhenDone: false } });

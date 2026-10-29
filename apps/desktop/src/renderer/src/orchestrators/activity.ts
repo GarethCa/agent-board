@@ -37,6 +37,8 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'remove-connector': { done: 'removed', tried: 'remove', nothing: 'a connector' },
   'add-clock': { done: 'added', tried: 'add', nothing: 'a clock' },
   'remove-clock': { done: 'removed', tried: 'remove', nothing: 'a clock' },
+  hold: { done: 'held', tried: 'hold', of: 'the zone ', after: ' for usage', nothing: 'a zone' },
+  release: { done: 'released', tried: 'release', of: 'the zone ', nothing: 'a zone' },
   'set-role': { done: 'set', tried: 'set', of: 'the default role ', nothing: 'a default role' },
   'remove-role': { done: 'removed', tried: 'remove', of: 'the default role ', nothing: 'a default role' },
   'set-status': { done: 'set the status of', tried: 'set the status of' },

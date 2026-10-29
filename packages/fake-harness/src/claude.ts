@@ -77,6 +77,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
       shellToolName: 'Bash',
       backgroundFlag: true,
       mcpServers: mcpConfigFlags(listFlag(args, '--mcp-config'), env),
+      ...statusLineOf(stringFlag(args, '--settings'), env, cwd, model),
       // Claude's Bash tool runs with its own env.
       shellEnv: env,
     },
@@ -113,6 +114,18 @@ function hooksDisabled(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The status line `--settings` gives, when `FAKE_HARNESS_RATE_LIMITS` gives plan usage to pass it: what the real Claude
+ * passes, with those `rate_limits`.
+ */
+function statusLineOf(settings: string | undefined, env: NodeJS.ProcessEnv, cwd: string, model: string): { statusLine?: { command: string; input: Record<string, unknown> } } {
+  if (!env.FAKE_HARNESS_RATE_LIMITS || settings === undefined || !settings.trim().startsWith('{')) return {};
+  const statusLine = (JSON.parse(settings) as { statusLine?: { type?: string; command?: string } }).statusLine;
+  if (statusLine?.type !== 'command' || typeof statusLine.command !== 'string') return {};
+  const input = { model: { id: model, display_name: model }, workspace: { current_dir: cwd }, cwd, rate_limits: JSON.parse(env.FAKE_HARNESS_RATE_LIMITS) };
+  return { statusLine: { command: statusLine.command, input } };
 }
 
 /** `--settings` takes inline JSON or a file path. */
@@ -155,8 +168,19 @@ class ClaudeTranscript implements Transcript {
     this.append({ type: 'user', promptId, message: { role: 'user', content: text } });
   }
 
+  queuedPrompt(text: string): void {
+    this.append({
+      type: 'attachment',
+      attachment: { type: 'queued_command', prompt: text, source_uuid: randomUUID(), delivery_id: randomUUID(), commandMode: 'prompt', origin: { kind: 'human' }, timestamp: now() },
+    });
+  }
+
   assistantText(text: string): void {
     this.append({ type: 'assistant', message: this.assistantMessage([{ type: 'text', text }], 'end_turn') });
+  }
+
+  thinking(text: string): void {
+    this.append({ type: 'assistant', message: this.assistantMessage([{ type: 'thinking', thinking: text, signature: 'fake' }], 'tool_use') });
   }
 
   toolUse(id: string, name: string, input: unknown): void {

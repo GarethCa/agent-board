@@ -5,7 +5,14 @@ status: accepted
 
 Agent state comes from each harness's **hook system**, posted to the daemon; the chat view comes from the harness's **transcript file**; we never infer state by reading terminal output.
 
-Two narrow exceptions read the screen the daemon keeps of a terminal, to decide a step, never an agent's state: Continue on credits reads Claude's rate-limit menu, and a starting Claude agent's first prompt reads Claude's trust screen and its prompt (below). Each matches the screen text recorded from a real build and only acts on what it recognises.
+Narrow exceptions read the screen the daemon keeps of a terminal. Two decide a step, never an agent's state: Continue on credits reads Claude's rate-limit menu, and a starting Claude agent's first prompt reads Claude's trust screen and its prompt (below). Each matches the screen text recorded from a real build and only acts on what it recognises.
+
+One decides a state, as a safety net under a lost `Stop` (`quiet-turns.ts`). A Claude agent `running` or `thinking` (however that state came, a hook or a decision on the board) with no hook and no terminal output for 5 minutes moves to idle only if both of these hold, and the daemon log says which way it went and why:
+
+- **Its transcript says the turn ended.** Its last entry of the conversation is a reply that called no tool. A tool call with no result yet, a prompt or a tool result means the turn is still at work, however silent. This is the main guard. Under reduced motion Claude 2.1.312 stops redrawing its spinner, so a long silent command is quiet on screen.
+- **Its screen shows Claude's prompt between turns.** That means its prompt box, with no spinner line (a glyph of `·✢✳✶✻✽*`, a verb and an ellipsis) and no footer hint (`… to interrupt`, or `… to return to team lead` in team mode) over it. The hint's key follows the user's binding and a narrow terminal truncates its row, so neither sign is sure to show.
+
+Its final message is not handed on, as no hook carried it. A hook or output while the transcript and screen are being read cancels the move. The signs were read from the 2.1.312 bundle, not captured from a running session.
 
 ## Claude Code (verified against code.claude.com/docs, Claude Code 2.1.x)
 
@@ -209,8 +216,10 @@ PTY.
     so its terminal is blocked while a prompt is held. This is the same case as the fake claude, with the same 20 s
     cap.
 - **Answering a waiting agent.** The daemon types the text into its PTY and submits it with `\r` 50 ms later. Line
-  breaks are flattened to spaces, and answers to one agent are typed one at a time. This is not verified against the
-  real TUI's paste detection.
+  breaks are flattened to spaces, and answers to one agent are typed one at a time. A line over 512 bytes goes as a
+  bracketed paste instead: Claude 2.1.312 kept only the end of a longer line typed as keys (2,691 characters sent, the
+  last 695 in its transcript, starting mid-word, a cut that falls on the 1 KiB reads a macOS terminal gives), while
+  first prompts of 4 to 6 KB, always pasted, arrived whole.
 - **Last message.** The agent keeps what it last said to the user, in memory, as the inbox's context: its own `Stop`'s
   `last_assistant_message`, or the `message` of an `agent_needs_input` notification. A `UserPromptSubmit` clears it.
 
@@ -255,9 +264,42 @@ PTY.
   - an entry the chat is made of doesn't match: a Claude `user` or `assistant` entry without its `version` or its
     `message` object;
   - a line runs past 16 MB.
-- **What the chat leaves out, as the TUIs do.** Claude: `isMeta` and sidechain entries, thinking, server tools, and
-  slash-command and system-reminder text. Codex: `developer` messages, and user messages Codex tags as anything but
+- **A message sent mid-turn, where Claude took it.** Claude Code 2.1 writes a message typed while a turn runs not as a
+  `user` entry but as an `attachment` of type `queued_command` (`commandMode: "prompt"`, its text in `prompt`), at
+  the step of that turn where it handed it to the model, after a tool call. The chat reads it there as the user's
+  message. A subagent's report (`isMeta`) and a background task's notification (`commandMode:
+  "task-notification"`) are left out, as their `user` forms are.
+- **What the chat leaves out, as the TUIs do.** Claude: `isMeta` and sidechain entries, server tools, compact
+  summaries, and slash-command and system-reminder text. Codex: `developer` messages, and user messages Codex tags as anything but
   `user.text` (its environment context); `event_msg`s, which repeat `response_item`s, except `turn_aborted`.
+- **Live states from the transcript.** Each entry carries `at`, the `timestamp` of its line (both harnesses write one),
+  so the chat can time thinking, calls and turns without hooks. Thinking is an entry of its own: a Claude `thinking`
+  block (its text, which Claude mostly leaves out: real 2.1.30x transcripts have it empty in about nine blocks in ten)
+  or a `redacted_thinking` one, and a Codex `reasoning` item (its summary; the reasoning is encrypted). A compaction is
+  a `compacted` entry, from Claude's `system` entry of subtype `compact_boundary` and Codex's `compacted` line; the
+  summary after it is left out. Other `system` entries (`stop_hook_summary`, …) are skipped.
+- **Timing a turn.** Many lines that start or move a turn make no entry (a background task's queue operations, hook
+  progress), so the entry before a thinking block can be the previous turn's reply, hours earlier. Thinking therefore
+  carries `since`, the latest timestamp of a line of the conversation before it (a `user`, `assistant` or `system`
+  line, or a queued message), entry or not: the latest, as Claude stamps a message queued during a turn with when it
+  was queued, earlier than the lines around it. Claude's other records, such as `deferred_tools_record`, are written
+  within a millisecond of the thinking, either side of it, so they don't count. Claude writes one thought as several
+  thinking blocks in a row; the chat shows them as one, for as long as all of them. A background task's report, which Claude gives the
+  model as a `user` entry starting `<task-notification>`, is a `notified` entry, so the chat can time a turn it starts.
+  A turn's length is Claude's own `system` entry of subtype `turn_duration` (`durationMs`), a `turn-ended` entry,
+  written after its last reply in about nine turns in ten; without it, the chat counts from the prompt or notification
+  that started the turn to its last reply.
+- **A call turned down.** When the user interrupts a tool call or turns it down, Claude writes its result as an error
+  ("The user doesn't want to proceed with this tool use…"), then `[Request interrupted by user for tool use]`, a
+  notice with `forToolUse`. The chat reads that pair as the call stopped, not failed. A plain `[Request interrupted by
+  user]` after a call that failed leaves it failed.
+- **Compacting, live.** Claude now sends `PreCompact` and `PostCompact` too (13 events). Neither moves the state: an
+  automatic compaction is mid-turn, and `/compact` ends at `PostCompact`. `Agent.compactingSince` is when the agent's
+  own `PreCompact` came, until `PostCompact`, its turn ending (`Stop`, `StopFailure`, Codex's `Interrupt`, an interrupt
+  from the board), its next prompt or its session ending; the chat shows "Compacting…" while it is set.
+- **Not read yet.** Claude shows its usage limit's reset time, its API retries and a running command's output only on
+  its screen, and no transcript entry or hook carries them, so the chat doesn't show them. A turn's cost needs a price
+  table, so the chat shows only its time.
 - **Subagents.** A Claude subagent's own transcript (`<session>/subagents/agent-<id>.jsonl`) is read when its call is
   opened, and followed until the call has its result, found by the `agentId` on the call's result or the `toolUseId` in its `.meta.json`. Codex records the
   messages between agents (`agent_message`) in the parent's rollout, so they show with the calls around them; the task
@@ -266,9 +308,32 @@ PTY.
   last read, a megabyte at a time, up to the last line break. A file over 8 MB is read from its first line (Codex's
   session line) and then from 8 MB before its end. A session keeps its latest 500 entries, the daemon 8 sessions, and
   a read returns at most the latest 200, saying when earlier ones aren't sent (`earlier`); the chat says those are in
-  the terminal. Tool output and inputs are clipped to 4,000 characters. The session window polls every 750 ms while
-  its chat shows. A file replaced or cut short starts a new `generation`, seeded from the clock so none repeats across
-  daemon restarts.
+  the terminal. Tool output and inputs are clipped to 4,000 characters. A file replaced or cut short starts a new
+  `generation`, seeded from the clock so none repeats across daemon restarts.
+- **Pushed, not polled.** While the daemon keeps a session's read, it watches the file (`fs.watch`) and, 25 ms after a
+  write (writes closer together are one change), tells every client `agent.transcriptChanged`. The chat then reads at
+  once, and again whenever the agent's state changes; a file not written yet can't be watched, so it also reads every
+  3 s while it shows. A Claude subagent's conversation, open in its call, is still read every 750 ms until the call has
+  its result. Any read starts the watch, not only a chat's (the CLI's and MCP's reads too); at most 8 files are watched,
+  and a change costs every client one small event, so a reader does not ask for it.
+- **A sent message shows at once.** The chat's message box shows what it sent as a bubble straight away, saying how it
+  is getting on: sending, queued (it was sent mid-turn: Claude takes it at the turn's next step, Codex once the turn
+  ends), waiting for the session to start,
+  not sent (with Retry), not delivered (its session never came up), or not seen in the transcript (a turn started and
+  ended since, with no copy). Once the daemon has answered, its bubble can be discarded.
+  - It goes, in the same render, once the transcript has its copy: a message of the user's written after it whose
+    words are its words (spacing, a paste's wrapper and an image don't count), or the words of it and the messages sent
+    after it, in order, as two sent in one turn can reach the agent as one message. A copy confirms only the messages
+    it is made of, and those still waiting are then placed after it, so the same words sent twice need two copies.
+  - A message is placed at the end of the transcript the chat had as it was sent. One sent before the chat's first
+    read is placed at the end of that read, and one from before the transcript was read afresh (a new generation) at
+    the end of the new one; one sent while there was no transcript, at the start of the first. A copy already in that
+    read is then missed, and the message ends up not seen: better than an older copy confirming it early.
+  - A command (`/compact`, `!ls`) never comes as a message (the harness keeps it out of the conversation), so its
+    bubble goes once the daemon has typed it.
+- **A pasted block folds.** Claude Code's wrapper round a pasted block (`<pasted_content id="…">`, closed by the same
+  id) shows as a folded "Pasted text (N lines)" block in any user message in the chat, a message from the board or
+  another agent's too; the terminal and the transcript keep it as it is.
 - **Codex calls.** Codex 0.162 runs shell commands as scripts for its `exec` tool (`custom_tool_call`); a call failed
   when its report says `Script failed`, it was `aborted`, or its `exit_code` wasn't 0. The fake `codex` writes this
   shape, and the fake `claude` a shell's stdout as the result's text, as the real CLIs do.
@@ -327,17 +392,40 @@ PTY.
   unsent, or a question or permission prompt is up when its turn comes) is kept on the agent (`Agent.undelivered`, in
   the daemon's memory) and flagged to the user, a flag that outlives its session and opening it, until the user
   resends it (`agent.resendUndelivered`, an ended agent started again with the first) or clears it. A flag the agent
-  already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared.
+  already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared. An
+  **unsent message**'s flag folds in the flag before it the same way, and either of the two may stand in place of the
+  other: whichever is over first leaves the other standing in place of what it held, never a copy of itself. A flag
+  the agent raised for its orchestrator goes to the user while folded in, as its reason shows on the user's flag.
+- **A Claude launch with no task waits too.** A Claude agent started with no task, or relaunched (woken, resumed,
+  restarted) with no new prompt, is held the same way until its session is up: nothing is typed at it, and what is
+  sent meanwhile is queued, as above, so a message is never typed into Claude while it loads (its splash, a resumed
+  conversation being redrawn, its trust screen), where it would sit at the prompt, unsent. The trust screen and the
+  stall below apply as for a task. With no task to paste into a turn begun by hand, any hook of its own but `SessionEnd`
+  says its session is up, not only `SessionStart`. A stalled one's flag names no Send, as there is no task to send. One with
+  nothing queued can be paused before it is up, as it holds nothing a pause would lose. Codex launched with no task is
+  not held: it fires no hook before a first prompt, and its composer is read only for one. A hand-off refused as busy
+  meanwhile waits for its edge to try again, so a message sent after it, queued here, may land first.
 - **Claude's trust screen.** In a folder Claude has never opened it shows a trust screen first ("Quick safety check
   … ❯ No, exit / Yes, I trust this folder" in 2.1.312) and fires no `SessionStart` until it is answered. While the
   task waits, the daemon reads the agent's screen (`startup-screen.ts`) a moment after its output, on the daemon's
   clock. It is the trust screen only with its title or its yes row on it, never a `No, exit` row alone. On the trust
   screen the agent is flagged to the user, never its orchestrator, which can't answer it and shouldn't decide it:
   `Claude is asking whether to trust this folder: <path>` (opening the agent leaves this flag up), and its tile and
-  the Needs-you row offer **Trust folder** (`agent.trustFolder`). Only that click answers it, through
-  `answerTrustScreen`, which any caller may use: Down, then Enter once the screen shows the pointer on the yes row, so
-  Enter never lands on `No, exit`. Claude records the trust itself; the
+  the Needs-you row offer **Trust folder** (`agent.trustFolder`). Only that click, or the zone setting below, answers
+  it, through `answerTrustScreen`, which any caller may use: Down, then Enter once the screen shows the pointer on the
+  yes row, so Enter never lands on `No, exit`. Claude records the trust itself; the
   board never writes `~/.claude.json`. Nothing is typed there otherwise, Send included.
+- **A zone that trusts its folder.** The user can opt a repo or folder zone in (**Trust this zone's folder for new
+  agents**, `Zone.trustsFolder`: off by default, offered in Add zone and in the zone's menu, where it is turned off
+  again). The daemon then answers the trust screen of an agent in that zone itself, through the same
+  `answerTrustScreen`, instead of flagging the user: no click, and the task is typed once Claude is up. It applies only
+  to an agent of the zone's repo running in the zone's own folder, or that folder in a worktree the app made for it
+  (ADR-0007), read when the screen shows, so turning it off applies to the next agent. Only a zone with a repo has it:
+  unbinding, or a clone that fails, turns it off, and a group can't be opted in. After Enter the daemon holds the screen
+  as answered until Claude has drawn past it, so a read mid-redraw never flags the user. The decision is logged (`trusted <id>'s folder by its
+  zone's setting`) and kept on the agent (`Agent.trustedByZone`) for its tile's "trusted by this zone's setting". If
+  the pointer can't be moved to the yes row, it falls back to the user's flag and Trust folder. It answers Claude's own
+  screen, as the click does, and never writes `~/.claude.json`.
 - **Its prompt, seen.** Once the trust screen has been answered (by Trust folder or in the terminal), or the agent has
   been given up on (below), Claude's prompt on its screen (a pointer line between the rules framing it) types the task
   as `SessionStart` would. The read just after the trust screen goes may catch Claude mid-redraw, so a screen that is
@@ -391,3 +479,46 @@ PTY.
     draw after it loads (a new-model notice, an update prompt), which the screen check would have to read as not up.
     The folder-trust screen's second row depends on how Codex is started (`Back to Agent Command Center` with its
     shared daemon, `Quit` without).
+
+**A turn left running**, as built (`packages/daemon/src/claude-state.ts`, `quiet-turns.ts`):
+
+- A Claude `SessionStart` from `compact` or `clear` leaves the state alone, no longer → running. Claude compacts
+  mid-turn, and also at its prompt between turns ("Compacted while idle"), and `/clear` restarts the session at its
+  prompt. Neither starts a turn, so between turns no `Stop` would follow to take the agent off `running`.
+- The transcript and the screen together decide a state once, as a safety net under a lost `Stop` (the exceptions at
+  the top).
+
+**Waiting at its prompt**, as built (`packages/daemon/src/hook-states.ts`, `claude-state.ts`, `agents.ts`):
+
+- Claude 2.1.312 fires `agent_needs_input` for more than a question of the agent's own. Its binary also sends it
+  when a background session it tracks becomes blocked (`<label> needs your input[: …]`), and as two dialogs of its own
+  open: `Teammate setup needs your input` and `Auto mode has a classifier billing notice to acknowledge`. All of this
+  is read from the binary's strings, not seen firing.
+- One landing once the agent's turn is over moved it to `waiting` with no `idle_prompt` behind it, so it counted as
+  away from its prompt and refused every message sent to it.
+- So any `waiting` entered from `idle`, or from a failed turn, counts as at the prompt, as `idle_prompt` after `Stop`
+  always did: messages and runs are typed there, and its orchestrator hears no needs-you. A rate-limited agent stays
+  `rate-limited`, as through its `idle_prompt`. A notification once its turn is over doesn't replace its last message.
+- Claude's own two dialogs, known by their exact text, are the exception: a question of its own up, as one asked
+  mid-turn is, whether they open before its `idle_prompt` or after it (usually after: the agent is already `waiting`
+  at its prompt, and only the mark changes). The agent shows `waiting` for you with the dialog's text as its last
+  message, unseen and logged, and a message sent to it is refused, quoting it, as typed keys and Enter would pick a row.
+  Crew events keep whether each agent needed the user at its last update, so its orchestrator hears needs-you though
+  the state stayed `waiting`.
+- A `waiting` entered mid-turn (from `running`, `thinking`) is a question of its own up, and so is a dialog. The
+  quiet-turn net above times both. After `QUIET_TURN_MS` with no hook or output, its transcript saying its turn ended
+  and its screen showing Claude's prompt, it moves to idle. That frees an agent whose `Stop` was lost before such a
+  notification, or whose dialog was closed in its terminal with no hook. A question Claude really asks is a tool call
+  (its transcript shows the turn under way) and stays. One left waiting is looked at again every `QUIET_TURN_MS`, as a
+  dialog closed in its terminal brings no hook, but the log says so once until its next hook: a question may stay up
+  for hours.
+- The daemon log says why each agent went `waiting`: the hook, its notification type and message, and whether its
+  turn had ended. A message refused for a question of its own quotes that question and says to answer it in its
+  terminal. No board action answers it yet.
+- Limits:
+  - A dialog Claude adds later, not on the list, counts as the prompt between turns: a message is typed into it, and
+    no needs-you is raised. A screen check before typing was left out: no screen of these dialogs has been seen to
+    calibrate it against, and a wrong one would refuse messages to agents at their prompt again.
+  - Word of another session that lands mid-turn shows the agent `waiting` until its next hook, quoting that word.
+  - The net can't tell a dialog closed from one drawn below an unchanged prompt box. One still up after the net's
+    look counts as the prompt.

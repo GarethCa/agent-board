@@ -52,6 +52,14 @@ const LATER_REVIEW = [
   '- **The e2e waits with sleep(500)** `e2e/move-session.spec.ts:57`: use the fake clock.',
 ].join('\n');
 
+/** Sends an `Explore` subagent to find where sessions are created, says what it found, and ends the turn. */
+async function sendExplorer(session: FakeSession): Promise<void> {
+  await session.say("I'll send an explorer to map the codebase.");
+  await session.spawnSubagent('Explore', 'Find where sessions are created', 'Sessions are created in src/daemon/sessions.ts.');
+  await session.say('The explorer found where sessions are created.');
+  await session.stop();
+}
+
 /**
  * An HTML plan that tries everything a plan's page must not: reach `url` by fetch, an image, a form post and a
  * navigation, open a window and the print dialog, and find the app's API or Node. It writes what it could into its title, once past `print()`, and its heading
@@ -177,10 +185,7 @@ const scripts: Record<FakeScenario, Script> = {
   /** Hands part of the work to a subagent and reports its result. */
   async subagent(session, prompt) {
     await session.submit(prompt);
-    await session.say("I'll send an explorer to map the codebase.");
-    await session.spawnSubagent('Explore', 'Find where sessions are created', 'Sessions are created in src/daemon/sessions.ts.');
-    await session.say('The explorer found where sessions are created.');
-    await session.stop();
+    await sendExplorer(session);
   },
 
   /**
@@ -392,11 +397,18 @@ const scripts: Record<FakeScenario, Script> = {
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
    * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
    * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
-   * `Ask permission` plays `permission`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
+    // Prompts that play another scenario, which submits them itself.
+    if (prompt === 'Ask permission') return scripts.permission(session, prompt);
+    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     await session.submit(prompt);
+    if (prompt === 'Think, then send a subagent') {
+      await session.recordThought('Sessions are made somewhere in the daemon: an explorer can find where.');
+      return sendExplorer(session);
+    }
     const task = /^Orchestrate: (.*)/.exec(prompt)?.[1];
     if (task !== undefined) {
       const started = await session.callMcpTool('agent-board', 'new_agent', { prompt: task, name: 'worker' });
@@ -503,8 +515,6 @@ const scripts: Record<FakeScenario, Script> = {
       await session.runShell('sleep 5');
       return prompt.endsWith('fail') ? session.failTurn('server_error', '500 Internal Server Error') : session.failTurn('rate_limit', '429 Too Many Requests');
     }
-    if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     if (prompt === 'Hit the rate limit') return session.failTurn('rate_limit', '429 Too Many Requests');
     await session.runShell("mkdir -p .agent-board && printf '# Handover\\n\\nThe work is done.\\n' > .agent-board/handover.md");
     await session.say('Handover written.\nSTATUS: done');

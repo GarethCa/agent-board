@@ -25,8 +25,8 @@ export interface LoggedEvent extends CrewEvent {
 export interface CrewEventLogOptions {
   /** The agents as they are as the daemon starts. */
   seed: readonly Agent[];
-  /** Whether only its idle prompt left the agent waiting (`AgentHost.idlePrompted`). */
-  idlePrompted(sessionId: string): boolean;
+  /** Whether the agent went waiting after its turn ended, so sits at its prompt (`AgentHost.waitsAtPrompt`). */
+  waitsAtPrompt(sessionId: string): boolean;
   /** The agent as it is now, if it is. */
   agent(sessionId: string): Agent | undefined;
   /** The agents above the agent in its crew: its `spawnedBy`, then theirs. */
@@ -75,8 +75,13 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
     agent.permissions.length > 0 ||
     waitsOnUser(agent) ||
     planPending(agent) ||
-    // Waiting with no ask of the board's: Claude's own question (`agent_needs_input`), unless only its idle prompt.
-    (agent.state === 'waiting' && agent.endedAt === null && !options.idlePrompted(agent.sessionId));
+    // Waiting with no ask of the board's: Claude's own question (`agent_needs_input`), unless its turn had ended.
+    (agent.state === 'waiting' && agent.endedAt === null && !options.waitsAtPrompt(agent.sessionId));
+  /**
+   * Whether each agent needed the user as of its last update: `needsUser` of an earlier update reads where its prompt
+   * stands now, which a dialog of Claude's own over it changes with no change of state.
+   */
+  const neededUser = new Map<string, boolean>(options.seed.map((agent) => [agent.sessionId, needsUser(agent)]));
 
   const askedFor = (agent: Agent): string | null => {
     const [prompt] = agent.permissions;
@@ -93,14 +98,14 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
   };
 
   /** What happened between two updates of a live agent, in order. */
-  const changes = (before: Agent, after: Agent): { kind: CrewEventKind; detail: string | null }[] => {
+  const changes = (before: Agent, after: Agent, needed: boolean, needs: boolean): { kind: CrewEventKind; detail: string | null }[] => {
     const found: { kind: CrewEventKind; detail: string | null }[] = [];
     if (before.workFinishedAt === null && after.workFinishedAt !== null) found.push({ kind: 'finished', detail: after.status?.summary ?? null });
     // A new flag (or a new reason): one an orchestrator passes on is the user's, not news to its own lead.
     if (after.flag !== null && after.flag.id !== before.flag?.id && after.flag.to === 'orchestrator') {
       found.push({ kind: 'flagged', detail: after.flag.reason });
     }
-    const asking = after.endedAt === null && !needsUser(before) && needsUser(after);
+    const asking = after.endedAt === null && !needed && needs;
     if (asking) found.push({ kind: 'needs-you', detail: askedFor(after) });
     if (after.endedAt === null && before.unsent === null && after.unsent !== null) found.push({ kind: 'not-sent', detail: after.unsent });
     // A turn that ends finished, or on asking the user, says so instead.
@@ -136,12 +141,15 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
     observe(agent) {
       const before = last.get(agent.sessionId);
       const leads = options.leads(agent);
+      const needed = neededUser.get(agent.sessionId) ?? (before !== undefined && needsUser(before));
+      const needs = needsUser(agent);
       last.set(agent.sessionId, agent);
+      neededUser.set(agent.sessionId, needs);
       leadsOf.set(agent.sessionId, leads);
       // An ended agent's later updates (its `done`, a rename) are no news; a relaunch starts it over. A paused one that
       // is closed as it is has ended now.
       if (before !== undefined && before.endedAt === null) {
-        for (const { kind, detail } of changes(before, agent)) log(agent, leads, kind, detail);
+        for (const { kind, detail } of changes(before, agent, needed, needs)) log(agent, leads, kind, detail);
       } else if (before?.hibernated != null && agent.endedAt !== null && agent.hibernated === null) {
         log(agent, leads, 'ended', howEnded(agent));
       }
@@ -168,6 +176,7 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
       const before = last.get(sessionId);
       if (before !== undefined && (before.endedAt === null || before.hibernated !== null)) log(before, leadsOf.get(sessionId) ?? [], 'ended', 'removed');
       last.delete(sessionId);
+      neededUser.delete(sessionId);
       leadsOf.delete(sessionId);
       pullRequestsKnown.delete(sessionId);
     },
@@ -195,6 +204,6 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
 
     cursor: () => `${run}.${seq}`,
 
-    waitState: (agent) => (agent.state === 'waiting' && options.idlePrompted(agent.sessionId) ? 'idle' : agent.state),
+    waitState: (agent) => (agent.state === 'waiting' && options.waitsAtPrompt(agent.sessionId) ? 'idle' : agent.state),
   };
 }

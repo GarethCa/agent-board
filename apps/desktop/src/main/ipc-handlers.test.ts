@@ -61,7 +61,7 @@ describe('the channels main handles', () => {
     ['unsaved plan edits', registerUnsavedPlanEditIpc, ['plan:markUnsavedEdit', 'plan:unsavedEdits']],
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
     ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:clocks', 'item:create', 'item:delete', 'item:import-image', 'item:list', 'item:update']],
-    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity']],
+    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:release', 'orchestrator:usage']],
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],

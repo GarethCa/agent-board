@@ -122,7 +122,7 @@ export const tile = (window: Page) => window.getByTestId('agent-tile');
 export const screen = (window: Page) => window.getByTestId('session-terminal').locator('.xterm-rows');
 
 /** Opens the board menu if it is closed, and returns it. */
-async function openBoardMenu(window: Page): Promise<Locator> {
+export async function openBoardMenu(window: Page): Promise<Locator> {
   const panel = window.getByRole('dialog', { name: 'Board menu' });
   // Dispatched, not clicked: a session window's scrim may cover the island (⌘\\ reaches it from the keyboard).
   if (!(await panel.isVisible())) await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');

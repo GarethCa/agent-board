@@ -1,11 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocumentSummary } from '@agent-board/daemon/protocol';
 import { changedLineCount, docMeta, docTypeTag, editHint, htmlPreview, newlyShown, previewLines } from './doc-view';
 
 describe('what the Document tab and a document card say', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('tags a document by its format and says who wrote its version', () => {
     expect(docTypeTag('markdown')).toBe('MD');
     expect(docTypeTag('html')).toBe('HTML');
+    // shortWhen formats in the process locale ("08:16" or "08:16 AM"), so pin it to a 24-hour one.
+    const toLocaleTime = Date.prototype.toLocaleTimeString;
+    vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(function (this: Date, _locales, options) {
+      return toLocaleTime.call(this, 'en-GB', options);
+    });
     const today = new Date().toISOString();
     expect(docMeta({ version: 3, writtenBy: 'agent', writtenAt: today }, 'Release orchestrator')).toMatch(/^v3 · written by Release orchestrator \d\d:\d\d$/);
     expect(docMeta({ version: 4, writtenBy: 'user', writtenAt: today }, 'Release orchestrator')).toMatch(/^v4 · written by you /);

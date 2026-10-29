@@ -390,6 +390,32 @@ describe('watching a crew from the command line', () => {
   });
 });
 
+describe('waiting from the command line', () => {
+  it('exits 3, not 0, when a wait gives up, takes a duration, and refuses a bad one before it connects', async () => {
+    const daemon = await startTestDaemon({
+      worktreesDir: tempDataDir(),
+      agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home: tempDataDir() }),
+    });
+    const client = await connectTestClient(daemon);
+    const zone = await client.call('zone.add', { path: tempRepo('slow'), x: 0, y: 0, name: 'slow' });
+    const env = { AGENT_BOARD_SOCKET: daemon.socketPath };
+    expect(await run(env, 'new', '--zone', ref('zone', zone.id), '--name', 'plain', '--', 'Do the work')).toMatchObject({ code: 0 });
+
+    // Its turn ends, but it never says it finished: the wait for that gives up.
+    const early = await run(env, 'wait', 'plain', '--until', 'finished', '--timeout', '1s');
+    expect(early).toMatchObject({ code: 3, out: expect.stringContaining('Timed out: not all are there yet') });
+    expect(await run(env, 'wait', 'plain', '--until', 'finished', '--timeout', '0', '--json')).toMatchObject({ code: 3, out: expect.stringContaining('"timedOut": true') });
+    // So `&&` stops there, and a wait that is answered exits 0.
+    expect(await run(env, 'wait', 'plain', '--timeout', '1m')).toMatchObject({ code: 0, out: expect.not.stringContaining('Timed out') });
+  });
+
+  it('takes seconds, or a number with s, m or h, up to the longest wait', async () => {
+    for (const bad of ['soon', '-1', '1.5', '2d', '31m', '9999999999999999999h']) {
+      expect(await run({}, 'wait', `--timeout=${bad}`)).toMatchObject({ code: 2, err: expect.stringContaining('--timeout must be a duration') });
+    }
+  });
+});
+
 describe('hand-offs and edges from the command line', () => {
   it('checks their arguments before it connects', async () => {
     expect(await run({}, 'handoff', '--data', '{nope')).toMatchObject({ code: 2, err: expect.stringContaining('--data must be JSON') });
