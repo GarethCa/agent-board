@@ -7,7 +7,7 @@ import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from 
 import { scratch } from './scratch.ts';
 
 const flowEdges = (page: Page): Promise<FlowEdge[]> => page.evaluate(() => window.agentBoard.flowEdges.list());
-const answer = (page: Page, sessionId: string, text: string): Promise<void> =>
+const answer = (page: Page, sessionId: string, text: string): Promise<{ queued: boolean }> =>
   page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [sessionId, text]);
 const deleteAgent = (page: Page, sessionId: string) => page.evaluate((id) => window.agentBoard.agents.delete(id, true), sessionId);
 const connectors = (page: Page) => page.evaluate(() => window.agentBoard.connectors.list());
@@ -122,7 +122,7 @@ test("a hand-off drawn from one agent's handle to another opens its Edge rules, 
       .toBe('Done: Hand-off from Write the code (its final message): Done: Ship it..');
     expect(await recordedStates(window)).toContain('handing-off');
     await expect(token).toHaveAttribute('data-state', 'delivered');
-    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d$/);
+    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d( [AP]M)?$/);
     await expect(rules).toContainText('Sent final message');
     await expect(rules).toContainText('fired 1 time');
 

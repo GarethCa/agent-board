@@ -584,6 +584,22 @@ describe('the orchestrator loop', () => {
     expect(result).toMatchObject({ timedOut: true, agents: [{ sessionId: worker.sessionId, state: 'done' }] });
   });
 
+  it('says over the wait tool whether it timed out, as a field and in its text', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
+    await lead.connection.call('orchestrator.close', { token: lead.token, sessionId: worker.sessionId });
+    const mcp = mcpAs(setup, lead.token);
+
+    expect(await mcp.callTool('wait', { agents: ['worker'], until: ['running'], timeout_seconds: 0 })).toMatchObject({
+      isError: false,
+      text: expect.stringContaining('Timed out'),
+      structured: { timedOut: true },
+    });
+    expect(await mcp.callTool('wait', { agents: ['worker'], timeout_seconds: 5 })).toMatchObject({ structured: { timedOut: false } });
+    expect(await mcp.callTool('wait', { agents: ['worker'], since: 'now', timeout_seconds: 0 })).toMatchObject({ structured: { timedOut: true } });
+  });
+
   it('reads only files inside the worktree', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
@@ -978,13 +994,13 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'zone_screenshot', 'add_note',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'usage_hold', 'usage_release', 'usage_pause', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'zone_screenshot', 'add_note',
       'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
     expect((await plainMcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
+    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
   });
 
   it('joins two of its agents with an edge, and removes it, over the tools', async () => {

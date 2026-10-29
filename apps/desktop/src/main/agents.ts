@@ -19,6 +19,7 @@ const moveAnswerDelayMs = app.isPackaged ? 0 : Number(process.env.AGENT_BOARD_MO
 export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   forwardEvents(daemon, ['agent.updated', 'agent.removed'], AGENT_IPC.changed);
   forwardEvents(daemon, ['agent.starting', 'agent.startEnded'], AGENT_IPC.startChanged);
+  forwardEvents(daemon, ['agent.transcriptChanged'], AGENT_IPC.transcriptChanged);
   // Starts live in the daemon's memory: a daemon restarted under the link has none of the ones the board shows.
   daemon.onConnected(() => sendToAllWindows(AGENT_IPC.startChanged, { type: 'agent.startsReset' } satisfies AgentStartsResetEvent));
 
@@ -39,7 +40,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthroughVoid(daemon, AGENT_IPC.dismissStart, 'agent.dismissStart', (sessionId: string) => ({ sessionId }));
   passthroughVoid(daemon, AGENT_IPC.updateStart, 'agent.updateStart', (sessionId: string, change: { name?: string; move?: TileMove }) => ({ sessionId, ...change }));
   ipcMain.handle(AGENT_IPC.nextName, async () => (await daemon.call('agent.nextName')).name);
-  passthroughVoid(daemon, AGENT_IPC.answer, 'agent.answer', (sessionId: string, text: string, paste?: boolean) => ({ sessionId, text, paste }));
+  passthrough(daemon, AGENT_IPC.answer, 'agent.answer', (sessionId: string, text: string, paste?: boolean) => ({ sessionId, text, paste }));
   ipcMain.handle(AGENT_IPC.pasteImage, async (_event, bytes: unknown) => (await handImage(dataDir, bytes, (path) => daemon.call('image.paste', { path }))).path);
   ipcMain.handle(AGENT_IPC.captureSelection, async (event, rect: unknown, width: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);

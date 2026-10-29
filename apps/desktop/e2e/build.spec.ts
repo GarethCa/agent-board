@@ -35,7 +35,7 @@ async function startOldDaemon(dataDir: string): Promise<number> {
   }
 }
 
-test('the app says when its daemon is from another build, and restarts it as its own', async () => {
+test('the app shows no board on a daemon from another build, only the offer to restart it as its own', async () => {
   const dataDir = tempDataDir();
   const oldDaemon = await startOldDaemon(dataDir);
   const app = await launchApp(dataDir);
@@ -43,6 +43,9 @@ test('the app says when its daemon is from another build, and restarts it as its
     const window = await app.firstWindow();
     const mismatch = window.getByTestId('build-mismatch');
     await expect(mismatch).toContainText('The daemon is from build 0000000 · 2026-01-01');
+    // This build can't read another's state, so the board, and its chrome, wait for the restart.
+    await expect(window.locator('.react-flow__pane')).toHaveCount(0);
+    await expect(window.getByTestId('daemon-status')).toHaveCount(0);
 
     await mismatch.getByRole('button', { name: 'Restart daemon' }).click();
 
@@ -52,6 +55,7 @@ test('the app says when its daemon is from another build, and restarts it as its
     await expect(status).toHaveAttribute('data-state', 'connected');
     await expect(status).not.toHaveAttribute('data-pid', String(oldDaemon));
     await expect(mismatch).toBeHidden();
+    await expect(window.locator('.react-flow__pane')).toHaveCount(1);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -2,8 +2,8 @@ import { expect, type ElectronApplication } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, listFinishedTurns, pickInChip, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
+import { agents, launch, listFinishedTurns, pickInChip, recordCharacters, recordedCharacters, recordedStates, recordStates, screen, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
+import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, openAddZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 test('a Claude agent runs in its own worktree, its tile follows it running → waiting → running → done across an app restart, and deleting it removes the worktree', async () => {
@@ -158,6 +158,54 @@ test("a Claude agent on Claude's trust screen offers Trust folder on its tile, a
     await expect(trust).toBeHidden();
     await tile(window).dblclick();
     await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a zone that trusts its folder, ticked in Add zone and changed from its menu, has Claude's trust screen answered for its new agents", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  env.FAKE_HARNESS_TRUST_SCREEN = '1';
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    // Off unless ticked: the checkbox is offered once a folder is chosen.
+    await pickFolderNext(app, repo);
+    const popover = await openAddZone(window, 'File browser');
+    await expect(popover.getByRole('checkbox', { name: "Trust this zone's folder for new agents" })).toHaveCount(0);
+    await popover.getByRole('button', { name: 'Choose a folder…' }).click();
+    const trust = popover.getByRole('checkbox', { name: "Trust this zone's folder for new agents" });
+    await expect(trust).not.toBeChecked();
+    await trust.check();
+    await popover.getByRole('button', { name: /^Add zone/ }).click();
+    await expect(popover).toBeHidden();
+    expect((await zones(window))[0]!.trustsFolder).toBe(true);
+
+    // Its agent is never asked: the zone's setting answered, its tile says so, and the task is typed.
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    const first = tile(window).filter({ hasText: 'Pick a database' });
+    await expect(first.getByTestId('tile-trusted-by-zone')).toHaveText("trusted by this zone's setting", { timeout: TURN_MS });
+    await expect(first.getByTestId('tile-trust')).toHaveCount(0);
+    await first.dblclick();
+    await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
+    await window.getByRole('button', { name: 'Close session window' }).click();
+
+    // From the zone's menu it is turned off, and the next agent asks again.
+    const zone = zoneNamed(window, 'monorepo');
+    await zone.getByRole('button', { name: 'Zone options' }).click();
+    await window.getByRole('menuitem', { name: "Stop trusting this zone's folder" }).click();
+    await expect.poll(async () => (await zones(window))[0]!.trustsFolder).toBe(false);
+    await spawnAgent(window, 'monorepo', 'Pick a cache');
+    const second = tile(window).filter({ hasText: 'Pick a cache' });
+    await expect(second.getByTestId('tile-trust')).toBeVisible({ timeout: TURN_MS });
+    await expect(second.getByTestId('tile-trusted-by-zone')).toHaveCount(0);
+
+    // And on again from the menu.
+    await zone.getByRole('button', { name: 'Zone options' }).click();
+    await window.getByRole('menuitem', { name: "Trust this zone's folder for new agents" }).click();
+    await expect.poll(async () => (await zones(window))[0]!.trustsFolder).toBe(true);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

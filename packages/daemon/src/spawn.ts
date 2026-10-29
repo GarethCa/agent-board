@@ -7,6 +7,8 @@ export interface SpawnDaemonOptions {
   command: string;
   args: string[];
   env?: NodeJS.ProcessEnv;
+  /** Where it runs: the caller's folder by default. */
+  cwd?: string;
   /** Receives the daemon's stdout and stderr. */
   logPath: string;
 }
@@ -28,6 +30,7 @@ export function spawnDetachedDaemon(options: SpawnDaemonOptions): Promise<void> 
       detached: true,
       stdio: daemonStdio(log, inheritable, devNull ?? log),
       env: options.env ?? process.env,
+      cwd: options.cwd,
       windowsHide: true,
     });
     child.unref();

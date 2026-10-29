@@ -20,6 +20,7 @@ const agent = (name: string, more: Partial<Agent> = {}): Agent =>
     plan: null,
     issue: null,
     lastMessage: null,
+    compactingSince: null,
     finishedAt: null,
     createdAt: '2026-10-01T10:00:00.000Z',
     ...more,

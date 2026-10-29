@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, isAbsolute, join, relative } from 'node:path';
 import { issuePrompt, shortIssueId } from '@agent-board/tracker';
 import type { AgentRecordStore } from './agent-records.ts';
@@ -112,8 +113,11 @@ interface AgentSpawnOptions
   records: Pick<AgentRecordStore, 'put'>;
   /** The agent was started with a first prompt, which its session has yet to take up. */
   promptQueued(sessionId: string): void;
-  /** Types `prompt` at the `harness` agent just launched as session `sessionId`, once its session is up. */
-  typeFirstPrompt(sessionId: string, prompt: string, harness: Harness): void;
+  /**
+   * Types `prompt` at the `harness` agent just launched as session `sessionId`, once its session is up; with none, only
+   * holds what is sent to it until then.
+   */
+  typeFirstPrompt(sessionId: string, prompt: string | undefined, harness: Harness): void;
   /**
    * Watches the agent just launched: a bypassed Codex agent's worktree for project config, and a Codex agent carrying
    * on conversation `codexSessionId` for `codex resume` failing.
@@ -217,7 +221,7 @@ export function createAgentSpawns(
   /**
    * Starts the agent's harness in `cwd` as session `id`, with a new hook token, and `task` (if any) as its first
    * message: typed at its prompt once its session is up (Claude's `SessionStart`, Codex's composer drawn up), so that
-   * no `pkill -f` naming a word of it ends the agent. With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
+   * no `pkill -f` naming a word of it ends the agent. Nothing else is typed at a Claude agent until then, task or not. With `resume`, Claude carries on conversation `id`, and Codex conversation `resume.codexSessionId` if it
    * is known (else it starts afresh). Returns whether Codex runs with the hook-trust bypass flag. Throws
    * `AGENT_ERROR.projectCodexConfig` for a Codex agent whose worktree has Codex config, unless allowed.
    */
@@ -229,7 +233,8 @@ export function createAgentSpawns(
     const boardCli = options.boardCliPath !== undefined && boardMcpOn(spec.zoneId) ? options.boardCliPath : undefined;
     let harnessCommand: HarnessLaunch;
     if (harness === 'claude') {
-      const settings = JSON.stringify(claudeSettings(options.hookUrl(), options.permissionHoldMs));
+      const statusLine = configuredStatusLine([cwd, worktree], options.env);
+      const settings = JSON.stringify(claudeSettings(options.hookUrl(), options.permissionHoldMs, statusLine === undefined ? undefined : 'user' in statusLine ? statusLine.user : null));
       harnessCommand = {
         command: harnessPath,
         args: [
@@ -293,7 +298,9 @@ export function createAgentSpawns(
       ...spec.size,
       hookTokenSha256: hashToken(token),
     });
-    if (task !== undefined) options.typeFirstPrompt(id, task, harness);
+    // A Claude agent with no task waits for its session too: a message typed while Claude loads sits unsent. (Codex
+    // fires no hook before its first prompt, and its composer is watched only for a task.)
+    if (task !== undefined || harness === 'claude') options.typeFirstPrompt(id, task, harness);
     return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
   };
 
@@ -905,13 +912,51 @@ const CLAUDE_SESSION_START_COMMAND =
   `-H "Authorization: Bearer $${HOOK_TOKEN_ENV}" --data-binary @- "$${HOOK_URL_ENV}" || true`;
 
 /**
+ * The status line Claude would run for an agent without ours: `project` when its project (the folder it starts in, or
+ * its worktree's root, for a folder zone) sets one, which ours never stands in for, as it would run a repo's command
+ * from trusted settings, past Claude's workspace trust; else the user's own command, from their settings; else none.
+ */
+export function configuredStatusLine(
+  projects: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): { project: true } | { user: string } | undefined {
+  const read = (file: string): unknown => {
+    try {
+      const settings: unknown = JSON.parse(readFileSync(file, 'utf8'));
+      return typeof settings === 'object' && settings !== null && 'statusLine' in settings ? (settings as { statusLine: unknown }).statusLine : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const files = [...new Set(projects.filter((project) => project !== ''))].flatMap((project) => [join(project, '.claude', 'settings.local.json'), join(project, '.claude', 'settings.json')]);
+  if (files.some((file) => read(file) != null)) return { project: true };
+  const own = read(join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), '.claude'), 'settings.json')) as { type?: unknown; command?: unknown } | null | undefined;
+  return own?.type === 'command' && typeof own.command === 'string' && own.command.trim() !== '' ? { user: own.command } : undefined;
+}
+
+/**
+ * The status line command that posts what Claude passes it (its plan usage, `rate_limits`) to the daemon's `/usage`,
+ * as `CLAUDE_SESSION_START_COMMAND` posts, beside the hook URL; then, with `own`, runs the status line Claude would
+ * have run without ours on the same input, so its line, and whatever else it does, stay as they were. Nothing is
+ * shown without one, as Claude shows none without a status line.
+ */
+export function claudeStatusLineCommand(own: string | undefined): string {
+  const post =
+    `in=$(cat); printf '%s' "$in" | curl -q -sf --noproxy '*' -m 1 -X POST -H 'content-type: application/json' ` +
+    `-H "Authorization: Bearer $${HOOK_TOKEN_ENV}" --data-binary @- "\${${HOOK_URL_ENV}%/hooks}/usage" >/dev/null 2>&1`;
+  return own === undefined ? `${post}; true` : `${post}; printf '%s' "$in" | {\n${own}\n}`;
+}
+
+/**
  * The `claude --settings` that sends every hook event to the daemon (ADR-0004): as an `http` hook, the token
  * interpolated from the session's environment by Claude so it never appears on the command line, except
  * `SessionStart`, which Claude runs only as a `command` hook (`CLAUDE_SESSION_START_COMMAND`). Claude waits on a
  * PermissionRequest hook a little longer than the daemon holds it (`permissionHoldMs`), so the daemon's no-decision
- * answer, not a timeout, is what hands the prompt back to the terminal.
+ * answer, not a timeout, is what hands the prompt back to the terminal. Its status line posts the plan usage Claude
+ * passes it to the daemon (`claudeStatusLineCommand`), running the user's own `ownStatusLine` after, if they have one;
+ * with `ownStatusLine` null (its project sets a status line), it has none of ours, and Claude runs the project's.
  */
-export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
+export function claudeSettings(hookUrl: string, permissionHoldMs: number, ownStatusLine?: string | null) {
   const handler = (timeout: number) => ({
     type: 'http',
     url: hookUrl,
@@ -921,6 +966,7 @@ export function claudeSettings(hookUrl: string, permissionHoldMs: number) {
   });
   const permissionTimeout = Math.ceil(permissionHoldMs / 1000) + PERMISSION_HOOK_MARGIN_S;
   return {
+    ...(ownStatusLine === null ? {} : { statusLine: { type: 'command', command: claudeStatusLineCommand(ownStatusLine) } }),
     hooks: Object.fromEntries(
       CLAUDE_HOOK_EVENTS.map((event) => [
         event,

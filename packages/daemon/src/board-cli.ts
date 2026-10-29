@@ -13,6 +13,11 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
+  holdZone,
+  releaseZone,
+  usagePauseAgent,
+  usagePrioritiesView,
+  usageView,
   edgesView,
   handOff,
   identifyView,
@@ -149,6 +154,8 @@ COMMANDS
   shells                Every shell tile.
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
+  usage [priorities]    The 5-hour and weekly plan usage, or the user's zone priorities and
+                        usage thresholds. See \`usage --help\`.
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
@@ -267,6 +274,11 @@ ORCHESTRATING
   roles [list]          Each default role and its template's first line.
   roles set <name> [--file <path>] [--] <template>
                         Add or replace one. \`roles remove <name>\` removes one.
+
+  Pacing work by usage (the Captain's, only while the user lets it):
+  usage hold|release <zone ref>
+                        Hold a zone's new starts and hand-offs, or release it.
+  usage pause <ref>     Pause an idle agent in a low-priority zone for usage.
 
 FOR THE USER
   orchestrate on|off <ref> [--scope zone|repo|board]
@@ -514,7 +526,7 @@ As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board read impl                      its final message
   agent-board read impl .agent-board/handover.md
   agent-board new --base agent:impl --role reviewer --name review -- 'Review the diff against main'
-  agent-board wait review && agent-board read review
+  agent-board wait review && agent-board read review     (wait exits 3 if it gave up first)
   agent-board send impl -- 'Fix the review points: ...'
   agent-board close review --remove
 
@@ -635,7 +647,7 @@ read, interrupt, restart or close, and the answer opens no way back.
   --json          Print the agent as JSON.`,
   },
   wait: {
-    usage: 'agent-board wait [<ref>...] [--crew] [--until <state,...>] [--any] [--timeout <seconds>]',
+    usage: 'agent-board wait [<ref>...] [--crew] [--until <state,...>] [--any] [--timeout <duration>]',
     text: `Waits until each agent's turn has ended: it is at its prompt (idle or waiting), needs the user,
 failed, was rate-limited, or has stopped. A turn you started with \`new\` or \`send\` counts
 only once it has begun, so wait straight after them. Prints each agent's line.
@@ -648,12 +660,14 @@ is still idle here: only a question, a plan or a permission prompt make it waiti
 daemon keeps that only while it runs: after it restarts, such an agent is waiting until its
 state next changes.)
 
-Exits 0 when they are there, and 3 when it gave up first: wait again.
+Exits 0 when they are there, and 3 (not 0) when it gave up first: wait again. So
+\`agent-board wait impl && agent-board read impl\` reads only once it is there.
 
   --crew             Your crew too: the agents you started, and theirs. With no refs, it is.
   --until <states>   Wait for these instead, by comma: ${WAIT_STATES.join(', ')}.
   --any              Until one of them is there, not all.
-  --timeout <s>      Give up after this many seconds: ${DEFAULT_ORCHESTRATOR_WAIT_MS / 1000} by default, at most ${MAX_ORCHESTRATOR_WAIT_MS / 1000}.
+  --timeout <d>      Give up after this long: seconds, or with s, m or h (90s, 30m). ${DEFAULT_ORCHESTRATOR_WAIT_MS / 1000}s by
+                     default, at most ${MAX_ORCHESTRATOR_WAIT_MS / 1000}s.
                      Your shell tool may stop a command sooner (Claude's Bash, after 2 minutes).
   --json             Print them as JSON.`,
   },
@@ -760,6 +774,27 @@ conversation, as its tile's Wake does. Refused for an agent that is not paused.
              agent-board, any. Never one with uncommitted changes or commits no other branch
              has.
   --json     Print the agent as JSON.`,
+  },
+  usage: {
+    usage: 'agent-board usage [priorities] [--json] | usage hold|release <zone ref> | usage pause <ref>',
+    text: `The plan's 5-hour and weekly usage: each window's used and left, when it resets, and when it
+was read. A Claude agent's status line posts it as the agent runs, so nothing is asked of anyone
+and no tokens are spent; with no Claude agent running for a while it is stale.
+
+\`usage priorities\` lists the user's priorities: whether they let the Captain pace work by
+usage (off until they turn it on in Settings › Usage), their thresholds, and each zone's
+priority (high, normal or low), its hold, and what the thresholds allow in it now.
+
+The Captain's budget hold, refused unless the user turned pacing on, the reading is fresh, and
+the zone is past a threshold:
+  usage hold <zone ref>     No agent starts in the zone, and hand-offs to its agents wait. Its
+                            tab says why, and the user can Override it.
+  usage release <zone ref>  Lift the hold: what waited goes on.
+  usage pause <ref>         Pause an idle agent in a low-priority zone past the pause threshold,
+                            saying why on its tile, where the user can Override it. Never
+                            mid-turn, as \`pause\`.
+
+${READ_FLAGS}`,
   },
   roles: {
     usage: 'agent-board roles [list] [--json] | roles set <name> [--zone <ref>] [--file <path>] [--] <template> | roles remove <name> [--zone <ref>]',
@@ -1396,6 +1431,16 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     return value;
   };
 
+  /** A duration option in whole seconds: `90`, `90s`, `30m` or `1h`. */
+  const duration = (option: Option, max: number) => {
+    const raw = string(option);
+    if (raw === undefined) return undefined;
+    const match = /^(\d+)([smh]?)$/.exec(raw.trim());
+    const value = match === null ? NaN : Number(match[1]) * { '': 1, s: 1, m: 60, h: 3600 }[match[2] as '' | 's' | 'm' | 'h'];
+    if (!Number.isSafeInteger(value) || value > max) throw new UsageError(`--${option} must be a duration such as 90, 90s or 30m, up to ${max} seconds`);
+    return value;
+  };
+
   switch (command) {
     case 'identify':
       return read((refs, session) => identifyView(refs, session.caller, session.socketPath));
@@ -1513,7 +1558,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const until = string('until')?.split(',').map((state) => state.trim()) as WaitState[] | undefined;
       const unknown = until?.find((state) => !isWaitState(state));
       if (unknown !== undefined) throw new UsageError(`${unknown} is not a state: ${WAIT_STATES.join(', ')}`);
-      const seconds = wholeNumber('timeout', MAX_ORCHESTRATOR_WAIT_MS / 1000);
+      const seconds = duration('timeout', MAX_ORCHESTRATOR_WAIT_MS / 1000);
       return async (session) => {
         const view = await waitForAgents(session, positionals, {
           until,
@@ -1842,6 +1887,17 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeSchedule(session, rest[0]!));
       }
       throw new UsageError('the schedule commands are `schedule add`, `schedule list` and `schedule remove`');
+    }
+    case 'usage': {
+      const [sub, ref, ...rest] = positionals;
+      if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+      if (sub === undefined || sub === 'priorities') {
+        if (ref !== undefined) throw new UsageError(`unexpected ${ref}`);
+        return async (session) => print(await (sub === undefined ? usageView(session) : usagePrioritiesView(session)));
+      }
+      if (sub !== 'hold' && sub !== 'release' && sub !== 'pause') throw new UsageError('the usage commands are `usage`, `usage priorities`, `usage hold`, `usage release` and `usage pause`');
+      if (ref === undefined) throw new UsageError(sub === 'pause' ? 'give one agent ref' : 'give one zone ref');
+      return async (session) => print(await (sub === 'hold' ? holdZone(session, ref) : sub === 'release' ? releaseZone(session, ref) : usagePauseAgent(session, ref)));
     }
     case 'roles': {
       const [sub = 'list', ...rest] = positionals;

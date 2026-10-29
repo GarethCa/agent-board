@@ -67,6 +67,14 @@ export function installApp(builtApp: string, installDir: string): string {
   return swapIn(installDir);
 }
 
+/** How to run an installed or built app's `agent-board` command line: its own executable, as Node, on its `daemon.js`. */
+export function appCli(app: string, args: readonly string[]): { command: string; args: string[] } {
+  return {
+    command: join(app, 'Contents', 'MacOS', 'agent-board'),
+    args: [join(app, 'Contents', 'Resources', 'app', 'out', 'main', 'daemon.js'), ...args],
+  };
+}
+
 /** Whether `pnpm package` installs. With `--opt-in` it takes an explicit `--install`. */
 export function shouldInstall(flags: { noInstall: boolean; install: boolean; optIn: boolean }): boolean {
   return !flags.noInstall && (flags.install || !flags.optIn);

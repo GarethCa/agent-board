@@ -74,6 +74,8 @@ export interface FlowEdgeHostOptions {
   /** The agent, if it still exists. */
   agent(sessionId: string): FlowAgent | undefined;
   conditions: ConditionChecker;
+  /** Why a hand-off to the agent waits whatever its edge's conditions say (its zone's budget hold), or undefined. */
+  heldFor?(sessionId: string): string | undefined;
   /** Whether a hand-off held or queued keeps a copy of its file, or only its path, read again when it is delivered. */
   heldPayloads(): HeldPayloadStorage;
   /** How often held hand-offs are checked again by themselves; 0 only when told to (`recheck`) or their rules change. */
@@ -123,6 +125,8 @@ export interface FlowEdgeHost {
   remove(id: string): void;
   /** Checks the hand-offs held on the agent's edges again now, as when its pull requests changed. */
   recheck(sessionId: string): void;
+  /** Checks every held hand-off again now, as when a budget hold was lifted. */
+  recheckAll(): void;
   /**
    * Deletes the agent's edges, either way, telling every client: before the agent's own deletion, whose foreign keys
    * would take them without a word.
@@ -485,6 +489,8 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
 
   /** Checks the edge's conditions, keeping how each did: the first that failed, or undefined when all passed. */
   const failing = async (row: FlowEdgeRow): Promise<string | undefined> => {
+    const held = options.heldFor?.(row.to_session_id);
+    if (held !== undefined) return held;
     const conditions = conditionsOf(row);
     if (conditions.length === 0) return undefined;
     const agent = options.agent(row.from_session_id);
@@ -752,7 +758,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
   /**
    * Delivers a named hand-off along its one-off edge at once: it has no conditions, and is the agent's own to send. It
    * never starts an ended agent again: the user ended it, and only the user's Send along the edge does. A paused one
-   * it wakes, as any message does.
+   * it wakes, as any message does, unless it is held (`heldFor`): paused for usage, or in a zone under a budget hold.
    */
   const handOffOnce = (row: FlowEdgeRow, given: (() => Promise<PayloadOrProblem>) | undefined) =>
     serially(row.id, async (): Promise<Outcome | undefined> => {
@@ -761,6 +767,11 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         const reason = `${to.name} has ended: a named hand-off never starts it again, the user's Send or an edge the user drew does`;
         skip(row.id, reason);
         return { outcome: 'skipped', name: payloadName(row.payload, row.path), reason };
+      }
+      const held = options.heldFor?.(row.to_session_id);
+      if (held !== undefined) {
+        skip(row.id, held);
+        return { outcome: 'skipped', name: payloadName(row.payload, row.path), reason: held };
       }
       const payload = await (given ?? (() => read(row)))();
       if ('problem' in payload) {
@@ -865,6 +876,9 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
 
     remove: removeEdge,
 
+    recheckAll() {
+      for (const row of selectHeld.all() as unknown as FlowEdgeRow[]) recheckHeld(row);
+    },
     recheck(sessionId) {
       for (const row of selectHeldOut.all(sessionId) as unknown as FlowEdgeRow[]) recheckHeld(row);
     },

@@ -12,11 +12,12 @@ import { DetailsHandle } from './DetailsHandle';
 import { ChatView } from './ChatView';
 import { Composer } from './Composer';
 import type { RunsChoice, RunsMode } from './chat';
+import { ChatStyleSwitch } from './ChatStyleSwitch';
 import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
-import { HARNESS_COMMANDS, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
+import { HARNESS_COMMANDS, planSurfaceOf, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
 import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
 import type { StripTab } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
@@ -174,6 +175,7 @@ export function SessionBody({
             onShowTerminal={onShowTerminal}
             runs={runs}
             onOpenLink={openLink}
+            onOpenPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))}
           />
         </div>
       )}
@@ -263,12 +265,13 @@ export function SessionBody({
               shell
             </span>
           )}
+          {chat && <ChatStyleSwitch />}
           {chat && (
             <span className="chat-runs-actions">
-              <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every run of tool calls" aria-label="Expand all">
+              <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every call and run of calls" aria-label="Expand all">
                 <span className="chat-runs-label">Expand all</span>
               </Button>
-              <Button variant="ghost" size="xs" icon={<ChevronsDownUp />} onClick={() => pressRuns('collapsed')} tooltip="Close every run of tool calls" aria-label="Collapse all">
+              <Button variant="ghost" size="xs" icon={<ChevronsDownUp />} onClick={() => pressRuns('collapsed')} tooltip="Close every call and run of calls" aria-label="Collapse all">
                 <span className="chat-runs-label">Collapse all</span>
               </Button>
             </span>

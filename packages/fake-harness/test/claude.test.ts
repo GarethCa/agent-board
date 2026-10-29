@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
+import { SPINNER_LINE, claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
 import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilEvents, untilStdout } from './run-fake.ts';
 
@@ -134,6 +134,22 @@ describe('fake claude', () => {
       'set up storage',
       'SQLite',
     ]);
+  });
+
+  it('keeps only the bytes after the last whole KiB of a long line typed with FAKE_HARNESS_RAW_INPUT, as Claude does, and a paste whole', async () => {
+    const long = Array.from({ length: 450 }, (_, index) => `w${String(index).padStart(4, '0')}`).join(' ');
+    // 2,001 bytes in 1,001 characters: the cut counts bytes.
+    const accented = 'é'.repeat(1000);
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: [long, `${accented}x`, `\x1b[200~${long}\x1b[201~`],
+      env: { FAKE_HARNESS_RAW_INPUT: '1', FAKE_HARNESS_REPEAT: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    const prompts = recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt);
+    expect(prompts).toEqual(['set up storage', long.slice(2048), `${'é'.repeat(488)}x`, long]);
   });
 
   it('waiting: exits when stdin closes at the prompt', async () => {
@@ -421,6 +437,26 @@ describe('fake claude', () => {
     expect((await done).code).toBe(0);
   });
 
+  it('with FAKE_HARNESS_QUEUE_MID_TURN, a line typed mid-turn is taken at its next step as a queued command, not a turn', async () => {
+    const { child, done } = startFake('claude', {
+      scenario: 'output',
+      args: ['--settings', settings(), 'fix the tests'],
+      env: { FAKE_HARNESS_STEP_DELAY_MS: '100', FAKE_HARNESS_QUEUE_MID_TURN: '1' },
+    });
+    await untilEvents(recorder, 'UserPromptSubmit');
+    child.stdin.write('also update the changelog\n');
+    await untilEvents(recorder, 'Stop');
+    child.stdin.end();
+    expect((await done).code).toBe(0);
+
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit')).toHaveLength(1);
+    const entries = readJsonl(recorder.events[0]!.transcript_path as string);
+    const kinds = entries.map((entry) => (entry.type === 'attachment' ? (entry.attachment as { type: string }).type : entry.type));
+    // After the tool's result, before what it said next.
+    expect(kinds).toEqual(['user', 'assistant', 'assistant', 'user', 'queued_command', 'assistant']);
+    expect(entries[4]).toMatchObject({ attachment: { prompt: 'also update the changelog', commandMode: 'prompt', origin: { kind: 'human' } }, version: expect.any(String) });
+  });
+
   it('SIGINT (Ctrl-C) interrupts the turn with no Stop, then takes the next prompt', async () => {
     const { child, done } = startFake('claude', {
       scenario: 'output',
@@ -497,6 +533,89 @@ describe('fake claude', () => {
 
     child.stdin.end();
     await done;
+  });
+
+  it('compacts once while idle at the prompt with FAKE_HARNESS_IDLE_COMPACT_MS: PreCompact, then a compact SessionStart, and no Stop', async () => {
+    const hooks = claudeHookSettings(recorder.url).hooks;
+    hooks.PreCompact = [{ hooks: [{ type: 'http', url: recorder.url, timeout: 10 }] }];
+    const { child, done } = startFake('claude', {
+      scenario: 'output',
+      args: ['--settings', JSON.stringify({ hooks }), 'fix the tests'],
+      env: { FAKE_HARNESS_IDLE_NOTIFY_MS: '0', FAKE_HARNESS_IDLE_COMPACT_MS: '200' },
+    });
+
+    await untilEvents(recorder, 'SessionStart', 2);
+    await sleep(300);
+    const afterStop = recorder.events.slice(recorder.events.findIndex((event) => event.hook_event_name === 'Stop') + 1);
+    expect(afterStop.map((event) => [event.hook_event_name, event.trigger ?? event.source ?? event.notification_type])).toEqual([
+      ['Notification', 'idle_prompt'],
+      ['PreCompact', 'auto'],
+      ['SessionStart', 'compact'],
+    ]);
+
+    child.stdin.end();
+    await done;
+  });
+
+  it('says another session needs input while idle with FAKE_HARNESS_IDLE_NEEDS_INPUT_MS, its idle prompt after', async () => {
+    const { child, done } = startFake('claude', {
+      scenario: 'output',
+      args: ['--settings', settings(), 'fix the tests'],
+      env: { FAKE_HARNESS_IDLE_NOTIFY_MS: '300', FAKE_HARNESS_IDLE_NEEDS_INPUT_MS: '100' },
+    });
+
+    await untilEvents(recorder, 'Notification', 2);
+    const afterStop = recorder.events.slice(recorder.events.findIndex((event) => event.hook_event_name === 'Stop') + 1);
+    expect(afterStop.map((event) => [event.notification_type, event.message])).toEqual([
+      ['agent_needs_input', 'Docs pass needs your input: which branch?'],
+      ['idle_prompt', 'Claude is waiting for your input'],
+    ]);
+
+    child.stdin.end();
+    await done;
+  });
+
+  it('fires no Stop for the first turns with FAKE_HARNESS_LOSE_STOP_HOOKS, as a hook lost on a loaded machine', async () => {
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: ['SQLite'],
+      env: { FAKE_HARNESS_LOSE_STOP_HOOKS: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'Stop').map((event) => event.last_assistant_message)).toEqual([
+      expect.stringContaining('SQLite'),
+    ]);
+  });
+
+  it('draws its prompt box each time it sits at its prompt with FAKE_HARNESS_PROMPT_BOX', async () => {
+    const result = await runFake('claude', { scenario: 'output', args: ['fix the tests'], env: { FAKE_HARNESS_PROMPT_BOX: '1' } });
+
+    expect(result.stdout).toMatch(/All tests pass\.[\s\S]*─+\n❯ \n─+/);
+  });
+
+  it("draws its prompt box under its turn's spinner line with FAKE_HARNESS_PROMPT_BOX=spinner", async () => {
+    const result = await runFake('claude', { scenario: 'output', args: ['fix the tests'], env: { FAKE_HARNESS_PROMPT_BOX: 'spinner' } });
+
+    expect(result.stdout).toContain(`All tests pass.\n${SPINNER_LINE}\n\n─`);
+  });
+
+  it('holds its first tool call for good with FAKE_HARNESS_HANG_TOOL, its call in the transcript with no result', async () => {
+    const { child, done } = startFake('claude', {
+      scenario: 'output',
+      args: ['--settings', settings(), 'fix the tests'],
+      env: { FAKE_HARNESS_HANG_TOOL: '1', FAKE_HARNESS_PROMPT_BOX: '1' },
+    });
+
+    const [pre] = await untilEvents(recorder, 'PreToolUse');
+    await sleep(300);
+    expect(recorder.events.map((event) => event.hook_event_name)).not.toContain('PostToolUse');
+    const entries = readJsonl(pre!.transcript_path as string);
+    expect(entries.at(-1)).toMatchObject({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } });
+
+    child.kill('SIGKILL');
+    expect((await done).stdout).toMatch(/● Bash\(.*\)\n─+\n❯ \n─+/);
   });
 
   it('kills a command hook that outlives its timeout, children included', async () => {

@@ -6,6 +6,7 @@ import type { Agent } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, oneLine, submittedText } from './terminal-input.ts';
+import { cutText } from './text-cut.ts';
 
 /**
  * How long the terminal must stay quiet after drawing the typed text for the harness to have taken it in, so Enter
@@ -22,8 +23,11 @@ const SETTLE_MAX_MS = 2_000;
  */
 const DEFAULT_SUBMIT_CONFIRM_MS = 3_000;
 
-/** Why nothing is typed at an agent whose session isn't up yet: its first prompt goes first, once it is. */
-const NOT_UP_REASON = "its session isn't up yet: its first prompt goes first";
+/** Why nothing is typed at an agent whose session isn't up yet. */
+const NOT_UP_REASON = "its session isn't up yet";
+
+/** Why nothing is typed at an agent whose session isn't up yet, with a first prompt to go first once it is. */
+const NOT_UP_FIRST_REASON = `${NOT_UP_REASON}: its first prompt goes first`;
 
 /** How many more times Enter is pressed before what was typed is called not sent. */
 const SUBMIT_RETRIES = 2;
@@ -33,6 +37,23 @@ const ESCAPE = '\x1b';
 
 /** How many times Escape is pressed on the rate-limit menu before giving up: it may take no keys just after it opens. */
 const MENU_CLOSES = 3;
+
+/**
+ * Why what was typed at an agent's prompt was given up on, its prompt standing at `now`: Enter, pressed again and again,
+ * never started a turn; the user typed there meanwhile; a turn started before Enter was pressed; or it moved on (a
+ * permission prompt, a question).
+ */
+const whyGaveUp = (now: PromptNow): string =>
+  now === 'at-prompt'
+    ? `no turn started on it after ${SUBMIT_RETRIES + 1} presses of Enter`
+    : now === 'typing'
+      ? 'you typed at its prompt meanwhile'
+      : now === 'working'
+        ? 'a turn started before Enter was pressed'
+        : 'it moved on before Enter was pressed';
+
+/** Why a message queued in a turn its rate limit stopped was given up on: Enter there may pick from Claude's menu. */
+const RATE_LIMITED_REASON = 'its turn hit a rate limit';
 
 /** Why nothing more is typed at a prompt holding a message that was never sent: it would run on from it. */
 const UNSENT_REASON = 'a message typed at its prompt was never sent';
@@ -71,7 +92,7 @@ interface DeliveryOptions<Row extends DeliveryRow> {
   write(sessionId: string, data: string): void;
   getRow(sessionId: string): Row | undefined;
   /** The agent, or an invalid-params error if there is none. */
-  requireAgent(sessionId: string): Pick<Agent, 'name' | 'endedAt' | 'state'>;
+  requireAgent(sessionId: string): Pick<Agent, 'name' | 'endedAt' | 'state' | 'lastMessage'>;
   /** Why a run can't start in the live agent now, or undefined if it can (`evenAsking` as for a hand-off). */
   whyNotReady(row: Row, evenAsking?: boolean): string | undefined;
   /** Relaunches the ended agent with `prompt` as its first message, carrying on Codex conversation `codexSessionId`. */
@@ -87,6 +108,12 @@ interface DeliveryOptions<Row extends DeliveryRow> {
    * and why: its sender heard it was queued, so it is handed back for the user to see and resend.
    */
   undelivered(sessionId: string, what: string, text: string, reason: string): void;
+  /**
+   * What was typed at the agent's prompt (`what`) was given up on, no Enter starting a turn on it, and why: the user is
+   * told, as only their Send or Clear moves it on (in its terminal, with `inTerminal`, as the board's Send refuses a
+   * prompt they typed at); or, with no `what`, the agent's prompt holds nothing unsent now.
+   */
+  notSent?(sessionId: string, what?: string, why?: string, inTerminal?: boolean): void;
   log(message: string): void;
   clock?: Clock;
   /** How long Enter first gets to start a turn (`DEFAULT_SUBMIT_CONFIRM_MS`). */
@@ -98,8 +125,8 @@ interface DeliveryOptions<Row extends DeliveryRow> {
  * another per agent; an ended agent is relaunched with it instead. Nothing is typed once a permission prompt or a
  * question is up, where its keys would answer that. Each is submitted with Enter once the harness has taken it in, and
  * Enter is pressed again while no turn starts; one still not submitted is kept as the agent's unsent message, which the
- * user sends or clears by hand, and nothing more is typed onto it. An answer typed mid-turn gets one Enter, which the
- * harness queues for after the turn: the turn's end then waits for it to start a turn of its own, as for any other.
+ * user sends or clears by hand, and nothing more is typed onto it. Anything typed mid-turn (an answer, or another
+ * whose agent started a turn while it was typed) gets one Enter, which the harness queues for after the turn: the turn's end then waits for it to start a turn of its own, as for any other.
  * Pressing Enter again rests on Enter at an empty prompt doing nothing in either harness, as it does in Claude Code and
  * Codex today: a turn whose hook is late is never started twice. Telling an answer queued mid-turn was taken up rests
  * on its `UserPromptSubmit` firing when the harness takes it up, mid-turn or after. Counts the hand-offs each agent has
@@ -133,10 +160,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    */
   const interruptedWith = new Set<string>();
   /**
-   * Agents whose first prompt waits for their session to come up, with what settles it: nothing else is typed at them
-   * until it has. A relaunch's own replaces the one before, which then leaves it in place as it settles.
+   * Agents whose session isn't up yet, with what settles it and why nothing is typed at them meanwhile (their first
+   * prompt, if any, goes first): nothing is typed at them until it has. A relaunch's own replaces the one before, which
+   * then leaves it in place as it settles.
    */
-  const notUp = new Map<string, Promise<boolean>>();
+  const notUp = new Map<string, { settled: Promise<boolean>; reason: string }>();
   /**
    * Agents whose first prompt is being typed now, its session up: a `SessionStart` landing meanwhile (Claude's prompt
    * seen on its screen typed it first) still leaves it at its prompt for that prompt's Enter.
@@ -145,11 +173,14 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   /** Per agent not up when they came, how many messages wait to be typed after its first prompt (`queueUntilUp`). */
   const waitingUp = new Map<string, number>();
 
-  const setUnsent = (sessionId: string, kept: { what: string; lines: number } | undefined) => {
+  /** Keeps `kept` as the agent's unsent message, or forgets it; `why` it was given up on tells the user (`notSent`). */
+  const setUnsent = (sessionId: string, kept: { what: string; lines: number } | undefined, why?: string) => {
     interruptedWith.delete(sessionId);
     if (kept === undefined ? !unsent.has(sessionId) : unsent.get(sessionId)?.what === kept.what) return;
     if (kept === undefined) unsent.delete(sessionId);
     else unsent.set(sessionId, kept);
+    if (kept === undefined) options.notSent?.(sessionId);
+    else if (why !== undefined) options.notSent?.(sessionId, kept.what, why, options.promptNow(sessionId) === 'typing');
     announce(sessionId);
   };
 
@@ -262,17 +293,20 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         count: (before?.count ?? 0) + 1,
       });
     };
-    const sent = await pressEnter(sessionId, () => {
-      options.log(`${what} to ${sessionId} was typed at its prompt but not sent`);
-      setUnsent(sessionId, { what, lines });
+    const sent = await pressEnter(sessionId, (now) => {
+      options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${whyGaveUp(now)}`);
+      setUnsent(sessionId, { what, lines }, whyGaveUp(now));
       return false;
     }, midTurn ? queue : undefined);
     return { typed: true, sent };
   };
 
-  /** Types `text` at the agent's prompt as one line and submits it, as `typeInput` does. */
+  /**
+   * Types `text` at the agent's prompt as one line (a long one pasted, `answerInput`) and submits it, as `typeInput`
+   * does: a turn that started meanwhile takes it as queued, as for the user's answers (`midTurn`).
+   */
   const typeLine = (sessionId: string, text: string, what: string, stillReady?: () => string | undefined) =>
-    typeInput(sessionId, oneLine(text), what, stillReady);
+    typeInput(sessionId, answerInput(oneLine(text)), what, stillReady, true);
 
   /**
    * Why the agent's unsent message can't be sent from the board now, or with `clearing` cleared, or undefined if it
@@ -294,13 +328,15 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * prompt or question came up while it waited, where its keys would answer that instead.
    */
   const whyNotAnswer = (sessionId: string): string | undefined => {
-    const { name, endedAt, state } = requireAgent(sessionId);
+    const { name, endedAt, state, lastMessage } = requireAgent(sessionId);
     if (endedAt !== null) return `${name} has ended`;
     if (options.promptNow(sessionId) !== 'moved-on') return undefined;
     if (state === 'needs-permission') return `${name} needs permission first`;
     // Its harness may show a menu of what to do about it, where Enter would pick one.
     if (state === 'rate-limited') return `${name} is rate-limited: answer it in its terminal, or Continue on credits`;
-    return `${name} is waiting on an answer to its question or plan`;
+    // Claude asked for input (`agent_needs_input`): a question of its turn, or a dialog of its own, which Enter would answer.
+    const question = lastMessage === null ? '' : `, "${cutText(oneLine(lastMessage), 120)}"`;
+    return `${name} is waiting on a question or dialog of its own${question}: answer it in its terminal`;
   };
 
   /**
@@ -312,13 +348,14 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     if (kept === undefined) return;
     queued.delete(sessionId);
     options.log(`${kept.what} queued at ${sessionId} was ${why} with its turn`);
-    setUnsent(sessionId, kept);
+    // The user's own interrupt is theirs to follow up; a rate limit is not.
+    setUnsent(sessionId, kept, why === 'rate-limited' ? RATE_LIMITED_REASON : undefined);
     if (why === 'interrupted') interruptedWith.add(sessionId);
   };
 
   /** Why a run or hand-off can't be typed at the live agent `row` now: its session isn't up yet, or `whyNotReady`. */
   const whyNotReadyNow = (sessionId: string, row: Row, evenAsking?: boolean): string | undefined =>
-    notUp.has(sessionId) ? NOT_UP_REASON : whyNotReady(row, evenAsking);
+    notUp.get(sessionId)?.reason ?? whyNotReady(row, evenAsking);
 
   /** Why a run or hand-off whose turn in the queue has come can't be typed at the agent now (`whyNotReadyNow`). */
   const stillReady = (sessionId: string, evenAsking: boolean): string | undefined => {
@@ -341,7 +378,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     announce(sessionId);
     try {
       for (;;) {
-        const typed = await typeInput(sessionId, line, what, () => (notUp.has(sessionId) ? NOT_UP_REASON : whyNotAnswer(sessionId)), true);
+        const typed = await typeInput(sessionId, line, what, () => notUp.get(sessionId)?.reason ?? whyNotAnswer(sessionId), true);
         if (typed.typed || !notUp.has(sessionId)) {
           if (!typed.typed) options.log(`${what} queued for ${sessionId} until it was up was not typed: ${typed.reason}`);
           return typed;
@@ -443,8 +480,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         await pressEnter(sessionId, (now) => {
           // Moved on or at work without a hook: it was taken up. The user typing there: whatever is there is theirs.
           if (now !== 'at-prompt') return true;
-          options.log(`${kept.what} queued at ${sessionId} was typed at its prompt but not sent`);
-          setUnsent(sessionId, kept);
+          options.log(`${kept.what} queued at ${sessionId} was typed at its prompt but not sent: ${whyGaveUp(now)}`);
+          setUnsent(sessionId, kept, whyGaveUp(now));
           return false;
         });
       });
@@ -573,18 +610,21 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * is up), ahead of anything else typed at it: so it never sits in the harness's argv, where any `pkill -f` naming a
      * word of it would end the agent. Until `ready` settles, nothing else is typed at the agent, and what is sent to
      * it waits behind it (`queueUntilUp`). Never typed blind: nothing is typed if `ready` resolves false (its session
-     * ended first). Kept as its unsent message if no turn starts on it.
+     * ended first). Kept as its unsent message if no turn starts on it. With no `prompt` (an agent started with no task,
+     * or relaunched with no new one), only what was sent to it meanwhile waits for `ready`: a message typed into a
+     * harness still loading would sit at its prompt, unsent.
      */
-    firstPrompt(sessionId: string, prompt: string, ready: Promise<boolean>) {
+    firstPrompt(sessionId: string, prompt: string | undefined, ready: Promise<boolean>) {
       const settled = ready.then(
         (up) => up,
         () => false,
       );
-      notUp.set(sessionId, settled);
-      void settled.then(() => notUp.get(sessionId) === settled && notUp.delete(sessionId));
+      const entry = { settled, reason: prompt === undefined ? NOT_UP_REASON : NOT_UP_FIRST_REASON };
+      notUp.set(sessionId, entry);
+      void settled.then(() => notUp.get(sessionId) === entry && notUp.delete(sessionId));
       const ended = () => (getRow(sessionId)?.ended_at === null ? undefined : 'its session has ended');
       inTurn(sessionId, async () => {
-        if (!(await settled)) return;
+        if (!(await settled) || prompt === undefined) return;
         typingFirst.add(sessionId);
         try {
           await typeNow(sessionId, answerInput(prompt, true), 'Its first prompt', ended, false);
@@ -594,8 +634,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       }).catch((error: unknown) => options.log(`typing ${sessionId}'s first prompt failed: ${(error as Error).message}`));
     },
 
-    /** Whether the agent's first prompt waits for its session to come up, so nothing else is typed at it yet. */
-    isNotUp: (sessionId: string) => notUp.has(sessionId),
+    /** Resolves once the agent's session is up (true) or ended before it was (false); at once, true, if it is up now. */
+    untilUp: (sessionId: string): Promise<boolean> => notUp.get(sessionId)?.settled ?? Promise.resolve(true),
+
+    /** Why nothing is typed at the agent yet, its session not up (`NOT_UP_REASON`), or undefined once it is. */
+    whyNotUp: (sessionId: string): string | undefined => notUp.get(sessionId)?.reason,
 
     /** Whether the agent's first prompt is being typed now (`typingFirst`). */
     isTypingFirst: (sessionId: string) => typingFirst.has(sessionId),
@@ -643,7 +686,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
       if (beingPaused(row)) return { started: false, reason: 'it was being paused' };
       if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, oneLine(prompt), 'A scheduled run', prompt);
+        queueOrHandBack(sessionId, answerInput(oneLine(prompt)), 'A scheduled run', prompt);
         return { started: true, queued: true };
       }
       const reason = unsent.has(sessionId) ? UNSENT_REASON : whyNotReadyNow(sessionId, row);
@@ -668,7 +711,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (beingPaused(row)) return { started: false, reason: 'it was being paused', busy: true };
       const reason = unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
-      const typed = await typeInput(to, answerInput(text, false), 'A crew flag', () => stillReady(to, true));
+      const typed = await typeInput(to, answerInput(text, false), 'A crew flag', () => stillReady(to, true), true);
       if (!typed.typed) return { started: false, reason: typed.reason, busy: true };
       return typed.sent ? { started: true } : { started: true, unsent: true };
     },

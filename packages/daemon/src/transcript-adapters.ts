@@ -7,7 +7,8 @@ import type { ChatEntry, Harness } from './protocol.ts';
  * from any other version, or a line that isn't one of its entries at all, makes the whole transcript unsupported and
  * the session window shows only the terminal. Entry types an adapter doesn't know inside a version it does are
  * skipped: real transcripts are mostly bookkeeping (attachments, queue operations, titles, token counts), and new
- * kinds come with every release. The entries the chat is made of must match, though: a Claude `user` or `assistant`
+ * kinds come with every release. One attachment is a message: Claude writes one the user sent mid-turn as a
+ * `queued_command`, where it took it. The entries the chat is made of must match, though: a Claude `user` or `assistant`
  * entry without its `version` or its `message` object means the format changed, so it is unsupported too, as is any
  * entry, anywhere in the file, from a version the adapter doesn't know (a session resumed under a newer release).
  *
@@ -37,7 +38,11 @@ const SUPPORTED_CODEX_MAJOR = 0;
 /** Messages Claude Code puts in the user's turn for itself or a slash command, which its TUI doesn't show as typed. */
 const CLAUDE_HIDDEN_USER_TEXT = /^<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|system-reminder|task-notification|user-prompt-submit-hook)>/;
 
-const CLAUDE_INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
+/** A background task's report, which Claude gives the model as a prompt of its own. */
+const CLAUDE_TASK_NOTIFICATION = /^<task-notification>/;
+
+/** Claude's interrupt, `for tool use` when the user turned down or stopped the call just before it. */
+const CLAUDE_INTERRUPTED = /^\[Request interrupted by user( for tool use)?[^\]]*\]$/;
 
 /** How Codex's `exec` tool reports a script that failed, or a call the user stopped. */
 const CODEX_FAILED = /^(?:Script failed|aborted\b)|\bexit_code=(?!0\b)-?\d+/;
@@ -51,6 +56,12 @@ type LineResult = ChatEntry[] | { unsupported: string };
 
 export function createTranscriptParser(harness: Harness, options: TranscriptParserOptions = {}): TranscriptParser {
   let unsupported: string | undefined;
+  /**
+   * The latest time an earlier line of the conversation was written, whether or not it made an entry. The latest, as
+   * Claude stamps a message queued during a turn with when it was queued, before the lines it lands among.
+   */
+  let previousAt: string | undefined;
+  const ofConversation = harness === 'claude' ? claudeOfConversation : () => true;
   const adapter = harness === 'claude' ? claudeAdapter(options.subagent === true) : codexAdapter();
   return {
     push(line) {
@@ -63,14 +74,44 @@ export function createTranscriptParser(harness: Harness, options: TranscriptPars
         return [];
       }
       const result = isObject(entry) ? adapter(entry) : { unsupported: UNRECOGNISED };
-      if (Array.isArray(result)) return result;
-      unsupported = result.unsupported;
-      return [];
+      if (!Array.isArray(result)) {
+        unsupported = result.unsupported;
+        return [];
+      }
+      const timestamp = isObject(entry) && typeof entry.timestamp === 'string' ? entry.timestamp : undefined;
+      const entries = stamped(result, timestamp, previousAt);
+      const later = timestamp !== undefined && (previousAt === undefined || Date.parse(timestamp) > Date.parse(previousAt));
+      if (later && isObject(entry) && ofConversation(entry)) previousAt = timestamp;
+      return entries;
     },
     get unsupported() {
       return unsupported;
     },
   };
+}
+
+/**
+ * The entries with the time their line was written, when it has one: both harnesses put a `timestamp` on each line.
+ * Thinking also gets the latest time a line before it was written, any line, as the lines that start a turn aren't
+ * all entries.
+ */
+function stamped(entries: ChatEntry[], timestamp: string | undefined, previousAt: string | undefined): ChatEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    ...(timestamp === undefined ? {} : { at: timestamp }),
+    ...(entry.kind === 'thinking' && previousAt !== undefined ? { since: previousAt } : {}),
+  }));
+}
+
+/**
+ * Whether a Claude line is of the conversation, so thinking after it is timed from it: a prompt, a reply, a tool's
+ * result, a turn's bookkeeping or a message queued during it. Not Claude's other attachments and records
+ * (`deferred_tools_record`, queue operations, file history), which it writes within a millisecond of the thinking,
+ * either side of it.
+ */
+function claudeOfConversation(entry: Json): boolean {
+  if (entry.type === 'attachment') return isObject(entry.attachment) && entry.attachment.type === 'queued_command';
+  return entry.type === 'user' || entry.type === 'assistant' || entry.type === 'system';
 }
 
 function claudeAdapter(subagent: boolean): (entry: Json) => LineResult {
@@ -79,6 +120,8 @@ function claudeAdapter(subagent: boolean): (entry: Json) => LineResult {
     if (typeof entry.version === 'string' && majorOf(entry.version) !== SUPPORTED_CLAUDE_MAJOR) {
       return { unsupported: `Claude Code ${entry.version} transcripts are not supported yet` };
     }
+    if (entry.type === 'attachment') return entry.isSidechain === true && !subagent ? [] : claudeQueued(entry.attachment);
+    if (entry.type === 'system') return entry.isSidechain === true && !subagent ? [] : claudeSystem(entry);
     if (entry.type !== 'user' && entry.type !== 'assistant') return [];
     if (typeof entry.version !== 'string') return { unsupported: 'a message entry has no Claude Code version' };
     if (!isObject(entry.message)) return { unsupported: 'a message entry has no message object' };
@@ -87,6 +130,13 @@ function claudeAdapter(subagent: boolean): (entry: Json) => LineResult {
     if (entry.type === 'assistant') return claudeAssistant(content);
     return entry.isMeta === true || entry.isCompactSummary === true ? [] : claudeUser(entry, content);
   };
+}
+
+/** Where Claude compacted the conversation (its summary, the next `user` entry, is left out), and how long a turn took. */
+function claudeSystem(entry: Json): ChatEntry[] {
+  if (entry.subtype === 'compact_boundary') return [{ kind: 'compacted' }];
+  if (entry.subtype === 'turn_duration' && typeof entry.durationMs === 'number' && entry.durationMs >= 0) return [{ kind: 'turn-ended', ms: entry.durationMs }];
+  return [];
 }
 
 function claudeUser(entry: Json, content: unknown): ChatEntry[] {
@@ -109,8 +159,22 @@ function claudeUser(entry: Json, content: unknown): ChatEntry[] {
   });
 }
 
+/**
+ * A message that came in while a turn ran, where Claude took it, at a step of that turn: Claude writes it as a
+ * `queued_command` attachment, not a `user` entry. One the user sent is a `prompt` (the mode may be left out); a
+ * subagent's report (`isMeta`) is Claude's bookkeeping, as a `user` entry marked so is, and a background task's
+ * notification (`task-notification`) is `notified`, as its text is. Any other attachment is bookkeeping.
+ */
+function claudeQueued(attachment: unknown): ChatEntry[] {
+  if (!isObject(attachment) || attachment.type !== 'queued_command' || attachment.isMeta === true) return [];
+  if ((attachment.commandMode ?? 'prompt') !== 'prompt' || typeof attachment.prompt !== 'string') return [];
+  return userText(attachment.prompt);
+}
+
 function userText(text: string): ChatEntry[] {
-  if (CLAUDE_INTERRUPTED.test(text.trim())) return [{ kind: 'notice', text: 'Interrupted' }];
+  const interrupted = CLAUDE_INTERRUPTED.exec(text.trim());
+  if (interrupted) return [{ kind: 'notice', text: 'Interrupted', ...(interrupted[1] === undefined ? {} : { forToolUse: true as const }) }];
+  if (CLAUDE_TASK_NOTIFICATION.test(text.trimStart())) return [{ kind: 'notified' }];
   if (CLAUDE_HIDDEN_USER_TEXT.test(text.trimStart()) || text.trim() === '') return [];
   return [{ kind: 'user', text }];
 }
@@ -123,7 +187,10 @@ function claudeAssistant(content: unknown): ChatEntry[] {
     if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       return [{ kind: 'tool-call', id: block.id, name: block.name, input: clipInput(block.input) }];
     }
-    // Thinking, and the server's own tools, aren't in the TUI's transcript either.
+    // Claude writes most thinking with its text left out (and redacted thinking with none at all).
+    if (block.type === 'thinking') return [{ kind: 'thinking', text: typeof block.thinking === 'string' ? clip(block.thinking.trim()) : '' }];
+    if (block.type === 'redacted_thinking') return [{ kind: 'thinking', text: '' }];
+    // The server's own tools aren't in the TUI's transcript either.
     return [];
   });
 }
@@ -142,10 +209,14 @@ function codexAdapter(): (entry: Json) => LineResult {
     }
     // `response_item`s are the record; `event_msg`s mostly repeat them for the TUI.
     if (entry.type === 'event_msg') return payload.type === 'turn_aborted' ? [{ kind: 'notice', text: 'Interrupted' }] : [];
+    if (entry.type === 'compacted') return [{ kind: 'compacted' }];
     if (entry.type !== 'response_item') return [];
     switch (payload.type) {
       case 'message':
         return codexMessage(payload);
+      // Its summary, when Codex wrote one; the reasoning itself is encrypted.
+      case 'reasoning':
+        return [{ kind: 'thinking', text: clip(blockText(payload.summary).trim()) }];
       case 'function_call':
       case 'custom_tool_call': {
         if (typeof payload.call_id !== 'string' || typeof payload.name !== 'string') return [];

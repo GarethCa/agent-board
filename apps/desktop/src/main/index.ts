@@ -150,12 +150,15 @@ function openBoard(showing?: WindowTarget): BrowserWindow {
   // Benchmarks fill the board with placeholder tiles and sticky notes (see e2e/board-perf.spec.ts). Never in a packaged build.
   const placeholders = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_TILES;
   const stickies = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_STICKIES;
+  // A prototype the rendering benchmark measures: terminals kept, attached, while off screen (session/TerminalPane.tsx).
+  const terminalCache = !app.isPackaged && process.env.AGENT_BOARD_TERMINAL_CACHE === '1';
   const window = openWindow(
     {
       // Tests keep onboarding from opening by itself on their empty boards, packaged or not; onboarding.spec.ts opts in.
       ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
       ...(placeholders ? { placeholders } : {}),
       ...(stickies ? { stickies } : {}),
+      ...(terminalCache ? { terminalCache: '1' } : {}),
       // The renderer reads demo mode from here alone, so a packaged build, where `demo` is never set, can't reach it.
       ...(demo ? { [WINDOW_QUERY.demo]: '1' } : {}),
       ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),

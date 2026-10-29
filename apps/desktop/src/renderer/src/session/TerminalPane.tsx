@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -17,6 +17,53 @@ import { useWebLinkOpener } from './web-links';
 
 /** How often the terminal refits to its element while that is being resized, e.g. by dragging its window's edge. */
 const REFIT_INTERVAL_MS = 80;
+
+/**
+ * A prototype, off unless the board was opened with `?terminalCache=1` (main sets it from `AGENT_BOARD_TERMINAL_CACHE`,
+ * never in a packaged build): a pane's terminal outlives the pane, still attached, so a pane mounted again for its
+ * session (an expanded tile panned back into view) shows it at once, rather than building a terminal and parsing the
+ * session's snapshot again. Past `KEPT_LIMIT` unmounted ones, the longest unseen is let go.
+ */
+// Unit tests import this module under node, where there is no `location`.
+const KEEP_TERMINALS = typeof location !== 'undefined' && new URLSearchParams(location.search).get('terminalCache') === '1';
+const KEPT_LIMIT = 24;
+
+/** What a kept terminal reports to and reads from: the pane showing it now. */
+interface PaneBinding {
+  report: RefObject<(status: PaneStatus) => void>;
+  harness: RefObject<Harness | null>;
+  openWeb: RefObject<ReturnType<typeof useWebLinkOpener>>;
+}
+
+interface KeptTerminal {
+  host: HTMLDivElement;
+  terminal: Terminal;
+  fit: FitAddon;
+  binding: PaneBinding;
+  last: { status?: PaneStatus };
+  shown: boolean;
+  dispose(): void;
+}
+
+/** The kept terminals by session id, the longest unseen first: each moves to the end as it leaves its pane. */
+const kept = new Map<string, KeptTerminal>();
+
+/** Takes a kept terminal out of its pane, as the most recently seen, and lets go of the longest unseen past the limit. */
+function park(sessionId: string, entry: KeptTerminal): void {
+  entry.host.remove();
+  entry.shown = false;
+  kept.delete(sessionId);
+  kept.set(sessionId, entry);
+  letGoOfUnseen();
+}
+
+function letGoOfUnseen(): void {
+  const unseen = [...kept].filter(([, each]) => !each.shown);
+  for (const [sessionId, each] of unseen.slice(0, Math.max(0, unseen.length - KEPT_LIMIT))) {
+    kept.delete(sessionId);
+    each.dispose();
+  }
+}
 
 /** Where a pane's attachment to its session stands. */
 export type AttachState = 'attaching' | 'attached' | 'exited' | 'detached' | 'unavailable';
@@ -69,11 +116,41 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   openWeb.current = webOpener;
 
   useEffect(() => {
-    const element = container.current!;
+    const mountedAt = performance.now();
+    timing('terminal.mount', mountedAt, sessionId);
+    const pane = container.current!;
+    const binding: PaneBinding = { report, harness: harnessRef, openWeb };
+    const reusable = KEEP_TERMINALS ? kept.get(sessionId) : undefined;
+    if (reusable !== undefined && !reusable.shown) {
+      Object.assign(reusable.binding, binding);
+      reusable.shown = true;
+      pane.appendChild(reusable.host);
+      terminalRef.current = reusable.terminal;
+      reusable.fit.fit();
+      timing('terminal.open', mountedAt, sessionId);
+      if (reusable.last.status !== undefined) report.current(reusable.last.status);
+      if (focusedRef.current && autoFocusRef.current) reusable.terminal.focus();
+      return () => {
+        terminalRef.current = null;
+        park(sessionId, reusable);
+      };
+    }
+    // Kept, it draws into an element of its own, which moves to whichever pane shows it.
+    const keep = KEEP_TERMINALS && reusable === undefined;
+    const element = keep ? document.createElement('div') : pane;
+    if (keep) {
+      element.className = 'terminal-host';
+      pane.appendChild(element);
+    }
+    const last: KeptTerminal['last'] = {};
     const api = window.agentBoard.sessions;
-    const status = (next: PaneStatus) => report.current(next);
+    const status = (next: PaneStatus) => {
+      last.status = next;
+      binding.report.current(next);
+    };
     const look = () => {
-      const look = terminalLook(element);
+      // A kept terminal out of every pane reads the theme from the page.
+      const look = terminalLook(element.isConnected ? element : document.documentElement);
       return { ...look, fontSize: Math.round(chosenFontSize() ?? look.fontSize!) };
     };
     const terminal = new Terminal({ ...look(), cursorBlink: true, scrollback: SCROLLBACK_LINES });
@@ -117,17 +194,17 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     };
     const openLink = (url: string, event: MouseEvent) => {
       if (!commandKey(event)) return;
-      const target = linkTarget(url, event.shiftKey, openWeb.current !== undefined);
+      const target = linkTarget(url, event.shiftKey, binding.openWeb.current !== undefined);
       // Shift-click extends the terminal's selection, which is not what a click on a link means.
       if (event.shiftKey) terminal.clearSelection();
-      if (target === 'web-tab') openWeb.current?.(url);
+      if (target === 'web-tab') binding.openWeb.current?.(url);
       else if (target === 'browser') void window.agentBoard.trackers.openLink(url).catch(() => {});
     };
-    const hint = (url: string) => (element.title = linkHint(url, openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') }));
+    const hint = (url: string) => (element.title = linkHint(url, binding.openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') }));
     const leave = () => element.removeAttribute('title');
     const links = terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        const found = bufferLinks(rowAt, y, terminal.cols).filter(({ url }) => linkTarget(url, false, openWeb.current !== undefined) !== undefined || linkTarget(url, true, false) !== undefined);
+        const found = bufferLinks(rowAt, y, terminal.cols).filter(({ url }) => linkTarget(url, false, binding.openWeb.current !== undefined) !== undefined || linkTarget(url, true, false) !== undefined);
         callback(
           found.length === 0
             ? undefined
@@ -150,7 +227,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
         if (url !== undefined) openLink(url, event);
       },
       hover(_event, text) {
-        element.title = hyperlinkHint(text, openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') });
+        element.title = hyperlinkHint(text, binding.openWeb.current !== undefined, { open: keyText('window.openLink'), browser: keyText('window.openLinkBrowser') });
       },
       leave,
     };
@@ -159,6 +236,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     // The board's zoom scales the terminal, which xterm's mouse mapping doesn't know.
     compensateForScale(terminal);
     fit.fit();
+    timing('terminal.open', mountedAt, sessionId);
 
     let disposed = false;
     let exited = false;
@@ -170,11 +248,12 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     void (laidOut ? api.resize(sessionId, { cols: terminal.cols, rows: terminal.rows }).catch(() => {}) : Promise.resolve())
       .then(() => {
         if (disposed) return;
+        const attaching = performance.now();
         detach = api.attach(sessionId, (event) => {
           switch (event.type) {
             case 'session.snapshot':
               terminal.reset();
-              terminal.write(event.data);
+              terminal.write(event.data, () => timing('terminal.snapshot', attaching, { sessionId, bytes: event.data.length }));
               status({ state: 'attached' });
               break;
             case 'session.output':
@@ -197,7 +276,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     // Shift+Enter and Option+Enter put a line break in an agent's message rather than sending it. Every event of the
     // key is kept from xterm, which would send its own CR; the sequence goes once, on keydown.
     terminal.attachCustomKeyEventHandler((event) => {
-      const sequence = newlineKey(harnessRef.current, event) ?? macLineEditKey(event);
+      const sequence = newlineKey(binding.harness.current, event) ?? macLineEditKey(event);
       if (sequence === undefined) return true;
       if (event.type === 'keydown') {
         // The board's delete key ignores keys typed into xterm's textarea, so ⌘⌫ here can't also delete a selection.
@@ -208,12 +287,13 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     });
     const resize = terminal.onResize((size) => void api.resize(sessionId, size).catch(() => {}));
     // Throttled: dragging a window's edge resizes the element every frame, and each new size resizes the session.
-    const refit = throttled(() => fit.fit(), REFIT_INTERVAL_MS);
+    // A kept terminal out of every pane has no size: it keeps the session's until it shows again.
+    const refit = throttled(() => element.isConnected && fit.fit(), REFIT_INTERVAL_MS);
     const observer = new ResizeObserver(refit.call);
     observer.observe(element);
     if (focusedRef.current && autoFocusRef.current) terminal.focus();
 
-    return () => {
+    const dispose = () => {
       disposed = true;
       themeChange.disconnect();
       resized();
@@ -227,6 +307,14 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       resize.dispose();
       detach?.();
       terminal.dispose();
+      if (keep) element.remove();
+    };
+    if (!keep) return dispose;
+    const entry: KeptTerminal = { host: element as HTMLDivElement, terminal, fit, binding, last, shown: true, dispose };
+    kept.set(sessionId, entry);
+    return () => {
+      terminalRef.current = null;
+      park(sessionId, entry);
     };
   }, [sessionId]);
 
@@ -236,6 +324,16 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   }, [focused]);
 
   return <div ref={container} className="terminal-pane nowheel" data-testid="session-terminal" />;
+}
+
+/**
+ * A User Timing measure from `start` to now, for profiles and the rendering benchmark (e2e/render-bench.spec.ts): a
+ * terminal's mount, its open and fit, and its snapshot from attaching to parsed. Cleared as soon as it is written, so the
+ * page's timeline never fills with them; a `PerformanceObserver` still hears each one.
+ */
+function timing(name: string, start: number, detail: unknown): void {
+  performance.measure(name, { start, detail });
+  performance.clearMeasures(name);
 }
 
 /**

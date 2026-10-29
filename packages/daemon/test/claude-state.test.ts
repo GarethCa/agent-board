@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lastMessageAfterHook, claudeStateAfterHook, stateAfterExit } from '../src/claude-state.ts';
+import { compactingAfterHook, lastMessageAfterHook, claudeStateAfterHook, stateAfterExit } from '../src/claude-state.ts';
 import type { AgentState } from '../src/protocol.ts';
 
 const hook = (hook_event_name: string, fields: Record<string, unknown> = {}) => ({ hook_event_name, ...fields });
@@ -27,10 +27,22 @@ describe('Claude hook → agent state (ADR-0004)', () => {
     expect(claudeStateAfterHook('thinking', hook(event, { agent_id: 'a1', agent_type: 'Explore' }))).toBe('thinking');
   });
 
-  it('keeps a rate-limited agent so through its idle prompt: its limit still stops it until a turn starts', () => {
+  it('keeps a rate-limited agent so through its idle prompt and word of other sessions: its limit still stops it until a turn starts', () => {
     expect(claudeStateAfterHook('rate-limited', hook('Notification', { notification_type: 'idle_prompt' }))).toBe('rate-limited');
+    expect(claudeStateAfterHook('rate-limited', hook('Notification', { notification_type: 'agent_needs_input', message: 'Docs pass needs your input' }))).toBe(
+      'rate-limited',
+    );
     expect(claudeStateAfterHook('rate-limited', hook('UserPromptSubmit', { prompt: 'continue' }))).toBe('thinking');
   });
+
+  it.each(['compact', 'clear'])(
+    'leaves the state alone on a SessionStart from %s: it comes at the prompt between turns as well as mid-turn, and no Stop follows',
+    (source) => {
+      for (const state of ['idle', 'waiting', 'running', 'thinking'] as const) {
+        expect(claudeStateAfterHook(state, hook('SessionStart', { source }))).toBe(state);
+      }
+    },
+  );
 
   it('ignores notifications it has no state for, and events it does not know', () => {
     expect(claudeStateAfterHook('idle', hook('Notification', { notification_type: 'auth_success' }))).toBe('idle');
@@ -94,5 +106,24 @@ describe("an agent's last message to the user, from its Claude hooks", () => {
     const idle = hook('Notification', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
     expect(lastMessageAfterHook(keep, idle)).toBe(keep);
     expect(lastMessageAfterHook(keep, hook('PreToolUse'))).toBe(keep);
+  });
+});
+
+describe('since when the agent has been compacting', () => {
+  const now = '2026-01-01T00:00:05.000Z';
+
+  it('starts at its own PreCompact and keeps that time through the hooks of the compaction', () => {
+    expect(compactingAfterHook(null, hook('PreCompact', { trigger: 'auto' }), now)).toBe(now);
+    expect(compactingAfterHook('earlier', hook('PreCompact'), now)).toBe('earlier');
+    expect(compactingAfterHook('earlier', hook('Notification', { notification_type: 'idle_prompt' }), now)).toBe('earlier');
+  });
+
+  it.each(['PostCompact', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Interrupt', 'SessionEnd'])('ends at %s', (event) => {
+    expect(compactingAfterHook('earlier', hook(event), now)).toBeNull();
+  });
+
+  it("ignores a subagent's hooks", () => {
+    expect(compactingAfterHook(null, hook('PreCompact', { agent_id: 'a1' }), now)).toBeNull();
+    expect(compactingAfterHook('earlier', hook('PostCompact', { agent_id: 'a1' }), now)).toBe('earlier');
   });
 });

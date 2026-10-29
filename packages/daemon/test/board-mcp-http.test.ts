@@ -91,7 +91,7 @@ describe('the board MCP over HTTP', () => {
     const mcp = mcpAs(one.token);
 
     expect((await mcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await mcp.listTools()).toEqual(['whoami', 'board', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
+    expect(await mcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
     expect((await mcp.callTool('whoami', {})).text).toMatch(new RegExp(`^you {6}agent:${one.agent.sessionId.slice(0, 4)}\\w* {2}one`));
     expect(await mcp.callTool('set_status', { summary: 'Moving session ids', progress: 40 })).toEqual({
       text: 'Your tile now says: Moving session ids',

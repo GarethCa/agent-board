@@ -208,6 +208,9 @@ const api: AgentBoardApi = {
   orchestrators: {
     activity: (orchestratorId, before) => invoke(ORCHESTRATOR_IPC.activity, orchestratorId, before),
     onLogged: (listener) => subscribe(ORCHESTRATOR_IPC.logged, listener),
+    usage: () => invoke(ORCHESTRATOR_IPC.usage),
+    onUsage: (listener) => subscribe(ORCHESTRATOR_IPC.usageChanged, listener),
+    release: (zoneId) => invoke(ORCHESTRATOR_IPC.release, zoneId),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),
@@ -248,6 +251,7 @@ const api: AgentBoardApi = {
     setName: (sessionId, name) => invoke(AGENT_IPC.setName, sessionId, name),
     move: (sessionId, move) => invoke(AGENT_IPC.move, sessionId, move),
     onChanged: (listener) => subscribe(AGENT_IPC.changed, listener),
+    onTranscriptChanged: (listener) => subscribe(AGENT_IPC.transcriptChanged, listener),
     onStartChanged: (listener) => subscribe(AGENT_IPC.startChanged, listener),
     onOpenRequested(listener) {
       // A capture window takes no request meant for the board's window.

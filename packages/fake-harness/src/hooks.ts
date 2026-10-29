@@ -117,6 +117,11 @@ export async function runHooks(
   return outputs.filter((output): output is HookOutput => output !== undefined);
 }
 
+/** Runs a status line `command` with `input` on its stdin, as Claude does; what it prints, or nothing past its timeout. */
+export async function runStatusLine(command: string, input: Record<string, unknown>, options: HookRunOptions): Promise<void> {
+  await runCommand({ type: 'command', command }, JSON.stringify(input), 5000, options);
+}
+
 /**
  * Runs in its own process group so a timeout kills everything the hook started (`a | b`, `x; sleep`), not just the
  * shell; a surviving grandchild would otherwise hold stdout open and block the session. Exit code 2 (blocking) is

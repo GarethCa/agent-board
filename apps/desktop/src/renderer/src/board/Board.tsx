@@ -2522,6 +2522,20 @@ function BoardView() {
         window.agentBoard.zones.setLook(zone.id, { fillOpacity }).then((saved) => setNodes((current) => withZone(current, saved)), report("set the zone's fill opacity"));
       },
       deleteZone: (zone: Zone) => deleteZones([zone]),
+      setTrustsFolder(zone, trustsFolder) {
+        window.agentBoard.zones.configure(zone.id, { trustsFolder }).then(
+          (saved) => {
+            setNodes((current) => withZone(current, saved));
+            toasts.show({
+              tone: 'success',
+              message: trustsFolder
+                ? `New agents in ${saved.name} start without Claude's trust prompt`
+                : `New agents in ${saved.name} show Claude's trust prompt again`,
+            });
+          },
+          report('change whether the zone trusts its folder'),
+        );
+      },
       setBoardMcp(zone, boardMcp) {
         window.agentBoard.zones.configure(zone.id, { boardMcp }).then(
           (saved) => {
@@ -3250,6 +3264,7 @@ function BoardView() {
               onShowAgent={(sessionId) => boardCommands.showTile({ kind: 'agent', id: sessionId })}
               onShowZone={(zoneId) => boardCommands.showZone(zoneId)}
               onOpenAgent={openAgent}
+              onOpenPlan={(agent) => tileActions.openPlan(agent)}
               onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
             />
           )}

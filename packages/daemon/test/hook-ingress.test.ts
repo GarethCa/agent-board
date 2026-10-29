@@ -57,6 +57,17 @@ describe('hook ingress', () => {
     expect(events).toEqual([{ type: 'hook', sessionId: 'session-1', event: 'Stop', payload: STOP }]);
   });
 
+  it("takes a live session's status line input at /usage, as the newest usage reading, and refuses one with no token", async () => {
+    const { daemon, client } = await daemonWithSession();
+    const body = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 40, resets_at: Date.now() / 1000 + 3600 } } });
+
+    expect((await postHook(daemon.hookPort, { path: '/usage', body })).status).toBe(401);
+    expect((await postHook(daemon.hookPort, { path: '/usage', token: 'secret-token', body: 'nope' })).status).toBe(400);
+    expect((await postHook(daemon.hookPort, { path: '/usage', token: 'secret-token', body })).status).toBe(200);
+
+    expect(await client.call('usage.get', undefined)).toMatchObject({ fiveHour: { usedPercent: 40, remainingPercent: 60 }, sevenDay: null, stale: false });
+  });
+
   it('accepts the auth scheme in any case', async () => {
     const { daemon } = await daemonWithSession();
     const response = await fetch(`http://127.0.0.1:${daemon.hookPort}/hooks`, {

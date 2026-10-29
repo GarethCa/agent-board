@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { runHooks, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
+import { runHooks, runStatusLine, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
 import { execFile, spawnSync } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
 import { CODEX_START_SCREENS, codexComposer, codexLoadingComposer, codexStartScreen, isCodexStartScreen } from './codex-screens.ts';
 import * as demo from './demo.ts';
 import { drawRateLimitMenu, rateLimitMenuRows, RATE_LIMIT_CONTINUE, RATE_LIMIT_STOP_ROW } from './rate-limit-menu.ts';
-import { drawPromptBox, drawTrustScreen } from './trust-screen.ts';
+import { SPINNER_LINE, drawPromptBox, drawTrustScreen } from './trust-screen.ts';
 
 /**
  * Stops the terminal echoing what is typed while the session runs, as the real TUIs (which read their keys raw) don't
@@ -21,6 +21,32 @@ function quietTerminal(): void {
   const stty = (setting: string) => spawnSync('stty', [setting], { stdio: [process.stdin, 'ignore', 'ignore'] });
   stty('-echo');
   process.once('exit', () => stty('echo'));
+}
+
+/**
+ * Takes keys as they come rather than a line at a time, as the real TUIs (which read raw) do: a terminal's line
+ * discipline holds at most 1 KiB of a line (`MAX_CANON` on macOS), so a longer one would never arrive whole. Ctrl-C
+ * still interrupts, as a signal. Line editing comes back as the process exits, for the shell its pane drops into.
+ */
+function keysAsTheyCome(): void {
+  if (!process.stdin.isTTY) return;
+  const stty = (setting: string) => spawnSync('stty', [setting], { stdio: [process.stdin, 'ignore', 'ignore'] });
+  stty('-icanon');
+  process.once('exit', () => stty('icanon'));
+}
+
+/** How many bytes of a long line typed at Claude reach it in one read of its terminal. */
+const TERMINAL_READ = 1024;
+
+/**
+ * What Claude keeps of `line` typed at its prompt with no bracketed paste around it: a line longer than one read of its
+ * terminal keeps only the bytes after its last whole read, as Claude 2.1.312 did with typed messages of 2,700
+ * characters, whose transcripts held their last 700 or so. A character the cut goes through is lost with it.
+ */
+function keptOfTypedLine(line: string): string {
+  const bytes = Buffer.from(line);
+  if (bytes.length <= TERMINAL_READ) return line;
+  return bytes.subarray(Math.floor((bytes.length - 1) / TERMINAL_READ) * TERMINAL_READ).toString().replace(/^\uFFFD+/, '');
 }
 
 /** One message of a conversation, as a resumed session shows it again. */
@@ -36,12 +62,16 @@ export interface Transcript {
   history(): ConversationMessage[];
   userPrompt(text: string, turnId: string): void;
   assistantText(text: string): void;
+  /** The model thinking, its text kept (Claude's `thinking` block); a harness that keeps none writes nothing. */
+  thinking?(text: string): void;
   toolUse(id: string, name: string, input: unknown): void;
   /** A call's result: what the tool returned (a string, or e.g. a shell's `{stdout, stderr}`), as the harness records it. */
   toolResult(id: string, response: unknown, isError: boolean): void;
   /** Writes the subagent's own transcript, started by the call `toolUseId`, and returns its path. */
   subagent(agentId: string, agentType: string, task: string, result: string, toolUseId: string): string;
   turnComplete(turnId: string, lastMessage: string): void;
+  /** A message the user typed while a turn ran, taken at one of its steps (Claude's `queued_command`). */
+  queuedPrompt?(text: string): void;
 }
 
 /** Everything that differs between the fake claude and the fake codex, named for the behaviour it switches. */
@@ -85,6 +115,8 @@ export interface Dialect {
   mcpServers: Record<string, McpServerConfig>;
   /** The env the model's shell commands run with: Codex leaves out what its `shell_environment_policy` excludes. */
   shellEnv: NodeJS.ProcessEnv;
+  /** The status line command its settings give, run after each turn with what it is passed on stdin. Claude only. */
+  statusLine?: { command: string; input: Record<string, unknown> };
   /** Overrides the SessionEnd reason (Codex always reports `other`). */
   sessionEndReason?: string;
   /** Pause between streamed words and tool steps. */
@@ -109,6 +141,7 @@ const MATCH_FIELD: Record<string, string> = {
   Notification: 'notification_type',
   SessionStart: 'source',
   SessionEnd: 'reason',
+  PreCompact: 'trigger',
   SubagentStart: 'agent_type',
   SubagentStop: 'agent_type',
   StopFailure: 'error',
@@ -118,6 +151,8 @@ const SESSION_SCOPED = new Set(['SessionStart', 'SessionEnd']);
 
 /** How long a session answered on its trust screen with `slow-prompt` shows a line of its own before its prompt. */
 const SLOW_PROMPT_MS = 1_000;
+/** How long a session answered on its trust screen with `slow-redraw` leaves it drawn after Enter. */
+const SLOW_REDRAW_MS = 600;
 
 /** The subagent a hook fires inside: its fields go on every hook it fires. */
 export interface SubagentScope {
@@ -171,8 +206,17 @@ export class FakeSession {
    * out on a loaded machine: `FAKE_HARNESS_LOSE_PROMPT_HOOKS`, 0 by default.
    */
   private promptHooksToLose = Number(process.env.FAKE_HARNESS_LOSE_PROMPT_HOOKS ?? 0);
+  /**
+   * Whether it takes keys as they come (`keysAsTheyCome`), so a line of any length arrives, and a Claude session keeps of
+   * a long typed line only what Claude does (`keptOfTypedLine`): `FAKE_HARNESS_RAW_INPUT=1`.
+   */
+  private readonly rawInput = process.env.FAKE_HARNESS_RAW_INPUT === '1';
+  /** How many turns still to end with no `Stop` hook (`FAKE_HARNESS_LOSE_STOP_HOOKS`): the turn ends all the same. */
+  private stopHooksToLose = Number(process.env.FAKE_HARNESS_LOSE_STOP_HOOKS ?? 0);
   /** Whether the prompt about to be submitted was typed at it. */
   private promptTyped = false;
+  /** Whether a message typed mid-turn is taken at the turn's next step: `FAKE_HARNESS_QUEUE_MID_TURN`. */
+  private readonly queueMidTurn = process.env.FAKE_HARNESS_QUEUE_MID_TURN === '1';
   /** Keys a menu read raw, which the line reader holds as the start of its next line (`readKeys`). */
   private heldKeys = '';
   /** What it put at its prompt itself, as Claude puts `continue` there after a rate limit: Enter submits it. */
@@ -187,6 +231,7 @@ export class FakeSession {
 
   constructor(dialect: Dialect) {
     this.dialect = dialect;
+    if (this.rawInput) keysAsTheyCome();
     this.lines = createInterface({ input: process.stdin, terminal: false })[Symbol.asyncIterator]();
     // Like the real TUIs: Ctrl-C (SIGINT, or \x03 through a PTY) interrupts a turn; twice at the prompt exits.
     // Print and exec modes keep the default and die.
@@ -212,7 +257,8 @@ export class FakeSession {
    * names that source instead of its own (`compact`, as Claude's after a compaction). With `FAKE_HARNESS_TRUST_SCREEN=1`
    * a Claude session shows its folder-trust screen first, firing nothing until it is answered (`trustScreen`); with
    * `late-start`, its `SessionStart` then waits for the first keys typed at its prompt; with `slow-prompt`, its prompt
-   * is drawn `SLOW_PROMPT_MS` after a line of its own. A Codex TUI draws its composer as it loads, then the startup
+   * is drawn `SLOW_PROMPT_MS` after a line of its own; with `slow-redraw`, the trust screen stays drawn `SLOW_REDRAW_MS`
+   * after Enter picks its yes row; with `stuck-pointer`, Down never moves its pointer. A Codex TUI draws its composer as it loads, then the startup
    * screen `FAKE_HARNESS_START_SCREEN` names (until Enter answers it), then its composer with its status line, and fires
    * its `SessionStart` with its first prompt.
    */
@@ -227,7 +273,7 @@ export class FakeSession {
     }
     const trust = process.env.FAKE_HARNESS_TRUST_SCREEN ?? '';
     let redrawing: NodeJS.Timeout | undefined;
-    if ((trust === '1' || trust === 'late-start' || trust === 'slow-prompt') && harness === 'claude' && !this.resumed) {
+    if ((trust === '1' || trust === 'late-start' || trust === 'slow-prompt' || trust === 'slow-redraw' || trust === 'stuck-pointer') && harness === 'claude' && !this.resumed) {
       await this.trustScreen();
       // Its prompt drawn well before its `SessionStart`, which lands as the first keys typed at it are, read raw (the
       // line reader still gets them) and the screen redrawn until it has, so it lands before the Enter after them.
@@ -334,6 +380,13 @@ export class FakeSession {
     this.lastAssistantMessage = text;
   }
 
+  /** Thinks for a step (its spinner, in a demo) and records the thinking with its text, as Claude's `thinking` block. */
+  async recordThought(text: string): Promise<void> {
+    await this.think();
+    await this.pause();
+    this.dialect.transcript.thinking?.(text);
+  }
+
   /**
    * Runs one tool call; asks for permission first when `needsPermission`. Returns whether it ran. Inside a subagent
    * (`inside`), its hooks carry the subagent's fields and it stays out of the main transcript.
@@ -351,6 +404,10 @@ export class FakeSession {
     if (this.dialect.demo) this.printLines([demo.toolHeading(harness, name, input, cwd)]);
     else this.print(`● ${name}(${JSON.stringify(input)})\n`);
     await this.fire('PreToolUse', { ...inside, tool_name: name, tool_input: input, tool_use_id: id });
+    if (process.env.FAKE_HARNESS_HANG_TOOL === '1' && this.dialect.harness === 'claude') {
+      this.drawPromptBox();
+      await this.untilInterrupted(new Promise<never>(() => {}));
+    }
 
     if (needsPermission && !(await this.askPermission(name, input, inside))) {
       if (!inside) this.dialect.transcript.toolResult(id, 'The user denied this tool call.', true);
@@ -363,7 +420,31 @@ export class FakeSession {
     if (this.dialect.demo) this.printLines(demo.toolResult(harness, name, input, response, cwd));
     if (!inside) this.dialect.transcript.toolResult(id, response, false);
     await this.fire('PostToolUse', { ...inside, tool_name: name, tool_input: input, tool_response: response, tool_use_id: id });
+    if (!inside) await this.takeQueued();
     return true;
+  }
+
+  /**
+   * Takes the messages typed while the turn ran, as Claude takes them at the step after a tool call: each written to
+   * the transcript as it took it (`queuedPrompt`), with no `UserPromptSubmit`. Only with `queueMidTurn`.
+   */
+  private async takeQueued(): Promise<void> {
+    const write = this.dialect.transcript.queuedPrompt?.bind(this.dialect.transcript);
+    if (!this.queueMidTurn || write === undefined) return;
+    while (await this.lineWaiting()) {
+      const line = await this.readLine();
+      if (line === undefined) return;
+      if (line.trim() !== '') write(line);
+    }
+  }
+
+  /** Whether a line typed at it is there to read now, without waiting for one. */
+  private async lineWaiting(): Promise<boolean> {
+    this.nextLine ??= this.lines.next();
+    let ready = false;
+    void this.nextLine.then(() => (ready = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    return ready;
   }
 
   /**
@@ -540,8 +621,12 @@ export class FakeSession {
   /** Ends the turn. */
   async stop(): Promise<void> {
     this.dialect.transcript.turnComplete(this.turnId, this.lastAssistantMessage);
-    await this.fire('Stop', { stop_hook_active: false, last_assistant_message: this.lastAssistantMessage });
+    if (this.stopHooksToLose > 0) this.stopHooksToLose -= 1;
+    else await this.fire('Stop', { stop_hook_active: false, last_assistant_message: this.lastAssistantMessage });
     this.inTurn = false;
+    // Claude draws its status line again as the turn ends; what it prints isn't drawn here.
+    const { statusLine } = this.dialect;
+    if (statusLine !== undefined) await runStatusLine(statusLine.command, { session_id: this.dialect.sessionId, ...statusLine.input }, this.dialect.hookOptions);
   }
 
   /**
@@ -560,23 +645,52 @@ export class FakeSession {
   }
 
   /**
-   * Sits at the input prompt until the user types a line; undefined means stdin closed. Claude fires
-   * `idle_prompt` once it has sat idle for `idleNotifyMs` (immediately when 0).
+   * Sits at the input prompt until the user types a line; undefined means stdin closed. Claude fires `idle_prompt` once
+   * it has sat idle for `idleNotifyMs` (immediately when 0). With `FAKE_HARNESS_PROMPT_BOX` Claude draws its prompt box
+   * there first (`drawPromptBox`); with `FAKE_HARNESS_IDLE_COMPACT_MS`, it compacts its conversation once it has sat idle that long, as
+   * Claude's idle compaction does: `PreCompact`, then a `SessionStart` from `compact`, and no turn. With
+   * `FAKE_HARNESS_IDLE_NEEDS_INPUT_MS`, once it has sat idle that long it says another session needs your input
+   * (`agent_needs_input`), as Claude does of the background sessions it tracks, or what
+   * `FAKE_HARNESS_IDLE_NEEDS_INPUT_MESSAGE` says instead (a dialog of Claude's own, by its text). With
+   * `FAKE_HARNESS_DIALOG_CLOSE_MS`, that dialog is closed in its terminal that long after: its prompt box is drawn
+   * again, and no hook fires, as acknowledging Claude's notice starts no turn.
    */
   async waitForInput(): Promise<string | undefined> {
     if (!this.dialect.notificationEvents) return this.readPrompt();
+    this.drawPromptBox();
+    // Hooks fire in order: one already under way finishes before the next, the next turn or SessionEnd.
+    let firing: Promise<unknown> = Promise.resolve();
+    const after = (ms: number, hooks: () => Promise<unknown>) => setTimeout(() => (firing = firing.then(hooks)), ms);
     const idle = () =>
       this.fire('Notification', { message: `${this.dialect.displayName} is waiting for your input`, notification_type: 'idle_prompt' });
-    if (this.dialect.idleNotifyMs <= 0) {
-      await idle();
-      return this.readPrompt();
+    const timers: NodeJS.Timeout[] = [];
+    if (this.dialect.idleNotifyMs <= 0) await idle();
+    else timers.push(after(this.dialect.idleNotifyMs, idle));
+    const compactMs = Number(process.env.FAKE_HARNESS_IDLE_COMPACT_MS ?? 0);
+    if (compactMs > 0) {
+      timers.push(
+        after(compactMs, async () => {
+          await this.fire('PreCompact', { trigger: 'auto', custom_instructions: '' });
+          await this.fire('SessionStart', { source: 'compact', model: this.dialect.model });
+        }),
+      );
     }
-    // Hooks fire in order: a notification already under way finishes before the next turn or SessionEnd.
-    let notifying: Promise<unknown> | undefined;
-    const timer = setTimeout(() => (notifying = idle()), this.dialect.idleNotifyMs);
+    const needsInputMs = Number(process.env.FAKE_HARNESS_IDLE_NEEDS_INPUT_MS ?? 0);
+    if (needsInputMs > 0) {
+      timers.push(
+        after(needsInputMs, () =>
+          this.fire('Notification', {
+            message: process.env.FAKE_HARNESS_IDLE_NEEDS_INPUT_MESSAGE || 'Docs pass needs your input: which branch?',
+            notification_type: 'agent_needs_input',
+          }),
+        ),
+      );
+      const closeMs = Number(process.env.FAKE_HARNESS_DIALOG_CLOSE_MS ?? 0);
+      if (closeMs > 0) timers.push(after(needsInputMs + closeMs, async () => this.printLines(drawPromptBox())));
+    }
     const line = await this.readPrompt();
-    clearTimeout(timer);
-    await notifying;
+    for (const timer of timers) clearTimeout(timer);
+    await firing;
     return line;
   }
 
@@ -639,14 +753,17 @@ export class FakeSession {
     for (;;) {
       const keys = await this.readKeys();
       held += keys.replace(/[\r\n]/g, '');
-      // eslint-disable-next-line no-control-regex -- the arrow keys' escape sequences
-      for (const [arrow] of keys.matchAll(/\x1b\[[AB]/g)) on = arrow.endsWith('B') ? 'yes' : 'no';
+      if (process.env.FAKE_HARNESS_TRUST_SCREEN !== 'stuck-pointer') {
+        // eslint-disable-next-line no-control-regex -- the arrow keys' escape sequences
+        for (const [arrow] of keys.matchAll(/\x1b\[[AB]/g)) on = arrow.endsWith('B') ? 'yes' : 'no';
+      }
       if (/[\r\n]/.test(keys)) break;
       this.print('\x1b[2J\x1b[H');
       this.printLines(drawTrustScreen(this.dialect.cwd, on));
     }
     // Every key it read reaches the line reader too: the line they end is the screen's.
     this.heldKeys = held;
+    if (on === 'yes' && process.env.FAKE_HARNESS_TRUST_SCREEN === 'slow-redraw') await this.sleep(SLOW_REDRAW_MS);
     this.print('\x1b[2J\x1b[H');
     if (on === 'no') process.exit(1);
     // Claude still drawing: a line of its own a while before its prompt.
@@ -671,8 +788,13 @@ export class FakeSession {
     return keys;
   }
 
+  /**
+   * Fires `SessionEnd` and exits: `FAKE_HARNESS_SESSION_END_EXIT_MS` after it, as a slow machine's Claude may take, still
+   * reading what is typed meanwhile.
+   */
   async end(reason: string): Promise<never> {
     await this.fire('SessionEnd', { reason: this.dialect.sessionEndReason ?? reason });
+    await this.sleep(Number(process.env.FAKE_HARNESS_SESSION_END_EXIT_MS ?? 0));
     process.exit(0);
   }
 
@@ -719,7 +841,8 @@ export class FakeSession {
   /** The next prompt or paste as it ended at an Enter. */
   private async readMessage(): Promise<string | undefined> {
     let line = await this.readTypedLine();
-    if (line === undefined || !line.startsWith(PASTE_START)) return line;
+    if (line === undefined) return line;
+    if (!line.startsWith(PASTE_START)) return this.rawInput && this.dialect.harness === 'claude' ? keptOfTypedLine(line) : line;
     const lines = [line];
     while (!line.includes(PASTE_END)) {
       line = await this.readTypedLine();
@@ -796,6 +919,16 @@ export class FakeSession {
     const answer = await this.readLine();
     if (answer === undefined) return false;
     return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+  }
+
+  /**
+   * Claude's prompt box, with `FAKE_HARNESS_PROMPT_BOX` (`1`), under its spinner line with `spinner`; nothing without it,
+   * or under Codex.
+   */
+  private drawPromptBox(): void {
+    const box = process.env.FAKE_HARNESS_PROMPT_BOX ?? '';
+    if (this.dialect.harness !== 'claude' || (box !== '1' && box !== 'spinner')) return;
+    this.printLines(box === 'spinner' ? [SPINNER_LINE, '', ...drawPromptBox()] : drawPromptBox());
   }
 
   private async fire(event: string, fields: Record<string, unknown>): Promise<HookOutput[]> {

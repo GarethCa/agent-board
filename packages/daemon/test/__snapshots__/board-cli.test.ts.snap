@@ -478,7 +478,7 @@ As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board read impl                      its final message
   agent-board read impl .agent-board/handover.md
   agent-board new --base agent:impl --role reviewer --name review -- 'Review the diff against main'
-  agent-board wait review && agent-board read review
+  agent-board wait review && agent-board read review     (wait exits 3 if it gave up first)
   agent-board send impl -- 'Fix the review points: ...'
   agent-board close review --remove
 
@@ -693,6 +693,8 @@ commands do:
   board.showDoc
   board.openPullRequest
   orchestrator.activity
+  usage.get
+  usage.priorities
 
 and, for an agent the user lets orchestrate, the orchestrator commands:
 
@@ -706,6 +708,9 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.restart
   orchestrator.pause
   orchestrator.wake
+  orchestrator.hold
+  orchestrator.release
+  orchestrator.usagePause
   orchestrator.close
   orchestrator.addEdge
   orchestrator.removeEdge
@@ -896,8 +901,32 @@ or a note by its label. It is gone at once; the user gets no Undo for it.
 "
 `;
 
+exports[`agent-board --help > has help for usage 1`] = `
+"usage: agent-board usage [priorities] [--json] | usage hold|release <zone ref> | usage pause <ref>
+
+The plan's 5-hour and weekly usage: each window's used and left, when it resets, and when it
+was read. A Claude agent's status line posts it as the agent runs, so nothing is asked of anyone
+and no tokens are spent; with no Claude agent running for a while it is stale.
+
+\`usage priorities\` lists the user's priorities: whether they let the Captain pace work by
+usage (off until they turn it on in Settings › Usage), their thresholds, and each zone's
+priority (high, normal or low), its hold, and what the thresholds allow in it now.
+
+The Captain's budget hold, refused unless the user turned pacing on, the reading is fresh, and
+the zone is past a threshold:
+  usage hold <zone ref>     No agent starts in the zone, and hand-offs to its agents wait. Its
+                            tab says why, and the user can Override it.
+  usage release <zone ref>  Lift the hold: what waited goes on.
+  usage pause <ref>         Pause an idle agent in a low-priority zone past the pause threshold,
+                            saying why on its tile, where the user can Override it. Never
+                            mid-turn, as \`pause\`.
+
+  --json   Print it as JSON instead.
+"
+`;
+
 exports[`agent-board --help > has help for wait 1`] = `
-"usage: agent-board wait [<ref>...] [--crew] [--until <state,...>] [--any] [--timeout <seconds>]
+"usage: agent-board wait [<ref>...] [--crew] [--until <state,...>] [--any] [--timeout <duration>]
 
 Waits until each agent's turn has ended: it is at its prompt (idle or waiting), needs the user,
 failed, was rate-limited, or has stopped. A turn you started with \`new\` or \`send\` counts
@@ -911,12 +940,14 @@ is still idle here: only a question, a plan or a permission prompt make it waiti
 daemon keeps that only while it runs: after it restarts, such an agent is waiting until its
 state next changes.)
 
-Exits 0 when they are there, and 3 when it gave up first: wait again.
+Exits 0 when they are there, and 3 (not 0) when it gave up first: wait again. So
+\`agent-board wait impl && agent-board read impl\` reads only once it is there.
 
   --crew             Your crew too: the agents you started, and theirs. With no refs, it is.
   --until <states>   Wait for these instead, by comma: running, thinking, waiting, needs-permission, idle, rate-limited, failed, done, scheduled, stopped-by-restart, handing-off, starting, on-command, hibernated, finished.
   --any              Until one of them is there, not all.
-  --timeout <s>      Give up after this many seconds: 50 by default, at most 1800.
+  --timeout <d>      Give up after this long: seconds, or with s, m or h (90s, 30m). 50s by
+                     default, at most 1800s.
                      Your shell tool may stop a command sooner (Claude's Bash, after 2 minutes).
   --json             Print them as JSON.
 "
@@ -1068,6 +1099,8 @@ COMMANDS
   shells                Every shell tile.
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
+  usage [priorities]    The 5-hour and weekly plan usage, or the user's zone priorities and
+                        usage thresholds. See \`usage --help\`.
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
@@ -1186,6 +1219,11 @@ ORCHESTRATING
   roles [list]          Each default role and its template's first line.
   roles set <name> [--file <path>] [--] <template>
                         Add or replace one. \`roles remove <name>\` removes one.
+
+  Pacing work by usage (the Captain's, only while the user lets it):
+  usage hold|release <zone ref>
+                        Hold a zone's new starts and hand-offs, or release it.
+  usage pause <ref>     Pause an idle agent in a low-priority zone for usage.
 
 FOR THE USER
   orchestrate on|off <ref> [--scope zone|repo|board]

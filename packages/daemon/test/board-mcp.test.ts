@@ -200,6 +200,11 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' } },
     { tool: 'list_schedules', command: 'schedule', options: [] },
     { tool: 'remove_schedule', command: 'schedule', positional: ['schedule'], options: [] },
+    // `usage priorities` is a subcommand: the tool's priorities.
+    { tool: 'usage', command: 'usage', positional: ['priorities'] },
+    { tool: 'usage_hold', command: 'usage', positional: ['zone'] },
+    { tool: 'usage_release', command: 'usage', positional: ['zone'] },
+    { tool: 'usage_pause', command: 'usage', positional: ['agent'] },
     { tool: 'roles', command: 'roles', options: [] },
     { tool: 'set_role', command: 'roles', positional: ['name'], renamed: { template: 'file' } },
     { tool: 'remove_role', command: 'roles', positional: ['name'], options: ['zone'] },

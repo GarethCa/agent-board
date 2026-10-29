@@ -26,6 +26,7 @@
   --minimap-mask: color-mix(in srgb, var(--surface) 60%, transparent); /* the minimap outside the view */
   --island: color-mix(in srgb, var(--raised) 96%, transparent); /* a floating island of controls over the board */
   --key-hint: #9a9488; /* a tool's key in its corner: a decoration, as its tooltip names the key too */
+  --shadow-usage-hot: 0 0 0 1.5px var(--warning-edge), var(--shadow-island); /* the usage pill past 80% of a window */
   --shadow-attention-ring: color-mix(in srgb, var(--state-waiting) 14%, transparent); /* round the Needs-you pill while something waits */
   --scrim-window: color-mix(in srgb, var(--text) 42%, transparent); /* behind a session window shown on the board */
 
@@ -482,6 +483,11 @@
   --window-diff-added: #1f3324; /* an added line's row in a PR tab's diff */
   --window-diff-hunk: #23283a; /* a hunk's header row in a PR tab's diff */
   --window-chat-subagent: #222a40; /* a message between Codex agents in the chat view */
+  /* The chat's live states, drawn from the window's own colours so every theme pack keeps them apart */
+  --window-think: var(--window-code-title); /* thinking, a plan, compacting */
+  --window-limit: var(--window-code-type); /* a usage limit */
+  --window-limit-soft: color-mix(in srgb, var(--window-limit) 14%, var(--window-bg));
+  --window-removed: var(--window-danger); /* an edit's lines taken out */
   /* A code block's highlighting in the chat view, on its block (--window-chrome) or the window */
   --window-code-keyword: #d0a2f7;
   --window-code-string: #a9dc9c;
@@ -523,6 +529,8 @@
   --shadow-attention: 0 0 0 3px var(--shadow-attention-ring);
   --shadow-tab-picked: 0 0 0 1px var(--border); /* the picked tab of a row of tabs */
   --shadow-row-picked: inset 0 0 0 1.5px var(--accent); /* the picked row of a list to pick from (Add zone) */
+  --shadow-chat-dot: 0 0 0 3px var(--window-bg); /* a dot on the chat's timeline rail, cut out of the rail */
+  --shadow-chat-pop: 0 8px 20px -10px rgb(0 0 0 / 70%); /* an event opened beside the rail */
   --shadow-rail-token-selected: 0 0 0 3px var(--connector-halo); /* round a selected rail's token */
   --shadow-loose-dot: inset 0 0 0 1.5px var(--muted); /* the hollow dot for the board's loose sessions */
   --shadow-pane-focused: inset 0 -2px 0 var(--window-focus); /* under the strip of a session window's focused pane, of several */
@@ -794,6 +802,7 @@
   --motion-fast: 120ms; /* a control's hover and press, a menu or dialog appearing */
   --motion-base: 200ms; /* the board moving to show something */
   --motion-spin: 800ms; /* one turn of a loading spinner */
+  --motion-ring: 1300ms; /* one ring spreading from the chat's live state */
   --motion-pop: 260ms; /* a subagent popping in */
   --motion-step: 190ms; /* a running character's bob */
   --motion-stride: 380ms; /* a running character's leg swing: two bobs */

@@ -25,6 +25,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e && pnpm visual:check && pnpm package --no-install && pnpm test:e2e:packaged",
     "check:local": "sh scripts/check-local.sh",
     "check:pr": "node scripts/check-pr/main.ts",
+    "bench:render": "pnpm build && pnpm --filter @agent-board/desktop exec playwright test --project bench",
     "knip": "knip --no-progress",
     "package": "pnpm --filter @agent-board/desktop package",
     "test:e2e:packaged": "pnpm --filter @agent-board/desktop test:e2e:packaged",

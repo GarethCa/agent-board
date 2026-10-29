@@ -20,7 +20,7 @@ export {
   drawRateLimitMenu,
   rateLimitMenuRows,
 } from './rate-limit-menu.ts';
-export { TRUST_NO_ROW, TRUST_YES_ROW, drawPromptBox, drawTrustScreen } from './trust-screen.ts';
+export { SPINNER_LINE, TRUST_NO_ROW, TRUST_YES_ROW, drawPromptBox, drawTrustScreen } from './trust-screen.ts';
 
 export interface FakeHarnessEnvOptions {
   scenario: FakeScenario;
@@ -66,18 +66,64 @@ export interface FakeHarnessEnvOptions {
    * out on a loaded machine; the turn runs all the same. Defaults to 0.
    */
   losePromptHooks?: number;
+  /** How many turns end with no `Stop` hook, as a hook lost on a loaded machine; the turn ends all the same. Defaults to 0. */
+  loseStopHooks?: number;
+  /** How long a session that quits waits after its `SessionEnd` before it exits, still reading what is typed. Defaults to 0. */
+  sessionEndExitMs?: number;
+  /**
+   * With more than 0, an idle Claude session compacts its conversation once it has sat at its prompt this long, as
+   * Claude's idle compaction does: `PreCompact`, then a `SessionStart` from `compact`, and no turn. Defaults to 0: never.
+   */
+  idleCompactMs?: number;
+  /**
+   * With more than 0, an idle Claude session says another session needs your input (`agent_needs_input`) once it has
+   * sat at its prompt this long, as Claude does of the background sessions it tracks. Defaults to 0: never.
+   */
+  idleNeedsInputMs?: number;
+  /** The message of that `agent_needs_input` instead of another session's: one of Claude's own dialogs, by its text. */
+  idleNeedsInputMessage?: string;
+  /** With `idleNeedsInputMs`: that dialog is closed in its terminal this long after it opens, its prompt box drawn, no hook. */
+  dialogCloseMs?: number;
+  /**
+   * Claude draws its prompt box each time it sits at its prompt, as the real TUI shows between turns; with `spinner`,
+   * under its turn's spinner line (`SPINNER_LINE`), as Claude still shows while work it started goes on. Defaults to false.
+   */
+  promptBox?: boolean | 'spinner';
+  /**
+   * Its turn's first tool call never returns, printing nothing more (its prompt box drawn under it with `promptBox`), as
+   * a long silent command under reduced motion, where Claude stops redrawing. Defaults to false.
+   */
+  hangTool?: boolean;
+  /**
+   * Take keys as they come rather than a line at a time, as the real TUIs do, so a line longer than a terminal's 1 KiB
+   * line arrives; Claude then keeps only the bytes after the last whole KiB of a long line typed with no paste around it,
+   * as Claude 2.1.312 did. Defaults to false.
+   */
+  rawInput?: boolean;
   /**
    * What Claude shows once a turn hits its usage limit: `continue` at its prompt (`prompt`), or its menu (`menu`, or
    * `menu-credits-first` with its usage-credits row first). None by default: just the error.
    */
   rateLimitScreen?: 'prompt' | 'menu' | 'menu-credits-first';
   /**
+   * The plan usage Claude passes its status line, as its `rate_limits`: with it, Claude runs the status line its
+   * `--settings` give after each turn. None by default, and then no status line runs.
+   */
+  rateLimits?: Record<string, unknown>;
+  /**
    * Show Claude's folder-trust screen as the session starts, firing no hook until it is answered, as Claude does in a
    * folder it has never opened; with `late-start`, its `SessionStart` only comes as the first keys are typed at the
    * prompt it draws then, landing before the Enter after them; with `slow-prompt`, a line of its own shows for a second
-   * before that prompt. Defaults to false.
+   * before that prompt; with `slow-redraw`, the screen stays drawn a while after Enter picks its yes row; with `stuck-pointer`,
+   * Down never moves its pointer. Defaults to false.
    */
-  trustScreen?: boolean | 'late-start' | 'slow-prompt';
+  trustScreen?: boolean | 'late-start' | 'slow-prompt' | 'slow-redraw' | 'stuck-pointer';
+  /**
+   * Take a message typed while a turn runs at the turn's next step after a tool call, writing it to the transcript as a
+   * `queued_command` attachment, as Claude Code 2.1 does (Claude only). Defaults to false: it is the next prompt, a
+   * turn of its own once this one ends.
+   */
+  queueMidTurn?: boolean;
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
@@ -106,7 +152,18 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_LOSE_ENTERS: String(options.loseEnters ?? 0),
     FAKE_HARNESS_LOSE_ENTERS_AFTER: String(options.loseEntersAfter ?? 0),
     FAKE_HARNESS_LOSE_PROMPT_HOOKS: String(options.losePromptHooks ?? 0),
+    FAKE_HARNESS_RAW_INPUT: options.rawInput ? '1' : '0',
+    FAKE_HARNESS_LOSE_STOP_HOOKS: String(options.loseStopHooks ?? 0),
+    FAKE_HARNESS_SESSION_END_EXIT_MS: String(options.sessionEndExitMs ?? 0),
+    FAKE_HARNESS_IDLE_COMPACT_MS: String(options.idleCompactMs ?? 0),
+    FAKE_HARNESS_IDLE_NEEDS_INPUT_MS: String(options.idleNeedsInputMs ?? 0),
+    FAKE_HARNESS_IDLE_NEEDS_INPUT_MESSAGE: options.idleNeedsInputMessage ?? '',
+    FAKE_HARNESS_DIALOG_CLOSE_MS: String(options.dialogCloseMs ?? 0),
+    FAKE_HARNESS_PROMPT_BOX: options.promptBox === 'spinner' ? 'spinner' : options.promptBox ? '1' : '0',
+    FAKE_HARNESS_HANG_TOOL: options.hangTool ? '1' : '0',
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
+    FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
+    FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
     FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',
   };
 }

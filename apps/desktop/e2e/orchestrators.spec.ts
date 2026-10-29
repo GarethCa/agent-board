@@ -116,7 +116,7 @@ test('an orchestrator wires itself to its worker and hands off along the edge: i
     // Its token says who made it, and, at the worker's end, when it delivered.
     const token = window.getByTestId('rail-token');
     await expect(token.locator('.rail-token-body')).toHaveAttribute('title', `Made by ${lead}, an orchestrator`);
-    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d$/, { timeout: 2 * TURN_MS });
+    await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d( [AP]M)?$/, { timeout: 2 * TURN_MS });
 
     await token.locator('.rail-token-open').click();
     const rules = window.getByRole('complementary', { name: 'Edge rules' });

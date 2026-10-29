@@ -298,6 +298,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           {checkoutWarning}
         </span>
       )}
+      {!starting && agent.trustedByZone && (
+        <span className="hybrid-tile-trusted" data-testid="tile-trusted-by-zone" title="Its zone trusts its folder for new agents: Claude's trust screen was answered by that setting, not by you.">
+          <ShieldCheck aria-hidden />
+          trusted by this zone&apos;s setting
+        </span>
+      )}
       {agent.undelivered.length > 0 ? (
         // Before all else: its sender heard it was queued, and nothing else says it never went.
         <UndeliveredRow
@@ -362,7 +368,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           set by ◎ {agent.status.setBy}
         </span>
       )}
-      {agent.hibernated !== null && <PausedLine hibernated={agent.hibernated} />}
+      {agent.hibernated !== null &&
+        (agent.hibernated.reason === undefined ? (
+          <PausedLine hibernated={agent.hibernated} />
+        ) : (
+          <HeldLine reason={agent.hibernated.reason} onOverride={() => resumeAgent(agent.sessionId)} />
+        ))}
       {agent.state === 'on-command' && <CommandRow agent={agent} />}
       {startup?.failed === true ? (
         <StartFailedActions onRetry={() => retryAgentStart(agent.sessionId)} onDelete={() => deleteAgent(agent.sessionId)} />
@@ -859,6 +870,33 @@ function PausedLine({ hibernated }: { hibernated: NonNullable<Agent['hibernated'
       {/* A long name gives way; how long ago always shows. */}
       <span className="hybrid-tile-paused-who">{who}</span>
       <span className="hybrid-tile-paused-when">{when}</span>
+    </span>
+  );
+}
+
+/**
+ * A tile paused for usage: why, as the Captain's digest says it, with Override, which wakes it as Wake does. Above its
+ * footer, yielding to the body's lines as a paused tile's line does: its footer's Wake still wakes it.
+ */
+function HeldLine({ reason, onOverride }: { reason: string; onOverride(): Promise<void> }) {
+  const [pending, setPending] = useState(false);
+  return (
+    <span className="hybrid-tile-byline hybrid-tile-held" data-testid="tile-held" data-yields="" title={`Paused for usage: ${reason}`}>
+      <span className="hybrid-tile-held-why">held: {reason}</span>
+      <Button
+        size="xs"
+        className="hybrid-tile-override nodrag"
+        data-testid="override"
+        title="Wake it anyway, carrying on its conversation"
+        disabled={pending}
+        onClick={() => {
+          setPending(true);
+          void onOverride().finally(() => setPending(false));
+        }}
+        onDoubleClick={stopPropagation}
+      >
+        Override
+      </Button>
     </span>
   );
 }

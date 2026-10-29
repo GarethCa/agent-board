@@ -6,6 +6,7 @@ import { createFakeGitHub, createFakeTracker, FAKE_GITHUB_STATE, type FakeGitHub
 import type { DaemonClient } from '../src/client.ts';
 import type { DaemonOptions } from '../src/daemon.ts';
 import {
+  DEFAULT_USAGE_THRESHOLDS,
   RPC_ERROR,
   type Agent,
   type AgentState,
@@ -16,7 +17,7 @@ import {
   type FlowEdgeUpdatedEvent,
   type HookEvent,
 } from '../src/protocol.ts';
-import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
+import { connectTestClient, git, insertFakeSession, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
 
@@ -816,12 +817,64 @@ describe('held payloads', () => {
 
   it('keeps a copy by default, and delivers the plan as it was when A handed off', async () => {
     const { client, recorder, a, b, edge, held } = await heldPlan();
-    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy' });
+    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS });
     expect(held.held).toMatchObject({ name: 'plan.md', copy: true });
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');
     writeFileSync(join(a.worktree, 'ready'), '');
     await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its plan.md): First plan.', before);
+    expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
+  });
+
+  it("holds a hand-off to an agent in a zone held for usage, saying why, and delivers it once the hold is lifted", async () => {
+    const dataDir = tempDataDir();
+    const { daemon, client, recorder } = await flowDaemon(dataDir);
+    const { zone, a, b } = await twoAgents(client, recorder);
+    await client.call('settings.set', { usagePacing: true });
+    await client.call('zone.configure', { id: zone.id, priority: 'low' });
+    insertFakeSession(dataDir, { id: 'reader', hookToken: 'reader-token' });
+    await fetch(`http://127.0.0.1:${daemon.hookPort}/usage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token' },
+      body: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 90, resets_at: Date.now() / 1000 + 3600 } } }),
+    });
+    await client.call('orchestrator.hold', { zoneId: zone.id });
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId });
+
+    await client.call('agent.answer', { sessionId: a.sessionId, text: 'Write the code' });
+
+    expect((await untilEdge(recorder, edge.id, (e) => e.held !== null)).held).toMatchObject({ reason: 'held: 5h at 90%, zone low priority' });
+    const before = recorder.events.length;
+    await client.call('orchestrator.release', { zoneId: zone.id });
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: Hand-off from Coder') === true, before);
+    expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
+  });
+
+  it('holds a hand-off to an agent paused for usage, saying why, and delivers it once the user wakes it', async () => {
+    const dataDir = tempDataDir();
+    const { daemon, client, recorder } = await flowDaemon(dataDir);
+    const { zone, a, b } = await twoAgents(client, recorder);
+    await client.call('settings.set', { usagePacing: true });
+    await client.call('zone.configure', { id: zone.id, priority: 'low' });
+    insertFakeSession(dataDir, { id: 'reader', hookToken: 'reader-token' });
+    await fetch(`http://127.0.0.1:${daemon.hookPort}/usage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer reader-token' },
+      body: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 96, resets_at: Date.now() / 1000 + 3600 } } }),
+    });
+    await client.call('orchestrator.usagePause', { sessionId: b.sessionId });
+    await untilAgent(recorder, b.sessionId, (agent) => agent.state === 'hibernated');
+    const edge = await client.call('flowEdge.create', { from: a.sessionId, to: b.sessionId });
+
+    await client.call('agent.answer', { sessionId: a.sessionId, text: 'Write the code' });
+
+    expect((await untilEdge(recorder, edge.id, (e) => e.held !== null)).held).toMatchObject({ reason: 'held: paused for usage, 5h at 96%, zone low priority' });
+    expect((await client.call('agent.list')).find((agent) => agent.sessionId === b.sessionId)?.state).toBe('hibernated');
+
+    // The user's Override wakes it, and what was held for its pause goes at once: this daemon has no periodic recheck.
+    const before = recorder.events.length;
+    await client.call('agent.resume', { sessionId: b.sessionId });
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: Hand-off from Coder') === true, before);
     expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
   });
 

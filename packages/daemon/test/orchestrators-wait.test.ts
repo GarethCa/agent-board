@@ -12,8 +12,8 @@ import type { Agent, AgentState, DaemonEvent } from '../src/protocol.ts';
 function host(agents = new Map<string, Agent>()) {
   const db = new DatabaseSync(':memory:');
   migrate(db);
-  /** Agents only their idle prompt left waiting. */
-  const idlePrompted = new Set<string>();
+  /** Agents that went waiting from idle, their turn ended: at their prompt. */
+  const waitsAtPrompt = new Set<string>();
   const add = (sessionId: string, fields: Partial<Agent>) =>
     agents.set(sessionId, {
       sessionId,
@@ -31,6 +31,7 @@ function host(agents = new Map<string, Agent>()) {
       unsent: null,
       untypedPrompt: null,
       lastMessage: null,
+      compactingSince: null,
       workFinishedAt: null,
       pullRequests: [],
       exitCode: null,
@@ -62,7 +63,7 @@ function host(agents = new Map<string, Agent>()) {
       pause: () => Promise.reject(new Error('not here')),
       finalMessage: () => undefined,
       orchestrateFacts: () => ({ off: false, depth: 0 }),
-      idlePrompted: (id) => idlePrompted.has(id),
+      waitsAtPrompt: (id) => waitsAtPrompt.has(id),
       clearFlag: (id) => agents.get(id)!,
       setStatus: () => {
         throw new Error('not here');
@@ -83,9 +84,9 @@ function host(agents = new Map<string, Agent>()) {
   });
   const handlers = orchestrators.handlers<BoardConnection>();
   /** The worker shows `state`, as the daemon would tell every client. */
-  const update = (state: AgentState, fields: Partial<Agent> = {}, sessionId = 'worker', idlePrompt = false) => {
-    if (idlePrompt) idlePrompted.add(sessionId);
-    else idlePrompted.delete(sessionId);
+  const update = (state: AgentState, fields: Partial<Agent> = {}, sessionId = 'worker', atPrompt = false) => {
+    if (atPrompt) waitsAtPrompt.add(sessionId);
+    else waitsAtPrompt.delete(sessionId);
     add(sessionId, { ...agents.get(sessionId), state, ...fields });
     orchestrators.onEvent({ type: 'agent.updated', agent: agents.get(sessionId)! } as DaemonEvent);
   };
@@ -306,18 +307,26 @@ describe('crew events across a restart, a question, pull requests and a removal'
     const { update, heard, handlers } = host();
     const { cursor: start } = await heard('now');
     update('running');
-    // agent_needs_input: waiting, with no ask of the board's, and not its idle prompt.
+    // agent_needs_input during its turn: waiting, with no ask of the board's, and not at its prompt.
     update('waiting', { lastMessage: 'Which branch should I use?' });
     expect((await heard(start)).lines).toEqual(['worker needs-you Which branch should I use?']);
     expect(await handlers['orchestrator.wait']({ token: 'me-token', sessionIds: ['worker'], states: ['waiting'], timeoutMs: 30 }, {})).toMatchObject({
       timedOut: false,
     });
 
-    // From idle too: a question is no idle prompt.
+    // After its turn ended, Claude's word of another session asks nothing of this one: it waits at its prompt.
     const { cursor: next } = await heard('now');
     update('idle');
-    update('waiting', { lastMessage: 'Still there?' });
-    expect((await heard(next)).lines).toEqual(['worker needs-you Still there?']);
+    update('waiting', { lastMessage: 'All done.' }, 'worker', true);
+    expect((await heard(next)).lines).toEqual([]);
+    expect(await handlers['orchestrator.wait']({ token: 'me-token', sessionIds: ['worker'], states: ['idle'], timeoutMs: 30 }, {})).toMatchObject({
+      timedOut: false,
+    });
+
+    // A dialog of Claude's own over that prompt: it waits for you now, though its state stays the same.
+    const { cursor: dialog } = await heard('now');
+    update('waiting', { lastMessage: 'Auto mode has a classifier billing notice to acknowledge' });
+    expect((await heard(dialog)).lines).toEqual(['worker needs-you Auto mode has a classifier billing notice to acknowledge']);
   });
 
   it('takes what its first read finds as known, and hears an open pull request new since, never a merged one', async () => {

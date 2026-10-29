@@ -5,6 +5,7 @@ import type {
   AgentStart,
   AgentStartEndedEvent,
   AgentStartingEvent,
+  AgentTranscriptChangedEvent,
   AgentUpdatedEvent,
   BoardItem,
   BuildInfo,
@@ -19,6 +20,8 @@ import type {
   CreateFlowEdgeParams,
   DaemonSettings,
   SettingsUpdatedEvent,
+  UsageReading,
+  UsageUpdatedEvent,
   FlowCommandApproval,
   FlowEdge,
   FlowEdgeRemovedEvent,
@@ -635,6 +638,10 @@ export const ORCHESTRATOR_IPC = {
   activity: 'orchestrator:activity',
   /** main → renderer: `(OrchestratorActivityEvent)` for every line added to the activity log. */
   logged: 'orchestrator:logged',
+  usage: 'orchestrator:usage',
+  /** main → renderer: `(UsageUpdatedEvent)` for each newer usage reading, and when it goes stale. */
+  usageChanged: 'orchestrator:usage-changed',
+  release: 'orchestrator:release',
 } as const;
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
@@ -643,6 +650,12 @@ export interface OrchestratorsApi {
   activity(orchestratorId: string, before?: number): Promise<OrchestratorActivity[]>;
   /** Calls `listener` with each line added to the log. Returns the unsubscribe function. */
   onLogged(listener: (event: OrchestratorActivityEvent) => void): () => void;
+  /** The newest plan usage reading. */
+  usage(): Promise<UsageReading>;
+  /** Calls `listener` with each newer usage reading, and when it goes stale. Returns the unsubscribe function. */
+  onUsage(listener: (event: UsageUpdatedEvent) => void): () => void;
+  /** The user's Override of a zone's budget hold: lifts it. */
+  release(zoneId: string): Promise<Zone>;
 }
 
 /** The board item IPC channels between the preload and main. */
@@ -757,6 +770,8 @@ export const AGENT_IPC = {
   openRequested: 'agent:openRequested',
   /** main → renderer: `(AgentChange)` for every agent change. */
   changed: 'agent:changed',
+  /** main → renderer: `(AgentTranscriptChangedEvent)` when the transcript of an agent a chat reads is written to. */
+  transcriptChanged: 'agent:transcriptChanged',
   /** main → renderer: `(AgentStartChange)` for every change of an agent's start. */
   startChanged: 'agent:startChanged',
 } as const;
@@ -787,7 +802,7 @@ export interface AgentsApi {
    * Sends `text` to the agent as the user's next message, its line breaks kept; `paste` pastes it even as one line, as
    * a terminal pastes a dropped file's path.
    */
-  answer(sessionId: string, text: string, paste?: boolean): Promise<void>;
+  answer(sessionId: string, text: string, paste?: boolean): Promise<{ queued: boolean }>;
   /**
    * Keeps a PNG, JPEG, GIF or WebP of at most 20 MB, pasted into the composer, where an agent can read it, and resolves
    * with its path. Rejects for anything else.
@@ -856,6 +871,11 @@ export interface AgentsApi {
   move(sessionId: string, move: TileMove): Promise<Agent>;
   /** Calls `listener` whenever an agent changes or is deleted. Returns the unsubscribe function. */
   onChanged(listener: (change: AgentChange) => void): () => void;
+  /**
+   * Calls `listener` whenever the transcript of an agent whose conversation was read (`transcript`) is written to.
+   * Returns the unsubscribe function.
+   */
+  onTranscriptChanged(listener: (change: AgentTranscriptChangedEvent) => void): () => void;
   /** Calls `listener` whenever an agent's start changes or is over. Returns the unsubscribe function. */
   onStartChanged(listener: (change: AgentStartChange) => void): () => void;
   /**
@@ -1382,6 +1402,7 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   ASK_IPC.plans,
   ASK_IPC.unsavedEdits,
   ORCHESTRATOR_IPC.activity,
+  ORCHESTRATOR_IPC.usage,
   AGENT_IPC.list,
   AGENT_IPC.starts,
   SHELL_IPC.list,

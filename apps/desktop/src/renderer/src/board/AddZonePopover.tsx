@@ -13,7 +13,7 @@ import {
   type ZoneLayout,
 } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
-import { AnchoredPopover, Button, ErrorText, Hint, Input, Kbd, Select, SwatchRadio, Tabs } from '../ui';
+import { AnchoredPopover, Button, Checkbox, ErrorText, Hint, Input, Kbd, Select, SwatchRadio, Tabs } from '../ui';
 import type { ZoneSource } from '../chrome/zones';
 import { tildify } from '../session/live-folder';
 import { useHomeDir } from '../session/SessionDetails';
@@ -75,6 +75,7 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
   const [color, setColor] = useState(initialColor);
   /** What a Linear team's zone is bound to: '' for nothing, `folder:<path>`, or `github:<owner/repo>`. */
   const [bindTo, setBindTo] = useState('');
+  const [trustsFolder, setTrustsFolder] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
   const [repos, setRepos] = useState<Loaded<GitHubRepoSource>>({ status: 'loading' });
@@ -155,7 +156,13 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
             : '';
   const name = (typedName ?? defaultName).trim();
 
-  const look = (): NewZoneParams => ({ ...layout, name: name || undefined, color });
+  // Offered for a repo or folder in git: a group, or a folder outside git (which becomes one), has no repo to trust.
+  const bound =
+    picked !== undefined &&
+    picked.source !== 'empty' &&
+    (picked.source !== 'linear' || bindTo !== '') &&
+    (picked.source !== 'folder' || picked.folder.repoRoot !== null);
+  const look = (): NewZoneParams => ({ ...layout, name: name || undefined, color, ...(bound && trustsFolder ? { trustsFolder } : {}) });
   const add = async (): Promise<Zone | undefined> => {
     if (picked === undefined) return undefined;
     const addFolder = async (path: string, params: NewZoneParams) => {
@@ -496,6 +503,17 @@ export function AddZonePopover({ layout, source: initialSource, placement, outli
             </Hint>
           )}
         </div>
+
+        {bound && (
+          <div className="add-zone-trust">
+            <Checkbox
+              label="Trust this zone's folder for new agents"
+              checked={trustsFolder}
+              onChange={(event) => setTrustsFolder(event.target.checked)}
+            />
+            <Hint>Agents here start without Claude&apos;s trust prompt, in this folder and the worktrees made under it.</Hint>
+          </div>
+        )}
 
         <div className="add-zone-foot">
           <label className="add-zone-name">

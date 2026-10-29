@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { migrate } from '../src/migrate.ts';
-import { COMPACT_WINDOW_RANGE } from '../src/protocol.ts';
+import { COMPACT_WINDOW_RANGE, DEFAULT_USAGE_THRESHOLDS } from '../src/protocol.ts';
 import { createSettings } from '../src/settings.ts';
 
 function setup() {
@@ -21,6 +21,24 @@ describe('the spacing new zones take', () => {
     expect(settings.get().arrangeSpacing).toBe('compact');
     expect(() => set({ arrangeSpacing: 'huge' })).toThrow(/arrangeSpacing must be one of compact, normal, roomy/);
     expect(settings.get().arrangeSpacing).toBe('compact');
+  });
+});
+
+describe('usage pacing', () => {
+  it('is off until the user turns it on, with the default thresholds', () => {
+    const { settings, set } = setup();
+    expect(settings.get()).toMatchObject({ usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS });
+    set({ usagePacing: true });
+    expect(settings.get().usagePacing).toBe(true);
+  });
+
+  it('keeps the thresholds given, each a whole percentage from 1 to 100, over the others', () => {
+    const { settings, set } = setup();
+    set({ usageThresholds: { fiveHourOnlyHigh: 70 } });
+    expect(settings.get().usageThresholds).toEqual({ ...DEFAULT_USAGE_THRESHOLDS, fiveHourOnlyHigh: 70 });
+    expect(() => set({ usageThresholds: { fiveHourPauseLow: 101 } })).toThrow(/whole percentage from 1 to 100/);
+    expect(() => set({ usageThresholds: { daily: 50 } })).toThrow(/usageThresholds has no daily/);
+    expect(settings.get().usageThresholds).toEqual({ ...DEFAULT_USAGE_THRESHOLDS, fiveHourOnlyHigh: 70 });
   });
 });
 

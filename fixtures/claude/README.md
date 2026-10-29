@@ -9,6 +9,17 @@ For the chat view's Claude adapter (`packages/daemon/src/transcript-adapters.ts`
 - `transcripts/<session-id>/subagents/agent-<id>.jsonl` and `.meta.json`: the Agent call's subagent, as Claude Code
   keeps it beside the session, with the call that started it in `toolUseId`.
 
+- `transcripts/queued-mid-turn.jsonl`: a turn into which messages came while it ran, each a `queued_command` attachment
+  where Claude Code took it, at the step after a tool call: one the user typed (`commandMode: "prompt"`), a subagent's
+  report (`isMeta`, `origin.kind: "peer"`) and a background task's notification (`commandMode:
+  "task-notification"`). Claude Code writes no `user` entry for any of them.
+- `transcripts/background-turn.jsonl`: in Claude Code 2.1.312's shapes, a turn that leaves a command in the background
+  and ends (its `turn_duration`); hours later, the command's notification starting a turn of its own (a `user` entry
+  with `origin.kind: "task-notification"`, after its queue operations), thinking and a reply; then a run of two calls,
+  the second taking five minutes, thinking, and a call the user turns down (its result an error, then the interrupt).
+  Before two of its thinking lines is a `deferred_tools_record` attachment, stamped a few milliseconds from it (one
+  after it), as Claude Code 2.1.312 writes them.
+
 They are **hand-written** in the entry shapes of real Claude Code 2.1.296 transcripts, not copied from one: real
 transcripts hold the user's prompts and code. IDs, paths and texts are made up and `usage` is trimmed.
 

@@ -138,7 +138,11 @@ describe('an agent flagging the user', () => {
     expect((await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId })).flag).toEqual(own);
   });
 
-  it('keeps its own flag beside a message never delivered behind a first prompt left unsent, and stands alone again once that is cleared', async () => {
+  /**
+   * An agent that flagged the user, whose first prompt was left unsent and a message queued behind it never delivered:
+   * its flags then stand one in place of another.
+   */
+  const unsentAndUndelivered = async () => {
     const clock = createFakeClock(new Date());
     // Its own line goes up; every Enter after it is lost, so its first prompt stays unsent.
     const setup = await flagDaemon({ clock, noSessionStart: true, loseEnters: 10, loseEntersAfter: 1, submitConfirmMs: 100 });
@@ -153,8 +157,25 @@ describe('an agent flagging the user', () => {
     await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId });
     const lost = await untilAgent(setup.recorder, agent.sessionId, (a) => a.undelivered.length > 0);
     expect(lost.unsent).toBe('Its first prompt');
-    expect(lost.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/not delivered.*Also: Which docs\?$/) });
+    expect(lost.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/not delivered.*Also: .*not sent.*Also: Which docs\?$/) });
+    return { setup, agent, own };
+  };
 
+  it('keeps its own flag beside a message never delivered behind a first prompt left unsent, and stands alone again once both are cleared', async () => {
+    const { setup, agent, own } = await unsentAndUndelivered();
+
+    // Its first prompt still sits unsent: that flag stands again, carrying its own, until it is cleared too.
+    const cleared = await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId });
+    expect(cleared.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^Its first prompt was typed at its prompt but not sent .*Also: Which docs\?$/) });
+    expect((await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId })).flag).toEqual(own);
+  });
+
+  it('never puts back a flag for a first prompt no longer unsent, whichever is cleared first', async () => {
+    const { setup, agent, own } = await unsentAndUndelivered();
+
+    // Nothing sits unsent now: what was never delivered says so alone, beside its own.
+    const cleared = await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId });
+    expect(cleared).toMatchObject({ unsent: null, flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile\. Also: Which docs\?$/) } });
     expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toEqual(own);
   });
 

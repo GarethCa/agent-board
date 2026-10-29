@@ -74,3 +74,19 @@ makes `daemon.stop` ask, and `daemon.health`'s `liveSessions` leaves it out. Shu
 Nothing brings it back after a restart: the pane shows the agent's saved screen, and Restart still works. A scheduled
 run or a flow hand-off to the ended agent ends its shell without asking: the user set that run up, and it needs the
 pane. Restarting from the board asks first if the shell is running something.
+
+**Upgrades**: an app shows nothing of a daemon from another build. The daemon outlives the app, so after
+an upgrade the new app may find the old build's daemon still running, and code from one build can't read another's
+state: the new board read fields the old daemon never sent, threw while rendering, and left its window blank, the offer
+to restart the daemon with it. So the board and every popped-out window first ask `daemon.health`, and on another build
+show only that offer, until the restart. `agent-board restart-daemon --data-dir <dir>` restarts the daemon as its own
+build for the app's updater: it stops the old daemon with force, so its sessions are stopped by restart, starts its
+own, and resumes each agent and shell pane that stop ended (not those stopped earlier), as Resume all would, typing
+nothing. Running it is the user asking for the resume, as pressing Resume all is. It says what it restarted and resumed,
+and names the agents it cut off mid-turn, whose turn is lost. It resumes nothing when another build's daemon answers in
+its place. It starts the daemon from the home folder, with the caller's environment less every `AGENT_BOARD_*`, pnpm's script
+variables, the Claude Code session it may run in, and `node_modules/.bin` on PATH, which a daemon would otherwise hand
+all its sessions. It refuses to run inside a session of the daemon it restarts (that daemon an ancestor of it), as
+stopping the daemon would end it first, and when it can't tell (no `ps`, or Windows). `pnpm update:app` runs
+it between installing the app and opening it, unless told `--no-restart`, or run inside such a session (or unsure of it), where it leaves
+the daemon running and the app offers the restart.

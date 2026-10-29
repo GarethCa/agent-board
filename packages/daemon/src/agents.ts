@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { isAbsolute, join, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { PullRequest } from '@agent-board/tracker';
 import { createAgentRecordStore, guessedDocOf, recordHandlers, type AgentRecordStore } from './agent-records.ts';
@@ -61,11 +62,12 @@ import {
   type TranscriptChunk,
   waitsForYou,
 } from './protocol.ts';
-import { repoZoneOf } from './repo-zone.ts';
+import { folderPath, repoZoneOf } from './repo-zone.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { RunStart, ScheduleHost } from './schedules.ts';
 import type { SessionHost } from './sessions.ts';
 import { createBackgroundCommands } from './background-commands.ts';
+import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript } from './quiet-turns.ts';
 import { createSubagentStore, subagentsAfterExit } from './subagents.ts';
 import { oneLine, submitsDraft } from './terminal-input.ts';
 import { isWorking, statusAfterTurn } from './turn-status.ts';
@@ -86,9 +88,15 @@ const FIRST_PROMPT_STALL_MS = 60_000;
  */
 const STALLED_FIRST_PROMPT =
   "its session never said it was up, so its first prompt isn't typed and messages to it wait: answer its terminal, or press Send on its tile. Its terminal shows: ";
+/** The flag an agent with no first prompt raises once its session is given up on saying it is up (`STALLED_FIRST_PROMPT`). */
+const STALLED_START =
+  "its session never said it was up, so messages to it wait: answer what its terminal shows, or type at its prompt. Its terminal shows: ";
 
 /** How long after output a starting agent's screen is read for Claude's trust screen or its prompt, at most. */
 const PROBE_MS = 250;
+
+/** How long a trust screen answered by its zone's setting may take to leave the screen before the user is asked. */
+const TRUST_GONE_WAIT_MS = 3_000;
 
 /** The agent's hooks after which its branch is read: not the ones before a tool runs or that only notify. */
 const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
@@ -104,6 +112,9 @@ const TURN_HOOKS: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'PreToolUs
 
 /** The hooks that end the agent's own turn: by its `Stop`, failed (a rate limit too), or interrupted (Codex's). */
 const TURN_ENDS: ReadonlySet<unknown> = new Set(['Stop', 'StopFailure', 'Interrupt']);
+
+/** The states of an agent at work in a turn, which only a hook (or an interrupt) ends. */
+const AT_WORK: ReadonlySet<SessionState> = new Set(['running', 'thinking']);
 
 export interface AgentHostOptions {
   db: DatabaseSync;
@@ -173,6 +184,8 @@ export interface AgentHostOptions {
   onTurnBoundary?(sessionId: string): void;
   /** An agent's branch changed in its worktree: the pull requests of the new one are wanted. */
   onBranchChanged?(sessionId: string): void;
+  /** Hears an agent paused for usage started again: what was held for its pause can go now. */
+  onWoken?(sessionId: string): void;
   /** Hears an agent about to be deleted, so what goes with it can say so first: its flow edges. */
   onRemoving(sessionId: string): void;
   /** The questions and plans agents wait on the user for: while one does, it is `waiting`. */
@@ -283,8 +296,8 @@ export interface AgentHost {
    * `MAX_STATUS_LENGTH`, and a progress 0-100 or null.
    */
   setStatus(sessionId: string, summary: string, progress: number | null, done?: boolean, setBy?: string | null): Agent;
-  /** Whether only its idle prompt left the live agent waiting, asking nothing (`createHookStates`'s). */
-  idlePrompted(sessionId: string): boolean;
+  /** Whether the live agent went waiting after its turn ended, so sits at its prompt asking nothing (`createHookStates`'s). */
+  waitsAtPrompt(sessionId: string): boolean;
   /** Notes that the agent says its work is finished (`Agent.workFinishedAt`), until its next prompt. */
   markFinished(sessionId: string): Agent;
   /** Lets the agent orchestrate in `scope`, or stops it with null. */
@@ -329,7 +342,7 @@ export interface AgentHost {
    * says who asked, for the log. Refuses one mid-turn, waiting on you, with the user typing or a message never sent
    * at its prompt, or with a message being typed or sent to it.
    */
-  pause(sessionId: string, by: string | null, why: string): Promise<Agent>;
+  pause(sessionId: string, by: string | null, why: string, reason?: string): Promise<Agent>;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
@@ -471,6 +484,8 @@ export interface AgentRow extends PositionColumns {
   master: number;
   /** 1 for an agent started in a group's folder of the user's, outside git (migration 0065): `Agent.plainFolder`. */
   plain_folder: number;
+  /** Whether its zone's setting answered Claude's trust screen for it (`Agent.trustedByZone`). */
+  trusted_by_zone: number;
   /** A reviewer's: the branch it reviews, and the commit it checked out detached. Null for any other agent. */
   reviews_branch: string | null;
   reviews_head: string | null;
@@ -482,6 +497,7 @@ export interface AgentRow extends PositionColumns {
   /** When it was paused, and the session id of the orchestrator that paused it (null for the user): `Agent.hibernated`. */
   hibernated_at: string | null;
   hibernated_by: string | null;
+  hibernated_reason: string | null;
   /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
   work_finished_at: string | null;
   /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
@@ -516,6 +532,7 @@ export interface ZoneRow {
   clone_repo: string | null;
   folder: string;
   codex_bypass_hook_trust: number;
+  trusts_folder: number;
   board_mcp: number;
   agents_orchestrate: number;
   tracker_provider: string | null;
@@ -537,11 +554,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectAll = db.prepare(`${select} ORDER BY a.rowid`);
   const selectOne = db.prepare(`${select} WHERE a.session_id = ?`);
   const zoneColumns =
-    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
+    'id, name, repo_root, folder, default_repo, group_folder, codex_bypass_hook_trust, trusts_folder, board_mcp, agents_orchestrate, tracker_provider, clone_repo, created_at';
   const selectZone = db.prepare(`SELECT ${zoneColumns} FROM zones WHERE id = ?`);
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
+  const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
@@ -562,7 +580,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     'SELECT harness_session_id, transcript_path, ended_at FROM agent_conversations WHERE session_id = ? ORDER BY id',
   );
   const updateTranscript = db.prepare('UPDATE agents SET transcript_path = ? WHERE session_id = ?');
-  const transcripts = createTranscriptReader();
+  const transcripts = createTranscriptReader((sessionId) => options.broadcast({ type: 'agent.transcriptChanged', sessionId }));
   const updateIssue = db.prepare(
     'UPDATE agents SET issue_provider = ?, issue_id = ?, issue_title = ?, issue_url = ? WHERE session_id = ?',
   );
@@ -585,17 +603,92 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   });
   /** What times the agent host's own waits: the system clock by default. */
   const clock = options.clock ?? systemClock;
+  /** A flag as kept (`flags`): `Agent.flag` without who it reaches, which `forUser` decides. */
+  type StoredFlag = Omit<AgentFlag, 'to'> & { forUser?: boolean; keepsEnded?: boolean };
   /**
    * Each live agent's flag (`Agent.flag`), without who it reaches (`forUser` when only the user can answer it, never its
    * orchestrator): in memory, as its session ending clears it, but for one that outlives it (`keepsEnded`: what was
    * never delivered to it, which only the user resends).
    */
-  const flags = new Map<string, Omit<AgentFlag, 'to'> & { forUser?: boolean; keepsEnded?: boolean }>();
+  const flags = new Map<string, StoredFlag>();
+  /**
+   * A flag that stands in place of the one the agent had (`replaced`), its reason going on in this one's
+   * (`base`, then `. Also: <its reason>`), to stand again once this one's condition is over: what was never delivered,
+   * and what sits unsent at its prompt. Each may stand in place of the other, so each forgets the other's once it ends.
+   */
+  interface Folding {
+    id: number;
+    base: string;
+    at: string;
+    keepsEnded: boolean;
+    replaced?: StoredFlag;
+  }
+  /** The flag `folding` shows: its own reason, then the one it stands in place of. */
+  const foldedFlag = (folding: Folding): StoredFlag => {
+    const also = folding.replaced === undefined ? '' : `. Also: ${folding.replaced.reason}`;
+    const reason = `${folding.base}${also}`.slice(0, MAX_FLAG_LENGTH);
+    return { id: folding.id, reason, at: folding.at, via: null, forUser: true, ...(folding.keepsEnded ? { keepsEnded: true } : {}) };
+  };
+  /** The agent's foldings now: what was never delivered to it, and what sits unsent at its prompt. */
+  const foldingsOf = (sessionId: string): Folding[] =>
+    [undelivered.get(sessionId), notSentFlags.get(sessionId)].filter((folding): folding is Folding => folding !== undefined);
+  /**
+   * Shows `folding` as it is now, if it stands, and in every other folding that stands in place of it, so none keeps
+   * an old copy of it.
+   */
+  const refreshFolding = (sessionId: string, folding: Folding, seen = new Set<number>()) => {
+    if (seen.has(folding.id)) return;
+    seen.add(folding.id);
+    const shown = foldedFlag(folding);
+    if (flags.get(sessionId)?.id === folding.id) flags.set(sessionId, shown);
+    for (const other of foldingsOf(sessionId)) {
+      if (other !== folding && other.replaced?.id === folding.id) {
+        other.replaced = shown;
+        refreshFolding(sessionId, other, seen);
+      }
+    }
+  };
+  /**
+   * The flag `goneId` is over: a folding that stood in place of it stands in place of `instead` now (what that one stood
+   * in place of), or of nothing.
+   */
+  const unfold = (sessionId: string, goneId: number, instead: StoredFlag | undefined) => {
+    for (const folding of foldingsOf(sessionId)) {
+      if (folding.replaced?.id !== goneId) continue;
+      if (instead === undefined) delete folding.replaced;
+      else folding.replaced = instead;
+      refreshFolding(sessionId, folding);
+    }
+  };
+  /**
+   * Raises `base` as a folding's flag, in place of `before` (the folding it was, if any): a flag the agent already had
+   * goes on in its reason (`Folding`). One whose `before` the other folding stands in place of stays under it, where
+   * that one shows it (the caller's `unfold`): on top, each would stand in place of the other.
+   */
+  const raiseFolding = (sessionId: string, before: Folding | undefined, base: string, keepsEnded: boolean): Folding => {
+    const standing = flags.get(sessionId);
+    const buried = before !== undefined && foldingsOf(sessionId).some((other) => other !== before && other.replaced?.id === before.id);
+    const replaced = standing !== undefined && standing.id !== before?.id && !buried ? standing : before?.replaced;
+    const folding: Folding = { id: ++lastFlagId, base, at: new Date().toISOString(), keepsEnded, ...(replaced === undefined ? {} : { replaced }) };
+    if (!buried) flags.set(sessionId, foldedFlag(folding));
+    return folding;
+  };
+  /**
+   * Takes down `folding`, whose condition is over: the flag it stood in place of stands again while the agent is live,
+   * if it still stood, and a folding standing in place of it stands in place of that one now (`unfold`).
+   */
+  const lowerFolding = (sessionId: string, folding: Folding) => {
+    if (flags.get(sessionId)?.id === folding.id) {
+      if (folding.replaced !== undefined && getRow(sessionId)?.ended_at === null) flags.set(sessionId, folding.replaced);
+      else flags.delete(sessionId);
+    }
+    unfold(sessionId, folding.id, folding.replaced);
+  };
   /**
    * Per agent, what was sent to it before its session was up and never typed (`Agent.undelivered`), oldest first, and
-   * the flag that says so: kept, in memory, until the user resends or clears it.
+   * the flag that says so (`Folding`): kept, in memory, until the user resends or clears it.
    */
-  const undelivered = new Map<string, { items: UndeliveredMessage[]; flagId: number; replaced?: Omit<AgentFlag, 'to'> & { forUser?: boolean } }>();
+  const undelivered = new Map<string, Folding & { items: UndeliveredMessage[] }>();
   /**
    * Hands back what was queued for the agent and never typed: kept for Resend, and flagged to the user. A flag the agent
    * already had (its own words, or why its start stalled) is kept: its reason goes on in this flag's, and it stands
@@ -606,14 +699,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     options.log(`${what} sent to ${sessionId} before it was up was not delivered: ${reason}`);
     const before = undelivered.get(sessionId);
     const items = [...(before?.items ?? []), { what, text, reason }];
-    const standing = flags.get(sessionId);
-    const replaced = standing !== undefined && standing.id !== before?.flagId ? standing : before?.replaced;
-    const flagId = ++lastFlagId;
-    undelivered.set(sessionId, { items, flagId, ...(replaced === undefined ? {} : { replaced }) });
     const lost = items.length === 1 ? `${what} sent before it was up` : `${items.length} messages sent before it was up`;
-    const also = replaced === undefined ? '' : `. Also: ${replaced.reason}`;
-    const reasonText = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${reason}): Resend on its tile${also}`;
-    flags.set(sessionId, { id: flagId, reason: reasonText.slice(0, MAX_FLAG_LENGTH), at: new Date().toISOString(), via: null, forUser: true, keepsEnded: true });
+    const base = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${reason}): Resend on its tile`;
+    const folding = raiseFolding(sessionId, before, base, true);
+    undelivered.set(sessionId, { ...folding, items });
+    if (before !== undefined) unfold(sessionId, before.id, foldedFlag(undelivered.get(sessionId)!));
     announce(sessionId);
   };
   /**
@@ -624,42 +714,60 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const kept = undelivered.get(sessionId);
     if (kept === undefined) return [];
     undelivered.delete(sessionId);
-    if (flags.get(sessionId)?.id === kept.flagId) {
-      if (kept.replaced !== undefined && getRow(sessionId)?.ended_at === null) flags.set(sessionId, kept.replaced);
-      else flags.delete(sessionId);
-    }
+    lowerFolding(sessionId, kept);
     return kept.items;
   };
   /**
    * Takes down the flag `flagId` a waiting first prompt raised, if it still stands, and forgets it as the flag a
-   * not-delivered one holds to put back (`keepUndelivered`): what it said is over.
+   * folding holds to put back (`unfold`): what it said is over.
    */
   const takeDownFirstPromptFlag = (sessionId: string, flagId: number | null) => {
     if (flagId === null) return;
     if (flags.get(sessionId)?.id === flagId) flags.delete(sessionId);
-    const kept = undelivered.get(sessionId);
-    if (kept?.replaced?.id === flagId) delete kept.replaced;
+    unfold(sessionId, flagId, undefined);
   };
   /** The last flag's id: each new one is the next. */
   let lastFlagId = 0;
+  /** Per agent, the flag that says what was typed at its prompt was never sent (`flagNotSent`, a `Folding`). */
+  const notSentFlags = new Map<string, Folding>();
   /**
-   * Per agent launched with a first prompt not yet typed: the prompt, its harness, what settles whether to type it
+   * Tells the user that `what` was typed at the agent's prompt and given up on, and `why`: only their Send or Clear
+   * (in its terminal, `inTerminal`, when they typed there) moves it on. A flag the agent already had is kept: its
+   * reason goes on in this flag's, and it stands again once the message is sent or cleared, unless it has gone
+   * meanwhile. With no `what`, takes this flag down: the prompt holds nothing unsent now.
+   */
+  const flagNotSent = (sessionId: string, what?: string, why?: string, inTerminal = false) => {
+    const before = notSentFlags.get(sessionId);
+    if (what === undefined) {
+      if (before === undefined) return;
+      notSentFlags.delete(sessionId);
+      lowerFolding(sessionId, before);
+      return;
+    }
+    const where = inTerminal ? 'send or clear it in its terminal' : 'Send or Clear it on its tile';
+    const folding = raiseFolding(sessionId, before, `${what} was typed at its prompt but not sent (${why}): ${where}`, false);
+    notSentFlags.set(sessionId, folding);
+    if (before !== undefined) unfold(sessionId, before.id, foldedFlag(folding));
+  };
+  /**
+   * Per agent launched whose session isn't up yet: its first prompt not yet typed, if it has one, its harness, what settles whether to type it
    * (true once its session is up: Claude's `SessionStart`, or its prompt seen on its screen once it stalled or its
    * trust screen was answered; Codex's composer drawn up (`codexComposerUp`); or on the user's Send; false once that
    * session ends or the agent is deleted), whether its session has been given up on saying it is up (`stalled`): its
    * tile then offers the prompt to send, whether a Claude agent's screen shows Claude's trust screen (`trust`), or did
-   * (`trusted`), whether a Codex agent's screen is watched for its composer (`watchScreen`), and the flag it raised
+   * (`trusted`), whether its zone's setting has tried to answer that screen (`zoneTried`: once, then the user's flag), whether a Codex agent's screen is watched for its composer (`watchScreen`), and the flag it raised
    * (`flagId`), which asks for a look.
    */
   const firstPrompts = new Map<
     string,
     {
-      prompt: string;
+      prompt: string | undefined;
       harness: Harness;
       settle: (ready: boolean) => void;
       stalled: boolean;
       trust: boolean;
       trusted: boolean;
+      zoneTried: boolean;
       flagId: number | null;
       cancel: () => void;
       watchScreen: boolean;
@@ -687,6 +795,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     entry.flagId = ++lastFlagId;
     flags.set(sessionId, { id: entry.flagId, reason: reason.slice(0, MAX_FLAG_LENGTH), at: new Date().toISOString(), via: null, forUser });
   };
+  /** The flag the agent whose session never said it was up raises, with what its terminal shows (`lines`). */
+  const stalledFlag = (entry: FirstPrompt, lines: readonly string[]) =>
+    `${entry.prompt === undefined ? STALLED_START : STALLED_FIRST_PROMPT}${screenTail(lines) || 'nothing'}`;
   /** Takes down the flag the agent's waiting first prompt raised, if it is still up. */
   const unflagFirstPrompt = (sessionId: string, entry: FirstPrompt) => {
     takeDownFirstPromptFlag(sessionId, entry.flagId);
@@ -710,7 +821,13 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (entry.harness !== 'claude') return { screen: { kind: 'other' } as StartupScreen, lines };
     const screen = readStartupScreen(lines);
     if (screen.kind === 'trust') {
-      if (entry.trust) return { screen, lines };
+      // Its zone's setting is answering it, or the user's flag is up already.
+      if (entry.trust || trusting.has(sessionId)) return { screen, lines };
+      if (!entry.zoneTried && zoneTrusts(sessionId)) {
+        entry.zoneTried = true;
+        if (await trustByZone(sessionId, entry)) return { screen, lines };
+        if (firstPrompts.get(sessionId) !== entry) return undefined;
+      }
       entry.trust = true;
       const row = getRow(sessionId);
       options.log(`${sessionId} shows Claude's trust screen: its first prompt waits for the user to answer it`);
@@ -729,7 +846,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     }
     // Given up on already, its trust screen answered, and still neither its prompt nor that screen: it asks for a look.
     if (entry.stalled && entry.trusted && entry.flagId === null && screen.kind === 'other') {
-      flagFirstPrompt(sessionId, entry, `${STALLED_FIRST_PROMPT}${screenTail(lines) || 'nothing'}`);
+      flagFirstPrompt(sessionId, entry, stalledFlag(entry, lines));
       announce(sessionId);
     }
     if (screen.kind === 'prompt' && (entry.stalled || stalling || entry.trusted)) {
@@ -738,8 +855,70 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     }
     return { screen, lines };
   };
-  /** Agents whose trust screen Trust folder is answering: a second click waits for none. */
+  /** Agents whose trust screen Trust folder, or their zone's setting, is answering: a second click waits for none. */
   const trusting = new Set<string>();
+  /** Whether `path` is `dir` or in it. */
+  const inside = (path: string, dir: string) => {
+    const from = relative(dir, path);
+    return from === '' || (!from.startsWith('..') && !isAbsolute(from));
+  };
+  /**
+   * Whether the agent's zone trusts its folder for new agents (`Zone.trustsFolder`) and the agent runs in it: in the
+   * zone's own folder or a worktree the app made (ADR-0007), never any other path.
+   */
+  const zoneTrusts = (sessionId: string): boolean => {
+    const row = getRow(sessionId);
+    const zone = row === undefined ? undefined : repoZone(row);
+    if (row === undefined || zone === undefined || zone.trusts_folder !== 1 || zone.repo_root === null || zone.repo_root !== row.repo_root) return false;
+    // The zone's own folder, or that folder in a worktree the app made for this agent (ADR-0007): no other path.
+    return (
+      inside(row.cwd, folderPath(zone.repo_root, zone.folder)) ||
+      (inside(row.worktree, options.worktreesDir) && inside(row.cwd, join(row.worktree, zone.folder)))
+    );
+  };
+  /**
+   * Answers the trust screen of the agent whose zone trusts its folder, as Trust folder would (`answerTrustScreen`),
+   * and records that its zone's setting did, for its tile. Resolves whether it did; false leaves it to the user's flag.
+   */
+  const trustByZone = async (sessionId: string, entry: FirstPrompt): Promise<boolean> => {
+    trusting.add(sessionId);
+    try {
+      const refused = await answerTrustScreen({
+        screen: () => sessions.screenLines(sessionId),
+        write: (data) => sessions.write(sessionId, data),
+        wait: (ms) => new Promise<void>((resolve) => void clock.setTimer(resolve, ms)),
+      });
+      if (refused === 'not-trust') return false;
+      if (refused === 'pointer') {
+        options.log(`${sessionId}'s zone trusts its folder, but its trust screen did not move to "Yes, I trust this folder": left to the user`);
+        return false;
+      }
+      // Answered: a read of its prompt from now on types the task, though no `SessionStart` has come.
+      if (firstPrompts.get(sessionId) === entry) entry.trusted = true;
+      // Claude may redraw a moment after Enter: held as answered until its screen leaves the trust screen, so a read
+      // meanwhile never flags the user for a screen the setting is answering. If it never leaves, the user's flag.
+      // Its first prompt settling meanwhile (its `SessionStart` came) is the screen gone.
+      let gone = false;
+      for (let waited = 0; ; waited += PROBE_MS) {
+        gone = firstPrompts.get(sessionId) !== entry || readStartupScreen((await sessions.screenLines(sessionId)) ?? []).kind !== 'trust';
+        if (gone || waited >= TRUST_GONE_WAIT_MS) break;
+        await new Promise<void>((resolve) => void clock.setTimer(resolve, PROBE_MS));
+      }
+      if (!gone) {
+        options.log(`${sessionId}'s trust screen is still up after its zone's setting answered it: left to the user`);
+        if (firstPrompts.get(sessionId) === entry) entry.trusted = false;
+        return false;
+      }
+      updateTrustedByZone.run(sessionId);
+      options.log(`trusted ${sessionId}'s folder by its zone's setting`);
+      announce(sessionId);
+      // Its prompt may have been drawn while held, its `SessionStart` not yet come: read it again, so it is typed.
+      probeSoon(sessionId);
+      return true;
+    } finally {
+      trusting.delete(sessionId);
+    }
+  };
   /** Per agent, a read of its screen due soon (`probeFirstPrompt`), once for all the output that comes meanwhile. */
   const probesDue = new Set<string>();
   const probeSoon = (sessionId: string) => {
@@ -759,13 +938,19 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const stallFirstPrompt = async (sessionId: string) => {
     const entry = firstPrompts.get(sessionId);
     if (entry === undefined || entry.stalled) return;
+    // Its trust screen is being answered: look again once that is done, so a hang after it still raises its flag.
+    if (trusting.has(sessionId)) return void clock.setTimer(() => stallSoon(sessionId), PROBE_MS);
     const shown = await probeFirstPrompt(sessionId, true);
     // Typed, or given up on by another read meanwhile.
     if (firstPrompts.get(sessionId) !== entry || entry.stalled) return;
     entry.stalled = true;
     if (entry.trust) return announce(sessionId);
-    options.log(`${sessionId}'s session never said it was up: its first prompt is not typed until it does, or the user sends it`);
-    flagFirstPrompt(sessionId, entry, `${STALLED_FIRST_PROMPT}${screenTail(shown?.lines ?? []) || 'nothing'}`);
+    options.log(
+      entry.prompt === undefined
+        ? `${sessionId}'s session never said it was up: nothing is typed at it until it does`
+        : `${sessionId}'s session never said it was up: its first prompt is not typed until it does, or the user sends it`,
+    );
+    flagFirstPrompt(sessionId, entry, stalledFlag(entry, shown?.lines ?? []));
     announce(sessionId);
   };
   const stallSoon = (sessionId: string) =>
@@ -794,10 +979,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     permissions,
     subagents,
     // Due until typed: a `SessionStart` landing as it is typed (its prompt, seen, typed it first) is still its start.
-    firstPromptDue: (sessionId): boolean => firstPrompts.has(sessionId) || deliveries.isTypingFirst(sessionId),
+    firstPromptDue: (sessionId): boolean => firstPrompts.get(sessionId)?.prompt !== undefined || deliveries.isTypingFirst(sessionId),
     upByScreen: (sessionId) => firstPrompts.get(sessionId)?.watchScreen === true,
     save: (row, state, next, always) => save(row, state, next, always),
     unsee: (sessionId) => updateSeen.run(0, sessionId),
+    log: (message) => options.log(message),
     clock: options.clock ?? systemClock,
     onCommand: (sessionId) => backgroundCommands.of(sessionId).length > 0,
     startingEnded(sessionId) {
@@ -833,10 +1019,51 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
     announce: (sessionId) => announce(sessionId),
     undelivered: (sessionId, what, text, reason) => keepUndelivered(sessionId, what, text, reason),
+    notSent: (sessionId, what, why, inTerminal) => flagNotSent(sessionId, what, why, inTerminal),
     log: options.log,
     // Its waits are the terminal's, in real time: never the schedules' clock, which tests drive by hand.
     submitConfirmMs: options.submitConfirmMs,
   });
+  /** Agents the net left waiting on a question since their last saved state: it says so once. */
+  const leftWaiting = new Set<string>();
+  /**
+   * The safety net under a lost `Stop`: a Claude agent at work with no hook and no output for `QUIET_TURN_MS` ended its
+   * turn unheard when its transcript says the turn ended (`turnEndedInTranscript`) and its screen shows Claude's prompt
+   * between turns (`showsIdlePrompt`). It moves to idle, as that `Stop` would have moved it, and the log says why; else
+   * the log says why not, and it is looked at again a spell later. Its final message is not handed on: no hook carried
+   * it. The quiet is timed from every state `save` gives it. One waiting on a question of its own (`questionUp`) is
+   * timed too: a notification that came with its `Stop` lost, or a dialog of Claude's closed with no hook, leaves it
+   * there with its turn over.
+   */
+  const quietTurns = createQuietTurns({ clock, check: (sessionId) => void endQuietTurn(sessionId) });
+  const endQuietTurn = async (sessionId: string) => {
+    const generation = quietTurns.generation(sessionId);
+    const row = getRow(sessionId);
+    // Moved off work some other way than `save` (its lifecycle's own state): nothing to time.
+    if (row === undefined || row.ended_at !== null || !(AT_WORK.has(row.state) || questionUp(row))) return quietTurns.stopped(sessionId);
+    if (permissions.prompts(sessionId).length > 0) return;
+    const quiet = `agent ${sessionId} was ${row.state} with no hook or output for ${QUIET_TURN_MS / 60_000} min`;
+    const [lines, ended] = await Promise.all([
+      sessions.screenLines(sessionId),
+      row.transcript_path === null ? undefined : readTranscriptTail(row.transcript_path).then(turnEndedInTranscript),
+    ]);
+    // A hook or output while they were read: it is at work after all.
+    const now = getRow(sessionId);
+    if (lines === null || quietTurns.generation(sessionId) !== generation || now?.state !== row.state) return;
+    const why =
+      ended === undefined ? 'its transcript says nothing of its turn' : !ended ? 'its transcript shows its turn under way' : !showsIdlePrompt(lines) ? "its screen shows no prompt of Claude's between turns" : undefined;
+    if (why !== undefined) {
+      // A question really up may stay so for hours: said once a hook, though it is looked at again, as a dialog closed in
+      // its terminal brings no hook to say so.
+      if (AT_WORK.has(row.state) || !leftWaiting.has(sessionId)) options.log(`${quiet}, but ${why}: left ${AT_WORK.has(row.state) ? 'at work' : 'waiting'}`);
+      if (!AT_WORK.has(row.state)) leftWaiting.add(sessionId);
+      return;
+    }
+    const as = AT_WORK.has(row.state) ? 'as the Stop it never sent would have' : 'nothing of its own up';
+    options.log(`${quiet}, its transcript says its turn ended and its screen shows Claude's prompt: moved to idle, ${as}`);
+    deliveries.turnEnded(sessionId, true);
+    save(now, 'idle', subagentsAfterExit(subagents.of(sessionId), 'idle', new Date()), true);
+  };
   const startupLines = createStartupLines(options.sessions, (sessionId) => hookStates.isStarting(sessionId), (sessionId) => announce(sessionId));
   const spawns = createAgentSpawns({
     ...options,
@@ -854,13 +1081,19 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const { promise: ready, resolve: settle } = Promise.withResolvers<boolean>();
       // One relaunched (woken, restarted) shows no `starting` to give up: it is given up on after as long.
       const cancel = (options.clock ?? systemClock).setTimer(() => stallSoon(sessionId), FIRST_PROMPT_STALL_MS);
-      firstPrompts.set(sessionId, { prompt, harness, settle, stalled: false, trust: false, trusted: false, flagId: null, cancel, watchScreen: harness === 'codex' });
+      firstPrompts.set(sessionId, { prompt, harness, settle, stalled: false, trust: false, trusted: false, zoneTried: false, flagId: null, cancel, watchScreen: harness === 'codex' });
       deliveries.firstPrompt(sessionId, prompt, ready);
     },
     watch: (...launched) => lifecycle.watchLaunched(...launched),
   });
   const lifecycle = createAgentLifecycle({
     ...options,
+    // What was held for its pause goes once its session is up: typed before, a hand-off is only busy.
+    onWoken: (sessionId) =>
+      void deliveries.untilUp(sessionId).then(
+        () => options.onWoken?.(sessionId),
+        (error: Error) => options.log(`could not hand ${sessionId} what was held for its pause: ${error.message}`),
+      ),
     getRow: (sessionId) => getRow(sessionId),
     get: (sessionId) => get(sessionId),
     requireAgent: (sessionId) => requireAgent(sessionId),
@@ -879,9 +1112,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         hookStates.relaunched(sessionId);
       },
       deleted(sessionId) {
+        quietTurns.stopped(sessionId);
+        leftWaiting.delete(sessionId);
         startupLines.forget(sessionId);
         spawns.forget(sessionId);
         settleFirstPrompt(sessionId, false);
+        notSentFlags.delete(sessionId);
         hookStates.deleted(sessionId);
       },
     },
@@ -959,7 +1195,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // and tell you again that it waits when it came back.
       state: shownState,
       notice: row.notice,
-      hibernated: isHibernated(row) ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by) } : null,
+      hibernated: isHibernated(row)
+        ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by), ...(row.hibernated_reason === null ? {} : { reason: row.hibernated_reason }) }
+        : null,
       earlierConversations: (selectConversations.all(row.session_id) as unknown as ConversationRow[]).map((each) => ({
         conversationId: each.harness_session_id,
         transcriptPath: each.transcript_path,
@@ -996,6 +1234,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       pushedPullRequests: [...options.pushedPullRequests(row.session_id)],
       recordedPullRequests: [...(options.recordedPullRequests?.(row.session_id) ?? [])],
       lastMessage: hookStates.lastMessage(row.session_id) ?? null,
+      compactingSince: hookStates.compactingSince(row.session_id) ?? null,
       finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
@@ -1017,6 +1256,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       unsent: live ? (deliveries.unsent(row.session_id) ?? null) : null,
       untypedPrompt: untypedPromptOf(row.session_id),
       trustFolder: live && firstPrompts.get(row.session_id)?.trust === true ? row.cwd : null,
+      trustedByZone: row.trusted_by_zone === 1,
       queuedUntilUp: live ? deliveries.queuedUntilUp(row.session_id) : 0,
       undelivered: undelivered.get(row.session_id)?.items ?? [],
     };
@@ -1025,7 +1265,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   /** The first prompt the agent's tile offers to send: one whose session never said it was up, but not on the trust screen. */
   const untypedPromptOf = (sessionId: string): string | null => {
     const entry = firstPrompts.get(sessionId);
-    return entry?.stalled === true && !entry.trust ? entry.prompt : null;
+    return entry?.stalled === true && !entry.trust ? (entry.prompt ?? null) : null;
   };
 
   const getRow = (sessionId: string) => selectOne.get(sessionId) as AgentRow | undefined;
@@ -1070,11 +1310,18 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   const requireAgent = (sessionId: string): Agent => toAgent(requireRow(sessionId));
 
+  /** Whether the live agent waits on a question or dialog of its own, in its turn: not at its prompt. */
+  const questionUp = (row: AgentRow) => row.state === 'waiting' && hookStates.promptNow(row) === 'moved-on';
+
   /**
    * Records the agent's new state and subagents and tells every client; unless `always`, only if either changed.
    * Subagent lists are compared by reference: the subagent functions return the same list when nothing changed.
    */
   const save = (row: AgentRow, state: SessionState, next: readonly Subagent[], always = false) => {
+    leftWaiting.delete(row.session_id);
+    // Every state given it, however it came (a hook, a decision on the board): at work, or on a question, its quiet starts now.
+    if (row.harness === 'claude' && (AT_WORK.has(state) || questionUp({ ...row, state }))) quietTurns.working(row.session_id);
+    else quietTurns.stopped(row.session_id);
     if (!always && state === row.state && next === subagents.of(row.session_id)) return;
     subagents.set(row.session_id, next);
     // A new state is a new ask, or work: either way what was seen is over.
@@ -1358,18 +1605,20 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     stop: lifecycle.stop,
 
-    pause(sessionId, by, why) {
+    pause(sessionId, by, why, reason) {
       const agent = requireAgent(sessionId);
       const row = getRow(sessionId)!;
+      // One not up yet with no first prompt and nothing queued loses nothing: its wait for its session is all it holds.
+      const notUp = deliveries.whyNotUp(sessionId);
+      const holdsNothing = notUp !== undefined && firstPrompts.get(sessionId)?.prompt === undefined && deliveries.queuedUntilUp(sessionId) === 0;
       const refusal =
         pauseRefusal(agent) ??
         (lifecycle.pausing(sessionId) === undefined ? undefined : 'it is already being paused') ??
         (deliveries.unsent(sessionId) === undefined ? undefined : 'a message typed at its prompt was never sent') ??
-        (deliveries.isNotUp(sessionId) ? "its session isn't up yet: its first prompt goes first" : undefined) ??
-        (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined) ??
+        (holdsNothing ? undefined : (notUp ?? (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined))) ??
         hookStates.whyNotReady(row, true);
       if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`);
-      return lifecycle.hibernate(sessionId, by, why);
+      return lifecycle.hibernate(sessionId, by, why, reason);
     },
 
     resume: lifecycle.resume,
@@ -1411,11 +1660,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     markSeen(sessionId) {
       const row = requireRow(sessionId);
-      // Claude's trust screen stays flagged until it is answered, and what was never delivered until it is resent or
-      // cleared: looking at either answers nothing.
+      // Claude's trust screen stays flagged until it is answered, what was never delivered until it is resent or
+      // cleared, and what sits unsent at its prompt until it is sent or cleared: looking at any answers nothing.
       const entry = firstPrompts.get(sessionId);
       const kept = flags.get(sessionId);
-      const stays = kept !== undefined && ((entry?.trust === true && kept.id === entry.flagId) || kept.keepsEnded === true);
+      const stays =
+        kept !== undefined && ((entry?.trust === true && kept.id === entry.flagId) || kept.keepsEnded === true || kept.id === notSentFlags.get(sessionId)?.id);
       const unflagged = stays ? false : flags.delete(sessionId);
       // Seen is the user having looked, whatever Needs you lists: a finished turn too, so listing those later shows it read.
       const seeing = row.seen === 0 && waitsForYou(toAgent(row), 'turns');
@@ -1473,7 +1723,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return agent;
     },
 
-    idlePrompted: (sessionId) => hookStates.idlePrompted(sessionId),
+    waitsAtPrompt: (sessionId) => hookStates.waitsAtPrompt(sessionId),
 
     markFinished(sessionId) {
       if (requireRow(sessionId).work_finished_at === null) updateFinished.run(new Date().toISOString(), sessionId);
@@ -1548,7 +1798,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // another hook, or a `SessionStart` after a compaction (which can come mid-turn), is of a turn the user began by
       // hand, which the prompt would be pasted into, left unsent.
       const started = row.harness === 'claude' && payload.hook_event_name === 'SessionStart' && payload.source !== 'compact';
-      if (payload.agent_id === undefined && started) settleFirstPrompt(sessionId, true);
+      // With no first prompt to paste into a turn begun by hand, any hook of its own says its session is up: but its
+      // `SessionEnd`, which says it is going.
+      const waiting = firstPrompts.get(sessionId);
+      const upWithout = waiting !== undefined && waiting.prompt === undefined && payload.hook_event_name !== 'SessionEnd';
+      if (payload.agent_id === undefined && (started || upWithout)) settleFirstPrompt(sessionId, true);
       // Codex fires `SessionStart` only with a prompt: one while its first is due is of a turn the user began by hand,
       // under which its composer stays drawn. Its screen is no longer watched: the task waits on its tile for Send.
       const handTyped = payload.hook_event_name === 'SessionStart' || payload.hook_event_name === 'UserPromptSubmit';
@@ -1558,6 +1812,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     onOutput(sessionId) {
       hookStates.outputSeen(sessionId);
+      quietTurns.activity(sessionId);
       if (firstPrompts.get(sessionId)?.watchScreen === true) composerWatch.outputSeen(sessionId);
       probeSoon(sessionId);
       // Its startup's lines, not its prompt as its first prompt is typed there.
@@ -1569,6 +1824,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
       hookStates.ended(session.id);
+      quietTurns.stopped(session.id);
       settleFirstPrompt(session.id, false);
       backgroundCommands.forget(session.id);
       // What it printed last, as it ended, is why its start failed.
@@ -1609,6 +1865,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     onShellChanged: lifecycle.onShellChanged,
 
     close: () => {
+      transcripts.close();
       backgroundCommands.close();
       lifecycle.close();
       permissions.close();

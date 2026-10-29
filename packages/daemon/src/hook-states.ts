@@ -1,11 +1,12 @@
 import { systemClock, type Clock } from './clock.ts';
-import { lastMessageAfterHook } from './claude-state.ts';
+import { compactingAfterHook, isOwnDialog, lastMessageAfterHook } from './claude-state.ts';
 import { stateAfterHook } from './harness-state.ts';
 import { stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
 import type { AgentState, Harness, SessionState, Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
-import { draftAfterInput } from './terminal-input.ts';
+import { draftAfterInput, oneLine } from './terminal-input.ts';
+import { cutText } from './text-cut.ts';
 
 /**
  * Hooks of a turn's work, which a turn interrupted mid-hook can still deliver after the interrupt. Until the next
@@ -59,6 +60,16 @@ interface HookStateOptions<Row extends HookStateRow> {
   recordFinal(sessionId: string, finalMessage: string): void;
   /** The agent's own turn ended with `finalMessage`, saved and announced: hands it off. */
   finished(sessionId: string, finalMessage: string): void;
+  /** Writes a line to the daemon's log: why an agent went waiting. */
+  log?(message: string): void;
+}
+
+/** What hook moved an agent on, for the log: its event, a notification's type, and its message cut short. */
+function hookCause(payload: Record<string, unknown>): string {
+  const type = typeof payload.notification_type === 'string' ? ` ${payload.notification_type}` : '';
+  const message = typeof payload.message === 'string' ? oneLine(payload.message) : '';
+  const said = message === '' ? '' : ` "${cutText(message, 120)}"`;
+  return `${String(payload.hook_event_name)}${type}${said}`;
 }
 
 /**
@@ -77,14 +88,17 @@ export function asksSomething(message: string | undefined): boolean {
 export function createHookStates<Row extends HookStateRow>(options: HookStateOptions<Row>) {
   const { permissions, subagents, save } = options;
   /**
-   * Agents whose `waiting` came from Claude's `idle_prompt` after their turn ended: they sit at their prompt, not on a
-   * question. A scheduled agent like that is waiting for its next run, not for you.
+   * Agents whose `waiting` came after their turn ended, from `idle` (Claude's `idle_prompt`, or an `agent_needs_input`
+   * about another session it tracks): they sit at their prompt, not on a question of their own. A scheduled agent like
+   * that is waiting for its next run, not for you.
    */
-  const idlePrompted = new Set<string>();
+  const waitsAtPrompt = new Set<string>();
   /** Agents waiting only because their idle prompt fired after a failed turn: still at their prompt. */
   const idleAfterFailure = new Set<string>();
   /** What each agent last said to the user (`lastMessageAfterHook`). */
   const lastMessages = new Map<string, string>();
+  /** Since when each agent compacting its conversation has been at it (`compactingAfterHook`). */
+  const compacting = new Map<string, string>();
   /** Agents interrupted since their last prompt: hooks still landing from that turn's work are ignored. */
   const interrupted = new Set<string>();
   /**
@@ -131,6 +145,15 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
 
   /** Whether the agent's last message asks the user something (`asksSomething`). */
   const asking = (sessionId: string) => asksSomething(lastMessages.get(sessionId));
+  /**
+   * Whether the live agent's turn is over, nothing of its own up: at its prompt (`atPrompt`, even asking), or stopped
+   * there by a failed or rate-limited turn. A notification then tells of something else.
+   */
+  const turnOver = (row: Row) =>
+    atPrompt(row, true) ||
+    (row.ended_at === null &&
+      permissions.prompts(row.session_id).length === 0 &&
+      (row.state === 'failed' || row.state === 'rate-limited' || (row.state === 'waiting' && idleAfterFailure.has(row.session_id))));
   /** Whether the live agent sits at its prompt after a turn that ended asking the user something. */
   const askingAtPrompt = (row: Row) => row.ended_at === null && row.state === 'idle' && asking(row.session_id);
 
@@ -142,7 +165,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     row.ended_at === null &&
     permissions.prompts(row.session_id).length === 0 &&
     (evenAsking || !asking(row.session_id)) &&
-    (row.state === 'idle' || (row.state === 'waiting' && idlePrompted.has(row.session_id)));
+    (row.state === 'idle' || (row.state === 'waiting' && waitsAtPrompt.has(row.session_id)));
 
   return {
     /** The agent was started with a first prompt: it shows `starting` until its session's first hook. */
@@ -180,11 +203,14 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     /** What the agent last said to the user, if anything. */
     lastMessage: (sessionId: string) => lastMessages.get(sessionId),
 
+    /** Since when the agent has been compacting its conversation, while it is. */
+    compactingSince: (sessionId: string) => compacting.get(sessionId),
+
     /**
-     * Whether only its idle prompt (Claude's `idle_prompt`, a minute after a turn) left the agent waiting, and its state
-     * hasn't changed since: it asks nothing, as Claude's `agent_needs_input` would.
+     * Whether the agent went `waiting` from `idle`, after its turn ended, and its state hasn't changed since: it sits at
+     * its prompt asking nothing, as Claude's `agent_needs_input` during a turn would.
      */
-    idlePrompted: (sessionId: string) => idlePrompted.has(sessionId),
+    waitsAtPrompt: (sessionId: string) => waitsAtPrompt.has(sessionId),
 
     /**
      * The state a live agent with an enabled schedule shows: `scheduled` at its prompt, waiting for its next run, and
@@ -272,9 +298,17 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         return undefined;
       }
       const previousMessage = lastMessages.get(sessionId) ?? null;
-      const lastMessage = lastMessageAfterHook(previousMessage, payload);
+      // A notification once its turn is over tells of another session Claude tracks: not its last word. A dialog of
+      // Claude's own is: it is what is up.
+      const ownDialog = isOwnDialog(payload);
+      const notifiedAtPrompt = payload.hook_event_name === 'Notification' && !ownDialog && turnOver(row);
+      const lastMessage = notifiedAtPrompt ? previousMessage : lastMessageAfterHook(previousMessage, payload);
       if (lastMessage === null) lastMessages.delete(sessionId);
       else lastMessages.set(sessionId, lastMessage);
+      const wasCompacting = compacting.get(sessionId) ?? null;
+      const compactingSince = compactingAfterHook(wasCompacting, payload, new Date(clock.now()).toISOString());
+      if (compactingSince === null) compacting.delete(sessionId);
+      else compacting.set(sessionId, compactingSince);
       const next = subagentsAfterHook(subagents.of(sessionId), payload, new Date());
       const pending = permissions.prompts(sessionId).length;
       // An agent started with no task, or resumed (woken, restarted) with no new prompt, has nothing to run yet: its
@@ -284,21 +318,31 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         payload.hook_event_name === 'SessionStart' &&
         row.state === 'idle' &&
         (typingFirst || (!prompted && (row.description === '' || payload.source === 'resume')));
-      const idlePrompt = payload.hook_event_name === 'Notification' && payload.notification_type === 'idle_prompt';
       const hooked = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
-      // Its idle prompt while a command it left runs says nothing of you: it stays idle, so the command's end, before the
-      // harness takes up its result, never shows it waiting for you.
-      const state = idlePrompt && row.state === 'idle' && hooked === 'waiting' && options.onCommand?.(sessionId) === true ? 'idle' : hooked;
-      if (idlePrompt && row.state === 'idle' && state === 'waiting') idlePrompted.add(sessionId);
-      else if (state !== row.state) idlePrompted.delete(sessionId);
-      if (idlePrompt && row.state === 'failed' && state === 'waiting') idleAfterFailure.add(sessionId);
-      else if (state !== row.state) idleAfterFailure.delete(sessionId);
+      // A notification at its prompt (its idle prompt, word of another session) while a command it left runs says nothing
+      // of you: it stays idle, so the command's end, before the harness takes up its result, never shows it waiting.
+      const state = row.state === 'idle' && hooked === 'waiting' && !ownDialog && options.onCommand?.(sessionId) === true ? 'idle' : hooked;
+      // A dialog of Claude's own over the prompt it waited at (after its idle prompt, as it usually comes): a new ask.
+      const dialogOverPrompt = ownDialog && state === 'waiting' && row.state === 'waiting' && turnOver(row);
+      if (dialogOverPrompt) options.unsee(sessionId);
+      // Its turn ended: no question of its own is up, whichever notification moved it on, unless Claude opened a dialog.
+      if (row.state === 'idle' && state === 'waiting' && !ownDialog) waitsAtPrompt.add(sessionId);
+      else if (state !== row.state || ownDialog) waitsAtPrompt.delete(sessionId);
+      if (row.state === 'failed' && state === 'waiting' && !ownDialog) idleAfterFailure.add(sessionId);
+      else if (state !== row.state || ownDialog) idleAfterFailure.delete(sessionId);
+      if (state === 'waiting' && (row.state !== 'waiting' || dialogOverPrompt)) {
+        const atItsPrompt = waitsAtPrompt.has(sessionId) || idleAfterFailure.has(sessionId);
+        const up = ownDialog ? "a dialog of Claude's own up" : 'a question of its own up';
+        const where = atItsPrompt ? 'at its prompt, its turn ended' : `from ${row.state}, ${up}`;
+        const went = dialogOverPrompt ? "has a dialog of Claude's own up at its prompt" : `went waiting ${where}`;
+        options.log?.(`agent ${sessionId} ${went}: ${hookCause(payload)}`);
+      }
       // Its own turn ended with a final message (a subagent's Stop is SubagentStop): it is kept before the state is saved,
       // so what that announces already carries it, and hands it off.
       const finalMessage = payload.last_assistant_message;
       const ended = payload.hook_event_name === 'Stop' && payload.agent_id === undefined && typeof finalMessage === 'string';
       if (ended) options.recordFinal(sessionId, finalMessage);
-      save(row, state, next, ended || settled || reply !== undefined || lastMessage !== previousMessage);
+      save(row, state, next, ended || settled || reply !== undefined || lastMessage !== previousMessage || compactingSince !== wasCompacting);
       if (ended) options.finished(sessionId, finalMessage);
       return reply;
     },
@@ -313,6 +357,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     interrupted(sessionId: string) {
       interrupted.add(sessionId);
       noMessage.add(sessionId);
+      compacting.delete(sessionId);
     },
 
     /** Whether the agent's latest turn was interrupted, so the final message kept is of an earlier turn. */
@@ -337,8 +382,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       idleAfterFailure.delete(sessionId);
       permissionSettled.delete(sessionId);
       interrupted.delete(sessionId);
-      idlePrompted.delete(sessionId);
+      waitsAtPrompt.delete(sessionId);
       drafting.delete(sessionId);
+      compacting.delete(sessionId);
     },
 
     /** The agent was deleted. */
@@ -347,7 +393,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       startFailed.delete(sessionId);
       idleAfterFailure.delete(sessionId);
       noMessage.delete(sessionId);
-      idlePrompted.delete(sessionId);
+      waitsAtPrompt.delete(sessionId);
       drafting.delete(sessionId);
       lastMessages.delete(sessionId);
     },

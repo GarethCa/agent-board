@@ -1,3 +1,4 @@
+import { watch, type FSWatcher } from 'node:fs';
 import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { isObject } from './json.ts';
@@ -13,6 +14,9 @@ import { createTranscriptParser, type TranscriptParser, type TranscriptParserOpt
  * a time, and one over `TAIL_START_BYTES` from that far before its end; a session keeps its last `MAX_KEPT_ENTRIES`
  * entries, the reader `MAX_CACHED` sessions, and a read returns at most `MAX_CHUNK_ENTRIES`, the latest. What is
  * left out is still in the terminal, and the chunk says so (`earlier`).
+ *
+ * A session's file is watched while its read is kept: a write to it is told to `onChange` (once for writes close
+ * together), so a client reads again at once instead of waiting on a timer.
  */
 export interface TranscriptReader {
   /**
@@ -27,8 +31,10 @@ export interface TranscriptReader {
    * Codex's subagents talk in their parent's rollout, so there is none for Codex.
    */
   readSubagent(harness: Harness, path: string | null, toolUseId: string, agentId?: string): Promise<TranscriptChunk>;
-  /** Drops what was read of the session's transcript. */
+  /** Drops what was read of the session's transcript, and stops watching it. */
   forget(key: string): void;
+  /** Stops watching every transcript. */
+  close(): void;
 }
 
 /** How many sessions' transcripts are kept parsed; the least recently read goes first. */
@@ -43,6 +49,8 @@ export const TAIL_START_BYTES = 8 * 1024 * 1024;
 const READ_CHUNK_BYTES = 1024 * 1024;
 /** The longest line it waits for the end of; one longer makes the transcript unsupported. */
 const MAX_LINE_BYTES = 16 * 1024 * 1024;
+/** How long after a write to a watched transcript its change is told: writes within it are one change. */
+const CHANGE_SETTLE_MS = 25;
 
 const NEWLINE = 0x0a;
 const AGENT_ID = /^[A-Za-z0-9_-]+$/;
@@ -71,8 +79,11 @@ interface Tail {
 const none = (): TranscriptChunk => ({ status: 'none', generation: 0, from: 0, earlier: false, entries: [] });
 const unsupported = (reason: string, generation: number): TranscriptChunk => ({ status: 'unsupported', reason, generation, from: 0, earlier: false, entries: [] });
 
-export function createTranscriptReader(): TranscriptReader {
+export function createTranscriptReader(onChange?: (key: string) => void): TranscriptReader {
   const tails = new Map<string, Tail>();
+  const watchers = new Map<string, { path: string; watcher: FSWatcher }>();
+  /** The changes still to be told, by session: kept apart from the watch, which a file replaced ends first. */
+  const pending = new Map<string, ReturnType<typeof setTimeout>>();
   const queue = keyedQueue();
   // Seeded from the clock (with room for a thousand tails a millisecond), so a window still open across a daemon
   // restart never mistakes a new tail for one from before.
@@ -91,12 +102,61 @@ export function createTranscriptReader(): TranscriptReader {
     skipped: false,
   });
 
+
+  const unwatch = (key: string) => {
+    watchers.get(key)?.watcher.close();
+    watchers.delete(key);
+  };
+
+  /** Tells the session's change once writes have settled, unless it is already to be told. */
+  const changed = (key: string) => {
+    if (pending.has(key)) return;
+    const timer = setTimeout(() => {
+      pending.delete(key);
+      onChange?.(key);
+    }, CHANGE_SETTLE_MS);
+    timer.unref();
+    pending.set(key, timer);
+  };
+
+  /** Watches the session's file, unless it is already; a file written over is watched again at its next read. */
+  const watchFile = (key: string, path: string) => {
+    if (onChange === undefined || watchers.get(key)?.path === path) return;
+    unwatch(key);
+    let watcher: FSWatcher;
+    try {
+      watcher = watch(path, { persistent: false });
+    } catch {
+      // Gone already: the next read finds out.
+      return;
+    }
+    const watched = { path, watcher };
+    watchers.set(key, watched);
+    watcher.on('change', (type) => {
+      // Moved or deleted: this watch follows the old file, so the next read watches the new one. The change is told
+      // all the same: that read comes from it.
+      if (type === 'rename' && watchers.get(key) === watched) unwatch(key);
+      changed(key);
+    });
+    watcher.on('error', () => {
+      if (watchers.get(key) === watched) unwatch(key);
+    });
+  };
+
+  /** Forgets the session: what was read of it, its watch, and a change of it not told yet. */
+  const drop = (key: string) => {
+    tails.delete(key);
+    unwatch(key);
+    clearTimeout(pending.get(key));
+    pending.delete(key);
+  };
+
   return {
     read(key, harness, path, since, generation) {
       return queue(key, async () => {
         const info = path === null ? undefined : await stat(path).catch(() => undefined);
         if (path === null || info === undefined) {
-          tails.delete(key);
+          drop(key);
           return none();
         }
         let tail = tails.get(key);
@@ -104,7 +164,8 @@ export function createTranscriptReader(): TranscriptReader {
         // Most recently read last, so the first is the one to drop.
         tails.delete(key);
         tails.set(key, tail);
-        if (tails.size > MAX_CACHED) tails.delete(tails.keys().next().value!);
+        if (tails.size > MAX_CACHED) drop(tails.keys().next().value!);
+        watchFile(key, path);
 
         await readNewLines(tail, info.size);
         return chunkOf(tail, generation === tail.generation ? since : 0);
@@ -128,7 +189,13 @@ export function createTranscriptReader(): TranscriptReader {
     },
 
     forget(key) {
-      tails.delete(key);
+      drop(key);
+    },
+
+    close() {
+      for (const key of [...watchers.keys()]) unwatch(key);
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
     },
   };
 }

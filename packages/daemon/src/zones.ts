@@ -10,12 +10,14 @@ import { folderPath } from './repo-zone.ts';
 import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   ARRANGE_SPACINGS,
+  ZONE_PRIORITIES,
   DEFAULT_ARRANGE_SPACING,
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
   validZoneFillOpacity,
   ZONE_COLORS,
   type ArrangeSpacing,
+  type ZonePriority,
   type DaemonEvent,
   type DaemonMethods,
   type TrackerProvider,
@@ -58,10 +60,14 @@ interface ZoneRow {
   width: number;
   height: number;
   codex_bypass_hook_trust: number;
+  trusts_folder: number;
   board_mcp: number;
   agents_orchestrate: number;
   gate_command: string | null;
   spacing: ArrangeSpacing;
+  priority: ZonePriority;
+  usage_hold_reason: string | null;
+  usage_hold_at: string | null;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -87,6 +93,8 @@ export interface NewZone extends ZoneLayout {
   tracker: ZoneTracker | null;
   /** Its spacing; the default for new zones in the settings without. */
   spacing?: ArrangeSpacing;
+  /** Whether Claude's trust screen is answered for its agents (`Zone.trustsFolder`); off without. */
+  trustsFolder?: boolean;
   /** A group's folder of the user's, outside git, that its agents with no repo run in; the app makes one without. */
   groupFolder?: string | null;
   /** The clone it waits for, and which folders the daemon made for it, so a failed clone removes only those. */
@@ -141,6 +149,8 @@ export interface ZoneTable {
   leastUsedColor(): string;
   /** Remembers a folder a zone was made for. */
   rememberFolder(path: string): void;
+  /** Places a budget hold on the zone, with why, or lifts it (null), and announces it. False if it is gone. */
+  setUsageHold(id: string, reason: string | null): boolean;
 }
 
 /** The zones table. `cloneProgress` says how far each clone is: progress lives in memory only. */
@@ -160,21 +170,25 @@ export function createZoneTable(
   const selectCloning = db.prepare('SELECT * FROM zones WHERE clone_repo IS NOT NULL ORDER BY rowid');
   const insert = db.prepare(
     `INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, tracker_provider, tracker_scope,
-       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing, group_folder)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       tracker_project, clone_repo, clone_path, clone_made_folder, clone_made_owner, spacing, group_folder, trusts_folder)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   // A bound zone's repo is its own: binding drops a group's default repo, and its folder.
+  // Only a zone with a repo trusts its folder (`Zone.trustsFolder`), and only the one it was opted in for: a zone
+  // bound by a finished clone keeps what was asked for it, any other binding starts off.
   const bind = db.prepare(
     `UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, group_folder = NULL, clone_repo = NULL, clone_path = NULL,
        clone_made_folder = NULL, clone_made_owner = NULL WHERE id = ? AND repo_root IS NULL`,
   );
   const bindNotCloning = db.prepare(
-    'UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, group_folder = NULL WHERE id = ? AND repo_root IS NULL AND clone_repo IS NULL',
+    'UPDATE zones SET repo_root = ?, folder = ?, default_repo = NULL, group_folder = NULL, trusts_folder = 0 WHERE id = ? AND repo_root IS NULL AND clone_repo IS NULL',
   );
+  // A clone that failed or was cancelled leaves an unbound zone, which trusts nothing.
   const clearClone = db.prepare(
-    'UPDATE zones SET clone_repo = NULL, clone_path = NULL, clone_made_folder = NULL, clone_made_owner = NULL WHERE id = ?',
+    'UPDATE zones SET clone_repo = NULL, clone_path = NULL, clone_made_folder = NULL, clone_made_owner = NULL, trusts_folder = 0 WHERE id = ?',
   );
   const remove = db.prepare('DELETE FROM zones WHERE id = ?');
+  const updateUsageHold = db.prepare('UPDATE zones SET usage_hold_reason = ?, usage_hold_at = ? WHERE id = ?');
   const colorUse = db.prepare('SELECT color, count(*) AS n FROM zones GROUP BY color');
   const sessionsIn = db.prepare(
     'SELECT (SELECT count(*) FROM agents WHERE zone_id = ?1) + (SELECT count(*) FROM shells WHERE zone_id = ?1) AS n',
@@ -197,10 +211,13 @@ export function createZoneTable(
     width: row.width,
     height: row.height,
     codexBypassHookTrust: row.codex_bypass_hook_trust === 1,
+    trustsFolder: row.trusts_folder === 1,
     boardMcp: row.board_mcp === 1,
     agentsOrchestrate: row.agents_orchestrate === 1,
     gateCommand: row.gate_command,
     spacing: row.spacing,
+    priority: row.priority,
+    usageHold: row.usage_hold_reason === null || row.usage_hold_at === null ? null : { reason: row.usage_hold_reason, since: row.usage_hold_at },
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -256,6 +273,7 @@ export function createZoneTable(
         zone.spacing ?? newZoneSpacing(),
         // The folder the app would make for it is kept as none: it is found again from the zone's id.
         zone.groupFolder == null || zone.groupFolder === groupFolder(groupsDir, id) ? null : zone.groupFolder,
+        zone.trustsFolder === true ? 1 : 0,
       );
       if (zone.repoRoot !== null) rememberFolder(folderPath(zone.repoRoot, zone.folder));
       announce(id);
@@ -285,6 +303,11 @@ export function createZoneTable(
       return ZONE_COLORS.reduce((best, color) => ((uses.get(color) ?? 0) < (uses.get(best) ?? 0) ? color : best));
     },
     rememberFolder,
+    setUsageHold(id, reason) {
+      if (updateUsageHold.run(reason, reason === null ? null : new Date().toISOString(), id).changes === 0) return false;
+      announce(id);
+      return true;
+    },
   };
 }
 
@@ -306,14 +329,16 @@ export function zoneHandlers<Context>(
   const updateColor = db.prepare('UPDATE zones SET color = ? WHERE id = ?');
   const updateFillOpacity = db.prepare('UPDATE zones SET fill_opacity = ? WHERE id = ?');
   const updateBypass = db.prepare('UPDATE zones SET codex_bypass_hook_trust = ? WHERE id = ?');
+  const updateTrustsFolder = db.prepare('UPDATE zones SET trusts_folder = ? WHERE id = ?');
   const updateBoardMcp = db.prepare('UPDATE zones SET board_mcp = ? WHERE id = ?');
   const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
+  const updatePriority = db.prepare('UPDATE zones SET priority = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
-  const unbind = db.prepare(`UPDATE zones SET repo_root = NULL, folder = '', default_repo = NULL WHERE id = ?`);
+  const unbind = db.prepare(`UPDATE zones SET repo_root = NULL, folder = '', default_repo = NULL, trusts_folder = 0 WHERE id = ?`);
   const updateDefaultRepo = db.prepare('UPDATE zones SET default_repo = ? WHERE id = ?');
   const agentCount = db.prepare('SELECT count(*) AS n FROM agents WHERE zone_id = ?');
   const selectGroupFolder = db.prepare('SELECT group_folder FROM zones WHERE id = ?');
@@ -340,7 +365,7 @@ export function zoneHandlers<Context>(
       const tracker = await checkedTracker(fields, trackers);
       // A folder outside git is a group whose own folder it is: its agents run there, with no worktree or branch.
       if (found.repoRoot === null) {
-        return zones.insert({ ...look, name: look.name ?? basename(found.path), repoRoot: null, folder: '', tracker, groupFolder: found.path });
+        return zones.insert({ ...look, name: look.name ?? basename(found.path), repoRoot: null, folder: '', tracker, groupFolder: found.path, trustsFolder: false });
       }
       const { repoRoot, folder } = found;
       const name = look.name ?? (folder === '' ? basename(repoRoot) : `${basename(repoRoot)}/${folder}`);
@@ -352,7 +377,7 @@ export function zoneHandlers<Context>(
       if (name === '') throw invalidParams('name must not be blank');
       const look = newZoneParams(fields, zones);
       const tracker = await checkedTracker(fields, trackers);
-      return zones.insert({ ...look, name, repoRoot: null, folder: '', tracker });
+      return zones.insert({ ...look, name, repoRoot: null, folder: '', tracker, trustsFolder: false });
     },
     'zone.bind': async (params) => {
       const fields = paramsObject(params);
@@ -436,17 +461,24 @@ export function zoneHandlers<Context>(
       const fields = paramsObject(params);
       const id = stringParam(fields, 'id');
       const bypass = optionalBooleanParam(fields, 'codexBypassHookTrust');
+      const trustsFolder = optionalBooleanParam(fields, 'trustsFolder');
       const boardMcp = optionalBooleanParam(fields, 'boardMcp');
       const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
       const gateCommand = gateCommandParam(fields);
       const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
-      if (bypass === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined) {
-        throw invalidParams('give codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand or spacing');
+      const priority = fields.priority === undefined ? undefined : oneOf(fields, 'priority', ZONE_PRIORITIES);
+      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined && priority === undefined) {
+        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing or priority');
       }
-      zones.get(id);
+      const zone = zones.get(id);
+      if (trustsFolder === true && zone.repoRoot === null) {
+        throw invalidParams(`${zone.name} has no repo: only a zone of a repo or folder can trust its folder`);
+      }
       if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
       if (spacing !== undefined) updateSpacing.run(spacing, id);
+      if (priority !== undefined) updatePriority.run(priority, id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
+      if (trustsFolder !== undefined) updateTrustsFolder.run(trustsFolder ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
       if (agentsOrchestrate !== undefined) updateAgentsOrchestrate.run(agentsOrchestrate ? 1 : 0, id);
       // Off, no agent in it orchestrates any more, whoever let it; on, the agents it let orchestrate do again (ADR-0011).
@@ -500,6 +532,7 @@ export function zoneHandlers<Context>(
       if (ownFolder !== null && !isAbsolute(ownFolder)) throw invalidParams(`groupFolder must be absolute, got ${ownFolder}`);
       // A snapshot from before zones had a spacing is of a zone laid out at normal's gaps, as the migration keeps those.
       const spacing = fields.spacing === undefined ? 'normal' : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
+      const priority = fields.priority === undefined ? 'normal' : oneOf(fields, 'priority', ZONE_PRIORITIES);
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
@@ -512,7 +545,9 @@ export function zoneHandlers<Context>(
         const kept = plain?.repoRoot === null ? plain.path : null;
         zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing, groupFolder: kept });
         updateFillOpacity.run(fillOpacity, id);
+        updatePriority.run(priority, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
+        updateTrustsFolder.run(bound !== null && optionalBooleanParam(fields, 'trustsFolder') === true ? 1 : 0, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);
         updateAgentsOrchestrate.run(optionalBooleanParam(fields, 'agentsOrchestrate') === false ? 0 : 1, id);
         updateGateCommand.run(gateCommandParam(fields) ?? null, id);
@@ -538,7 +573,7 @@ export function zoneHandlers<Context>(
 export function newZoneParams(
   fields: Record<string, unknown>,
   zones: Pick<ZoneTable, 'leastUsedColor'>,
-): ZoneLayout & { name: string | undefined; color: string } {
+): ZoneLayout & { name: string | undefined; color: string; trustsFolder: boolean } {
   const layout = layoutParams({
     x: fields.x,
     y: fields.y,
@@ -549,7 +584,7 @@ export function newZoneParams(
   if (name === '') throw invalidParams('name must not be blank');
   const color = fields.color === undefined ? zones.leastUsedColor() : stringParam(fields, 'color').toLowerCase();
   if (!/^#[0-9a-f]{6}$/.test(color)) throw invalidParams(`color must be #rrggbb, got ${color}`);
-  return { ...layout, name, color };
+  return { ...layout, name, color, trustsFolder: optionalBooleanParam(fields, 'trustsFolder') === true };
 }
 
 /** The tracker a new zone asks for, checked with the tracker, or null for none. */

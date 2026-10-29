@@ -21,7 +21,7 @@ const USER_SETTINGS = {
   hooks: {
     Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }],
     PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '~/bin/check-bash', timeout: 30 }] }],
-    PreCompact: [{ hooks: [{ type: 'command', command: 'echo compact' }] }],
+    ConfigChange: [{ hooks: [{ type: 'command', command: 'echo compact' }] }],
   },
 };
 
@@ -67,7 +67,7 @@ describe('installing the external hooks', () => {
     expect(settings.hooks.Stop).toHaveLength(2);
     expect(settings.hooks.PreToolUse![0]).toEqual(USER_SETTINGS.hooks.PreToolUse[0]);
     // An event agent-board doesn't use stays as it was.
-    expect(settings.hooks.PreCompact).toEqual(USER_SETTINGS.hooks.PreCompact);
+    expect(settings.hooks.ConfigChange).toEqual(USER_SETTINGS.hooks.ConfigChange);
   });
 
   it('is idempotent, and replaces hooks pointing at an older shim', () => {

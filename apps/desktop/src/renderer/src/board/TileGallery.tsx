@@ -130,6 +130,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   subagents: [],
   commands: [],
   lastMessage: null,
+  compactingSince: null,
   finishedAt: null,
   permissions: [],
   ask: null,
@@ -146,6 +147,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   unsent: null,
   untypedPrompt: null,
   trustFolder: null,
+  trustedByZone: false,
   queuedUntilUp: 0,
   undelivered: [],
   status: null,
@@ -161,6 +163,7 @@ const CROWDED: Agent = {
   sessionId: 'gallery-crowded',
   name: 'Movable sessions follow-up for the dock',
   lastMessage: null,
+  compactingSince: null,
   muted: true,
   pullRequests: [
     { number: 214, title: 'Movable sessions', url: '', state: 'open', checks: 'passing' },

@@ -28,6 +28,8 @@ export interface HookIngressOptions {
     payload: Record<string, unknown>,
     signal: AbortSignal,
   ): HookReply | Promise<HookReply>;
+  /** What Claude Code passed an agent's status line, posted by it (`claudeSettings`): its plan usage, mostly. */
+  onStatusLine?(sessionId: string, payload: Record<string, unknown>): void;
   /** The SHA-256 of the token the global hooks of external sessions post with. */
   externalTokenSha256?: string;
   /** A global hook's call for a session agent-board did not spawn; the payload carries its `session_id`. */
@@ -57,6 +59,7 @@ export interface HookIngress {
  * - `POST /external/<harness>`: the opt-in global hooks of sessions agent-board did not spawn (ADR-0004). One
  *   daemon-wide token; the payload's `session_id` identifies the session. The reply is always empty, so these hooks
  *   never steer their session.
+ * - `POST /usage`: what Claude Code passed an agent's status line, with the agent's hook token. The reply is empty.
  * - `POST /mcp`: the board MCP over Streamable HTTP (ADR-0010, `board-mcp-http.ts`). The token is the session's board
  *   token, not its hook token, so the call can do what the session's `agent-board mcp` could and no more.
  *
@@ -67,6 +70,7 @@ export async function startHookIngress(options: HookIngressOptions): Promise<Hoo
   const mcp = options.mcpCallerFor === undefined ? undefined : createBoardMcpHttp();
   const server = createServer((request, response) => {
     if (request.url === '/mcp' && mcp !== undefined) return mcpRequest(request, response, mcp);
+    if (request.url === '/usage' && options.onStatusLine !== undefined) return statusLineRequest(request, response, options.onStatusLine);
     const external = /^\/external\/(claude|codex)$/.exec(request.url ?? '')?.[1] as Harness | undefined;
     if (request.url !== '/hooks' && external === undefined) return reply(response, 404, 'not found');
     if (request.method !== 'POST') return reply(response, 405, 'use POST');
@@ -106,6 +110,28 @@ export async function startHookIngress(options: HookIngressOptions): Promise<Hoo
     if (caller === undefined) return reply(response, 401, 'missing or unknown board token');
     readBody(request, MAX_MCP_BODY_BYTES).then(
       (body) => transport.serve(body, response, caller),
+      (error: Error) => reply(response, error.message === 'too large' ? 413 : 400, error.message),
+    );
+  };
+
+  /** An agent's status line input, from a live session holding the hook token it carries. */
+  const statusLineRequest = (request: IncomingMessage, response: ServerResponse, onStatusLine: NonNullable<HookIngressOptions['onStatusLine']>) => {
+    if (request.method !== 'POST') return reply(response, 405, 'use POST');
+    const token = bearerToken(request);
+    const sessionId = token === undefined ? undefined : options.sessionForToken(hashToken(token));
+    if (sessionId === undefined) return reply(response, 401, 'missing or unknown session token');
+    readBody(request).then(
+      (body) => {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return reply(response, 400, 'status line body must be JSON');
+        }
+        if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return reply(response, 400, 'status line body must be an object');
+        onStatusLine(sessionId, payload as Record<string, unknown>);
+        reply(response, 200);
+      },
       (error: Error) => reply(response, error.message === 'too large' ? 413 : 400, error.message),
     );
   };
