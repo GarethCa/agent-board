@@ -453,10 +453,11 @@ export function arrangeTiles(
   const noteSizeOf = (key: string, least: Size): Size => ({ width: Math.max(least.width, options.noteWidths?.get(key) ?? 0), height: Math.max(least.height, options.noteHeights?.get(key) ?? 0) });
   const rows = rowsOf(tiles, links, options.by);
   let positions: Map<string, Point>;
-  if (options.layout === 'columns' || options.layout === 'cards') {
+  // Wrap lays out lanes, so by role or state it lays the rows out as rows do.
+  if (options.layout === 'columns' || options.layout === 'cards' || (options.layout === 'wrap' && options.by === 'issue')) {
     const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
     const headOf = (row: Row) => headSize(noteSizeOf(laneKey(row.tiles), HEAD_NOTE_SIZE));
-    const cells = (options.layout === 'columns' ? columnCells : cardCells)(rows, isCluster, headOf);
+    const cells = (options.layout === 'columns' ? columnCells : options.layout === 'cards' ? cardCells : wrapCells)(rows, isCluster, headOf);
     positions = placeCells(cells, links, obstacles, grid);
     for (const row of rows.filter(isCluster)) {
       const key = laneKey(row.tiles);
@@ -572,6 +573,8 @@ interface Cell {
    * column within its own line only, so no card in another line is spread apart by it.
    */
   band?: number;
+  /** The rows it runs down beside (a wrapped lane's head): only the last of them is made tall enough to hold it. 1 without. */
+  span?: number;
 }
 
 /** A lane's head cell's id among the tiles' (where its label and note go). */
@@ -623,6 +626,38 @@ function cardCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
   return cells;
 }
 
+/** The most tiles on one row of a lane that wraps: the next goes on a new row under its first. */
+const WRAP_AFTER = 4;
+
+/**
+ * Lanes that wrap: the top row (the lead, the shells and the clocks) as rows lay it out, then each lane below the one
+ * before, its head cell in its first column and its tiles in slot order after it, a new row under the first of them
+ * after every `WRAP_AFTER`. Each lane's columns are its own (`Cell.band`), so a wide tile spreads only its own lane.
+ */
+function wrapCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headOf: (row: Row) => Size): Cell[] {
+  const cells: Cell[] = [];
+  let next = 0;
+  for (const [band, row] of rows.entries()) {
+    if (!row.unit) {
+      cells.push(...row.tiles.map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: next, alone: true })));
+      next++;
+      continue;
+    }
+    const lines = Math.max(1, Math.ceil(row.tiles.length / WRAP_AFTER));
+    const head = isCluster(row) ? [{ id: headId(laneKey(row.tiles)), size: headOf(row), column: 0, row: next, band, span: lines }] : [];
+    const tiles = inSlotOrder(row).map((tile, index) => ({
+      id: tile.id,
+      size: sizeOf(tile),
+      column: head.length + (index % WRAP_AFTER),
+      row: next + Math.floor(index / WRAP_AFTER),
+      band,
+    }));
+    cells.push(...head, ...tiles);
+    next += lines;
+  }
+  return cells;
+}
+
 /**
  * Where `cells` go, in px: every column as wide as its widest cell (a line of cards' widest in its own line, the lead's
  * row's its own: `Cell.band`, `Cell.alone`), and a rail's room past each column a rail runs along within a row, each on
@@ -659,6 +694,9 @@ function placeCells(cells: readonly Cell[], links: readonly ArrangeLink[], obsta
   const xOf = (cell: Cell) => starts.get(groupOf(cell))![cell.column]!;
   const positions = new Map<string, Point>();
   const rows = Math.max(0, ...cells.map((cell) => cell.row + 1));
+  const lastRowOf = (cell: Cell) => cell.row + (cell.span ?? 1) - 1;
+  /** Where the cells running down past their first row reach, by the row they end in. */
+  const reaches = new Map<number, number>();
   let next = grid.origin.y;
   for (let row = 0; row < rows; row++) {
     const inRow = cells.filter((cell) => cell.row === row);
@@ -670,7 +708,8 @@ function placeCells(cells: readonly Cell[], links: readonly ArrangeLink[], obsta
     if (railAbove.has(row)) next += railRoomAbove(grid);
     const at = downPast(next, (y) => inRow.map((cell) => sizedFootprint({ x: xOf(cell), y }, cell.size)), obstacles, gaps.lane);
     for (const cell of inRow) positions.set(cell.id, { x: xOf(cell), y: at });
-    next = at + Math.max(...inRow.map((cell) => cell.size.height)) + gaps.lane;
+    for (const cell of inRow.filter((each) => lastRowOf(each) > row)) reaches.set(lastRowOf(cell), Math.max(reaches.get(lastRowOf(cell)) ?? 0, at + cell.size.height));
+    next = Math.max(at + Math.max(0, ...inRow.filter((cell) => lastRowOf(cell) === row).map((cell) => cell.size.height)), reaches.get(row) ?? 0) + gaps.lane;
   }
   return positions;
 }

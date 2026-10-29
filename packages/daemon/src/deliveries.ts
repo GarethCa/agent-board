@@ -29,6 +29,9 @@ const NOT_UP_REASON = "its session isn't up yet";
 /** Why nothing is typed at an agent whose session isn't up yet, with a first prompt to go first once it is. */
 const NOT_UP_FIRST_REASON = `${NOT_UP_REASON}: its first prompt goes first`;
 
+/** Why what was queued for an agent not up yet is handed back as the daemon closes (`handBackQueued`). */
+const CLOSED_REASON = 'the daemon shut down before it was up';
+
 /** How many more times Enter is pressed before what was typed is called not sent. */
 const SUBMIT_RETRIES = 2;
 
@@ -172,6 +175,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
   const typingFirst = new Set<string>();
   /** Per agent not up when they came, how many messages wait to be typed after its first prompt (`queueUntilUp`). */
   const waitingUp = new Map<string, number>();
+  /**
+   * What was queued for agents not up yet and not yet typed or handed back (`queueOrHandBack`), oldest first: whichever
+   * comes first, its typing starting, its queue settling or the daemon closing (`handBackQueued`), takes each one.
+   */
+  const queuedItems = new Set<{ sessionId: string; what: string; text: string }>();
 
   /** Keeps `kept` as the agent's unsent message, or forgets it; `why` it was given up on tells the user (`notSent`). */
   const setUnsent = (sessionId: string, kept: { what: string; lines: number } | undefined, why?: string) => {
@@ -371,14 +379,21 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * Resolves with how it went: not typed if its session ends first, or holds its first prompt unsent, or a permission
    * prompt or question is up when its turn comes (`whyNotAnswer`), which its caller hands back (`undelivered`), never
    * dropping it. Messages and scheduled runs only: a hand-off is busy until the agent is up, for its edge to retry.
+   * `typing` hears once it starts being typed: from then on it is the agent's prompt's, never handed back.
    */
-  const queueUntilUp = async (sessionId: string, line: string, what: string): Promise<Typed> => {
+  const queueUntilUp = async (sessionId: string, line: string, what: string, typing: () => void): Promise<Typed> => {
     options.log(`${what} to ${sessionId} is queued until its session is up`);
     recount(waitingUp, sessionId, 1);
     announce(sessionId);
     try {
       for (;;) {
-        const typed = await typeInput(sessionId, line, what, () => notUp.get(sessionId)?.reason ?? whyNotAnswer(sessionId), true);
+        const whyNot = () => {
+          const reason = notUp.get(sessionId)?.reason ?? whyNotAnswer(sessionId);
+          // Typed next, as nothing stands in its way.
+          if (reason === undefined) typing();
+          return reason;
+        };
+        const typed = await typeInput(sessionId, line, what, whyNot, true);
         if (typed.typed || !notUp.has(sessionId)) {
           if (!typed.typed) options.log(`${what} queued for ${sessionId} until it was up was not typed: ${typed.reason}`);
           return typed;
@@ -402,13 +417,17 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * Queues `text`, typed as `line`, for the agent not up yet (`queueUntilUp`), handing it to `undelivered` if it is
    * never typed: the sender has heard it was queued, so it is never dropped unsaid.
    */
-  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string) =>
-    void queueUntilUp(sessionId, line, what)
+  const queueOrHandBack = (sessionId: string, line: string, what: string, text: string) => {
+    const item = { sessionId, what, text };
+    queuedItems.add(item);
+    void queueUntilUp(sessionId, line, what, () => queuedItems.delete(item))
       .then((typed) => {
+        // Typed, or the daemon closing handed it back already.
+        if (!queuedItems.delete(item)) return;
         if (!typed.typed) options.undelivered(sessionId, what, text, typed.reason);
       })
-      // Its daemon closed meanwhile, its database with it: it goes with the daemon's memory.
       .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
+  };
 
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
   const beingPaused = (row: Row) => row.ended_at === null && row.hibernated_at !== null;
@@ -642,6 +661,23 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /** Whether the agent's first prompt is being typed now (`typingFirst`). */
     isTypingFirst: (sessionId: string) => typingFirst.has(sessionId),
+
+    /**
+     * Hands back everything still queued for agents not up yet and not being typed (`undelivered`), as the daemon
+     * closes: kept, it shows with Resend once the daemon is back, where the queue itself would go with the daemon's
+     * memory. Call before the database closes. One that can't be kept is logged, never holding up the rest.
+     */
+    handBackQueued() {
+      const items = [...queuedItems];
+      queuedItems.clear();
+      for (const { sessionId, what, text } of items) {
+        try {
+          options.undelivered(sessionId, what, text, CLOSED_REASON);
+        } catch (error) {
+          options.log(`could not keep ${what} for ${sessionId}, never delivered: ${(error as Error).message}`);
+        }
+      }
+    },
 
     /** How many messages sent to the agent before its session was up still wait to be typed (`queueUntilUp`). */
     queuedUntilUp: (sessionId: string): number => waitingUp.get(sessionId) ?? 0,

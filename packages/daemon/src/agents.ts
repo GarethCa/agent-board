@@ -425,7 +425,7 @@ export interface AgentHost {
   fallbackOwner(sessionId: string): string | undefined;
   /** Tells clients of the agent whose fallback shell this is, if any: what runs in the shell changed. */
   onShellChanged(shellId: string): void;
-  /** Releases held hooks; call before the database closes. */
+  /** Releases held hooks, and keeps what was queued for agents not up yet as undelivered; call before the database closes. */
   close(): void;
 }
 
@@ -665,11 +665,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    * goes on in its reason (`Folding`). One whose `before` the other folding stands in place of stays under it, where
    * that one shows it (the caller's `unfold`): on top, each would stand in place of the other.
    */
-  const raiseFolding = (sessionId: string, before: Folding | undefined, base: string, keepsEnded: boolean): Folding => {
+  const raiseFolding = (sessionId: string, before: Folding | undefined, base: string, keepsEnded: boolean, at = new Date().toISOString()): Folding => {
     const standing = flags.get(sessionId);
     const buried = before !== undefined && foldingsOf(sessionId).some((other) => other !== before && other.replaced?.id === before.id);
     const replaced = standing !== undefined && standing.id !== before?.id && !buried ? standing : before?.replaced;
-    const folding: Folding = { id: ++lastFlagId, base, at: new Date().toISOString(), keepsEnded, ...(replaced === undefined ? {} : { replaced }) };
+    const folding: Folding = { id: ++lastFlagId, base, at, keepsEnded, ...(replaced === undefined ? {} : { replaced }) };
     if (!buried) flags.set(sessionId, foldedFlag(folding));
     return folding;
   };
@@ -683,12 +683,54 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       else flags.delete(sessionId);
     }
     unfold(sessionId, folding.id, folding.replaced);
+    resurface(sessionId);
+  };
+  /** The flag the agent's foldings stand in place of that is none of them: its own, or why its start stalled. */
+  const underFoldings = (sessionId: string): StoredFlag | undefined => {
+    const foldings = foldingsOf(sessionId);
+    return foldings.map((folding) => folding.replaced).find((flag) => flag !== undefined && !foldings.some((folding) => folding.id === flag.id));
+  };
+  /**
+   * Shows again the foldings whose condition still holds but that no flag shows, once the flag that stood in place of
+   * them (the agent's own) has gone: the newest on top, standing in place of the other. Only what was never delivered
+   * once the agent has ended (`ended`). While a flag that is no folding stands, they wait for it to go.
+   */
+  const resurface = (sessionId: string, ended = getRow(sessionId)?.ended_at !== null) => {
+    const shown = flags.get(sessionId);
+    const foldings = foldingsOf(sessionId).filter((folding) => !ended || folding.keepsEnded);
+    const top = foldings.find((folding) => folding.id === shown?.id);
+    if (shown !== undefined && top === undefined) return;
+    const hidden = foldings.filter((folding) => folding !== top && !foldings.some((other) => other.replaced?.id === folding.id)).sort((a, b) => b.id - a.id);
+    const head = top ?? hidden.shift();
+    if (head === undefined) return;
+    const other = hidden[0];
+    if (other !== undefined && head.replaced === undefined) {
+      head.replaced = foldedFlag(other);
+      refreshFolding(sessionId, head);
+    }
+    if (top === undefined) flags.set(sessionId, foldedFlag(head));
   };
   /**
    * Per agent, what was sent to it before its session was up and never typed (`Agent.undelivered`), oldest first, and
-   * the flag that says so (`Folding`): kept, in memory, until the user resends or clears it.
+   * the flag that says so (`Folding`): kept, in the database too, until the user resends or clears it, so the daemon
+   * shows it again once it restarts.
    */
   const undelivered = new Map<string, Folding & { items: UndeliveredMessage[] }>();
+  const insertUndelivered = db.prepare('INSERT INTO undelivered_messages (session_id, what, text, reason, at) VALUES (?, ?, ?, ?, ?)');
+  const deleteUndelivered = db.prepare('DELETE FROM undelivered_messages WHERE session_id = ?');
+  const selectUndelivered = db.prepare('SELECT session_id, what, text, reason, at FROM undelivered_messages ORDER BY id');
+  /**
+   * Raises the flag that says `items` were never delivered to the agent, the last at `at`, in place of the one before
+   * (`keepUndelivered`).
+   */
+  const flagUndelivered = (sessionId: string, items: UndeliveredMessage[], at: string) => {
+    const before = undelivered.get(sessionId);
+    const lost = items.length === 1 ? `${items[0]!.what} sent before it was up` : `${items.length} messages sent before it was up`;
+    const base = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${items.at(-1)!.reason}): Resend on its tile`;
+    const folding = raiseFolding(sessionId, before, base, true, at);
+    undelivered.set(sessionId, { ...folding, items });
+    if (before !== undefined) unfold(sessionId, before.id, foldedFlag(undelivered.get(sessionId)!));
+  };
   /**
    * Hands back what was queued for the agent and never typed: kept for Resend, and flagged to the user. A flag the agent
    * already had (its own words, or why its start stalled) is kept: its reason goes on in this flag's, and it stands
@@ -697,13 +739,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const keepUndelivered = (sessionId: string, what: string, text: string, reason: string) => {
     if (getRow(sessionId) === undefined) return;
     options.log(`${what} sent to ${sessionId} before it was up was not delivered: ${reason}`);
-    const before = undelivered.get(sessionId);
-    const items = [...(before?.items ?? []), { what, text, reason }];
-    const lost = items.length === 1 ? `${what} sent before it was up` : `${items.length} messages sent before it was up`;
-    const base = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${reason}): Resend on its tile`;
-    const folding = raiseFolding(sessionId, before, base, true);
-    undelivered.set(sessionId, { ...folding, items });
-    if (before !== undefined) unfold(sessionId, before.id, foldedFlag(undelivered.get(sessionId)!));
+    const at = new Date().toISOString();
+    insertUndelivered.run(sessionId, what, text, reason, at);
+    flagUndelivered(sessionId, [...(undelivered.get(sessionId)?.items ?? []), { what, text, reason }], at);
     announce(sessionId);
   };
   /**
@@ -714,6 +752,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const kept = undelivered.get(sessionId);
     if (kept === undefined) return [];
     undelivered.delete(sessionId);
+    deleteUndelivered.run(sessionId);
     lowerFolding(sessionId, kept);
     return kept.items;
   };
@@ -725,11 +764,21 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (flagId === null) return;
     if (flags.get(sessionId)?.id === flagId) flags.delete(sessionId);
     unfold(sessionId, flagId, undefined);
+    resurface(sessionId);
   };
   /** The last flag's id: each new one is the next. */
   let lastFlagId = 0;
   /** Per agent, the flag that says what was typed at its prompt was never sent (`flagNotSent`, a `Folding`). */
   const notSentFlags = new Map<string, Folding>();
+  // What was never delivered before the daemon last closed is flagged again, as it was: once every folding's state is
+  // declared, as raising one reads them all (`foldingsOf`).
+  const keptUndelivered = Map.groupBy(
+    selectUndelivered.all() as unknown as (UndeliveredMessage & { session_id: string; at: string })[],
+    (row) => row.session_id,
+  );
+  for (const [sessionId, rows] of keptUndelivered) {
+    flagUndelivered(sessionId, rows.map(({ what, text, reason }) => ({ what, text, reason })), rows.at(-1)!.at);
+  }
   /**
    * Tells the user that `what` was typed at the agent's prompt and given up on, and `why`: only their Send or Clear
    * (in its terminal, `inTerminal`, when they typed there) moves it on. A flag the agent already had is kept: its
@@ -1118,6 +1167,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         spawns.forget(sessionId);
         settleFirstPrompt(sessionId, false);
         notSentFlags.delete(sessionId);
+        undelivered.delete(sessionId);
+        flags.delete(sessionId);
         hookStates.deleted(sessionId);
       },
     },
@@ -1667,6 +1718,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const stays =
         kept !== undefined && ((entry?.trust === true && kept.id === entry.flagId) || kept.keepsEnded === true || kept.id === notSentFlags.get(sessionId)?.id);
       const unflagged = stays ? false : flags.delete(sessionId);
+      // What still waits on the user under the flag read away stands again.
+      if (unflagged) resurface(sessionId);
       // Seen is the user having looked, whatever Needs you lists: a finished turn too, so listing those later shows it read.
       const seeing = row.seen === 0 && waitsForYou(toAgent(row), 'turns');
       if (seeing) updateSeen.run(1, sessionId);
@@ -1680,13 +1733,26 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const text = oneLine(reason);
       if (text === '') throw invalidParams('say why you need a look: the reason must not be blank');
       if (text.length > MAX_FLAG_LENGTH) throw invalidParams(`the reason is ${text.length} characters; at most ${MAX_FLAG_LENGTH}`);
+      // Its new flag stands in place of its last, which a folding may still carry: none puts that one back.
+      const earlier = underFoldings(sessionId);
+      if (earlier !== undefined) unfold(sessionId, earlier.id, undefined);
       flags.set(sessionId, { id: ++lastFlagId, reason: text, at: new Date().toISOString(), via });
       return announced(sessionId);
     },
 
     clearFlag(sessionId) {
       requireRow(sessionId);
-      return flags.delete(sessionId) ? announced(sessionId) : get(sessionId)!;
+      const shown = flags.get(sessionId);
+      if (shown === undefined) return get(sessionId)!;
+      // A folding stays while its condition holds: what goes is the flag it stands in place of, if any. Otherwise the
+      // flag goes, and the foldings it stood in place of stand again.
+      if (foldingsOf(sessionId).some((folding) => folding.id === shown.id)) {
+        const own = underFoldings(sessionId);
+        if (own === undefined) return get(sessionId)!;
+        unfold(sessionId, own.id, undefined);
+      } else flags.delete(sessionId);
+      resurface(sessionId);
+      return announced(sessionId);
     },
 
     setMuted(sessionId, muted) {
@@ -1833,6 +1899,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       lifecycle.stopGuard(session.id);
       // What was never delivered to it is flagged on, for Resend.
       if (flags.get(session.id)?.keepsEnded !== true) flags.delete(session.id);
+      // Only what outlives its session stands now: its own reason, which it can no longer answer, goes from what was
+      // never delivered. What ran above (its first prompt settled, its unsent message gone) resurfaced as if it were
+      // live, as its row isn't saved ended yet: this puts that right.
+      const own = underFoldings(session.id);
+      if (own !== undefined) unfold(session.id, own.id, undefined);
+      resurface(session.id, true);
       const row = getRow(session.id);
       if (row === undefined) return;
       // Its crew's flags reach the user now.
@@ -1865,6 +1937,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     onShellChanged: lifecycle.onShellChanged,
 
     close: () => {
+      deliveries.handBackQueued();
       transcripts.close();
       backgroundCommands.close();
       lifecycle.close();

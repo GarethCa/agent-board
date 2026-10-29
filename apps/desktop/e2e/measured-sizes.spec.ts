@@ -148,9 +148,12 @@ test("a lane's note dragged bigger keeps its size through an arrange and a resta
     // Undone, it is the board's to size again: its old size, and no longer the user's.
     await first.window.keyboard.press('ControlOrMeta+z');
     await expect.poll(async () => (await noteOf()).data.userSized).toBe(false);
-    expect(await noteOf()).toMatchObject({ width: before.width, height: before.height });
+    // The size comes back with the flag, but a read between the two sees one without the other.
+    await expect.poll(noteOf).toMatchObject({ width: before.width, height: before.height });
     await dragCorner();
     await expect.poll(async () => (await noteOf()).data.userSized).toBe(true);
+    await expect.poll(async () => (await noteOf()).width).toBeGreaterThan(before.width + 40);
+    await expect.poll(async () => (await noteOf()).height).toBeGreaterThan(before.height + 30);
     const sized = await noteOf();
     expect(sized.width).toBeGreaterThan(before.width + 40);
     expect(sized.height).toBeGreaterThan(before.height + 30);
@@ -164,8 +167,11 @@ test("a lane's note dragged bigger keeps its size through an arrange and a resta
     // Its text no longer fits: it scrolls, and says there is more under it until it is read to the end.
     const more = first.window.getByTestId('agent-note-more');
     await expect(more).toBeVisible();
-    await note.locator('.agent-note-body').evaluate((element) => element.scrollTo(0, element.scrollHeight));
-    await expect(more).toHaveCount(0);
+    // A scroll sent as the note is laid out again is lost, so it is sent until the cue goes.
+    await expect(async () => {
+      await note.locator('.agent-note-body').evaluate((element) => element.scrollTo(0, element.scrollHeight));
+      await expect(more).toHaveCount(0, { timeout: 1000 });
+    }).toPass();
 
     // After a restart of the app.
     await first.app.close();

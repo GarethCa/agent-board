@@ -1440,26 +1440,22 @@
   }
 }
 
-/* The usage pill, beside the creation toolbar: the 5-hour and weekly windows, detail on hover. */
+/* The usage pill, first in the zoom island: the 5-hour and weekly windows, detail on hover. */
 
 .usage-pill {
-  position: absolute;
-  top: 50%;
-  left: calc(100% + var(--space-2));
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border);
+  height: var(--control-sm);
+  padding: 0 var(--space-2);
+  border: 0;
   border-radius: var(--radius-card);
-  background: var(--island);
-  box-shadow: var(--shadow-island);
+  background: transparent;
   color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
-  translate: 0 -50%;
 }
 
 .usage-pill.is-hot {
@@ -1555,6 +1551,15 @@
 .usage-detail-fresh {
   padding-top: var(--space-1-5);
   border-top: 1px solid var(--on-inverse-soft);
+}
+
+/* In Settings the block sits on the panel, not on the inverse tooltip: its divider and width follow the panel. */
+.settings .usage-detail {
+  width: auto;
+}
+
+.settings .usage-detail-fresh {
+  border-top-color: var(--border);
 }
 
 .usage-detail.is-stale .usage-detail-fresh {

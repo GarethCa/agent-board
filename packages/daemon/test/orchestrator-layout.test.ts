@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import { agentNoteSize } from '../src/agent-notes.ts';
@@ -769,6 +769,8 @@ describe('orchestrator.arrange', () => {
       const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
       await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
       await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${me.agent.sessionId}`, width: 960, height: 600 }] });
+      // Lanes go by state, so wait out the crew's start: left to chance, a loaded run arranges one daemon's crew while still starting.
+      await vi.waitFor(async () => expect((await setup.client.call('agent.list')).map((agent) => agent.state)).not.toContain('starting'), { timeout: 15_000, interval: 20 });
       for (const [index, at] of starts.entries()) {
         const clock = await me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', does: 'fresh', prompt: `sweep ${index}` } });
         await setup.client.call('item.update', { id: clock.id, ...at });

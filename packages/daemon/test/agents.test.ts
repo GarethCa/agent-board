@@ -61,6 +61,8 @@ async function agentDaemon(
     dialogCloseMs?: number;
     /** How many of its fakes' turns end with no `Stop` hook. */
     loseStopHooks?: number;
+    /** How many Enters typed after text its fakes lose, the text staying at the prompt. */
+    loseEnters?: number;
     /** How long its fakes take to exit after their `SessionEnd`, still reading what is typed. */
     sessionEndExitMs?: number;
     /** Its fake Claude draws its prompt box each time it sits at its prompt (`spinner`: under its spinner line). */
@@ -90,6 +92,7 @@ async function agentDaemon(
       idleNeedsInputMessage: options.idleNeedsInputMessage,
       dialogCloseMs: options.dialogCloseMs,
       loseStopHooks: options.loseStopHooks,
+      loseEnters: options.loseEnters,
       sessionEndExitMs: options.sessionEndExitMs,
       promptBox: options.promptBox,
       hangTool: options.hangTool,
@@ -1214,6 +1217,73 @@ describe('Claude agents', () => {
         expect.objectContaining({ sessionId: finished.sessionId, state: 'done' }),
         expect.objectContaining({ sessionId: running.sessionId, state: 'stopped-by-restart', endedAt: expect.any(String) }),
       ]);
+    });
+
+    it('keeps a message queued for an agent not yet up when the daemon shuts down, flagged with Resend after the restart', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir, noSessionStart: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      expect(await first.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+      await first.daemon.stop();
+
+      const second = await agentDaemon('output', { dataDir });
+      const [kept] = await second.client.call('agent.list');
+      expect(kept).toMatchObject({
+        sessionId: agent.sessionId,
+        state: 'stopped-by-restart',
+        undelivered: [{ what: 'A message', text: 'Also lint', reason: expect.any(String) }],
+        flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend/) },
+      });
+      await second.daemon.stop();
+
+      // Kept until the user resends or clears it, however many restarts come between.
+      const third = await agentDaemon('output', { dataDir });
+      expect((await third.client.call('agent.list'))[0]).toMatchObject({ undelivered: kept!.undelivered, flag: kept!.flag });
+      await third.client.call('session.attach', { sessionId: agent.sessionId });
+      await third.client.call('agent.resendUndelivered', { sessionId: agent.sessionId });
+      expect((await third.client.call('agent.list'))[0]).toMatchObject({ undelivered: [], flag: null });
+      await third.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit' && e.payload.prompt === 'Also lint',
+      );
+      await third.daemon.stop();
+
+      const fourth = await agentDaemon('output', { dataDir });
+      expect((await fourth.client.call('agent.list'))[0]).toMatchObject({ undelivered: [] });
+    });
+
+    it('keeps a message still waiting behind a first prompt being sent as the daemon shuts down, as not delivered', async () => {
+      const dataDir = tempDataDir();
+      // Its Enters are lost: the daemon is still pressing Enter on its task when it stops, the message behind it.
+      const first = await agentDaemon('output', { dataDir, loseEnters: 10 });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Tidy the docs', ...SIZE });
+      await first.client.call('session.attach', { sessionId: agent.sessionId });
+      expect(await first.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' })).toEqual({ queued: true });
+      await vi.waitFor(() => expect(first.recorder.screenText(agent.sessionId)).toContain('Tidy the docs'), { timeout: 10_000 });
+      await first.daemon.stop();
+
+      const second = await agentDaemon('output', { dataDir });
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({
+        undelivered: [{ what: 'A message', text: 'Also lint', reason: 'the daemon shut down before it was up' }],
+        flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend/) },
+      });
+    });
+
+    it('forgets what was not delivered to an agent for good once the user clears it', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir, noSessionStart: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      await first.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Also lint' });
+      await first.daemon.stop();
+
+      const second = await agentDaemon('output', { dataDir });
+      await second.client.call('agent.clearUndelivered', { sessionId: agent.sessionId });
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({ undelivered: [], flag: null });
+      await second.daemon.stop();
+      const third = await agentDaemon('output', { dataDir });
+      expect((await third.client.call('agent.list'))[0]).toMatchObject({ undelivered: [], flag: null });
     });
 
     it('tells stopped by restart apart from stopped by the user and from a crash, after a shutdown and a hard kill', async () => {

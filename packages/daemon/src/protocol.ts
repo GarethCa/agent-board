@@ -2785,9 +2785,10 @@ export const ARRANGE_BYS = ['issue', 'role', 'state'] as const;
 export type ArrangeBy = (typeof ARRANGE_BYS)[number];
 /**
  * How it lays the groups out: a row each (the default; by issue, lanes with a column per slot), a column each, a card
- * each (flowed two or three across), or filling the zone's width as Tidy does.
+ * each (flowed two or three across), filling the zone's width as Tidy does, or by issue a lane each that wraps its
+ * tiles onto a new row after four (`wrap`; by role or state, as rows).
  */
-export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid'] as const;
+export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid', 'wrap'] as const;
 export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
 /**

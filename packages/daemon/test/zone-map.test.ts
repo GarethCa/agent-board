@@ -82,7 +82,7 @@ describe('a zone map', () => {
   it('finds a tile nudged down off its row in every layout and grouping, the lead and shells too', () => {
     const tiles = [...crew, agent('review-b', { role: 'reviewer', reviewOf: 'agent:impl-b', createdAt: '9' })];
     for (const by of ['issue', 'role', 'state'] as const) {
-      for (const layout of ['rows', 'columns', 'cards'] as const) {
+      for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
         expect(arrangedZone(tiles, undefined, layout, [], undefined, by).offGrid, `${by} ${layout}`).toEqual([]);
         for (const key of ['agent:lead', 'shell:gate', 'agent:review-a']) {
           const nudged = arrangedZone(tiles, (thing) => (thing.key === key ? { ...thing, y: thing.y + 30 } : thing), layout, [], undefined, by);
@@ -149,10 +149,10 @@ describe('a zone map', () => {
       { from: 'agent:impl-c', to: 'agent:review-c' },
       { from: 'agent:review-c', to: 'agent:impl-c' },
     ];
-    for (const layout of ['rows', 'columns', 'cards'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
       const map = arrangedZone(mixed, undefined, layout, links);
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
-      expect(laneTable(map, 'zone:z', ref), layout).toContain(`next lane → ${{ rows: 'row', columns: 'column', cards: 'card' }[layout]} 4`);
+      expect(laneTable(map, 'zone:z', ref), layout).toContain(`next lane → ${{ rows: 'row', columns: 'column', cards: 'card', wrap: 'lane' }[layout]} 4`);
     }
   });
 
@@ -169,7 +169,7 @@ describe('a zone map', () => {
       { from: `agent:impl-${lane}`, to: `agent:review-${lane}` },
       { from: `agent:review-${lane}`, to: `agent:impl-${lane}` },
     ]);
-    for (const layout of ['rows', 'columns', 'cards'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
       const map = arrangedZone(tiles, undefined, layout, links, new Map([['issue:ACME-11', 140]]));
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
     }
@@ -180,11 +180,34 @@ describe('a zone map', () => {
       ['issue:ACME-9', agentNoteSize(Array.from({ length: 10 }, (_, index) => `- step ${index + 1}`).join('\n'), 256, 0).height],
       ['issue:ACME-12', 400],
     ]);
-    for (const layout of ['rows', 'columns', 'cards'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
       const map = arrangedZone(crew, undefined, layout, [], tall);
       expect(map.things.find((thing) => thing.key === 'item:issue:ACME-12-note')!.height, layout).toBe(400);
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
     }
+  });
+
+  it('lints a lane that wraps onto several rows ok, and measures the space between wrapped lanes down the zone', () => {
+    const tiles: ArrangeTile[] = [
+      ...crew,
+      ...Array.from({ length: 9 }, (_, index) => agent(`review-a${index}`, { role: 'reviewer', reviewOf: 'agent:impl-a', createdAt: `${index}` })),
+    ];
+    const links = [
+      { from: 'agent:impl-a', to: 'agent:review-a' },
+      { from: 'agent:review-a', to: 'agent:impl-a' },
+    ];
+    const map = arrangedZone(tiles, undefined, 'wrap', links);
+    // ACME-9's lane of eleven is three rows deep.
+    const rowsOf = (keys: readonly string[]) => new Set(keys.map((key) => map.things.find((thing) => thing.key === key)!.y)).size;
+    const { slots } = map.lanes.find((lane) => lane.key === 'issue:ACME-9')!;
+    expect(rowsOf([...slots.implementer, ...slots.reviewer])).toBe(3);
+    expect([map.overlaps, map.offGrid, map.widestGap, map.laneGap, map.labelGap]).toEqual([[], [], 0, 0, 0]);
+    expect(laneTable(map, 'zone:z', ref).split('\n').at(-1)).toMatch(/^lint {2}ok · /);
+    // By role, wrap lays out as rows, and the next lane is a row.
+    expect(laneTable(arrangedZone(tiles, undefined, 'wrap', links, undefined, 'role'), 'zone:z', ref)).toContain('next lane → row 3');
+    // A lane dragged down, away from the one above it, is that many rows apart.
+    const lastLane = (thing: ZoneMapThing) => thing.key.includes('ACME-9') || thing.key.startsWith('agent:review-a') || thing.key === 'agent:impl-a';
+    expect(arrangedZone(tiles, (thing) => (lastLane(thing) ? { ...thing, y: thing.y + 3 * ROW_STEP } : thing), 'wrap', links).laneGap).toBe(3);
   });
 
   it('counts the widest gap in a lane in slots', () => {

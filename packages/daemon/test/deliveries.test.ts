@@ -164,6 +164,76 @@ describe('deliveries', () => {
     expect(deliveries.queuedUntilUp('a')).toBe(0);
   });
 
+  it('hands back what is still queued for an agent not up yet as the daemon closes, once only', async () => {
+    const a = row('a');
+    const { deliveries, writes, land, undelivered } = setup([a]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests', up);
+    expect(await deliveries.answer('a', 'Also lint')).toEqual({ queued: true });
+    expect(deliveries.runScheduled('a', 'Nightly')).toEqual({ started: true, queued: true });
+    deliveries.handBackQueued();
+    expect(undelivered).toEqual([
+      'a A message: Also lint (the daemon shut down before it was up)',
+      'a A scheduled run: Nightly (the daemon shut down before it was up)',
+    ]);
+    // Its session then ends with the daemon: nothing is handed back twice.
+    a.ended_at = '2026-10-22T10:00:01Z';
+    comeUp(false);
+    await land('a');
+    deliveries.handBackQueued();
+    expect(writes).toEqual([]);
+    expect(undelivered).toHaveLength(2);
+  });
+
+  it('hands back nothing as the daemon closes that is being typed, its Enter not yet seen to start a turn', async () => {
+    const { deliveries, writes, advance, undelivered } = setup([row('a')]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', undefined, up);
+    await deliveries.answer('a', 'Also lint');
+    comeUp(true);
+    // Drawn, and Enter pressed once its terminal is quiet: no turn has started on it yet.
+    await advance(0);
+    deliveries.outputSeen('a');
+    await advance(150);
+    expect(writes).toEqual([
+      ['a', 'Also lint'],
+      ['a', '\r'],
+    ]);
+    // Its prompt has it now, its `UserPromptSubmit` still to come.
+    deliveries.handBackQueued();
+    expect(undelivered).toEqual([]);
+  });
+
+  it('keeps on handing back as the daemon closes when one could not be kept', async () => {
+    const { deliveries, undelivered } = setup([row('a'), row('b')]);
+    for (const id of ['a', 'b']) {
+      deliveries.firstPrompt(id, undefined, new Promise<boolean>(() => {}));
+      await deliveries.answer(id, `Also lint ${id}`);
+    }
+    const push = undelivered.push.bind(undelivered);
+    let failed = false;
+    undelivered.push = (...kept) => {
+      if (failed) return push(...kept);
+      failed = true;
+      throw new Error('disk full');
+    };
+    expect(() => deliveries.handBackQueued()).not.toThrow();
+    expect([...undelivered]).toEqual(['b A message: Also lint b (the daemon shut down before it was up)']);
+  });
+
+  it('hands back nothing as the daemon closes that its queue already settled', async () => {
+    const a = row('a');
+    const { deliveries, land, undelivered } = setup([a]);
+    const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
+    deliveries.firstPrompt('a', 'Fix the tests', up);
+    await deliveries.answer('a', 'Also lint');
+    a.ended_at = '2026-10-22T10:00:01Z';
+    comeUp(false);
+    await land('a');
+    deliveries.handBackQueued();
+    expect(undelivered).toEqual(['a A message: Also lint (a has ended)']);
+  });
+
   it('hands back what was queued behind a first prompt left unsent, never typing onto it', async () => {
     const { deliveries, writes, advance, undelivered } = setup([row('a')]);
     const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();

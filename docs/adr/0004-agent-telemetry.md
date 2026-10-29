@@ -389,13 +389,19 @@ PTY.
   is busy at once, as for an agent at work, so its edge keeps it and tries again, never holding its sender handing off
   for as long as the agent takes to come up. One relaunched before it came up keeps what was queued for its new
   session. Nothing queued is ever dropped unsaid: one never typed (its session ended first, its prompt holds the task
-  unsent, or a question or permission prompt is up when its turn comes) is kept on the agent (`Agent.undelivered`, in
-  the daemon's memory) and flagged to the user, a flag that outlives its session and opening it, until the user
-  resends it (`agent.resendUndelivered`, an ended agent started again with the first) or clears it. A flag the agent
+  unsent, a question or permission prompt is up when its turn comes, or the daemon shuts down first) is kept on the
+  agent (`Agent.undelivered`, in the database, so a daemon restart shows it again) and flagged to the user, a flag that
+  outlives its session, opening it and a restart, until the user resends it (`agent.resendUndelivered`, an ended agent
+  started again with the first) or clears it. A flag the agent
   already had stays: its reason goes on in that one's, and it stands again once that is resent or cleared. An
   **unsent message**'s flag folds in the flag before it the same way, and either of the two may stand in place of the
   other: whichever is over first leaves the other standing in place of what it held, never a copy of itself. A flag
   the agent raised for its orchestrator goes to the user while folded in, as its reason shows on the user's flag.
+  A flag the agent raises after them stands in place of both (and of its own earlier one they carried), until it is
+  cleared, read away or its session ends: then whichever of the two still holds stands again, never only on the tile.
+  Clearing the agent's flag while one of them shows (`needs_you` with clear, or its orchestrator's `send`) takes its
+  own reason off that one and leaves the rest standing. Once its session ends, only what was never delivered stands,
+  without the agent's own reason, which it can no longer answer.
 - **A Claude launch with no task waits too.** A Claude agent started with no task, or relaunched (woken, resumed,
   restarted) with no new prompt, is held the same way until its session is up: nothing is typed at it, and what is
   sent meanwhile is queued, as above, so a message is never typed into Claude while it loads (its splash, a resumed

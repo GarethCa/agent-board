@@ -131,9 +131,13 @@ export async function openBoardMenu(window: Page): Promise<Locator> {
 
 /** Sets what a double-click on a tile opens, from the board menu's Settings, and closes the menu again. */
 export async function setClickOpens(window: Page, opens: 'Session window' | 'Expand in place'): Promise<void> {
-  const menu = await openBoardMenu(window);
+  const menu = window.getByRole('dialog', { name: 'Board menu' });
   const choice = menu.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: opens });
-  await choice.check();
+  // A menu opened as another panel (the inbox) is still closing can be closed with it, so it is opened again until it stays.
+  await expect(async () => {
+    await openBoardMenu(window);
+    await choice.check({ timeout: 2000 });
+  }).toPass();
   await expect(choice).toBeChecked();
   await window.keyboard.press('Escape');
   await expect(menu).toBeHidden();
