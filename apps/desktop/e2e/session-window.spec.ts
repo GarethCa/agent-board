@@ -254,6 +254,8 @@ test("a permission prompt shows a Show prompt banner over the terminal, and answ
 
     // Show prompt gives the keyboard to the terminal, where the prompt is answered.
     await sessionWindow(window).getByRole('button', { name: 'Show prompt' }).click();
+    // Typed before the terminal has the keyboard, the answer goes nowhere.
+    await expect(sessionWindow(window).locator('.xterm-helper-textarea')).toBeFocused();
     await window.keyboard.type('y');
     await window.keyboard.press('Enter');
     await expect(screen(window)).toContainText('Removed dist.');

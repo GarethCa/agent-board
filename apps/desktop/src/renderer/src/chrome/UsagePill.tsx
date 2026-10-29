@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { UsageReading } from '@agent-board/daemon/protocol';
-import { Tooltip } from '../ui';
+import { IslandSeparator, Tooltip } from '../ui';
 import { cx } from '../ui/cx';
-import { usageMeter } from './usage-view';
+import { usageMeter, type UsageMeter } from './usage-view';
 
 /** How often the pill's "read N min ago" is worked out again. */
 const TICK_MS = 30_000;
 
 /** The newest plan usage reading, kept up to date, and the time now, moving on every `TICK_MS`. */
-function useUsage(): { reading: UsageReading | undefined; now: number } {
+export function useUsage(): { reading: UsageReading | undefined; now: number } {
   const [reading, setReading] = useState<UsageReading>();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -32,15 +32,42 @@ function useUsage(): { reading: UsageReading | undefined; now: number } {
 }
 
 /**
- * The 5-hour and weekly usage beside the creation toolbar: a small meter for each, with when each resets and how old
+ * The 5-hour and weekly usage beside the zoom controls, when Settings › Usage turns it on: a small meter for each, with when each resets and how old
  * the reading is on hover. Nothing shows before a Claude agent's status line has posted a reading; a stale one is
- * hatched and says so.
+ * hatched and says so. `separated` draws the island's divider after it, only when it draws itself.
  */
-export function UsagePill() {
+export function UsagePill({ separated = false }: { separated?: boolean }) {
   const { reading, now } = useUsage();
   const meter = reading === undefined ? undefined : usageMeter(reading, now);
   if (meter === undefined || meter.windows.length === 0) return null;
-  const detail = (
+  const detail = <UsageDetail meter={meter} />;
+  return (
+    <>
+      <Tooltip content={detail} side="top">
+        <button
+          type="button"
+          className={cx('usage-pill', meter.hot && 'is-hot', meter.stale && 'is-stale')}
+          aria-label={`Plan usage: ${meter.windows.map((window) => `${window.label} ${window.used}%`).join(', ')}${meter.stale ? ', stale' : ''}`}
+          data-testid="usage-pill"
+        >
+          {meter.windows.map((window) => (
+            <span key={window.short} className="usage-pill-window">
+              <em>{window.short}</em>
+              <UsageBar used={window.used} window={window.short} />
+              {window.used}%
+            </span>
+          ))}
+          {meter.stale && <span className="usage-pill-stale">stale</span>}
+        </button>
+      </Tooltip>
+      {separated && <IslandSeparator />}
+    </>
+  );
+}
+
+/** The meter's figures: each window's use, what is left and when it resets, and how old the reading is. */
+export function UsageDetail({ meter }: { meter: UsageMeter }) {
+  return (
     <span className={cx('usage-detail', meter.stale && 'is-stale')}>
       {meter.windows.map((window) => (
         <span key={window.short} className="usage-detail-window">
@@ -56,25 +83,6 @@ export function UsagePill() {
       ))}
       <span className="usage-detail-fresh">{meter.fresh}</span>
     </span>
-  );
-  return (
-    <Tooltip content={detail} side="bottom">
-      <button
-        type="button"
-        className={cx('usage-pill', meter.hot && 'is-hot', meter.stale && 'is-stale')}
-        aria-label={`Plan usage: ${meter.windows.map((window) => `${window.label} ${window.used}%`).join(', ')}${meter.stale ? ', stale' : ''}`}
-        data-testid="usage-pill"
-      >
-        {meter.windows.map((window) => (
-          <span key={window.short} className="usage-pill-window">
-            <em>{window.short}</em>
-            <UsageBar used={window.used} window={window.short} />
-            {window.used}%
-          </span>
-        ))}
-        {meter.stale && <span className="usage-pill-stale">stale</span>}
-      </button>
-    </Tooltip>
   );
 }
 

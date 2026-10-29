@@ -355,7 +355,7 @@ describe('arrangeTiles', () => {
     const note: Rect = { x: 333, y: 91, width: 157, height: 211 };
     const big = agent('big', { size: { width: 301, height: 180 } });
     for (const by of ['issue', 'role', 'state'] as const) {
-      for (const layout of ['rows', 'columns', 'cards', 'grid'] as const) {
+      for (const layout of ['rows', 'columns', 'cards', 'grid', 'wrap'] as const) {
         const tiles = [...crew, big];
         const result = arrangeTiles(tiles, edges, { by, layout, width: 1000, obstacles: [note], clusters: true });
         const { positions, clusters } = result;
@@ -498,7 +498,7 @@ describe('arranging at a spacing', () => {
     }
   });
 
-  it.each(['columns', 'cards', 'grid'] as const)('in %s, starts at the spacing\'s padding and keeps its gaps', (layout) => {
+  it.each(['columns', 'cards', 'grid', 'wrap'] as const)('in %s, starts at the spacing\'s padding and keeps its gaps', (layout) => {
     for (const spacing of ARRANGE_SPACINGS) {
       const gaps = SPACING_GAPS[spacing];
       const { positions } = arrangeTiles(busy, links, { by: 'issue', layout, width: 1400, clusters: layout !== 'grid', spacing });
@@ -779,6 +779,116 @@ describe('arranging lanes as columns or cards', () => {
     const many = [...lanes, ...['ACME-20', 'ACME-21'].map((issue) => agent(issue, { role: 'implementer', issue }))];
     const { clusters } = arranged('cards', many);
     expect(clusters.map((cluster) => cells(new Map([['label', cluster.labelAt]])).label![1])).toEqual([1, 1, 1, 4, 4]);
+  });
+});
+
+describe('arranging lanes to wrap', () => {
+  // ACME-9's lane holds ten agents: its implementer, six reviewers and three follow-up reviewers, started in turn.
+  const big: ArrangeTile[] = [
+    agent('impl-a', { role: 'implementer', issue: 'ACME-9', createdAt: '2026-01-01T00:00:00Z' }),
+    ...[1, 2, 3, 4, 5, 6].map((n) => agent(`review-a${n}`, { role: 'reviewer', reviewOf: 'impl-a', createdAt: `2026-01-01T00:0${n}:00Z` })),
+    ...[1, 2, 3].map((n) => agent(`again-a${n}`, { role: 'follow-up-reviewer', reviewOf: 'impl-a', createdAt: `2026-01-01T00:1${n}:00Z` })),
+  ];
+  const lead = agent('lead', { lead: true });
+  const gate: ArrangeTile = { ...agent('gate'), kind: 'shell', state: null };
+  const one = agent('impl-b', { role: 'implementer', issue: 'ACME-12', createdAt: '2026-01-02T00:00:00Z' });
+  const pair = [
+    agent('impl-c', { role: 'implementer', issue: 'ACME-14', createdAt: '2026-01-03T00:00:00Z' }),
+    agent('review-c', { role: 'reviewer', reviewOf: 'impl-c', createdAt: '2026-01-03T00:01:00Z' }),
+  ];
+  const tiles = [lead, gate, ...big, one, ...pair];
+  const arranged = (crew: readonly ArrangeTile[] = tiles, links: { from: string; to: string }[] = []) => arrangeTiles(crew, links, { by: 'issue', layout: 'wrap', width: 600, clusters: true });
+
+  it('keeps the top row as rows do, then wraps a lane of ten into rows of 4, 4 and 2 after its head, in slot order', () => {
+    const { positions, clusters } = arranged();
+    const at = cells(positions);
+    expect([at.lead, at.gate]).toEqual([
+      [0, 0],
+      [1, 0],
+    ]);
+    const order = ['impl-a', 'review-a1', 'review-a2', 'review-a3', 'review-a4', 'review-a5', 'review-a6', 'again-a1', 'again-a2', 'again-a3'];
+    expect(order.map((id) => at[id])).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 1],
+      [4, 1],
+      [1, 2],
+      [2, 2],
+      [3, 2],
+      [4, 2],
+      [1, 3],
+      [2, 3],
+    ]);
+    // Its label and note together in its first column, the note below the label: a tile's size in all.
+    const a = clusters.find((cluster) => cluster.key === 'issue:ACME-9')!;
+    expect(cells(new Map([['label', a.labelAt]])).label).toEqual([0, 1]);
+    expect(a.noteAt).toEqual({ x: a.labelAt.x, y: a.labelAt.y + CLUSTER_LABEL_SIZE.height + TILE_GAP });
+    expect(a.noteAt.y + a.noteSize.height).toBe(a.labelAt.y + AGENT_TILE_SIZE.height);
+  });
+
+  it('runs a tall note down beside its lane’s wrapped rows, and starts the next lane below whichever reaches further', () => {
+    const tall = (height: number) => arrangeTiles(tiles, [], { by: 'issue', layout: 'wrap', width: 600, clusters: true, noteHeights: new Map([['issue:ACME-9', height]]) });
+    const { positions, clusters } = tall(600);
+    const a = clusters.find((cluster) => cluster.key === 'issue:ACME-9')!;
+    // Its rows stay a grid row apart, whatever its note's height.
+    expect(['impl-a', 'again-a2'].map((id) => cells(positions)[id])).toEqual([
+      [1, 1],
+      [1, 3],
+    ]);
+    expect(a.noteSize.height).toBe(600);
+    expect(positions.get('impl-b')!.y).toBe(a.noteAt.y + 600 + SPACING_GAPS.normal.lane);
+    // A note shorter than its rows leaves the next lane where it was.
+    expect(cells(tall(200).positions)['impl-b']).toEqual([1, 4]);
+  });
+
+  it('keeps a one-agent lane on one row, and stacks the lanes in order below each other', () => {
+    const { positions, clusters } = arranged();
+    const at = cells(positions);
+    expect(at['impl-b']).toEqual([1, 4]);
+    expect([at['impl-c'], at['review-c']]).toEqual([
+      [1, 5],
+      [2, 5],
+    ]);
+    expect(clusters.map((cluster) => cells(new Map([['label', cluster.labelAt]])).label)).toEqual([
+      [0, 1],
+      [0, 4],
+      [0, 5],
+    ]);
+  });
+
+  it('gives each lane its own columns: a wide tile spreads only its own lane', () => {
+    const wide = { ...pair[1]!, size: { width: AGENT_TILE_SIZE.width + 200, height: AGENT_TILE_SIZE.height } };
+    const crew = [lead, gate, ...big, one, pair[0]!, wide, agent('again-c', { role: 'follow-up-reviewer', reviewOf: 'impl-c', createdAt: '2026-01-03T00:02:00Z' })];
+    const plain = arranged().positions;
+    const { positions } = arranged(crew);
+    // Its own lane moves on past it; every other lane's tiles stay where they were.
+    expect(positions.get('again-c')!.x).toBe(positions.get('review-c')!.x + wide.size.width + TILE_GAP);
+    for (const tile of [...big, one]) expect(positions.get(tile.id), tile.id).toEqual(plain.get(tile.id));
+  });
+
+  it('when a tile joins a lane, moves only that lane’s tiles, and the lanes below straight down', () => {
+    const before = arranged();
+    const crew = [...tiles, agent('again-b', { role: 'follow-up-reviewer', reviewOf: 'impl-b', createdAt: '2026-01-02T00:01:00Z' })];
+    const after = arranged(crew);
+    // Above it, nothing moves; in it, its new tile goes after its first, on the same row.
+    for (const tile of [lead, gate, ...big, one]) expect(after.positions.get(tile.id), tile.id).toEqual(before.positions.get(tile.id));
+    expect(cells(after.positions)['again-b']).toEqual([2, 4]);
+    // Filling ACME-9's last row, nothing below moves; one more wraps it, and the lanes below slide down a row, not across.
+    const fuller = [...tiles, ...[4, 5].map((n) => agent(`again-a${n}`, { role: 'follow-up-reviewer', reviewOf: 'impl-a', createdAt: `2026-01-01T00:1${n}:00Z` }))];
+    expect(cells(arranged(fuller).positions)['impl-b']).toEqual([1, 4]);
+    const wrapped = [...fuller, agent('again-a6', { role: 'follow-up-reviewer', reviewOf: 'impl-a', createdAt: '2026-01-01T00:16:00Z' })];
+    const moved = arranged(wrapped).positions;
+    expect(cells(moved)['again-a6']).toEqual([1, 4]);
+    for (const tile of [one, ...pair]) {
+      expect(moved.get(tile.id)!.x, tile.id).toBe(before.positions.get(tile.id)!.x);
+      expect(moved.get(tile.id)!.y - before.positions.get(tile.id)!.y, tile.id).toBe(ROW_STEP);
+    }
+  });
+
+  it('by role or state, lays the rows out as rows do', () => {
+    for (const by of ['role', 'state'] as const) {
+      expect(arrangeTiles(crew, edges, { by, layout: 'wrap', width: 1000 }).positions, by).toEqual(arrangeTiles(crew, edges, { by, layout: 'rows', width: 1000 }).positions);
+    }
   });
 });
 

@@ -71,6 +71,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await expect.soft(window.locator('body')).toHaveScreenshot('board-menu.png', SHOT);
     await restorePointer();
     await window.keyboard.press('Escape');
+    await expect(window.getByRole('dialog', { name: 'Board menu' })).toBeHidden();
 
     // The inbox, open from the Needs-you pill.
     await window.getByTestId('inbox-count').click();
@@ -80,6 +81,8 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await expect.soft(window.locator('body')).toHaveScreenshot('inbox.png', SHOT);
     await restorePointer();
     await window.keyboard.press('Escape');
+    // Gone before the board menu is opened again, or the inbox, still leaving, covers the button.
+    await expect(window.getByTestId('needs-you-inbox')).toBeHidden();
 
     // A tile expanded in place: its details collapsed to the icon rail on the left, its terminal beside them, the tile beside it pushed clear.
     await setClickOpens(window, 'Expand in place');

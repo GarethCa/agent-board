@@ -8,12 +8,14 @@ import { scratch } from './scratch.ts';
 // Pacing work by plan usage: the reading a Claude agent's status line posts, each zone's priority, and the switch that
 // lets the Captain hold work, off until the user turns it on.
 
-test("the toolbar shows the usage a Claude agent's status line read; a zone takes a priority; the user turns pacing on in Settings › Usage, and overrides a hold", async () => {
+test("Settings › Usage shows the usage a Claude agent's status line read, and can show it beside the zoom controls; a zone takes a priority; the user turns pacing on in Settings › Usage, and overrides a hold", async () => {
   const { dir, repo, env } = scratch('output');
   const now = Math.round(Date.now() / 1000);
   const rateLimits = { five_hour: { used_percentage: 86, resets_at: now + 3600 }, seven_day: { used_percentage: 41, resets_at: now + 3 * 86_400 } };
   const dataDir = tempDataDir();
-  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV, FAKE_HARNESS_RATE_LIMITS: JSON.stringify(rateLimits) });
+  const first = await launch(dataDir, { ...env, ...SHELL_ENV, FAKE_HARNESS_RATE_LIMITS: JSON.stringify(rateLimits) });
+  let app = first.app;
+  const window = first.window;
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
@@ -23,9 +25,6 @@ test("the toolbar shows the usage a Claude agent's status line read; a zone take
 
     await spawnAgent(window, 'monorepo', 'Write the code');
     await expect(tile(window)).toHaveAttribute('data-state', /waiting|idle/, { timeout: TURN_MS });
-
-    await expect(pill).toHaveAccessibleName('Plan usage: 5-hour window 86%, 7-day window 41%');
-    await expect(pill).toHaveClass(/is-hot/);
 
     // Each zone is Normal until the user picks another priority on its tab.
     const zone = window.getByTestId('zone');
@@ -37,6 +36,15 @@ test("the toolbar shows the usage a Claude agent's status line read; a zone take
     // Settings › Usage: the thresholds, and under them the switch, off until the user turns it on.
     await window.getByRole('button', { name: 'Board menu' }).click();
     const menu = window.getByRole('dialog', { name: 'Board menu' });
+    await expect(menu.locator('.usage-detail')).toContainText('86%');
+    await expect(menu.locator('.usage-detail')).toContainText('41%');
+    // The reading has arrived, and the pill is still nowhere: off by default, not in the toolbar, not in the corner.
+    await expect(pill).toHaveCount(0);
+    const onBoard = menu.getByRole('switch', { name: 'Show usage on the board' });
+    await expect(onBoard).not.toBeChecked();
+    await onBoard.click();
+    await expect(onBoard).toBeChecked();
+    expect(await window.evaluate(() => globalThis.window.agentBoard.view.get('usageOnBoard'))).toBe(true);
     await expect(menu.getByRole('slider', { name: '5-hour window: Only High zones start new agents at' })).toHaveValue('80');
     await expect(menu.getByRole('slider', { name: "5-hour window: Low zones' idle agents may be paused at" })).toHaveValue('95');
     await expect(menu.getByRole('slider', { name: '7-day window: Only High zones start new agents at' })).toHaveValue('90');
@@ -47,6 +55,12 @@ test("the toolbar shows the usage a Claude agent's status line read; a zone take
     await expect(pacing).toBeChecked();
     expect((await window.evaluate(() => globalThis.window.agentBoard.flowEdges.settings())).usagePacing).toBe(true);
     await window.keyboard.press('Escape');
+
+    // On, the pill sits first in the zoom island, bottom right, and not in the toolbar.
+    await expect(pill).toHaveAccessibleName('Plan usage: 5-hour window 86%, 7-day window 41%');
+    await expect(pill).toHaveClass(/is-hot/);
+    await expect(window.getByRole('group', { name: 'Zoom' }).getByTestId('usage-pill')).toHaveCount(1);
+    await expect(window.getByRole('toolbar', { name: 'Create' }).getByTestId('usage-pill')).toHaveCount(0);
 
     // A hold, placed from a shell on the board as the user's side would, shows on the zone's tab with Override.
     await zone.getByRole('button', { name: 'New shell in zone' }).click();
@@ -62,6 +76,12 @@ test("the toolbar shows the usage a Claude agent's status line read; a zone take
     await window.getByRole('menuitem', { name: /Override/ }).click();
     await expect(zone.getByRole('button', { name: 'Priority: Low' })).toBeVisible();
     expect((await zones(window))[0]!.usageHold).toBeNull();
+
+    // The switch is kept: a relaunch on the same data shows the pill in the Zoom group again.
+    await app.close();
+    const again = await launch(dataDir, { ...env, ...SHELL_ENV });
+    app = again.app;
+    await expect(again.window.getByRole('group', { name: 'Zoom' }).getByTestId('usage-pill')).toBeVisible();
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);

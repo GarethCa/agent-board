@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.8 (2026-10-29)
+
+- Arrange gets an opt-in wrap layout: lanes wrap their tiles onto new rows after 4
+- The usage pill moves out of the toolbar into Settings, with an option to show it beside the zoom controls
+- An unsent or undelivered flag hidden by the agent's own flag stands again once that flag is cleared or read away
+- Messages queued for an agent not yet up survive a daemon shutdown, shown with Resend after the restart
+- Flaky tests wait for what they need under load: stop-tree, clock layout, board menu, terminal focus, note size
+
 ## v0.6.7 (2026-10-29)
 
 - The quiet-net tests wait up to 10 s for the net's log line, which a loaded full run can take more than 1 s to write

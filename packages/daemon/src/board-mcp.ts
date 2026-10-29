@@ -654,7 +654,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
           type: 'string',
           enum: [...ARRANGE_LAYOUTS],
           description:
-            'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), or filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows.',
+            'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows, or by issue each lane below the one before, its label and note in its first column and its tiles wrapping onto a new row after four (wrap; by role or state, as rows).',
         },
         auto: { type: 'boolean', description: 'Arrange by itself after every agent you start, note you add and agent you close (true), or stop (false). Off at first.' },
       },
@@ -1029,7 +1029,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     return (await unpinEntry(session, { ...givenStrings(args, ['path', 'url', 'label']), forOrchestrator: args.for_orchestrator === true }, cwd)).text;
   },
   needs_you: async (session, { reason, via, clear }) => {
-    if (clear === true) return flagLine(await flagOwn(session, undefined));
+    if (clear === true) return flagLine(await flagOwn(session, undefined), true);
     if (typeof reason !== 'string') throw new BoardError('give a reason, or clear');
     if (via !== undefined && typeof via !== 'string') throw new BoardError('via must be a string');
     return flagLine(await flagOwn(session, reason, via));

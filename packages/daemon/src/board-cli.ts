@@ -233,7 +233,7 @@ ORCHESTRATING
   the way moving aside:
   move <ref> [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]]
                         Move a tile (an agent, a shell) or a note.
-  arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off]
+  arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap] [--auto on|off]
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
@@ -902,7 +902,7 @@ the zone over another zone is refused.
   --json           Print where it went as JSON.`,
   },
   arrange: {
-    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid] [--auto on|off] [--json] | arrange board [--json]',
+    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap] [--auto on|off] [--json] | arrange board [--json]',
     text: `Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
 orchestrator: you first, then
 
@@ -930,7 +930,10 @@ and, by role or state, shells and your crew's clocks last. --layout columns turn
 a column instead: you, the shells and your crew's clocks stacked first, then a column per lane,
 its label with its note below it on top, then its tiles under them in slot order. --layout cards makes each lane a card instead,
 two across (three past four lanes), a free column and row between them: its label and note,
-implementer and reviewers on one row, its follow-up reviewers under them. --layout grid fills
+implementer and reviewers on one row, its follow-up reviewers under them. --layout wrap stacks
+the lanes as rows do, but each lane's label and note sit in its first column and its tiles, in
+slot order, wrap onto a new row after four, each lane with its own columns; by role or state it
+lays out as rows. --layout grid fills
 the zone's width in the same order
 instead of a row each, but only with the tiles no edge joins: a unit whose tiles an edge joins
 (you too, if one joins you) is laid out exactly as rows lay it out, from the top, and the grid
@@ -1524,7 +1527,7 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       } else if (reason.trim() === '') throw new UsageError('give a reason, or --clear');
       return async (session) => {
         const agent = await flagOwn(session, values.clear === true ? undefined : reason, string('via'));
-        return values.json ? JSON.stringify(agent, null, 2) : flagLine(agent);
+        return values.json ? JSON.stringify(agent, null, 2) : flagLine(agent, values.clear === true);
       };
     }
     case 'new': {

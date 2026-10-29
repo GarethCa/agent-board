@@ -902,10 +902,14 @@ export async function flagOwn(session: BoardSession, reason: string | undefined,
   return session.client.call('board.needsYou', { token: session.token, reason, ...(crew === undefined ? {} : { via: crew.sessionId }) });
 }
 
-/** What flagging (`flagOwn`) did, in a line: who it reaches, or that it was cleared. */
-export function flagLine(agent: Agent): string {
+/**
+ * What flagging (`flagOwn`) did, in a line: who it reaches, or that it was cleared (`cleared`), and what still waits on
+ * the user, which only they move on (a message left unsent or never delivered).
+ */
+export function flagLine(agent: Agent, cleared = false): string {
   const { flag } = agent;
   if (flag === null) return 'Your flag is cleared.';
+  if (cleared) return `Nothing of yours is flagged now. Still in Needs you, for the user to see to: "${flag.reason}".`;
   if (flag.to === 'orchestrator') return `Flagged for the agent that started you: "${flag.reason}". It hears it at its prompt, and its reply clears it.`;
   const via = flag.via === null ? '' : ` (passing on ${flag.via})`;
   return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or \`agent-board needs-you --clear\`, clears it.`;

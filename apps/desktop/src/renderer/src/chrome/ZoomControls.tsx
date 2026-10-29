@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { MiniMap, useReactFlow, useStore, type Node } from '@xyflow/react';
 import { Grid3x3, Map as MapIcon, Minus, Plus } from 'lucide-react';
 import { Button, Island, IslandSeparator, ToolButton } from '../ui';
+import { UsagePill } from './UsagePill';
+import { useUsageOnBoard } from './usage-on-board';
 import { ViewPopover, type ViewPopoverProps } from './ViewPopover';
 
 /**
  * The bottom-right island (chrome C): zoom out, the zoom (a click fits the board), zoom in, snapping to the grid, and
- * the minimap's toggle, with the minimap over it. The View button opens the popover of view settings.
+ * the minimap's toggle, with the minimap over it, and the usage pill first when Settings › Usage shows it here. The View button opens the popover of view settings.
  */
 export function ZoomControls({
   nodeColor,
@@ -17,10 +19,12 @@ export function ZoomControls({
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
   const [minimap, setMinimap] = useState(true);
+  const [usageOnBoard] = useUsageOnBoard();
   return (
     <>
       {minimap && <MiniMap className="board-minimap" pannable zoomable nodeColor={nodeColor} nodeStrokeColor="var(--raised-edge)" ariaLabel="Minimap" />}
       <Island className="zoom-controls island-bottom-right" role="group" aria-label="Zoom">
+        {usageOnBoard && <UsagePill separated />}
         <ToolButton size="sm" icon={<Minus />} label="Zoom out" onClick={() => void zoomOut()} />
         <Button
           size="sm"

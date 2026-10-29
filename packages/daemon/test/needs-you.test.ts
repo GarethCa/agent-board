@@ -179,6 +179,85 @@ describe('an agent flagging the user', () => {
     expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toEqual(own);
   });
 
+  /** An agent whose first prompt was left unsent, flagged so, connected as itself. */
+  const unsentFirstPrompt = async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await flagDaemon({ clock, noSessionStart: true, loseEnters: 10, loseEntersAfter: 1, submitConfirmMs: 100 });
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, prompt: 'Tidy the docs', ...SIZE });
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    const side = await agentSideOf(setup, agent.sessionId);
+    clock.advance(60_000);
+    await untilAgent(setup.recorder, agent.sessionId, (a) => a.untypedPrompt !== null);
+    await setup.client.call('agent.typeFirstPrompt', { sessionId: agent.sessionId });
+    const unsent = await untilAgent(setup.recorder, agent.sessionId, (a) => a.unsent !== null);
+    expect(unsent.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^Its first prompt was typed at its prompt but not sent .*on its tile$/) });
+    return { setup, agent, ...side, unsentFlag: unsent.flag! };
+  };
+
+  it('raises again the flag for a message left unsent once its own flag, raised after it, is cleared', async () => {
+    const { agent, token, connection, unsentFlag } = await unsentFirstPrompt();
+    expect((await connection.call('board.needsYou', { token, reason: 'Which docs?' })).flag?.reason).toBe('Which docs?');
+
+    const cleared = await connection.call('board.needsYou', { token, clear: true });
+    expect(cleared).toMatchObject({ sessionId: agent.sessionId, unsent: 'Its first prompt', flag: { to: 'user', reason: unsentFlag.reason } });
+  });
+
+  it('raises again the flag for a message left unsent once the user reads its own flag away', async () => {
+    const { setup, agent, token, connection, unsentFlag } = await unsentFirstPrompt();
+    await connection.call('board.needsYou', { token, reason: 'Which docs?' });
+
+    const seen = await setup.client.call('agent.markSeen', { sessionId: agent.sessionId });
+    expect(seen.flag).toMatchObject({ to: 'user', reason: unsentFlag.reason });
+    // Reading the flag for what sits unsent answers nothing: it stays until the message is sent or cleared.
+    expect((await setup.client.call('agent.markSeen', { sessionId: agent.sessionId })).flag).toMatchObject({ reason: unsentFlag.reason });
+    expect((await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId })).flag).toBeNull();
+  });
+
+  it('raises again the flags for a message never delivered and one left unsent once a newer flag of its own is cleared', async () => {
+    const { setup, agent } = await unsentAndUndelivered();
+    const { token, connection } = await agentSideOf(setup, agent.sessionId);
+    expect((await connection.call('board.needsYou', { token, reason: 'Second look' })).flag?.reason).toBe('Second look');
+
+    // Its newer flag stood in place of its first, so neither comes back: only what still waits on the user does.
+    const cleared = await connection.call('board.needsYou', { token, clear: true });
+    expect(cleared.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
+    expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toMatchObject({ reason: expect.stringMatching(/^Its first prompt .*on its tile$/) });
+    expect((await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId })).flag).toBeNull();
+  });
+
+  it('clears only its own reason from a flag for messages still waiting on the user, and says what stands', async () => {
+    const { setup, agent } = await unsentAndUndelivered();
+    const { token } = await agentSideOf(setup, agent.sessionId);
+    let out = '';
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token };
+    expect(await runBoardCommand('needs-you', ['--clear'], { out: (text) => (out += text), err: (text) => (out += text), env })).toBe(0);
+    expect(out).toMatch(/^Nothing of yours is flagged now\. Still in Needs you, for the user to see to: "A message sent before it was up was not delivered/);
+
+    const [left] = await setup.client.call('agent.list');
+    expect(left!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
+    expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag?.reason).toMatch(/^Its first prompt .*on its tile$/);
+  });
+
+  it('takes its own reason, which it can no longer answer, off the flag for a message never delivered once its session ends', async () => {
+    const { setup, agent } = await unsentAndUndelivered();
+
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    // As it stops, it may still show its reason: once it has ended, that is gone.
+    await untilAgent(setup.recorder, agent.sessionId, (a) => a.endedAt !== null && a.state !== 'waiting');
+    const [ended] = await setup.client.call('agent.list');
+    expect(ended!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile$/) });
+  });
+
+  it('raises again the flag for a message never delivered once its session ends under a newer flag of its own', async () => {
+    const { setup, agent } = await unsentAndUndelivered();
+    const { token, connection } = await agentSideOf(setup, agent.sessionId);
+    await connection.call('board.needsYou', { token, reason: 'Second look' });
+
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    const ended = await untilAgent(setup.recorder, agent.sessionId, (a) => a.endedAt !== null && a.flag !== null);
+    expect(ended.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile$/) });
+  });
+
   it('refuses a blank or overlong reason', async () => {
     const setup = await flagDaemon();
     const { token, connection } = await topLevel(setup);

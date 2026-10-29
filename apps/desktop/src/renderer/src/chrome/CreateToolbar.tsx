@@ -7,7 +7,6 @@ import { ShapeIcon } from '../board/items/shapes/ShapeArt';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
 import { keyText } from '../keys/registry';
 import { Button, Island, IslandSeparator, Kbd, Popover, ToolButton } from '../ui';
-import { UsagePill } from './UsagePill';
 
 /**
  * How a drag on the board acts: selecting and moving what it starts on; the same, but a zone's body draws a marquee and
@@ -75,7 +74,6 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       </Button>
       {drag.ghost !== undefined &&
         createPortal(<ToolGhost at={drag.ghost.at} size={ghostSize} label={GHOST_LABELS[drag.ghost.tool]!} fromToolbar />, document.body)}
-      <UsagePill />
     </Island>
   );
 }

@@ -120,16 +120,19 @@ describe('the merge gate', () => {
     await client.call('gate.run', { sessionId: agent.sessionId });
     await recorder.waitFor((e): e is GateUpdatedEvent => e.type === 'gate.updated' && e.run.steps.some((step) => step.name === 'test' && step.status === 'running'));
     await expect(client.call('gate.run', { sessionId: agent.sessionId })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams, message: expect.stringContaining('already running') });
-    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await sleep(20);
-    const child = Number(readFileSync(pidFile, 'utf8'));
+    // The gate writes the pid just after its `start test` marker, so under load the file can come a while later.
+    const child = await vi.waitFor(() => {
+      const pid = Number(readFileSync(pidFile, 'utf8'));
+      if (!pid) throw new Error('no pid yet');
+      return pid;
+    }, { timeout: 15_000, interval: 20 });
 
     await client.call('gate.stop', { sessionId: agent.sessionId });
 
     const run = await ended(agent.sessionId);
     expect(run).toMatchObject({ status: 'stopped', exitCode: null });
     expect(names(run)).toEqual(['lint passed', 'test stopped', 'e2e waiting']);
-    for (let i = 0; i < 100 && isProcessAlive(child); i++) await sleep(20);
-    expect(isProcessAlive(child)).toBe(false);
+    await vi.waitFor(() => expect(isProcessAlive(child)).toBe(false), { timeout: 15_000, interval: 20 });
   });
 
   it('says the head and what is uncommitted, so a run on an older commit or with changes is seen for what it is', async () => {

@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_USAGE_THRESHOLDS, type DaemonSettings, type UsageReading, type UsageThresholds } from '@agent-board/daemon/protocol';
 import { Fieldset, Hint, SectionLabel, Switch } from '../ui';
+import { UsageDetail, useUsage } from './UsagePill';
+import { useUsageOnBoard } from './usage-on-board';
+import { usageMeter } from './usage-view';
 
 type OnError = (action: string) => (error: unknown) => void;
 
@@ -18,21 +21,20 @@ const nowText = (reading: UsageReading | undefined, window: 'fiveHour' | 'sevenD
 };
 
 /**
- * Settings › Usage: the thresholds, which speak in the zones' priorities (High, Normal or Low, from each zone's tab),
+ * Settings › Usage: the 5-hour and weekly figures the pill shows, with the switch for showing it on the board, then the thresholds, which speak in the zones' priorities (High, Normal or Low, from each zone's tab),
  * and under them the switch that lets the Captain pace work by them. Off until the user turns it on; the daemon
  * refuses every budget hold while it is off.
  */
 export function UsageSetting({ onError }: { onError: OnError }) {
   const [settings, setSettings] = useState<Pick<DaemonSettings, 'usagePacing' | 'usageThresholds'>>();
-  const [reading, setReading] = useState<UsageReading>();
+  const { reading, now } = useUsage();
+  const [usageOnBoard, setUsageOnBoard] = useUsageOnBoard();
+  const meter = reading === undefined ? undefined : usageMeter(reading, now);
 
   useEffect(() => {
     window.agentBoard.flowEdges.settings().then(setSettings, onError('read the usage settings'));
-    window.agentBoard.orchestrators.usage().then(setReading, () => {});
-    const offUsage = window.agentBoard.orchestrators.onUsage((event) => setReading(event.usage));
     const offSettings = window.agentBoard.flowEdges.onSettingsChanged((event) => setSettings(event.settings));
     return () => {
-      offUsage();
       offSettings();
     };
   }, [onError]);
@@ -43,6 +45,11 @@ export function UsageSetting({ onError }: { onError: OnError }) {
   return (
     <>
       <SectionLabel as="h4">Usage</SectionLabel>
+      <Fieldset legend="Plan usage">
+        {meter === undefined || meter.windows.length === 0 ? <Hint>No reading yet: it comes from a Claude agent&apos;s status line.</Hint> : <UsageDetail meter={meter} />}
+        <Switch label="Show usage on the board" checked={usageOnBoard} onChange={(event) => setUsageOnBoard(event.target.checked)} />
+        <Hint>{usageOnBoard ? 'On' : 'Off'} · shows the figures beside the zoom controls, bottom right</Hint>
+      </Fieldset>
       <Fieldset legend="Thresholds">
         <Hint>Each zone&apos;s priority is on its tab. The Captain reads these with agent-board usage priorities.</Hint>
         {THRESHOLDS.map(({ key, window, reads, does }) => (

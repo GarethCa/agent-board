@@ -75,30 +75,33 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   const offGrid = new Set(lead.filter((key) => !onGrid(byKey.get(key)!, arranged, grid)));
   // A lane is a row, or a column, of its own only by issue in rows or columns: else its tiles need only be on the grid.
   const along = arrange.by !== 'issue' ? undefined : arrange.layout === 'rows' ? 'row' : arrange.layout === 'columns' ? 'column' : undefined;
+  // By issue in wrap, a lane is a band of rows of its own: only the space down between lanes is measured.
+  const wraps = arrange.by === 'issue' && arrange.layout === 'wrap';
+  const down = along === 'row' || wraps;
   const lineOf = (thing: ZoneMapThing) => (along === 'row' ? thing.y : thing.x);
   let widestGap = 0;
   let labelGap = 0;
-  const [across, extent] = along === 'row' ? (['y', 'height'] as const) : (['x', 'width'] as const);
-  // The top row (the lead, the shells and the crew's clocks) is the first span in rows; in columns it lies beside the lanes, so how far
+  const [across, extent] = down ? (['y', 'height'] as const) : (['x', 'width'] as const);
+  // The top row (the lead, the shells and the crew's clocks) is the first span in rows and wrap; in columns it lies beside the lanes, so how far
   // below it they start is measured on its own.
   const topThings = lead.map((key) => byKey.get(key)!);
   const spans: { start: number; end: number }[] =
-    along === 'row' && topThings.length > 0 ? [{ start: Math.min(...topThings.map((thing) => thing.y)), end: Math.max(...topThings.map((thing) => thing.y + thing.height)) }] : [];
+    down && topThings.length > 0 ? [{ start: Math.min(...topThings.map((thing) => thing.y)), end: Math.max(...topThings.map((thing) => thing.y + thing.height)) }] : [];
   let lanesTop = Infinity;
   for (const lane of mapped) {
     const tiles = LANE_SLOTS.flatMap((slot) => lane.slots[slot]).map((key) => byKey.get(key)!);
     const label = lane.labelItem === null ? undefined : byKey.get(lane.labelItem);
     const note = lane.note === null ? undefined : byKey.get(lane.note);
     for (const tile of tiles) if (!onGrid(tile, arranged, grid)) offGrid.add(tile.key);
-    if (along === undefined) continue;
-    // Its line is where its label is, else its first tile.
-    const line = [label, ...tiles, note].find((thing) => thing !== undefined);
-    if (line === undefined) continue;
-    for (const thing of [...tiles, note]) if (thing !== undefined && lineOf(thing) !== lineOf(line)) offGrid.add(thing.key);
-    // Where it lies across, for the gap to the next lane.
     const whole = [label, ...tiles, note].filter((thing): thing is ZoneMapThing => thing !== undefined);
+    if (whole.length === 0 || (along === undefined && !wraps)) continue;
+    // Where it lies across, for the gap to the next lane.
     lanesTop = Math.min(lanesTop, ...whole.map((thing) => thing.y));
     spans.push({ start: Math.min(...whole.map((thing) => thing[across])), end: Math.max(...whole.map((thing) => thing[across] + thing[extent])) });
+    if (along === undefined) continue;
+    // Its line is where its label is, else its first tile.
+    const line = whole[0]!;
+    for (const thing of [...tiles, note]) if (thing !== undefined && lineOf(thing) !== lineOf(line)) offGrid.add(thing.key);
     // The label's distance to its lane: the space to its nearest neighbour on either side (by the rule `widestGap` keeps), and
     // how far past the lane's first thing it lies, a label dragged to the far end.
     if (label !== undefined && (tiles.length > 0 || note !== undefined)) {
@@ -125,7 +128,7 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   // a column's tile gap, in slots across.
   spans.sort((a, b) => a.start - b.start);
   // These kept gaps are the ones arrange keeps between lanes at this spacing (its lane and tile gaps): they follow it.
-  const [kept, unit] = along === 'row' ? [laneKept, rowStep] : [tileGap, columnStep];
+  const [kept, unit] = down ? [laneKept, rowStep] : [tileGap, columnStep];
   let laneGap = 0;
   let reach = spans[0]?.end ?? 0;
   for (const span of spans.slice(1)) {
@@ -214,7 +217,7 @@ function freeLine(map: ZoneMap, things: ReadonlyMap<string, ZoneMapThing>): stri
     const tiles = LANE_SLOTS.flatMap((slot) => lane.slots[slot]);
     return tiles.length > 0 && tiles.every((key) => isDone(things.get(key)));
   });
-  const place = map.arrange.layout === 'columns' ? 'column' : map.arrange.layout === 'cards' ? 'card' : 'row';
+  const place = map.arrange.layout === 'columns' ? 'column' : map.arrange.layout === 'cards' ? 'card' : map.arrange.layout === 'wrap' && map.arrange.by === 'issue' ? 'lane' : 'row';
   return [`free  next lane → ${place} ${map.lanes.length + 1}`, ...finished.map((lane) => `${laneName(lane)} can fold (all done)`)].join(' · ');
 }
 
