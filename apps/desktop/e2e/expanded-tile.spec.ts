@@ -3,7 +3,7 @@ import { SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
 import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
+import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
 
@@ -162,6 +162,8 @@ async function addRepoZone(page: Page, app: Parameters<typeof pickFolderNext>[0]
 }
 
 test('a Claude agent tile expands in place with its details and live terminal, moves with the board, collapses, and escalates to its session window and its own OS window', async () => {
+  // Its session window is the Simplified design's under `E2E_DESIGN=simplified`: no dock, Done in its header.
+  const simplified = runDesign() === 'simplified';
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -271,12 +273,17 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await expect(expandedTile(window)).toHaveCount(0);
     await expect(terminals(window)).toHaveCount(1);
-    // Minimise still docks it.
-    await window.getByRole('button', { name: 'Minimise session window' }).click();
-    await expect(window.getByTestId('dock-item')).toHaveAttribute('data-placement', 'docked');
-    // Docked, it stays compact; closing the window gives the tile back as it was, expanded at the same size.
-    await expect(expandedTile(window)).toHaveCount(0);
-    await window.getByTestId('dock-item').getByRole('button', { name: 'Close Pick a database' }).click();
+    if (simplified) {
+      // The Simplified design has no dock: Done closes the window, giving the tile back as it was, expanded at the same size.
+      await window.getByRole('button', { name: 'Done, close Pick a database' }).click();
+    } else {
+      // Minimise still docks it.
+      await window.getByRole('button', { name: 'Minimise session window' }).click();
+      await expect(window.getByTestId('dock-item')).toHaveAttribute('data-placement', 'docked');
+      // Docked, it stays compact; closing the window gives the tile back as it was, expanded at the same size.
+      await expect(expandedTile(window)).toHaveCount(0);
+      await window.getByTestId('dock-item').getByRole('button', { name: 'Close Pick a database' }).click();
+    }
     await expect(expandedTile(window)).toHaveCount(1);
     await expect(tile(window)).toHaveCount(0);
     const sizeAfter = await settledBox(expandedTile(window));
@@ -285,14 +292,24 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     // Pop out opens it in its own OS window, which pops back in.
     const [popped] = await Promise.all([app.waitForEvent('window'), expandedTile(window).getByRole('button', { name: 'Pop out' }).click()]);
     await expect(sessionWindow(popped)).toHaveAttribute('data-state', 'attached');
-    await expect(popped.getByTestId('session-terminal').locator('.xterm-rows')).toContainText('Going with SQLite.');
+    // Classic opens it on its terminal; the Simplified design on its chat.
+    if (simplified) await expect(popped.getByText('Going with SQLite.').first()).toBeVisible();
+    else await expect(popped.getByTestId('session-terminal').locator('.xterm-rows')).toContainText('Going with SQLite.');
     await expect(expandedTile(window)).toHaveCount(0);
     // A click on its tile meanwhile goes to that window (brought forward) rather than opening a second terminal here.
     await tile(window).dblclick();
     await expect(expandedTile(window)).toHaveCount(0);
-    await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
-    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
-    await window.getByRole('button', { name: 'Close session window' }).click();
+    if (simplified) {
+      // Back to board is in its header's ⋯ under the Simplified design, and Done closes the window it comes back to.
+      await popped.locator('.session-window-head').getByRole('button', { name: 'More', exact: true }).click();
+      await clickClosing(popped, popped.getByRole('menuitem', { name: 'Back to board' }));
+      await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+      await window.getByRole('button', { name: 'Done, close Pick a database' }).click();
+    } else {
+      await clickClosing(popped, popped.getByRole('button', { name: 'Back to board' }));
+      await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+      await window.getByRole('button', { name: 'Close session window' }).click();
+    }
     await expect(expandedTile(window)).toHaveCount(1);
     await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
     await expect(expandedTile(window)).toHaveCount(0);
@@ -343,7 +360,7 @@ test('a shell tile expands in place with its two panes, each taking input, and k
 
     // + › Web… in the expanded tile opens a blank tab with its address bar focused, though the tile expanding gave the keyboard away.
     await expandedTile(window).getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: 'Web…' }).click();
+    await window.getByRole('menuitem', { name: /^Web…/ }).click();
     await expect(expandedTile(window).getByTestId('web-address')).toBeFocused();
     await expandedTile(window).getByRole('button', { name: 'Close New tab' }).click();
     await expect(panes).toHaveCount(2);
@@ -715,6 +732,14 @@ test("Tidy with a tile expanded lays the zone out round its expanded size, and e
     const ids = (await storedShellPlaces(window)).map(([id]) => id);
     await shellNode(window, ids[0]!).dblclick();
     await expect(expandedTile(window)).toHaveCount(1);
+    // The view follows a tile that opened past the edge, and where it stops the zone's chip can be off screen or under
+    // the top chrome: wait for it to stop, then frame the zone on purpose (fitted, then a step out so its tab clears the
+    // panels over the board) before pressing the chip.
+    await viewSettled(window);
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    await window.getByRole('button', { name: 'Zoom Out' }).click();
+    await viewSettled(window);
     await zone.getByRole('button', { name: 'Tidy zone' }).click();
     // The board draws only the tiles in view, and Tidy may put some below the expanded one, past the window's edge.
     await window.getByRole('button', { name: /^Fit view/ }).click();

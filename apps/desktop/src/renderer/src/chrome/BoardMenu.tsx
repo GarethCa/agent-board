@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { LayoutDashboard, LifeBuoy, Menu as MenuIcon, Plus, Search } from 'lucide-react';
+import { LayoutDashboard, LifeBuoy, Menu as MenuIcon, Plus, Search, Settings as SettingsIcon } from 'lucide-react';
 import { APP_NAME } from '../../../shared/brand';
 import { DaemonStatus, type DaemonStatusValue } from '../DaemonStatus';
-import { binding, isActive, keyText } from '../keys/registry';
+import { useSimplified } from '../design';
+import { binding, chordText, isActive, keyText } from '../keys/registry';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
-import { Settings, type SettingsProps } from './Settings';
 
-/** Whether the board menu is open, and where it put the focus as it opened: its search field, or its settings. */
-export type BoardMenuState = { open: false } | { open: true; at?: 'search' | 'settings'; asked?: number };
+/** Whether the board menu is open, and whether it put the focus in its search field as it opened. */
+export type BoardMenuState = { open: false } | { open: true; at?: 'search'; asked?: number };
 
-export interface BoardMenuProps extends Omit<SettingsProps, 'muted'> {
+/** Settings…'s key: the app menu's, which only macOS has. */
+const SETTINGS_KEY = navigator.platform.startsWith('Mac') ? chordText({ mod: 'command', key: ',' }) : undefined;
+
+export interface BoardMenuProps {
   menu: BoardMenuState;
   onMenu(menu: BoardMenuState): void;
   status: DaemonStatusValue;
@@ -32,31 +35,27 @@ export interface BoardMenuProps extends Omit<SettingsProps, 'muted'> {
   onGettingStarted?(): void;
   /** Opens the ⌘K switcher. */
   onFind(): void;
+  /** Opens the Settings window. */
+  onSettings(): void;
 }
 
 /**
  * The board menu, the top-left island (chrome C): the app's mark and the board's name, the daemon's status, and a
- * panel with the zones, the agents and shells, and the settings. Its search field (⌘\ opens the menu on it) narrows
- * the zones and agents by name; Find opens the ⌘K switcher.
+ * panel with the zones, the agents and shells, and a Settings… row that opens the Settings window. Its search field
+ * (⌘\ opens the menu on it) narrows the zones and agents by name; Find opens the ⌘K switcher.
  */
-export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onArrangeBoard, onOpenAgent, onOpenShell, onGettingStarted, onFind, ...settings }: BoardMenuProps) {
+export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onArrangeBoard, onOpenAgent, onOpenShell, onGettingStarted, onFind, onSettings }: BoardMenuProps) {
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
-  const settingsSection = useRef<HTMLElement>(null);
+  const simplified = useSimplified();
   const at = menu.open ? menu.at : undefined;
   /** When it was last asked to focus there: asked again while open, it focuses again. */
   const asked = menu.open ? menu.asked : undefined;
 
-  // Once the panel has mounted, the focus goes where it was opened for.
+  // Once the panel has mounted, the focus goes to the search field if it was opened for it.
   useEffect(() => {
     if (at === undefined) return;
-    const frame = requestAnimationFrame(() => {
-      if (at === 'search') search.current?.focus();
-      else {
-        settingsSection.current?.scrollIntoView({ block: 'nearest' });
-        settingsSection.current?.querySelector('button')?.focus();
-      }
-    });
+    const frame = requestAnimationFrame(() => search.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [at, asked]);
 
@@ -132,9 +131,19 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
           </div>
         </Section>
         <Sessions agents={agents} shells={shells} filter={filter} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
-        <Section ref={settingsSection} label="Settings">
-          <Settings status={status} muted={agents.filter((agent) => agent.muted).length} {...settings} />
-        </Section>
+        <div className="board-menu-actions board-menu-settings">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<SettingsIcon />}
+            onClick={() => {
+              close();
+              onSettings();
+            }}
+          >
+            Settings…{SETTINGS_KEY !== undefined && <Kbd>{SETTINGS_KEY}</Kbd>}
+          </Button>
+        </div>
         {onGettingStarted !== undefined && (
           <Section label="Help">
             <div className="board-menu-actions">
@@ -171,10 +180,11 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         className="board-menu-find"
         icon={<Search />}
         aria-label="Find"
-        tooltip="Jump to a session or zone"
+        tooltip={simplified ? <>Jump to a session or zone <Kbd>{keyText('move.spotlight')}</Kbd></> : 'Jump to a session or zone'}
         onClick={onFind}
       >
-        <Kbd>{keyText('move.spotlight')}</Kbd>
+        {/* The Simplified design's magnifier alone: its key is in the tooltip. */}
+        {!simplified && <Kbd>{keyText('move.spotlight')}</Kbd>}
       </Button>
     </Island>
   );

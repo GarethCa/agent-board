@@ -27,12 +27,13 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   notifications: true,
   notifyInFront: false,
   arrangeSpacing: DEFAULT_ARRANGE_SPACING,
+  keepWebLogins: true,
   usagePacing: false,
   usageThresholds: DEFAULT_USAGE_THRESHOLDS,
 };
 
 /** The settings that are switches. */
-const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront', 'usagePacing'] as const;
+const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront', 'keepWebLogins', 'usagePacing'] as const;
 
 export interface SettingsHost {
   get(): DaemonSettings;

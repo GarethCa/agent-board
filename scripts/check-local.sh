@@ -72,11 +72,11 @@ done
 
 # Each stage's wall-clock limit in minutes, about three times a usual run on a loaded machine. The unit tests get more:
 # on a busy machine they may run on one worker per project (scripts/vitest-workers), about 15 minutes, and a stuck test
-# is caught within a minute or so by the watchdog anyway. The visual and e2e limits start once the e2e lock is held.
+# is caught within a minute or so by the watchdog anyway. The visual suite gets 20: it runs over 100 shots, about 8–10 minutes when the machine is quiet. The visual and e2e limits start once the e2e lock is held.
 # CHECK_LIMIT_MIN sets them all (the gate's own test does: scripts/deadline/check-local.test.ts).
 checks_min=${CHECK_LIMIT_MIN:-10}
 test_min=${CHECK_LIMIT_MIN:-45}
-visual_min=${CHECK_LIMIT_MIN:-10}
+visual_min=${CHECK_LIMIT_MIN:-20}
 e2e_min=${CHECK_LIMIT_MIN:-30}
 deadline="node scripts/deadline/main.ts"
 

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Columns2, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
+import { Columns2, EyeOff, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
 import type { PackageScripts } from '@agent-board/daemon/protocol';
 import { binding, chordText, keyText } from '../keys/registry';
 import { Button, IconButton, Kbd, Menu, type MenuEntry } from '../ui';
@@ -45,8 +45,8 @@ interface TabStripProps {
   sessions: { label: string; onSelect(): void }[];
   /** The agent's pull requests the + menu offers to open as a tab here. */
   pullRequests?: { label: string; onSelect(): void }[];
-  /** Asks for a page to open in a web tab here: the + menu's "Web…". */
-  onOpenWeb?(): void;
+  /** Asks for a page to open in a web tab here: the + menu's "Web…", or its "Private web…" for a `private` one. */
+  onOpenWeb?(options?: { private?: boolean }): void;
   /** Named "Shell", not just +, while the window has no tab but its own, so the way to one is plain to see. */
   named: boolean;
   /** Whether + offers shells and Split makes one: not in a tab window (slice 4), which holds none. True by default. */
@@ -145,7 +145,12 @@ export function TabStrip({
   ];
   const entries: MenuEntry[] = [
     ...(shells ? shellEntries : []),
-    ...(onOpenWeb === undefined ? [] : [{ label: 'Web…', icon: <Globe />, hint: 'A dev server, or an https page', onSelect: onOpenWeb }]),
+    ...(onOpenWeb === undefined
+      ? []
+      : [
+          { label: 'Web…', icon: <Globe />, hint: 'A dev server, or an https page', onSelect: () => onOpenWeb() },
+          { label: 'Private web…', icon: <EyeOff />, hint: 'Keeps no login or cookie past the tab', onSelect: () => onOpenWeb({ private: true }) },
+        ]),
     ...(shells ? (['separator', { heading: 'Run a script' }, ...scriptEntries] as MenuEntry[]) : []),
     ...(sessions.length === 0 ? [] : (['separator', { heading: 'Show a session' }] as MenuEntry[])),
     ...sessions.map((session): MenuEntry => ({ label: session.label, icon: <PanelsTopLeft />, onSelect: session.onSelect })),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import type { AgentState } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState } from '@agent-board/daemon/protocol';
 import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
 import { keyText, pressed, type KeyId } from '../keys/registry';
@@ -12,6 +12,8 @@ import { useReviewTabRequests } from '../review/review-tab';
 import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
+import { SimplifiedHeader } from './SimplifiedHeader';
+import { useSimplified } from '../design';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
@@ -34,6 +36,8 @@ export interface WindowNav {
   /** The sessions either side: their names, and an agent's state, for the buttons' previews. */
   previous: { name: string; state?: AgentState };
   next: { name: string; state?: AgentState };
+  /** Every session of the group, this one too, in board order, and how to show each in this window. */
+  members: readonly { id: string; name: string; agent?: Agent; onShow(): void }[];
   /** Shows the previous (-1) or next (1) session in this window. */
   onStep(direction: -1 | 1): void;
 }
@@ -113,6 +117,11 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const showing = (tab === 'review' && reviewable) || (tab === 'activity' && orchestrates) ? tab : 'terminal';
   const root = useRef<HTMLDivElement>(null);
   const placed = useWindowFrame(root, frame);
+  useNavKeys(nav);
+  // Under the Simplified design an agent's window has one header, which holds its view switch.
+  const simplified = useSimplified() && content.kind === 'session';
+  const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
+  const terminalToggle = useRef<(() => void) | null>(null);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
 
   // ⌘I shows or hides the details.
@@ -159,6 +168,24 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
     >
       {frame && EDGES.map((edge) => <span key={edge} className={`session-window-edge session-window-edge-${edge}`} data-edge={edge} onPointerDown={(event) => placed.startResize(event, edge)} />)}
       <header className="session-window-head" data-drag-region={placement === 'own-window' || undefined} onDoubleClick={placed.onHeaderDoubleClick}>
+        {simplified ? (
+          <SimplifiedHeader
+            sessionId={content.sessionId}
+            agent={agent}
+            name={name}
+            title={title}
+            placement={placement}
+            nav={nav}
+            onViewSlot={setViewSlot}
+            terminalToggle={terminalToggle}
+            detailsOpen={!detailsCollapsed}
+            onDetailsOpen={(open) => setDetailsCollapsed(!open)}
+            onClose={onClose}
+            onPopOut={onPopOut}
+            onPopIn={onPopIn}
+          />
+        ) : (
+          <>
         {nav && <NavButtons nav={nav} />}
         {content.kind !== 'tabs' && <HarnessMark className="session-window-mark" harness={agent?.harness ?? 'shell'} />}
         <SessionName agent={agent} shell={shell} name={name} title={title} />
@@ -211,6 +238,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
             <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" />
           </Menu>
         )}
+          </>
+        )}
       </header>
       {(reviewable || orchestrates) && (
         <Tabs<WindowTab>
@@ -233,6 +262,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           notice={notice}
           onAttachState={setAttach}
           shown={showing === 'terminal'}
+          viewSlot={simplified ? viewSlot : undefined}
+          terminalToggle={simplified ? terminalToggle : undefined}
         />
       </div>
       {/* A new round is shown as it starts, whichever round was picked. */}
@@ -314,22 +345,6 @@ function swallowNextClick() {
  */
 function NavButtons({ nav }: { nav: WindowNav }) {
   const { count, onStep } = nav;
-  // Read through a ref: `nav` is new each render, and the listener need only be added once.
-  const navRef = useRef(nav);
-  navRef.current = nav;
-  // Before the board's own keys (⌘[ and ⌘] restack its selection), and wherever the focus is, the terminal too. They
-  // are taken even for a session alone in its group: restacking the board's selection behind this window would go unseen.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const step = pressed('window.previous', event) ? -1 : pressed('window.next', event) ? 1 : undefined;
-      if (step === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (navRef.current.count > 1) navRef.current.onStep(step);
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
   const preview = (label: string, to: { name: string; state?: AgentState }, key: KeyId) => (
     <span className="session-nav-preview">
       <span className="session-nav-preview-muted">{label}</span>
@@ -360,6 +375,30 @@ function NavButtons({ nav }: { nav: WindowNav }) {
       />
     </span>
   );
+}
+
+/**
+ * ⌘[ and ⌘] step through the group's sessions, before the board's own keys (they restack its selection), and wherever
+ * the focus is, the terminal too. They are taken even for a session alone in its group: restacking the board's
+ * selection behind this window would go unseen.
+ */
+function useNavKeys(nav: WindowNav | undefined) {
+  // Read through a ref: `nav` is new each render, and the listener need only be added once.
+  const navRef = useRef(nav);
+  navRef.current = nav;
+  const stepping = nav !== undefined;
+  useEffect(() => {
+    if (!stepping) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const step = pressed('window.previous', event) ? -1 : pressed('window.next', event) ? 1 : undefined;
+      if (step === undefined || navRef.current === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (navRef.current.count > 1) navRef.current.onStep(step);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [stepping]);
 }
 
 /** "3 of 7 · Frontend", with the zone's colour; a hollow dot and "Loose" for the board's loose sessions. */

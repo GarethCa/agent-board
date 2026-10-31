@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   AGENT_IPC,
   APPEARANCE_IPC,
+  DESIGN_IPC,
+  TECHNICAL_IPC,
   CAPTURE_IPC,
   CAPTURE_READS,
   CONNECTOR_IPC,
@@ -33,6 +35,8 @@ import {
   type WebTabState,
 } from './api';
 import { appearanceFromQuery } from '../shared/appearance';
+import { designFrom } from '../shared/design';
+import { technicalFromQuery } from '../shared/technical';
 import { ipcErrorMessage } from '../shared/errors';
 import { captureFrameFrom } from '../shared/capture';
 import { ipcCalls, readOnlyIpc } from './ipc';
@@ -44,6 +48,22 @@ const { invoke, subscribe, keyed } = ipcCalls(ipc);
 const sessionEvents = keyed<[SessionStreamEvent]>(SESSION_IPC.event);
 const webTabStates = keyed<[WebTabState]>(WEB_TAB_IPC.changed);
 const webTabKeys = keyed<[WebTabKey]>(WEB_TAB_IPC.key);
+
+/**
+ * Calls `listener` when main pokes `poke` and its `take` says a menu item was picked. Taken on every poke and once on
+ * subscribing, as opening an agent is, for a request made while the board loaded. A capture window takes no request
+ * meant for the board's window.
+ */
+function onMenuRequest(poke: string, take: string, listener: () => void): () => void {
+  if (capturing) return () => {};
+  const takeRequest = () =>
+    void ipc.invoke(take).then((requested: boolean) => {
+      if (requested) listener();
+    });
+  const unsubscribe = subscribe(poke, takeRequest);
+  takeRequest();
+  return unsubscribe;
+}
 
 const api: AgentBoardApi = {
   daemonHealth: () => invoke(DAEMON_IPC.health),
@@ -171,10 +191,10 @@ const api: AgentBoardApi = {
     commentDoc: (documentId, text) => invoke(ASK_IPC.commentDoc, documentId, text),
   },
   webTabs: {
-    open(tabId, url, { onState, onKey }) {
+    open(tabId, url, { onState, onKey }, options) {
       const stopStates = webTabStates(tabId, onState);
       const stopKeys = webTabKeys(tabId, onKey);
-      ipc.invoke(WEB_TAB_IPC.open, tabId, url).catch((error: unknown) => onState({ url, title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
+      ipc.invoke(WEB_TAB_IPC.open, tabId, url, { private: options?.private === true }).catch((error: unknown) => onState({ url, title: '', canGoBack: false, canGoForward: false, loading: false, focused: false, problem: ipcErrorMessage(error) }));
       return () => {
         stopStates();
         stopKeys();
@@ -201,6 +221,7 @@ const api: AgentBoardApi = {
     dismissOffered: (tabId) => invoke(WEB_TAB_IPC.dismissOffered, tabId),
     dismissPasskey: (tabId) => invoke(WEB_TAB_IPC.dismissPasskey, tabId),
     forget: (tabId) => invoke(WEB_TAB_IPC.forget, tabId),
+    clearData: () => invoke(WEB_TAB_IPC.clearData),
     handOff: (tabId) => invoke(WEB_TAB_IPC.handOff, tabId),
     focus: (tabId) => invoke(WEB_TAB_IPC.focus, tabId),
     cancelHandOff: (tabId) => invoke(WEB_TAB_IPC.cancelHandOff, tabId),
@@ -316,6 +337,7 @@ const api: AgentBoardApi = {
   view: {
     get: (key) => invoke(VIEW_IPC.get, key),
     set: (key, value) => invoke(VIEW_IPC.set, key, value),
+    onChanged: (listener) => subscribe(VIEW_IPC.changed, (change: { key: string; value: unknown }) => listener(change.key, change.value)),
     measured: (report) => invoke(VIEW_IPC.measured, report),
   },
   appearance: {
@@ -324,19 +346,30 @@ const api: AgentBoardApi = {
     set: (appearance) => invoke(APPEARANCE_IPC.set, appearance),
     onChanged: (listener) => subscribe(APPEARANCE_IPC.changed, listener),
   },
+  design: {
+    initial: designFrom(new URLSearchParams(location.search).get(WINDOW_QUERY.design)),
+    get: () => invoke(DESIGN_IPC.get),
+    set: (design) => invoke(DESIGN_IPC.set, design),
+    onChanged: (listener) => subscribe(DESIGN_IPC.changed, listener),
+  },
+  technical: {
+    initial: technicalFromQuery(new URLSearchParams(location.search).get(WINDOW_QUERY.technical)),
+    get: () => invoke(TECHNICAL_IPC.get),
+    set: (technical) => invoke(TECHNICAL_IPC.set, technical),
+    onChanged: (listener) => subscribe(TECHNICAL_IPC.changed, listener),
+  },
   setup: {
     check: (tool) => invoke(SETUP_IPC.check, tool),
     testNotification: () => invoke(SETUP_IPC.testNotification),
     installCli: () => invoke(SETUP_IPC.installCli),
-    onGettingStarted(listener) {
-      // A capture window takes no request meant for the board's window.
-      if (capturing) return () => {};
-      // Taken on every poke and once on subscribing, as opening an agent is, for a request made while the board loaded.
+    onGettingStarted: (listener) => onMenuRequest(SETUP_IPC.gettingStarted, SETUP_IPC.takeGettingStarted, listener),
+    openSettings: (pane) => invoke(SETUP_IPC.openSettings, pane),
+    onSettingsPane(listener) {
       const take = () =>
-        void ipc.invoke(SETUP_IPC.takeGettingStarted).then((requested: boolean) => {
-          if (requested) listener();
+        void ipc.invoke(SETUP_IPC.takeSettingsPane).then((pane: string | null) => {
+          if (pane !== null) listener(pane);
         });
-      const unsubscribe = subscribe(SETUP_IPC.gettingStarted, take);
+      const unsubscribe = subscribe(SETUP_IPC.settingsPane, take);
       take();
       return unsubscribe;
     },

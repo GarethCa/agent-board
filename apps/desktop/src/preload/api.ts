@@ -109,6 +109,7 @@ import type {
 } from '@agent-board/daemon/protocol';
 import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
+import type { Design } from '../shared/design';
 
 /** The app lost its connection to the daemon for this attachment; the session itself may still be running. */
 export interface SessionDetachedEvent {
@@ -555,6 +556,8 @@ export const WEB_TAB_IPC = {
   /** main → renderer: `(tabId, WebTabKey)`, one of its window's own shortcuts pressed while the page had the keyboard. */
   key: 'web-tab:key',
   focus: 'web-tab:focus',
+  /** Settings' Clear browsing data, from the Settings window: the shared session's cookies, storage and cache. */
+  clearData: 'web-tab:clearData',
 } as const;
 
 /** Where a web tab's page is drawn in its window, in CSS pixels from the top left of the page. */
@@ -581,6 +584,11 @@ export interface WebTabState {
   offered?: string;
   /** The page has asked for a passkey, which this app can't serve for most pages, and the user hasn't dismissed that (`web-passkeys.ts`). */
   passkey?: true;
+  /**
+   * Its page keeps nothing past itself: a session of its own, in memory, for a private tab, or any tab while Keep logins
+   * between sessions is off or couldn't be read.
+   */
+  private?: true;
 }
 
 /** A key pressed in a web tab's page that is its window's to act on, as a `KeyboardEvent` would carry it. */
@@ -588,15 +596,16 @@ export type WebTabKey = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKe
 
 /**
  * A web tab's page: a locked-down web view the main process lays over the tab's area of this window. It
- * shows https pages and http ones on this machine only, in a session partition of its own, with no access to the app.
+ * shows https pages and http ones on this machine only, with no access to the app, in the session web tabs share, kept
+ * on disk, or, private, in a session partition of its own, in memory.
  */
 export interface WebTabsApi {
   /**
    * Makes the tab's page, hidden until `setBounds` places it, and loads `url`. `onState` hears how it is doing and `onKey`
-   * the window's own shortcuts pressed in it. Returns the function that takes the page away; its partition's data is
-   * kept until `forget`.
+   * the window's own shortcuts pressed in it. `private` gives it a partition of its own, as does Keep logins between
+   * sessions being off. Returns the function that takes the page away; a partition of its own keeps its data until `forget`.
    */
-  open(tabId: string, url: string, listeners: { onState(state: WebTabState): void; onKey(key: WebTabKey): void }): () => void;
+  open(tabId: string, url: string, listeners: { onState(state: WebTabState): void; onKey(key: WebTabKey): void }, options?: { private?: boolean }): () => void;
   /**
    * Makes a page for an agent's HTML plan, as `open` does for a web page: served from memory, offline, going
    * nowhere and opening nothing (`plan-lockdown.ts`). `forget` lets its page go.
@@ -620,11 +629,13 @@ export interface WebTabsApi {
   dismissOffered(tabId: string): Promise<void>;
   /** Hides the notice that the page asked for a passkey (`WebTabState.passkey`), until it asks again. */
   dismissPasskey(tabId: string): Promise<void>;
-  /** The tab was closed: its page goes, and its partition's cookies, storage and cache with it. */
+  /** The tab was closed: its page goes, and a partition of its own goes with its cookies, storage and cache. */
   forget(tabId: string): Promise<void>;
+  /** Clears the session web tabs share (Settings' Clear browsing data): its logins, cookies, storage and cache. The Settings window only. */
+  clearData(): Promise<void>;
   /**
    * The tab moves to another window (slice 4), in any window: its page waits, hidden, for the window that
-   * opens it next, which takes it as it is, with no reload. One no window takes in a while goes, with its partition's data.
+   * opens it next, which takes it as it is, with no reload. One no window takes in a while goes; its partition stays.
    */
   handOff(tabId: string): Promise<void>;
   /** The move fell through: a page still waiting goes back to the window it left. */
@@ -1104,10 +1115,24 @@ export interface WindowTarget {
 
 /**
  * The query a renderer window is loaded with: `popOut` (the ID), `kind` and `title` make it one popped-out session
- * window instead of the board; `show`, `kind` and `title` open the board with that window shown.
+ * window instead of the board; `settings` (the pane to open on, or empty) makes it the Settings window; `show`, `kind`
+ * and `title` open the board with that window shown.
  */
-/** A renderer window's query: what it shows, and the Appearance setting it opens in (`appearance`). */
-export const WINDOW_QUERY = { popOut: 'popOut', show: 'show', kind: 'kind', title: 'title', appearance: 'appearance', demo: 'demo' } as const;
+/**
+ * A renderer window's query: what it shows, and the Appearance, Simplified design and Show technical details settings
+ * it opens in (`appearance`, `design`, `technical`).
+ */
+export const WINDOW_QUERY = {
+  popOut: 'popOut',
+  settings: 'settings',
+  show: 'show',
+  kind: 'kind',
+  title: 'title',
+  appearance: 'appearance',
+  design: 'design',
+  technical: 'technical',
+  demo: 'demo',
+} as const;
 
 /** The window target a renderer's query names under `idKey`, if any. */
 export function windowTargetFrom(query: URLSearchParams, idKey: string): WindowTarget | undefined {
@@ -1284,6 +1309,8 @@ export const VIEW_IPC = {
   get: 'view:get',
   set: 'view:set',
   measured: 'view:measured',
+  /** Main to every window: a key was saved, with its value. */
+  changed: 'view:changed',
 } as const;
 
 /** How the app left the board (its viewport, its session windows), kept by the daemon so it outlives a restart. */
@@ -1292,6 +1319,8 @@ export interface ViewApi {
   get(key: string): Promise<unknown>;
   /** Saves `value` (JSON, up to 64 KiB) under `key`; null forgets it. */
   set(key: string, value: unknown): Promise<void>;
+  /** Calls `listener` when a key is saved, from any window, with the value saved. Returns the unsubscribe function. */
+  onChanged(listener: (key: string, value: unknown) => void): () => void;
   /**
    * Says how this window draws the board now (`layout.measured`), replacing what was said before: kept in the daemon's
    * memory only, and said again by main when it reconnects.
@@ -1316,12 +1345,51 @@ export interface AppearanceApi {
   onChanged(listener: (appearance: Appearance) => void): () => void;
 }
 
+export const DESIGN_IPC = {
+  get: 'design:get',
+  set: 'design:set',
+  /** main → renderer: `(Design)` whenever any window picks one. */
+  changed: 'design:changed',
+} as const;
+
+/** The Simplified design setting: Classic (today's design) or Simplified. Every window follows it at once. */
+export interface DesignApi {
+  /** The setting as this window opened (`WINDOW_QUERY.design`), so its first paint is in the right design. */
+  initial: Design;
+  get(): Promise<Design>;
+  set(design: Design): Promise<void>;
+  /** Calls `listener` whenever any window picks one. Returns the unsubscribe function. */
+  onChanged(listener: (design: Design) => void): () => void;
+}
+
+export const TECHNICAL_IPC = {
+  get: 'technical:get',
+  set: 'technical:set',
+  /** main → renderer: `(boolean)` whenever any window or the View menu turns it on or off. */
+  changed: 'technical:changed',
+} as const;
+
+/** The Show technical details switch, which adds the technical layer back under the Simplified design. Every window follows it at once. */
+export interface TechnicalApi {
+  /** The switch as this window opened (`WINDOW_QUERY.technical`), so its first paint shows the right layer. */
+  initial: boolean;
+  get(): Promise<boolean>;
+  set(technical: boolean): Promise<void>;
+  /** Calls `listener` whenever it is turned on or off. Returns the unsubscribe function. */
+  onChanged(listener: (technical: boolean) => void): () => void;
+}
+
 export const SETUP_IPC = {
   check: 'setup:check',
   testNotification: 'setup:testNotification',
   /** Main to the board: the app menu's Help › Getting started was picked; take the request with `takeGettingStarted`. */
   gettingStarted: 'setup:gettingStarted',
   takeGettingStarted: 'setup:takeGettingStarted',
+  /** Opens the Settings window, or brings it forward, at a pane if given. */
+  openSettings: 'setup:openSettings',
+  /** Main to the Settings window: it was asked to show a pane as it was brought forward; take it with `takeSettingsPane`. */
+  settingsPane: 'setup:settingsPane',
+  takeSettingsPane: 'setup:takeSettingsPane',
   installCli: 'setup:installCli',
 } as const;
 
@@ -1336,6 +1404,16 @@ export interface SetupApi {
   testNotification(): Promise<{ shown: boolean }>;
   /** Calls `listener` when the app menu's Help › Getting started is picked. Returns the function that stops it. */
   onGettingStarted(listener: () => void): () => void;
+  /**
+   * Opens the Settings window, its own OS window, or brings it forward if it is open. Given `pane` (`group` or
+   * `group.section`, renderer/src/chrome/settings-ia.ts), it shows that; otherwise it opens on the pane it last showed.
+   */
+  openSettings(pane?: string): Promise<void>;
+  /**
+   * In the Settings window: calls `listener` with each pane it is asked to show, one asked before it listened too.
+   * Returns the function that stops it.
+   */
+  onSettingsPane(listener: (pane: string) => void): () => void;
   /**
    * Links the `agent-board` CLI into `~/.local/bin` (ADR-0010), for terminals outside the app, and resolves with the
    * link's path. Fails when the daemon wrote no CLI, or a file of someone else's is in the way.
@@ -1372,6 +1450,8 @@ export interface AgentBoardApi {
   tabDrags: TabDragsApi;
   view: ViewApi;
   appearance: AppearanceApi;
+  design: DesignApi;
+  technical: TechnicalApi;
   setup: SetupApi;
   capture: CaptureApi;
 }
@@ -1413,6 +1493,8 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   WINDOW_IPC.isFullScreen,
   VIEW_IPC.get,
   APPEARANCE_IPC.get,
+  DESIGN_IPC.get,
+  TECHNICAL_IPC.get,
 ]);
 
 export interface CaptureApi {

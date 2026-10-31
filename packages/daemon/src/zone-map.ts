@@ -78,6 +78,9 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
   // By issue in wrap, a lane is a band of rows of its own: only the space down between lanes is measured.
   const wraps = arrange.by === 'issue' && arrange.layout === 'wrap';
   const down = along === 'row' || wraps;
+  // Masonry and a treemap place a lane by the window's shape (masonry with none, the zone's width) as it was when arranged, which the map
+  // can't know: a lane's tiles there go unlinted off the grid, as one no longer where it would go now need not be wrong.
+  const packs = arrange.layout === 'masonry' || arrange.layout === 'treemap';
   const lineOf = (thing: ZoneMapThing) => (along === 'row' ? thing.y : thing.x);
   let widestGap = 0;
   let labelGap = 0;
@@ -92,7 +95,7 @@ export function buildZoneMap({ lanes, things: drawn, parts, arrange, spacing = '
     const tiles = LANE_SLOTS.flatMap((slot) => lane.slots[slot]).map((key) => byKey.get(key)!);
     const label = lane.labelItem === null ? undefined : byKey.get(lane.labelItem);
     const note = lane.note === null ? undefined : byKey.get(lane.note);
-    for (const tile of tiles) if (!onGrid(tile, arranged, grid)) offGrid.add(tile.key);
+    for (const tile of tiles) if (!packs && !onGrid(tile, arranged, grid)) offGrid.add(tile.key);
     const whole = [label, ...tiles, note].filter((thing): thing is ZoneMapThing => thing !== undefined);
     if (whole.length === 0 || (along === undefined && !wraps)) continue;
     // Where it lies across, for the gap to the next lane.
@@ -217,7 +220,7 @@ function freeLine(map: ZoneMap, things: ReadonlyMap<string, ZoneMapThing>): stri
     const tiles = LANE_SLOTS.flatMap((slot) => lane.slots[slot]);
     return tiles.length > 0 && tiles.every((key) => isDone(things.get(key)));
   });
-  const place = map.arrange.layout === 'columns' ? 'column' : map.arrange.layout === 'cards' ? 'card' : map.arrange.layout === 'wrap' && map.arrange.by === 'issue' ? 'lane' : 'row';
+  const place = map.arrange.layout === 'columns' ? 'column' : map.arrange.layout === 'cards' ? 'card' : ['wrap', 'masonry', 'treemap'].includes(map.arrange.layout) && map.arrange.by === 'issue' ? 'lane' : 'row';
   return [`free  next lane → ${place} ${map.lanes.length + 1}`, ...finished.map((lane) => `${laneName(lane)} can fold (all done)`)].join(' · ');
 }
 

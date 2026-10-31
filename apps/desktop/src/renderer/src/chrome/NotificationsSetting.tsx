@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { DaemonSettings } from '@agent-board/daemon/protocol';
-import { Choice, Choices, Fieldset, Hint, SectionLabel, Switch, Tag } from '../ui';
+import { Choice, Choices, Fieldset, Hint, Switch, Tag } from '../ui';
 
 type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront'>;
 
 /**
- * Settings › Notifications: what the needs-you inbox lists (explicit requests only, the default, or every finished turn
+ * Settings › Alerts › Notifications: what the needs-you inbox lists (explicit requests only, the default, or every finished turn
  * too), whether a new request raises an OS notification, and whether it does so while the app is in front. How many
  * agents are muted, which notify of nothing but still show in the list. The daemon keeps them, so every window agrees.
  */
@@ -29,7 +29,6 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
   const disabled = settings === undefined || busy;
   return (
     <>
-      <SectionLabel as="h4">Notifications</SectionLabel>
       <Fieldset legend="Needs you shows">
         <Choices aria-label="Needs you shows">
           <Choice

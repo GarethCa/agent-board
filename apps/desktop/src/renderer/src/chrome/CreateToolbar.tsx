@@ -1,12 +1,13 @@
-import { ChevronDown, Hand, MousePointer2, Plus, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
+import { ChevronDown, Hand, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
 import { useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
 import { noteShapeUsed, useRecentShapes } from '../board/items/shapes/recents';
 import { ShapeIcon } from '../board/items/shapes/ShapeArt';
 import { ShapePicker } from '../board/items/shapes/ShapePicker';
+import { useSimplified } from '../design';
 import { keyText } from '../keys/registry';
-import { Button, Island, IslandSeparator, Kbd, Popover, ToolButton } from '../ui';
+import { AnchoredPopover, Button, Island, IslandSeparator, Kbd, Menu, Popover, ToolButton, type MenuEntry } from '../ui';
 
 /**
  * How a drag on the board acts: selecting and moving what it starts on; the same, but a zone's body draws a marquee and
@@ -34,11 +35,56 @@ export type DraggedTool = 'agent' | 'shell';
  * The creation toolbar, the top-centre island (chrome C, WbTools): how a drag acts, then what to put on the board, then
  * the sessions to start. The Zone tool (Z) drags out where a new zone goes, then asks what it is for (P1). The
  * Agent (A) and Shell (`) tools carry a ghost tile to where the new session goes, in a zone or loose.
+ *
+ * Under the Simplified design it holds fewer buttons: Select, Hand, a Draw menu with the drawing tools and Box select,
+ * and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
  */
 export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
+  const simplified = useSimplified();
   // A click arms the tool, for a click on the board; a drag off the button puts the tile where it is let go.
   const toggle = (armed: ArmedTool) => drag.consumeClick() || onTool(tool === armed ? undefined : armed);
+  const ghost =
+    drag.ghost !== undefined &&
+    createPortal(<ToolGhost at={drag.ghost.at} size={ghostSize} label={GHOST_LABELS[drag.ghost.tool]!} fromToolbar />, document.body);
+  const newAgent = (
+    <Button
+      variant="primary"
+      className="create-toolbar-agent"
+      icon={<Plus />}
+      aria-pressed={tool === 'agent'}
+      tooltip={<>Put a new agent on the board, or in a zone <Kbd>{keyText('make.agent')}</Kbd></>}
+      onClick={() => toggle('agent')}
+      onPointerDown={(event) => drag.start('agent', event)}
+      data-tour="new-agent"
+    >
+      New agent
+    </Button>
+  );
+  if (simplified) {
+    return (
+      <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
+        <ToolButton label="Select" icon={<MousePointer2 />} hint="Select and move" shortcut={keyText('move.select')} pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
+        <ToolButton label="Hand" icon={<Hand />} hint="Pan the board" shortcut={keyText('move.hand')} pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
+        <IslandSeparator />
+        <DrawMenu mode={mode} tool={tool} onMode={onMode} onTool={onTool} onSticky={onSticky} />
+        <IslandSeparator />
+        <div className="create-toolbar-split">
+          {newAgent}
+          <Menu
+            entries={[
+              { label: 'New agent', icon: <Plus />, shortcut: keyText('make.agent'), onSelect: () => onTool('agent') },
+              { label: 'New terminal', icon: <SquareTerminal />, shortcut: keyText('make.shell'), onSelect: () => onTool('shell') },
+            ]}
+            align="end"
+          >
+            <Button variant="primary" className="create-toolbar-agent-more" icon={<ChevronDown />} aria-label="More to start" aria-pressed={tool === 'shell'} />
+          </Menu>
+        </div>
+        {ghost}
+      </Island>
+    );
+  }
   return (
     <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
       <ToolButton label="Select" icon={<MousePointer2 />} shortcut={keyText('move.select')} hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
@@ -50,18 +96,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       <ShapeTool armed={tool === 'shape'} onTool={onTool} />
       <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
       <IslandSeparator />
-      <Button
-        variant="primary"
-        className="create-toolbar-agent"
-        icon={<Plus />}
-        aria-pressed={tool === 'agent'}
-        tooltip={<>Put a new agent on the board, or in a zone <Kbd>{keyText('make.agent')}</Kbd></>}
-        onClick={() => toggle('agent')}
-        onPointerDown={(event) => drag.start('agent', event)}
-        data-tour="new-agent"
-      >
-        New agent
-      </Button>
+      {newAgent}
       <Button
         icon={<SquareTerminal />}
         aria-label="New shell"
@@ -72,9 +107,47 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       >
         Shell
       </Button>
-      {drag.ghost !== undefined &&
-        createPortal(<ToolGhost at={drag.ghost.at} size={ghostSize} label={GHOST_LABELS[drag.ghost.tool]!} fromToolbar />, document.body)}
+      {ghost}
     </Island>
+  );
+}
+
+/** The tools the Simplified design's Draw menu arms, so its button shows pressed while one is. */
+const DRAW_TOOLS: ReadonlySet<ArmedTool> = new Set(['text', 'shape', 'zone']);
+
+/**
+ * The Simplified design's Draw menu: a sticky note, Text, Shape and Zone, then Box select, each with its key. Picking
+ * Shape, or pressing S, opens the shape picker under the button, as the Shape tool's own button does under Classic. A
+ * pick arms its tool, even one already armed: a menu row is no toggle.
+ */
+function DrawMenu({ mode, tool, onMode, onTool, onSticky }: Pick<CreateToolbarProps, 'mode' | 'tool' | 'onMode' | 'onTool' | 'onSticky'>) {
+  const shapes = useShapePicker(tool === 'shape', onTool);
+  const entries: MenuEntry[] = [
+    { label: 'Sticky note', icon: <StickyNote />, shortcut: keyText('make.note'), onSelect: onSticky },
+    { label: 'Text', icon: <Type />, shortcut: keyText('make.text'), onSelect: () => onTool('text') },
+    { label: 'Shape', icon: <Shapes />, shortcut: keyText('make.shape'), onSelect: () => onTool('shape') },
+    { label: 'Zone', icon: <SquareDashedMousePointer />, shortcut: keyText('make.zone'), onSelect: () => onTool('zone') },
+    'separator',
+    { label: 'Box select', icon: <SquareDashed />, shortcut: keyText('move.box'), onSelect: () => onMode('box') },
+  ];
+  const pressed = (tool !== undefined && DRAW_TOOLS.has(tool)) || (tool === undefined && mode === 'box');
+  return (
+    <AnchoredPopover
+      {...shapes.popover}
+      side="bottom"
+      sideOffset={6}
+      anchor={
+        <span className="create-toolbar-draw">
+          <Menu entries={entries}>
+            <Button variant="ghost" icon={<PenLine />} trailingIcon={<ChevronDown aria-hidden />} aria-pressed={pressed} data-tour="add-zone">
+              Draw
+            </Button>
+          </Menu>
+        </span>
+      }
+    >
+      {shapes.picker}
+    </AnchoredPopover>
   );
 }
 
@@ -84,55 +157,9 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
  * the picker; a press on the board closes it too and draws, while Esc or the button again puts the tool down.
  */
 function ShapeTool({ armed, onTool }: { armed: boolean; onTool(tool: ArmedTool | undefined): void }) {
-  const last = useRecentShapes()[0] ?? 'rectangle';
-  // Open whenever the tool is armed, until it is picked from or the board is pressed.
-  const [closed, setClosed] = useState(false);
-  const [wasArmed, setWasArmed] = useState(armed);
-  if (wasArmed !== armed) {
-    setWasArmed(armed);
-    setClosed(false);
-  }
-  /** Closed by a pick or a press on the board: the tool stays armed, and focus stays off the button. */
-  const keepArmed = useRef(false);
-  const close = () => {
-    keepArmed.current = true;
-    setClosed(true);
-  };
+  const { last, popover, picker } = useShapePicker(armed, onTool);
   return (
-    <Popover
-      aria-label="Shapes"
-      className="shape-picker-popover"
-      open={armed && !closed}
-      onOpenChange={(open) => {
-        if (open) {
-          setClosed(false);
-          onTool('shape');
-        } else if (keepArmed.current) setClosed(true);
-        else onTool(undefined);
-      }}
-      onPointerDownOutside={(event) => {
-        if ((event.target as Element | null)?.closest('[data-testid="board-tool"]')) keepArmed.current = true;
-      }}
-      onCloseAutoFocus={(event) => {
-        if (keepArmed.current) event.preventDefault();
-        keepArmed.current = false;
-      }}
-      content={
-        <ShapePicker
-          current={last}
-          hint={
-            <>
-              <span>Click, then drag on the board</span>·<span>↵ the first match</span>
-            </>
-          }
-          onEscape={() => onTool(undefined)}
-          onPick={(shape) => {
-            noteShapeUsed(shape);
-            close();
-          }}
-        />
-      }
-    >
+    <Popover {...popover} content={picker}>
       <ToolButton
         label="Shape"
         className="create-toolbar-shape"
@@ -148,6 +175,64 @@ function ShapeTool({ armed, onTool }: { armed: boolean; onTool(tool: ArmedTool |
       />
     </Popover>
   );
+}
+
+/**
+ * The shape picker's state, for whichever button it opens under: open whenever the Shape tool is armed, until it is
+ * picked from or the board is pressed. A pick arms that shape and closes it; a press on the board closes it too and
+ * draws, while Esc or a press elsewhere puts the tool down.
+ */
+function useShapePicker(armed: boolean, onTool: (tool: ArmedTool | undefined) => void) {
+  const last = useRecentShapes()[0] ?? 'rectangle';
+  const [closed, setClosed] = useState(false);
+  const [wasArmed, setWasArmed] = useState(armed);
+  if (wasArmed !== armed) {
+    setWasArmed(armed);
+    setClosed(false);
+  }
+  /** Closed by a pick or a press on the board: the tool stays armed, and focus stays off the button. */
+  const keepArmed = useRef(false);
+  const close = () => {
+    keepArmed.current = true;
+    setClosed(true);
+  };
+  return {
+    last,
+    popover: {
+      'aria-label': 'Shapes',
+      className: 'shape-picker-popover',
+      open: armed && !closed,
+      onOpenChange: (open: boolean) => {
+        if (open) {
+          setClosed(false);
+          onTool('shape');
+        } else if (keepArmed.current) setClosed(true);
+        else onTool(undefined);
+      },
+      onPointerDownOutside: (event: Event) => {
+        if ((event.target as Element | null)?.closest('[data-testid="board-tool"]')) keepArmed.current = true;
+      },
+      onCloseAutoFocus: (event: Event) => {
+        if (keepArmed.current) event.preventDefault();
+        keepArmed.current = false;
+      },
+    },
+    picker: (
+      <ShapePicker
+        current={last}
+        hint={
+          <>
+            <span>Click, then drag on the board</span>·<span>↵ the first match</span>
+          </>
+        }
+        onEscape={() => onTool(undefined)}
+        onPick={(shape) => {
+          noteShapeUsed(shape);
+          close();
+        }}
+      />
+    ),
+  };
 }
 
 /**

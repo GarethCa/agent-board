@@ -58,6 +58,14 @@ function host(agents = new Map<string, Agent>()) {
         throw new Error('not here');
       },
       continueOnCredits: () => Promise.reject(new Error('not here')),
+      sendUnsent: () => Promise.reject(new Error('not here')),
+      clearUnsent: () => {
+        throw new Error('not here');
+      },
+      queueAfterTurn: () => {
+        throw new Error('not here');
+      },
+      deliverAfterTurn: () => {},
       resume: () => Promise.reject(new Error('not here')),
       stop: () => Promise.reject(new Error('not here')),
       pause: () => Promise.reject(new Error('not here')),

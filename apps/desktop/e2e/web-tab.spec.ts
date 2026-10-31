@@ -1,4 +1,4 @@
-import { expect, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 import { serveWebPages } from './web-server.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
@@ -91,7 +92,7 @@ async function goTo(window: Page, typed: string): Promise<void> {
   await address.press('Enter');
 }
 
-test("a web tab from + Web… shows a local dev server's page, locked down: no file, data or javascript, no redirect away, no window, permission, download or devtools; it follows its pane as it splits, hides behind another tab, is kept across a restart by its URL and goes with its data when closed", async () => {
+test("a web tab from + Web… shows a local dev server's page, locked down: no file, data or javascript, no redirect away, no window, permission, download or devtools; it follows its pane as it splits, hides behind another tab, is kept across a restart by its URL and goes when closed", async () => {
   const server = await serveWebPages();
   const { dir, repo, env } = scratch('output');
   const dataDir = tempDataDir();
@@ -106,7 +107,7 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     // + › Web… opens a tab at once with no page and its address bar focused, saying how to start a server while none runs;
     // what is typed there is checked with the rule the page is held to.
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: 'Web…' }).click();
+    await window.getByRole('menuitem', { name: /^Web…/ }).click();
     const address = webView(window).getByTestId('web-address');
     await expect(address).toBeFocused();
     await expect(address).toHaveValue('');
@@ -300,7 +301,7 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
 
     // A new tab showing hides the page, and it comes back as that tab closes; so does another tab showing.
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: 'Web…' }).click();
+    await window.getByRole('menuitem', { name: /^Web…/ }).click();
     await expect.poll(async () => (await theWebView(app)).visible).toBe(false);
     await window.getByRole('button', { name: 'Close New tab' }).click();
     await expectDrawnOver(app, window);
@@ -341,11 +342,6 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     await expect(webView(window).getByTestId('web-address')).toHaveValue(`${server.url}next`);
     await expectDrawnOver(app, window);
 
-    // Closed, its page goes, and its partition's cookies with it.
-    await restored.evaluate(() => void (document.cookie = 'seen=1; max-age=3600'));
-    const tabId = (await webView(window).getAttribute('data-web-tab'))!;
-    const cookies = () => app.evaluate(({ session }, id) => session.fromPartition(`web-tab-${id}`).cookies.get({}).then((all) => all.length), tabId);
-    expect(await cookies()).toBe(1);
     // ⌘W in the page closes its tab, as anywhere in the window, never the app's window.
     // Sent as the OS sends a key press: Playwright's reach the page through devtools, which the app never hears.
     await app.evaluate(({ BrowserWindow }, mac) => {
@@ -355,7 +351,143 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     await expect(tabNamed(window, host)).toHaveCount(0);
     await expect(sessionWindow(window)).toBeVisible();
     await expect.poll(() => webViews(app)).toEqual([]);
-    await expect.poll(cookies).toBe(0);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+    await server.close();
+  }
+});
+
+/** The cookies kept in the session web tabs share: its unpackaged name, as tests run the app unpackaged. */
+const sharedCookies = (app: ElectronApplication) => app.evaluate(({ session }) => session.fromPartition('persist:web-plain').cookies.get({}).then((all) => all.map((each) => each.name)));
+
+/**
+ * Waits for the one web tab's page, as the main process has it, to be at `url` and say `heading`: read there, as
+ * Playwright's list of pages can keep one a window took away and miss the one made in its place.
+ */
+async function expectHeading(app: ElectronApplication, url: string, heading: string): Promise<void> {
+  await expect
+    .poll(() =>
+      app.evaluate(async ({ BrowserWindow }) => {
+        const [view] = BrowserWindow.getAllWindows().flatMap((window) => window.contentView.children) as Electron.WebContentsView[];
+        if (view === undefined || view.webContents.isLoading()) return undefined;
+        return [view.webContents.getURL(), await view.webContents.executeJavaScript('document.querySelector("h1")?.textContent')];
+      }),
+    )
+    .toEqual([url, heading]);
+}
+
+/** Opens a web tab from the + menu's `entry` and goes to `url` in it, waiting for its page to say `heading`. */
+async function openWebTab(app: ElectronApplication, window: Page, entry: 'Web…' | 'Private web…', url: string, heading: string): Promise<void> {
+  await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
+  await window.getByRole('menuitem', { name: new RegExp(`^${entry}`) }).click();
+  await goTo(window, url);
+  await expect((await webPage(app, url)).locator('h1')).toHaveText(heading);
+}
+
+/** Closes the one web tab, at `host`, and waits for its page to go. */
+async function closeWebTab(app: ElectronApplication, window: Page, host: string): Promise<void> {
+  await tabNamed(window, host).hover();
+  await window.getByRole('button', { name: `Close ${host}` }).click();
+  await expect(tabNamed(window, host)).toHaveCount(0);
+  await expect.poll(() => webViews(app)).toEqual([]);
+}
+
+/**
+ * With the shell tile's window closed, answers the Settings window's ask (Advanced › Web tabs) before it clears browsing
+ * data (Clear browsing data… or the switch turned off), then opens the board's session window again, its web tab loaded afresh.
+ */
+async function confirmClear(window: Page, action: (webTabs: Locator) => Promise<void>): Promise<void> {
+  await window.getByRole('button', { name: 'Close session window' }).click();
+  await expect(sessionWindow(window)).toBeHidden();
+  const settings = await openSettings(window, 'advanced.webTabs');
+  await action(settingsSection(settings, 'Web tabs'));
+  await settings.getByTestId('web-data-confirm').click();
+  await expect(settings.getByTestId('web-data-cleared')).toBeVisible();
+  await window.getByTestId('shell-tile').dblclick();
+  await expect(sessionWindow(window)).toBeVisible();
+}
+
+test('web tabs keep a login across closing the tab and a restart, as a browser does; Clear browsing data and turning it off (in Settings or from outside) forget it and make open tabs private, and a private tab keeps none', async () => {
+  const server = await serveWebPages();
+  const host = new URL(server.url).host;
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const appEnv = { ...env, ...SHELL_ENV };
+  let { app, window } = await launch(dataDir, appEnv);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await expect(tabs(window)).toHaveCount(1);
+
+    // A private tab signs in for itself alone, says it is private, and forgets the login as it closes.
+    await openWebTab(app, window, 'Private web…', `${server.url}login`, 'Signed in');
+    await expect(webView(window).getByTestId('web-private')).toHaveText('Private');
+    const privateId = (await webView(window).getAttribute('data-web-tab'))!;
+    const privateCookies = () => app.evaluate(({ session }, id) => session.fromPartition(`web-tab-${id}`).cookies.get({}).then((all) => all.length), privateId);
+    expect(await privateCookies()).toBe(1);
+    expect(await sharedCookies(app)).toEqual([]);
+    await closeWebTab(app, window, host);
+    await expect.poll(privateCookies).toBe(0);
+    await openWebTab(app, window, 'Web…', `${server.url}account`, 'Signed out');
+    await expect(webView(window).getByTestId('web-private')).toHaveCount(0);
+
+    // Signed in in one web tab, another opened after it closed is signed in too.
+    await goTo(window, `${server.url}login`);
+    await expect((await webPage(app, `${server.url}login`)).locator('h1')).toHaveText('Signed in');
+    await closeWebTab(app, window, host);
+    expect(await sharedCookies(app)).toEqual(['login']);
+    await openWebTab(app, window, 'Web…', `${server.url}account`, 'Signed in');
+
+    // And after a restart, the tab kept loads signed in.
+    const shellId = (await sessionWindow(window).getAttribute('data-shell-id'))!;
+    await expect.poll(() => keptWebUrl(window, shellId)).toBe(`${server.url}account`);
+    await app.close();
+    ({ app, window } = await launch(dataDir, appEnv));
+    await expect((await webPage(app, `${server.url}account`)).locator('h1')).toHaveText('Signed in');
+
+    // Clear browsing data, once confirmed, signs every web tab out.
+    await confirmClear(window, (webTabs) => webTabs.getByRole('button', { name: 'Clear browsing data…' }).click());
+    expect(await sharedCookies(app)).toEqual([]);
+    await expect((await webPage(app, `${server.url}account`)).locator('h1')).toHaveText('Signed out');
+
+    // Turned off in Settings, what was kept goes, and the tab, opened again, is private and says so: signing in there keeps nothing.
+    await goTo(window, `${server.url}login`);
+    await expect.poll(() => sharedCookies(app)).toEqual(['login']);
+    await confirmClear(window, (webTabs) => webTabs.getByRole('switch', { name: 'Keep logins between sessions' }).click());
+    expect(await sharedCookies(app)).toEqual([]);
+    await expect(webView(window).getByTestId('web-private')).toBeVisible();
+    await goTo(window, `${server.url}login`);
+    await expectHeading(app, `${server.url}login`, 'Signed in');
+    expect(await sharedCookies(app)).toEqual([]);
+
+    // Turned off from outside Settings (the CLI, the daemon's socket), the app does it itself: a tab open in the kept
+    // session moves at once to one of its own, at its page, signed out, and what it signs in to there is never kept,
+    // past a restart either.
+    await window.evaluate(() => self.agentBoard.flowEdges.setSettings({ keepWebLogins: true }));
+    await closeWebTab(app, window, host);
+    await openWebTab(app, window, 'Web…', `${server.url}login`, 'Signed in');
+    await expect(webView(window).getByTestId('web-private')).toHaveCount(0);
+    await goTo(window, `${server.url}account`);
+    await expectHeading(app, `${server.url}account`, 'Signed in');
+    await expect.poll(() => sharedCookies(app)).toEqual(['login']);
+    await window.evaluate(() => self.agentBoard.flowEdges.setSettings({ keepWebLogins: false }));
+    await expect.poll(() => sharedCookies(app)).toEqual([]);
+    await expect(webView(window).getByTestId('web-private')).toBeVisible();
+    await expectHeading(app, `${server.url}account`, 'Signed out');
+    await goTo(window, `${server.url}login`);
+    await expectHeading(app, `${server.url}login`, 'Signed in');
+    await goTo(window, `${server.url}account`);
+    await expectHeading(app, `${server.url}account`, 'Signed in');
+    expect(await sharedCookies(app)).toEqual([]);
+    await expect.poll(() => keptWebUrl(window, shellId)).toBe(`${server.url}account`);
+    await app.close();
+    ({ app, window } = await launch(dataDir, appEnv));
+    await expectHeading(app, `${server.url}account`, 'Signed out');
+    await expect(webView(window).getByTestId('web-private')).toBeVisible();
+    expect(await sharedCookies(app)).toEqual([]);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

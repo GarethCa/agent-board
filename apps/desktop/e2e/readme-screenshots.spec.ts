@@ -572,7 +572,7 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
 
     // A web tab from + › Web…, showing the agent's dev server.
     await panes.nth(0).getByRole('button', { name: 'New tab' }).click();
-    await page.getByRole('menuitem', { name: 'Web…' }).click();
+    await page.getByRole('menuitem', { name: /^Web…/ }).click();
     const address = page.getByTestId('web-address');
     await expect(address).toBeFocused();
     await address.fill(devUrl);

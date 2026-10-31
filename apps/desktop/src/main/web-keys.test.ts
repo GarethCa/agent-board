@@ -23,6 +23,16 @@ describe("a key pressed in a web tab's page", () => {
     expect(webKey(press('KeyI', { meta: true, shift: true }), true)).toBeUndefined();
   });
 
+  it("hands the Simplified design's ⌘⌥T and ⌘. to the window, and under Classic keeps them for the page", () => {
+    expect(webKey(press('KeyT', { meta: true, alt: true }), true, true)).toBe('window');
+    expect(webKey(press('KeyT', { control: true, shift: true, alt: true }), false, true)).toBe('window');
+    expect(webKey(press('Period', { meta: true }), true, true)).toBe('window');
+    expect(webKey(press('Period', { control: true, shift: true }), false, true)).toBe('window');
+    expect(webKey(press('KeyT', { meta: true, alt: true }), true, false)).toBeUndefined();
+    expect(webKey(press('Period', { meta: true }), true, false)).toBeUndefined();
+    expect(webKey(press('Period', { control: true }), false, true)).toBeUndefined();
+  });
+
   it('keeps editing keys, and plain typing, for the page', () => {
     for (const code of ['KeyC', 'KeyV', 'KeyX', 'KeyA', 'KeyZ', 'KeyL', 'KeyF']) expect(webKey(press(code, { meta: true }), true)).toBeUndefined();
     expect(webKey(press('KeyW'), true)).toBeUndefined();

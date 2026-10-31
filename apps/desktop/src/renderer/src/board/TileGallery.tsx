@@ -149,6 +149,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   trustFolder: null,
   trustedByZone: false,
   queuedUntilUp: 0,
+  messagesWaiting: 0,
   undelivered: [],
   status: null,
   workFinishedAt: null,

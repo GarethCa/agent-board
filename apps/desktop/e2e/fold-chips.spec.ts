@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { agents, closeAgent, launch, spawnAgent, tile, tileAction, TURN_MS, zoneNamed, zones } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
+import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const chip = (page: Page) => page.locator('[data-testid="agent-tile"][data-folded]');
@@ -51,7 +51,7 @@ test('a closed agent folds to a chip that keeps its edge, unfolds on click, fold
     await expect.poll(() => node.evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(34);
     await expect(chip(window)).toContainText('Fix checkout flake');
     await expect(chip(window).locator('.ui-pill')).toContainText('ended');
-    await expect(tile(window).filter({ hasNot: window.locator('[data-folded]') })).toHaveCount(1);
+    await expect(window.locator('[data-testid="agent-tile"]:not([data-folded])')).toHaveCount(1);
 
     // The chip is centred in its tile's place, as it is drawn: its edge leaves from the same height as the tile's did.
     await expect
@@ -93,7 +93,12 @@ test('an agent that has only ended, its pane a live shell, keeps its tile and it
     const [agent] = await agents(window);
     await window.evaluate((id) => globalThis.window.agentBoard.agents.stop(id), agent!.sessionId);
     await expect(tile(window)).toHaveAttribute('data-state', 'done');
-    await expect(tile(window).getByRole('button', { name: 'Restart' })).toBeAttached();
+    // On the Classic tile Restart is in its head; on the Simplified card, in its ⋯ menu.
+    if (runDesign() === 'simplified') {
+      await tile(window).getByRole('button', { name: 'More' }).click();
+      await expect(window.getByRole('menuitem', { name: 'Restart agent' })).toBeVisible();
+      await window.keyboard.press('Escape');
+    } else await expect(tile(window).getByRole('button', { name: 'Restart' })).toBeAttached();
     await expect(chip(window)).toHaveCount(0);
   } finally {
     await app.close();

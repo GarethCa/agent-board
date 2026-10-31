@@ -242,6 +242,14 @@ describe('window layout', () => {
       expect(parseWindowLayout(JSON.parse(JSON.stringify(two)))).toEqual(two);
     });
 
+    it('keeps a private web tab private, and reads one with any other mark as an ordinary one', () => {
+      const privateWeb: Surface = { kind: 'web', id: 'w9', url: 'https://example.com/', private: true };
+      const layout = singlePane([own, privateWeb]);
+      expect(parseWindowLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+      const marked = { type: 'pane', id: 'main', tabs: [{ kind: 'own' }, { kind: 'web', id: 'w9', url: '', private: 'yes' }], active: 'own' };
+      expect(windowPanes(parseWindowLayout(marked))[0]!.tabs[1]).toEqual({ kind: 'web', id: 'w9', url: '' });
+    });
+
     it.each([
       ['not an object', 3],
       ['an empty strip', { type: 'pane', id: 'p', tabs: [], active: 'own' }],

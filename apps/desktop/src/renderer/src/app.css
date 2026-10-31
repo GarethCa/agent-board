@@ -218,6 +218,9 @@ kbd {
 /* Hybrid tiles */
 
 .hybrid-tile {
+  /* A container for the head's corner to fold by (see .hybrid-tile-minor). It also contains layout and style, which
+     makes the tile a stacking context and the containing block of fixed-position descendants. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -520,8 +523,8 @@ kbd {
   white-space: nowrap;
 }
 
-/* The head's corner: the actions, unseen until the tile is hovered or holds the focus (only their opacity changes, so
-   nothing moves). It gives way before the name does, so the head never leaves the tile. */
+/* The head's corner: the actions, always shown, softer until the tile is hovered or holds the focus (only their opacity
+   changes, so nothing moves). It gives way before the name does, so the head never leaves the tile. */
 .hybrid-tile-corner {
   display: grid;
   flex: 0 1 auto;
@@ -540,13 +543,23 @@ kbd {
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
-/* Hidden, not removed: the keyboard still reaches them, and :focus-within shows them. */
+/* Never hidden: softer at rest, full on hover or focus. */
 .hybrid-tile-actions {
   gap: var(--space-px);
   padding: var(--space-px);
   border-radius: var(--radius-item);
   background: var(--tag);
-  opacity: 0;
+  opacity: 0.7;
+}
+
+/* A narrow tile folds its lesser actions into the ⋯ menu, which has them all, before Expand and ⋯ would go. A size
+   container is measured on its content box, so 200px here is a tile of about 224 (border 2, padding 12 + 10). The head
+   needs its icon (~16) + 7 + the name's --size-tile-name (96) + 7 + four buttons (4 x 18 + 3 + 2 = 77) = about 203, so
+   the default 256px tile (content 232) keeps all four and the 200px least size (content 176) folds. */
+@container (max-width: 200px) {
+  .hybrid-tile-minor {
+    display: none;
+  }
 }
 
 .hybrid-tile:is(:hover, :focus-within) .hybrid-tile-actions {
@@ -1388,6 +1401,206 @@ kbd {
 
 .character-gallery td {
   background: var(--raised);
+}
+
+.character-gallery .captain {
+  margin-right: var(--space-3-5);
+  vertical-align: bottom;
+}
+
+/*
+ * An agent's status, one of six, as the Simplified design draws it: a glyph or the orange character, and its word. Only
+ * Needs you and Problem are coloured, orange and red; Done is green, Working in ink, Paused and Scheduled grey.
+ */
+.status-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.status-mark-glyph {
+  flex: none;
+}
+
+.status-mark[data-status='needs-you'] {
+  color: var(--state-waiting);
+}
+
+.status-mark[data-status='problem'] {
+  color: var(--state-failed);
+}
+
+.status-mark[data-status='done'] .status-mark-glyph {
+  color: var(--state-done-ink);
+}
+
+.status-mark[data-status='paused'],
+.status-mark[data-status='scheduled'] {
+  color: var(--muted);
+}
+
+/* The character stands a little taller than the word, at a size that still reads its pose. */
+.status-mark-character {
+  display: inline-flex;
+  flex: none;
+}
+
+.status-mark-character .character {
+  width: 18px;
+  height: 21px;
+}
+
+.status-mark-gallery {
+  margin: var(--space-6);
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.status-mark-gallery th,
+.status-mark-gallery td {
+  padding: var(--space-1-5) var(--space-3-5);
+  text-align: left;
+}
+
+.status-mark-gallery td {
+  background: var(--raised);
+}
+
+/*
+ * An agent's calm tile under the Simplified design (CalmTile.tsx): its name beside its window controls, one grey line, its
+ * status with at most one button, and the technical line Show technical details adds. Only the Simplified design draws
+ * it, so none of this reaches Classic.
+ */
+.calm-tile {
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-2-5) var(--space-3);
+}
+
+/* Needs you rings it in orange, a problem in red; the rest sit plain. A paused agent or one a restart stopped takes none
+   of Classic's dashed, striped or slate looks: its status says it. The ring follows its status, so an agent that asks in
+   its last words or has changes to review is ringed too, seen or not. */
+.calm-tile.hybrid-tile-agent:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
+  outline-style: solid;
+  outline-width: 2.5px;
+  background: var(--raised);
+}
+
+.calm-tile:is([data-state='stopped-by-restart'], [data-state='hibernated']) {
+  outline-color: transparent;
+}
+
+/* As plain as Classic's own rules weigh, so a hand-off's ring and a tab drop's halo, later in this file, still show. */
+.calm-tile[data-status='needs-you'] {
+  outline-color: var(--state-waiting);
+}
+
+.calm-tile[data-status='problem'] {
+  outline-color: var(--state-failed);
+}
+
+.calm-tile .hybrid-tile-name {
+  /* Room for the five controls on the narrowest tile: the name gives way first, to its second line, then an ellipsis. */
+  min-width: var(--space-12);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: normal;
+}
+
+/* The window controls, always shown at full strength along the top edge, each a 24px target. */
+.calm-tile-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.calm-tile-controls .ui-icon-button[data-size='xs'] {
+  width: var(--space-6);
+  height: var(--space-6);
+  color: var(--muted);
+}
+
+.calm-tile-controls .ui-icon-button svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.calm-tile-controls .ui-icon-button:disabled {
+  opacity: 0.4;
+}
+
+/* What it is doing or asks, in grey, on up to two lines. */
+.calm-tile-line {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.calm-tile-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--space-6);
+  margin-top: auto;
+}
+
+.calm-tile-action {
+  flex: none;
+}
+
+/* How many of its crew flag it for a look, waiting for its answer. */
+.calm-tile-crew-flags {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+/* The repo it works in, outside its zones: after the status, giving way before it. */
+.calm-tile-repo {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-end: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The technical layer: one mono line under a hairline, its harness's mark first. */
+.calm-tile-technical {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-top: var(--space-1);
+  border-top: 0.5px solid var(--border);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.calm-tile-technical svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.calm-tile-technical-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .zone[data-kind='unbound'] {
@@ -2815,6 +3028,174 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+/* A message another agent sent: its character beside a bubble tinted in its colour (the Captain's teal, or its harness's). */
+.chat-agent,
+.chat-ev[data-sender] {
+  --sender: var(--harness-claude);
+}
+
+.chat-agent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: end;
+  max-width: 100%;
+}
+
+.chat-agent[data-sender='captain'],
+.chat-ev[data-sender='captain'] {
+  --sender: var(--master);
+}
+
+.chat-agent[data-sender='codex'],
+.chat-ev[data-sender='codex'] {
+  --sender: var(--harness-codex);
+}
+
+.chat-agent-figure {
+  display: block;
+  /* Drawn in the dark well, whatever the theme: ink and paper from the window, not the app. */
+  --figure-ink: var(--window-ink);
+  --figure-paper: var(--window-bg);
+  line-height: 0;
+}
+
+.chat-agent-figure svg {
+  width: auto;
+  height: 40px;
+}
+
+.chat-agent-bubble {
+  min-width: 0;
+  padding: var(--space-1-5) var(--space-2-5) var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--sender) 30%, var(--window-edge));
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
+  background: color-mix(in srgb, var(--sender) 9%, var(--window-bg));
+  color: var(--window-ink);
+  font-size: var(--font-size-sm-plus);
+}
+
+.chat-agent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  margin-bottom: var(--space-0-5);
+  font-size: var(--font-size-xs);
+}
+
+.chat-agent-head b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-agent-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--sender) 14%, transparent);
+  color: var(--sender);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.chat-agent-kind svg,
+.chat-agent-info svg,
+.chat-agent-more svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.chat-agent-info {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--window-ink-soft);
+  cursor: pointer;
+}
+
+.chat-agent-info:hover,
+.chat-agent-info[aria-expanded='true'] {
+  color: var(--window-ink);
+}
+
+.chat-agent-info:focus-visible,
+.chat-agent-more:focus-visible,
+.chat-agents-hidden button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* What the board added for the receiver: how to answer, a hand-off's head. */
+.chat-agent-aside {
+  margin: 0 0 var(--space-1);
+  color: var(--window-ink-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.chat-agent-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-agent-text[data-collapsed='true'] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.chat-agent-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  margin-top: var(--space-0-5);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.chat-agent-more svg[data-open='true'] {
+  transform: rotate(180deg);
+}
+
+/* Where agents' messages are left out of a chat that shows only the user's own. */
+.chat-agents-hidden {
+  margin: 0;
+  padding: var(--space-0-5) var(--space-1);
+  border: 1px dashed var(--window-edge);
+  border-radius: var(--radius-md);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+
+.chat-agents-hidden button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.chat-agents-switch button {
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
 /* A message sent from the message box that the transcript doesn't show yet. */
 .chat-sent {
   display: flex;
@@ -3552,6 +3933,10 @@ kbd {
   border-radius: var(--radius-pill);
   background: var(--window-edge);
   box-shadow: var(--shadow-chat-dot);
+}
+
+.chat-ev[data-sender] > .chat-dot[data-agent] {
+  border-color: var(--sender);
 }
 
 .chat-dot[data-hollow] {
@@ -6424,7 +6809,7 @@ button.chat-chip[aria-expanded='true'] {
   background: var(--rail-token);
   color: var(--rail-token-ink);
   box-shadow: var(--shadow-control);
-  font-family: var(--font-mono);
+  font-family: var(--rail-token-font);
   font-size: var(--font-size-xs);
   font-weight: var(--weight-medium);
   white-space: nowrap;
@@ -6489,7 +6874,7 @@ button.chat-chip[aria-expanded='true'] {
   left: 0;
   margin-top: var(--space-1);
   color: var(--muted);
-  font-family: var(--font-mono);
+  font-family: var(--rail-token-font);
   font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
@@ -6520,13 +6905,13 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .rail-token[data-state='held'] .rail-token-chip {
-  border-color: var(--flow-held-ink);
-  background: var(--flow-held);
-  color: var(--flow-held-ink);
+  border-color: var(--rail-token-held-ink);
+  background: var(--rail-token-held);
+  color: var(--rail-token-held-ink);
 }
 
 .rail-token[data-state='held'] .rail-token-note {
-  color: var(--flow-held-ink);
+  color: var(--rail-token-held-ink);
 }
 
 .rail-token[data-state='queued'] .rail-token-chip {
@@ -9441,4 +9826,38 @@ tr[data-status='running'] .gate-step-icon {
 :root[data-capture] .react-flow__panel,
 :root[data-capture] .react-flow__panel * {
   visibility: hidden;
+}
+
+/*
+ * Show technical details (technical.ts): under the Simplified design, a technical bit tagged `data-technical-detail` is
+ * left out until the switch is on. Classic always shows it.
+ */
+:root[data-design='simplified']:not([data-technical]) [data-technical-detail] {
+  display: none !important;
+}
+
+/*
+ * An agent's window header under the Simplified design (SimplifiedHeader.tsx): the zone pop-up, name and status, then
+ * the one action, the Chat | Timeline | Terminal switch, the details toggle, ⋯ and Done. Only that header draws these.
+ */
+.session-window-zone {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: var(--space-1-5);
+  font-weight: var(--weight-medium);
+}
+
+.session-window-zone svg:last-child {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  opacity: 0.6;
+}
+
+.session-window-view-slot,
+.session-window-gate {
+  display: contents;
+}
+
+.ui-segmented.session-header-view-switch {
+  flex: none;
 }

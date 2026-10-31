@@ -462,11 +462,20 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     description:
       "Send an agent its next message, once its turn has ended (wait first). Never to one that needs the user's " +
       "permission, and never a harness command. To one still starting it is queued until it's up, after its first " +
-      'prompt. You may also reply to an agent that messaged you, even outside your scope. As `agent-board send`.',
+      'prompt; to an orchestrator mid-turn, until its turn ends, then sent as a turn of its own. You may also reply to an agent that messaged you, even outside your scope, and message the Captain whatever your scope. It fails, saying why, when ' +
+      'the message was typed at its prompt but no turn started on it: then submit presses Enter on what is typed ' +
+      'there, or clear clears it, instead of text (for an agent you may steer). The agent reads your message headed with your ' +
+      'sender mark, so it and its chat know it is yours, not the user\'s: `⟨send from <your name> · <your ref>⟩ <text>` ' +
+      '(reply when it answers its message, flag or question); the result says how it starts. As `agent-board send`.',
     inputSchema: {
       type: 'object',
-      properties: { agent: AGENT_REF, text: { type: 'string' } },
-      required: ['agent', 'text'],
+      properties: {
+        agent: AGENT_REF,
+        text: { type: 'string' },
+        submit: { type: 'boolean', description: 'Instead of text: press Enter on the message left unsent at its prompt.' },
+        clear: { type: 'boolean', description: 'Instead of text: clear the message left unsent at its prompt.' },
+      },
+      required: ['agent'],
       additionalProperties: false,
     },
   },
@@ -654,7 +663,7 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
           type: 'string',
           enum: [...ARRANGE_LAYOUTS],
           description:
-            'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows, or by issue each lane below the one before, its label and note in its first column and its tiles wrapping onto a new row after four (wrap; by role or state, as rows).',
+            'A row per group (rows, at first: by issue, lanes with a column per slot), a column per group (columns), a card per lane two or three across (cards), filling the zone (grid) with the tiles no edge joins, units joined by edges laid out as rows, or by issue each lane below the one before, its label and note in its first column and its tiles wrapping onto a new row after four (wrap; by role or state, as rows), each lane as wrap lays it out in the shortest of as many columns as fit the window (masonry), or each lane a block sized by its tiles in a treemap of the window\'s shape, 16:10 with none (treemap); masonry and treemap pack each role\'s or state\'s row as a lane.',
         },
         auto: { type: 'boolean', description: 'Arrange by itself after every agent you start, note you add and agent you close (true), or stop (false). Off at first.' },
       },
@@ -1061,7 +1070,13 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
         issue: stringArg(args, 'issue', true),
       })
     ).text,
-  send: async (session, args) => (await sendToAgent(session, stringArg(args, 'agent'), stringArg(args, 'text'))).text,
+  send: async (session, args) => {
+    const draft = args.submit === true ? { submit: true as const } : args.clear === true ? { clear: true as const } : undefined;
+    if ((args.submit === true && args.clear === true) || (draft !== undefined && args.text !== undefined)) {
+      throw new BoardError('give one of text, submit and clear');
+    }
+    return (await sendToAgent(session, stringArg(args, 'agent'), draft ?? { text: stringArg(args, 'text') })).text;
+  },
   wait: async (session, { agents = [], crew, until, any, since, kinds, timeout_seconds: seconds = MCP_WAIT_SECONDS }) => {
     if (!Array.isArray(agents) || !agents.every((ref) => typeof ref === 'string')) throw new BoardError('agents must be a list of agent refs');
     // As `agent-board watch`: no agents named is your crew.

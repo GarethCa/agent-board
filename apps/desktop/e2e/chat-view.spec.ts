@@ -317,7 +317,7 @@ test("an expanded tile's chat renders the agent's Markdown and opens its links w
     second = await launch(dataDir, env);
     // The relaunched app, on the same data, still holds the session's choice.
     const [agent] = await agents(second.window);
-    await expect.poll(() => second!.window.evaluate(() => localStorage.getItem('agent-board.chat-sessions'))).toBe(JSON.stringify([agent!.sessionId]));
+    await expect.poll(() => second!.window.evaluate(() => localStorage.getItem('agent-board.session-views'))).toBe(JSON.stringify({ [agent!.sessionId]: 'chat' }));
   } finally {
     await first.app.close().catch(() => {});
     await second?.app.close().catch(() => {});

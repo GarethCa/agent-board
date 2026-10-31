@@ -6,11 +6,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, closeAgent, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, showDetails, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, tileAction, TURN_MS, windowKey, zoneNamed, zones } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
+import { test, openAddZone, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell, type LaunchOptions } from './launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from './render.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox, untilStill, viewTransform } from './board-helpers.ts';
 import { crowdedPanel, LONG } from './master-helpers.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
+import { SETTINGS_GROUPS } from '../src/renderer/src/chrome/settings-ia.ts';
 
 // Visual regression for the Workbench theme. Baselines are per platform (`-linux`, `-darwin`) and both are committed;
 // a test runs against the ones for the platform it is on, and fails, never skips, if they are missing. `pnpm visual:update`
@@ -62,7 +64,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await expect.soft(window.locator('.board')).toHaveScreenshot('board.png', SHOT);
     await restorePointer();
 
-    // The board menu, open: its zones, sessions and settings.
+    // The board menu, open: its zones, sessions and its Settings… row.
     await window.getByRole('button', { name: 'Board menu' }).click();
     await expect(window.getByRole('dialog', { name: 'Board menu' })).toBeVisible();
     await pinRandomText(window);
@@ -448,8 +450,9 @@ for (const { theme, suffix } of [
       await expect.soft(window.locator('body')).toHaveScreenshot(`spotlight-empty${suffix}.png`, SHOT);
       await restorePointer();
 
+      // The agent, and under it the settings its letters find too: Tidying, and Arrange spacing in it.
       await window.keyboard.type('tid');
-      await expect(switcher.getByTestId('spotlight-row')).toHaveCount(1);
+      await expect(switcher.getByTestId('spotlight-row')).toHaveCount(3);
       await pinRandomText(window);
       restorePointer = await ignorePointer(window);
       await settle(window);
@@ -463,7 +466,7 @@ for (const { theme, suffix } of [
   });
 }
 
-/** Settings › Appearance's Mode switch and Theme control, and the Theme popover open over the board menu. */
+/** Settings › General › Appearance's Mode switch and Theme control, and the Theme popover open over the Settings window. */
 for (const { theme, suffix } of [
   { theme: 'light', suffix: '' },
   { theme: 'dark', suffix: '-dark' },
@@ -478,26 +481,27 @@ for (const { theme, suffix } of [
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
       await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
-      await pinFonts(window);
-      await window.getByRole('button', { name: 'Board menu' }).click();
-      const mode = window.getByRole('group', { name: 'Mode' });
-      const control = window.getByRole('button', { name: 'Theme: Agent Board' });
-      await control.scrollIntoViewIfNeeded();
+      const settings = await openSettings(window, 'general.appearance');
+      await settings.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(settings);
+      const mode = settings.getByRole('group', { name: 'Mode' });
+      const control = settings.getByRole('button', { name: 'Theme: Agent Board' });
       await expect(mode.getByRole('button', { name: theme === 'dark' ? 'Dark' : 'Light' })).toHaveAttribute('aria-pressed', 'true');
-      let restorePointer = await ignorePointer(window);
-      await settle(window);
+      let restorePointer = await ignorePointer(settings);
+      await settle(settings);
       // The fieldsets, the outer of each name (the Mode switch inside its fieldset is a group named Mode too).
       const top = (await mode.first().boundingBox())!;
-      const bottom = (await window.getByRole('group', { name: 'Theme' }).first().boundingBox())!;
+      const bottom = (await settings.getByRole('group', { name: 'Theme' }).first().boundingBox())!;
       const clip = { x: top.x - 8, y: top.y - 8, width: Math.max(top.width, bottom.width) + 16, height: bottom.y + bottom.height - top.y + 16 };
-      await expect.soft(window).toHaveScreenshot(`theme-control${suffix}.png`, { ...SHOT, clip });
+      await expect.soft(settings).toHaveScreenshot(`theme-control${suffix}.png`, { ...SHOT, clip });
       await restorePointer();
 
       await control.click();
-      const popover = window.getByRole('dialog', { name: 'Themes' });
+      const popover = settings.getByRole('dialog', { name: 'Themes' });
       await expect(popover.getByRole('option', { name: 'Agent Board' })).toHaveAttribute('aria-selected', 'true');
-      restorePointer = await ignorePointer(window);
-      await settle(window);
+      restorePointer = await ignorePointer(settings);
+      await settle(settings);
       await expect.soft(popover).toHaveScreenshot(`theme-popover${suffix}.png`, SHOT);
       await restorePointer();
     } finally {
@@ -544,8 +548,8 @@ for (const { theme, suffix } of [
   });
 }
 
-/** The board menu with more zones than fit a short window: it stays inside the window, scrolls, and its last control can be reached. */
-test('the board menu with a dozen zones in a short window stays inside it and scrolls to Settings', async () => {
+/** The board menu with more zones than fit a short window: it stays inside the window, scrolls, and its Settings… row can be reached. */
+test('the board menu with a dozen zones in a short window stays inside it and scrolls to its Settings… row', async () => {
   needsBaselines('board-menu-overflow');
   const { dir, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -577,11 +581,11 @@ test('the board menu with a dozen zones in a short window stays inside it and sc
     await expect.soft(window.locator('body')).toHaveScreenshot('board-menu-overflow.png', SHOT);
     await restorePointer();
 
-    // The last Settings control scrolls into view and is clickable.
-    const last = menu.getByRole('group', { name: 'Settings' }).or(menu.locator('section', { hasText: 'Settings' })).locator('button, [role="switch"], [role="radio"]').last();
-    await last.scrollIntoViewIfNeeded();
-    await expect(last).toBeInViewport();
-    await last.click({ trial: true });
+    // The Settings… row scrolls into view and is clickable.
+    const row = menu.getByRole('button', { name: /^Settings…/ });
+    await row.scrollIntoViewIfNeeded();
+    await expect(row).toBeInViewport();
+    await row.click({ trial: true });
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);
@@ -596,11 +600,9 @@ test('the compact window setting: Off by default, then a custom window with its 
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
-    await window.setViewportSize(VIEWPORT);
-    await pinFonts(window);
-    await window.getByRole('button', { name: 'Board menu' }).click();
-    const menu = window.getByRole('dialog', { name: 'Board menu' });
-    await expect(menu).toBeVisible();
+    const settings = await openSettings(window, 'agents.context');
+    await pinFonts(settings);
+    const menu = settingsSection(settings, 'Context');
     const select = menu.getByLabel("Compact agents' context at");
     await expect(select).toHaveValue('0');
     await select.selectOption('custom');
@@ -613,8 +615,8 @@ test('the compact window setting: Off by default, then a custom window with its 
     await custom.press('Enter');
     await expect(custom).toHaveValue('300000');
     await select.scrollIntoViewIfNeeded();
-    const restorePointer = await ignorePointer(window);
-    await settle(window);
+    const restorePointer = await ignorePointer(settings);
+    await settle(settings);
     await expect.soft(menu.locator('.ui-field', { hasText: "Compact agents' context at" })).toHaveScreenshot('settings-compact-window.png', SHOT);
     await expect.soft(menu.locator('.ui-field', { hasText: 'Custom window, in tokens' })).toHaveScreenshot('settings-compact-window-custom.png', SHOT);
     await restorePointer();
@@ -624,6 +626,46 @@ test('the compact window setting: Off by default, then a custom window with its 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** The Settings window on each of its seven groups' pages, and searching, light and dark. */
+for (const { theme, suffix } of [
+  { theme: 'light', suffix: '' },
+  { theme: 'dark', suffix: '-dark' },
+] as const) {
+  test(`the Settings window on each group, ${theme}`, async () => {
+    const shots = [...SETTINGS_GROUPS.map((group) => `settings-window-${group.id}${suffix}`), `settings-window-search${suffix}`];
+    needsBaselines(...shots);
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    try {
+      const settings = await openSettings(window);
+      await settings.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(settings);
+      for (const group of SETTINGS_GROUPS) {
+        await openSettings(window, group.id);
+        await pinRandomText(settings);
+        const restorePointer = await ignorePointer(settings);
+        await settle(settings);
+        await expect.soft(settings.locator('body')).toHaveScreenshot(`settings-window-${group.id}${suffix}.png`, SHOT);
+        await restorePointer();
+      }
+
+      // Searching: the sidebar filtered to what holds "path", the page those sections with the matches highlighted.
+      await settings.getByRole('searchbox', { name: 'Search settings' }).fill('path');
+      await expect(settings.getByRole('main', { name: 'Search' })).toBeVisible();
+      await pinRandomText(settings);
+      const restorePointer = await ignorePointer(settings);
+      await settle(settings);
+      await expect.soft(settings.locator('body')).toHaveScreenshot(`settings-window-search${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close().catch(() => {});
+      await removeDataDir(dataDir);
+    }
+  });
+}
 
 /** Waits until the board's view stops moving: after a fit or a jump, which animate. */
 const viewSettled = (window: Page): Promise<void> => untilStill(() => viewTransform(window));
@@ -1501,8 +1543,8 @@ for (const { theme, scheme } of [{ theme: 'light', scheme: 'light' }, { theme: '
 }
 
 /**
- * Times that differ run to run, pinned: those the chat counts or reads from the transcript to `4.1s`, and how long a
- * held permission prompt has left to `20 s`.
+ * Times that differ run to run, pinned: those the chat counts or reads from the transcript to `4.1s`, how long a
+ * held permission prompt has left to `20 s`, and the session id of an agent a message names.
  */
 async function pinChatTimes(page: Page) {
   await page.evaluate(() => {
@@ -1512,6 +1554,8 @@ async function pinChatTimes(page: Page) {
       node.data = node.data.replace(/\bwithin \d+ s\b/, 'within 20 s');
       if (node.parentElement?.closest('.chat-frame') == null) continue;
       node.data = node.data.replace(/\b(?:\d+h )?(?:\d+m )?\d+(?:\.\d)?s\b/g, '4.1s');
+      // The fake agent echoes a sender mark, whose ref is the sender's session id.
+      node.data = node.data.replace(/\bagent:[0-9a-f]{8}\b/g, 'agent:00000000');
     }
   });
 }
@@ -1579,6 +1623,73 @@ for (const style of ['Cards', 'Timeline', 'Status line'] as const) {
       }
     });
   }
+}
+
+/** What an agent's message says in the shots of it: long enough to fold in a narrow chat (the fake agent's input stops short of a kilobyte). */
+const HANDED_OFF = [
+  'Review is back on the pull request. Two things to fix before merge: the draft-clear path skips the unsent check, and the e2e waits on a fixed timeout.',
+  'Everything else looks good. Please rebase on main first, then push and tell me when the gate is green.',
+].join(' ');
+
+/** An edge that hands `from`'s final message to `to`, and `from`'s next turn, answered with `text`. */
+async function handOff(page: Page, from: string, to: string, text: string): Promise<void> {
+  await page.evaluate(([a, b]) => window.agentBoard.flowEdges.create({ from: a!, to: b! }), [from, to]);
+  await page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [from, text]);
+}
+
+/** Starts two agents, hands the first's final message to the second, and shows the second's chat in `style`. */
+async function showAgentMessage(app: ElectronApplication, window: Page, repo: string, style: string): Promise<void> {
+  await pickFolderNext(app, repo);
+  await browseForZone(window);
+  await spawnAgent(window, 'monorepo', 'Write the code');
+  await spawnAgent(window, 'monorepo', 'Review the code');
+  const reviewer = tile(window).filter({ hasText: 'Review the code' });
+  for (const each of [tile(window).filter({ hasText: 'Write the code' }), reviewer]) await expect(each).toHaveAttribute('data-state', 'waiting');
+  const all = await agents(window);
+  const coder = all.find((agent) => agent.name === 'Write the code')!;
+  const reviewing = all.find((agent) => agent.name === 'Review the code')!;
+  await handOff(window, coder.sessionId, reviewing.sessionId, HANDED_OFF);
+  await expect
+    .poll(async () => (await agents(window)).find((agent) => agent.sessionId === reviewing.sessionId)?.lastMessage, { timeout: TURN_MS })
+    .toContain('⟨hand-off from Write the code');
+  await reviewer.dblclick();
+  await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+  await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: style }).click();
+  const chat = sessionWindow(window).getByTestId('chat-frame');
+  await expect(chat.getByTestId('chat-agent-message')).toHaveCount(1);
+  await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+}
+
+for (const { style, theme, narrow } of [
+  ...(['Cards', 'Timeline', 'Status line'] as const).flatMap((style) => (['light', 'dark'] as const).map((theme) => ({ style, theme, narrow: false }))),
+  // Past four lines it folds, shown in a chat narrow enough for the message to wrap that far.
+  { style: 'Cards', theme: 'dark', narrow: true },
+] as const) {
+  test(`an agent's message in the chat as ${style.toLowerCase()} in the ${theme} theme${narrow ? ', in a narrow chat, folded' : ''}`, async () => {
+    const shot = `${theme === 'light' ? '' : 'dark-'}chat-agent-message-${style.toLowerCase().replace(' ', '-')}${narrow ? '-folded' : ''}`;
+    needsBaselines(shot);
+    const { dir, repo, env } = scratch('output');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
+    try {
+      await listFinishedTurns(window);
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await pinFonts(window);
+      await showAgentMessage(app, window, repo, style);
+      if (narrow) await window.addStyleTag({ content: '.session-chat-view .chat-view { max-width: 440px; }' });
+      await pinRandomText(window);
+      await pinChatTimes(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shot}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 }
 
 test("the dark theme: a review doc in its implementer's session window", async () => {
@@ -1759,9 +1870,9 @@ const THEMES = [
   { theme: 'dark', suffix: '-dark' },
 ] as const;
 
-/** Launches on the gallery (`#gallery`) in `theme`, a theme of `scheme`'s mode. */
-async function launchGallery(dataDir: string, theme: string, scheme: 'light' | 'dark' = theme === 'dark' ? 'dark' : 'light') {
-  const launched = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS);
+/** Launches on the gallery (`#gallery`) in `theme`, a theme of `scheme`'s mode, and in `options`' design. */
+async function launchGallery(dataDir: string, theme: string, scheme: 'light' | 'dark' = theme === 'dark' ? 'dark' : 'light', options: LaunchOptions = {}) {
+  const launched = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS, options);
   await listFinishedTurns(launched.window);
   const { window } = launched;
   await window.setViewportSize(VIEWPORT);
@@ -1841,6 +1952,261 @@ for (const { theme, suffix } of THEMES) {
     }
   });
 }
+
+// The Simplified design's first baselines, `simplified-` before each name: the same primitives restyled by its tokens.
+// Its type is the system's (SF Pro and SF Mono on macOS), so these shots are as machine-bound as the system's fonts.
+for (const { theme, suffix } of THEMES) {
+  test(`every primitive in every state in the Simplified design: the component gallery, ${theme}`, async () => {
+    needsBaselines(...GALLERY_SECTIONS.map((section) => `simplified-gallery-${section}${suffix}`));
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, { design: 'simplified' });
+    try {
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect(window.getByTestId('component-gallery')).toBeVisible();
+      // Its tokens took: the system's type, not the bundled Bricolage. A machine without SF Pro still mismatches the shots.
+      expect(await window.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain('-apple-system');
+      await window.evaluate(() => document.fonts.ready);
+      await ignorePointer(window);
+      await settle(window);
+      for (const section of GALLERY_SECTIONS) {
+        await expect.soft(window.getByTestId(`gallery-${section}`)).toHaveScreenshot(`simplified-gallery-${section}${suffix}.png`, SHOT);
+      }
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+// The characters in the Simplified design, with the Captain at each of the sizes it is drawn at.
+for (const { theme, suffix } of THEMES) {
+  test(`every character pose and the Captain in the Simplified design: the character gallery, ${theme}`, async () => {
+    needsBaselines(`simplified-character-gallery${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, { design: 'simplified' });
+    try {
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      const gallery = window.getByTestId('character-gallery');
+      await expect(gallery.getByTestId('captain')).toHaveCount(4);
+      await window.evaluate(() => document.fonts.ready);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(gallery).toHaveScreenshot(`simplified-character-gallery${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+// The six statuses in the Simplified design, each as icons and words and as characters.
+for (const { theme, suffix } of THEMES) {
+  test(`every status, as icons and words and as characters, in the Simplified design: the status marks, ${theme}`, async () => {
+    needsBaselines(`simplified-status-marks${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, { design: 'simplified' });
+    try {
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      const marks = window.getByTestId('status-marks');
+      await expect(marks.getByTestId('status-mark')).toHaveCount(12);
+      await window.evaluate(() => document.fonts.ready);
+      await ignorePointer(window);
+      await settle(window);
+      await expect.soft(marks).toHaveScreenshot(`simplified-status-marks${suffix}.png`, SHOT);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+// An agent's calm tile in the Simplified design: one in each status, then the technical layer added to one.
+const CALM_STATUSES = ['working', 'waiting', 'done', 'paused', 'scheduled', 'problem', 'stopped'];
+for (const { theme, suffix } of THEMES) {
+  test(`an agent's calm tile in each status in the Simplified design: name, window controls, one grey line, the status and a button only when it needs you, ${theme}`, async () => {
+    needsBaselines(...CALM_STATUSES.map((status) => `simplified-tile-${status}${suffix}`));
+    const dataDir = tempDataDir();
+    const { app, window } = await launchGallery(dataDir, theme, undefined, { design: 'simplified' });
+    try {
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect(window.getByTestId('calm-tile-gallery').getByTestId('agent-tile')).toHaveCount(8);
+      await pinFonts(window);
+      await ignorePointer(window);
+      await settle(window);
+      for (const status of CALM_STATUSES) {
+        await expect.soft(window.getByTestId(`simplified-tile-${status}`)).toHaveScreenshot(`simplified-tile-${status}${suffix}.png`, SHOT);
+      }
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+test("an agent's calm tile with Show technical details on in the Simplified design: its AI, branch, pull request, raw state and exit code under it", async () => {
+  needsBaselines('simplified-tile-technical');
+  const dataDir = tempDataDir();
+  const { app, window } = await launchGallery(dataDir, 'light', undefined, { design: 'simplified', technical: true });
+  try {
+    await expect(window.locator('html')).toHaveAttribute('data-technical', '');
+    const calm = window.getByTestId('simplified-tile-technical');
+    await expect(calm.getByTestId('tile-technical')).toBeVisible();
+    await pinFonts(window);
+    await ignorePointer(window);
+    await settle(window);
+    await expect.soft(calm).toHaveScreenshot('simplified-tile-technical.png', SHOT);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+// Connections in the Simplified design: today's rails, arrows and captions restyled by its tokens.
+for (const { theme, suffix } of THEMES) {
+  const simplified: LaunchOptions = { design: 'simplified' };
+  const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+
+  test(`rails between three agents in the Simplified design: a pair waiting with no Send on its token, and a one-way link with what comes next, ${theme}`, async () => {
+    needsBaselines(`simplified-edges${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, simplified);
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Fix checkout flake');
+      await spawnAgent(window, 'monorepo', 'Review checkout fix');
+      await spawnAgent(window, 'monorepo', 'Merge checkout fix');
+      await expect(tile(window)).toHaveCount(3);
+      for (const at of [0, 1, 2]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      const [fixer, reviewer, merger] = await agents(window);
+      const [zone] = await zones(window);
+      writeFileSync(join(fixer!.worktree, 'handover.md'), '# Handover\n');
+      writeFileSync(join(reviewer!.worktree, 'review.md'), '# Review\n');
+      await window.evaluate(
+        async ({ zoneId, ids }) => {
+          const { agents, flowEdges } = globalThis.window.agentBoard;
+          for (const [index, id] of ids.entries()) await agents.move(id, { zoneId, x: 20 + index * 520, y: 40 });
+          await flowEdges.create({ from: ids[0]!, to: ids[1]!, payload: 'handover', path: 'handover.md', conditions: [{ kind: 'pr-checks' }] });
+          await flowEdges.create({ from: ids[1]!, to: ids[0]!, trigger: 'manual', payload: 'handover', path: 'review.md' });
+          await flowEdges.create({ from: ids[1]!, to: ids[2]!, payload: 'json', path: 'verdict.json', conditions: [{ kind: 'pr-checks' }] });
+        },
+        { zoneId: zone!.id, ids: [fixer!.sessionId, reviewer!.sessionId, merger!.sessionId] },
+      );
+      const token = window.getByTestId('rail-token');
+      await expect(token).toHaveCount(2);
+      await expect(token.filter({ hasText: 'review.md' })).toHaveAttribute('data-state', 'waiting');
+      // The waiting review has no Send on it: it is sent from its Edge rules.
+      await expect(window.getByTestId('rail-token-send')).toHaveCount(0);
+      await nodesStill(window);
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await nodesStill(window);
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-edges${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`arrows between notes in the Simplified design: straight, an elbow and a bowed curve selected, ${theme}`, async () => {
+    needsBaselines(`simplified-arrows${suffix}`);
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS, simplified);
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      await window.evaluate(async () => {
+        const { items, connectors } = globalThis.window.agentBoard;
+        const note = (text: string, x: number, y: number) =>
+          items.create({ kind: 'sticky', zoneId: null, x, y, width: 160, height: 120, data: { text, color: '#ffd43b' } });
+        const ends = async (row: number, style: 'straight' | 'elbow' | 'curved', points: EdgePoint[], label = '') => {
+          const [from, to] = [await note(`${style} from`, 0, row * 200), await note(`${style} to`, 820, row * 200 + 40)];
+          await connectors.create({ from: { type: 'item', id: from.id, side: 'right' }, to: { type: 'item', id: to.id, side: 'left' }, style, points, label });
+        };
+        await ends(0, 'straight', []);
+        await ends(1, 'elbow', [{ x: -40, y: 70 }]);
+        await ends(2, 'curved', [{ x: -60, y: -110, bow: true }], 'bowed');
+      });
+      await expect(window.locator('.react-flow__edge-path.connector-line')).toHaveCount(3);
+      await window.getByRole('button', { name: /^Fit view/ }).click();
+      await viewSettled(window);
+      await window.getByTestId('connector-label').click();
+      await expect(window.getByTestId('line-bow')).toHaveCount(1);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-arrows${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
+
+test('connections hidden in the Simplified design: no rail or arrow is drawn, and each tile says how many it has', async () => {
+  needsBaselines('simplified-connections-hidden');
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, { design: 'simplified' });
+  await listFinishedTurns(window);
+  try {
+    await window.setViewportSize(VIEWPORT);
+    await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+    await pinFonts(window);
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Fix checkout flake');
+    await spawnAgent(window, 'monorepo', 'Review checkout fix');
+    await expect(tile(window)).toHaveCount(2);
+    for (const at of [0, 1]) await expect(tile(window).nth(at)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+    const [fixer, reviewer] = await agents(window);
+    const [zone] = await zones(window);
+    await window.evaluate(
+      async ({ zoneId, from, to }) => {
+        const { agents, flowEdges, connectors } = globalThis.window.agentBoard;
+        await agents.move(from, { zoneId, x: 40, y: 40 });
+        await agents.move(to, { zoneId, x: 440, y: 40 });
+        await flowEdges.create({ from, to });
+        await connectors.create({ from: { type: 'agent', id: to, side: 'bottom' }, to: { type: 'agent', id: from, side: 'bottom' } });
+      },
+      { zoneId: zone!.id, from: fixer!.sessionId, to: reviewer!.sessionId },
+    );
+    await expect(window.locator('.react-flow__edge')).toHaveCount(2);
+    // ⇧E: hand-offs only, then none.
+    await window.keyboard.press('Shift+E');
+    await expect(window.locator('.react-flow__edge')).toHaveCount(1);
+    await window.keyboard.press('Shift+E');
+    await expect(window.locator('.react-flow__edge')).toHaveCount(0);
+    await expect(window.getByTestId('connections-count')).toHaveText(['↔ 2', '↔ 2']);
+    await window.getByRole('button', { name: /^Fit view/ }).click();
+    await viewSettled(window);
+    await pinRandomText(window);
+    const restorePointer = await ignorePointer(window);
+    await settle(window);
+    await expect.soft(window.locator('.board')).toHaveScreenshot('simplified-connections-hidden.png', SHOT);
+    await restorePointer();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 for (const { theme, suffix } of THEMES) {
   test(`the text style bar with its font size control, ${theme}`, async () => {
@@ -2066,13 +2432,11 @@ for (const { theme, suffix } of [
       await expect.soft(window.locator('.board')).toHaveScreenshot(`agent-notes${suffix}.png`, SHOT);
       await restorePointer();
 
-      // The terminal card, every note at once.
-      const menu = window.getByRole('dialog', { name: 'Board menu' });
-      await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
-      await menu.getByRole('group', { name: 'Agent notes' }).getByRole('button', { name: 'Terminal' }).click();
-      // Closed by a click on bare board, not Escape, whose focus back on the menu button would show its tooltip.
+      // The terminal card, every note at once, picked in the Settings window.
+      const settings = await openSettings(window, 'board.notes');
+      await settingsSection(settings, 'Agent notes').getByRole('button', { name: 'Terminal' }).click();
+      // A click on bare board leaves nothing selected, as in the document card's shot.
       await window.mouse.click(VIEWPORT.width - 120, VIEWPORT.height / 2);
-      await expect(menu).toBeHidden();
       await expect(window.getByTestId('agent-note').first()).toHaveAttribute('data-look', 'terminal');
       const restoreAgain = await ignorePointer(window);
       await settle(window);
@@ -2300,6 +2664,245 @@ for (const { theme, scheme } of [
     } finally {
       await app.close();
       await removeDataDir(dataDir);
+    }
+  });
+}
+
+// The Delete question in the Simplified design: an alertdialog over a board with a sticky and a live shell selected, shot with the scrim around it.
+for (const { theme, suffix } of THEMES) {
+  test(`the Delete selection question in the Simplified design, ${theme}`, async () => {
+    needsBaselines(`simplified-delete-confirm${suffix}`);
+    const { dir, repo, env } = scratch('output');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(
+      dataDir,
+      { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' },
+      RENDER_ARGS,
+      { design: 'simplified' },
+    );
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+      await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+      await window.evaluate(async () => {
+        await globalThis.window.agentBoard.items.create({ kind: 'sticky', zoneId: null, x: 700, y: 420, width: 160, height: 160, data: { text: 'note', color: '#fff3a3' } });
+      });
+      await window.getByTestId('sticky').click({ position: { x: 12, y: 12 } });
+      await window.getByTestId('shell-tile').click({ modifiers: ['Shift'] });
+      await window.keyboard.press('Backspace');
+      const confirm = window.getByRole('alertdialog', { name: 'Delete selection?' });
+      await expect(confirm).toBeVisible();
+      await pinFonts(window);
+      await pinRandomText(window);
+      await ignorePointer(window);
+      await settle(window);
+      // The whole window, so the scrim over the board is in the shot. The shell tile's panes line is masked: it is live text.
+      await expect.soft(window.locator('body')).toHaveScreenshot(`simplified-delete-confirm${suffix}.png`, { ...SHOT, mask: [window.getByTestId('shell-tile-panes')] });
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const { theme, suffix } of THEMES) {
+  const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+  test(`the Simplified empty board: three starter cards, ${theme}`, async () => {
+    needsBaselines(`simplified-empty-board${suffix}`);
+    const { dir, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, { design: 'simplified' });
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-empty-board${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`the Simplified board: today's islands with fewer buttons, two agents waiting, ${theme}`, async () => {
+    needsBaselines(`simplified-board${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, { design: 'simplified' });
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await expect.poll(() => window.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Pick a database');
+      await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      await spawnAgent(window, 'monorepo', 'Tidy the tokens');
+      await expect(tile(window)).toHaveCount(2);
+      await expect(tile(window).nth(1)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      // Named by what it shows: its word and its count.
+      await expect(window.getByTestId('inbox-count')).toHaveAccessibleName('Needs you 2');
+      await expect(window.getByTestId('inbox-count').locator('.needs-you-count')).toHaveText('2');
+      await pinFonts(window);
+      await pinRandomText(window);
+      const restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-board${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+// New agent and Add zone in the Simplified design: the same dialog and popover as Classic's, in its sheet style. New agent
+// shows only the assistant, the task and a name until Show technical details adds the model and role.
+for (const { theme, suffix } of THEMES) {
+  const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+  test(`New agent and Add zone as Simplified sheets, ${theme}`, async () => {
+    needsBaselines(`simplified-new-agent${suffix}`, `simplified-add-zone${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, { design: 'simplified' });
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await zoneNamed(window, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+      const form = window.getByRole('dialog', { name: 'New agent' });
+      await expect(form).toBeVisible();
+      await pinRandomText(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(form).toHaveScreenshot(`simplified-new-agent${suffix}.png`, SHOT);
+      await restorePointer();
+      await form.getByRole('button', { name: 'Cancel' }).click();
+      await expect(form).toBeHidden();
+
+      const popover = await openAddZone(window, 'Group');
+      await expect(popover).toBeVisible();
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(popover).toHaveScreenshot(`simplified-add-zone${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+// An agent's window in the Simplified design: one header, with its zone, name and status, the Chat | Timeline | Terminal
+// switch, the details toggle, ⋯ and Done, over its chat (the view it opens on) and then its terminal.
+for (const { theme, suffix } of THEMES) {
+  const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+  test(`an agent's window as the Simplified design draws it, on its chat and on its terminal, ${theme}`, async () => {
+    needsBaselines(`simplified-session-window${suffix}`, `simplified-session-window-terminal${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, { design: 'simplified' });
+    await listFinishedTurns(window);
+    try {
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Pick a database');
+      await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      await tile(window).dblclick();
+      const chat = sessionWindow(window).getByTestId('chat-view');
+      await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+      await expect(sessionWindow(window).getByTestId('chat-live')).toHaveAttribute('data-live', 'done');
+      await pinRandomText(window);
+      await pinChatTimes(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('body')).toHaveScreenshot(`simplified-session-window${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Terminal' }).click();
+      await expect(screen(window)).toContainText('Which database should I use');
+      await pinRandomText(window);
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      // The terminal's text and cursor are masked, not its background.
+      await expect.soft(window.locator('body')).toHaveScreenshot(`simplified-session-window-terminal${suffix}.png`, { ...SHOT, mask: [screen(window)] });
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+// The Simplified design's one docked pane: Needs you opens it on the list, the Captain on its chat in the character's hat.
+for (const { theme, suffix } of THEMES) {
+  const simplified: LaunchOptions = { design: 'simplified' };
+  const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+
+  test(`the docked pane in the Simplified design: the Needs-you list and the Captain's chat, ${theme}`, async () => {
+    needsBaselines(`simplified-captain-pane-list${suffix}`, `simplified-captain-pane-chat${suffix}`);
+    const { dir, repo, env } = scratch('waiting');
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, ...appearance, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS, simplified);
+    try {
+      await listFinishedTurns(window);
+      await window.setViewportSize(VIEWPORT);
+      await window.emulateMedia({ colorScheme: theme });
+      await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
+      await pinFonts(window);
+      await pickFolderNext(app, repo);
+      await browseForZone(window);
+      await spawnAgent(window, 'monorepo', 'Pick a database');
+      await expect(tile(window).first()).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
+      const panel = window.getByTestId('master-panel');
+      await window.addStyleTag({ content: '.master-panel * { scrollbar-width: none; }' });
+
+      await window.getByTestId('inbox-count').click();
+      await expect(panel.getByTestId('inbox-item')).toHaveCount(1);
+      await pinChatTimes(window);
+      await pinRandomText(window);
+      let restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-captain-pane-list${suffix}.png`, SHOT);
+      await restorePointer();
+
+      await window.getByTestId('master-button').click();
+      await panel.getByTestId('master-start').click();
+      await expect(panel.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?'], { timeout: TURN_MS });
+      await expect(panel.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
+      await pinChatTimes(window);
+      await pinRandomText(window);
+      restorePointer = await ignorePointer(window);
+      await settle(window);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`simplified-captain-pane-chat${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 }

@@ -6,11 +6,12 @@ import { RECORDED_LINEAR_FIXTURES, serveFixtures, type HttpInteraction } from '@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { drag } from './board-helpers.ts';
-import { connectedDaemonPid, launchApp } from './launch.ts';
+import { connectedDaemonPid, launchApp, type LaunchOptions } from './launch.ts';
+import { isSettingsWindow, openSettings } from './settings-helpers.ts';
 
 /** Launches the app on `dataDir` with `env` and extra switches `args`, and waits for it to reach its daemon. */
-export async function launch(dataDir: string, env: Record<string, string>, args: string[] = []): Promise<{ app: ElectronApplication; window: Page }> {
-  const app = await launchApp(dataDir, env, args);
+export async function launch(dataDir: string, env: Record<string, string>, args: string[] = [], options: LaunchOptions = {}): Promise<{ app: ElectronApplication; window: Page }> {
+  const app = await launchApp(dataDir, env, args, options);
   const window = await app.firstWindow();
   await connectedDaemonPid(window);
   return { app, window };
@@ -23,6 +24,9 @@ export async function launch(dataDir: string, env: Record<string, string>, args:
 export async function listFinishedTurns(page: Page): Promise<void> {
   await page.evaluate(() => window.agentBoard.flowEdges.setSettings({ needsYouShows: 'turns' }));
 }
+
+/** The key that opens the Captain's panel. */
+export const MASTER_KEY = process.platform === 'darwin' ? 'Meta+Shift+m' : 'Control+Shift+m';
 
 // A plain, non-login sh: never the developer's own shell, rc files or profile.
 export const SHELL_ENV = { SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' };
@@ -122,25 +126,24 @@ export const tile = (window: Page) => window.getByTestId('agent-tile');
 export const screen = (window: Page) => window.getByTestId('session-terminal').locator('.xterm-rows');
 
 /** Opens the board menu if it is closed, and returns it. */
-export async function openBoardMenu(window: Page): Promise<Locator> {
+async function openBoardMenu(window: Page): Promise<Locator> {
   const panel = window.getByRole('dialog', { name: 'Board menu' });
   // Dispatched, not clicked: a session window's scrim may cover the island (⌘\\ reaches it from the keyboard).
   if (!(await panel.isVisible())) await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
   return panel;
 }
 
-/** Sets what a double-click on a tile opens, from the board menu's Settings, and closes the menu again. */
+/**
+ * Sets what a double-click on a tile opens, in the Settings window's Board › Opening tiles, and closes the window again
+ * if it opened it, so the app is left with the windows it had.
+ */
 export async function setClickOpens(window: Page, opens: 'Session window' | 'Expand in place'): Promise<void> {
-  const menu = window.getByRole('dialog', { name: 'Board menu' });
-  const choice = menu.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: opens });
-  // A menu opened as another panel (the inbox) is still closing can be closed with it, so it is opened again until it stays.
-  await expect(async () => {
-    await openBoardMenu(window);
-    await choice.check({ timeout: 2000 });
-  }).toPass();
+  const wasOpen = window.context().pages().some(isSettingsWindow);
+  const settings = await openSettings(window, 'board.opening');
+  const choice = settings.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: opens });
+  await choice.check();
   await expect(choice).toBeChecked();
-  await window.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
+  if (!wasOpen) await settings.close();
 }
 
 /** The board menu's running sessions, opening the menu first if it is closed. */

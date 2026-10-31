@@ -550,7 +550,7 @@ describe('Claude agents', () => {
     await client.call('session.write', { sessionId: agent.sessionId, data: '\r' });
     const lost = await untilAgent(recorder, agent.sessionId, (a) => a.endedAt !== null && a.undelivered.length > 0);
     expect(lost.undelivered).toEqual([{ what: 'A message', text: 'Also lint', reason: expect.stringContaining('has ended') }]);
-    expect(lost.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend/) });
+    expect(lost.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend/) });
 
     const resent = recorder.events.length;
     // Looking at it resends nothing: it stays flagged.
@@ -1233,7 +1233,7 @@ describe('Claude agents', () => {
         sessionId: agent.sessionId,
         state: 'stopped-by-restart',
         undelivered: [{ what: 'A message', text: 'Also lint', reason: expect.any(String) }],
-        flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend/) },
+        flag: { to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend/) },
       });
       await second.daemon.stop();
 
@@ -1266,7 +1266,7 @@ describe('Claude agents', () => {
       const second = await agentDaemon('output', { dataDir });
       expect((await second.client.call('agent.list'))[0]).toMatchObject({
         undelivered: [{ what: 'A message', text: 'Also lint', reason: 'the daemon shut down before it was up' }],
-        flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend/) },
+        flag: { to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend/) },
       });
     });
 

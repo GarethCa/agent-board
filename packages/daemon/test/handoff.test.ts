@@ -14,6 +14,7 @@ import {
   type Harness,
   type OrchestratorActivityEvent,
 } from '../src/protocol.ts';
+import { refOf } from '../src/crew-flags.ts';
 import { connectTestClient, insertFakeSession, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -622,8 +623,8 @@ describe('submitting a hand-off', () => {
 
       // The fake prints `> ` and the prompt only once it is submitted: what is typed at its prompt echoes without.
       await untilTurnEnds(setup.recorder, b.sessionId, since);
-      await setup.recorder.waitForText(b.sessionId, '> Hand-off from impl');
-      expect(setup.recorder.screenText(b.sessionId).split('> Hand-off from impl')).toHaveLength(2);
+      await setup.recorder.waitForText(b.sessionId, '> ⟨hand-off from impl');
+      expect(setup.recorder.screenText(b.sessionId).split('> ⟨hand-off from impl')).toHaveLength(2);
       expect(await historyOf(setup, edge.id)).toEqual(['delivered']);
     },
   );
@@ -644,7 +645,9 @@ describe('submitting a hand-off', () => {
     await setup.client.call('agent.answer', { sessionId: a.sessionId, text: 'Write it again' });
 
     await untilTurnEnds(setup.recorder, b.sessionId, since);
-    expect(await userPrompts(setup, b.sessionId)).toEqual([`Hand-off from impl (its handover.md): ${text.replace(/\s+/g, ' ')}`]);
+    // Whole, and its chat entry says who it is from.
+    const [prompt] = (await setup.client.call('agent.transcript', { sessionId: b.sessionId })).entries.filter((entry) => entry.kind === 'user');
+    expect(prompt).toMatchObject({ text: `Hand-off from impl (its handover.md): ${text.replace(/\s+/g, ' ')}`, from: { ref: refOf(a), name: 'impl', kind: 'hand-off', payload: 'handover.md' } });
   });
 
   it('shows a hand-off still unsent after every Enter on its agent, types nothing more after it, and sends it on Send', async () => {
@@ -678,8 +681,8 @@ describe('submitting a hand-off', () => {
     const sent = await setup.client.call('agent.sendUnsent', { sessionId: b.sessionId });
     expect(sent).toMatchObject({ unsent: null, flag: null });
     await untilTurnEnds(setup.recorder, b.sessionId, stuck.at);
-    await setup.recorder.waitForText(b.sessionId, '> Hand-off from impl');
-    expect(setup.recorder.screenText(b.sessionId).split('> Hand-off from impl')).toHaveLength(2);
+    await setup.recorder.waitForText(b.sessionId, '> ⟨hand-off from impl');
+    expect(setup.recorder.screenText(b.sessionId).split('> ⟨hand-off from impl')).toHaveLength(2);
     expect(setup.recorder.screenText(b.sessionId)).not.toContain('more');
     await expect(setup.client.call('agent.sendUnsent', { sessionId: b.sessionId })).rejects.toThrow('review has no unsent message at its prompt');
   });
@@ -700,7 +703,7 @@ describe('submitting a hand-off', () => {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const updates = setup.recorder.events.filter((e): e is AgentUpdatedEvent => e.type === 'agent.updated' && e.agent.sessionId === b.sessionId);
     expect(updates.filter((e) => e.agent.unsent !== null)).toEqual([]);
-    expect(setup.recorder.screenText(b.sessionId).split('> Hand-off from impl')).toHaveLength(2);
+    expect(setup.recorder.screenText(b.sessionId).split('> ⟨hand-off from impl')).toHaveLength(2);
     expect((await setup.client.call('flowEdge.list')).find((each) => each.id === edge.id)!.history[0]).toMatchObject({
       kind: 'delivered',
       detail: 'handover.md (24 B)',
@@ -824,7 +827,7 @@ describe('after a restart', () => {
     await again.call('agent.answer', { sessionId: a.sessionId, text: 'Write it again' });
 
     await untilEdge(after, edge.id, (seen) => seen.deliveries === 1 && !seen.delivering);
-    await after.waitForText(b.sessionId, '> Hand-off from impl');
+    await after.waitForText(b.sessionId, '> ⟨hand-off from impl');
     expect(await historyOf({ client: again } as Setup, edge.id)).toEqual(['delivered']);
   });
 });

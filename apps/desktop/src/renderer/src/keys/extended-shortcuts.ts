@@ -1,6 +1,6 @@
 // The "Extended keyboard shortcuts" setting: whether the registry's `new` keys work. On by default; turned off, the app
 // keeps only the keys it had before the registry (and the fixes). Kept in the daemon's view state, so every window
-// reads the same value: each reads it as it opens and again whenever it comes to the front.
+// reads the same value: each reads it as it opens, follows each change, and reads it again whenever it comes to the front.
 import { useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 
@@ -29,7 +29,7 @@ export function setExtendedShortcuts(value: boolean): void {
   void window.agentBoard.view.set(VIEW_KEYS.extendedShortcuts, value).catch(() => {});
 }
 
-/** Reads the saved setting now and whenever this window comes to the front, where another window may have changed it. */
+/** Reads the saved setting now and whenever this window comes to the front, and follows every window's change to it. */
 export function followExtendedShortcuts(): void {
   const read = () =>
     window.agentBoard.view.get(VIEW_KEYS.extendedShortcuts).then(
@@ -38,6 +38,7 @@ export function followExtendedShortcuts(): void {
     );
   void read();
   window.addEventListener('focus', () => void read());
+  window.agentBoard.view.onChanged((key, saved) => key === VIEW_KEYS.extendedShortcuts && update(extendedShortcutsFrom(saved)));
 }
 
 /** The setting, for a component that shows it or what it turns on. */

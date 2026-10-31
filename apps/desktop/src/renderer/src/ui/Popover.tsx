@@ -80,6 +80,10 @@ interface AnchoredPopoverProps {
   /** How far from the anchor, px; negative overlaps it. */
   sideOffset?: number;
   className?: string;
+  /** Hears a press outside it, which closes it, before it closes. */
+  onPointerDownOutside?(event: Event): void;
+  /** As it closes and gives focus back: `preventDefault()` keeps focus where it went instead. */
+  onCloseAutoFocus?(event: Event): void;
 }
 
 /**
@@ -87,7 +91,19 @@ interface AnchoredPopoverProps {
  * moving away does not, as the menu that opened it hands focus back to its own button as it closes. Keys typed in it
  * stay in it, so the board's shortcuts don't fire.
  */
-export function AnchoredPopover({ anchor, children, open, onOpenChange, align = 'start', side = 'right', sideOffset = 10, className, ...rest }: AnchoredPopoverProps) {
+export function AnchoredPopover({
+  anchor,
+  children,
+  open,
+  onOpenChange,
+  align = 'start',
+  side = 'right',
+  sideOffset = 10,
+  className,
+  onPointerDownOutside,
+  onCloseAutoFocus,
+  ...rest
+}: AnchoredPopoverProps) {
   return (
     <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
       <RadixPopover.Anchor asChild>{anchor}</RadixPopover.Anchor>
@@ -101,6 +117,8 @@ export function AnchoredPopover({ anchor, children, open, onOpenChange, align = 
           collisionPadding={8}
           onFocusOutside={(event) => event.preventDefault()}
           onKeyDown={(event) => event.stopPropagation()}
+          onPointerDownOutside={onPointerDownOutside}
+          onCloseAutoFocus={onCloseAutoFocus}
         >
           {children}
         </RadixPopover.Content>

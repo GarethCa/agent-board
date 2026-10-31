@@ -87,3 +87,20 @@ describe('the clickable links setting', () => {
     expect(settings.get().clickableLinks).toBe(true);
   });
 });
+
+describe('the keep web logins setting', () => {
+  it('is on until it is turned off, and stays as it was set', () => {
+    const { settings, set } = setup();
+    expect(settings.get().keepWebLogins).toBe(true);
+    set({ keepWebLogins: false });
+    expect(settings.get().keepWebLogins).toBe(false);
+    set({ keepWebLogins: true });
+    expect(settings.get().keepWebLogins).toBe(true);
+  });
+
+  it('refuses anything but a boolean', () => {
+    const { settings, set } = setup();
+    expect(() => set({ keepWebLogins: 1 })).toThrow();
+    expect(settings.get().keepWebLogins).toBe(true);
+  });
+});

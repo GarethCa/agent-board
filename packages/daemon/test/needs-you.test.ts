@@ -5,6 +5,8 @@ import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { CREW_PLAN_PATH, CREW_QUESTION_PATH, MAX_FLAG_LENGTH, RPC_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type SettingsUpdatedEvent } from '../src/protocol.ts';
 import { runBoardCommand } from '../src/board-cli.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
+import { refOf } from '../src/crew-flags.ts';
+import { markSender } from '../src/sender-marker.ts';
 import { connectTestClient, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 import { createFakeClock } from './fake-clock.ts';
 import type { Clock } from '../src/clock.ts';
@@ -175,7 +177,7 @@ describe('an agent flagging the user', () => {
 
     // Nothing sits unsent now: what was never delivered says so alone, beside its own.
     const cleared = await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId });
-    expect(cleared).toMatchObject({ unsent: null, flag: { to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile\. Also: Which docs\?$/) } });
+    expect(cleared).toMatchObject({ unsent: null, flag: { to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend on its tile\. Also: Which docs\?$/) } });
     expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toEqual(own);
   });
 
@@ -220,7 +222,7 @@ describe('an agent flagging the user', () => {
 
     // Its newer flag stood in place of its first, so neither comes back: only what still waits on the user does.
     const cleared = await connection.call('board.needsYou', { token, clear: true });
-    expect(cleared.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
+    expect(cleared.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
     expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag).toMatchObject({ reason: expect.stringMatching(/^Its first prompt .*on its tile$/) });
     expect((await setup.client.call('agent.clearUnsent', { sessionId: agent.sessionId })).flag).toBeNull();
   });
@@ -231,10 +233,10 @@ describe('an agent flagging the user', () => {
     let out = '';
     const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token };
     expect(await runBoardCommand('needs-you', ['--clear'], { out: (text) => (out += text), err: (text) => (out += text), env })).toBe(0);
-    expect(out).toMatch(/^Nothing of yours is flagged now\. Still in Needs you, for the user to see to: "A message sent before it was up was not delivered/);
+    expect(out).toMatch(/^Nothing of yours is flagged now\. Still in Needs you, for the user to see to: "A message was not delivered/);
 
     const [left] = await setup.client.call('agent.list');
-    expect(left!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
+    expect(left!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Also: Its first prompt was typed at its prompt but not sent .*on its tile$/) });
     expect((await setup.client.call('agent.clearUndelivered', { sessionId: agent.sessionId })).flag?.reason).toMatch(/^Its first prompt .*on its tile$/);
   });
 
@@ -245,7 +247,7 @@ describe('an agent flagging the user', () => {
     // As it stops, it may still show its reason: once it has ended, that is gone.
     await untilAgent(setup.recorder, agent.sessionId, (a) => a.endedAt !== null && a.state !== 'waiting');
     const [ended] = await setup.client.call('agent.list');
-    expect(ended!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile$/) });
+    expect(ended!.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend on its tile$/) });
   });
 
   it('raises again the flag for a message never delivered once its session ends under a newer flag of its own', async () => {
@@ -255,7 +257,7 @@ describe('an agent flagging the user', () => {
 
     await setup.client.call('agent.stop', { sessionId: agent.sessionId });
     const ended = await untilAgent(setup.recorder, agent.sessionId, (a) => a.endedAt !== null && a.flag !== null);
-    expect(ended.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message sent before it was up was not delivered .*Resend on its tile$/) });
+    expect(ended.flag).toMatchObject({ to: 'user', reason: expect.stringMatching(/^A message was not delivered .*Resend on its tile$/) });
   });
 
   it('refuses a blank or overlong reason', async () => {
@@ -405,13 +407,14 @@ describe("a crew member's flag", () => {
     expect(await answer).toEqual({ outcome: 'timed-out', answer: null });
   });
 
-  it('is cleared when its orchestrator sends it a message', async () => {
+  it('is cleared when its orchestrator sends it a message, marked as a reply', async () => {
     const { setup, lead, member } = await crew();
     await member.connection.call('board.needsYou', { token: member.token, reason: 'Which fixture?' });
     await setup.recorder.waitForText(lead.agent.sessionId, 'needs you:');
     await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.state === 'idle' || a.state === 'waiting');
     const sent = await lead.connection.call('orchestrator.send', { token: lead.token, sessionId: member.agent.sessionId, text: 'Use the fake clock' });
     expect(sent.flag).toBeNull();
+    expect(sent.typed).toBe(markSender('reply', lead.agent.name, refOf(lead.agent), 'Use the fake clock'));
   });
 
   it('reaches the user once its orchestrator has ended', async () => {

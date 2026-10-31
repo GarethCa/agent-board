@@ -2,10 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { extendedShortcuts, extendedShortcutsFrom, followExtendedShortcuts, setExtendedShortcuts } from './extended-shortcuts';
 
 function stubView(saved: unknown) {
-  const view = { get: vi.fn(async () => saved), set: vi.fn(async () => {}) };
+  let changed: ((key: string, value: unknown) => void) | undefined;
+  const view = {
+    get: vi.fn(async () => saved),
+    set: vi.fn(async () => {}),
+    onChanged: vi.fn((listener: (key: string, value: unknown) => void) => {
+      changed = listener;
+      return () => {};
+    }),
+  };
   const events = new EventTarget();
   vi.stubGlobal('window', { agentBoard: { view }, addEventListener: events.addEventListener.bind(events) });
-  return { view, focus: () => events.dispatchEvent(new Event('focus')) };
+  return { view, focus: () => events.dispatchEvent(new Event('focus')), change: (key: string, value: unknown) => changed?.(key, value) };
 }
 
 afterEach(() => {
@@ -36,5 +44,15 @@ describe('the Extended keyboard shortcuts setting', () => {
     view.get.mockResolvedValue(true);
     focus();
     await vi.waitFor(() => expect(extendedShortcuts()).toBe(true));
+  });
+
+  it('follows a change another window makes, such as the Settings window, without waiting to come to the front', async () => {
+    const { change } = stubView(true);
+    followExtendedShortcuts();
+    await vi.waitFor(() => expect(extendedShortcuts()).toBe(true));
+    change('keyboard.extendedShortcuts', false);
+    expect(extendedShortcuts()).toBe(false);
+    change('usageOnBoard', true);
+    expect(extendedShortcuts()).toBe(false);
   });
 });

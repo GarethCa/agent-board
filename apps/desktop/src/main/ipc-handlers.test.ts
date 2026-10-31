@@ -31,6 +31,7 @@ const { registerReviewIpc } = await import('./reviews');
 const { registerShellIpc } = await import('./shells');
 const { registerTrackerIpc } = await import('./trackers');
 const { registerWebTabIpc } = await import('./web-tabs');
+const { registerSettingsWindow } = await import('./settings-window');
 
 /** A daemon that answers every call with `{ method, params }`, so a handler's daemon call can be read back. */
 function fakeDaemon(): DaemonLink {
@@ -65,7 +66,8 @@ describe('the channels main handles', () => {
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
-    ['web tabs', () => registerWebTabIpc({ isBoard: () => false }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:dismissPasskey', 'web-tab:focus', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds']],
+    ['web tabs', () => registerWebTabIpc({ isBoard: () => false, isSettings: () => false, keepLogins: async () => true }), ['web-tab:back', 'web-tab:cancelHandOff', 'web-tab:clearData', 'web-tab:close', 'web-tab:dismissOffered', 'web-tab:dismissPasskey', 'web-tab:focus', 'web-tab:forget', 'web-tab:forward', 'web-tab:handOff', 'web-tab:load', 'web-tab:open', 'web-tab:openInBrowser', 'web-tab:openOffered', 'web-tab:openPlan', 'web-tab:reload', 'web-tab:setBounds']],
+    ['settings window', () => registerSettingsWindow({ open: () => { throw new Error('no window in a unit test'); } }), ['setup:openSettings', 'setup:takeSettingsPane']],
     ['trackers', registerTrackerIpc, ['tracker:connect', 'tracker:disconnect', 'tracker:issues', 'tracker:openLink', 'tracker:projects', 'tracker:scopes', 'tracker:status']],
   ])('%s', (_name, register, channels) => {
     expect(registered(register)).toEqual(channels);

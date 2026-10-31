@@ -21,6 +21,8 @@ interface InboxProps {
   onOpen(agent: Agent): void;
   /** Opens the settings, where what it lists is picked. */
   onSettings?(): void;
+  /** Whether it names itself; the docked pane's own header does that instead. */
+  heading?: boolean;
 }
 
 /**
@@ -30,17 +32,19 @@ interface InboxProps {
  * however it was answered. An item whose session was opened since it began asking is read: it stays while the agent
  * waits, but no longer counts. A flag goes once its session is opened.
  */
-export function Inbox({ agents, onOpen, onSettings }: InboxProps) {
+export function Inbox({ agents, onOpen, onSettings, heading = true }: InboxProps) {
   const shows = useNeedsYouShows();
   const entries = needsYouEntries(agents, shows);
   const items = entries.map((entry) => entry.agent);
   const now = useNow(items.some((agent) => heldPrompts(agent).length > 0 || waitsOnUser(agent) || agent.flag !== null));
   return (
     <section className="inbox" data-testid="needs-you-inbox" aria-label="Needs you">
-      <header className="inbox-head">
-        <h2>Needs you</h2>
-        {items.length > 1 && <span className="inbox-order">oldest first</span>}
-      </header>
+      {(heading || items.length > 1) && (
+        <header className="inbox-head">
+          {heading && <h2>Needs you</h2>}
+          {items.length > 1 && <span className="inbox-order">oldest first</span>}
+        </header>
+      )}
       {items.length === 0 ? (
         <EmptyState framed={false} title="Nothing needs you.">
           {shows === 'explicit'

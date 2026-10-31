@@ -119,7 +119,7 @@ test("a hand-off drawn from one agent's handle to another opens its Edge rules, 
     await expect(reviewer.getByText('receiving…').first()).toBeVisible();
     await expect
       .poll(async () => (await agents(window)).find((agent) => agent.sessionId === reviewerAgent.sessionId)?.lastMessage)
-      .toBe('Done: Hand-off from Write the code (its final message): Done: Ship it..');
+      .toBe(`Done: ⟨hand-off from Write the code · agent:${coderAgent.sessionId.slice(0, 8)}⟩ Hand-off from Write the code (its final message): Done: Ship it..`);
     expect(await recordedStates(window)).toContain('handing-off');
     await expect(token).toHaveAttribute('data-state', 'delivered');
     await expect(token.getByTestId('rail-token-note')).toHaveText(/^delivered \d\d:\d\d( [AP]M)?$/);
@@ -234,7 +234,7 @@ test('the Edge rules carry a file from the agent\'s worktree, hold a hand-off un
     expect((await flowEdges(window))[0]).toMatchObject({ paused: true, deliveries: 0 });
     await rules.getByRole('button', { name: 'Resume', exact: true }).click();
     const builderMessage = async () => (await agents(window)).find((agent) => agent.sessionId === builder.sessionId)?.lastMessage;
-    await expect.poll(builderMessage).toBe('Done: Hand-off from Write the plan (its plan.md): # Plan 1. Add zoneId..');
+    await expect.poll(builderMessage).toBe(`Done: ⟨hand-off from Write the plan · agent:${planner.sessionId.slice(0, 8)}⟩ Hand-off from Write the plan (its plan.md): # Plan 1. Add zoneId..`);
     await expect(token).toHaveAttribute('data-state', 'delivered');
     await expect(rules).toContainText('Released: every condition passed');
     await expect(rules).toContainText('Sent plan.md (23 B) to Build it');

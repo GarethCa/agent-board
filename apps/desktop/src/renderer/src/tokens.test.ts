@@ -8,6 +8,7 @@ import { COLOR_SLOTS, FILL_SLOTS, STICKY_COLORS, ZONE_COLORS } from '@agent-boar
 import { boardPaint } from './board-colors';
 import { contrast, mix } from '../../shared/colour';
 import { NOTE_TAB_ROOM, themePacksCss } from '../../shared/theme-pack-tokens';
+import { deskFor } from '../../shared/design';
 import { THEMES } from '../../shared/themes';
 
 /*
@@ -197,6 +198,7 @@ const LOCAL = [
   '--swatch',
   '--swatch-edge',
   '--chip',
+  '--sender',
   '--chip-ink',
   '--chip-edge',
   '--tile-state',
@@ -285,8 +287,8 @@ const WINDOW_PALETTE = new Set([
 ]);
 
 /**
- * Colour tokens every theme keeps as they are in the light one: brand marks, a colour on a saturated fill or the rest
- * of the session window's own palette, which is dark in every theme.
+ * Colour tokens every theme keeps as they are in the light one: brand marks, a colour on a saturated fill, the
+ * Captain's hat and its emblem or the rest of the session window's own palette, which is dark in every theme.
  */
 const SAME_IN_EVERY_THEME = new Set([
   '--on-accent',
@@ -294,6 +296,8 @@ const SAME_IN_EVERY_THEME = new Set([
   '--on-zone',
   '--snap-guide',
   '--harness-claude',
+  '--figure-hat',
+  '--figure-hat-emblem',
   '--linear-mark',
   '--switch-knob',
   '--demo-cursor-fill',
@@ -335,9 +339,26 @@ postcss.parse(tokens).walkRules((rule) => {
 
 const WINDOW = "[data-surface='window']";
 /** Each theme in the registry, with the scope its block sets tokens in: the light one is `:root` itself. */
-const THEME_SCOPES = THEMES.map((theme) => ({ ...theme, scope: theme.id === 'light' ? ':root' : `:root[data-theme='${theme.id}']` }));
+const THEME_SCOPES = THEMES.map((theme) => {
+  const scope = theme.id === 'light' ? ':root' : `:root[data-theme='${theme.id}']`;
+  return { ...theme, scope, stack: [scope] };
+});
 /** The themes that override the light one. */
 const OVERRIDES = THEME_SCOPES.filter(({ id }) => id !== 'light');
+
+const DARK = ":root[data-theme='dark']";
+const SIMPLIFIED = ":root[data-design='simplified']";
+const SIMPLIFIED_DARK = ":root[data-design='simplified'][data-theme='dark']";
+/**
+ * The Simplified design in each mode, as the scopes it reads, nearest first. Its dark block outranks the rest; its light
+ * block comes after the dark theme in tokens.css, so its aliases and the values the dark block leaves alone win there.
+ */
+const SIMPLIFIED_SCOPES = [
+  { id: 'simplified', scheme: 'light' as const, stack: [SIMPLIFIED] },
+  { id: 'simplified-dark', scheme: 'dark' as const, stack: [SIMPLIFIED_DARK, SIMPLIFIED, DARK] },
+];
+/** Every look the app can show: each theme, and the Simplified design in each mode. */
+const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES];
 
 /**
  * A colour token's hex value in the first of `scope` that sets it (falling back to `:root`), following var() aliases.
@@ -490,12 +511,39 @@ describe('themes', () => {
   });
 });
 
+describe('the Simplified design', () => {
+  const simplified = scopes.get(SIMPLIFIED)!;
+  const simplifiedDark = scopes.get(SIMPLIFIED_DARK)!;
+
+  it('only sets tokens the light theme defines, and none of those that are the same in every theme', () => {
+    for (const block of [simplified, simplifiedDark]) {
+      expect([...block.keys()].filter((name) => !scopes.get(':root')!.has(name))).toEqual([]);
+      expect([...SAME_IN_EVERY_THEME].filter((name) => block.has(name))).toEqual([]);
+    }
+  });
+
+  it('has a dark value for every colour its light block writes', () => {
+    const written = [...simplified].filter(([, value]) => colourIn(value) !== undefined).map(([name]) => name);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.filter((name) => !simplifiedDark.has(name))).toEqual([]);
+  });
+
+  it.each(SIMPLIFIED_SCOPES)('opens a window in $id on its desk', ({ scheme, stack }) => {
+    const theme = THEMES.find((each) => each.id === scheme)!;
+    expect(hexOf('--surface', stack)).toBe(deskFor('simplified', theme));
+  });
+
+  it('draws the desk plain, with no dots', () => {
+    for (const { stack } of SIMPLIFIED_SCOPES) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
+  });
+});
+
 /** A shape's fills in its slots, the tile's own aside: `--shape-fill-blue`. */
 const SHAPE_FILL_TOKENS = FILL_SLOTS.filter((slot) => slot !== 'tile').map((slot) => `--shape-fill-${slot}`);
 
-describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) => {
+describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
   it.each(TEXT_PAIRS)('%s on %s meets WCAG AA', (text, background) => {
-    expect(contrast(hexOf(text, scope), hexOf(background, scope))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(hexOf(text, stack), hexOf(background, stack))).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each([...drawnPairs()].filter(([pair]) => !NOT_TEXT.has(pair)))('%s, as a rule draws it (%j), meets WCAG AA', (pair) => {
@@ -504,7 +552,7 @@ describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) =>
     const inWindow = WINDOW_PAIRS.some(([t, b]) => t === text && b === background);
     const resolve = (name: string) => {
       try {
-        return hexOf(name, inWindow ? [WINDOW, scope] : scope);
+        return hexOf(name, inWindow ? [WINDOW, ...stack] : stack);
       } catch {
         return undefined; // a mix or a keyword, not a flat colour
       }
@@ -514,41 +562,48 @@ describe.each(THEME_SCOPES)('text contrast in the $id theme', ({ id, scope }) =>
   });
 
   it.each(WINDOW_PAIRS)('in the session window, %s on %s meets WCAG AA', (text, background) => {
-    expect(contrast(hexOf(text, [WINDOW, scope]), hexOf(background, [WINDOW, scope]))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(hexOf(text, [WINDOW, ...stack]), hexOf(background, [WINDOW, ...stack]))).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each(CODE_COLOURS.flatMap((name) => ['--window-bg', '--window-chrome'].map((background) => [name, background])))(
     'in a chat code block, %s on %s meets WCAG AA',
     (text, background) => {
-      expect(contrast(hexOf(text, [WINDOW, scope]), hexOf(background, [WINDOW, scope]))).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(hexOf(text, [WINDOW, ...stack]), hexOf(background, [WINDOW, ...stack]))).toBeGreaterThanOrEqual(4.5);
     },
   );
 
   it.each(STICKY_TONES)("a %s sticky note's ink meets WCAG AA on it", (tone) => {
-    expect(contrast(hexOf(`--sticky-${tone}-ink`, scope), hexOf(`--sticky-${tone}`, scope))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(hexOf(`--sticky-${tone}-ink`, stack), hexOf(`--sticky-${tone}`, stack))).toBeGreaterThanOrEqual(4.5);
   });
 
   // Text in any slot may sit on any fill, the tile's too: each pair meets AA.
   it.each(COLOR_SLOTS.flatMap((slot) => ['--raised', ...SHAPE_FILL_TOKENS].map((fill) => [`--shape-ink-${slot}`, fill])))(
     "a shape's text %s on its fill %s meets WCAG AA",
     (text, fill) => {
-      expect(contrast(hexOf(text, scope), hexOf(fill, scope))).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(hexOf(text, stack), hexOf(fill, stack))).toBeGreaterThanOrEqual(4.5);
     },
   );
 
+  // In the Settings window, an unchecked switch's track, a box's and a field's edge are the muted text mixed into the box.
+  it.each(['--raised', '--panel'])("the Settings window's switch tracks and field edges read at 3:1 on %s", (surface) => {
+    const share = Number.parseFloat(scopes.get(':root')!.get('--settings-control-edge-mix')!) / 100;
+    const edge = mix(hexOf('--muted', stack), hexOf('--raised', stack), share);
+    expect(contrast(edge, hexOf(surface, stack))).toBeGreaterThanOrEqual(3);
+  });
+
   it.each(COLOR_SLOTS.map((slot) => `--paint-${slot}`))('%s reads at 3:1 on the desk, as a line or large text must', (paint) => {
-    expect(contrast(hexOf(paint, scope), hexOf('--surface', scope))).toBeGreaterThanOrEqual(3);
+    expect(contrast(hexOf(paint, stack), hexOf('--surface', stack))).toBeGreaterThanOrEqual(3);
   });
 
   // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
   // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
   it.each([...ZONE_COLORS, 'loose'])("an agent note's tab text meets WCAG AA on a %s tab, or nearly as well as the theme's text on its panel", (zone) => {
-    const share = (name: string) => Number.parseFloat([scope, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
-    const [panel, text] = [hexOf('--panel', scope), hexOf('--text', scope)];
-    const tint = zone === 'loose' ? hexOf('--agent-note-loose', scope) : zone;
+    const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
+    const [panel, text] = [hexOf('--panel', stack), hexOf('--text', stack)];
+    const tint = zone === 'loose' ? hexOf('--agent-note-loose', stack) : zone;
     const tab = mix(tint, panel, share('--agent-note-tab-mix'));
     const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
-    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(id === 'light' || id === 'dark' ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
+    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
   });
 });
 

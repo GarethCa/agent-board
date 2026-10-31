@@ -455,7 +455,7 @@ describe('laying out the board from the command line', () => {
     await usage(['move', 'a', '--near', 'b', '--side', 'under'], '--side must be below, right, left, above');
     await usage(['move', 'a', '--near', 'b', '--at', '1,2'], 'give --at or --near, not both');
     await usage(['arrange', '--by', 'mood'], '--by must be issue, role, state');
-    await usage(['arrange', '--layout', 'spiral'], '--layout must be rows, columns, cards, grid, wrap');
+    await usage(['arrange', '--layout', 'spiral'], '--layout must be rows, columns, cards, grid, wrap, masonry, treemap');
     await usage(['arrange', 'a', 'b'], 'give at most one zone ref');
     await usage(['zone', 'add', '--name', 'x'], 'give --group');
     await usage(['zone', 'add', '--group'], 'give the group --name');

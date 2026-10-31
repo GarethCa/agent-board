@@ -146,10 +146,31 @@ const subscribe = (listener: () => void) => {
 /** Draws again each time an item says what it measured of itself. */
 export const useMeasuresChanged = (): number => useSyncExternalStore(subscribe, () => version);
 
+/** This window's size, px, if it has one: what masonry and a treemap pack to. */
+export const windowSize = (of: Pick<Window, 'innerWidth' | 'innerHeight'>): Pick<LayoutMeasured, 'window'> =>
+  of.innerWidth > 0 && of.innerHeight > 0 ? { window: { width: of.innerWidth, height: of.innerHeight } } : {};
+
 /**
- * Says how this window draws `nodes` as `shown`, round the tiles `expanded`, to the daemon, a moment after it changes,
- * while this window is the one in front (and again each time it comes to the front). Once it is no longer in front it
- * says so (`away`), so an arrange waits on no measure from it. A capture window says nothing.
+ * Calls `say` a moment from now, and again a moment after each time `target` (the window) is resized, the last of a
+ * drag's resizes only, so nothing draws again as it is resized. Returns how to stop.
+ */
+export function settleThenSay(say: () => void, target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = window): () => void {
+  let timer = setTimeout(say, SETTLE_MS);
+  const resized = () => {
+    clearTimeout(timer);
+    timer = setTimeout(say, SETTLE_MS);
+  };
+  target.addEventListener('resize', resized);
+  return () => {
+    clearTimeout(timer);
+    target.removeEventListener('resize', resized);
+  };
+}
+
+/**
+ * Says how this window draws `nodes` as `shown`, round the tiles `expanded`, and how big it is, to the daemon, a moment
+ * after it changes, while this window is the one in front (and again each time it comes to the front). Once it is no
+ * longer in front it says so (`away`), so an arrange waits on no measure from it. A capture window says nothing.
  */
 export function useMeasuredBoxes(nodes: readonly Node[], shown: readonly Node[], expanded: ExpandedTiles, look: AgentNoteLook): void {
   const focused = useWindowFocused();
@@ -167,10 +188,9 @@ export function useMeasuredBoxes(nodes: readonly Node[], shown: readonly Node[],
       if (sent.current !== undefined && sent.current.away !== true) say({ ...sent.current, away: true });
       return;
     }
-    const timer = setTimeout(() => {
-      const report = { boxes: measuredBoxes(nodes, shown, drawnSizes, noteFits, look), expanded: expandedBoxes(nodes, expanded) };
+    return settleThenSay(() => {
+      const report = { boxes: measuredBoxes(nodes, shown, drawnSizes, noteFits, look), expanded: expandedBoxes(nodes, expanded), ...windowSize(window) };
       if (sent.current === undefined || !sameReport(sent.current, report)) say(report);
-    }, SETTLE_MS);
-    return () => clearTimeout(timer);
+    });
   }, [focused, nodes, shown, expanded, look, measuredVersion]);
 }

@@ -47,16 +47,16 @@ export interface Confirmed {
 }
 
 /**
- * Which messages the transcript doesn't show yet, and which it does. A copy is a message of the user's written after
- * the message was sent whose words are the message's: spacing, a paste's wrapper and an image (its path as sent, how
- * the harness writes it in the copy) don't count. Two or more sent one after another may come as one copy, as two
+ * Which messages the transcript doesn't show yet, and which it does. A copy is a message of the user's (never one
+ * another agent sent, which says who from) written after the message was sent whose words are the message's: spacing,
+ * a paste's wrapper and an image (its path as sent, how the harness writes it in the copy) don't count. Two or more sent one after another may come as one copy, as two
  * sent in one turn can reach the agent as one message. Each copy confirms only the messages it is made of; the store
  * then places the messages still waiting after it (`confirm`), so it never confirms another. A message not placed in
  * the transcript's generation, and a command, wait.
  */
 export function settle(messages: readonly SentMessage[], transcript: Transcript | undefined): { waiting: SentMessage[]; confirmed: Confirmed[] } {
   if (transcript?.status !== 'ok') return { waiting: [...messages], confirmed: [] };
-  const copies = transcript.entries.map((entry) => (entry.kind === 'user' ? copyWords(entry.text) : undefined));
+  const copies = transcript.entries.map((entry) => (entry.kind === 'user' && entry.from === undefined ? copyWords(entry.text) : undefined));
   const matchable = messages.filter((message) => !message.command && message.after?.generation === transcript.generation);
   const confirmed: Confirmed[] = [];
   const done = new Set<string>();

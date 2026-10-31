@@ -1,4 +1,4 @@
-import { app, ipcMain, Menu, Notification, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
+import { app, ipcMain, Menu, Notification, type BrowserWindow } from 'electron';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonLink } from '@agent-board/daemon/client';
@@ -7,7 +7,10 @@ import type { SetupTool } from '@agent-board/daemon/protocol';
 import { SETUP_IPC } from '../preload/api';
 import { revealWindow } from './background';
 import type { Notifier } from './notifications';
-import { viewMenu } from './view-menu';
+import { menuTemplate, RELEASES_URL } from './app-menu';
+import type { FileSetting } from './file-setting';
+import type { Design } from '../shared/design';
+import { openWebLink } from './links';
 
 /**
  * Onboarding's and Settings' IPC: the daemon's CLI checks, the notification that asks the OS for permission, and
@@ -29,31 +32,55 @@ export function registerSetupIpc(daemon: DaemonLink, notify: Notifier): void {
 }
 
 /**
- * The app menu: Electron's default one, with Help › Getting started, which reopens onboarding on the board (`window`,
- * opening it if need be). A request made while the board loads is kept until it asks (`takeGettingStarted`), as
- * opening an agent is.
+ * The app menu bar: Electron's default menus, with Help › Getting started, which reopens onboarding on the board
+ * (`window`, opening it if need be), and on macOS an app menu with About, Settings… (`settings`, the Settings window)
+ * and Check for Updates…. A request made while the board loads is kept until it asks (`takeGettingStarted`), as opening
+ * an agent is. Under the Simplified design, View › Show Technical Details turns `technical` on or off; the menu bar is
+ * built again whenever it or the `design` changes, so the item follows a pick made in any window.
  */
-export function setAppMenu(window: () => BrowserWindow): void {
-  let requested = false;
-  ipcMain.handle(SETUP_IPC.takeGettingStarted, () => {
-    const taken = requested;
-    requested = false;
-    return taken;
-  });
-  const gettingStarted = () => {
-    requested = true;
-    const target = window();
-    revealWindow(target);
-    target.webContents.send(SETUP_IPC.gettingStarted);
+export function setAppMenu(
+  window: () => BrowserWindow,
+  settings: () => void,
+  { design, technical }: { design: FileSetting<Design>; technical: FileSetting<boolean> },
+): void {
+  const asks = (poke: string, take: string) => {
+    let asked = false;
+    ipcMain.handle(take, () => {
+      const taken = asked;
+      asked = false;
+      return taken;
+    });
+    return () => {
+      asked = true;
+      const target = window();
+      revealWindow(target);
+      target.webContents.send(poke);
+    };
   };
-  const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' } as const] : []),
-    { role: 'fileMenu' },
-    { role: 'editMenu' },
-    // No zoom items: ⌘+ ⌘- ⌘0 size the terminal text, and the board has its own zoom.
-    viewMenu(app.isPackaged),
-    { role: 'windowMenu' },
-    { role: 'help', submenu: [{ label: 'Getting started', click: gettingStarted }] },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  const actions = {
+    about: () => app.showAboutPanel(),
+    settings,
+    checkForUpdates: () => void openWebLink(RELEASES_URL).catch(() => {}),
+    gettingStarted: asks(SETUP_IPC.gettingStarted, SETUP_IPC.takeGettingStarted),
+  };
+  const build = () => {
+    const template = menuTemplate({ mac: process.platform === 'darwin', packaged: app.isPackaged, name: app.name }, actions, {
+      simplified: design.current() === 'simplified',
+      on: technical.current(),
+      // A pick that can't be saved leaves the setting as it was; the menu is built again to untick it. (A menu that
+      // can't be built after a kept pick is the setting's listener's failure, logged there.)
+      set: (on) => {
+        try {
+          technical.set(on);
+        } catch (error) {
+          console.error('agent-board: could not keep Show technical details:', error);
+          build();
+        }
+      },
+    });
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  };
+  build();
+  design.onChanged(build);
+  technical.onChanged(build);
 }

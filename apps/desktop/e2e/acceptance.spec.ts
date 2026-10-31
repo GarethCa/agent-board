@@ -29,6 +29,7 @@ import { run } from './board-helpers.ts';
 import { test, browseForZone, connectedDaemonPid, openAddZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 /**
  * The v1 definition of done, walked end to end on the fakes: every line of it in one journey, on one
@@ -216,12 +217,10 @@ test('v1 definition of done: zones, tracker-linked Claude and Codex agents, inbo
     });
 
     await test.step('a claude session started in another terminal shows up in its zone', async () => {
-      await window.getByRole('button', { name: 'Settings', exact: true }).click();
-      const toggle = window.getByRole('switch', { name: 'Show sessions from other terminals' });
+      const settings = await openSettings(window, 'accounts.terminals');
+      const toggle = settingsSection(settings, 'Other terminals').getByRole('switch', { name: 'Show sessions from other terminals' });
       await toggle.click();
       await expect(toggle).toBeChecked();
-      await window.keyboard.press('Escape');
-      await expect(toggle).toBeHidden();
 
       outside = claudeInTerminal(join(repo, 'apps', 'web'), home, ['Pick a database'], 'waiting');
       outside.stdout.resume();

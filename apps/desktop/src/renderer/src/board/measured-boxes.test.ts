@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Node } from '@xyflow/react';
 import { measuredText } from '@agent-board/daemon/protocol';
-import { expandedBoxes, forgetNoteFits, measuredBoxes, noteFitContext, noteFitKnown, reportNoteFits, sameReport } from './measured-boxes';
+import { expandedBoxes, forgetNoteFits, measuredBoxes, noteFitContext, noteFitKnown, reportNoteFits, sameReport, settleThenSay, windowSize } from './measured-boxes';
 
 const node = (id: string, x: number, y: number, size: { width: number; height: number }, more: Partial<Node> = {}): Node => ({
   id,
@@ -90,5 +90,36 @@ describe('the heights agent notes measured for their text', () => {
     forgetNoteFits();
     expect(noteFitKnown('item:n', fit)).toBe(false);
     expect(noteFitKnown('item:m', { ...fit, text: 'another' })).toBe(false);
+  });
+});
+
+describe('saying how big the window is', () => {
+  it('says its size, and nothing for a window with none yet', () => {
+    expect(windowSize({ innerWidth: 1600, innerHeight: 1000 })).toEqual({ window: { width: 1600, height: 1000 } });
+    expect(windowSize({ innerWidth: 0, innerHeight: 0 })).toEqual({});
+  });
+
+  it('says it a moment later, and again once a drag of resizes settles, once, until stopped', () => {
+    vi.useFakeTimers();
+    try {
+      const target = new EventTarget();
+      const say = vi.fn();
+      const stop = settleThenSay(say, target);
+      vi.advanceTimersByTime(250);
+      expect(say).toHaveBeenCalledTimes(1);
+      for (let step = 0; step < 5; step++) {
+        target.dispatchEvent(new Event('resize'));
+        vi.advanceTimersByTime(100);
+      }
+      expect(say).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(250);
+      expect(say).toHaveBeenCalledTimes(2);
+      stop();
+      target.dispatchEvent(new Event('resize'));
+      vi.advanceTimersByTime(1000);
+      expect(say).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

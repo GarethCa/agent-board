@@ -53,6 +53,14 @@ describe('withTiles', () => {
     ]);
   });
 
+  it("gives a reviewer's tile the agent it reviews, so its card can say it waits for it", () => {
+    const implementer = agent('impl', 'z');
+    const reviewer = { ...agent('rev', 'z'), reviewOf: 'impl' } as Agent;
+    const nodes = withTiles([zone('z')], [implementer, reviewer], [], []);
+    expect(tile(nodes, 'agent:rev').data.implementer).toBe(implementer);
+    expect(tile(nodes, 'agent:impl').data).not.toHaveProperty('implementer');
+  });
+
   it('puts a loose start where it was asked for, and drops its tile once the start is over', () => {
     const starting = withTiles([], [], [], [], new Map(), [], {}, new Set(), [start('b', null, { x: 40, y: 60 })]);
     expect(tile(starting, 'start:b')).toMatchObject({ position: { x: 40, y: 60 } });

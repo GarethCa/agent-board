@@ -34,6 +34,8 @@ export type TileData = {
   crew?: number;
   /** How many of those flag it for a look (`AgentFlag.to`), waiting for its answer. */
   crewFlags?: number;
+  /** For a reviewer, the agent it reviews, while it is on the board: its card says when it waits for it. */
+  implementer?: Agent;
   /** The tabs of the agent's session window, when it has any: its shells chip lists their shells. */
   tabs?: Shell[];
 };
@@ -83,6 +85,8 @@ export interface TileActions {
   deleteShell(shellId: string): void;
   /** Asks to delete the agent, confirming first if that would lose work. */
   deleteAgent(sessionId: string): void;
+  /** Stops the live agent once the user confirms: its session ends, and its worktree, branch and conversation stay. */
+  stopAgent(sessionId: string): void;
   /** Asks which issue to link the agent to. */
   linkIssue(agent: Agent): void;
   /** Opens the agent's schedule editor. */
@@ -171,6 +175,7 @@ export const TileActionsContext = createContext<TileActions>({
   popOutShell: () => {},
   deleteShell: () => {},
   deleteAgent: () => {},
+  stopAgent: () => {},
   linkIssue: () => {},
   scheduleAgent: () => {},
   setMuted: () => {},

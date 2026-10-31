@@ -78,7 +78,7 @@ function CheatSheet({ context, onClose }: { context: SheetContext; onClose(): vo
               )}
               <Kbd>{keyText('dialog.close')}</Kbd> close
             </span>
-            <span>Extended keyboard shortcuts are {extended ? 'on' : 'off'}: Settings, in the board menu</span>
+            <span>Extended keyboard shortcuts are {extended ? 'on' : 'off'}: Settings › General › Keyboard</span>
           </div>
         </RadixDialog.Content>
       </RadixDialog.Portal>

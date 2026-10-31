@@ -154,11 +154,15 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       return { ...look, fontSize: Math.round(chosenFontSize() ?? look.fontSize!) };
     };
     const terminal = new Terminal({ ...look(), cursorBlink: true, scrollback: SCROLLBACK_LINES });
-    // A theme change (the theme sets data-theme on <html>) restyles the terminal, which doesn't see CSS.
-    const themeChange = new MutationObserver(() => Object.assign(terminal.options, look()));
-    themeChange.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
+    // A theme or design change (data-theme, data-design on <html>) restyles the terminal, which doesn't see CSS. The
+    // design changes its font, so its cells too: it refits, which resizes the session.
+    const themeChange = new MutationObserver(() => {
+      Object.assign(terminal.options, look());
+      fit.fit();
+    });
+    themeChange.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-design'] });
     // The text size is the terminal's own: ⌘+ ⌘- ⌘0 and a pinch over it change it, not the board's zoom or the page's.
     // A new size refits the terminal, which resizes the session.
     const resized = onFontSize(() => {

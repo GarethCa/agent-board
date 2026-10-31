@@ -2,7 +2,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { HybridTile, lastMessageCard } from './HybridTile';
+import { HybridTile } from './HybridTile';
+import { lastMessageCard } from './tile-parts';
 import { galleryAgent } from './TileGallery';
 
 const AT = '2026-10-22T12:00:00.000Z';

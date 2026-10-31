@@ -58,6 +58,11 @@ export interface ArrangeOptions {
   layout: ArrangeLayout;
   /** The zone's width now: a grid fills it, and it never narrows. */
   width: number;
+  /**
+   * The size of the app's window, if one is open: masonry and a treemap pack to its shape (masonry to the zone's width
+   * without, a treemap to `PACKED_SHAPE`), never to the zone's own, which an arrange then fits to what it packed.
+   */
+  window?: Size;
   /** What it may not move (notes, cards, tiles out of scope), relative to the zone: every tile keeps a gap from them. */
   obstacles?: readonly Rect[];
   /**
@@ -453,11 +458,17 @@ export function arrangeTiles(
   const noteSizeOf = (key: string, least: Size): Size => ({ width: Math.max(least.width, options.noteWidths?.get(key) ?? 0), height: Math.max(least.height, options.noteHeights?.get(key) ?? 0) });
   const rows = rowsOf(tiles, links, options.by);
   let positions: Map<string, Point>;
-  // Wrap lays out lanes, so by role or state it lays the rows out as rows do.
-  if (options.layout === 'columns' || options.layout === 'cards' || (options.layout === 'wrap' && options.by === 'issue')) {
+  // Wrap lays out lanes, so by role or state it lays the rows out as rows do. Masonry and a treemap pack groups: by role
+  // or state, each role's or state's row.
+  const packs = options.layout === 'masonry' || options.layout === 'treemap';
+  if (options.layout === 'columns' || options.layout === 'cards' || (options.layout === 'wrap' && options.by === 'issue') || packs) {
     const isCluster = (row: Row) => options.clusters === true && options.by === 'issue' && row.unit;
     const headOf = (row: Row) => headSize(noteSizeOf(laneKey(row.tiles), HEAD_NOTE_SIZE));
-    const cells = (options.layout === 'columns' ? columnCells : options.layout === 'cards' ? cardCells : wrapCells)(rows, isCluster, headOf);
+    const cells = packs
+      ? packedCells(rows, isCluster, headOf, (row) => (options.by === 'issue' ? !row.unit : row.tiles.some((tile) => tile.lead)), (blocks, above) =>
+          options.layout === 'masonry' ? masonry(blocks, grid, above, options.window, options.width) : treemap(blocks, grid, above, options.window),
+        )
+      : (options.layout === 'columns' ? columnCells : options.layout === 'cards' ? cardCells : wrapCells)(rows, isCluster, headOf);
     positions = placeCells(cells, links, obstacles, grid);
     for (const row of rows.filter(isCluster)) {
       const key = laneKey(row.tiles);
@@ -658,6 +669,194 @@ function wrapCells(rows: readonly Row[], isCluster: (row: Row) => boolean, headO
   return cells;
 }
 
+/** A group a packed layout places whole: a lane, or by role or state a row, and its head cell's size if it has one. */
+interface Group {
+  row: Row;
+  head?: Size;
+}
+
+/** A group's cells from its own first column and row, and how many of each it takes up. */
+interface Block {
+  cells: Cell[];
+  columns: number;
+  rows: number;
+}
+
+/**
+ * `group` as a block: its head cell in its first column, running down beside its tiles, and its tiles in slot order
+ * after it, a new row under the first of them after every `across`; as many rows as the more of its tiles' and its head's.
+ */
+function blockOf({ row, head }: Group, across: number, grid: ZoneGrid): Block {
+  const tiles = inSlotOrder(row);
+  const rows = Math.max(Math.ceil(tiles.length / across), head === undefined ? 1 : gridSpan(head, grid).rows);
+  const first = head === undefined ? [] : [{ id: headId(laneKey(row.tiles)), size: head, column: 0, row: 0, span: rows }];
+  const cells = tiles.map((tile, index) => ({ id: tile.id, size: sizeOf(tile), column: first.length + (index % across), row: Math.floor(index / across) }));
+  return { cells: [...first, ...cells], columns: first.length + Math.min(across, tiles.length), rows };
+}
+
+/** `block`'s cells moved `column` along and `row` down. */
+const shifted = (block: Block, column: number, row: number): Cell[] => block.cells.map((cell) => ({ ...cell, column: cell.column + column, row: cell.row + row }));
+
+/**
+ * A packed layout: the top row (the lead, the shells and the clocks by issue, else the lead's row: `isTop`) as rows lay
+ * it out, and below it each other row as a group, where `pack` puts it (told how many rows are `above` it). Columns are
+ * shared, so a wide tile widens its column whole, and no two groups' cells ever share one: no group overlaps another.
+ */
+function packedCells(
+  rows: readonly Row[],
+  isCluster: (row: Row) => boolean,
+  headOf: (row: Row) => Size,
+  isTop: (row: Row) => boolean,
+  pack: (groups: readonly Group[], above: number) => Cell[],
+): Cell[] {
+  const top = rows
+    .filter(isTop)
+    .flatMap((row) => row.tiles)
+    .map((tile, column) => ({ id: tile.id, size: sizeOf(tile), column, row: 0, alone: true }));
+  const groups = rows.filter((row) => !isTop(row)).map((row) => (isCluster(row) ? { row, head: headOf(row) } : { row }));
+  const above = top.length > 0 ? 1 : 0;
+  return [...top, ...pack(groups, above).map((cell) => ({ ...cell, row: cell.row + above }))];
+}
+
+/** The shape a treemap packs to with no app window open: a laptop screen's. */
+const PACKED_SHAPE = 16 / 10;
+
+/** The shape, width over height, of a zone holding `columns` grid columns and `rows` grid rows, its padding round them. */
+const shapeOf = (columns: number, rows: number, grid: ZoneGrid) => (columns * grid.column + 2 * grid.origin.x) / (rows * grid.row + 2 * grid.origin.y);
+
+/**
+ * Masonry: each group a block whose tiles wrap after `WRAP_AFTER`, in order into the shortest of `across` columns of
+ * blocks (the leftmost of the shortest), each as wide as its widest block, a free grid column between them. As many
+ * columns as make the whole (the rows `above` it too) nearest `window`'s shape; with no window, the most whose width the
+ * zone's `width` holds, so a zone fitted to its masonry packs it the same way again.
+ */
+function masonry(groups: readonly Group[], grid: ZoneGrid, above: number, window: Size | undefined, width: number): Cell[] {
+  const blocks = groups.map((group) => blockOf(group, WRAP_AFTER, grid));
+  if (blocks.length === 0) return [];
+  /** The blocks stacked in `across` columns: where each goes, in grid cells, and how many columns and rows they take up. */
+  const stack = (across: number) => {
+    const heights: number[] = Array.from({ length: across }, () => 0);
+    const widths: number[] = Array.from({ length: across }, () => 0);
+    const into = blocks.map((block) => {
+      const column = heights.indexOf(Math.min(...heights));
+      const row = heights[column]!;
+      heights[column] = row + block.rows;
+      widths[column] = Math.max(widths[column]!, block.columns);
+      return { column, row };
+    });
+    const starts = widths.map((_, column) => widths.slice(0, column).reduce((sum, each) => sum + each + 1, 0));
+    return { at: into.map(({ column, row }) => ({ column: starts[column]!, row })), columns: starts.at(-1)! + widths.at(-1)!, rows: Math.max(...heights) };
+  };
+  const counts = Array.from({ length: blocks.length }, (_, index) => index + 1);
+  let across = 1;
+  if (window !== undefined && window.width > 0 && window.height > 0) {
+    const misfit = (count: number) => {
+      const { columns, rows } = stack(count);
+      return Math.abs(Math.log(shapeOf(columns, rows + above, grid) / (window.width / window.height)));
+    };
+    for (const count of counts) if (misfit(count) < misfit(across)) across = count;
+  } else {
+    const held = Math.floor((width - 2 * grid.origin.x + grid.column - AGENT_TILE_SIZE.width) / grid.column);
+    for (const count of counts) if (stack(count).columns <= held) across = count;
+  }
+  const { at } = stack(across);
+  return blocks.flatMap((block, index) => shifted(block, at[index]!.column, at[index]!.row));
+}
+
+/**
+ * `areas`, largest first, as a squarified treemap of `into`: strips along its shorter side, each taking areas while that
+ * keeps its worst rectangle nearer square, so every area gets a rectangle of its size, as near square as it can be.
+ */
+function squarify(areas: readonly number[], into: Rect): Rect[] {
+  const rects: Rect[] = [];
+  let { x, y, width, height } = into;
+  const worst = (strip: readonly number[], side: number) => {
+    const sum = strip.reduce((total, area) => total + area, 0);
+    return Math.max(...strip.map((area) => Math.max((side * side * area) / (sum * sum), (sum * sum) / (side * side * area))));
+  };
+  for (let start = 0; start < areas.length; ) {
+    const side = Math.min(width, height);
+    let end = start + 1;
+    while (end < areas.length && worst(areas.slice(start, end + 1), side) <= worst(areas.slice(start, end), side)) end++;
+    const strip = areas.slice(start, end);
+    const sum = strip.reduce((total, area) => total + area, 0);
+    if (width >= height) {
+      const thick = sum / height;
+      let along = y;
+      for (const area of strip) {
+        rects.push({ x, y: along, width: thick, height: area / thick });
+        along += area / thick;
+      }
+      x += thick;
+      width -= thick;
+    } else {
+      const thick = sum / width;
+      let along = x;
+      for (const area of strip) {
+        rects.push({ x: along, y, width: area / thick, height: thick });
+        along += area / thick;
+      }
+      y += thick;
+      height -= thick;
+    }
+    start = end;
+  }
+  return rects;
+}
+
+/**
+ * `group` as a block `across` wide, filled row by row in slot order: its head cell first, running down as many rows as
+ * it takes, then its tiles round it.
+ */
+function filledBlock({ row, head }: Group, across: number, grid: ZoneGrid): Block {
+  const tall = head === undefined ? 0 : gridSpan(head, grid).rows;
+  const tiles = inSlotOrder(row);
+  const spots: { column: number; row: number }[] = [];
+  for (let spot = tall > 0 ? 1 : 0; spots.length < tiles.length; spot++) {
+    const [column, line] = [spot % across, Math.floor(spot / across)];
+    if (column > 0 || line >= tall) spots.push({ column, row: line });
+  }
+  const first = head === undefined ? [] : [{ id: headId(laneKey(row.tiles)), size: head, column: 0, row: 0, span: tall }];
+  const cells = [...first, ...tiles.map((tile, index) => ({ id: tile.id, size: sizeOf(tile), ...spots[index]! }))];
+  return { cells, columns: Math.max(...cells.map((cell) => cell.column + 1)), rows: Math.max(tall, ...spots.map((spot) => spot.row + 1)) };
+}
+
+/**
+ * A treemap: each group a rectangle sized by its cells (its tiles and its head), squarified into a box of `window`'s
+ * shape (`PACKED_SHAPE` with none) once the rows `above` it and the zone's padding are counted, as the board draws it;
+ * then put on the grid and filled as a block as wide as it is. Approximate: a rectangle too small for its block grows,
+ * down past whatever it would overlap, so none ever does. Never the zone's own shape: the arrange fits the zone to what
+ * it packed, a little narrower each time, so the next would pack narrower still.
+ */
+function treemap(groups: readonly Group[], grid: ZoneGrid, above: number, window: Size | undefined): Cell[] {
+  const areas = groups.map((group) => (group.row.tiles.length + (group.head === undefined ? 0 : 1)) * grid.column * grid.row);
+  const total = areas.reduce((sum, area) => sum + area, 0);
+  if (total === 0) return [];
+  // The largest first, and between groups as large, the one first in order.
+  const order = areas.map((_, index) => index).toSorted((a, b) => areas[b]! - areas[a]! || a - b);
+  // A box `total` big whose width, its padding added, over its height, the rows above and its padding added, is `aspect`.
+  const aspect = window !== undefined && window.width > 0 && window.height > 0 ? window.width / window.height : PACKED_SHAPE;
+  const b = aspect * (above * grid.row + 2 * grid.origin.y) - 2 * grid.origin.x;
+  const height = (Math.sqrt(b * b + 4 * aspect * total) - b) / (2 * aspect);
+  const rects = squarify(
+    order.map((index) => areas[index]!),
+    { x: 0, y: 0, width: total / height, height },
+  );
+  const taken = new Set<string>();
+  const cells: Cell[] = [];
+  for (const [at, index] of order.entries()) {
+    const rect = rects[at]!;
+    const left = Math.round(rect.x / grid.column);
+    const block = filledBlock(groups[index]!, Math.max(1, Math.round((rect.x + rect.width) / grid.column) - left), grid);
+    const spots = (top: number) => Array.from({ length: block.columns * block.rows }, (_, cell) => `${left + (cell % block.columns)},${top + Math.floor(cell / block.columns)}`);
+    let top = Math.round(rect.y / grid.row);
+    while (spots(top).some((spot) => taken.has(spot))) top++;
+    for (const spot of spots(top)) taken.add(spot);
+    cells.push(...shifted(block, left, top));
+  }
+  return cells;
+}
+
 /**
  * Where `cells` go, in px: every column as wide as its widest cell (a line of cards' widest in its own line, the lead's
  * row's its own: `Cell.band`, `Cell.alone`), and a rail's room past each column a rail runs along within a row, each on
@@ -700,9 +899,9 @@ function placeCells(cells: readonly Cell[], links: readonly ArrangeLink[], obsta
   let next = grid.origin.y;
   for (let row = 0; row < rows; row++) {
     const inRow = cells.filter((cell) => cell.row === row);
-    // An empty row is a grid row of space.
+    // An empty row is a grid row of space, and as much more as a cell running down to it reaches past it.
     if (inRow.length === 0) {
-      next += grid.row;
+      next = Math.max(next + grid.row, (reaches.get(row) ?? 0) + gaps.lane);
       continue;
     }
     if (railAbove.has(row)) next += railRoomAbove(grid);

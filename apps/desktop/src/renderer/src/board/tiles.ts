@@ -171,6 +171,7 @@ export function withTiles(
     const home = agent.zoneId !== null && zones.get(agent.zoneId)?.data.zone.repoRoot === agent.repoRoot;
     const orchestrator = agent.spawnedBy === null ? undefined : byId.get(agent.spawnedBy);
     const crew = crews.get(agent.sessionId);
+    const implementer = agent.reviewOf === null ? undefined : byId.get(agent.reviewOf);
     // A closed agent is a chip, unless the user unfolded it or it is expanded in place.
     if (isFolded(agent, unfolded) && expandedRank(expanded, id) === undefined) folded.add(id);
     add(id, agent.zoneId, {
@@ -180,6 +181,7 @@ export function withTiles(
       ...(home ? {} : { repo: repoName(agent.repoRoot) }),
       ...(orchestrator === undefined ? {} : { from: { sessionId: orchestrator.sessionId, name: orchestrator.name } }),
       ...(crew === undefined ? {} : { crew }),
+      ...(implementer === undefined ? {} : { implementer }),
       ...(crewFlags.has(agent.sessionId) ? { crewFlags: crewFlags.get(agent.sessionId) } : {}),
       ...(tabs.has(agent.sessionId) ? { tabs: tabs.get(agent.sessionId) } : {}),
       ...(folded.has(id) ? { folded: true as const, lift: chipLift(tileSizeOf(sizes, id).height) } : {}),

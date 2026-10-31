@@ -49,10 +49,12 @@ interface SheetOptions {
   /** What was typed in its filter: rows whose label or keys have it. */
   filter?: string;
   isMac?: boolean;
+  /** Whether the window shows the Simplified design: under Classic, its own keys are left out. Read from the root unless given. */
+  simplified?: boolean;
 }
 
 /** The cheat sheet opened in `context`: each section with a row it keeps, the ones for `context` first. */
-export function cheatSheet(context: SheetContext, { extended, filter = '', isMac = mac }: SheetOptions): SheetSection[] {
+export function cheatSheet(context: SheetContext, { extended, filter = '', isMac = mac, simplified }: SheetOptions): SheetSection[] {
   const needle = filter.trim().toLowerCase();
   const rowOf = (entry: KeyBinding): SheetRow => ({
     id: entry.id as KeyId,
@@ -66,7 +68,7 @@ export function cheatSheet(context: SheetContext, { extended, filter = '', isMac
       id,
       title: TITLES[id],
       here: here.includes(id),
-      rows: KEYS.filter((entry) => entry.section === id && isActive(entry, extended))
+      rows: KEYS.filter((entry) => entry.section === id && isActive(entry, extended, simplified))
         .map(rowOf)
         .filter(kept),
     }))

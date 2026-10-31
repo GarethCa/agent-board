@@ -1,82 +1,99 @@
-// Whether an agent's pane shows its terminal or its chat, remembered per session: one choice for its session window,
-// pop-out and expanded tile, so switching in one carries to the others. Only a chat is stored; the terminal is the default.
+// Whether an agent's pane shows its terminal, its chat or its timeline, remembered per session: one choice for its
+// session window, pop-out and expanded tile, so switching in one carries to the others. A session with no pick shows
+// the view windows open on: the terminal, or under the Simplified design the one its setting names.
 //
 // The one place it lives is the app's local storage, shared by every window of the app. It is read each time and never
 // held between reads, so a window with no session open still sees what a pop-out picked, and a write changes only its
-// own session's entry in what is stored now.
+// own session's entry in what is stored now. Until the first pick is stored, the chats picked before there were three
+// views are read from where they were kept, which is never written, so an older build still finds them.
 
 import { useCallback, useSyncExternalStore } from 'react';
 
-/** What an agent's session shows of it: its terminal (the harness's own TUI) or its conversation as a chat. */
-export type SessionView = 'terminal' | 'chat';
+/**
+ * What an agent's session shows of it: its terminal (the harness's own TUI), its conversation as a chat, or (under the
+ * Simplified design) its conversation as a timeline rail.
+ */
+export const SESSION_VIEWS = ['chat', 'timeline', 'terminal'] as const;
+export type SessionView = (typeof SESSION_VIEWS)[number];
 
-const STORAGE_KEY = 'agent-board.chat-sessions';
+const STORAGE_KEY = 'agent-board.session-views';
+/** The ids of the chats picked, as kept before there were three views. */
+const OLD_KEY = 'agent-board.chat-sessions';
 
-/** The ids stored, parsed again only when the stored text changes. */
-let parsed: { text: string | null; ids: ReadonlySet<string> } = { text: null, ids: new Set() };
+type Picks = ReadonlyMap<string, SessionView>;
+
+/** The picks stored, parsed again only when the stored text changes. */
+let parsed: { text: string | null; picks: Picks } = { text: null, picks: new Map() };
 /** What this run keeps when storage can't be read or written: the choice then lasts as long as the app does. */
-let unstored: ReadonlySet<string> | undefined;
+let unstored: Picks | undefined;
 const listeners = new Set<() => void>();
 
-function read(): ReadonlySet<string> {
-  if (unstored !== undefined) return unstored;
-  let text: string | null;
+const isView = (value: unknown): value is SessionView => SESSION_VIEWS.includes(value as SessionView);
+
+/** The stored text's picks: a session id to its view, or, as kept before there were three views, the ids of chats. */
+function parse(text: string | null): Picks {
+  const picks = new Map<string, SessionView>();
   try {
-    text = localStorage.getItem(STORAGE_KEY);
-  } catch {
-    unstored = parsed.ids;
-    return unstored;
-  }
-  if (text === parsed.text) return parsed.ids;
-  let ids = new Set<string>();
-  try {
-    const stored: unknown = JSON.parse(text ?? '[]');
-    if (Array.isArray(stored)) ids = new Set(stored.filter((id): id is string => typeof id === 'string'));
+    const stored: unknown = JSON.parse(text ?? '{}');
+    if (Array.isArray(stored)) for (const id of stored) if (typeof id === 'string') picks.set(id, 'chat');
+    if (stored !== null && typeof stored === 'object' && !Array.isArray(stored)) {
+      for (const [id, view] of Object.entries(stored)) if (isView(view)) picks.set(id, view);
+    }
   } catch {
     // Unreadable text is no choices.
   }
-  parsed = { text, ids };
-  return ids;
+  return picks;
 }
 
-function write(ids: ReadonlySet<string>): void {
-  const text = JSON.stringify([...ids]);
+function read(): Picks {
+  if (unstored !== undefined) return unstored;
+  let text: string | null;
+  try {
+    // The old list, until there is anything of its own.
+    text = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(OLD_KEY);
+  } catch {
+    unstored = parsed.picks;
+    return unstored;
+  }
+  if (text !== parsed.text) parsed = { text, picks: parse(text) };
+  return parsed.picks;
+}
+
+function write(picks: Picks): void {
+  const text = JSON.stringify(Object.fromEntries(picks));
   try {
     localStorage.setItem(STORAGE_KEY, text);
-    parsed = { text, ids };
+    parsed = { text, picks };
   } catch {
-    unstored = ids;
+    unstored = picks;
   }
   for (const listener of listeners) listener();
 }
 
-/** The view picked for a session: the terminal until its chat is. */
-export function chosenView(sessionId: string | undefined): SessionView {
-  return sessionId !== undefined && read().has(sessionId) ? 'chat' : 'terminal';
+/** The view picked for a session: `opensOn`, the terminal unless given, until one is. */
+export function chosenView(sessionId: string | undefined, opensOn: SessionView = 'terminal'): SessionView {
+  return (sessionId === undefined ? undefined : read().get(sessionId)) ?? opensOn;
 }
 
 /** Picks a session's view and tells every pane showing it. */
 export function setChosenView(sessionId: string, view: SessionView): void {
-  const ids = read();
-  if (ids.has(sessionId) === (view === 'chat')) return;
-  const next = new Set(ids);
-  if (view === 'chat') next.add(sessionId);
-  else next.delete(sessionId);
-  write(next);
+  const picks = read();
+  if (picks.get(sessionId) === view) return;
+  write(new Map(picks).set(sessionId, view));
 }
 
 /** Forgets the choice of every session that is not in `live`: its agent has been deleted. */
 export function forgetViewsExcept(live: readonly string[]): void {
   const keep = new Set(live);
-  const ids = read();
-  const kept = [...ids].filter((id) => keep.has(id));
-  if (kept.length !== ids.size) write(new Set(kept));
+  const picks = read();
+  const kept = [...picks].filter(([id]) => keep.has(id));
+  if (kept.length !== picks.size) write(new Map(kept));
 }
 
 /** Hears every change of any session's view, here or in another window of the app; returns how to stop. */
 export function onSessionViews(listener: () => void): () => void {
   const fromOtherWindow = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) listener();
+    if (event.key === STORAGE_KEY || event.key === OLD_KEY) listener();
   };
   listeners.add(listener);
   window.addEventListener('storage', fromOtherWindow);
@@ -86,9 +103,9 @@ export function onSessionViews(listener: () => void): () => void {
   };
 }
 
-/** A session's view and how to pick it, live across the windows of the app. */
-export function useSessionView(sessionId: string | undefined): [SessionView, (view: SessionView) => void] {
-  const view = useSyncExternalStore(onSessionViews, () => chosenView(sessionId), () => 'terminal' as const);
+/** A session's view and how to pick it, live across the windows of the app; `opensOn` until one is picked. */
+export function useSessionView(sessionId: string | undefined, opensOn: SessionView = 'terminal'): [SessionView, (view: SessionView) => void] {
+  const view = useSyncExternalStore(onSessionViews, () => chosenView(sessionId, opensOn), () => opensOn);
   const pick = useCallback((next: SessionView) => sessionId !== undefined && setChosenView(sessionId, next), [sessionId]);
   return [view, pick];
 }

@@ -2,6 +2,7 @@ import { createContext, memo, useContext, useEffect, useState, type KeyboardEven
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, type Edge, type EdgeProps } from '@xyflow/react';
 import type { ConnectorSide, EdgePoint, FlowEdgeShape, FlowEdgeTrigger, UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import { FileText, Send, Zap, type LucideIcon } from 'lucide-react';
+import { useSimplified } from '../design';
 import { tokenNumber } from '../theme';
 import { BarRow } from './items/ItemStyleBar';
 import { LineStyleButtons, RouteButton } from './connectors/LineStyleButtons';
@@ -116,8 +117,8 @@ const OUTWARD: Record<ConnectorSide, EdgePoint> = { left: { x: -1, y: 0 }, right
  * The edges between two agents as one rail: a faint line with no arrowheads when they hand work both
  * ways, or with a small arrow at the receiving end when only one way, and the latest document riding it as a token at
  * the end of whoever has it (`railToken`). A click on the rail or its token selects the edge the token is from (or the
- * one of its edges already selected), which opens its Edge rules; a token waiting for Send has Send on it, and slides
- * to the other end as it goes. Selected, the rail can be bent, its ends moved to other sides of their tiles or onto
+ * one of its edges already selected), which opens its Edge rules; a token waiting for Send has Send on it (Classic
+ * only: the Simplified design sends from Edge rules), and slides to the other end as it goes. Selected, the rail can be bent, its ends moved to other sides of their tiles or onto
  * other agents' (every edge on it moving with them), and its style picked, as a connector's can: the edge made first
  * keeps its shape. An end on no side the user picked faces
  * the other tile.
@@ -147,7 +148,7 @@ export const AgentFlowEdge = memo(function AgentFlowEdge(props: EdgeProps<AgentF
   const at = { x: end.x + OUTWARD[side].x * gap, y: end.y + OUTWARD[side].y * gap + apart };
   const sliding = useSlide(atStart, token.state === 'sending');
   const capRadius = tokenNumber('--rail-cap-radius');
-  // Too short a rail for its token to lie along: it shows only its mark (and Send), the rest on hover or focus.
+  // Too short a rail for its token to lie along: it shows only its mark (and Send, in Classic), the rest on hover or focus.
   const compact = shape.length < tokenNumber('--rail-token-room');
   return (
     <>
@@ -233,7 +234,7 @@ const STATE_NAMES: Record<RailToken['state'], string> = {
  * The document on a rail: its name, its round on a linked pair (R2) or a held one's passing conditions (1/2),
  * Send while it waits for it, and the line under it (`delivered 14:31`, `held until CI green`). It sits `at` the end
  * of whoever has it, off the `side` of that tile, and slides there while `sliding` (not under reduced motion). On a
- * rail too short for it (`compact`), only its mark, round and Send show until it is hovered or focused.
+ * rail too short for it (`compact`), only its mark, round and (in Classic) Send show until it is hovered or focused.
  */
 function RailTokenChip(props: {
   token: RailToken;
@@ -247,6 +248,7 @@ function RailTokenChip(props: {
   onSend(): void;
 }) {
   const { token, at } = props;
+  const simplified = useSimplified();
   const name = edgeLabel(token.edge);
   return (
     <div
@@ -261,7 +263,7 @@ function RailTokenChip(props: {
     >
       <div className="rail-token-body" title={props.title}>
         <span className="rail-token-chip">
-          <button type="button" className="rail-token-open" aria-label={`${name}: ${STATE_NAMES[token.state]}`} {...pressed(props.onOpen)}>
+          <button type="button" className="rail-token-open" aria-label={`${name}: ${simplified && token.state === 'waiting' ? 'waiting' : STATE_NAMES[token.state]}`} {...pressed(props.onOpen)}>
             <FileText className="rail-token-icon" aria-hidden="true" />
             <span className="rail-token-name">{name}</span>
             {token.round !== undefined && <span className="rail-token-count">R{token.round}</span>}
@@ -271,7 +273,7 @@ function RailTokenChip(props: {
               </span>
             )}
           </button>
-          {token.state === 'waiting' && (
+          {token.state === 'waiting' && !simplified && (
             <button type="button" className="rail-token-send" data-testid="rail-token-send" {...pressed(props.onSend)}>
               <Send aria-hidden="true" />
               send

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { ChevronsDownUp, ChevronsUpDown, ClipboardList, FileText, GitPullRequest, Globe } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronsDownUp, ChevronsUpDown, ClipboardList, FileText, GitPullRequest, Globe, SquareTerminal } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
 import type { Agent, Shell, ShellOwner } from '@agent-board/daemon/protocol';
@@ -12,6 +13,7 @@ import { DetailsHandle } from './DetailsHandle';
 import { ChatView } from './ChatView';
 import { Composer } from './Composer';
 import type { RunsChoice, RunsMode } from './chat';
+import { ChatAgentsSwitch } from './ChatAgentsFilter';
 import { ChatStyleSwitch } from './ChatStyleSwitch';
 import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
@@ -23,6 +25,8 @@ import type { StripTab } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
 import { PaneStrip, WindowPanes } from './WindowPanes';
 import { chosenView, useSessionView, type SessionView } from './session-view';
+import { useOpensOn } from './opens-on';
+import { pressed } from '../keys/registry';
 import { PullRequestTab } from './PullRequestTab';
 import { WebTab } from './WebTab';
 import { GateTab } from '../gate/GateTab';
@@ -57,6 +61,13 @@ interface SessionBodyProps {
   autoFocus?: boolean;
   /** Whether the window shows this body at all: false while its Review or Activity tab covers it. True by default. */
   shown?: boolean;
+  /**
+   * Where an agent's Chat | Timeline | Terminal switch goes: the session window's header, under the Simplified design,
+   * which also gives ⌥⌘T to it (null until the header is drawn). Without one, a Terminal | Chat switch ends the pane's strip.
+   */
+  viewSlot?: HTMLElement | null;
+  /** Set to what ⌥⌘T does, with the switch in the header, for the header's menu to do too. */
+  terminalToggle?: RefObject<(() => void) | null>;
 }
 
 /**
@@ -72,6 +83,8 @@ export function SessionBody({
   onAttachState,
   autoFocus = true,
   shown = true,
+  viewSlot,
+  terminalToggle,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -122,8 +135,14 @@ export function SessionBody({
   );
   useEffect(() => onAttachState?.(own.state), [own.state, onAttachState]);
   // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
-  const [pickedView, pickView] = useSessionView(agent?.sessionId);
-  const chatPicked = pickedView === 'chat' && agent !== undefined;
+  // The Timeline is the chat drawn as its rail, in the Simplified design's window, whose header has the switch and which
+  // opens on the view its setting names. Anywhere else (Classic, an expanded tile) a Timeline pick shows as the chat,
+  // in the chat's own style, and the terminal is what shows until a view is picked.
+  const headerSwitch = viewSlot !== undefined;
+  const opensOn = useOpensOn();
+  const windowOpensOn = headerSwitch ? opensOn : 'terminal';
+  const [pickedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
+  const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
   const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
   // Expand all and Collapse all, kept while the window is open, through switches to the terminal and back.
@@ -142,12 +161,32 @@ export function SessionBody({
   }, [chatPicked]);
   const switchView = (next: SessionView) => {
     // A pick that changes nothing sets no flag: the next change heard from elsewhere is still not this body's.
-    pickedHere.current = chosenView(agent?.sessionId) !== next;
+    pickedHere.current = chosenView(agent?.sessionId, windowOpensOn) !== next;
     pickView(next);
     // Chat picked while a shell tab shows brings the agent's own tab forward. Only on a pick: a tab asked for as the
     // window opens (a row of the shells chip) still shows.
-    if (next === 'chat') select?.(OWN_SURFACE);
+    if (next !== 'terminal') select?.(OWN_SURFACE);
   };
+  // ⌥⌘T, with the switch in the header: the terminal, and from it back to the chat or timeline last shown.
+  const lastConversation = useRef<SessionView>('chat');
+  if (pickedView !== 'terminal') lastConversation.current = pickedView;
+  const toggleTerminal = useRef(() => {});
+  toggleTerminal.current = () => switchView(chat ? 'terminal' : lastConversation.current);
+  if (terminalToggle) terminalToggle.current = () => toggleTerminal.current();
+  // Not while the window's Review or Activity tab covers the body: the switch it would change can't be seen.
+  const listening = headerSwitch && agent !== undefined && shown;
+  useEffect(() => {
+    if (!listening) return;
+    // Before the terminal, which would otherwise take the key, and wherever the focus is in the window.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!pressed('window.terminalView', event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleTerminal.current();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [listening]);
 
   // An agent's terminal, with its chat view over it when that is picked: in its own tab, or the whole window.
   const sessionView = content.kind === 'session' && (
@@ -176,6 +215,7 @@ export function SessionBody({
             runs={runs}
             onOpenLink={openLink}
             onOpenPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))}
+            style={headerSwitch && pickedView === 'timeline' ? 'timeline' : undefined}
           />
         </div>
       )}
@@ -184,7 +224,12 @@ export function SessionBody({
 
   // How the agent's pane shows it, over the pane it changes: the same in a session window and an expanded tile. Over a
   // shell tab it reads Terminal, which is what shows; pressing Chat brings the agent's own tab forward.
-  const viewSwitch = agent && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
+  const viewSwitch = agent && !headerSwitch && <Segmented<SessionView> className="session-view-switch" aria-label="View" value={chat ? 'chat' : 'terminal'} onChange={switchView} options={VIEW_OPTIONS} />;
+  // In the header, the three views, always there: Terminal reads as picked while a shell tab shows, as it is what shows.
+  const headerViewSwitch =
+    agent && viewSlot
+      ? createPortal(<Segmented<SessionView> className="session-header-view-switch" aria-label="View" value={chat ? pickedView : 'terminal'} onChange={switchView} options={HEADER_VIEW_OPTIONS} />, viewSlot)
+      : null;
   // A split window's panes have strips of their own; the switch ends the one holding the agent's own tab.
   const split = panes !== undefined && panes.panes.length > 1;
   const here = agent ? 'in this worktree' : 'in this folder';
@@ -265,7 +310,8 @@ export function SessionBody({
               shell
             </span>
           )}
-          {chat && <ChatStyleSwitch />}
+          {chat && !headerSwitch && <ChatStyleSwitch />}
+          {chat && agent && <ChatAgentsSwitch sessionId={agent.sessionId} />}
           {chat && (
             <span className="chat-runs-actions">
               <Button variant="ghost" size="xs" icon={<ChevronsUpDown />} onClick={() => pressRuns('expanded')} tooltip="Open every call and run of calls" aria-label="Expand all">
@@ -308,6 +354,7 @@ export function SessionBody({
         {agent && chat && <Composer agent={agent} />}
       </div>
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
+      {headerViewSwitch}
     </div>
     </WebLinkContext.Provider>
   );
@@ -316,6 +363,13 @@ export function SessionBody({
 const VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
   { id: 'terminal', label: 'Terminal' },
   { id: 'chat', label: 'Chat' },
+];
+
+/** The Simplified design's header switch: the conversation first, then the harness's own screen. */
+const HEADER_VIEW_OPTIONS: SegmentedOption<SessionView>[] = [
+  { id: 'chat', label: 'Chat' },
+  { id: 'timeline', label: 'Timeline' },
+  { id: 'terminal', label: 'Terminal', icon: <SquareTerminal /> },
 ];
 
 /**

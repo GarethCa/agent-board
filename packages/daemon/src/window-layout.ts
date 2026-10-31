@@ -16,7 +16,7 @@ export interface SessionTarget {
  * What a tab shows. `own` is the window's own session (an agent's, or a shell tile's own panes), `shell` one of its
  * shell tabs (a row of `shells` it owns), `session` another agent or shell tile, shown here and still its own, `pr`
  * a GitHub pull request (`repo` is its `owner/repo`), read from GitHub by the daemon, and `web` a web page, kept
- * by the URL it was last at (`isWebTabUrl`; empty for a new tab nothing has been typed in yet) and named by an `id` of its own, so it stays one tab as its page changes.
+ * by the URL it was last at (`isWebTabUrl`; empty for a new tab nothing has been typed in yet) and named by an `id` of its own, so it stays one tab as its page changes; a `private` one keeps nothing past its page (no shared session).
  * `gate` is an agent's merge gate: its latest run's steps and logs, named by the agent's session. `plan`
  * is an agent's plans: their versions, the one picked rendered, and the decision on the latest. `doc` is one of
  * an agent's hand-off docs, by its absolute `path`, read through that agent. `document` is a document an agent showed
@@ -27,7 +27,7 @@ export type Surface =
   | { kind: 'shell'; shellId: string }
   | { kind: 'session'; target: SessionTarget }
   | { kind: 'pr'; repo: string; number: number }
-  | { kind: 'web'; id: string; url: string }
+  | { kind: 'web'; id: string; url: string; private?: true }
   | { kind: 'gate'; sessionId: string }
   | { kind: 'plan'; sessionId: string }
   | { kind: 'doc'; sessionId: string; path: string }
@@ -309,7 +309,8 @@ export function parseSurface(raw: unknown): Surface | undefined {
   }
   if (fields.kind === 'web') {
     const { id, url } = fields;
-    return typeof id === 'string' && id !== '' && typeof url === 'string' && (url === '' || isWebTabUrl(url)) ? { kind: 'web', id, url } : undefined;
+    if (typeof id !== 'string' || id === '' || typeof url !== 'string' || (url !== '' && !isWebTabUrl(url))) return undefined;
+    return fields.private === true ? { kind: 'web', id, url, private: true } : { kind: 'web', id, url };
   }
   if (fields.kind !== 'session' || typeof fields.target !== 'object' || fields.target === null) return undefined;
   const { kind, id } = fields.target as Record<string, unknown>;

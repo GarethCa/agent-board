@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { agents, launch, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 test('the clickable links switch is on, offers to restart running Claude agents when it changes, and never restarts on its own', async () => {
   const { dir, repo, env } = scratch('waiting');
@@ -19,10 +20,9 @@ test('the clickable links switch is on, offers to restart running Claude agents 
     // Started with the setting on.
     expect(await startedWithLinks()).toBe(true);
 
-    await window.getByRole('button', { name: 'Board menu' }).click();
-    const menu = window.getByRole('dialog', { name: 'Board menu' });
-    const links = menu.getByRole('switch', { name: 'Clickable links from Claude' });
-    const offer = menu.getByTestId('clickable-links-restart');
+    const settings = await openSettings(window, 'agents.links');
+    const links = settingsSection(settings, 'Links').getByRole('switch', { name: 'Clickable links from Claude' });
+    const offer = settings.getByTestId('clickable-links-restart');
     await expect(links).toBeChecked();
     await expect(offer).toHaveCount(0);
 

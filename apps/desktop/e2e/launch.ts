@@ -4,11 +4,12 @@ import { daemonPaths } from '@agent-board/daemon/paths';
 import { isProcessAlive } from '@agent-board/daemon/pid';
 import { scrubBoardSessionEnv } from '@agent-board/fake-harness';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import type { Design } from '../src/shared/design.ts';
 
 const appEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 /** `agent-board daemon`'s entry, which the app runs with its own executable as Node. */
@@ -105,12 +106,33 @@ export const test = base.extend<{ reap: void }>({
   ],
 });
 
+/** How the app opens, beyond its environment. */
+export interface LaunchOptions {
+  /** The Simplified design setting to open in: written into the data dir first, as a pick in Settings keeps it. */
+  design?: Design;
+  /** The Show technical details switch to open with, written as the design is. */
+  technical?: boolean;
+}
+
+/**
+ * The design a run opens every app in when a test doesn't pick one: `E2E_DESIGN=simplified` runs specs written for
+ * Classic under the Simplified design, to check what they drive still works there.
+ */
+export const runDesign = (): Design | undefined => (process.env.E2E_DESIGN === 'simplified' ? 'simplified' : undefined);
+
+/** Skips a test about Classic's own look in a run under the Simplified design (`E2E_DESIGN`). */
+export function classicOnly(): void {
+  test.skip(runDesign() === 'simplified', "about Classic's own look");
+}
+
 /**
  * Launches the built app on `dataDir`, so it never touches the real app-data dir, a real daemon or the real Codex hook
  * shim, and never raises a real OS notification. `args` are extra Electron/Chromium switches, placed before the app.
  */
-export function launchApp(dataDir: string, env: Record<string, string> = {}, args: string[] = []): Promise<ElectronApplication> {
+export function launchApp(dataDir: string, env: Record<string, string> = {}, args: string[] = [], { design = runDesign(), technical }: LaunchOptions = {}): Promise<ElectronApplication> {
   track(dataDir);
+  if (design !== undefined) writeFileSync(join(dataDir, 'design.json'), JSON.stringify({ design }));
+  if (technical !== undefined) writeFileSync(join(dataDir, 'technical.json'), JSON.stringify({ technical }));
   const launched = electron.launch({
     args: [...args, appEntry],
     env: {
@@ -197,10 +219,14 @@ export async function addEmptyZone(page: Page, name: string, color?: string): Pr
 
 /**
  * Puts a new agent or shell on the board with the toolbar's tool: arms it, then clicks the board at
- * `at` (relative to the board), near its top left by default.
+ * `at` (relative to the board), near its top left by default. Under the Simplified design the shell's tool is New
+ * terminal, in the New agent button's More to start menu.
  */
 export async function placeWithTool(page: Page, tool: 'New agent' | 'New shell', at?: { x: number; y: number }): Promise<void> {
-  await page.getByRole('button', { name: tool, exact: true }).click();
+  if (tool === 'New shell' && (await page.locator('html').getAttribute('data-design')) === 'simplified') {
+    await page.getByRole('button', { name: 'More to start' }).click();
+    await page.getByRole('menuitem', { name: 'New terminal' }).click();
+  } else await page.getByRole('button', { name: tool, exact: true }).click();
   // Clear of the islands at the board's corners, and of the empty board's welcome in its middle.
   await page.getByTestId('board-tool').click({ position: at ?? { x: 240, y: 240 } });
 }

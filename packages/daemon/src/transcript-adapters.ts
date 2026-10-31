@@ -1,5 +1,6 @@
 import { isObject } from './json.ts';
 import type { ChatEntry, Harness } from './protocol.ts';
+import { readSender } from './sender-marker.ts';
 
 /**
  * Versioned adapters from each harness's transcript to chat entries (ADR-0004). Both formats are internal to
@@ -93,11 +94,11 @@ export function createTranscriptParser(harness: Harness, options: TranscriptPars
 /**
  * The entries with the time their line was written, when it has one: both harnesses put a `timestamp` on each line.
  * Thinking also gets the latest time a line before it was written, any line, as the lines that start a turn aren't
- * all entries.
+ * all entries. A user message another agent sent says who from (`readSender`), in either harness's transcript.
  */
 function stamped(entries: ChatEntry[], timestamp: string | undefined, previousAt: string | undefined): ChatEntry[] {
   return entries.map((entry) => ({
-    ...entry,
+    ...(entry.kind === 'user' ? { ...entry, ...readSender(entry.text) } : entry),
     ...(timestamp === undefined ? {} : { at: timestamp }),
     ...(entry.kind === 'thinking' && previousAt !== undefined ? { since: previousAt } : {}),
   }));

@@ -23,8 +23,25 @@ const BLOCKED_BY_CLIENT = -20;
  */
 const HAND_OFF_MS = (!app.isPackaged && Number(process.env.AGENT_BOARD_HAND_OFF_MS)) || 30_000;
 
-/** Each web tab's session partition: its own, and in memory only, so nothing it keeps outlives the app. */
+/**
+ * The session web tabs share, kept on disk, so a login outlasts its tab and the app, as a browser's does: cleared only by
+ * Clear browsing data (`clearWebLogins`) or by turning Keep logins between sessions off. Named for how its cookies are
+ * kept: the packaged app encrypts them (the cookie encryption fuse, `electron-builder.yml`), the unpackaged one, which
+ * shares its data folder, can't read them, so each keeps a store of its own. Should the fuse ever change, so must the
+ * name: a store is never read by a build that keeps cookies the other way (ADR-0020).
+ */
+const SHARED_PARTITION = app.isPackaged ? 'persist:web' : 'persist:web-plain';
+
+/** A private web tab's, or a plan view's, session partition: its own, and in memory only, so nothing it keeps outlives it. */
 const partitionOf = (tabId: string) => `web-tab-${tabId}`;
+
+/** Clears the session web tabs share: its cookies, storage and cache, and any login kept for an HTTP auth prompt. */
+export async function clearWebLogins(): Promise<void> {
+  const shared = sessions.fromPartition(SHARED_PARTITION);
+  await shared.clearStorageData();
+  await shared.clearCache();
+  await shared.clearAuthCache();
+}
 
 /** What the tab says of a page it stopped going to `url`. */
 const blocked = (url: string) => `Blocked ${url}. ${WEB_TAB_RULE}`;
@@ -38,8 +55,12 @@ const planPages = new Map<string, string>();
 /** Partitions being cleared, by tab id: a tab opened again meanwhile waits for its own to be empty. */
 const clearing = new Map<string, Promise<void>>();
 
+/** The tabs whose page has a partition of its own (private web tabs and plan views), which goes as the tab does. */
+const ownPartitions = new Set<string>();
+
 /** Clears a tab's partition: its cookies, storage and cache. Electron keeps the session itself until the app quits. */
 function clearPartition(tabId: string): Promise<void> {
+  ownPartitions.delete(tabId);
   const partition = sessions.fromPartition(partitionOf(tabId));
   const cleared = (async () => {
     await partition.clearStorageData();
@@ -65,6 +86,8 @@ interface WebTab {
   passkey: ReturnType<typeof passkeyNotice>;
   /** Whether it shows an agent's plan, which goes nowhere: `load` takes it nowhere either. */
   plan: boolean;
+  /** Whether its page has a partition of its own, in memory, rather than the shared session. */
+  own: boolean;
 }
 
 /** How a kind of page is opened and held: what it loads, what it says of what it stopped, and its lockdown. */
@@ -97,19 +120,39 @@ const planKind = (tabId: string): ViewKind => ({
 /**
  * The web tabs' IPC: each tab's page is a `WebContentsView` of its own over the tab's area of the window
  * whose renderer opened it, which places it (`setBounds`) and hides it. Locked down (`web-lockdown.ts`): no Node, a
- * sandbox, no preload, no devtools, no dialogs, a partition of its own, https and this machine's http only. Its page
- * goes when its renderer takes it away, reloads or closes; its partition's data when the tab is closed (`forget`), or
- * its renderer reloads or closes, as nothing there can show it again. A tab moving to another window (slice
+ * sandbox, no preload, no devtools, no dialogs, https and this machine's http only. Its session is the one web tabs
+ * share, kept on disk, so logins last; a private tab's (or every tab's, with Keep logins between sessions off) is a
+ * partition of its own, in memory. Its page goes when its renderer takes it away, reloads or closes; a partition of its
+ * own goes with its data when the tab is closed (`forget`), or its renderer reloads or closes, as nothing there can show
+ * it again. The shared session is cleared only by `clearWebLogins`. A tab moving to another window (slice
  * 4) is handed off first (`handOff`): its page waits, hidden and kept from its window's going, for the window that
  * opens the tab next, which takes the page as it is. Its one injection is the passkey probe (`web-passkeys.ts`): a script
  * in the page, never a preload, that logs when it explicitly asks for a passkey.
  */
-export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents): boolean }): void {
+export function registerWebTabIpc({
+  isBoard,
+  isSettings,
+  keepLogins,
+  simplified = () => false,
+}: {
+  isBoard(contents: WebContents): boolean;
+  /** Whether `contents` is the Settings window's page, whose Clear browsing data empties the shared session. */
+  isSettings(contents: WebContents): boolean;
+  keepLogins(): Promise<boolean>;
+  /** Whether the Simplified design is on, whose window keys a page hands on too. */
+  simplified?(): boolean;
+}): {
+  stopKeepingLogins(): void;
+} {
   const tabs = new Map<string, WebTab>();
   /** Where each tab's renderer last placed its page, kept for one placed before its page was made (its effects' order). */
   const placed = new Map<string, WebTabBounds | null>();
-  /** The tabs being opened while their partition clears, each with its own mark: one taken away meanwhile is not made. */
+  /** The tabs being opened, while the setting is read and their own partition clears, each with its own mark: one taken away meanwhile is not made. */
   const opening = new Map<string, symbol>();
+  /** Where a tab being opened was sent meanwhile (`load`), which its page loads instead of what it was opened at. */
+  const sentWhileOpening = new Map<string, string>();
+  /** How many times Keep logins between sessions has gone off: a page whose open read it on and saw this change is made private. */
+  let stops = 0;
   /** The renderers whose going is already watched, so each takes its pages with it once. */
   const watched = new WeakSet<WebContents>();
   const lockedSessions = new WeakSet<Electron.Session>();
@@ -137,6 +180,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       ...(tab.problem === undefined ? {} : { problem: tab.problem }),
       ...(tab.offered === undefined ? {} : { offered: tab.offered }),
       ...(tab.passkey.shown ? { passkey: true } : {}),
+      ...(tab.own && !tab.plan ? { private: true } : {}),
     };
   };
   const tell = (tabId: string, tab: WebTab) => {
@@ -156,6 +200,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
 
   const destroy = (key: string) => {
     opening.delete(key);
+    sentWhileOpening.delete(key);
     placed.delete(key);
     const tab = tabs.get(key);
     if (tab === undefined) return;
@@ -165,7 +210,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
   };
   /** Whether the tab's page lives on elsewhere: handed off, or taken by another window since. */
   const livesOn = (tabId: string) => handedOff.has(tabId) || [...tabs.keys()].some((key) => key.endsWith(`:${tabId}`));
-  /** Its renderer gone or reloading, each of its tabs' pages goes, and its partition's data with it: not one that lives on elsewhere. */
+  /** Its renderer gone or reloading, each of its tabs' pages goes, and a partition of its own with its data: not one that lives on elsewhere. */
   const destroyAllOf = (owner: WebContents) => {
     const prefix = `${owner.id}:`;
     for (const key of new Set([...tabs.keys(), ...placed.keys()])) {
@@ -173,7 +218,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       destroy(key);
       if (livesOn(key.slice(prefix.length))) continue;
       planPages.delete(key.slice(prefix.length));
-      void clearPartition(key.slice(prefix.length)).catch(() => {});
+      if (ownPartitions.has(key.slice(prefix.length))) void clearPartition(key.slice(prefix.length)).catch(() => {});
     }
   };
   /** Its pages go with the renderer: when it goes, and when it reloads, as nothing there lays them out any more. */
@@ -221,7 +266,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
    * its view, locked down for what it shows, over the tab's area, or its page as it was when handed off from another
    * window. A plan is served from memory (`planPages`), and a reload serves it again.
    */
-  const openView = async (event: IpcMainInvokeEvent, tabId: string, page: { url: string } | { plan: string }) => {
+  const openView = async (event: IpcMainInvokeEvent, tabId: string, page: { url: string; private: boolean } | { plan: string }) => {
     const owner = event.sender;
     const key = keyOf(owner, tabId);
     // Handed off from another window: its page comes as it is, where it had got to. One that went with the window it
@@ -240,23 +285,36 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       adopt(tabId, owner, window, key);
       return;
     }
-    // Its window reloaded, its partition may still be clearing: its page starts on an empty one, unless taken away first.
-    const pending = clearing.get(tabId);
-    if (pending !== undefined) {
-      const mark = Symbol(tabId);
-      opening.set(key, mark);
-      await pending.catch(() => {});
-      if (opening.get(key) !== mark || owner.isDestroyed()) return;
-    }
+    // A web page shares the kept session unless it is private, or Keep logins between sessions is off (or can't be
+    // read). Its window reloaded, its own partition may still be clearing: its page starts on an empty one. Either
+    // way, unless taken away first.
+    const mark = Symbol(tabId);
+    opening.set(key, mark);
+    const stopsBefore = stops;
+    let own = 'plan' in page || page.private || !(await keepLogins().catch(() => false));
+    await clearing.get(tabId)?.catch(() => {});
+    if (opening.get(key) !== mark || owner.isDestroyed()) return;
+    // The setting went off while it was read: the page isn't in `tabs` yet for that to move it, so it starts private.
+    if (stops !== stopsBefore) own = true;
+    opening.delete(key);
     const window = BrowserWindow.fromWebContents(owner);
     if (window === null) throw new Error('no window to show a web tab in');
+    const sent = sentWhileOpening.get(key);
+    sentWhileOpening.delete(key);
+    makeView(owner, window, key, tabId, 'url' in page ? webKind(sent ?? page.url) : planKind(tabId), own);
+  };
+
+  /** Makes the tab's page, in `window` for the renderer `owner`, as `kind` says, in a partition of its own (`own`) or the shared session, in place of any it had. */
+  const makeView = (owner: WebContents, window: BrowserWindow, key: string, tabId: string, kind: ViewKind, own: boolean) => {
+    if (own) ownPartitions.add(tabId);
+    else ownPartitions.delete(tabId);
     const bounds = placed.get(key);
     destroy(key);
     if (bounds !== undefined) placed.set(key, bounds);
     watch(owner);
     const view = new WebContentsView({
       webPreferences: {
-        partition: partitionOf(tabId),
+        partition: own ? partitionOf(tabId) : SHARED_PARTITION,
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -271,8 +329,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       },
     });
     window.contentView.addChildView(view);
-    const kind = 'url' in page ? webKind(page.url) : planKind(tabId);
-    const tab: WebTab = { view, window, owner, asked: kind.asked, problem: undefined, offered: undefined, passkey: passkeyNotice(() => tell(tabId, tab)), plan: kind.plan };
+    const tab: WebTab = { view, window, owner, asked: kind.asked, problem: undefined, offered: undefined, passkey: passkeyNotice(() => tell(tabId, tab)), plan: kind.plan, own };
     tabs.set(key, tab);
     place(tab, placed.get(key) ?? null);
 
@@ -314,7 +371,7 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
       changed();
     });
     contents.on('before-input-event', (input, key) => {
-      const action = webKey(key);
+      const action = webKey(key, undefined, simplified());
       if (action === undefined) return;
       input.preventDefault();
       // A held key acts once, as in the window.
@@ -331,10 +388,11 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     void contents.loadURL(kind.asked).catch(() => {});
   };
 
-  ipcMain.handle(WEB_TAB_IPC.open, async (event, tabId: unknown, url: unknown) => {
+  ipcMain.handle(WEB_TAB_IPC.open, async (event, tabId: unknown, url: unknown, options: unknown) => {
     if (typeof tabId !== 'string' || !TAB_ID.test(tabId)) throw new Error(`not a web tab's id: ${String(tabId)}`);
     if (typeof url !== 'string' || !isWebTabUrl(url)) throw new Error(blocked(String(url)));
-    await openView(event, tabId, { url });
+    const isPrivate = typeof options === 'object' && options !== null && (options as { private?: unknown }).private === true;
+    await openView(event, tabId, { url, private: isPrivate });
   });
 
   // An agent's HTML plan, from the renderer, which read it from the daemon: drawn as a web tab's page is, but
@@ -357,7 +415,15 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
 
   ipcMain.handle(WEB_TAB_IPC.load, (event, tabId: unknown, url: unknown) => {
     const tab = tabOf(event, tabId);
-    if (tab === undefined || tab.plan) return;
+    if (tab === undefined) {
+      // Sent while its page is still being made: the page loads it as it is made.
+      const key = keyFor(event, tabId);
+      if (key === undefined || !opening.has(key)) return;
+      if (typeof url !== 'string' || !isWebTabUrl(url)) throw new Error(blocked(String(url)));
+      sentWhileOpening.set(key, url);
+      return;
+    }
+    if (tab.plan) return;
     if (typeof url !== 'string' || !isWebTabUrl(url)) throw new Error(blocked(String(url)));
     tab.asked = url;
     tab.problem = undefined;
@@ -430,11 +496,33 @@ export function registerWebTabIpc({ isBoard }: { isBoard(contents: WebContents):
     }
     adopt(tabId, tab.owner, tab.window, from);
   });
+  // Settings' Clear browsing data, from the Settings window alone: the shared session's logins, cookies, storage and cache.
+  ipcMain.handle(WEB_TAB_IPC.clearData, async (event) => {
+    if (!isSettings(event.sender)) throw new Error('only Settings clears browsing data');
+    await clearWebLogins();
+  });
   ipcMain.handle(WEB_TAB_IPC.forget, async (event, tabId: unknown) => {
     const key = keyFor(event, tabId);
     if (key === undefined) return;
     destroy(key);
     planPages.delete(tabId as string);
-    await clearPartition(tabId as string);
+    if (ownPartitions.has(tabId as string)) await clearPartition(tabId as string);
   });
+
+  return {
+    /**
+     * Keep logins between sessions went off: every web page in the shared session is made again in a partition of its
+     * own, at the page it was at, signed out; one handed off goes, to load afresh, privately, when its window opens.
+     * Nothing open writes to the shared session after, nor does a page still being opened.
+     */
+    stopKeepingLogins() {
+      stops += 1;
+      for (const [tabId, { tab }] of [...handedOff]) if (!tab.own) expire(tabId);
+      for (const [key, tab] of [...tabs]) {
+        if (tab.own || tab.window.isDestroyed() || tab.owner.isDestroyed()) continue;
+        const at = tab.view.webContents.getURL();
+        makeView(tab.owner, tab.window, key, key.slice(key.indexOf(':') + 1), webKind(at !== '' && isWebTabUrl(at) ? at : tab.asked), true);
+      }
+    },
+  };
 }

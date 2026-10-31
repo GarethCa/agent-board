@@ -7,14 +7,17 @@ import { describeBuild } from '@agent-board/daemon/protocol';
 import { spawnDetachedDaemon } from '@agent-board/daemon/spawn';
 import { stopDaemon } from '@agent-board/daemon/stop';
 import { appearanceFrom, appearanceQuery, themeFor } from '../shared/appearance';
+import { deskFor } from '../shared/design';
 import { APP_NAME } from '../shared/brand';
 import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
 import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
 import { registerAgentIpc, registerAgentOpening } from './agents';
 import { registerAppearance } from './appearance';
+import { registerDesign } from './design';
+import { registerTechnical } from './technical';
 import { backgroundMode, enterBackgroundMode, headless, revealWindow } from './background';
 import { BUILD } from './build';
-import { chromeOptions } from './chrome';
+import { chromeOptions, type ChromeFor } from './chrome';
 import { registerExternalIpc } from './external';
 import { registerConnectorIpc } from './connectors';
 import { registerFlowEdgeIpc } from './flow-edges';
@@ -31,11 +34,12 @@ import { registerImageProtocol, registerImageScheme, registerItemIpc } from './i
 import { guardWindow } from './links';
 import { createNotifier, registerNotifications } from './notifications';
 import { registerSessionIpc } from './sessions';
+import { registerSettingsWindow } from './settings-window';
 import { registerSetupIpc, setAppMenu } from './setup';
 import { registerShellIpc } from './shells';
 import { registerTrackerIpc } from './trackers';
 import { daemonViewState, registerViewIpc } from './view';
-import { registerWebTabIpc } from './web-tabs';
+import { clearWebLogins, registerWebTabIpc } from './web-tabs';
 import { registerTabDragIpc } from './tab-drags';
 import { registerWindowIpc } from './windows';
 import { registerZoneIpc } from './zones';
@@ -77,6 +81,9 @@ const daemon = createDaemonLink(daemonConnection);
 /** The narrowest the board's window gets: the bottom bar's zones pill, dock and zoom bar fit side by side down to here. */
 const BOARD_MIN_SIZE = { minWidth: 640, minHeight: 480 };
 
+/** The narrowest the Settings window gets: its sidebar and a page of rows still fit side by side. */
+const SETTINGS_MIN_SIZE = { minWidth: 620, minHeight: 400 };
+
 /** Opens a renderer window: the board, or with `query` set, one view of it such as a popped-out session window. */
 function openWindow(
   query: Record<string, string> = {},
@@ -90,6 +97,7 @@ function openWindow(
     offscreenScale,
   }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean; offscreenScale?: number } = {},
 ): BrowserWindow {
+  const kind: ChromeFor = WINDOW_QUERY.popOut in query ? 'pop-out' : WINDOW_QUERY.settings in query ? 'settings' : 'board';
   const window = new BrowserWindow({
     width,
     height,
@@ -100,10 +108,10 @@ function openWindow(
     ...(hidden ? { useContentSize: true, enableLargerThanScreen: true } : {}),
     // A recorded window may be bigger than the screen: it is never shown.
     ...(offscreenScale === undefined ? {} : { enableLargerThanScreen: true }),
-    // The desk of the theme it opens in, so it never flashes the other one before the page paints.
-    backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
-    ...chromeOptions(process.platform, WINDOW_QUERY.popOut in query ? 'pop-out' : 'board'),
-    ...(WINDOW_QUERY.popOut in query || hidden ? {} : BOARD_MIN_SIZE),
+    // The desk of the theme and design it opens in, so it never flashes another before the page paints.
+    backgroundColor: deskFor(design.current(), themeFor(appearance.current(), nativeTheme.shouldUseDarkColors)),
+    ...chromeOptions(process.platform, kind),
+    ...(kind === 'settings' ? SETTINGS_MIN_SIZE : kind === 'pop-out' || hidden ? {} : BOARD_MIN_SIZE),
     // Background mode shows the window without focus once it has loaded; headless mode never shows it.
     show: !backgroundMode && !hidden,
     webPreferences: {
@@ -132,8 +140,14 @@ function openWindow(
       ? target.origin === new URL(devServerUrl).origin
       : target.protocol === 'file:' && target.pathname === pathToFileURL(rendererFile).pathname;
   });
-  // The Appearance setting it opens in, for its first paint (renderer/src/themes.ts); later picks reach it as they happen.
-  const withAppearance = { ...query, [WINDOW_QUERY.appearance]: appearanceQuery(appearance.current()) };
+  // The Appearance, design and technical details settings it opens in, for its first paint (renderer/src/themes.ts,
+  // design.ts, technical.ts); later picks reach it as they happen.
+  const withAppearance = {
+    ...query,
+    [WINDOW_QUERY.appearance]: appearanceQuery(appearance.current()),
+    [WINDOW_QUERY.design]: design.current(),
+    [WINDOW_QUERY.technical]: String(technical.current()),
+  };
   if (devServerUrl) {
     void window.loadURL(`${devServerUrl}?${new URLSearchParams(withAppearance)}`);
   } else {
@@ -194,7 +208,34 @@ registerGateIpc(daemon);
 registerAskIpc(daemon);
 registerUnsavedPlanEditIpc();
 // The board's window may hand off any window's web tab, as it makes every move.
-registerWebTabIpc({ isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents });
+// Web tabs keep logins in a shared session while Settings says to, read as each opens. Turned off, the pages in it move
+// to sessions of their own and it is emptied, once, not again at every other setting's change while it stays off; and
+// emptied as the app connects while it is off, should anything have been left in it.
+let keptWebLogins: boolean | undefined;
+const settingsWindow = registerSettingsWindow({ open: openWindow });
+const webTabs = registerWebTabIpc({
+  isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents,
+  isSettings: settingsWindow.isSettings,
+  keepLogins: async () => (await daemon.call('settings.get')).keepWebLogins,
+  // Read as a key is pressed, after `design` is registered below.
+  simplified: () => design.current() === 'simplified',
+});
+const followKeepLogins = (keep: boolean) => {
+  if (!keep && keptWebLogins !== false) {
+    webTabs.stopKeepingLogins();
+    void clearWebLogins().catch(() => {});
+  }
+  keptWebLogins = keep;
+};
+daemon.onEvent((event) => {
+  if (event.type === 'settings.updated') followKeepLogins(event.settings.keepWebLogins);
+});
+daemon.onConnected(() => {
+  daemon.call('settings.get').then(
+    (settings) => followKeepLogins(settings.keepWebLogins),
+    () => {},
+  );
+});
 registerOrchestratorIpc(daemon);
 registerAgentIpc(daemon, dataDir);
 registerShellIpc(daemon);
@@ -205,6 +246,8 @@ registerSetupIpc(daemon, notify);
 // Before any window opens. Tests pin the theme with AGENT_BOARD_APPEARANCE, the default when nothing was picked, so a
 // machine in dark mode doesn't change their screenshots.
 const appearance = registerAppearance(dataDir, appearanceFrom(process.env.AGENT_BOARD_APPEARANCE));
+const design = registerDesign(dataDir);
+const technical = registerTechnical(dataDir);
 const view = daemonViewState(daemon);
 registerViewIpc(view);
 const poppedWindows = registerWindowIpc({
@@ -228,7 +271,7 @@ let stopNotifications: (() => void) | undefined;
 void app.whenReady().then(() => {
   registerImageProtocol(dataDir);
   stopNotifications = registerNotifications(daemon, notify, openAgent, () => revealWindow(board ?? openBoard()));
-  setAppMenu(() => board ?? openBoard());
+  setAppMenu(() => board ?? openBoard(), () => settingsWindow.show(), { design, technical });
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
   openBoard();

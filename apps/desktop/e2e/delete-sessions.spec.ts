@@ -152,7 +152,7 @@ test('⌫ inside a session window never deletes its session, even with focus in 
     await expect(shellTiles(window).getByRole('button', { name: 'Pop out' })).toBeVisible();
     await expect(shellTiles(window).getByRole('button', { name: /^Delete/ })).toHaveCount(0);
     await shellTiles(window).getByRole('button', { name: 'More' }).click();
-    await expect(window.getByRole('menuitem', { name: 'Pop out' })).toHaveCount(0);
+    await expect(window.getByRole('menuitem', { name: 'Pop out' })).toBeVisible();
     await window.getByRole('menuitem', { name: 'Delete shell' }).click();
     const confirm = window.getByRole('alertdialog', { name: 'Delete shell?' });
     await expect(confirm).toContainText('still has running shells');
@@ -182,7 +182,7 @@ test('a plain click selects an agent tile and ⌫ asks to delete it; the hover r
     await expect(tile(window).getByRole('button', { name: /^Delete/ })).toHaveCount(0);
     await tile(window).getByRole('button', { name: 'More' }).click();
     await expect(window.getByRole('menuitem', { name: 'Delete agent' })).toBeVisible();
-    await expect(window.getByRole('menuitem', { name: 'Pop out' })).toHaveCount(0);
+    await expect(window.getByRole('menuitem', { name: 'Pop out' })).toBeVisible();
     await window.keyboard.press('Escape');
 
     // One plain click, then ⌫: the confirmation shows.

@@ -1,4 +1,4 @@
-// How every chat view shows an agent's states, one choice for the app: picked in Settings › Chat or from the switch
+// How every chat view shows an agent's states, one choice for the app: picked in Settings › Agents › Chat or from the switch
 // over a chat, and heard by every window.
 
 import { useSyncExternalStore } from 'react';

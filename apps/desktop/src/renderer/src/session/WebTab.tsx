@@ -4,7 +4,7 @@ import type { WebSurface } from '@agent-board/daemon/window-layout';
 import { keptWebUrl, WEB_TAB_RULE, webTabLabel, webTabUrl } from '@agent-board/daemon/web-url';
 import type { WebTabKey, WebTabState } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
-import { Button, ErrorText, IconButton, Input } from '../ui';
+import { Button, ErrorText, IconButton, Input, Tag } from '../ui';
 import { newWebTabs, type LocalServer } from './tabs';
 import { useWebViewBounds } from './use-web-view';
 
@@ -82,7 +82,9 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
         onKey: (key) => {
           if (!latest.current.onPaneKey(key)) host.current?.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }));
         },
-      });
+      },
+      { private: web.private === true },
+    );
     return () => {
       close();
       keep();
@@ -132,6 +134,11 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
         <IconButton icon={<ArrowLeft />} aria-label="Back" size="xs" disabled={!state.canGoBack} onClick={() => run(() => window.agentBoard.webTabs.back(web.id))} />
         <IconButton icon={<ArrowRight />} aria-label="Forward" size="xs" disabled={!state.canGoForward} onClick={() => run(() => window.agentBoard.webTabs.forward(web.id))} />
         <IconButton icon={<RotateCw />} aria-label="Reload" size="xs" disabled={blank} onClick={() => run(() => window.agentBoard.webTabs.reload(web.id))} />
+        {(web.private === true || state.private === true) && (
+          <Tag data-testid="web-private" title="A private tab: no login or cookie outlasts it">
+            Private
+          </Tag>
+        )}
         <Input
           size="sm"
           className="web-address"

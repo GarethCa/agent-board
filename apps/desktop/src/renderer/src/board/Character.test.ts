@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Agent, Subagent } from '@agent-board/daemon/protocol';
-import { Character, CHARACTER_POSES } from './Character';
+import { Captain, CAPTAIN_SIZES, Character, CHARACTER_POSES } from './Character';
 import { CharacterGallery } from './CharacterGallery';
 import { HybridTile } from './HybridTile';
 import { MAX_PERCHED } from './perch';
@@ -57,6 +57,40 @@ describe('the character gallery', () => {
     const drawings = gallery.filter((c) => c.attributes['data-body'] === 'bean').map((c) => c.drawing);
     expect(drawings).toHaveLength(CHARACTER_POSES.length);
     expect(new Set(drawings).size).toBe(CHARACTER_POSES.length);
+  });
+});
+
+/** Every paint in rendered markup: each `fill` and `stroke`, as an attribute or in a `style`. */
+const paints = (html: string) => [...html.matchAll(/(?:^|[\s;"])(?:fill|stroke)(?:="|:)([^";]+)/g)].map(([, paint]) => paint!.trim());
+
+describe('the palette', () => {
+  it("paints each pose only with the figure's tokens, its harness's colour and the state it shows", () => {
+    const html = renderToStaticMarkup(createElement(CharacterGallery));
+    expect(new Set(paints(html).filter((paint) => !/^var\(--(figure-(ink|paper)|harness-(claude|codex)|state-[\w-]+)\)$/.test(paint)))).toEqual(new Set(['none']));
+  });
+
+  it("paints the Captain only in Claude's orange and the figure's ink, paper and hat: no skin tones", () => {
+    const html = renderToStaticMarkup(createElement(Captain, { size: 'avatar' }));
+    expect(new Set(paints(html))).toEqual(new Set(['var(--harness-claude)', 'var(--figure-ink)', 'var(--figure-paper)', 'var(--figure-hat)', 'var(--figure-hat-emblem)', 'none']));
+  });
+});
+
+describe('the Captain', () => {
+  it('is drawn at a size for each place it appears, as tall as that place asks and a whole number of pixels wide', () => {
+    for (const [size, height] of Object.entries(CAPTAIN_SIZES)) {
+      const html = renderToStaticMarkup(createElement(Captain, { size: size as keyof typeof CAPTAIN_SIZES }));
+      expect(html).toMatch(new RegExp(`<svg[^>]*data-testid="captain"[^>]*width="\\d+" height="${height}"`));
+    }
+  });
+
+  it('is named for screen readers', () => {
+    expect(renderToStaticMarkup(createElement(Captain, { size: 'toolbar' }))).toMatch(/<svg[^>]*role="img"[^>]*aria-label="The Captain"/);
+  });
+
+  it('stands in the gallery at every size under the Simplified design, and is absent from it otherwise', () => {
+    const shown = renderToStaticMarkup(createElement(CharacterGallery, { captain: true }));
+    expect([...shown.matchAll(/data-testid="captain" data-size="([\w-]+)"/g)].map(([, size]) => size)).toEqual(Object.keys(CAPTAIN_SIZES));
+    expect(renderToStaticMarkup(createElement(CharacterGallery))).not.toContain('data-testid="captain"');
   });
 });
 
@@ -142,6 +176,7 @@ describe('subagents on a Hybrid tile', () => {
         trustFolder: null,
         trustedByZone: false,
         queuedUntilUp: 0,
+        messagesWaiting: 0,
         undelivered: [],
         status: null,
         workFinishedAt: null,

@@ -26,6 +26,8 @@ export interface SessionNav {
   zoneId: string | null;
   previous: NavStep;
   next: NavStep;
+  /** Every session of the group, it too, in board order. */
+  group: WindowTarget[];
 }
 
 /**
@@ -58,5 +60,5 @@ export function sessionNav(sessions: readonly NavSession[], id: string, skip: Re
   const index = group.findIndex((session) => session.target.id === id);
   const count = group.length;
   const stepTo = (to: number): NavStep => ({ target: group[(to + count) % count]!.target, wrapped: to < 0 || to >= count });
-  return { index, count, zoneId, previous: stepTo(index - 1), next: stepTo(index + 1) };
+  return { index, count, zoneId, previous: stepTo(index - 1), next: stepTo(index + 1), group: group.map((session) => session.target) };
 }

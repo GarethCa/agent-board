@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Field } from '../ui';
 
 /**
- * Settings › Command line: links the `agent-board` CLI into `~/.local/bin`, as VS Code installs `code`, for terminals
+ * Settings › Advanced › Command line: links the `agent-board` CLI into `~/.local/bin`, as VS Code installs `code`, for terminals
  * outside the app. Sessions the app starts have it already.
  */
 export function CliInstallSetting({ onError }: { onError: (action: string) => (error: unknown) => void }) {

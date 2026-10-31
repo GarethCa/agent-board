@@ -51,7 +51,7 @@ test("a reviewer spawned from an implementer's tile leaves its doc and ends; the
     await viewer.getByRole('button', { name: 'Send to implementer' }).click();
     await expect
       .poll(async () => (await agents(window)).find((agent) => agent.sessionId === coderAgent!.sessionId)?.lastMessage, { timeout: REVIEW_MS })
-      .toMatch(/^Done: Hand-off from Write the code · review r1 \(its review, round 1\): # Review of the work so far Verdict: Changes requested/);
+      .toMatch(/^Done: ⟨hand-off from Write the code · review r1 · agent:[0-9a-f-]+⟩ Hand-off from Write the code · review r1 \(its review, round 1\): # Review of the work so far Verdict: Changes requested/);
     await expect(viewer.getByTestId('review-round').first()).toContainText('sent');
 
     // The terminal is a tab away, still attached.

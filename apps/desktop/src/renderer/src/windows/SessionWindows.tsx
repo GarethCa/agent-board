@@ -374,6 +374,11 @@ export function SessionWindowsLayer({
       zone: zone && { name: zone.name, color: zone.color },
       previous: side(where.previous.target),
       next: side(where.next.target),
+      members: where.group.map((target) => {
+        const subject = contentOf(target);
+        const agent = subject?.kind === 'session' ? subject.agent : undefined;
+        return { id: target.id, ...side(target), agent, onShow: () => target.id !== from.id && switchTo(from.id, target) };
+      }),
       onStep(direction) {
         const to = direction === 1 ? where.next : where.previous;
         switchTo(from.id, to.target);

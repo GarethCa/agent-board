@@ -9,18 +9,16 @@ import { BoardMenu, type BoardMenuState } from './BoardMenu';
 import { CreateToolbar, type CreateToolbarProps } from './CreateToolbar';
 import { EmptyBoard } from './EmptyBoard';
 import { NeedsYou } from './NeedsYou';
+import type { PaneSide } from '../master/use-master-panel';
 import { BoardSpotlight } from './BoardSpotlight';
 import type { SpotlightHandle } from './Spotlight';
 import { Onboarding } from '../onboarding/Onboarding';
 import { onboardingState, shouldOpenOnboarding, type OnboardingState } from '../onboarding/first-run';
 import { SampleBoard } from '../onboarding/SampleBoard';
+import { setCrewLook, setViewSetting, useViewSettings } from '../board/view-settings';
 import { ZoneJump } from './ZoneJump';
 import { ZoomControls } from './ZoomControls';
 import type { ZoneSource } from './zones';
-import type { ClickOpens } from '../board/click-opens';
-import type { ConnectionsView } from '../board/connections-view';
-import type { CrewLook } from '../board/crew-view';
-import type { AgentNoteLook } from '../board/items/agent-note-look';
 
 export interface BoardChromeProps extends CreateToolbarProps {
   /** Whether the board has loaded: until then only the board menu shows, with the daemon's status. */
@@ -38,8 +36,12 @@ export interface BoardChromeProps extends CreateToolbarProps {
   zones: readonly Zone[];
   agents: readonly Agent[];
   /** The Captain's panel: whether it is open, and the Captain button's toggle. */
-  masterOpen: boolean;
+  /** Which side the docked pane shows, or undefined while it is shut. */
+  pane: PaneSide | undefined;
   onMaster(): void;
+  onNeedsYou(): void;
+  /** Opens the Settings window, or brings it forward, on the pane it last showed. */
+  onSettings(): void;
   /** Undefined until the board has listed them. */
   shells: readonly Shell[] | undefined;
   /** Opens Add zone in the middle of the view, on the source's tab (GitHub without one). */
@@ -62,17 +64,6 @@ export interface BoardChromeProps extends CreateToolbarProps {
   onRunInShell(command: string): Promise<string | undefined>;
   /** Closes a session window, leaving its tile on the board. */
   onCloseWindow(id: string): void;
-  /** What a double-click on an agent's or shell tile opens, for Settings, and picks it. */
-  clickOpens: ClickOpens;
-  onClickOpens(value: ClickOpens): void;
-  crewLook: CrewLook;
-  onCrewLook(value: CrewLook): void;
-  agentNoteLook: AgentNoteLook;
-  onAgentNoteLook(value: AgentNoteLook): void;
-  connections: ConnectionsView;
-  onConnections(value: ConnectionsView): void;
-  /** When something on the board last asked for Settings (a zone's menu): the board menu opens on it each time it changes. */
-  settingsAsked?: number;
 }
 
 /**
@@ -81,13 +72,11 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterOpen, onMaster, shells, onAddZone, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, clickOpens, onClickOpens, crewLook, onCrewLook, connections, onConnections, agentNoteLook, onAgentNoteLook, settingsAsked, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, onMaster, onNeedsYou, onSettings, shells, onAddZone, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
-  useEffect(() => {
-    if (settingsAsked !== undefined) setMenu({ open: true, at: 'settings', asked: settingsAsked });
-  }, [settingsAsked]);
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
+  const { connections, crewLook } = useViewSettings();
 
   const spotlight = useRef<SpotlightHandle>(null);
 
@@ -120,26 +109,18 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, masterO
         onArrangeBoard={onArrangeBoard}
         onOpenAgent={onOpenAgent}
         onOpenShell={onOpenShell}
-        onError={onError}
-        clickOpens={clickOpens}
-        onClickOpens={onClickOpens}
-        crewLook={crewLook}
-        onCrewLook={onCrewLook}
-        agentNoteLook={agentNoteLook}
-        onAgentNoteLook={onAgentNoteLook}
-        connections={connections}
-        onConnections={onConnections}
         onGettingStarted={onboarding.state?.showInMenu ? onboarding.reopen : undefined}
         onFind={() => spotlight.current?.open()}
+        onSettings={onSettings}
       />
       {loaded && <BoardSpotlight ref={spotlight} agents={agents} shells={shells} zones={zones} />}
       {loaded && (
         <>
           <CreateToolbar {...toolbar} />
-          <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={() => setMenu({ open: true, at: 'settings', asked: performance.now() })} onMaster={onMaster} masterOpen={masterOpen} />
+          <NeedsYou agents={agents} onOpen={onOpenAgent} onSettings={onSettings} onMaster={onMaster} onNeedsYou={onNeedsYou} pane={pane} />
           <ZoneJump zones={zones} current={currentZone} onJump={onJump} onKeyboardHelp={onKeyboardHelp} />
-          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={onConnections} crewLook={crewLook} onCrewLook={onCrewLook} />
-          {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} />}
+          <ZoomControls nodeColor={minimapColor} grid={grid} onGrid={onGrid} connections={connections} onConnections={(value) => setViewSetting('connections', value)} crewLook={crewLook} onCrewLook={setCrewLook} />
+          {empty && !onboarding.open && <EmptyBoard onAddZone={onAddZone} onTool={toolbar.onTool} />}
           {onboarding.open && onboarding.state !== undefined && (
             <Onboarding
               showInMenu={onboarding.state.showInMenu}

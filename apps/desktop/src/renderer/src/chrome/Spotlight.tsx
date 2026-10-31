@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Settings } from 'lucide-react';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
@@ -9,9 +9,11 @@ import { inOverlay } from '../keys';
 import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
-import { Kbd, StatusPill, Tag } from '../ui';
+import { useSimplified } from '../design';
+import { Kbd, StatusPill, Tag, useToast } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
-import { spotlightGroups, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
+import { errorMessage } from '../../../shared/errors';
+import { SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
 
 /**
  * Where ⌘K was pressed, as the window it opens in reads it: what ↵ does there, and the session that view shows already.
@@ -24,6 +26,9 @@ export interface SpotlightPlace<C> {
   /** The row key of the session the view shows already (`agent:<session id>`, `shell:<id>`): picking it only closes. */
   current?: string;
 }
+
+/** The key of the "New agent named …" row, among the rows' keys as ↑↓ move through them. */
+const NEW_AGENT_KEY = 'new-agent';
 
 /** Opens the switcher from a control, such as the board menu's Find, as ⌘K does. */
 export interface SpotlightHandle {
@@ -40,9 +45,9 @@ export interface SpotlightProps<C> {
   placeOf(at: Element | null): SpotlightPlace<C>;
   /**
    * Does what ↵ (with `open`, ⌘↵) asks of the subject. False (now, or once it has asked the main process) if it showed
-   * nothing here, and the focus goes back.
+   * nothing here, and the focus goes back. A setting is the switcher's own to open, from every window.
    */
-  onPick(context: C, subject: SpotlightSubject, open: boolean): boolean | Promise<boolean>;
+  onPick(context: C, subject: BoardSubject, open: boolean): boolean | Promise<boolean>;
   /** Whether a new agent can start from here: "New agent named …" is offered only then. */
   canStartAgent: boolean;
   onNewAgent(context: C, name: string): void;
@@ -80,7 +85,8 @@ function focusKeeper(at: Element | null): () => void {
 
 /**
  * ⌘K, a Spotlight-style switcher over any window of the app: a search field over the sessions and
- * zones, grouped before anything is typed and ranked once something is, live as they change. It opens wherever the
+ * zones, grouped before anything is typed and ranked once something is, live as they change, with the settings that
+ * match under them; a setting picked opens the Settings window at its section. It opens wherever the
  * focus is, a terminal or a web tab's page too, and Esc gives the focus back where it was. What ↵ does is the
  * window's: the board's shows the tile or switches the view in focus (`BoardSpotlight`), a popped-out window switches
  * its session (`PopOutSpotlight`).
@@ -120,13 +126,21 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
   }, []);
 
   const shows = useNeedsYouShows();
-  const groups = useMemo(() => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows }), [query, agents, shells, zones, shows]);
+  const simplified = useSimplified();
+  const groups = useMemo(
+    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, simplified }),
+    [query, agents, shells, zones, shows, simplified],
+  );
   const rows = groups.flatMap((group) => group.rows);
-  // Kept by key as the rows change under it; the first once it has gone.
-  const active = rows.find((row) => row.key === activeKey) ?? rows[0];
   const place = opened?.place;
   const newName = query.trim();
-  const offerNew = rows.length === 0 && newName !== '' && canStartAgent;
+  // Offered whenever no session or zone matches, settings or not: first, so ↵ still starts it.
+  const offerNew = newName !== '' && canStartAgent && groups.every((group) => group.label === SETTINGS_GROUP);
+  const keys = [...(offerNew ? [NEW_AGENT_KEY] : []), ...rows.map((row) => row.key)];
+  // Kept by key as the rows change under it; the first once it has gone.
+  const activeKeyNow = activeKey !== undefined && keys.includes(activeKey) ? activeKey : keys[0];
+  const active = rows.find((row) => row.key === activeKeyNow);
+  const toasts = useToast();
 
   /** Closes it, the focus back where it was. */
   function dismiss(from: Opened<C>) {
@@ -138,7 +152,19 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
     if (opened === undefined) return;
     if (row.key === opened.place.current) return dismiss(opened);
     setOpened(undefined);
-    void Promise.resolve(onPick(opened.place.context, row.subject, open)).then((shown) => shown || requestAnimationFrame(opened.restore));
+    const { subject } = row;
+    // The Settings window comes forward with the focus; if it can't, it says so and the focus goes back here.
+    const shown =
+      subject.kind === 'setting'
+        ? window.agentBoard.setup.openSettings(subject.pane).then(
+            () => true,
+            (error: unknown) => {
+              toasts.show({ id: 'open Settings', tone: 'error', message: `Could not open Settings: ${errorMessage(error)}` });
+              return false;
+            },
+          )
+        : onPick(opened.place.context, subject, open);
+    void Promise.resolve(shown).then((done) => done || requestAnimationFrame(opened.restore));
   }
 
   function startNew() {
@@ -148,16 +174,16 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
   }
 
   const onKeyDown = (event: ReactKeyboardEvent) => {
-    const index = active === undefined ? -1 : rows.indexOf(active);
+    const index = activeKeyNow === undefined ? -1 : keys.indexOf(activeKeyNow);
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      if (rows.length === 0) return;
+      if (keys.length === 0) return;
       const step = event.key === 'ArrowDown' ? 1 : -1;
-      setActiveKey(rows[(index + step + rows.length) % rows.length]!.key);
+      setActiveKey(keys[(index + step + keys.length) % keys.length]!);
     } else if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
       event.preventDefault();
       if (active !== undefined) pick(active, event.metaKey || event.ctrlKey);
-      else if (offerNew) startNew();
+      else if (activeKeyNow === NEW_AGENT_KEY) startNew();
     }
   };
 
@@ -190,7 +216,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
               aria-label="Jump to a session or zone"
               aria-expanded
               aria-controls={listId}
-              aria-activedescendant={active === undefined ? undefined : `${listId}-${active.key}`}
+              aria-activedescendant={activeKeyNow === undefined ? undefined : `${listId}-${activeKeyNow}`}
               aria-autocomplete="list"
               placeholder="Jump to a session or zone…"
               spellCheck={false}
@@ -207,6 +233,26 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
             </span>
           </div>
           <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions and zones">
+            {offerNew && (
+              <div
+                id={`${listId}-${NEW_AGENT_KEY}`}
+                className="spotlight-row"
+                role="option"
+                aria-selected={activeKeyNow === NEW_AGENT_KEY}
+                data-active={activeKeyNow === NEW_AGENT_KEY || undefined}
+                data-testid="spotlight-new-agent"
+                onPointerMove={activeKeyNow === NEW_AGENT_KEY ? undefined : () => setActiveKey(NEW_AGENT_KEY)}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={startNew}
+              >
+                <span className="spotlight-mark" aria-hidden>
+                  <Plus />
+                </span>
+                <span className="spotlight-main">
+                  <span className="spotlight-name">New agent named ‘{newName}’</span>
+                </span>
+              </div>
+            )}
             {groups.map((group, index) => (
               <Fragment key={group.label ?? index}>
                 {group.label !== undefined && (
@@ -216,30 +262,11 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
                   </div>
                 )}
                 {group.rows.map((row) => (
-                  <Row key={row.key} id={`${listId}-${row.key}`} row={row} active={row === active} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
+                  <Row key={row.key} id={`${listId}-${row.key}`} row={row} active={row.key === activeKeyNow} onHover={() => setActiveKey(row.key)} onPick={() => pick(row, false)} />
                 ))}
               </Fragment>
             ))}
-            {rows.length === 0 &&
-              (offerNew ? (
-                <div
-                  className="spotlight-row"
-                  role="option"
-                  aria-selected
-                  data-active
-                  data-testid="spotlight-new-agent"
-                  onClick={startNew}
-                >
-                  <span className="spotlight-mark" aria-hidden>
-                    <Plus />
-                  </span>
-                  <span className="spotlight-main">
-                    <span className="spotlight-name">New agent named ‘{newName}’</span>
-                  </span>
-                </div>
-              ) : (
-                <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>
-              ))}
+            {rows.length === 0 && !offerNew && <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>}
           </div>
           <div className="spotlight-foot" aria-hidden>
             <span>
@@ -284,7 +311,9 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
       onClick={onPick}
     >
       <span className="spotlight-mark" aria-hidden>
-        {subject.kind === 'zone' ? (
+        {subject.kind === 'setting' ? (
+          <Settings />
+        ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
           <span className="spotlight-zone-ring" style={{ '--zone-color': subject.zone.color } as CSSProperties} />
         ) : (
@@ -301,8 +330,10 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
         <StatusPill {...agentPill(subject.agent, shows, TILE_STATE_LABELS)} title={STATE_LABELS[subject.agent.state]} />
       ) : subject.kind === 'shell' ? (
         <Tag>shell</Tag>
-      ) : (
+      ) : subject.kind === 'zone' ? (
         <span className="spotlight-act">show zone</span>
+      ) : (
+        <span className="spotlight-act">open setting</span>
       )}
     </div>
   );

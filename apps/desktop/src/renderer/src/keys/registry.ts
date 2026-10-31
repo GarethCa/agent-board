@@ -3,8 +3,11 @@
 //
 // Each entry is marked `today` (in the app before the registry), `new` (added since) or `fix` (an existing key changed
 // to correct a bug). A `new` entry is inactive while the "Extended keyboard shortcuts" setting is off, so the app then
-// behaves as it did before; `fix` entries stay, since they correct bugs. A later key is one more entry here.
+// behaves as it did before; `fix` entries stay, since they correct bugs. An entry marked `simplifiedOnly` is the
+// Simplified design's (docs/adr/0022-simplified-design.md): active under it alone, whatever the setting, and unlisted
+// under Classic. A later key is one more entry here.
 import { ROTATION_SNAP } from '../board/items/rotation';
+import { isSimplified } from '../design';
 import { extendedShortcuts } from './extended-shortcuts';
 
 const mac = navigator.platform.startsWith('Mac');
@@ -43,7 +46,7 @@ export type SectionId = 'tile' | 'move' | 'make' | 'edit' | 'window' | 'dialog';
 export interface KeyBinding {
   /** `<section>.<action>`, never renamed: handlers, tests and later a remapping name it. */
   id: string;
-  /** What it does, as the cheat sheet and Settings › Keyboard list it. */
+  /** What it does, as the cheat sheet and Settings › General › Keyboard list it. */
   label: string;
   section: SectionId;
   scope: KeyScope;
@@ -52,6 +55,8 @@ export interface KeyBinding {
   keys: readonly Chord[];
   /** Its default chords off macOS, where they are more than the modifier rule changes. */
   otherKeys?: readonly Chord[];
+  /** A key of the Simplified design's alone: under Classic it does nothing and nothing lists it. */
+  simplifiedOnly?: true;
 }
 
 // Bare keys on the board: what they type, Shift or not, as the board's single keys have always taken.
@@ -125,6 +130,24 @@ export const KEYS = [
   },
   { id: 'window.paneFocus', label: 'Focus the pane that way', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'pane', text: '←↑→↓' }] },
   // Ctrl+Shift+I off macOS, as plain Ctrl+I is Tab in a terminal.
+  {
+    id: 'window.terminalView',
+    label: 'Show the agent’s terminal, or back to its chat',
+    section: 'window',
+    scope: 'terminal-safe',
+    status: 'today',
+    keys: [{ mod: 'pane', code: 'KeyT', text: 'T' }],
+    simplifiedOnly: true,
+  },
+  {
+    id: 'window.stopStep',
+    label: 'Stop the agent’s step, while it works',
+    section: 'window',
+    scope: 'terminal-safe',
+    status: 'today',
+    keys: [{ mod: 'window', code: 'Period', text: '.' }],
+    simplifiedOnly: true,
+  },
   { id: 'window.details', label: 'Show or hide the details', section: 'window', scope: 'window', status: 'fix', keys: [{ mod: 'window', code: 'KeyI', text: 'I' }] },
   { id: 'window.runGate', label: 'Run the gate', section: 'window', scope: 'terminal-safe', status: 'today', keys: [{ mod: 'window', shift: true, code: 'KeyG', text: 'G' }], otherKeys: [{ mod: 'window', code: 'KeyG', text: 'G' }] },
   {
@@ -163,10 +186,17 @@ export function binding(id: KeyId): KeyBinding {
   return BY_ID.get(id)!;
 }
 
-/** Whether a binding is in use: always, unless it is `new` and the "Extended keyboard shortcuts" setting is off. */
-export function isActive(entry: KeyBinding, extended = extendedShortcuts()): boolean {
+/**
+ * Whether a binding is in use: always, unless it is `new` and the "Extended keyboard shortcuts" setting is off, or it
+ * is the Simplified design's and the window shows Classic.
+ */
+export function isActive(entry: KeyBinding, extended = extendedShortcuts(), simplified = windowSimplified()): boolean {
+  if (entry.simplifiedOnly) return simplified;
   return entry.status !== 'new' || extended;
 }
+
+/** Whether this window shows the Simplified design; never where there is no window (a unit test). */
+const windowSimplified = () => typeof document !== 'undefined' && isSimplified();
 
 /** A binding's default chords on this platform. */
 export function chordsOf(entry: KeyBinding, isMac = mac): readonly Chord[] {
@@ -227,13 +257,15 @@ interface PressOptions {
   isMac?: boolean;
   /** The "Extended keyboard shortcuts" setting, read from its store unless given. */
   extended?: boolean;
+  /** Whether the window shows the Simplified design, read from its root unless given. */
+  simplified?: boolean;
 }
 
 /**
  * Whether `event` presses the binding `id` on this platform: one of its chords, and the binding active. Handlers keep
  * their own guards (typing, an overlay, what has the focus); this is only which key it is.
  */
-export function pressed(id: KeyId, event: KeyPress, { isMac = mac, extended }: PressOptions = {}): boolean {
+export function pressed(id: KeyId, event: KeyPress, { isMac = mac, extended, simplified }: PressOptions = {}): boolean {
   const entry = binding(id);
-  return isActive(entry, extended) && chordsOf(entry, isMac).some((chord) => chordPressed(chord, event, isMac));
+  return isActive(entry, extended, simplified) && chordsOf(entry, isMac).some((chord) => chordPressed(chord, event, isMac));
 }

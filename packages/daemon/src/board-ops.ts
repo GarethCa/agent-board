@@ -18,6 +18,7 @@ import {
   type PlanFormat,
   type PinRef,
   type RecordParams,
+  type SendDelivery,
   roleLabel,
   type BoardCaller,
   type CrewEvent,
@@ -1086,15 +1087,43 @@ export async function removeDefaultRole(session: BoardSession, name: string, zon
   return { text: zone === undefined ? `Removed the default role ${shown}.` : `Removed ${zone.name}'s template for ${shown}.`, json: { removed: shown } };
 }
 
-/** `send`: the agent's next message, queued until its session is up if it isn't yet. */
-export async function sendToAgent(session: BoardSession, ref: string, text: string): Promise<BoardView> {
+/** How much of the message `send` prints as the agent reads it. */
+const SENT_PREVIEW_LENGTH = 120;
+
+/** What `send` prints first for how it went, before the agent's line. */
+const SENT_LINES: Record<SendDelivery, string> = {
+  started: 'Sent to',
+  'queued-until-up': "Queued until it's up, after its first prompt:",
+  waking: "Waking it with the message, typed once it's up:",
+  'queued-in-turn': 'A turn started as it was typed: queued for after that turn, not yet seen taken up, at',
+  'queued-after-turn': 'Queued until its turn ends, then sent as a turn of its own:',
+  cleared: 'Pressed Ctrl-U on what was typed at its prompt:',
+};
+
+/**
+ * `send`: the agent's next message, queued until its session is up if it isn't yet; or, with `submit` or `clear`,
+ * Enter pressed on what sits unsent at its prompt, or that cleared. Says how it went: a message typed whose turn never
+ * started is refused by the daemon, saying so.
+ */
+export async function sendToAgent(
+  session: BoardSession,
+  ref: string,
+  what: { text: string } | { submit: true } | { clear: true },
+): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
-  const sent = await session.client.call('orchestrator.send', { token, sessionId: agent.sessionId, text });
+  const { delivery, typed } = await session.client.call('orchestrator.send', { token, sessionId: agent.sessionId, ...what });
   const fresh = await freshAgentLine(session, agent.sessionId);
-  const queued = sent.queuedUntilUp > 0;
+  const first = 'submit' in what && delivery === 'started' ? 'Sent what was typed at its prompt:' : SENT_LINES[delivery];
+  // How the message it reads starts: with the sender mark, when an agent sent it.
+  const reads = typed === undefined ? '' : `\nIt reads: ${cut(typed, SENT_PREVIEW_LENGTH)}`;
   return {
-    text: queued ? `Queued until it's up, after its first prompt: ${fresh.line}` : `Sent to ${fresh.line}`,
-    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), queued },
+    text: `${first} ${fresh.line}${reads}`,
+    json: {
+      ...agentJson(fresh.refs, fresh.agent, session.caller),
+      queued: delivery === 'queued-until-up' || delivery === 'queued-after-turn',
+      delivery,
+      ...(typed === undefined ? {} : { typed }),
+    },
   };
 }
 

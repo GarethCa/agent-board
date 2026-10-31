@@ -1,9 +1,7 @@
 import { expect } from '@playwright/test';
-import { agents, launch, tile } from './agent-helpers.ts';
+import { agents, launch, MASTER_KEY, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
-
-const MASTER_KEY = process.platform === 'darwin' ? 'Meta+Shift+m' : 'Control+Shift+m';
 
 test('⌘⇧M opens the Captain’s panel: Start the Captain puts its tile on the board, and the panel shows the zones it watches and its chat', async () => {
   const { repo, env } = scratch('output');

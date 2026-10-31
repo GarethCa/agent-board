@@ -80,7 +80,7 @@ An **edge** carries one agent's work to another when the first finishes. Hover a
 
 Every agent agent-board starts is told one thing: it is on agent-board, and `agent-board --help` says the rest. That help is the whole manual (zones, tiles, edges, refs and commands), so nothing long is pasted into the agent's prompt and it costs no tokens until the agent asks. Two doors lead to the same place:
 
-- **The `agent-board` command line.** Inside a session it is already on the `PATH`. For your own terminals, **Settings › Command line › Install command-line tool** links it into `~/.local/bin`. It reads the board (`tree`, `zones`, `agents`, `shells`, `edges`, `show <ref>`), and an agent uses it to set its own one-line status, which its tile shows in place of the task. Read commands take `--json`.
+- **The `agent-board` command line.** Inside a session it is already on the `PATH`. For your own terminals, **Settings › Advanced › Command line › Install command-line tool** links it into `~/.local/bin`. It reads the board (`tree`, `zones`, `agents`, `shells`, `edges`, `show <ref>`), and an agent uses it to set its own one-line status, which its tile shows in place of the task. Read commands take `--json`.
 - **The board MCP server.** `agent-board mcp` is a small stdio MCP server that Claude and Codex are started with, giving them `whoami`, `board`, `connections` and `set_status` tools. It is on by default; a zone's ⋯ menu has **Turn off board MCP** for agents started there afterwards (the command line stays).
 
 An agent can also hand off on purpose. `agent-board handoff` (or the `handoff` MCP tool) sends a message over one of the agent's own edges, and `agent-board edge list` shows them. An [orchestrator](#orchestrators) can wire its crew with `agent-board edge add` and `edge remove`; an edge an agent made is drawn dashed and says who made it, and the agent can remove only its own ([ADR-0012](adr/0012-explicit-handoff-and-agent-made-edges.md)).
@@ -114,7 +114,7 @@ An agent can lead other agents the way you would: start one with a task, wait fo
 
 - **On by default, per zone.** A zone's ⋯ menu has **Stop agents orchestrating** / **Let agents orchestrate**. With it on, an agent in the zone may start and steer agents in that zone, and only there. Switch it off and they stop at their next call. Or grant it one agent at a time from your own terminal: `agent-board orchestrate on agent:22a7 --scope zone` (`repo` and `board` widen the scope).
 - **Crews go three deep.** An agent an orchestrator starts runs in its own worktree and branch, and leads its own crew only as its zone allows, three agents deep at most. Its permission prompts come to your **Needs you** inbox, never to the orchestrator.
-- **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board** can show a "from" chip on each agent instead.
+- **Crew frames.** An orchestrator's agents sit beside it in a dashed frame labelled with its name, which moves with it. **Settings › Board › Crews** can show a "from" chip on each agent instead.
 - **An Activity tab.** The orchestrator's session window gets an **Activity** tab listing what it started, sent, interrupted and closed, and what it tried and was refused, with why.
 
 <p align="center">
@@ -133,7 +133,7 @@ Switch a session window from **Terminal** to **Chat** to read the agent's conver
 
 ## Light or dark
 
-The **Workbench** theme comes in light and dark. **Settings › Appearance** follows macOS, or picks one.
+The **Workbench** theme comes in light and dark. **Settings › General › Appearance** follows macOS, or picks one.
 
 <p align="center">
   <img src="assets/screenshots/board-dark.png" alt="The same board in the dark theme" width="880">
