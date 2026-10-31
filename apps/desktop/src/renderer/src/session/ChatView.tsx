@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CircleAlert } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { Button, EmptyState } from '../ui';
+import { useSimplified } from '../design';
+import { foldAgentMessages, senderLook, type SenderLook } from './agent-message';
 import { agentAtWork, chatItems, type RunsChoice } from './chat';
+import { holdAgentMessages, setIncludeAgents, useIncludeAgents } from './chat-filter';
 import { liveCallId, liveState } from './chat-live';
-import { ChatSettingContext, type ChatSetting } from './chat-parts';
-import { useChatStyle } from './chat-style';
-import { ChatStream, LiveCard, MessageText, RailLive, StatusLine } from './ChatStreams';
+import { ChatSettingContext, MessageText, useChatSetting, type ChatSetting } from './chat-parts';
+import { useChatStyle, type ChatStyle } from './chat-style';
+import { ChatStream, LiveCard, RailLive, StatusLine } from './ChatStreams';
 import { sentLabel, sentMessages, settle, useSentMessages, type SentMessage } from './sent-messages';
+import { useLiveAgents } from './use-live-board';
 import { useTranscript } from './use-transcript';
 /** How close to the bottom, in pixels, still counts as reading the latest: new messages then scroll into view. */
 const STICK_DISTANCE = 48;
@@ -24,6 +28,8 @@ interface ChatViewProps {
   onOpenLink(url: string): void;
   /** Opens the agent's plans, from a plan's card or line; without it they have no Open plan. */
   onOpenPlan?(): void;
+  /** The style it is drawn in, over the one picked for every chat: the Simplified design's Timeline view is the rail. */
+  style?: ChatStyle;
 }
 
 /**
@@ -33,7 +39,7 @@ interface ChatViewProps {
  * waits on you for is answered where it shows. A transcript its adapter can't read leaves only the terminal, saying
  * so. It shows the latest messages of a long one; the earlier ones are in the terminal.
  */
-export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOpenPlan }: ChatViewProps) {
+export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOpenPlan, style: drawnIn }: ChatViewProps) {
   const { sessionId, harness, name } = agent;
   const transcript = useTranscript(active, (since, generation) => window.agentBoard.agents.transcript(sessionId, since, generation), {
     // The daemon says when the transcript changes; a change of state (its hooks) may come before it can watch the file.
@@ -73,13 +79,22 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
     [runs.at],
   );
 
-  const style = useChatStyle();
+  const picked = useChatStyle();
+  const style = drawnIn ?? picked;
   // What the agent is doing now, from its hooks and its transcript, at the end of the chat.
   const live = useMemo(() => liveState(agent, items, transcript?.status === 'ok' ? transcript.entries : []), [agent, items, transcript]);
   const standsAt = liveCallId(live);
+  // Who the messages other agents sent are from, as far as the board still has them; and whether to show them.
+  const includeAgents = useIncludeAgents(sessionId);
+  const shown = useMemo(() => foldAgentMessages(items, includeAgents), [items, includeAgents]);
+  const holdsAgents = useMemo(() => items.some((item) => item.kind === 'user' && item.from !== undefined), [items]);
+  useEffect(() => (holdsAgents ? holdAgentMessages(sessionId) : undefined), [sessionId, holdsAgents]);
+  const captainHat = useSimplified();
+  const senderRefs = useMemo(() => [...new Set(items.flatMap((item) => (item.kind === 'user' && item.from ? [item.from.ref] : [])))], [items]);
+  const onShowAgents = useCallback(() => setIncludeAgents(sessionId, true), [sessionId]);
   const setting = useMemo<ChatSetting>(
-    () => ({ style, harness, sessionId, onOpenLink, onOpenPlan, runs: runs.mode, toggled, onToggle, atWork, liveCallId: standsAt }),
-    [style, harness, sessionId, onOpenLink, onOpenPlan, runs.mode, toggled, onToggle, atWork, standsAt],
+    () => ({ style, harness, sessionId, onOpenLink, onOpenPlan, runs: runs.mode, toggled, onToggle, atWork, liveCallId: standsAt, captainHat, onShowAgents }),
+    [style, harness, sessionId, onOpenLink, onOpenPlan, runs.mode, toggled, onToggle, atWork, standsAt, captainHat, onShowAgents],
   );
 
   // Follows the conversation while the reader is at its end; leaves them be while they read back.
@@ -124,7 +139,7 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
   const stream = (
     <>
       <ChatSettingContext.Provider value={setting}>
-        <ChatStream items={items} />
+        {senderRefs.length === 0 ? <ChatStream items={shown} /> : <WithSenders refs={senderRefs}><ChatStream items={shown} /></WithSenders>}
       </ChatSettingContext.Provider>
       {waiting.map((message) => (
         <SentBubble key={message.id} message={message} label={sentLabel(message, agent)} onRetry={() => void sentMessages.retry(sessionId, message.id, atWork)} onDrop={() => sentMessages.drop(sessionId, message.id)} />
@@ -153,6 +168,28 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
       {liveProps && style === 'status-line' && <StatusLine {...liveProps} />}
     </div>
   );
+}
+
+/**
+ * Who the senders of the agents' messages in a chat are, as far as the board still has them, for their bubbles'
+ * characters. Only a chat that holds such a message listens to the agents, and its children re-render only when
+ * one of those senders changes, not with every hook of every agent.
+ */
+function WithSenders({ refs, children }: { refs: string[]; children: ReactNode }) {
+  const setting = useChatSetting();
+  const { agents } = useLiveAgents();
+  const key = refs.map((ref) => `${ref} ${senderLook(agents ?? [], ref)?.harness ?? ''} ${senderLook(agents ?? [], ref)?.master ?? ''}`).join('\n');
+  const senderLookOf = useMemo(() => {
+    const looks = new Map(
+      key.split('\n').map((line): [string, SenderLook | undefined] => {
+        const [ref, harness, master] = line.split(' ');
+        return [ref!, harness === '' || harness === undefined ? undefined : { harness: harness as SenderLook['harness'], master: master === 'true' }];
+      }),
+    );
+    return (ref: string) => looks.get(ref);
+  }, [key]);
+  const value = useMemo(() => ({ ...setting, senderLook: senderLookOf }), [setting, senderLookOf]);
+  return <ChatSettingContext.Provider value={value}>{children}</ChatSettingContext.Provider>;
 }
 
 /**

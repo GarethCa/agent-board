@@ -3,7 +3,7 @@ import { ChevronDown, Moon, Search, Sun, SunMoon } from 'lucide-react';
 import { choiceFor, missingMode, themeFor, type Appearance, type Mode } from '../../../shared/appearance';
 import { THEME_CHOICES, THEMES, type ThemeChoice, type ThemePreview } from '../../../shared/themes';
 import { darkQuery } from '../themes';
-import { EmptyState, Fieldset, Hint, Input, Popover, SectionLabel, Segmented } from '../ui';
+import { EmptyState, Fieldset, Hint, Input, Popover, Segmented } from '../ui';
 
 /** Whether the window is in dark mode now: the OS's own while the setting is System. */
 function useDark(): boolean {
@@ -178,7 +178,7 @@ function ThemeList({ picked, onPick }: { picked: string; onPick(theme: string): 
 }
 
 /**
- * Settings › Appearance: the mode, Light, Dark or System (the default, which follows the OS), then the theme,
+ * Settings › General › Appearance: the mode, Light, Dark or System (the default, which follows the OS), then the theme,
  * a button showing the choice that opens the Theme popover. A choice is a family, and the mode picks its light or dark
  * theme; where it has none for the mode, the app's own shows, and a hint says so. The setting is the main process's
  * (main/appearance.ts), which every window follows at once; this shows it, as picked in any window, and changes it.
@@ -208,7 +208,6 @@ export function AppearanceSetting({ onError }: { onError(action: string): (error
   const missing = appearance && missingMode(appearance);
   return (
     <>
-      <SectionLabel as="h4">Appearance</SectionLabel>
       <Fieldset legend="Mode">
         <Segmented aria-label="Mode" options={MODE_OPTIONS} value={appearance?.mode ?? 'system'} onChange={(mode) => pick({ mode })} />
         <Hint>

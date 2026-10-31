@@ -4,8 +4,13 @@ import type { DaemonEvent } from '@agent-board/daemon/protocol';
 
 /** Sends a message on `channel` to every window: the board, session windows and popped-out ones. */
 export function sendToAllWindows(channel: string, ...args: unknown[]): void {
+  sendToWindowsExcept(undefined, channel, ...args);
+}
+
+/** Sends a message on `channel` to every window but `except`: the one that made the change, which has shown it already. */
+export function sendToWindowsExcept(except: Electron.WebContents | undefined, channel: string, ...args: unknown[]): void {
   for (const contents of webContents.getAllWebContents()) {
-    if (!contents.isDestroyed()) contents.send(channel, ...args);
+    if (contents !== except && !contents.isDestroyed()) contents.send(channel, ...args);
   }
 }
 

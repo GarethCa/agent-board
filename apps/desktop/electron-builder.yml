@@ -18,3 +18,13 @@ mac:
   category: public.app-category.developer-tools
   # The brand's macOS icon: the art on the macOS icon grid, made into the .icns (brand/BRAND.md).
   icon: ../../brand/png/app-icon/icon-1024-macos-padded.png
+# Web tabs keep logins on disk (persist:web): their cookies are encrypted with a key in the OS keychain, as Chrome's
+# are, rather than written in plain text where anything running as the user reads them. One-way: a cookie store written
+# encrypted is unreadable to a build with the fuse off, so turning it off means renaming the shared partition in the same
+# change (SHARED_PARTITION in src/main/web-tabs.ts) and deleting the old store (ADR-0020). The app must still run as
+# Node (the daemon and hook forwarder), which leaves the keychain's key in reach of the app's own binary.
+electronFuses:
+  runAsNode: true
+  enableCookieEncryption: true
+  # Changing a fuse breaks the build's ad hoc signature, which Apple silicon needs to launch it at all.
+  resetAdHocDarwinSignature: true

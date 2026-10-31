@@ -136,6 +136,21 @@ describe('fake claude', () => {
     ]);
   });
 
+  it('clears with Ctrl-U the text a lost Enter left at its prompt, so the next line goes up alone', async () => {
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: ['SQLite', '\x15Postgres'],
+      env: { FAKE_HARNESS_LOSE_ENTERS: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt)).toEqual([
+      'set up storage',
+      'Postgres',
+    ]);
+  });
+
   it('keeps only the bytes after the last whole KiB of a long line typed with FAKE_HARNESS_RAW_INPUT, as Claude does, and a paste whole', async () => {
     const long = Array.from({ length: 450 }, (_, index) => `w${String(index).padStart(4, '0')}`).join(' ');
     // 2,001 bytes in 1,001 characters: the cut counts bytes.

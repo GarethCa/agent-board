@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ARRANGE_SPACINGS, DEFAULT_ARRANGE_SPACING, type ArrangeSpacing } from '@agent-board/daemon/protocol';
-import { SPACING_LABELS } from '../board/ZoneNode';
+import { SPACING_LABELS } from '../board/menu-model';
 import { Fieldset, Hint, Segmented } from '../ui';
 
 /**

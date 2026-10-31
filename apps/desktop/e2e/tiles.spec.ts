@@ -8,8 +8,9 @@ import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
 import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey } from './agent-helpers.ts';
-import { test, addEmptyZone, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
+import { test, addEmptyZone, classicOnly, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 /** The board as the daemon has stored it. */
 function stored(dataDir: string): Promise<{ zones: Zone[]; agents: Agent[]; shells: Shell[] }> {
@@ -305,10 +306,10 @@ test('a tile for a session started in another terminal drags within its zone, ou
   let other: ChildProcessWithoutNullStreams | undefined;
   try {
     await addZone(app, window, repo);
-    await window.getByRole('button', { name: 'Settings', exact: true }).click();
-    await window.getByRole('switch', { name: 'Show sessions from other terminals' }).click();
-    await expect(window.getByRole('switch', { name: 'Show sessions from other terminals' })).toBeChecked();
-    await window.keyboard.press('Escape');
+    const settings = await openSettings(window, 'accounts.terminals');
+    const otherTerminals = settingsSection(settings, 'Other terminals').getByRole('switch', { name: 'Show sessions from other terminals' });
+    await otherTerminals.click();
+    await expect(otherTerminals).toBeChecked();
     // The fake claude, as if typed into another terminal.
     session = spawn('claude', ['Pick a database'], { cwd: repo, env: fakeHarnessEnv({ scenario: 'waiting', home, stepDelayMs: 100, idleNotifyMs: 300 }) });
     session.stdout.resume();
@@ -446,7 +447,8 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
   }
 });
 
-test('hovering a tile moves nothing on it: its state stays at the bottom and only the actions show', async () => {
+test('hovering a tile moves nothing on it: its state stays at the bottom and its always-visible actions brighten', async () => {
+  classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -462,7 +464,11 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and onl
     // Its state settles first: the fake agent works, then waits, and the pill's label (so its width) follows.
     await expect(card).toHaveAttribute('data-state', 'waiting');
     await expect(card.locator('.ui-pill')).toHaveCount(1);
-    await expect(actions).toHaveCSS('opacity', '0');
+    // Visible at rest, not hidden until hovered.
+    await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Pop out' })).toBeVisible();
+    await expect(actions).not.toHaveCSS('opacity', '0');
     const before = await boxes();
 
     await card.hover();
@@ -471,6 +477,39 @@ test('hovering a tile moves nothing on it: its state stays at the bottom and onl
     await expect(card.locator('.ui-pill')).toBeVisible();
     // The same either way: its parts are where they were.
     expect(await boxes()).toEqual(before);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a tile at its least width folds Pop out into ⋯ and keeps Expand and ⋯ inside it', async () => {
+  classicOnly();
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await addZone(app, window, repo);
+    await spawnAgent(window, 'monorepo', 'Fold the corner');
+    const card = tile(window);
+    await window.mouse.move(0, 0);
+    await expect(card).toHaveAttribute('data-state', 'waiting');
+    await expect(card.getByRole('button', { name: 'Pop out' })).toBeVisible();
+
+    // The least tile width, 200px (a tile's size is the board's to set, so the width is set on the tile itself).
+    await card.evaluate((element) => ((element as HTMLElement).style.width = '200px'));
+    await expect(card.getByRole('button', { name: 'Pop out' })).toBeHidden();
+    await expect(card.getByRole('button', { name: 'Expand' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'More' })).toBeVisible();
+    const tileBox = await settledBox(card);
+    const cornerBox = await settledBox(card.locator('.hybrid-tile-corner'));
+    expect(cornerBox.x + cornerBox.width).toBeLessThanOrEqual(tileBox.x + tileBox.width);
+    const expandBox = await settledBox(card.getByRole('button', { name: 'Expand' }));
+    expect(expandBox.x).toBeGreaterThanOrEqual(tileBox.x);
+
+    await card.getByRole('button', { name: 'More' }).click();
+    await expect(window.getByRole('menuitem', { name: 'Pop out' })).toBeVisible();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

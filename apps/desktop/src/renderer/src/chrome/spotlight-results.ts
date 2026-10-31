@@ -1,9 +1,18 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
 import { needsYouNow, planPending, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { SETTINGS_GROUPS } from './settings-ia';
+import { controlsIn, searchable } from './settings-search';
 
-/** What a row of the switcher is about. */
-export type SpotlightSubject = { kind: 'agent'; agent: Agent } | { kind: 'shell'; shell: Shell } | { kind: 'zone'; zone: Zone };
+/** What a row of the switcher is about: a setting's row opens the Settings window at its section (`group.section`). */
+export type SpotlightSubject =
+  | { kind: 'agent'; agent: Agent }
+  | { kind: 'shell'; shell: Shell }
+  | { kind: 'zone'; zone: Zone }
+  | { kind: 'setting'; pane: string };
+
+/** A row's subject that the window ⌘K opened in shows: a session or a zone. */
+export type BoardSubject = Exclude<SpotlightSubject, { kind: 'setting' }>;
 
 export interface SpotlightRow {
   key: string;
@@ -27,17 +36,26 @@ export interface SpotlightSources {
   zones: readonly Zone[];
   /** What the needs-you inbox lists: the agents in it lead, as there. */
   shows: NeedsYouShows;
+  /** Whether the Simplified design is on, so the settings it alone draws are found; Classic's if unset. */
+  simplified?: boolean;
 }
 
 /** How many sessions Recent lists before anything is typed: the rest are a few letters away. */
 export const RECENT_LIMIT = 6;
 
+/** How many settings a query lists, under the sessions and zones: the Settings window's own search lists them all. */
+export const SETTINGS_LIMIT = 5;
+
+/** The heading the settings found are listed under. */
+export const SETTINGS_GROUP = 'Settings';
+
 /**
  * The switcher's rows for `query`. Before anything is typed: the agents that need you, then the other sessions most
  * recently active, then the zones, leaving out an empty group. Once something is: the sessions and zones that match,
- * best first, ranked on the name, then the issue, the branch, the zone and what the agent asks, in that order.
+ * best first, ranked on the name, then the issue, the branch, the zone and what the agent asks, in that order; then,
+ * under Settings, the few settings sections and controls that match best.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, simplified = false }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
@@ -88,16 +106,42 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows }:
     );
   }
   for (const zone of zones) consider([[zone.name, 1]], (marks) => zoneRow(zone, agents, tiles, marks));
-  if (ranked.length === 0) return [];
   ranked.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
-  return [{ rows: ranked.map(({ row }) => row) }];
+  const groups: SpotlightGroup[] = [{ rows: ranked.map(({ row }) => row) }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
+  return groups.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * The settings sections and controls that hold `wanted` where the Settings window's search looks (`searchSettings`): a
+ * section's name or its group's, a control's label or its other words, as a whole run of letters, case and accents
+ * aside. Unlike the window, which lists every section found, these are ranked, a match in the name first, and cut to
+ * `SETTINGS_LIMIT`. Each opens its section.
+ */
+function settingRows(wanted: string, simplified: boolean): SpotlightRow[] {
+  const needle = searchable(wanted);
+  const found: { score: number; row: SpotlightRow }[] = [];
+  const consider = (key: string, pane: string, name: string, sub: string, also?: string) => {
+    const named = fuzzyMatch(needle, searchable(name), true);
+    const other = also === undefined ? undefined : fuzzyMatch(needle, searchable(also), true);
+    const score = Math.max(named?.score ?? 0, (other?.score ?? 0) * FIELD_WEIGHTS.also);
+    if (score > 0) found.push({ score, row: { key: `setting:${key}`, subject: { kind: 'setting', pane }, name, sub, marks: named?.positions ?? [] } });
+  };
+  for (const group of SETTINGS_GROUPS) {
+    for (const section of group.sections) {
+      const pane = `${group.id}.${section.id}`;
+      consider(pane, pane, section.name, `Settings · ${group.name}`, group.name);
+      for (const control of controlsIn(pane, simplified)) consider(control.id, pane, control.label, `Settings · ${group.name} › ${section.name}`, control.also);
+    }
+  }
+  found.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
+  return found.slice(0, SETTINGS_LIMIT).map(({ row }) => row);
 }
 
 /** A field to match: its text, how much a match in it counts, and whether only a whole run of letters does. */
 type Field = readonly [text: string | null | undefined, weight: number, runOnly?: boolean];
 
 /** How much a match in each field counts against one in the name. */
-const FIELD_WEIGHTS = { issue: 0.9, branch: 0.8, zone: 0.7, asks: 0.5 };
+const FIELD_WEIGHTS = { issue: 0.9, branch: 0.8, zone: 0.7, asks: 0.5, also: 0.7 };
 
 function agentRow(agent: Agent, zoneName: (zoneId: string | null) => string, marks: readonly number[], shows: NeedsYouShows): SpotlightRow {
   const detail = needsYouNow(agent, shows) ? askOf(agent) : agent.branch;

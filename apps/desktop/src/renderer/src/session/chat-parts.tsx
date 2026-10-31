@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type KeyboardEvent } from 'react';
+import { createContext, Fragment, useContext, useEffect, useState, type KeyboardEvent } from 'react';
 import {
   Asterisk,
   Bot,
@@ -23,7 +23,8 @@ import { continuesOnCredits, type Agent, type Harness } from '@agent-board/daemo
 import { Button, ErrorText } from '../ui';
 import { useAction } from '../use-action';
 import { toolSummary } from '../../../shared/needs-you';
-import { duration, editCounts, msBetween, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
+import { duration, editCounts, msBetween, pastedParts, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
+import type { SenderLook } from './agent-message';
 import type { LiveState } from './chat-live';
 import type { ChatStyle } from './chat-style';
 
@@ -45,6 +46,12 @@ export interface ChatSetting {
   liveCallId?: string;
   /** A subagent's own conversation, drawn inside its call. */
   subagent?: boolean;
+  /** Who a message's sender is (its ref), if the board still has them: what its bubble's character looks like. */
+  senderLook?(ref: string): SenderLook | undefined;
+  /** Whether the Captain stands in its tricorn, as it does under the Simplified design. */
+  captainHat?: boolean;
+  /** Shows the messages other agents sent again, from the line that says they are hidden. */
+  onShowAgents?(): void;
 }
 
 export const ChatSettingContext = createContext<ChatSetting>({ style: 'cards', harness: 'claude', sessionId: '', onOpenLink: () => {}, atWork: false });
@@ -347,4 +354,20 @@ export function LiveActions({ agent, live, onOpenPlan, onShowTerminal, compact =
 /** A live state's actions, if it has any: the kinds that wait on the user, or that the user can move on. */
 export function hasActions(live: LiveState): boolean {
   return live.kind === 'permission' || live.kind === 'ask' || live.kind === 'plan' || live.kind === 'rate-limited' || live.kind === 'failed';
+}
+
+/** A user's message as typed, each block pasted into it folded to its line count, opening to what was pasted. */
+export function MessageText({ text }: { text: string }) {
+  return pastedParts(text).map((part, index) =>
+    part.kind === 'text' ? (
+      <Fragment key={index}>{part.text}</Fragment>
+    ) : (
+      <details key={index} className="chat-pasted" data-testid="chat-pasted">
+        <summary>
+          Pasted text ({part.lines} {part.lines === 1 ? 'line' : 'lines'})
+        </summary>
+        <pre className="chat-pasted-text">{part.text}</pre>
+      </details>
+    ),
+  );
 }

@@ -12,20 +12,24 @@ export type WebKey = 'window' | 'reload' | 'hardReload' | undefined;
 /**
  * What a key press in a web tab's page is for. Its window's own shortcuts go to the window (⌘W closes the tab, not the
  * OS window; ⌘T, ⌘D, ⌘1–9, ⌘K (the switcher) and ⌘⌥ and an arrow as anywhere in it; off macOS with Ctrl+Shift, Ctrl's own keys staying the
- * page's). ⌘R (Ctrl+R) reloads the page, never the app, and ⇧⌘R (Ctrl+Shift+R) skips its cache. Everything else, ⌘C
- * and ⌘V among them, is the page's.
+ * page's). Under the Simplified design its ⌘⌥T (the terminal) and ⌘. (stop the step) go too; under Classic, which has
+ * neither, they stay the page's. ⌘R (Ctrl+R) reloads the page, never the app, and ⇧⌘R (Ctrl+Shift+R) skips its cache.
+ * Everything else, ⌘C and ⌘V among them, is the page's.
  */
-export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' | 'shift' | 'alt'>, isMac = process.platform === 'darwin'): WebKey {
+export function webKey(input: Pick<Input, 'type' | 'code' | 'meta' | 'control' | 'shift' | 'alt'>, isMac = process.platform === 'darwin', simplified = false): WebKey {
   if (input.type !== 'keyDown') return undefined;
   const command = isMac ? input.meta && !input.control : input.control && !input.meta;
   if (command && !input.alt && input.code === 'KeyR') return input.shift ? 'hardReload' : 'reload';
   const chord = isMac ? command : command && input.shift;
   if (!chord) return undefined;
-  // With Alt: an arrow moves between panes (⌘⌥, or Ctrl+Shift+Alt), and off macOS Ctrl+Shift+Alt+D splits below.
+  // With Alt: an arrow moves between panes (⌘⌥, or Ctrl+Shift+Alt), off macOS Ctrl+Shift+Alt+D splits below, and the
+  // Simplified design's ⌘⌥T shows the terminal.
   if (input.alt) {
     if (ARROWS.has(input.code)) return isMac && input.shift ? undefined : 'window';
+    if (simplified && input.code === 'KeyT' && !(isMac && input.shift)) return 'window';
     return !isMac && input.code === 'KeyD' ? 'window' : undefined;
   }
+  if (simplified && input.code === 'Period' && !(isMac && input.shift)) return 'window';
   if (WINDOW_CODES.has(input.code)) return 'window';
   // ⌘I, not ⇧⌘I; off macOS Ctrl+Shift+I, as plain Ctrl+I is Tab.
   return input.code === 'KeyI' && !(isMac && input.shift) ? 'window' : undefined;

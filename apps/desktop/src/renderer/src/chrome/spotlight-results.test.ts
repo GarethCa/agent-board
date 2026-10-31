@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { fuzzyMatch, RECENT_LIMIT, spotlightGroups, type SpotlightRow } from './spotlight-results';
+import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, spotlightGroups, type SpotlightRow } from './spotlight-results';
 
 const zone = (id: string, name: string): Zone => ({ id, name, color: '#3b5bdb' }) as Zone;
 
@@ -111,6 +111,52 @@ describe('spotlightGroups once something is typed', () => {
 
   it('is empty when nothing matches', () => {
     expect(spotlightGroups('zzzz', { agents: [agent('One')], shells: [], zones, shows: 'turns' })).toEqual([]);
+  });
+});
+
+describe('spotlightGroups and settings', () => {
+  const settingRows = (query: string, simplified = false) =>
+    spotlightGroups(query, { agents: [], shells: [], zones, shows: 'turns', simplified }).find((group) => group.label === 'Settings')?.rows ?? [];
+
+  it('lists the settings that match after the sessions and zones, under Settings', () => {
+    const groups = spotlightGroups('appear', { agents: [agent('Appearance pass')], shells: [], zones, shows: 'turns' });
+    expect(groups.map((group) => group.label)).toEqual([undefined, 'Settings']);
+    expect(names(groups[0]!.rows)).toEqual(['Appearance pass']);
+    expect(groups[1]!.rows).toEqual([
+      { key: 'setting:general.appearance', subject: { kind: 'setting', pane: 'general.appearance' }, name: 'Appearance', sub: 'Settings · General', marks: [0, 1, 2, 3, 4, 5] },
+    ]);
+  });
+
+  it('finds a control by its label, opening its section, and by the other words it goes by, best first', () => {
+    expect(settingRows('path').map((row) => [row.name, row.sub, row.subject])).toEqual([
+      // The earlier match ranks first, as for a session.
+      ['Codex path', 'Settings · Advanced › Programs', { kind: 'setting', pane: 'advanced.programs' }],
+      ['Claude path', 'Settings · Advanced › Programs', { kind: 'setting', pane: 'advanced.programs' }],
+    ]);
+    // Only the label's letters are marked: a match in its other words marks none.
+    expect(settingRows('dark').map((row) => [row.name, row.marks])).toEqual([['Mode', []]]);
+  });
+
+  it("finds a group's sections by the group's name, as the Settings window's search does", () => {
+    expect(settingRows('advanced').map((row) => row.subject)).toEqual(
+      // Equal matches, so by name: Background service, Command line, Held hand-offs, Programs, Web tabs.
+      ['service', 'cli', 'handoffs', 'programs', 'webTabs'].map((section) => ({ kind: 'setting', pane: `advanced.${section}` })),
+    );
+    expect(names(settingRows('accounts'))).toEqual(['Other terminals']);
+  });
+
+  it('matches settings only by a whole run of letters, and lists at most a few', () => {
+    expect(settingRows('apprnc')).toEqual([]);
+    expect(settingRows('s').length).toBe(SETTINGS_LIMIT);
+  });
+
+  it('leaves out the settings only the Simplified design draws, under Classic', () => {
+    expect(names(settingRows('technical'))).toEqual([]);
+    expect(names(settingRows('technical', true))).toEqual(['Show technical details']);
+  });
+
+  it('lists no settings before anything is typed', () => {
+    expect(spotlightGroups('', { agents: [], shells: [], zones: [], shows: 'turns' })).toEqual([]);
   });
 });
 

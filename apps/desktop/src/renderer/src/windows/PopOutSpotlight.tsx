@@ -1,5 +1,5 @@
 import { rowKeyOf, Spotlight, windowTargetOf } from '../chrome/Spotlight';
-import type { SpotlightSubject } from '../chrome/spotlight-results';
+import type { BoardSubject } from '../chrome/spotlight-results';
 import type { WindowTarget } from '../../../preload/api';
 import { useLiveLists } from './use-live-lists';
 
@@ -13,7 +13,7 @@ export function PopOutSpotlight({ target, onSwitched }: { target: WindowTarget; 
   const { agents, shells, zones } = useLiveLists();
   const { windows } = window.agentBoard;
 
-  const onPick = (from: WindowTarget, subject: SpotlightSubject): boolean | Promise<boolean> => {
+  const onPick = (from: WindowTarget, subject: BoardSubject): boolean | Promise<boolean> => {
     if (subject.kind === 'zone') {
       void windows.requestBoard({ kind: 'zone', zoneId: subject.zone.id });
       return true;

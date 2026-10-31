@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { untilStill, viewTransform } from './board-helpers.ts';
 import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
 import { addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
@@ -53,9 +54,13 @@ test('with AGENT_BOARD_DEMO=1, hides the daemon status, moves the camera on cue 
 
     // Frames a zone, and says when the move has finished.
     await addEmptyZone(page, 'Promo');
+    // The view is still easing to the new zone: let it finish, or its frames land after the moves below and undo them.
+    await untilStill(() => viewTransform(page));
     const zone = await page.evaluate(async () => (await window.agentBoard.zones.list()).find((each) => each.name === 'Promo')!);
     await page.evaluate(() => window.__demo!.camera!({ x: -5000, y: -5000, width: 40, height: 40 }, 0));
     await page.evaluate((id) => window.__demo!.fit!(id, 300, 'linear'), zone.id);
+    // A move resolves once its time is up, which a stalled window can reach before its last frame: read the view once it is still.
+    await untilStill(() => viewTransform(page));
     const framed = await viewport(page);
     const board = await page.locator('.react-flow').evaluate((element) => ({ width: element.clientWidth, height: element.clientHeight }));
     expect(framed.x + (zone.x + zone.width / 2) * framed.zoom).toBeCloseTo(board.width / 2, 0);
@@ -67,8 +72,19 @@ test('with AGENT_BOARD_DEMO=1, hides the daemon status, moves the camera on cue 
     await page.evaluate(() => window.__demo!.cursor!(true));
     await page.mouse.move(300, 200);
     await expect(page.locator('.demo-cursor')).toHaveCSS('translate', '300px 200px');
+    // Watched from before the press, with the observer in place before it: a ripple lives 450 ms, and a stalled window
+    // can poll only after it has gone. Stored on the window, so a ripple seen first is still counted.
+    await page.evaluate(() => {
+      const seen = { count: 0 };
+      (window as unknown as { __rippleSeen: typeof seen }).__rippleSeen = seen;
+      const note = () => {
+        seen.count = Math.max(seen.count, document.querySelectorAll('.demo-cursor-ripple').length);
+      };
+      new MutationObserver(note).observe(document.body, { childList: true, subtree: true });
+      note();
+    });
     await page.mouse.down();
-    await expect(page.locator('.demo-cursor-ripple')).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __rippleSeen: { count: number } }).__rippleSeen.count)).toBe(1);
     await page.mouse.up();
     // The ripple goes once it has spread.
     await expect(page.locator('.demo-cursor-ripple')).toHaveCount(0);

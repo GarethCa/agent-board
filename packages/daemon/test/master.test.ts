@@ -303,3 +303,51 @@ describe('the Captain', () => {
     expect(masterPosition([])).toEqual({ x: 0, y: 0 });
   });
 });
+
+describe('a message to the Captain', () => {
+  it('comes from any orchestrator, whatever its scope, and waits for a busy Captain’s turn to end; steering it stays out of scope', async () => {
+    const setup = await masterDaemon();
+    const { client } = setup;
+    const master = await client.call('master.start', SIZE);
+    await until(client, master.sessionId, atPrompt);
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 400, y: 200, name: 'kobo' });
+    // A zone's lead the user started: the Captain never messaged it, so it has no reply path to answer by.
+    const lead = await client.call('agent.spawn', { zoneId: zone.id, name: 'kobo lead', prompt: 'Print your board identity', orchestrate: 'zone', ...SIZE });
+    const { token, connection } = await sideOf(setup, lead.sessionId);
+    await until(client, lead.sessionId, atPrompt);
+
+    await client.call('session.attach', { sessionId: master.sessionId });
+    await client.call('agent.answer', { sessionId: master.sessionId, text: 'Work slowly' });
+    await until(client, master.sessionId, (agent) => agent.state === 'running' || agent.state === 'thinking');
+    expect(await connection.call('orchestrator.send', { token, sessionId: master.sessionId, text: 'Morning summary' })).toMatchObject({
+      delivery: 'queued-after-turn',
+      messagesWaiting: 1,
+    });
+    await until(client, master.sessionId, (agent) => atPrompt(agent) && agent.messagesWaiting === 0 && /Slow work done\.[\s\S]*Morning summary/.test(setup.recorder.screenText(master.sessionId)));
+
+    // The Captain is told who it is from: it hears from leads all over the board.
+    expect(setup.recorder.screenText(master.sessionId)).toContain(`[agent-board] From kobo lead (agent:${lead.sessionId.slice(0, 8)}).`);
+    expect(await connection.call('orchestrator.send', { token, sessionId: master.sessionId, text: 'One more thing' })).toMatchObject({ delivery: 'started' });
+    await until(client, master.sessionId, atPrompt);
+    const id = { token, sessionId: master.sessionId };
+    for (const steer of [
+      () => connection.call('orchestrator.interrupt', id),
+      () => connection.call('orchestrator.send', { ...id, submit: true }),
+      () => connection.call('orchestrator.send', { ...id, clear: true }),
+      () => connection.call('orchestrator.read', id),
+      () => connection.call('orchestrator.wait', { token, sessionIds: [master.sessionId], timeoutMs: 1_000 }),
+      () => connection.call('orchestrator.pause', id),
+      () => connection.call('orchestrator.close', id),
+    ]) {
+      await expect(steer()).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    }
+
+    // Paused by the user, a message would wake it: that is steering too.
+    await client.call('agent.pause', { sessionId: master.sessionId });
+    await until(client, master.sessionId, (agent) => agent.state === 'hibernated');
+    await expect(connection.call('orchestrator.send', { ...id, text: 'Wake up' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringMatching(/is paused: only the user, or an orchestrator that may steer it, wakes it/),
+    });
+  }, 60_000);
+});

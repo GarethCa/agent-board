@@ -1,5 +1,5 @@
 import { useBoardCommands } from './commands';
-import { memo, useContext, useState, type MouseEvent, type ReactNode } from 'react';
+import { memo, useContext, useState, type ReactNode } from 'react';
 import {
   shortIssueId,
   statusLine,
@@ -11,7 +11,6 @@ import {
   continuesOnCredits,
   type AgentRole,
   type AgentSchedule,
-  type UndeliveredMessage,
   type ChecksState,
   planPending,
   type ExternalSession,
@@ -20,14 +19,10 @@ import {
   type Shell,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
-import { isClosed } from '@agent-board/daemon/board-layout';
-import { startBlocked } from '@agent-board/daemon/review-doc';
 import { gateBadge, inRepoCheckout, shortCommit } from '@agent-board/daemon/gate-rules';
 import { planBadge, planStamp } from '../plan/plan-view';
 import { latestShown } from '../doc/doc-view';
 import { useGateRun } from '../gate/GatesProvider';
-import { gated } from '../gate/gate-view';
-import { runGateShortcut } from '../session/window-keys';
 import { HarnessMark } from './HarnessMark';
 import { agentStartLines, StartFailedActions, StartOutput, StartSteps, StartTile } from './StartTile';
 import { useCheckoutWarning } from './checkout-warning';
@@ -35,16 +30,14 @@ import { agentSetupLine, branchLine, modelLabel, roleText } from './AgentSetup';
 import { useNow } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
-import { FoldVertical, ArrowUpRight, Bell, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileSearch, FileText, Folder, FolderCheck, GitBranch, Hammer, Hash, Maximize2, MoreHorizontal, Network, Pause, PenLine, Pencil, Play, RefreshCw, RotateCcw, Search, SendHorizontal, ShieldCheck, SquareArrowOutUpRight, Timer, Trash2, TriangleAlert, X } from 'lucide-react';
-import { toolSummary } from '../../../shared/needs-you';
-import { Button, Chip, EditableName, FlowPill, HoverCard, IconButton, Menu, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename, type IconButtonProps, type MenuEntry } from '../ui';
+import { ArrowUpRight, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
+import { Button, Chip, EditableName, FlowPill, HoverCard, Menu, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename, type MenuEntry } from '../ui';
 import { Character } from './Character';
 import { CommandFigure } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
 import { badgeLine, checksLabel, foldRanking, isStarting, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
 import { ResumeButton } from './RestartBanner';
-import { cx } from '../ui/cx';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { SubagentPerch } from './SubagentPerch';
@@ -53,7 +46,6 @@ import { windowShells } from '../session/tabs';
 import { useRenameRequest } from './rename';
 import { useFittedLines } from './use-fitted-lines';
 import { splitReviewerName } from './tile-name';
-import type { ClickOpens } from './click-opens';
 import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type TileData, type TileProps } from './tile';
 import { CrewViewContext, lightCrew } from './crew-view';
 import { folderLabel } from './folders';
@@ -62,8 +54,11 @@ import { canRestart, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
-import { keyText } from '../keys/registry';
-import { pauseControl, pausedLine } from './paused';
+import { pausedLine } from './paused';
+import { agentMenu, externalMenu, shellMenu } from './menu-model';
+import { CalmTile } from './CalmTile';
+import { useSimplified } from '../design';
+import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /**
  * Hybrid (v1): a calm white tile with a soft shadow, sitting straight. An agent's tile shows its name, harness,
@@ -73,7 +68,11 @@ import { pauseControl, pausedLine } from './paused';
  */
 export const HybridTile = memo(function HybridTile({ id, tile, selected = false }: TileProps) {
   const harness = tile.harness ?? 'shell';
+  const simplified = useSimplified();
   if (tile.start !== undefined) return <StartTile id={id} start={tile.start} />;
+  if (tile.agent !== undefined && simplified) {
+    return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
+  }
   if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} />;
   if (tile.shell !== undefined) return <ShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.external !== undefined) return <ExternalTile id={id} session={tile.external} />;
@@ -95,29 +94,15 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   // The crew it is of, as an orchestrator or one it started: lit while the orchestrator or a chip is hovered.
   const crewOf = crew === undefined ? from?.sessionId : agent.sessionId;
   const chip = from !== undefined && crewView.look !== 'off' && (crewView.look === 'chips' || !crewView.framed.has(agent.sessionId));
-  const { setFolded, expand, openAgent, popOutAgent, deleteAgent, linkIssue, scheduleAgent, setMuted, openLink, openPullRequest, resumeAgent, pauseAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, startReview, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
-    useContext(TileActionsContext);
+  const tileActions = useContext(TileActionsContext);
+  const { expand, openAgent, popOutAgent, deleteAgent, openLink, openPullRequest, resumeAgent, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered, restartAgent, rename, openReview, openGate, openPlan, openDoc, retryAgentStart, continueOnCredits } =
+    tileActions;
   const commands = useBoardCommands();
   const gate = useGateRun(agent.sessionId);
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
   const rounds = roundsOf(useReviews(), agent.sessionId);
   const latestRound = rounds.at(-1);
-  const notStarted = startBlocked(agent, rounds);
-  // A reviewer opens the review it is writing; an implementer starts its next round, or opens the last.
-  const reviewEntries = (): MenuEntry[] =>
-    agent.reviewOf !== null
-      ? [{ label: 'Open review', icon: <FileCheck />, onSelect: () => openReview(agent.reviewOf!) }]
-      : [
-          ...(latestRound === undefined ? [] : [{ label: 'Open review', icon: <FileCheck />, onSelect: () => openReview(agent.sessionId) }]),
-          {
-            label: latestRound === undefined ? 'Review its work' : `Start review round ${latestRound.round + 1}`,
-            icon: <FileSearch />,
-            disabled: notStarted !== undefined,
-            hint: notStarted,
-            onSelect: () => startReview(agent),
-          },
-        ];
   const starting = isStarting(agent);
   // A starting reviewer has no room for a subtitle row, so its marker leads its name ("Review · r1 · Rework the…"), where a
   // long name's clamp can't cut it off.
@@ -163,7 +148,6 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   // Its last message, a hover away, while the body says what it is doing; an ask or a notice is the body's, as it was.
   const card = lastMessageCard(agent);
   const lastMessage = card?.text;
-  const pause = pauseControl(agent);
   return (
     <HoverCard label={card?.label ?? 'Last message'} content={lastMessage}>
     <div
@@ -202,54 +186,14 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
         <RenameButton renaming={renaming} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
-          <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
+          <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
           {canRestart(agent) && (
-            <TileButton icon={<RotateCcw />} aria-label="Restart" title="Restart it, carrying on its conversation" onClick={() => restartAgent(agent.sessionId)} />
+            <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Restart" title="Restart it, carrying on its conversation" onClick={() => restartAgent(agent.sessionId)} />
           )}
           {agent.state === 'stopped-by-restart' && (
-            <TileButton icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
+            <TileButton className="hybrid-tile-minor" icon={<RotateCcw />} aria-label="Resume" data-testid="resume" title="Resume it, carrying on its conversation" onClick={() => void resumeAgent(agent.sessionId)} />
           )}
-          <TileMenu
-            entries={[
-              otherOpen(clickOpens, () => expand(id), () => openAgent(agent)),
-              ...(isClosed(agent) ? [{ label: 'Fold to a chip', icon: <FoldVertical />, onSelect: () => setFolded(id, true) }] : []),
-              ...(canRestart(agent) ? [{ label: 'Restart agent', icon: <RotateCcw />, onSelect: () => restartAgent(agent.sessionId) }] : []),
-              ...(agent.state === 'stopped-by-restart' ? [{ label: 'Resume agent', icon: <RotateCcw />, onSelect: () => void resumeAgent(agent.sessionId) }] : []),
-              ...(continuesOnCredits(agent) ? [{ label: 'Continue on credits', icon: <Coins />, onSelect: () => void continueOnCredits(agent.sessionId) }] : []),
-              ...(pause === undefined
-                ? []
-                : [
-                    pause.action === 'wake'
-                      ? { label: 'Wake', icon: <Play />, hint: pause.hint, onSelect: () => void resumeAgent(agent.sessionId) }
-                      : { label: 'Pause', icon: <Pause />, disabled: !pause.enabled, hint: pause.hint, onSelect: () => void pauseAgent(agent.sessionId) },
-                  ]),
-              'separator',
-              { label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: renaming.startSoon },
-              { label: agent.schedule === null ? 'Schedule…' : 'Edit schedule…', icon: <Clock />, onSelect: () => scheduleAgent(agent) },
-              { label: agent.issue === null ? 'Link issue…' : 'Change issue…', icon: <Hash />, onSelect: () => linkIssue(agent) },
-              {
-                label: agent.muted ? 'Unmute notifications' : 'Mute notifications',
-                icon: agent.muted ? <Bell /> : <BellOff />,
-                onSelect: () => setMuted(agent.sessionId, !agent.muted),
-              },
-              'separator',
-              ...reviewEntries(),
-              ...(gated(agent)
-                ? [
-                    {
-                      label: 'Run gate',
-                      icon: <ShieldCheck />,
-                      shortcut: runGateShortcut(),
-                      disabled: gate?.status === 'running',
-                      hint: gate?.status === 'running' ? 'It is running: its Gate tab shows it' : "Run its zone's gate command in its worktree",
-                      onSelect: () => openGate(agent, true),
-                    },
-                  ]
-                : []),
-              'separator',
-              { label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => deleteAgent(agent.sessionId) },
-            ]}
-          />
+          <TileMenu entries={agentMenu({ nodeId: id, agent, clickOpens, gate, rounds, rename: renaming.startSoon, actions: tileActions })} />
         </TileCorner>
       </div>
       {crew !== undefined && (
@@ -503,6 +447,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                 {agent.queuedUntilUp} queued until it&apos;s up
               </Chip>
             )}
+            {agent.messagesWaiting > 0 && (
+              <Chip className="hybrid-tile-queued" data-testid="tile-messages-waiting" title="Sent by other agents mid-turn: each is typed once its turn ends, as a turn of its own">
+                <Timer aria-hidden />
+                {agent.messagesWaiting} message{agent.messagesWaiting === 1 ? '' : 's'} waiting
+              </Chip>
+            )}
             {!starting && crewFlags !== undefined && (
               <Chip className="hybrid-tile-crew-flags" data-testid="crew-flags" title="Crew members waiting for its answer: sending each a message clears its flag">
                 ⚑ {crewFlags} crew flag{crewFlags === 1 ? '' : 's'}
@@ -534,34 +484,10 @@ const ROLE_ICONS: Record<AgentRole, ReactNode> = {
   custom: <PenLine aria-hidden />,
 };
 
-/**
- * The agent's last message for the card that shows below its tile, with the time its turn ended in the card's label:
- * none while the tile's body is an ask or a notice, which take its place.
- */
-export function lastMessageCard(agent: Agent): { text: string; label: string } | undefined {
-  if (askOf(agent) !== undefined || agent.notice !== null || !agent.lastMessage) return undefined;
-  const at = agent.finishedAt === null ? undefined : new Date(agent.finishedAt);
-  const time = at === undefined || Number.isNaN(at.getTime()) ? '' : ` · ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  return { text: agent.lastMessage, label: `Last message${time}` };
-}
-
-/**
- * What a tile waiting for you asks, in place of its task: the tool it wants to use, the question it asks through the
- * board with its options, or the plan it waits on. A question on its card beside the tile isn't repeated:
- * the tile points at it, the question in its tooltip. Its last message is on its hover card instead.
- */
-function askOf(agent: Agent): { tool?: string; text: string; title?: string; question?: true } | undefined {
-  const prompt = agent.permissions[0];
-  if (prompt !== undefined) return { tool: prompt.toolName, text: toolSummary(prompt) };
-  if (agent.ask?.onBoard === true) return { text: 'Asking you ↗', title: agent.ask.question, question: true };
-  if (agent.ask !== null) return { text: agent.ask.options.length === 0 ? agent.ask.question : `${agent.ask.question}\n${agent.ask.options.join(' · ')}`, question: true };
-  if (planPending(agent)) return { text: `Waiting for you to decide on its plan: ${agent.plan.title}` };
-  return undefined;
-}
-
 /** A shell tile: plain shells in a zone's folder, or at home loose on the board, split into panes in its session window. */
 function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected: boolean }) {
-  const { expand, openShell, popOutShell, deleteShell, resumeShell, rename } = useContext(TileActionsContext);
+  const tileActions = useContext(TileActionsContext);
+  const { expand, openShell, popOutShell, resumeShell, rename } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
   const renaming = useRenaming(shell.name, (name) => rename({ kind: 'shell', shellId: shell.id }, name));
   const dropOver = dropOverValue.use();
@@ -590,16 +516,8 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
         <RenameButton renaming={renaming} />
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its panes" onClick={() => expand(id)} />
-          <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
-          <TileMenu
-            entries={[
-              otherOpen(clickOpens, () => expand(id), () => openShell(shell)),
-              'separator',
-              { label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: renaming.startSoon },
-              'separator',
-              { label: 'Delete shell', icon: <Trash2 />, danger: true, onSelect: () => deleteShell(shell.id) },
-            ]}
-          />
+          <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its terminal in its own window" onClick={() => popOutShell(shell)} />
+          <TileMenu entries={shellMenu({ nodeId: id, shell, clickOpens, rename: renaming.startSoon, actions: tileActions })} />
         </TileCorner>
       </div>
       <ShellFolderChip shell={shell} />
@@ -656,186 +574,6 @@ function ShellFolderChip({ shell }: { shell: Shell }) {
         {folderLabel(folder, folders.home)}
       </Chip>
     </Menu>
-  );
-}
-
-/**
- * What was typed at the agent's prompt and never sent, its Enter lost however often pressed: Send presses it again,
- * and Clear clears its prompt. Nothing more is typed at the agent until one of them is done. The question the agent
- * asked, which the row hides, is in its tooltip.
- */
-function UnsentRow({
-  fitted,
-  what,
-  asked,
-  onSend,
-  onClear,
-}: {
-  fitted: (element: HTMLElement | null) => void;
-  what: string;
-  asked: string | undefined;
-  onSend(): Promise<void>;
-  onClear(): Promise<void>;
-}) {
-  const [pending, setPending] = useState<'send' | 'clear'>();
-  const run = (action: 'send' | 'clear', act: () => Promise<void>) => {
-    setPending(action);
-    void act().finally(() => setPending(undefined));
-  };
-  const text = pending === 'send' ? `Sending ${what.charAt(0).toLowerCase()}${what.slice(1)}…` : `${what} not sent: it is typed at its prompt`;
-  return (
-    <span
-      ref={fitted}
-      className="hybrid-tile-body hybrid-tile-unsent"
-      role="note"
-      data-testid="tile-unsent"
-      title={asked === undefined ? text : `${text}\n\nIt asked: ${asked}`}
-      onDoubleClick={stopPropagation}
-    >
-      <span className="hybrid-tile-text">{text}</span>
-      <Button size="xs" variant="primary" icon={<SendHorizontal />} className="nodrag" data-testid="send-unsent" disabled={pending !== undefined} onClick={() => run('send', onSend)}>
-        Send
-      </Button>
-      <Button size="xs" className="nodrag" data-testid="clear-unsent" disabled={pending !== undefined} onClick={() => run('clear', onClear)}>
-        Clear
-      </Button>
-    </span>
-  );
-}
-
-/**
- * What was sent to the agent before its session was up and never typed: Resend sends it again (an ended agent starts
- * again with it), Clear forgets it.
- */
-function UndeliveredRow({
-  fitted,
-  items,
-  onResend,
-  onClear,
-}: {
-  fitted: (element: HTMLElement | null) => void;
-  items: readonly UndeliveredMessage[];
-  onResend(): Promise<void>;
-  onClear(): Promise<void>;
-}) {
-  const [pending, setPending] = useState<'resend' | 'clear'>();
-  const run = (which: 'resend' | 'clear', action: () => Promise<void>) => {
-    setPending(which);
-    void action().finally(() => setPending(undefined));
-  };
-  const what = items.length === 1 ? `${items[0]!.what} not delivered:` : `${items.length} messages not delivered:`;
-  return (
-    <span
-      ref={fitted}
-      className="hybrid-tile-body hybrid-tile-unsent"
-      role="note"
-      data-testid="tile-undelivered"
-      title={items.map((item) => `${item.what} (${item.reason}):\n${item.text}`).join('\n\n')}
-      onDoubleClick={stopPropagation}
-    >
-      <span className="hybrid-tile-text">
-        {pending === 'resend' ? (
-          'Resending…'
-        ) : (
-          <>
-            <strong>{what}</strong> {items.map((item) => item.text).join(' · ')}
-          </>
-        )}
-      </span>
-      <Button size="xs" variant="primary" icon={<SendHorizontal />} className="nodrag" data-testid="resend-undelivered" disabled={pending !== undefined} onClick={() => run('resend', onResend)}>
-        Resend
-      </Button>
-      <Button size="xs" className="nodrag" data-testid="clear-undelivered" disabled={pending !== undefined} onClick={() => run('clear', onClear)}>
-        Clear
-      </Button>
-    </span>
-  );
-}
-
-/**
- * Claude's trust screen, which its first prompt waits on: Trust folder answers it `Yes, I trust this folder`, only on
- * the user's click; the first prompt is typed once its session is up.
- */
-function TrustRow({ fitted, folder, onTrust }: { fitted: (element: HTMLElement | null) => void; folder: string; onTrust(): Promise<void> }) {
-  const [pending, setPending] = useState(false);
-  return (
-    <span
-      ref={fitted}
-      className="hybrid-tile-body hybrid-tile-unsent"
-      role="note"
-      data-testid="tile-trust"
-      title={`Claude is asking whether to trust this folder before it starts:\n${folder}\n\nTrust folder answers "Yes, I trust this folder"; its first prompt is typed once it is up.`}
-      onDoubleClick={stopPropagation}
-    >
-      <span className="hybrid-tile-text">
-        {pending ? (
-          'Trusting its folder…'
-        ) : (
-          <>
-            <strong>Claude asks to trust this folder:</strong> {folder}
-          </>
-        )}
-      </span>
-      <Button
-        size="xs"
-        variant="primary"
-        icon={<FolderCheck />}
-        className="nodrag"
-        data-testid="trust-folder"
-        disabled={pending}
-        onClick={() => {
-          setPending(true);
-          void onTrust().finally(() => setPending(false));
-        }}
-      >
-        Trust folder
-      </Button>
-    </span>
-  );
-}
-
-/**
- * The first prompt its session never said it was up for, so never typed: Send types it at its prompt, once the user
- * has seen its terminal is ready for it (a startup screen of its harness answered).
- */
-function UntypedRow({ fitted, prompt, onSend }: { fitted: (element: HTMLElement | null) => void; prompt: string; onSend(): Promise<void> }) {
-  const [pending, setPending] = useState(false);
-  // What to do before Send (beside it), short enough to fit the one line a crowded tile leaves the row: Send on a
-  // startup screen (trust this folder?) answers it.
-  const hint = 'Answer its terminal first:';
-  return (
-    <span
-      ref={fitted}
-      className="hybrid-tile-body hybrid-tile-unsent"
-      role="note"
-      data-testid="tile-untyped"
-      title={`Its first prompt is not typed yet: its session never said it was up. Answer its terminal first, then Send.\n\n${prompt}`}
-      onDoubleClick={stopPropagation}
-    >
-      <span className="hybrid-tile-text">
-        {pending ? (
-          'Sending its first prompt…'
-        ) : (
-          <>
-            <strong>{hint}</strong> {prompt}
-          </>
-        )}
-      </span>
-      <Button
-        size="xs"
-        variant="primary"
-        icon={<SendHorizontal />}
-        className="nodrag"
-        data-testid="send-untyped"
-        disabled={pending}
-        onClick={() => {
-          setPending(true);
-          void onSend().finally(() => setPending(false));
-        }}
-      >
-        Send
-      </Button>
-    </span>
   );
 }
 
@@ -939,7 +677,8 @@ function ResumeRow({ onResume }: { onResume(): Promise<void> }) {
  * in agent-board, becoming an agent, or dismissed.
  */
 function ExternalTile({ id, session }: { id: string; session: ExternalSession }) {
-  const { expand, dismissExternal, resumeExternal } = useContext(TileActionsContext);
+  const tileActions = useContext(TileActionsContext);
+  const { expand, resumeExternal } = tileActions;
   const { status } = session;
   const fitted = useFittedLines();
   const docs = [status?.handover && `handover ${status.handover}`, status?.reviewDoc && `review ${status.reviewDoc}`].filter(Boolean);
@@ -961,18 +700,13 @@ function ExternalTile({ id, session }: { id: string; session: ExternalSession })
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its details" onClick={() => expand(id)} />
           <TileButton
+            className="hybrid-tile-minor"
             icon={<Play />}
             aria-label="Resume in agent-board"
             title="Carry on this session here, as an agent with a terminal of its own"
             onClick={() => resumeExternal(session)}
           />
-          <TileMenu
-            entries={[
-              { label: 'Resume in agent-board…', icon: <Play />, onSelect: () => resumeExternal(session) },
-              'separator',
-              { label: 'Remove from board', icon: <Trash2 />, danger: true, onSelect: () => dismissExternal(session.id) },
-            ]}
-          />
+          <TileMenu entries={externalMenu(session, tileActions)} />
         </TileCorner>
       </div>
       <span className="hybrid-tile-branch" title={session.worktree ?? session.cwd}>
@@ -1001,30 +735,9 @@ function ExternalTile({ id, session }: { id: string; session: ExternalSession })
   );
 }
 
-/** A name this long fills both of its lines, so the rename pencil laid over its end would hide letters: it leaves room. */
-const LONG_NAME = 24;
-const nameClass = (name: string) => (name.length > LONG_NAME ? 'hybrid-tile-name hybrid-tile-name-long' : 'hybrid-tile-name');
-
-/** Keeps a double-click on a tile's control from also opening its session. */
-const stopPropagation = (event: MouseEvent) => event.stopPropagation();
-
-/** An icon button in a tile's head: small, and kept from dragging the tile or opening its session. */
-function TileButton(props: Omit<IconButtonProps, 'size'>) {
-  return <IconButton size="xs" {...props} className={cx('nodrag', props.className)} onDoubleClick={stopPropagation} />;
-}
-
-/** A tile's More button and its menu of the rarer actions. */
-function TileMenu({ entries }: { entries: MenuEntry[] }) {
-  return (
-    <Menu entries={entries} align="end">
-      <TileButton icon={<MoreHorizontal />} aria-label="More" title="More actions" />
-    </Menu>
-  );
-}
-
 /**
- * The corner of a tile's head: its actions, unseen until the tile is hovered or holds the focus, but always there
- * for the keyboard, which shows them as it reaches them. Only their opacity changes, so nothing on the tile moves
+ * The corner of a tile's head: its actions, softer at rest and full when the tile is hovered or holds the focus,
+ * but never hidden. Only their opacity changes, so nothing on the tile moves
  *; the state lives in the footer.
  */
 function TileCorner({ children }: { children: ReactNode }) {
@@ -1106,11 +819,4 @@ export function PullRequestChip({ pr, pushed = false, open }: { pr: PullRequest;
       {pr.checks !== 'none' && <span className="hybrid-tile-pr-checks">{CHECK_MARKS[pr.checks]}</span>}
     </Chip>
   );
-}
-
-/** The ⋯ menu's way to do, once, what a click on the tile doesn't: expand it in place, or open its window. */
-function otherOpen(clickOpens: ClickOpens, expand: () => void, open: () => void): MenuEntry {
-  return clickOpens === 'window'
-    ? { label: 'Expand in place', icon: <Expand />, onSelect: expand }
-    : { label: 'Open window', icon: <Maximize2 />, onSelect: open };
 }

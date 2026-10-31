@@ -204,7 +204,8 @@ ORCHESTRATING
                         <path> picks the repo it works in, task by task.
   send <ref> [--] <message>
                         Send an agent its next message, once its turn has ended. Also, from
-                        any agent, a reply to an agent that messaged it.
+                        any agent, a reply to an agent that messaged it. --submit or --clear
+                        sends or clears a message left unsent at its prompt.
   wait [<ref>...] [--crew] [--until finished]
                         Wait until each agent's turn has ended: it is at its prompt, needs
                         the user, or has stopped; or until it says its work is finished.
@@ -233,7 +234,7 @@ ORCHESTRATING
   the way moving aside:
   move <ref> [--to <zone ref>] [--at <x>,<y>] [--near <ref> [--side below|right|left|above]]
                         Move a tile (an agent, a shell) or a note.
-  arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap] [--auto on|off]
+  arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off]
                         Lay out your zone's tiles: you first, then a lane per issue, its
                         implementer, reviewer and follow-up in columns, then its note.
                         --auto on arranges by itself as you start agents and add notes.
@@ -530,6 +531,10 @@ As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board send impl -- 'Fix the review points: ...'
   agent-board close review --remove
 
+A send says "Sent" once the agent's turn has started on it. If it fails because the message was
+typed at its prompt but no turn started, \`agent-board send impl --submit\` presses Enter on it, and
+\`agent-board send impl --clear\` clears it, so the next send can go.
+
 Keep your crew's tile lines current: a tile shows one status line (or else its task), and the
 agent's last message is only a hover away. Set a crew member's with \`agent-board status set
 --agent impl 'Retry fix in; waiting on review round 1'\` as its work moves on; its tile says you
@@ -630,20 +635,40 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
   --json             Print the agent as JSON.`,
   },
   send: {
-    usage: 'agent-board send <ref> [--file <path>] [--] <message>',
+    usage: 'agent-board send <ref> [--file <path>] [--] <message> | send <ref> --submit | --clear',
     text: `Sends the agent <message> (or the text of --file) as its next message, as the user typing it
 would. Only once its turn has ended: wait for it first, or interrupt it. To an agent still
-starting it is queued until its session is up, after its first prompt. Never to an agent
+starting it is queued until its session is up, after its first prompt. To an orchestrator
+mid-turn it is queued until that turn ends, then sent as a turn of its own, after any sent
+before it, or behind any still waiting (its tile counts them; a \`wait\` on it, if you may
+wait on it, waits for that turn). Never to an agent
 that needs the user's permission, and never a harness command (a message starting with ! or
 a /command other than a plugin's /plugin:command). Only printable text, tabs and line
 breaks: no control characters.
+
+It says "Sent" only once the agent's turn has started on it. A message typed at its prompt
+whose Enter starts no turn stays there, unsent (its tile says so), and send fails, saying
+why: nothing more is typed at that prompt until it is sent or cleared. --submit presses
+Enter on it, as the tile's Send does, and fails, leaving it unsent, if no turn starts;
+--clear clears it. Both only for an agent you may steer, and never while the user is typing at its prompt.
 
 Any agent may send back to an agent that messaged it, for an hour after its latest message,
 even one outside its scope, and even if it may not orchestrate: a message it couldn't otherwise
 answer ends with a line naming who sent it. That opens a reply and nothing more: no wait,
 read, interrupt, restart or close, and the answer opens no way back.
 
+Any orchestrator may send the Captain a message, whatever its scope: a message only, so
+--submit, --clear, waking it and every other command on the Captain stay out of its scope.
+The Captain is told who it is from.
+
+What the agent reads starts with your sender mark, so it and its chat know the message is
+yours, not the user's: \`⟨send from impl · agent:944e1234⟩ Fix the review points: ...\`
+(\`reply\` instead of \`send\` when it answers the agent's message, flag or question). send
+prints how it starts, as typed (with --json, all of it).
+
   --file <path>   Read the message from a file.
+  --submit        Press Enter on the message left unsent at its prompt.
+  --clear         Clear the message left unsent at its prompt.
   --json          Print the agent as JSON.`,
   },
   wait: {
@@ -902,7 +927,7 @@ the zone over another zone is refused.
   --json           Print where it went as JSON.`,
   },
   arrange: {
-    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap] [--auto on|off] [--json] | arrange board [--json]',
+    usage: 'agent-board arrange [<zone ref>] [--by issue|role|state] [--layout rows|columns|cards|grid|wrap|masonry|treemap] [--auto on|off] [--json] | arrange board [--json]',
     text: `Lays out the tiles of your zone (or <zone ref>, in your scope) that you may move, for an
 orchestrator: you first, then
 
@@ -933,7 +958,10 @@ two across (three past four lanes), a free column and row between them: its labe
 implementer and reviewers on one row, its follow-up reviewers under them. --layout wrap stacks
 the lanes as rows do, but each lane's label and note sit in its first column and its tiles, in
 slot order, wrap onto a new row after four, each lane with its own columns; by role or state it
-lays out as rows. --layout grid fills
+lays out as rows. --layout masonry packs each lane, as wrap lays it out, into the shortest of
+as many columns of lanes as best fit the app's window (or the zone's width with no window open).
+--layout treemap gives each lane a block sized by its tiles, packed to the window's shape (16:10
+with none open). By role or state, masonry and treemap pack each row as a lane. --layout grid fills
 the zone's width in the same order
 instead of a row each, but only with the tiles no edge joins: a unit whose tiles an edge joins
 (you too, if one joins you) is laid out exactly as rows lay it out, from the top, and the grid
@@ -1320,6 +1348,7 @@ const OPTIONS = {
   kind: { type: 'string' },
   via: { type: 'string' },
   clear: { type: 'boolean' },
+  submit: { type: 'boolean' },
   keep: { type: 'boolean' },
   result: { type: 'string' },
   'handoff-to': { type: 'string' },
@@ -1346,7 +1375,7 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   doc: ['title', 'board', 'plan'],
   new: ['zone', 'name', 'harness', 'model', 'role', 'no-template', 'repo', 'branch', 'base', 'issue', 'file'],
   roles: ['file', 'zone'],
-  send: ['file'],
+  send: ['file', 'submit', 'clear'],
   wait: ['until', 'any', 'timeout', 'crew'],
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
   restart: ['fresh', 'file'],
@@ -1553,9 +1582,15 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'send': {
       const ref = positionals[0];
       if (ref === undefined) throw new UsageError('give an agent ref and a message');
+      if (values.submit === true || values.clear === true) {
+        if (values.submit === true && values.clear === true) throw new UsageError('give --submit or --clear, not both');
+        if (positionals.length > 1 || string('file') !== undefined) throw new UsageError('--submit and --clear take no message');
+        const draft = values.submit === true ? { submit: true as const } : { clear: true as const };
+        return async (session) => print(await sendToAgent(session, ref, draft));
+      }
       const message = text(1);
       if (message.trim() === '') throw new UsageError('give a message');
-      return async (session) => print(await sendToAgent(session, ref, message));
+      return async (session) => print(await sendToAgent(session, ref, { text: message }));
     }
     case 'wait': {
       const until = string('until')?.split(',').map((state) => state.trim()) as WaitState[] | undefined;

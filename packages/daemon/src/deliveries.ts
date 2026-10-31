@@ -1,6 +1,8 @@
 import { systemClock, type Clock } from './clock.ts';
 import { recount } from './counts.ts';
 import { handoffLine } from './handoff-text.ts';
+import { refOf } from './crew-flags.ts';
+import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
 import type { Agent } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
@@ -32,6 +34,9 @@ const NOT_UP_FIRST_REASON = `${NOT_UP_REASON}: its first prompt goes first`;
 /** Why what was queued for an agent not up yet is handed back as the daemon closes (`handBackQueued`). */
 const CLOSED_REASON = 'the daemon shut down before it was up';
 
+/** Why what waited for an agent's turn to end is handed back as the daemon closes (`handBackQueued`). */
+const CLOSED_IN_TURN_REASON = 'the daemon shut down before its turn ended';
+
 /** How many more times Enter is pressed before what was typed is called not sent. */
 const SUBMIT_RETRIES = 2;
 
@@ -55,6 +60,16 @@ const whyGaveUp = (now: PromptNow): string =>
         ? 'a turn started before Enter was pressed'
         : 'it moved on before Enter was pressed';
 
+/**
+ * A message sent to an agent mid-turn, waiting for that turn to end (`queueAfterTurn`): `typing` hears its typing
+ * start, and `settled` how it went once typed (whether its turn started), or that it was handed back instead.
+ */
+export interface AfterTurn {
+  text: string;
+  typing(): void;
+  settled(started: boolean): void;
+}
+
 /** Why a message queued in a turn its rate limit stopped was given up on: Enter there may pick from Claude's menu. */
 const RATE_LIMITED_REASON = 'its turn hit a rate limit';
 
@@ -69,8 +84,26 @@ const UNSENT_REASON = 'a message typed at its prompt was never sent';
  */
 const clearKeys = (lines: number) => `\x15${'\x7f\x15'.repeat(lines - 1)}`;
 
-/** How typing at an agent went: typed, and whether its turn started; or not typed, and why. */
-type Typed = { typed: true; sent: boolean } | { typed: false; reason: string };
+/**
+ * How typing at an agent went: typed, and whether its turn started (or, `inTurn`, its one Enter queued it in the turn
+ * under way), or else why it was given up on, left unsent; or not typed, and why.
+ */
+type Typed = { typed: true; sent: boolean; inTurn?: boolean; why?: string } | { typed: false; reason: string };
+
+/**
+ * How a message sent as the agent's next went (`answer`): typed and its turn started; queued until its session is up;
+ * the paused agent `woken` with it, to be typed once its session is up; its one Enter queued it in a turn under way
+ * (`inTurn`); or typed but not sent, `unsent` saying why it was given up on.
+ */
+export interface Answered {
+  queued: boolean;
+  woken?: true;
+  inTurn?: true;
+  unsent?: string;
+}
+
+/** How sending an unsent message went (`send`): its turn started, or why not. */
+export type UnsentSent = { started: true } | { started: false; why: string };
 
 /**
  * Where an agent's prompt stands: between turns, holding only what was typed (`at-prompt`) or the user's typing too
@@ -180,6 +213,10 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * comes first, its typing starting, its queue settling or the daemon closing (`handBackQueued`), takes each one.
    */
   const queuedItems = new Set<{ sessionId: string; what: string; text: string }>();
+  /** Per agent mid-turn when they came, the messages waiting for its turn to end, oldest first (`queueAfterTurn`). */
+  const afterTurn = new Map<string, AfterTurn[]>();
+  /** Agents one of whose messages waiting for its turn to end is being typed now. */
+  const typingAfterTurn = new Set<string>();
 
   /** Keeps `kept` as the agent's unsent message, or forgets it; `why` it was given up on tells the user (`notSent`). */
   const setUnsent = (sessionId: string, kept: { what: string; lines: number } | undefined, why?: string) => {
@@ -291,8 +328,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     if (reason !== undefined) return { typed: false, reason };
     await typeAndSettle(sessionId, line);
     const lines = line.split('\r').length;
+    let inTurn = false;
+    let why: string | undefined;
     // Two queued in one turn may go up as one message: the second Enter landed on the first's text.
     const queue = () => {
+      inTurn = true;
       const before = queued.get(sessionId);
       queued.set(sessionId, {
         what: before?.what ?? what,
@@ -302,11 +342,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       });
     };
     const sent = await pressEnter(sessionId, (now) => {
-      options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${whyGaveUp(now)}`);
-      setUnsent(sessionId, { what, lines }, whyGaveUp(now));
+      why = whyGaveUp(now);
+      options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${why}`);
+      setUnsent(sessionId, { what, lines }, why);
       return false;
     }, midTurn ? queue : undefined);
-    return { typed: true, sent };
+    return { typed: true, sent, ...(inTurn ? { inTurn } : {}), ...(why === undefined ? {} : { why }) };
   };
 
   /**
@@ -318,15 +359,15 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
   /**
    * Why the agent's unsent message can't be sent from the board now, or with `clearing` cleared, or undefined if it
-   * can. Clearing a prompt the user typed at too is theirs to ask: it clears their words with it.
+   * can. Clearing a prompt the user typed at too is theirs to ask (`byUser`): it clears their words with it.
    */
-  const whyNotNow = (sessionId: string, clearing = false): string | undefined => {
+  const whyNotNow = (sessionId: string, clearing = false, byUser = true): string | undefined => {
     const { name, endedAt } = requireAgent(sessionId);
     if (endedAt !== null) return `${name} has ended`;
     if (!unsent.has(sessionId)) return `${name} has no unsent message at its prompt`;
     if (sending.has(sessionId)) return `${name}'s unsent message is being sent`;
     const now = options.promptNow(sessionId);
-    if (now === 'typing' && !clearing) return `you are typing in ${name}'s terminal`;
+    if (now === 'typing' && !(clearing && byUser)) return `${byUser ? 'you are' : 'the user is'} typing in ${name}'s terminal`;
     if (now === 'moved-on' || now === 'working') return `${name} is not at its prompt`;
     return undefined;
   };
@@ -429,6 +470,29 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       .catch((error: Error) => options.log(`could not keep ${what} for ${sessionId}, never delivered: ${error.message}`));
   };
 
+  /**
+   * Hands back everything waiting for the agent's turn to end (`undelivered`), and why: its sender heard it was queued,
+   * so it is never dropped unsaid. Nothing is handed back for an agent deleted meanwhile, which has nowhere to show it.
+   */
+  const handBackAfterTurn = (sessionId: string, reason: string) => {
+    const items = afterTurn.get(sessionId);
+    if (items === undefined) return;
+    afterTurn.delete(sessionId);
+    for (const item of items) {
+      try {
+        options.undelivered(sessionId, 'A message', item.text, reason);
+      } catch (error) {
+        options.log(`could not keep a message for ${sessionId}, never delivered: ${(error as Error).message}`);
+      }
+      item.settled(false);
+    }
+    try {
+      announce(sessionId);
+    } catch (error) {
+      options.log(`could not tell clients of ${sessionId}'s waiting messages: ${(error as Error).message}`);
+    }
+  };
+
   /** Whether the live agent is being paused: its session is going, so nothing is typed at it. */
   const beingPaused = (row: Row) => row.ended_at === null && row.hibernated_at !== null;
 
@@ -444,6 +508,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /** Forgets the deleted agent's hand-offs still landing, and its unsent or queued message. */
     forget(sessionId: string) {
+      for (const item of afterTurn.get(sessionId) ?? []) item.settled(false);
+      afterTurn.delete(sessionId);
       handingOff.delete(sessionId);
       unsent.delete(sessionId);
       sending.delete(sessionId);
@@ -523,8 +589,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       else if (!draftAfterInput(true, data)) queued.delete(sessionId);
     },
 
-    /** The agent's session ended: its prompt, and what was typed at it, went with it. */
-    ended(sessionId: string) {
+    /**
+     * The agent's session ended (`byShutdown`, as the daemon shuts down): its prompt, and what was typed at it, went
+     * with it.
+     */
+    ended(sessionId: string, byShutdown = false) {
+      handBackAfterTurn(sessionId, byShutdown ? CLOSED_IN_TURN_REASON : 'its session ended before its turn did');
       queued.delete(sessionId);
       interruptedWith.delete(sessionId);
       setUnsent(sessionId, undefined);
@@ -533,24 +603,29 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     /**
      * Sends the agent's unsent message, as the user asked: presses Enter on it as a delivery does, after whatever is
      * being typed at it, and resolves once its turn starts or no Enter starts one. It stays unsent until then, so
-     * nothing is typed onto it meanwhile. If no Enter starts a turn, the prompt holds nothing to send (an Enter on text
-     * submits it, and the harness has long taken it in): it is no longer unsent. Refuses unless the agent sits at its
-     * prompt with nothing the user typed there.
+     * nothing is typed onto it meanwhile. If no Enter starts a turn, the user's Send takes the prompt as holding nothing
+     * to send (an Enter on text submits it, and the harness has long taken it in; they see the prompt): it is no longer
+     * unsent. Refuses unless the agent sits at its prompt with nothing the user typed there. Asked by an orchestrator
+     * (`byUser` false), which sees no prompt, it stays unsent then: an Enter can be lost, as it was on the message.
+     * Resolves with how it went.
      */
-    async send(sessionId: string) {
-      const refused = whyNotNow(sessionId);
+    async send(sessionId: string, byUser = true): Promise<UnsentSent> {
+      const refused = whyNotNow(sessionId, false, byUser);
       if (refused !== undefined) throw invalidParams(refused);
       sending.add(sessionId);
-      await inTurn(sessionId, async () => {
+      return inTurn(sessionId, async () => {
         try {
+          let why: string | undefined;
           // Gone unless the user typed at it meanwhile (their words are theirs to send), or it moved on unpressed.
           const gone = await pressEnter(sessionId, (now) => {
-            if (now !== 'at-prompt') return false;
+            why = now === 'typing' && !byUser ? 'the user typed at its prompt meanwhile' : whyGaveUp(now);
+            if (now !== 'at-prompt' || !byUser) return false;
             options.log(`no turn started at ${sessionId}'s prompt on Send: it holds nothing to send`);
             return true;
           });
           // Settled in its own step, so what waits behind it in the queue finds the prompt as it is now.
           if (gone) setUnsent(sessionId, undefined);
+          return why === undefined ? { started: true } : { started: false, why };
         } finally {
           sending.delete(sessionId);
         }
@@ -559,10 +634,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /**
      * Clears the agent's unsent message, as the user asked: clears its lines at the prompt (`clearKeys`), with anything
-     * the user typed there, and resolves with the keys written. Refuses as `send` does, but for the user typing there.
+     * the user typed there, and resolves with the keys written. Refuses as `send` does, but for the user typing there;
+     * asked by an orchestrator (`byUser` false), that too, as their words would go with it.
      */
-    clear(sessionId: string): string {
-      const refused = whyNotNow(sessionId, true);
+    clear(sessionId: string, byUser = true): string {
+      const refused = whyNotNow(sessionId, true, byUser);
       if (refused !== undefined) throw invalidParams(refused);
       const keys = clearKeys(unsent.get(sessionId)!.lines);
       options.write(sessionId, keys);
@@ -668,6 +744,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * memory. Call before the database closes. One that can't be kept is logged, never holding up the rest.
      */
     handBackQueued() {
+      for (const sessionId of [...afterTurn.keys()]) handBackAfterTurn(sessionId, CLOSED_IN_TURN_REASON);
       const items = [...queuedItems];
       queuedItems.clear();
       for (const { sessionId, what, text } of items) {
@@ -683,11 +760,87 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     queuedUntilUp: (sessionId: string): number => waitingUp.get(sessionId) ?? 0,
 
     /**
+     * How many messages sent to the agent mid-turn still wait for a turn of its to end (`queueAfterTurn`), the one being
+     * typed now included.
+     */
+    waitingAfterTurn: (sessionId: string): number => afterTurn.get(sessionId)?.length ?? 0,
+
+    /**
+     * Keeps `item` for the live agent mid-turn, to be typed once a turn of its has ended and it is ready for its next
+     * message (`deliverAfterTurn`), after those kept before it: never typed into a turn, a question or a dialog. Kept
+     * in memory: as the daemon closes, it is handed back as not delivered (`handBackQueued`).
+     */
+    queueAfterTurn(sessionId: string, item: AfterTurn) {
+      afterTurn.set(sessionId, [...(afterTurn.get(sessionId) ?? []), item]);
+      options.log(`a message to ${sessionId} is queued until its turn ends`);
+      announce(sessionId);
+    },
+
+    /**
+     * Types the oldest message waiting for the agent's turn to end, if it is ready for its next message now (`tell`'s
+     * test, even asking): each starts a turn of its own, so the next waits for that one to end, and the caller calls
+     * again on the agent's next change. Hands them all back if it ended or is being paused; one typed whose Enter
+     * started no turn is its unsent message, which the user is told of, as for any other.
+     */
+    deliverAfterTurn(sessionId: string) {
+      const items = afterTurn.get(sessionId);
+      if (items === undefined || typingAfterTurn.has(sessionId)) return;
+      const row = getRow(sessionId);
+      if (row === undefined) return;
+      if (row.ended_at !== null) return handBackAfterTurn(sessionId, 'its session ended before its turn did');
+      if (beingPaused(row)) return handBackAfterTurn(sessionId, 'it was paused before its turn ended');
+      if (unsent.has(sessionId) || whyNotReadyNow(sessionId, row, true) !== undefined) return;
+      // Kept first in line while it is typed, so it is counted, a send meanwhile goes behind it, and a hand-back (its
+      // session ending, the daemon closing) takes it too.
+      const item = items[0]!;
+      /** Takes `item` off the line once typed or given up on; false if a hand-back took it first, and settled it. */
+      const take = () => {
+        const now = afterTurn.get(sessionId);
+        if (now?.[0] !== item) return false;
+        if (now.length === 1) afterTurn.delete(sessionId);
+        else afterTurn.set(sessionId, now.slice(1));
+        return true;
+      };
+      typingAfterTurn.add(sessionId);
+      item.typing();
+      void typeInput(sessionId, answerInput(item.text, false), 'A message', () => stillReady(sessionId, true))
+        .then(
+          (typed) => {
+            if (!typed.typed) {
+              // It went to work or asked before it was typed: still first in line, for its next turn's end. One whose
+              // session ended meanwhile is handed back as it ends, or was already.
+              if (afterTurn.get(sessionId)?.[0] === item) item.settled(false);
+              return;
+            }
+            if (take()) item.settled(typed.sent);
+          },
+          (error: Error) => {
+            options.log(`could not type a waiting message at ${sessionId}: ${error.message}`);
+            if (!take()) return;
+            // The error itself is for the log: the user is told plainly.
+            options.undelivered(sessionId, 'A message', item.text, 'it could not be typed');
+            item.settled(false);
+          },
+        )
+        .catch((error: Error) => options.log(`could not keep a message for ${sessionId}, never delivered: ${error.message}`))
+        .finally(() => {
+          typingAfterTurn.delete(sessionId);
+          // Its daemon closed meanwhile: nothing is told.
+          try {
+            announce(sessionId);
+          } catch (error) {
+            options.log(`could not tell clients of ${sessionId}'s waiting messages: ${(error as Error).message}`);
+          }
+        });
+    },
+
+    /**
      * Sends `text` as the agent's next message. A paused agent is woken with it as its first message (held until its
      * harness starts, never typed into a terminal still starting), carrying on its conversation. One whose session isn't
-     * up yet gets it once it is, after its first prompt (`queueUntilUp`): resolves at once, `queued`.
+     * up yet gets it once it is, after its first prompt (`queueUntilUp`): resolves at once, `queued`. Resolves with how
+     * it went (`Answered`): one typed whose Enter started no turn is the agent's unsent message, and says why.
      */
-    async answer(sessionId: string, text: string, paste = false): Promise<{ queued: boolean }> {
+    async answer(sessionId: string, text: string, paste = false): Promise<Answered> {
       // A pause under way ends first: the message then wakes the agent, never typed into a terminal that is going.
       const pausing = options.pausing(sessionId);
       if (pausing !== undefined) await pausing;
@@ -697,7 +850,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         const row = getRow(sessionId)!;
         const woken = relaunch(row, text, 'to wake it for a message', row.harness_session_id);
         if (!woken.started) throw invalidParams(`${agent.name} can't be woken: ${woken.reason}`);
-        return { queued: false };
+        return { queued: false, woken: true };
       }
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
       // Its state says so while any permission prompt, its own or a subagent's, is pending.
@@ -708,7 +861,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         return { queued: true };
       }
       const typed = await typeInput(sessionId, answerInput(text, paste), 'A message', () => whyNotAnswer(sessionId), true);
-      if (typed.typed) return { queued: false };
+      if (typed.typed && !typed.sent) return { queued: false, unsent: typed.why ?? UNSENT_REASON };
+      if (typed.typed) return typed.inTurn === true ? { queued: false, inTurn: true } : { queued: false };
       // Refused, never typed: the caller still has it.
       throw invalidParams(
         typed.reason === UNSENT_REASON ? `${agent.name} has a message typed at its prompt that was never sent: send or clear it first` : typed.reason,
@@ -764,7 +918,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       const reason = row.ended_at !== null ? undefined : unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
       const fromName = getRow(from)?.name ?? 'another agent';
-      const line = handoffLine(fromName, name, text);
+      const line = markSender('hand-off', fromName, refOf({ sessionId: from }), handoffLine(fromName, name, text));
       recount(handingOff, from, 1);
       announce(from);
       try {

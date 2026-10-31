@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 // Orchestrators on the board: a zone that lets its agents orchestrate, the crew frame or from chips
 // that show who started whom, and the orchestrator's Activity tab.
@@ -10,15 +11,12 @@ import { scratch } from './scratch.ts';
 /** The tile of the agent named `name`. */
 const agentTile = (window: Page, name: string) => tile(window).filter({ has: window.getByTitle(name, { exact: true }) });
 
-/** Picks how the board shows an orchestrator's agents, from the board menu's Settings, and closes the menu again. */
+/** Picks how the board shows an orchestrator's agents, in the Settings window's Board › Crews. */
 async function setCrewLook(window: Page, look: 'In a crew frame' | 'With a “from” chip' | 'Off'): Promise<void> {
-  const panel = window.getByRole('dialog', { name: 'Board menu' });
-  if (!(await panel.isVisible())) await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
-  const choice = panel.getByRole('radiogroup', { name: 'Agents an orchestrator starts' }).getByRole('radio', { name: look });
+  const settings = await openSettings(window, 'board.crews');
+  const choice = settingsSection(settings, 'Crews').getByRole('radiogroup', { name: 'Agents an orchestrator starts' }).getByRole('radio', { name: look });
   await choice.check();
   await expect(choice).toBeChecked();
-  await window.keyboard.press('Escape');
-  await expect(panel).toBeHidden();
 }
 
 test('an orchestrator in a zone that lets it starts two workers: they sit in its crew frame, or carry from chips, or neither, and its Activity tab lists them', async () => {

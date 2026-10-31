@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { ChatEntry } from '../src/protocol.ts';
+import { markSender } from '../src/sender-marker.ts';
 import { createTranscriptParser } from '../src/transcript-adapters.ts';
 
 const fixtures = new URL('../../../fixtures/', import.meta.url);
@@ -111,6 +112,17 @@ describe('the Claude adapter', () => {
     expect(parse('claude', [user('[Request interrupted by user for tool use]'), user('[Request interrupted by user]')]).entries).toEqual([
       { kind: 'notice', text: 'Interrupted', forToolUse: true },
       { kind: 'notice', text: 'Interrupted' },
+    ]);
+  });
+
+  test('a message another agent sent says who from, typed or queued mid-turn; one the user typed says nothing', () => {
+    const user = (text: string) => JSON.stringify({ type: 'user', version: '2.1.312', message: { role: 'user', content: [{ type: 'text', text }] } });
+    const queued = (prompt: string) => JSON.stringify({ type: 'attachment', version: '2.1.312', attachment: { type: 'queued_command', prompt } });
+    const sent = markSender('send', 'Captain', 'agent:944e1234', 'Fix the login test');
+    expect(parse('claude', [user(sent), queued(markSender('reply', 'lead', 'agent:ab12cd34', 'Yes')), user('Fix the login test')]).entries).toEqual([
+      { kind: 'user', text: 'Fix the login test', from: { ref: 'agent:944e1234', name: 'Captain', kind: 'send' } },
+      { kind: 'user', text: 'Yes', from: { ref: 'agent:ab12cd34', name: 'lead', kind: 'reply' } },
+      { kind: 'user', text: 'Fix the login test' },
     ]);
   });
 
@@ -249,6 +261,14 @@ describe('the Codex adapter', () => {
       JSON.stringify({ type: 'response_item', payload: { type: 'custom_tool_call_output', call_id, output: text } });
     const failed = parse('codex', [codex[0]!, output('a', 'Script failed\nOutput:\n'), output('b', 'Script completed\nexit_code=2'), output('c', '{"output":"","metadata":{"exit_code":1}}')]);
     expect(failed.entries.map((entry) => (entry as { isError: boolean }).isError)).toEqual([true, true, true]);
+  });
+
+  test('a message another agent sent says who from', () => {
+    const user = (text: string) =>
+      JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }], internal_chat_message_metadata_passthrough: { content_item_kinds: ['user.text'] } } });
+    expect(parse('codex', [codex[0]!, user(markSender('hand-off', 'impl', 'agent:ab12cd34', 'Hand-off from impl (its final message): Done.'))]).entries).toEqual([
+      { kind: 'user', text: 'Hand-off from impl (its final message): Done.', from: { ref: 'agent:ab12cd34', name: 'impl', kind: 'hand-off', payload: 'final message' } },
+    ]);
   });
 
   test('messages between agents are kept with who sent them', () => {

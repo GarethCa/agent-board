@@ -15,6 +15,8 @@ import {
   type ReviewRound,
   type ReviewUpdatedEvent,
 } from '../src/protocol.ts';
+import { refOf } from '../src/crew-flags.ts';
+import { markSender } from '../src/sender-marker.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
@@ -125,7 +127,9 @@ describe('review rounds', { timeout: ROUNDS_MS }, () => {
       (e): e is HookEvent =>
         e.type === 'hook' && e.sessionId === implementer.sessionId && e.payload.hook_event_name === 'UserPromptSubmit' && e.payload.prompt !== 'Write the code',
     );
-    expect(delivered.payload.prompt).toBe(`Hand-off from Coder · review r1 (its review, round 1): ${ready.doc!.replace(/\s+/g, ' ')}`);
+    expect(delivered.payload.prompt).toBe(
+      markSender('hand-off', 'Coder · review r1', refOf({ sessionId: round.reviewer! }), `Hand-off from Coder · review r1 (its review, round 1): ${ready.doc!.replace(/\s+/g, ' ')}`),
+    );
   });
 
   it('refuses to send a doc the implementer can not take now, saying why', async () => {

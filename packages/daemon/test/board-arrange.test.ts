@@ -355,7 +355,7 @@ describe('arrangeTiles', () => {
     const note: Rect = { x: 333, y: 91, width: 157, height: 211 };
     const big = agent('big', { size: { width: 301, height: 180 } });
     for (const by of ['issue', 'role', 'state'] as const) {
-      for (const layout of ['rows', 'columns', 'cards', 'grid', 'wrap'] as const) {
+      for (const layout of ['rows', 'columns', 'cards', 'grid', 'wrap', 'masonry', 'treemap'] as const) {
         const tiles = [...crew, big];
         const result = arrangeTiles(tiles, edges, { by, layout, width: 1000, obstacles: [note], clusters: true });
         const { positions, clusters } = result;
@@ -498,7 +498,7 @@ describe('arranging at a spacing', () => {
     }
   });
 
-  it.each(['columns', 'cards', 'grid', 'wrap'] as const)('in %s, starts at the spacing\'s padding and keeps its gaps', (layout) => {
+  it.each(['columns', 'cards', 'grid', 'wrap', 'masonry', 'treemap'] as const)('in %s, starts at the spacing\'s padding and keeps its gaps', (layout) => {
     for (const spacing of ARRANGE_SPACINGS) {
       const gaps = SPACING_GAPS[spacing];
       const { positions } = arrangeTiles(busy, links, { by: 'issue', layout, width: 1400, clusters: layout !== 'grid', spacing });
@@ -888,6 +888,173 @@ describe('arranging lanes to wrap', () => {
   it('by role or state, lays the rows out as rows do', () => {
     for (const by of ['role', 'state'] as const) {
       expect(arrangeTiles(crew, edges, { by, layout: 'wrap', width: 1000 }).positions, by).toEqual(arrangeTiles(crew, edges, { by, layout: 'rows', width: 1000 }).positions);
+    }
+  });
+});
+
+describe('packing lanes as masonry or a treemap', () => {
+  const lead = agent('lead', { lead: true });
+  const gate: ArrangeTile = { ...agent('gate'), kind: 'shell', state: null };
+  const clock: ArrangeTile = { ...agent('timer'), kind: 'clock', state: null };
+  /** A lane for `issue` of `count` agents started on `day`: its implementer, then reviewers. */
+  const lane = (issue: string, count: number, day: number): ArrangeTile[] =>
+    Array.from({ length: count }, (_, index) =>
+      agent(`${issue}-${index}`, {
+        role: index === 0 ? 'implementer' : 'reviewer',
+        issue,
+        reviewOf: index === 0 ? null : `${issue}-0`,
+        createdAt: `2026-01-${String(day).padStart(2, '0')}T00:0${index % 10}:00Z`,
+      }),
+    );
+  // A busy zone as one is used: a lane of ten, a lane of three and a reviewer, four lanes of one with their notes, and
+  // the top row of the lead, a shell and a clock.
+  const real = [lead, gate, clock, ...lane('ACME-1', 10, 1), ...lane('ACME-2', 4, 2), ...[3, 4, 5, 6].flatMap((n) => lane(`ACME-${n}`, 1, n))];
+  // Thirty tiles: the lead and twenty-nine agents in lanes of seven down to one.
+  const thirty = [lead, ...[7, 5, 4, 3, 3, 2, 2, 1, 1, 1].flatMap((count, index) => lane(`ACME-${index + 10}`, count, index + 1))];
+  const layouts = ['masonry', 'treemap'] as const;
+  const pack = (tiles: readonly ArrangeTile[], layout: (typeof layouts)[number], options: Partial<Parameters<typeof arrangeTiles>[2]> = {}) =>
+    arrangeTiles(tiles, [], { by: 'issue', layout, width: 1400, clusters: true, ...options });
+  const overlap = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const hullOf = (rects: readonly Rect[]): Rect => {
+    const [x, y] = [Math.min(...rects.map((rect) => rect.x)), Math.min(...rects.map((rect) => rect.y))];
+    return { x, y, width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x, height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y };
+  };
+  /** Each lane's parts (its tiles, label and note) and the top row's tiles, as boxes, by group. */
+  const groupsOf = (arranged: ReturnType<typeof arrangeTiles>, tiles: readonly ArrangeTile[]): Rect[][] => {
+    const parts = new Map(partsOf(arranged, tiles).map(({ id, rect }) => [id, rect]));
+    const lanes = arranged.clusters.map((cluster) => [...cluster.members, `${cluster.key}#label`, `${cluster.key}#note`].map((id) => parts.get(id)!));
+    const inLanes = new Set(arranged.clusters.flatMap((cluster) => cluster.members));
+    return [...lanes, tiles.filter((tile) => !inLanes.has(tile.id)).map((tile) => parts.get(tile.id)!)];
+  };
+  const shapes = [
+    { name: 'a wide window', window: { width: 1600, height: 1000 } },
+    { name: 'a tall window', window: { width: 800, height: 1200 } },
+    { name: 'no window', window: undefined },
+    { name: 'a narrow zone', width: 500 },
+  ];
+
+  it.each(layouts)('in %s, overlaps nothing, keeps each lane in a block of its own and the top row on top, in a real zone and one of thirty', (layout) => {
+    const note: Rect = { x: 900, y: 600, width: 157, height: 211 };
+    const tall = new Map([['issue:ACME-3', 500]]);
+    for (const tiles of [real, thirty]) {
+      for (const { name, ...shape } of shapes) {
+        for (const extra of [{}, { noteHeights: tall }, { obstacles: [note] }]) {
+          const arranged = pack(tiles, layout, { ...shape, ...extra });
+          const parts = partsOf(arranged, tiles);
+          const at = `${tiles.length} tiles, ${name}, ${Object.keys(extra).join() || 'plain'}`;
+          expect(arranged.positions.size, at).toBe(tiles.length);
+          expect(offGrid(arranged, tiles), at).toEqual([]);
+          parts.forEach(({ rect }, index) => expect(clearOf(rect, [...parts.filter((_, other) => other !== index).map((part) => part.rect), ...(extra.obstacles ?? [])]), at).toBe(true));
+          // No lane's box holds a part of another lane: each is contiguous.
+          const groups = groupsOf(arranged, tiles);
+          for (const [index, group] of groups.entries()) {
+            for (const other of groups.filter((_, each) => each !== index).flat()) expect(overlap(hullOf(group), other), at).toBe(false);
+          }
+          // The top row first, above every lane.
+          const lanesTop = Math.min(...arranged.clusters.map((cluster) => cluster.labelAt.y));
+          for (const id of tiles.filter((tile) => tile.lead || tile.kind !== 'agent').map((tile) => tile.id)) expect(arranged.positions.get(id)!.y, at).toBeLessThan(lanesTop);
+          // And it all fits the zone it says.
+          for (const { rect } of parts) expect(rect.x + rect.width <= arranged.size.width && rect.y + rect.height <= arranged.size.height, at).toBe(true);
+        }
+      }
+    }
+  });
+
+  it.each(layouts)('in %s, starts what is below a lane’s tall note below it, past rows nothing else is in', (layout) => {
+    const tiles = [lead, ...lane('ACME-1', 1, 1), ...lane('ACME-2', 1, 2)];
+    for (const window of [undefined, { width: 400, height: 1600 }]) {
+      const arranged = pack(tiles, layout, { width: 600, window, noteHeights: new Map([['issue:ACME-1', 600]]) });
+      const parts = partsOf(arranged, tiles);
+      parts.forEach(({ rect }, index) => expect(clearOf(rect, parts.filter((_, other) => other !== index).map((part) => part.rect)), JSON.stringify(window)).toBe(true));
+    }
+  });
+
+  it.each(layouts)('in %s, arranges the same crew the same way, whatever order its tiles come in', (layout) => {
+    for (const tiles of [real, thirty]) {
+      for (const { name, ...shape } of shapes) {
+        const once = pack(tiles, layout, shape);
+        expect(pack(tiles.toReversed(), layout, shape), name).toEqual(once);
+        expect(pack(tiles, layout, shape), name).toEqual(once);
+      }
+    }
+  });
+
+  it('as masonry, wraps a lane’s tiles after 4 beside its head, and puts each lane in the shortest column, the leftmost of those', () => {
+    const { positions, clusters } = pack(real, 'masonry', { window: { width: 2400, height: 900 } });
+    const at = cells(positions);
+    const label = (key: string) => cells(new Map([['label', clusters.find((cluster) => cluster.key === key)!.labelAt]])).label;
+    // The top row as rows lay it out.
+    expect([at.lead, at.gate, at.timer]).toEqual([
+      [0, 0],
+      [1, 0],
+      [2, 0],
+    ]);
+    // ACME-1's ten in rows of 4, 4 and 2 after its head in the first column.
+    expect(label('issue:ACME-1')).toEqual([0, 1]);
+    expect(['ACME-1-0', 'ACME-1-3', 'ACME-1-4', 'ACME-1-9'].map((id) => at[id])).toEqual([
+      [1, 1],
+      [4, 1],
+      [1, 2],
+      [2, 3],
+    ]);
+    // Two columns of lanes for this window, a free grid column between them: the rest go into the second until it is as
+    // tall as the first, then the first, the leftmost of the two.
+    expect(['ACME-2', 'ACME-3', 'ACME-4', 'ACME-5', 'ACME-6'].map((issue) => label(`issue:${issue}`))).toEqual([
+      [6, 1],
+      [6, 2],
+      [6, 3],
+      [0, 4],
+      [6, 4],
+    ]);
+    // In a 16:10 window, one column is the nearer shape.
+    expect(new Set(pack(real, 'masonry', { window: { width: 1600, height: 1000 } }).clusters.map((cluster) => cluster.labelAt.x)).size).toBe(1);
+  });
+
+  it('as masonry, packs more columns of lanes in a wider window, and with none, as many as the zone’s width holds, the same again once fitted to them', () => {
+    const across = (arranged: ReturnType<typeof arrangeTiles>) => new Set(arranged.clusters.map((cluster) => cluster.labelAt.x)).size;
+    expect(across(pack(thirty, 'masonry', { window: { width: 2400, height: 900 } }))).toBeGreaterThan(across(pack(thirty, 'masonry', { window: { width: 900, height: 1400 } })));
+    expect(across(pack(thirty, 'masonry', { width: 600 }))).toBe(1);
+    const wide = pack(thirty, 'masonry', { width: 5000 });
+    expect(across(wide)).toBe(3);
+    // Fitted to what it laid out, the zone packs it the same way.
+    expect(pack(thirty, 'masonry', { width: wide.size.width }).positions).toEqual(wide.positions);
+  });
+
+  it('as a treemap, gives a bigger lane a bigger box, and fills a wider window wider', () => {
+    const box = (arranged: ReturnType<typeof arrangeTiles>, key: string) => hullOf(groupsOf(arranged, thirty)[arranged.clusters.findIndex((cluster) => cluster.key === key)]!);
+    const area = (rect: Rect) => rect.width * rect.height;
+    const square = pack(thirty, 'treemap', { window: { width: 1400, height: 1400 } });
+    expect(area(box(square, 'issue:ACME-10'))).toBeGreaterThan(area(box(square, 'issue:ACME-19')));
+    const shape = (arranged: ReturnType<typeof arrangeTiles>) => arranged.size.width / arranged.size.height;
+    expect(shape(pack(thirty, 'treemap', { window: { width: 2400, height: 900 } }))).toBeGreaterThan(shape(pack(thirty, 'treemap', { window: { width: 900, height: 2400 } })));
+    // With no window, a laptop screen's shape, whatever the zone's.
+    expect(pack(thirty, 'treemap', { width: 3000 }).positions).toEqual(pack(thirty, 'treemap', { width: 600 }).positions);
+    expect(pack(thirty, 'treemap', { width: 600 }).positions).toEqual(pack(thirty, 'treemap', { window: { width: 1600, height: 1000 } }).positions);
+  });
+
+  it.each(layouts)('in %s, arranges a zone fitted to what it arranged the same way again, from a wide, a square or a tall zone', (layout) => {
+    for (const tiles of [real, thirty]) {
+      for (const { name, ...shape } of shapes) {
+        for (const width of [3000, 1400, 600]) {
+          // As an arrange does: lay out, fit the zone to it, and lay out again in the zone as fitted, a few times over.
+          const first = pack(tiles, layout, { ...shape, width });
+          let arranged = first;
+          for (let round = 0; round < 4; round++) arranged = pack(tiles, layout, { ...shape, width: arranged.size.width });
+          expect(arranged, `${tiles.length} tiles, ${name}, from ${width} wide`).toEqual(pack(tiles, layout, { ...shape, width: first.size.width }));
+          expect(arranged.size, `${tiles.length} tiles, ${name}, from ${width} wide`).toEqual(pack(tiles, layout, { ...shape, width: arranged.size.width }).size);
+        }
+      }
+    }
+  });
+
+  it.each(layouts)('in %s, by role or state, packs each role’s or state’s row as a group, the lead on top, overlapping nothing', (layout) => {
+    for (const by of ['role', 'state'] as const) {
+      const tiles = [...real, agent('again', { role: 'follow-up-reviewer', reviewOf: 'ACME-1-0', state: 'running' })];
+      const arranged = arrangeTiles(tiles, [], { by, layout, width: 1400 });
+      expect(arranged.clusters, by).toEqual([]);
+      expectClear(arranged.positions, tiles);
+      expect(cells(arranged.positions).lead, by).toEqual([0, 0]);
+      expect(Math.min(...tiles.filter((tile) => !tile.lead).map((tile) => arranged.positions.get(tile.id)!.y)), by).toBeGreaterThan(arranged.positions.get('lead')!.y);
     }
   });
 });

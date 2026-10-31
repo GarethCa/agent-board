@@ -25,6 +25,13 @@ describe('which sent messages the transcript has yet to show', () => {
     expect(settle([yes], transcript([user('yes'), user('no'), user('yes')]))).toEqual({ waiting: [], confirmed: [{ id: 'yes', at: { generation: 1, end: 3 } }] });
   });
 
+  test("another agent's message with the same words is no copy", () => {
+    const ship = sent('Ship it');
+    const fromCaptain: ChatEntry = { kind: 'user', text: 'Ship it', from: { ref: 'agent:944e1234', name: 'Captain', kind: 'send' } };
+    expect(waiting([ship], transcript([fromCaptain]))).toEqual([ship]);
+    expect(waiting([ship], transcript([fromCaptain, user('Ship it')]))).toEqual([]);
+  });
+
   test('a copy is the whole message: one that only mentions its words, or adds to them, is not', () => {
     const ok = sent('ok');
     expect(waiting([ok], transcript([user('Ada says the build is ok now'), user('ok, the PR is ready'), user('yesterday')]))).toEqual([ok]);

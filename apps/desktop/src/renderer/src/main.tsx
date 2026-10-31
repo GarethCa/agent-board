@@ -18,11 +18,15 @@ import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
+import { SettingsWindow } from './chrome/SettingsWindow';
 import { CAPTURE_FRAME } from './board/capture-mode';
 import { DEMO } from './demo/demo-mode';
 import { ReviewsProvider } from './review/ReviewsProvider';
 import { GatesProvider } from './gate/GatesProvider';
 import { followTheme } from './themes';
+import { followViewSettings } from './board/view-settings';
+import { followDesign } from './design';
+import { followTechnical } from './technical';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { ToastProvider, TooltipProvider } from './ui';
 
@@ -31,14 +35,24 @@ if (!root) throw new Error('missing #root element');
 
 // Set by the main process for a popped-out session window (main/windows.ts).
 const popOut = windowTargetFrom(new URLSearchParams(location.search), WINDOW_QUERY.popOut);
+// Set by the main process for the Settings window (main/settings-window.ts): the pane it opens on, or empty.
+const settings = new URLSearchParams(location.search).get(WINDOW_QUERY.settings) ?? undefined;
 
 // The build is in the board's title so screenshots and bug reports name the commit. A popped-out window is titled by
-// its session (PopOutWindow), which this would otherwise overwrite whenever it resolved later.
-if (popOut === undefined) void window.agentBoard.build().then((build) => (document.title = `agent-board · ${describeBuild(build)}`));
+// its session (PopOutWindow), which this would otherwise overwrite whenever it resolved later, and Settings is Settings.
+if (settings !== undefined) document.title = 'Settings';
+else if (popOut === undefined) void window.agentBoard.build().then((build) => (document.title = `agent-board · ${describeBuild(build)}`));
 
 // The theme for the window's light or dark mode, which the Appearance setting drives (themes.ts): set before the first
 // paint, and again whenever macOS or the setting changes it.
 followTheme();
+
+// The Simplified design, or Classic (design.ts): set before the first paint, and again whenever the setting changes.
+followDesign();
+
+// Show technical details under the Simplified design (technical.ts): set before the first paint, and again whenever it
+// or the design changes.
+followTechnical();
 
 // A capture window shows the board's canvas alone (board/capture-mode.ts, app.css).
 if (CAPTURE_FRAME !== undefined) document.documentElement.dataset.capture = '';
@@ -48,6 +62,7 @@ if (DEMO) document.documentElement.dataset.demo = '';
 
 // Whether the keys added since the key registry work: read as the window opens, and again as it comes to the front.
 followExtendedShortcuts();
+followViewSettings();
 
 // How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round
 // them. In full screen the lights hide, and what sat beside them moves into the corner.
@@ -66,7 +81,11 @@ createRoot(root).render(
   <StrictMode>
     <TooltipProvider>
       <ToastProvider>
-        {popOut !== undefined ? (
+        {settings !== undefined ? (
+          <DaemonGate>
+            <SettingsWindow initial={settings} />
+          </DaemonGate>
+        ) : popOut !== undefined ? (
           <DaemonGate>
             <ReviewsProvider>
               <GatesProvider>

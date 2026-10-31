@@ -4,13 +4,14 @@ import { token } from '../../theme';
 
 const subscribe = (notify: () => void) => {
   const watch = new MutationObserver(notify);
-  watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-design'] });
   return () => watch.disconnect();
 };
 
-const themeNow = () => document.documentElement.dataset.theme ?? '';
+/** The look shown now: its theme, and its design, as the Simplified design's light shares the theme `light`. */
+const themeNow = () => `${document.documentElement.dataset.theme ?? ''}|${document.documentElement.dataset.design ?? ''}`;
 
-/** Each fold's result for each theme, read once: a theme's tokens never change while the app runs. */
+/** Each fold's result for each look, read once: a look's tokens never change while the app runs. */
 const folded = new WeakMap<Fold<string>, Map<string, FoldedSlot<string>[]>>();
 
 /** `fold` in the theme shown now, for the board's context menu (built when it opens) and anything else outside a render. */

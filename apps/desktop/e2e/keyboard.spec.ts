@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { launch, sessionWindow, SHELL_ENV, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 const sheet = (page: Page) => page.getByRole('dialog', { name: 'Keyboard' });
 const row = (page: Page, id: string) => sheet(page).locator(`[data-key="${id}"]`);
@@ -59,13 +60,10 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
     await expect(sessionWindow(window)).toHaveCount(0);
 
     // The setting off: the new keys are gone, ? and ⌘/ open nothing, and the sheet (from its button) leaves them out.
-    await window.getByRole('button', { name: 'Board menu' }).click();
-    const menu = window.getByRole('dialog', { name: 'Board menu' });
-    const setting = menu.getByRole('switch', { name: 'Extended keyboard shortcuts' });
+    const settings = await openSettings(window, 'general.keyboard');
+    const setting = settingsSection(settings, 'Keyboard').getByRole('switch', { name: 'Extended keyboard shortcuts' });
     await expect(setting).toBeChecked();
     await setting.uncheck();
-    await window.keyboard.press('Escape');
-    await expect(menu).toBeHidden();
     await window.locator('.react-flow__pane').click({ position: { x: 40, y: 500 } });
     // Each new key is pressed, then H: the board takes H (the hand) only if nothing opened over it, so the sheet staying
     // shut is seen after the key was handled, not before.
@@ -94,13 +92,12 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
     await window.reload();
     await expect(tile(window)).toHaveCount(1);
     await expect(sessionWindow(window)).toHaveCount(0);
-    await window.getByRole('button', { name: 'Board menu' }).click();
-    const kept = window.getByRole('dialog', { name: 'Board menu' }).getByRole('switch', { name: 'Extended keyboard shortcuts' });
+    const reopened = await openSettings(window, 'general.keyboard');
+    const kept = settingsSection(reopened, 'Keyboard').getByRole('switch', { name: 'Extended keyboard shortcuts' });
     await expect(kept).not.toBeChecked();
 
     // Turned back on, ? works again.
     await kept.check();
-    await window.keyboard.press('Escape');
     await window.locator('.react-flow__pane').click({ position: { x: 40, y: 500 } });
     await window.keyboard.press('?');
     await expect(sheet(window)).toBeVisible();

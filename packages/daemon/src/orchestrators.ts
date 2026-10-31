@@ -5,12 +5,14 @@ import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AgentHost } from './agents.ts';
+import type { Answered } from './deliveries.ts';
 import { agentTarget, boardCaller, sessionCaller, type ActivityLogger, type BoardCallerSources, type BoardConnection } from './board.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { runGit } from './git.ts';
 import { checkedBranchName, noBranchWhy } from './worktrees.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
+import { markSender, sendTrailer } from './sender-marker.ts';
 import { createReplyPaths } from './reply-paths.ts';
 import { invalidParams, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
@@ -42,7 +44,9 @@ import {
   type OrchestrateScope,
   type OrchestratorAction,
   type OrchestratorActivity,
+  type OrchestratorSent,
   type PullRequest,
+  type SendDelivery,
   type WaitState,
   type Zone,
 } from './protocol.ts';
@@ -177,7 +181,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag'
+    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -366,6 +370,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   /** A string param a control call names as what it asks, for its log line. */
   const askedText = (params: unknown): string => {
     const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+    // A send that presses Enter on, or clears, what sits unsent at the agent's prompt carries no text of its own.
+    if (p.submit === true || p.clear === true) return [p.submit === true ? '--submit' : '', p.clear === true ? '--clear' : ''].join(' ').trim();
     const text = p.text ?? p.prompt ?? p.summary;
     return typeof text === 'string' ? text : '';
   };
@@ -542,6 +548,36 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     return result;
   };
 
+  /**
+   * Presses Enter on the message typed at `to`'s prompt and never sent, for an orchestrator that may steer it, as the
+   * tile's Send does: a turn that starts is waited for as a send's is. Refused while the user is typing there.
+   */
+  const submitUnsent = async (me: Orchestrator, to: Agent): Promise<OrchestratorSent> => {
+    awaitingTurn.add(to.sessionId);
+    let submitted: Awaited<ReturnType<AgentHost['sendUnsent']>>;
+    try {
+      submitted = await agents.sendUnsent(to.sessionId, false);
+    } catch (error) {
+      awaitingTurn.delete(to.sessionId);
+      throw error;
+    }
+    const { sent } = submitted;
+    if (!sent.started) {
+      awaitingTurn.delete(to.sessionId);
+      throw invalidParams(`${to.name}'s unsent message was not sent (${sent.why}): it is still at its prompt. Try --submit again, or --clear`);
+    }
+    return sentTo(to, me.agent, 'started');
+  };
+
+  /**
+   * What `orchestrator.send` answers: `to` as it is now, and how the send went. Its orchestrator (`sender`) answered it
+   * once its turn started, so its flag is seen to; not by a message still queued, which answers nothing yet.
+   */
+  const sentTo = (to: Agent, sender: Agent | null, delivery: SendDelivery): OrchestratorSent => {
+    if (delivery === 'started' && to.flag !== null && to.spawnedBy === sender?.sessionId) return { ...agents.clearFlag(to.sessionId), delivery };
+    return { ...agents.get(to.sessionId)!, delivery };
+  };
+
   /** A spawn's or send's text, refused unless an orchestrator may type it (`orchestratorTextRefusal`). */
   const checkText = (text: string) => {
     const why = orchestratorTextRefusal(text);
@@ -653,6 +689,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
         if (awaitingTurn.has(event.agent.sessionId) && (event.agent.endedAt !== null || TURN_STATES.has(event.agent.state))) {
           awaitingTurn.delete(event.agent.sessionId);
         }
+        if (event.agent.messagesWaiting > 0) agents.deliverAfterTurn(event.agent.sessionId);
         crewEvents.observe(event.agent);
         notifyWaiters();
       } else if (event.type === 'agent.removed') {
@@ -739,16 +776,30 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
 
         'orchestrator.send': async (params, connection) => {
           const p = paramsObject(params);
-          // An answer to an agent that messaged it passes scope (and needs no orchestrating), as nothing else does.
-          const reply = replier(p, connection);
+          const submit = optionalBooleanParam(p, 'submit') === true;
+          const clear = optionalBooleanParam(p, 'clear') === true;
+          // An answer to an agent that messaged it passes scope (and needs no orchestrating), as nothing else does: it
+          // opens a message alone, never what sits at the agent's prompt.
+          const reply = submit || clear ? undefined : replier(p, connection);
           const me = reply === undefined ? orchestrator('orchestrator.send', p, connection) : undefined;
           const entry: Entry = { detail: askedText(p) };
-          return logged(me ?? reply!, 'send', entry, async () => {
-            const text = stringParam(p, 'text');
+          return logged(me ?? reply!, 'send', entry, async (): Promise<OrchestratorSent> => {
+            if ((submit && clear) || ((submit || clear) && p.text !== undefined)) throw invalidParams('give one of text, submit and clear');
+            const text = submit || clear ? '' : stringParam(p, 'text');
             const to = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(to);
-            if (me !== undefined) checkSteerable(me, to);
+            // Any orchestrator may message the Captain, wherever its scope reaches: a message only, as a scope rule, so
+            // `--submit`, `--clear` and every other command on it are still checked as steering.
+            const toCaptain = to.master && !submit && !clear && me?.agent != null && me.agent.sessionId !== to.sessionId;
+            if (me !== undefined && !toCaptain) checkSteerable(me, to);
+            // Waking the Captain is steering it: the user paused it, and only they, or an orchestrator that may steer
+            // it, wake it.
+            if (toCaptain && !maySteer(me!.agent!, to) && to.state === 'hibernated') {
+              throw outOfScope(`${to.name} is paused: only the user, or an orchestrator that may steer it, wakes it`);
+            }
             checkNotUsagePaused(me === undefined ? (agents.get(reply!.sessionId) ?? null) : me.agent, to);
+            if (clear) return { ...agents.clearUnsent(to.sessionId, false), delivery: 'cleared' };
+            if (submit) return submitUnsent(me!, to);
             checkText(text);
             if (to.endedAt !== null && to.state !== 'hibernated') throw invalidParams(`${to.name} has ended`);
             if (to.permissions.length > 0 || to.state === 'needs-permission') {
@@ -756,30 +807,71 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             }
             // Waiting on the user mid-turn: what was typed would be queued into that turn, not answer it.
             if (waitsOnUser(to)) throw invalidParams(`${to.name} is waiting on the user's answer to its question or plan`);
-            if (!SENDABLE_STATES.has(to.state)) {
+            const midTurn = !SENDABLE_STATES.has(to.state);
+            if (midTurn && to.orchestrate === null) {
               throw invalidParams(`${to.name} is ${to.state}: wait for its turn to end, or interrupt it, before sending`);
             }
             // A message an agent sent by its own scope lets the receiver answer it (an answer opens nothing back), and
             // one that couldn't otherwise is told how. Not its own crew, which answers in its turn's last message.
             const sender = me?.agent ?? null;
             const opens = sender !== null && !inCrewOf(sender, to.spawnedBy);
+            // The Captain hears from leads all over the board: it is told who each message is from, as it can answer
+            // any of them by its own scope.
             const hint =
-              sender !== null && opens && !maySteer(to, sender)
-                ? `\n\n[agent-board] From ${sender.name} (${refOf(sender)}), who you may answer with \`agent-board send ${refOf(sender)} -- '…'\`.`
-                : '';
+              sender === null || !opens
+                ? ''
+                : !maySteer(to, sender)
+                  ? sendTrailer(sender.name, refOf(sender), true)
+                  : to.master
+                    ? sendTrailer(sender.name, refOf(sender), false)
+                    : '';
+            // Who sent it heads it (ADR-0023), as the receiver's transcript holds it as the user's: a reply when it answers
+            // a message from the receiver, or its crew member's flag or question.
+            const from = reply ?? sender;
+            const answers =
+              reply !== undefined ||
+              (sender !== null && (repliesTo(sender.sessionId, to.sessionId) || (to.flag?.to === 'orchestrator' && to.spawnedBy === sender.sessionId)));
+            const typed = from === null ? `${text}${hint}` : markSender(answers ? 'reply' : 'send', from.name, refOf(from), `${text}${hint}`);
+            // An orchestrator is busy much of the time, and what it is sent is mostly news for it: kept until its turn
+            // ends, never typed into that turn, so its end is never taken for the reply's. Sent between turns while
+            // others still wait for it, it goes behind them.
+            if (midTurn || to.messagesWaiting > 0) {
+              agents.queueAfterTurn(to.sessionId, {
+                text: typed,
+                typing: () => awaitingTurn.add(to.sessionId),
+                settled: (started) => {
+                  if (!started) awaitingTurn.delete(to.sessionId);
+                  else if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId, me!.orchestrate);
+                },
+              });
+              return { ...sentTo(to, sender, 'queued-after-turn'), typed };
+            }
             awaitingTurn.add(to.sessionId);
-            let queued: boolean;
+            let answered: Answered;
             try {
-              ({ queued } = await agents.answer(to.sessionId, `${text}${hint}`));
+              answered = await agents.answer(to.sessionId, typed);
             } catch (error) {
               awaitingTurn.delete(to.sessionId);
               throw error;
             }
+            if (answered.unsent !== undefined) {
+              // Typed, but no turn started on it: never a success, and nothing to wait for.
+              awaitingTurn.delete(to.sessionId);
+              const next =
+                me === undefined
+                  ? 'The user is flagged to send or clear it'
+                  : `Send it with \`agent-board send ${refOf(to)} --submit\`, or clear it with \`--clear\``;
+              throw invalidParams(`${to.name}: your message was typed at its prompt but not sent (${answered.unsent}). ${next}`);
+            }
             if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId, me!.orchestrate);
-            // Its orchestrator answered it: its flag is seen to. Not by a message queued until it is up, which answers
-            // nothing yet.
-            if (!queued && to.flag !== null && to.spawnedBy === sender?.sessionId) return agents.clearFlag(to.sessionId);
-            return agents.get(to.sessionId)!;
+            const delivery: SendDelivery = answered.queued
+              ? 'queued-until-up'
+              : answered.woken === true
+                ? 'waking'
+                : answered.inTurn === true
+                  ? 'queued-in-turn'
+                  : 'started';
+            return { ...sentTo(to, sender, delivery), typed };
           });
         },
 
@@ -830,7 +922,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               return crew ? [...named, ...crewOf(me).filter((agent) => !ids.includes(agent.sessionId))] : named;
             };
             const there = (agent: Agent) => {
-              if (awaitingTurn.has(agent.sessionId)) return false;
+              // Its turn on a message still waiting for it hasn't begun either.
+              if (awaitingTurn.has(agent.sessionId) || agent.messagesWaiting > 0) return false;
               const wanted = states as WaitState[];
               return wanted.includes(crewEvents.waitState(agent)) || (wanted.includes('finished') && agent.workFinishedAt !== null);
             };

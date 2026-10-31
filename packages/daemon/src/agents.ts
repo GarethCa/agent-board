@@ -10,7 +10,7 @@ import { systemClock, type Clock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
 import type { StartChange } from './agent-starts.ts';
-import { createDeliveries } from './deliveries.ts';
+import { createDeliveries, type AfterTurn, type Answered, type UnsentSent } from './deliveries.ts';
 import { createHookStates } from './hook-states.ts';
 import { answerTrustScreen, readStartupScreen, screenTail, type StartupScreen } from './startup-screen.ts';
 import { type HarnessPaths } from './harness-path.ts';
@@ -318,9 +318,16 @@ export interface AgentHost {
   repoZoneId(sessionId: string): string | undefined;
   /**
    * Sends `text` to the agent as the user's next message, after any answer to it still being typed: its line breaks
-   * kept, pasted as a terminal pastes them, and pasted even as one line with `paste`.
+   * kept, pasted as a terminal pastes them, and pasted even as one line with `paste`. Resolves with how it went.
    */
-  answer(sessionId: string, text: string, paste?: boolean): Promise<{ queued: boolean }>;
+  answer(sessionId: string, text: string, paste?: boolean): Promise<Answered>;
+  /**
+   * Keeps a message for the live agent mid-turn until a turn of its ends, then types it, after any kept before it
+   * (`Agent.messagesWaiting`); handed back as not delivered if it ends or the daemon closes first.
+   */
+  queueAfterTurn(sessionId: string, item: AfterTurn): void;
+  /** Types the next message kept for the agent's turn to end, if it is ready for it now (call on each change of it). */
+  deliverAfterTurn(sessionId: string): void;
   /**
    * Interrupts the agent's turn, as Ctrl-C in its terminal would, and returns it idle at its prompt with its permission
    * prompts released. Refuses an ended agent and one with no turn under way.
@@ -375,10 +382,16 @@ export interface AgentHost {
   finalMessage(sessionId: string): string | undefined;
   /** Hears what a client typed into the agent's terminal, so a run never adds to a draft at its prompt. */
   onInput(sessionId: string, data: string): void;
-  /** Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked. */
-  sendUnsent(sessionId: string): Promise<Agent>;
-  /** Clears the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked. */
-  clearUnsent(sessionId: string): Agent;
+  /**
+   * Presses Enter on the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked (or,
+   * `byUser` false, an orchestrator), and resolves with the agent and how it went.
+   */
+  sendUnsent(sessionId: string, byUser?: boolean): Promise<{ agent: Agent; sent: UnsentSent }>;
+  /**
+   * Clears the message typed at the agent's prompt and never sent (`Agent.unsent`), as the user asked; or, `byUser`
+   * false, an orchestrator, refused while the user is typing there.
+   */
+  clearUnsent(sessionId: string, byUser?: boolean): Agent;
   /**
    * Sends again, in order, what was sent to the agent before its session was up and never typed (`Agent.undelivered`),
    * as the user asked: as messages, an ended agent started again with the first. What can't be sent stays.
@@ -711,7 +724,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     if (top === undefined) flags.set(sessionId, foldedFlag(head));
   };
   /**
-   * Per agent, what was sent to it before its session was up and never typed (`Agent.undelivered`), oldest first, and
+   * Per agent, what was sent to it and never typed (`Agent.undelivered`): before its session was up, or mid-turn, oldest first, and
    * the flag that says so (`Folding`): kept, in the database too, until the user resends or clears it, so the daemon
    * shows it again once it restarts.
    */
@@ -725,7 +738,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    */
   const flagUndelivered = (sessionId: string, items: UndeliveredMessage[], at: string) => {
     const before = undelivered.get(sessionId);
-    const lost = items.length === 1 ? `${items[0]!.what} sent before it was up` : `${items.length} messages sent before it was up`;
+    const lost = items.length === 1 ? items[0]!.what : `${items.length} messages`;
     const base = `${lost} ${items.length === 1 ? 'was' : 'were'} not delivered (${items.at(-1)!.reason}): Resend on its tile`;
     const folding = raiseFolding(sessionId, before, base, true, at);
     undelivered.set(sessionId, { ...folding, items });
@@ -1309,6 +1322,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       trustFolder: live && firstPrompts.get(row.session_id)?.trust === true ? row.cwd : null,
       trustedByZone: row.trusted_by_zone === 1,
       queuedUntilUp: live ? deliveries.queuedUntilUp(row.session_id) : 0,
+      messagesWaiting: live ? deliveries.waitingAfterTurn(row.session_id) : 0,
       undelivered: undelivered.get(row.session_id)?.items ?? [],
     };
   };
@@ -1533,6 +1547,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     },
 
     answer: deliveries.answer,
+    queueAfterTurn: deliveries.queueAfterTurn,
+    deliverAfterTurn: deliveries.deliverAfterTurn,
 
     runScheduled: deliveries.runScheduled,
 
@@ -1551,9 +1567,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       deliveries.typed(sessionId, data);
     },
 
-    async sendUnsent(sessionId) {
-      await deliveries.send(sessionId);
-      return get(sessionId)!;
+    async sendUnsent(sessionId, byUser) {
+      const sent = await deliveries.send(sessionId, byUser);
+      return { agent: get(sessionId)!, sent };
     },
 
     async resendUndelivered(sessionId) {
@@ -1587,9 +1603,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return get(sessionId)!;
     },
 
-    clearUnsent(sessionId) {
+    clearUnsent(sessionId, byUser) {
       // Typed at its terminal as much as the user's keys are: a draft of theirs there goes with it.
-      hookStates.typed(sessionId, deliveries.clear(sessionId));
+      hookStates.typed(sessionId, deliveries.clear(sessionId, byUser));
       return get(sessionId)!;
     },
 
@@ -1895,7 +1911,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       backgroundCommands.forget(session.id);
       // What it printed last, as it ended, is why its start failed.
       if (hookStates.startFailed(session.id)) startupLines.now(session.id);
-      deliveries.ended(session.id);
+      deliveries.ended(session.id, session.stoppedByRestart);
       lifecycle.stopGuard(session.id);
       // What was never delivered to it is flagged on, for Resend.
       if (flags.get(session.id)?.keepsEnded !== true) flags.delete(session.id);
@@ -2019,11 +2035,12 @@ export function agentHandlers<Context>(
     },
     'agent.answer': async (params) => {
       const p = paramsObject(params);
-      return agents.answer(stringParam(p, 'sessionId'), stringParam(p, 'text'), optionalBooleanParam(p, 'paste'));
+      const { queued } = await agents.answer(stringParam(p, 'sessionId'), stringParam(p, 'text'), optionalBooleanParam(p, 'paste'));
+      return { queued };
     },
     'agent.interrupt': (params) => agents.interrupt(stringParam(paramsObject(params), 'sessionId'), "the app's agent.interrupt"),
     'agent.continueOnCredits': (params) => agents.continueOnCredits(stringParam(paramsObject(params), 'sessionId'), "the app's agent.continueOnCredits"),
-    'agent.sendUnsent': (params) => agents.sendUnsent(stringParam(paramsObject(params), 'sessionId')),
+    'agent.sendUnsent': async (params) => (await agents.sendUnsent(stringParam(paramsObject(params), 'sessionId'))).agent,
     'agent.typeFirstPrompt': (params) => agents.typeFirstPrompt(stringParam(paramsObject(params), 'sessionId')),
     'agent.trustFolder': (params) => agents.trustFolder(stringParam(paramsObject(params), 'sessionId')),
     'agent.clearUnsent': (params) => agents.clearUnsent(stringParam(paramsObject(params), 'sessionId')),

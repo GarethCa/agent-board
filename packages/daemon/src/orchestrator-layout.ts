@@ -1278,6 +1278,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       layout: arrange.layout,
       spacing: zone.spacing,
       width: zone.width,
+      window: measures.window(),
       obstacles: placedOf(board)
         .filter((each) => each.zoneId === zone.id && !ids.has(each.key) && !own.has(each.key))
         .map((each) => takenBy(asDrawn(each))),
@@ -1357,7 +1358,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         // the layout. Who is in a cluster doesn't depend on where anything is, so the clusters are read from a first pass.
         const { spacing } = zone;
         const grid = zoneGrid(spacing);
-        const first = clusters ? arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: keep(ownParts), clusters }).clusters : [];
+        const first = clusters ? arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, window: measures.window(), obstacles: keep(ownParts), clusters }).clusters : [];
         const byHand = clusters ? handPlaced(me, inZone, board.items, parts, first) : new Map<string, BoardItem>();
         const obstacles = keep(new Set([...ownParts, ...[...byHand.values()].map((item) => `item:${item.id}`)]));
         // Each lane makes room for its note at the height its text needs.
@@ -1422,7 +1423,7 @@ export function layoutHandlers<Context extends BoardConnection>({
       const unmeasured = !measures.live() || (clusters && now.noteHeights.guessed.size > 0);
       // Laid out round `stay` too: the parts it could find no room to park, left where they are.
       const plan = (stay: readonly Rect[]) => {
-        const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, obstacles: [...obstacles, ...stay], clusters, noteHeights, noteWidths });
+        const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, window: measures.window(), obstacles: [...obstacles, ...stay], clusters, noteHeights, noteWidths });
         const { positions } = arranged;
         // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
         // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited

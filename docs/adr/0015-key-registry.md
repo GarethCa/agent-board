@@ -21,4 +21,4 @@ The app's keys were matched in a dozen handlers, each testing `event.key` and th
 ## Considered
 
 - **Each new handler checks the setting itself.** Easy to forget, and the cheat sheet would need the same list again.
-- **A keybindings file, or remapping now.** The design picks a read-only Settings › Keyboard first; a remap is a user layer over these defaults, later.
+- **A keybindings file, or remapping now.** The design picks a read-only Settings › General › Keyboard first; a remap is a user layer over these defaults, later.

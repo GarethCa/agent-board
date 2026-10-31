@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import postcss from 'postcss';
 import { describe, expect, it } from 'vitest';
 import { COLOR_SLOTS, FILL_SLOTS } from '@agent-board/daemon/protocol';
-import { covers, foldAlike, foldColors, foldFills, foldLines } from './board-colors';
+import { covers, foldAlike, foldColors, foldFills, foldLines, type ReadToken } from './board-colors';
 import { THEMES } from '../../shared/themes';
 
 const here = import.meta.dirname;
@@ -111,4 +111,33 @@ describe('the number of swatches in the colour rows', () => {
   it('shows each light-theme colour on its own', () => {
     expect(rowOf('light')).toHaveLength(12);
   });
+});
+
+describe('the Simplified design', () => {
+  /** The tokens a Simplified design block sets: `blocks` reads theme blocks alone, so it never sees these. */
+  const simplifiedSets = (selector: string) => {
+    const names = new Set<string>();
+    postcss.parse(readFileSync(join(here, 'tokens.css'), 'utf8')).walkRules((rule) => {
+      if (rule.selector === selector) rule.walkDecls((decl) => void names.add(decl.prop));
+    });
+    return names;
+  };
+
+  it.each([":root[data-design='simplified']", ":root[data-design='simplified'][data-theme='dark']"])(
+    '%s sets none of the tokens the colour rows read, so they fold as in the app’s own theme in its mode',
+    (selector) => {
+      const set = simplifiedSets(selector);
+      expect(set.size).toBeGreaterThan(0);
+      const read = new Set<string>();
+      const recording: ReadToken = (name) => {
+        read.add(name);
+        return resolver('light')(name);
+      };
+      foldColors(recording);
+      foldLines(recording);
+      foldFills(recording);
+      expect(read.size).toBeGreaterThan(0);
+      expect([...read].filter((name) => set.has(name))).toEqual([]);
+    },
+  );
 });

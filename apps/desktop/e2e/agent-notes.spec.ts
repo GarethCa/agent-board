@@ -6,16 +6,14 @@ import { agents, launch, spawnAgent, tile, tileAction, TURN_MS, zones } from './
 import { withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
-/** Picks how agent notes look, from the board menu's Settings, and closes the menu again. */
+/** Picks how agent notes look, in the Settings window's Board › Agent notes. */
 async function agentNotesLook(window: Page, look: 'Document' | 'Terminal'): Promise<void> {
-  const menu = window.getByRole('dialog', { name: 'Board menu' });
-  await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
-  const choice = menu.getByRole('group', { name: 'Agent notes' }).getByRole('button', { name: look });
+  const settings = await openSettings(window, 'board.notes');
+  const choice = settingsSection(settings, 'Agent notes').getByRole('group', { name: 'Agent notes' }).getByRole('button', { name: look });
   await choice.click();
   await expect(choice).toHaveAttribute('aria-pressed', 'true');
-  await window.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
 }
 
 test("an agent note: its badge selects its agent's tile, a tether leads there, the user's edit says so, and the look switches live", async () => {

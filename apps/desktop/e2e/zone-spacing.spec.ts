@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
 import { test, addEmptyZone, removeDataDir, tempDataDir } from './launch.ts';
+import { settingsSection } from './settings-helpers.ts';
 
 /** Where each shell is stored, relative to its zone, in the order they were made. */
 const shellPlaces = (page: Page) =>
@@ -54,11 +55,12 @@ test("a zone's ▾ picks its spacing, tidies it at once, and keeps it across a r
       { x: 12 + 256 + 16, y: 36 },
     ]);
 
-    // Its default for new zones is in Settings › Board.
+    // Its default for new zones is in the Settings window, under Board › Tidying.
     await zone.getByRole('button', { name: 'Tidy and spacing' }).click();
     await expect(menu.getByRole('menuitemradio', { name: /Compact/ })).toHaveAttribute('aria-checked', 'true');
-    await menu.getByRole('menuitem', { name: /Default for new zones/ }).click();
-    await expect(window.locator('.ui-segmented[aria-label="Arrange spacing"]')).toBeVisible();
+    const [settings] = await Promise.all([app.waitForEvent('window'), menu.getByRole('menuitem', { name: /Default for new zones/ }).click()]);
+    await expect(settingsSection(settings, 'Tidying')).toBeVisible();
+    await expect(settingsSection(settings, 'Tidying').locator('.ui-segmented[aria-label="Arrange spacing"]')).toBeVisible();
 
     await app.close();
     ({ app, window } = await launch(dataDir, SHELL_ENV));

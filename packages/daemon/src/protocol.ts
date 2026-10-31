@@ -1443,6 +1443,12 @@ export interface DaemonSettings {
   /** The spacing a new zone starts with (`Zone.spacing`). Roomy by default. */
   arrangeSpacing: ArrangeSpacing;
   /**
+   * Whether web tabs share one session kept on disk, so their logins, cookies and storage outlast closing the tab and
+   * restarting the app, as a browser's do. On by default. Off, each web tab opened afterwards is private: its own session,
+   * in memory, forgotten as it closes.
+   */
+  keepWebLogins: boolean;
+  /**
    * Whether the Captain may pace work by usage: hold starts and hand-offs in a zone, and pause its idle agents, within
    * `usageThresholds`. Off by default; the daemon refuses every budget hold while it is off.
    */
@@ -1882,6 +1888,11 @@ export interface Agent {
   trustedByZone: boolean;
   /** How many messages sent before the live agent's session was up wait to be typed, after its first prompt. */
   queuedUntilUp: number;
+  /**
+   * How many messages other agents sent the live orchestrator mid-turn wait for a turn of its to end, to be typed one
+   * after another, each a turn of its own (`queued-after-turn`).
+   */
+  messagesWaiting: number;
   /**
    * What was sent to the agent before its session was up and never typed, oldest first: its session ended first, its
    * first prompt was left unsent, or a question or permission prompt was up when its turn came. Its sender heard it was
@@ -2359,12 +2370,35 @@ export interface BackgroundCommand {
   startedAt: string;
 }
 
+/** How a message another agent sent reached its receiver: a `send`, an answer to its message, flag or question, or an edge's hand-off. */
+export type MessageKind = 'send' | 'reply' | 'hand-off';
+
+/** The ref of the agent with session id `sessionId`: `agent:` and the start of the id, as a sender mark and a trailer name it. */
+export const agentRefOf = (sessionId: string): string => `agent:${sessionId.slice(0, 8)}`;
+
+/** A hand-off's head, before its payload (`Hand-off from impl (its plan.md): `): its text, and the payload's name. */
+export const HAND_OFF_HEAD = /^Hand-off from .+? \(its ([^)]+)\): /;
+
+/** A send's closing line on who it is from (`[agent-board] From Captain (agent:944e1234)…`), after a blank line at the very end. */
+export const SEND_TRAILER = /\n\n(\[agent-board\] From [^\n]+)$/;
+
+/** Who sent a message the board typed at an agent's prompt, as its sender mark names them (ADR-0023). */
+export interface MessageSender {
+  /** The sending agent's ref, `agent:` and the start of its session id. */
+  ref: string;
+  name: string;
+  kind: MessageKind;
+  /** For a hand-off, the payload it carried: `final message`, `plan.md`. */
+  payload?: string;
+}
+
 /**
  * One thing in an agent's conversation, as the chat view shows it, read from its harness's transcript by a
  * versioned adapter (`transcript-adapters.ts`). A tool's result is its own entry, joined to its call by `id`.
  */
 export type ChatEntry = (
-  | { kind: 'user'; text: string }
+  /** `from` names the agent a message came from, which the board typed for it; a message without one is the user's. */
+  | { kind: 'user'; text: string; from?: MessageSender }
   | { kind: 'assistant'; text: string }
   /**
    * The model thinking before it answered or called a tool. Claude keeps the text of most of it to itself, so `text` is
@@ -2748,6 +2782,23 @@ export type OrchestratorSpawned = Agent & {
   template: string | null;
 };
 
+/**
+ * How an `orchestrator.send` went. A message: its turn started (`started`); queued until its session is up
+ * (`queued-until-up`); the paused agent woken with it, to be typed once its session is up (`waking`); or typed as a
+ * turn started meanwhile, its one Enter queueing it for after that turn, not yet seen taken up (`queued-in-turn`); or,
+ * to an orchestrator mid-turn, kept by the daemon until its turn ends and then typed, after any sent before it
+ * (`queued-after-turn`, `Agent.messagesWaiting`). With `submit`, the unsent message at its prompt: its turn started (`started`). With `clear`, the keys that clear it
+ * were typed (`cleared`). One whose turn never started is never any of these: the send is refused, saying so, and it
+ * stays the agent's unsent message.
+ */
+export type SendDelivery = 'started' | 'queued-until-up' | 'waking' | 'queued-in-turn' | 'queued-after-turn' | 'cleared';
+
+/**
+ * What `orchestrator.send` answers: the agent, and how the send went. `typed` is the message as the receiver reads it,
+ * headed with its sender mark when an agent sent it (ADR-0023); none for `submit` or `clear`.
+ */
+export type OrchestratorSent = Agent & { delivery: SendDelivery; typed?: string };
+
 /** The sides of a tile or note another is put beside (`orchestrator.move`'s and `addNote`'s `near`). */
 export const TILE_SIDES = ['below', 'right', 'left', 'above'] as const;
 export type TileSide = (typeof TILE_SIDES)[number];
@@ -2785,10 +2836,11 @@ export const ARRANGE_BYS = ['issue', 'role', 'state'] as const;
 export type ArrangeBy = (typeof ARRANGE_BYS)[number];
 /**
  * How it lays the groups out: a row each (the default; by issue, lanes with a column per slot), a column each, a card
- * each (flowed two or three across), filling the zone's width as Tidy does, or by issue a lane each that wraps its
- * tiles onto a new row after four (`wrap`; by role or state, as rows).
+ * each (flowed two or three across), filling the zone's width as Tidy does, by issue a lane each that wraps its tiles
+ * onto a new row after four (`wrap`; by role or state, as rows), each group a block in the shortest of as many columns
+ * as fit the window (`masonry`), or each group a block sized by its tiles in a treemap of the window's shape (`treemap`).
  */
-export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid', 'wrap'] as const;
+export const ARRANGE_LAYOUTS = ['rows', 'columns', 'cards', 'grid', 'wrap', 'masonry', 'treemap'] as const;
 export type ArrangeLayout = (typeof ARRANGE_LAYOUTS)[number];
 
 /**
@@ -2833,12 +2885,13 @@ export interface ExpandedBox extends BoxRect {
 /**
  * What the app says of how it draws the board (`layout.measured`): its boxes, and the tiles expanded in place as it
  * drew them, which where it drew the rest depends on. `away` once its window is no longer in front: it says nothing
- * more until it is again, so nothing waits on it.
+ * more until it is again, so nothing waits on it. `window`, how big its window is, px: an arrange packs masonry to its shape.
  */
 export interface LayoutMeasured {
   boxes: MeasuredBox[];
   expanded: ExpandedBox[];
   away?: boolean;
+  window?: { width: number; height: number };
 }
 
 /** The most boxes one `layout.measured` takes. */
@@ -3849,9 +3902,13 @@ export interface DaemonMethods {
   'orchestrator.spawn': { params: { token?: string } & OrchestratorSpawnParams; result: OrchestratorSpawned };
   /**
    * Sends `text` as the agent's next message (`agent.answer`). Only to a live agent at its prompt, between turns: one
-   * that is working, needs permission or has ended is refused with `invalidParams`.
+   * that is working, needs permission or has ended is refused with `invalidParams`, and so is one whose Enter never
+   * started a turn, the message left typed at its prompt (`Agent.unsent`), saying so. Instead of `text`, `submit`
+   * presses Enter on the agent's unsent message (`agent.sendUnsent`) and `clear` clears it (`agent.clearUnsent`), both
+   * refused while the user is typing there, and never on a reply path: only an orchestrator that may steer the agent
+   * reaches its prompt so. Answers with how it went (`SendDelivery`).
    */
-  'orchestrator.send': { params: { token?: string; sessionId: string; text: string }; result: Agent };
+  'orchestrator.send': { params: { token?: string; sessionId: string; text?: string; submit?: boolean; clear?: boolean }; result: OrchestratorSent };
   /**
    * Sets the status line of an agent in the caller's crew (the agents it started, and theirs), as the agent's own
    * `board.setStatus` does, saying who set it. The latest of the two wins. An agent outside its crew, an orchestrator

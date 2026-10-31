@@ -8,7 +8,7 @@ The needs-you inbox listed every live agent `waiting` or needing permission. Hoo
 ## Only explicit requests, by default
 
 - **The rule is one function** (`needsYouKind` in the protocol): a permission prompt pending (or `needs-permission`), a question (`ask`), a plan waiting on a decision, or a flag that reaches the user, in that order; with `DaemonSettings.needsYouShows: 'turns'`, also an agent `waiting` at its prompt. The inbox, the pill, the dock badge, each tile's needs-you look and pill, the switcher, the daemon's start banner and notifications all read it with the one setting, so they agree. The daemon keeps the setting and tells every client when it changes (`settings.updated`).
-- **The default is explicit requests only.** A turn ending is no request: the agent's tile looks idle, and the inbox, pill and notifications say nothing. The old behaviour stays one switch away, in Settings › Notifications.
+- **The default is explicit requests only.** A turn ending is no request: the agent's tile looks idle, and the inbox, pill and notifications say nothing. The old behaviour stays one switch away, in Settings › Alerts › Notifications.
 - **A permission prompt always counts**, whoever started the agent: only the user can allow or deny a tool. A question and a plan count when an agent the user started (or an orchestrator) puts them; a crew member's go to its orchestrator, below. A first version listed a crew member's questions and plans for the user too, as only the user answers a held question (ADR-0014); that went against the decision that only orchestrators, top-level agents and permission prompts reach Needs you, so they became flags.
 
 ## A flag: "please look", with nothing held

@@ -17,9 +17,14 @@ import {
   type FlowEdgeUpdatedEvent,
   type HookEvent,
 } from '../src/protocol.ts';
+import { refOf } from '../src/crew-flags.ts';
+import { markSender } from '../src/sender-marker.ts';
 import { connectTestClient, git, insertFakeSession, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 100, rows: 30 };
+
+/** What B is typed for a hand-off from `from`: its sender mark, then the hand-off line. */
+const handedOff = (from: Agent, line: string) => markSender('hand-off', from.name, refOf(from), line);
 
 /**
  * A daemon whose agents run the fake claude's `output` scenario: one turn, then each line typed to it as a turn. Held
@@ -284,8 +289,8 @@ describe('delivering along flow edges', () => {
     await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
 
     // A's turn says "Done: Ship it.", which B gets as its next message.
-    const fed = await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its final message): Done: Ship it..', before);
-    expect(fed.lastMessage).toBe('Done: Hand-off from Coder (its final message): Done: Ship it..');
+    const fed = await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`, before);
+    expect(fed.lastMessage).toBe(`Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`);
     expect(statesOf(recorder.events, a.sessionId, before).slice(0, 4)).toEqual(['thinking', 'idle', 'handing-off', 'idle']);
     const delivered = await recorder.waitFor(
       (e): e is FlowEdgeUpdatedEvent => e.type === 'flowEdge.updated' && e.edge.id === edge.id && e.edge.lastDelivery !== null,
@@ -316,7 +321,7 @@ describe('delivering along flow edges', () => {
     const sent = await client.call('flowEdge.send', { id: edge.id });
 
     expect(sent.lastDelivery).toMatchObject({ delivered: true, reason: null });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its final message): Done: Ship it..', before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`, before);
     expect(statesOf(recorder.events, a.sessionId, sending)).toEqual(['waiting']);
   });
 
@@ -331,7 +336,7 @@ describe('delivering along flow edges', () => {
     const before = recorder.events.length;
     await client.call('agent.answer', { sessionId: a.sessionId, text: 'Ship it' });
 
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its final message): Done: Ship it..', before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`, before);
   });
 
   it("refuses to send before A has finished a turn, and skips a B that's still working, saying why", async () => {
@@ -366,7 +371,7 @@ describe('file payloads', () => {
 
     await client.call('agent.answer', { sessionId: a.sessionId, text: 'Write the plan' });
 
-    const said = 'Done: Hand-off from Coder (its plan.md): # Plan 1. Add zoneId..';
+    const said = `Done: ${handedOff(a, 'Hand-off from Coder (its plan.md): # Plan 1. Add zoneId.')}.`;
     await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === said, before);
     const delivered = await untilEdge(recorder, edge.id, (e) => e.deliveries === 1);
     expect(delivered.history).toEqual([{ at: expect.any(String), kind: 'delivered', detail: 'plan.md (23 B)' }]);
@@ -385,7 +390,7 @@ describe('file payloads', () => {
     writeFileSync(join(a.worktree, 'handoff.json'), '{ "verdict": "approve",\n  "findings": [] }');
     const sending = recorder.events.length;
     await client.call('flowEdge.send', { id: edge.id });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its handoff.json): {"verdict":"approve","findings":[]}.', sending);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its handoff.json): {"verdict":"approve","findings":[]}')}.`, sending);
 
     // An auto hand-off of a broken file goes nowhere, and its history says why.
     writeFileSync(join(a.worktree, 'handoff.json'), '{ verdict');
@@ -438,7 +443,7 @@ describe('conditions', () => {
     checks('FAILURE');
     await untilEdge(recorder, edge.id, (e) => e.held?.reason === 'PR #214 checks failing');
     checks('SUCCESS');
-    const said = 'Done: Hand-off from Coder (its final message): Done: Ship it..';
+    const said = `Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`;
     await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === said, before);
     const released = await untilEdge(recorder, edge.id, (e) => e.deliveries === 1);
     expect(released.held).toBeNull();
@@ -459,7 +464,7 @@ describe('conditions', () => {
     const sent = await client.call('flowEdge.send', { id: edge.id });
 
     expect(sent).toMatchObject({ held: null, deliveries: 1, lastDelivery: { delivered: true } });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its final message): Done: Ship it..');
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its final message): Done: Ship it.')}.`);
   });
 
   it("checks a held hand-off again by itself, releasing it once a custom script passes in A's worktree", async () => {
@@ -700,7 +705,7 @@ describe('pausing, manual edges and queueing', () => {
 
     expect(sent.queued).toEqual({ since: expect.any(String), name: 'final message', copy: true });
     expect(sent.history[0]).toEqual({ at: expect.any(String), kind: 'queued', detail: 'it was still working' });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its final message): All tests pass..', answered);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its final message): All tests pass.')}.`, answered);
     const delivered = await untilEdge(recorder, edge.id, (e) => e.deliveries === 1);
     expect(delivered.queued).toBeNull();
   }, 20_000);
@@ -817,12 +822,12 @@ describe('held payloads', () => {
 
   it('keeps a copy by default, and delivers the plan as it was when A handed off', async () => {
     const { client, recorder, a, b, edge, held } = await heldPlan();
-    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS });
+    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', keepWebLogins: true, usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS });
     expect(held.held).toMatchObject({ name: 'plan.md', copy: true });
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');
     writeFileSync(join(a.worktree, 'ready'), '');
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its plan.md): First plan.', before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its plan.md): First plan')}.`, before);
     expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
   });
 
@@ -846,7 +851,7 @@ describe('held payloads', () => {
     expect((await untilEdge(recorder, edge.id, (e) => e.held !== null)).held).toMatchObject({ reason: 'held: 5h at 90%, zone low priority' });
     const before = recorder.events.length;
     await client.call('orchestrator.release', { zoneId: zone.id });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: Hand-off from Coder') === true, before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: ⟨hand-off from Coder') === true, before);
     expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
   });
 
@@ -874,7 +879,7 @@ describe('held payloads', () => {
     // The user's Override wakes it, and what was held for its pause goes at once: this daemon has no periodic recheck.
     const before = recorder.events.length;
     await client.call('agent.resume', { sessionId: b.sessionId });
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: Hand-off from Coder') === true, before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage?.startsWith('Done: ⟨hand-off from Coder') === true, before);
     expect((await untilEdge(recorder, edge.id, (e) => e.deliveries === 1)).held).toBeNull();
   });
 
@@ -884,7 +889,7 @@ describe('held payloads', () => {
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');
     writeFileSync(join(a.worktree, 'ready'), '');
-    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === 'Done: Hand-off from Coder (its plan.md): Second plan.', before);
+    await untilAgent(recorder, b.sessionId, (agent) => agent.lastMessage === `Done: ${handedOff(a, 'Hand-off from Coder (its plan.md): Second plan')}.`, before);
     await untilEdge(recorder, edge.id, (e) => e.deliveries === 1);
   });
 

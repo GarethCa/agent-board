@@ -28,6 +28,18 @@ function boxParam(params: Record<string, unknown>, name: string): BoxRect {
   return { x: value('x'), y: value('y'), width: value('width'), height: value('height') };
 }
 
+/** A window's size, px: finite, and more than 0. */
+function windowParam(raw: unknown): { width: number; height: number } {
+  if (typeof raw !== 'object' || raw === null) throw invalidParams('window must be a size');
+  const fields = raw as Record<string, unknown>;
+  const value = (field: 'width' | 'height') => {
+    const each = fields[field];
+    if (typeof each !== 'number' || !Number.isFinite(each) || each <= 0) throw invalidParams(`window.${field} must be a finite number more than 0`);
+    return each;
+  };
+  return { width: value('width'), height: value('height') };
+}
+
 function measuredBoxParam(raw: unknown): MeasuredBox {
   const params = paramsObject(raw);
   const box: MeasuredBox = { key: stringParam(params, 'key'), saved: boxParam(params, 'saved'), drawn: boxParam(params, 'drawn') };
@@ -73,6 +85,8 @@ export interface LayoutMeasures {
   drawn(key: string, saved: BoxRect, sized: boolean, expanded: readonly ExpandedBox[]): BoxRect | undefined;
   /** The height a note's text needs, if the app measured it saying the same, at the same width. */
   fits(note: NoteToMeasure): number | undefined;
+  /** How big the window that reports is, if one does and said. */
+  window(): { width: number; height: number } | undefined;
   /** Waits until the app has measured every one of `notes`, at most the wait it was made with (none with no app). */
   measured(notes: readonly NoteToMeasure[]): Promise<void>;
 }
@@ -87,6 +101,7 @@ export function createLayoutMeasures({ waitMs = DEFAULT_MEASURE_WAIT_MS, mayRepo
   let drawnRound: ExpandedBox[] = [];
   /** Whether the window that reports is no longer in front, so says nothing more for now. */
   let away = false;
+  let size: { width: number; height: number } | undefined;
   const listeners = new Set<() => void>();
 
   const fits = ({ key, width, text }: NoteToMeasure) => {
@@ -104,6 +119,7 @@ export function createLayoutMeasures({ waitMs = DEFAULT_MEASURE_WAIT_MS, mayRepo
         if (!Array.isArray(params.expanded)) throw invalidParams('expanded must be a list');
         if (params.expanded.length > MAX_MEASURED_BOXES) throw invalidParams(`expanded must be at most ${MAX_MEASURED_BOXES}`);
         if (params.away !== undefined && typeof params.away !== 'boolean') throw invalidParams('away must be true or false');
+        const window = params.window === undefined ? undefined : windowParam(params.window);
         const next = new Map(params.boxes.map((each) => measuredBoxParam(each)).map((box) => [box.key, box] as const));
         const round = params.expanded.map((each) => expandedBoxParam(each));
         if (from !== connection) {
@@ -116,6 +132,7 @@ export function createLayoutMeasures({ waitMs = DEFAULT_MEASURE_WAIT_MS, mayRepo
               boxes = new Map();
               drawnRound = [];
               away = false;
+              size = undefined;
               for (const listener of [...listeners]) listener();
             },
             { once: true },
@@ -124,6 +141,7 @@ export function createLayoutMeasures({ waitMs = DEFAULT_MEASURE_WAIT_MS, mayRepo
         boxes = next;
         drawnRound = round;
         away = params.away === true;
+        size = window;
         for (const listener of [...listeners]) listener();
         return null;
       },
@@ -136,6 +154,7 @@ export function createLayoutMeasures({ waitMs = DEFAULT_MEASURE_WAIT_MS, mayRepo
       return sameExpanded(drawnRound, expanded) ? box.drawn : { ...box.drawn, x: saved.x, y: saved.y };
     },
     fits,
+    window: () => size,
     measured(notes) {
       // A window that is away says nothing until it is in front again: there is nothing to wait for.
       const done = () => from === undefined || away || notes.every((note) => fits(note) !== undefined);

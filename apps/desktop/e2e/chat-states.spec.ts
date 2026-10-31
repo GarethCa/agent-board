@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, openBoardMenu, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { launch, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -25,12 +26,10 @@ async function closeChat(window: Page): Promise<void> {
 /** Picks the chat style: Cards is the default, Timeline from Settings › Chat (with no window open), the status line from the switch over a chat. */
 async function pickStyle(window: Page, style: Style): Promise<void> {
   if (style === 'Timeline') {
-    const menu = await openBoardMenu(window);
-    const choices = menu.getByRole('radiogroup', { name: 'Chat style' });
+    const settings = await openSettings(window, 'agents.chat');
+    const choices = settingsSection(settings, 'Chat').getByRole('radiogroup', { name: 'Chat style' });
     await expect(choices.getByRole('radio', { name: /^Cards/ })).toBeChecked();
     await choices.getByRole('radio', { name: /^Timeline/ }).check();
-    await window.keyboard.press('Escape');
-    await expect(menu).toBeHidden();
   } else if (style === 'Status line') {
     await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: 'Status line' }).click();
   }
@@ -133,8 +132,8 @@ for (const style of ['Cards', 'Timeline', 'Status line'] as const) {
       // The style picked outlasts a relaunch.
       await app.close();
       ({ app, window } = await launch(dataDir, env));
-      const menu = await openBoardMenu(window);
-      await expect(menu.getByRole('radiogroup', { name: 'Chat style' }).getByRole('radio', { name: new RegExp(`^${style}`) })).toBeChecked();
+      const settings = await openSettings(window, 'agents.chat');
+      await expect(settingsSection(settings, 'Chat').getByRole('radiogroup', { name: 'Chat style' }).getByRole('radio', { name: new RegExp(`^${style}`) })).toBeChecked();
     } finally {
       await app.close();
       await removeDataDir(dataDir);

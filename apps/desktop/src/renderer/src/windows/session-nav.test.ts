@@ -37,6 +37,7 @@ describe('moving between a group’s sessions', () => {
     expect(nav).toMatchObject({ index: 2, count: 4, zoneId: 'frontend' });
     expect(nav.previous).toEqual({ target: board[1]!.target, wrapped: false });
     expect(nav.next).toEqual({ target: board[3]!.target, wrapped: false });
+    expect(nav.group.map((target) => target.id)).toEqual(['planner', 'tokens', 'auth', 'nav']);
   });
 
   it('wraps at the ends, and says so', () => {

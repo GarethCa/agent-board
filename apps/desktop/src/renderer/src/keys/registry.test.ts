@@ -15,6 +15,8 @@ const press = (key: string, code: string, held: Partial<Record<'metaKey' | 'ctrl
 const MAC = { isMac: true, extended: true };
 const OTHER = { isMac: false, extended: true };
 
+const ids = (sections: ReturnType<typeof cheatSheet>) => sections.flatMap((section) => section.rows.map((row) => row.id));
+
 describe('the key registry', () => {
   it('has each id once, each in the form section.action, with a label and a key to write', () => {
     const ids = KEYS.map((entry) => entry.id);
@@ -109,10 +111,17 @@ describe('pressing a key', () => {
 });
 
 describe('the Extended keyboard shortcuts setting', () => {
-  it('turned off, leaves every new key inactive and every other one as it was', () => {
+  it('turned off, leaves every new key inactive and every other one as it was, under Classic', () => {
     for (const entry of KEYS as readonly KeyBinding[]) {
-      expect(isActive(entry, true), entry.id).toBe(true);
-      expect(isActive(entry, false), entry.id).toBe(entry.status !== 'new');
+      expect(isActive(entry, true, false), entry.id).toBe(!entry.simplifiedOnly);
+      expect(isActive(entry, false, false), entry.id).toBe(!entry.simplifiedOnly && entry.status !== 'new');
+    }
+  });
+
+  it('turned off, leaves every new key inactive and every other one as it was, under the Simplified design', () => {
+    for (const entry of KEYS as readonly KeyBinding[]) {
+      expect(isActive(entry, true, true), entry.id).toBe(true);
+      expect(isActive(entry, false, true), entry.id).toBe(entry.status !== 'new');
     }
   });
 
@@ -130,13 +139,40 @@ describe('the Extended keyboard shortcuts setting', () => {
   });
 });
 
-describe('the cheat sheet', () => {
-  const ids = (sections: ReturnType<typeof cheatSheet>) => sections.flatMap((section) => section.rows.map((row) => row.id));
+describe('a key of the Simplified design', () => {
+  it('is active only under it, whatever the Extended keyboard shortcuts setting', () => {
+    const terminal = binding('window.terminalView');
+    expect(isActive(terminal, true, false)).toBe(false);
+    expect(isActive(terminal, false, true)).toBe(true);
+    expect(pressed('window.terminalView', press('t', 'KeyT', { metaKey: true, altKey: true }), { isMac: true, extended: false, simplified: true })).toBe(true);
+    expect(pressed('window.terminalView', press('t', 'KeyT', { metaKey: true, altKey: true }), { isMac: true, extended: true, simplified: false })).toBe(false);
+    expect(pressed('window.terminalView', press('t', 'KeyT', { ctrlKey: true, shiftKey: true, altKey: true }), { isMac: false, simplified: true })).toBe(true);
+    expect(pressed('window.terminalView', press('t', 'KeyT', { metaKey: true }), { isMac: true, simplified: true })).toBe(false);
+    expect([keyText('window.terminalView', true), keyText('window.terminalView', false)]).toEqual(['⌘⌥T', 'Ctrl+Shift+Alt+T']);
+    expect([keyText('window.stopStep', true), keyText('window.stopStep', false)]).toEqual(['⌘.', 'Ctrl+Shift+.']);
+    expect(pressed('window.stopStep', press('.', 'Period', { metaKey: true }), { isMac: true, simplified: true })).toBe(true);
+    expect(pressed('window.stopStep', press('.', 'Period', { metaKey: true }), { isMac: true, simplified: false })).toBe(false);
+  });
 
-  it('lists every active key once, and leaves the new ones out with the setting off', () => {
-    const on = ids(cheatSheet('board', { extended: true }));
+  it('is on the cheat sheet only under it', () => {
+    expect(ids(cheatSheet('window', { extended: true, simplified: true }))).toContain('window.terminalView');
+    expect(ids(cheatSheet('window', { extended: true, simplified: false }))).not.toContain('window.terminalView');
+  });
+});
+
+describe('the cheat sheet', () => {
+
+  it('lists every active key once under Classic, its own keys alone, and leaves the new ones out with the setting off', () => {
+    const classic = ids(cheatSheet('board', { extended: true, simplified: false }));
+    expect(classic.toSorted()).toEqual((KEYS as readonly KeyBinding[]).filter((entry) => !entry.simplifiedOnly).map((entry) => entry.id).toSorted());
+    const newOnes = (KEYS as readonly KeyBinding[]).filter((entry) => !entry.simplifiedOnly && entry.status === 'new').length;
+    expect(ids(cheatSheet('board', { extended: false, simplified: false }))).toHaveLength(classic.length - newOnes);
+  });
+
+  it('lists every active key once under the Simplified design, and leaves the new ones out with the setting off', () => {
+    const on = ids(cheatSheet('board', { extended: true, simplified: true }));
     expect(on.toSorted()).toEqual(KEYS.map((entry) => entry.id).toSorted());
-    const off = ids(cheatSheet('board', { extended: false }));
+    const off = ids(cheatSheet('board', { extended: false, simplified: true }));
     expect(off).not.toContain('move.cheatSheet');
     expect(off).not.toContain('move.cheatSheetAnywhere');
     expect(off).not.toContain('move.master');

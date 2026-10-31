@@ -1,5 +1,5 @@
 import { CHAT_STYLE_LABELS, DEFAULT_CHAT_STYLE, setChatStyle, useChatStyle, type ChatStyle } from '../session/chat-style';
-import { Choice, Choices, Fieldset, SectionLabel, Tag } from '../ui';
+import { Choice, Choices, Fieldset, Tag } from '../ui';
 
 const DETAILS: Record<ChatStyle, string> = {
   cards: 'Each call, permission, plan or limit a card in the stream, opening on a click, its actions on it.',
@@ -7,12 +7,11 @@ const DETAILS: Record<ChatStyle, string> = {
   'status-line': 'The messages, finished calls as chips, and one live line over the message box.',
 };
 
-/** Settings › Chat: how every chat view shows an agent's states. The switch over a chat picks the same. */
+/** Settings › Agents › Chat: how every chat view shows an agent's states. The switch over a chat picks the same. */
 export function ChatStyleSetting() {
   const style = useChatStyle();
   return (
     <>
-      <SectionLabel as="h4">Chat</SectionLabel>
       <Fieldset legend="Style">
         <Choices aria-label="Chat style">
           {(Object.keys(DETAILS) as ChatStyle[]).map((each) => (

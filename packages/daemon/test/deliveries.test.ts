@@ -43,8 +43,13 @@ function setup(rows: Row[], notReady?: string) {
   const shown: { state: AgentState; lastMessage?: string } = { state: 'idle' };
   /** Why the agents can't take a run now, if they can't. */
   const ready: { why: string | undefined } = { why: notReady };
+  /** What writing to an agent's terminal throws, if it fails. */
+  const failing: { write: Error | undefined } = { write: undefined };
   const deliveries = createDeliveries<Row>({
-    write: (sessionId, data) => void writes.push([sessionId, data]),
+    write(sessionId, data) {
+      if (failing.write !== undefined) throw failing.write;
+      writes.push([sessionId, data]);
+    },
     getRow: (sessionId) => byId.get(sessionId),
     requireAgent(sessionId) {
       const found = byId.get(sessionId);
@@ -84,7 +89,7 @@ function setup(rows: Row[], notReady?: string) {
     await flush();
   };
 
-  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, advance, land };
+  return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, advance, land };
 }
 
 describe('deliveries', () => {
@@ -425,9 +430,24 @@ describe('submitting what is typed', () => {
     await advance(1_000);
     prompt.now = 'typing';
     await advance(1_000);
-    await answered;
+    expect(await answered).toEqual({ queued: false, unsent: 'you typed at its prompt meanwhile' });
     expect(writes.map(([, data]) => data)).toEqual(['the plan']);
     expect(deliveries.unsent('a')).toBe('A message');
+  });
+
+  it('says a message whose last Enter started no turn was not sent, never that it was', async () => {
+    const { deliveries, advance } = setup([row('a')]);
+    const answered = deliveries.answer('a', 'the plan');
+    await advance(2_000 + 1_000 + 2_000 + 4_000);
+    expect(await answered).toEqual({ queued: false, unsent: 'no turn started on it after 3 presses of Enter' });
+    expect(deliveries.unsent('a')).toBe('A message');
+  });
+
+  it('says a message whose turn started was sent', async () => {
+    const { deliveries, land } = setup([row('a')]);
+    const answered = deliveries.answer('a', 'the plan');
+    await land('a');
+    expect(await answered).toEqual({ queued: false });
   });
 
   it("keeps a hand-off still unsent after the last Enter as the agent's unsent message, and types nothing more after it", async () => {
@@ -485,7 +505,7 @@ describe('submitting what is typed', () => {
     prompt.now = 'working';
     const answered = deliveries.answer('a', 'and the tests');
     await advance(2_000);
-    await answered;
+    expect(await answered).toEqual({ queued: false, inTurn: true });
     await advance(10_000);
     expect(writes.map(([, data]) => data)).toEqual(['and the tests', '\r']);
     expect(deliveries.unsent('a')).toBeUndefined();
@@ -810,7 +830,7 @@ describe('an unsent message', () => {
     await advance(1_000);
     expect(writes).toEqual([['a', '\r'], ['a', '\r']]);
     deliveries.turnSeen('a');
-    await sent;
+    expect(await sent).toEqual({ started: true });
     expect(deliveries.unsent('a')).toBeUndefined();
     expect(writes.filter(([, data]) => data.includes('the plan'))).toEqual([]);
   });
@@ -819,9 +839,18 @@ describe('an unsent message', () => {
     const { deliveries, writes, advance } = await unsentOn();
     const sent = deliveries.send('a');
     await advance(1_000 + 2_000 + 4_000);
-    await sent;
+    expect(await sent).toEqual({ started: false, why: 'no turn started on it after 3 presses of Enter' });
     expect(writes.map(([, data]) => data)).toEqual(['\r', '\r', '\r']);
     expect(deliveries.unsent('a')).toBeUndefined();
+  });
+
+  it("stays unsent when an orchestrator's Send starts no turn: it sees no prompt, and Enters can be lost", async () => {
+    const { deliveries, writes, advance } = await unsentOn();
+    const sent = deliveries.send('a', false);
+    await advance(1_000 + 2_000 + 4_000);
+    expect(await sent).toEqual({ started: false, why: 'no turn started on it after 3 presses of Enter' });
+    expect(writes.map(([, data]) => data)).toEqual(['\r', '\r', '\r']);
+    expect(deliveries.unsent('a')).toBe('A scheduled run');
   });
 
   it('types an answer that came while Send waited once its turn starts: Send settles first, in its own step', async () => {
@@ -843,7 +872,7 @@ describe('an unsent message', () => {
     await advance(500);
     prompt.now = 'typing';
     await advance(500);
-    await sent;
+    expect(await sent).toEqual({ started: false, why: 'you typed at its prompt meanwhile' });
     expect(deliveries.unsent('a')).toBe('A scheduled run');
   });
 
@@ -855,6 +884,15 @@ describe('an unsent message', () => {
     await expect(deliveries.send('a')).rejects.toThrow('a is not at its prompt');
     expect(() => deliveries.clear('a')).toThrow('a is not at its prompt');
     expect(writes).toEqual([]);
+  });
+
+  it("is never sent or cleared for an orchestrator while the user is typing there: their words would go with it", async () => {
+    const { deliveries, writes, prompt } = await unsentOn();
+    prompt.now = 'typing';
+    await expect(deliveries.send('a', false)).rejects.toThrow("the user is typing in a's terminal");
+    expect(() => deliveries.clear('a', false)).toThrow("the user is typing in a's terminal");
+    expect(writes).toEqual([]);
+    expect(deliveries.unsent('a')).toBe('A scheduled run');
   });
 
   it('is cleared on Clear with what the user typed there too, so a draft they emptied with Backspace never blocks it', async () => {
@@ -901,6 +939,94 @@ describe('an unsent message', () => {
     const ended = (await unsentOn()).deliveries;
     ended.ended('a');
     expect(ended.unsent('a')).toBeUndefined();
+  });
+});
+
+describe('messages waiting for a turn to end', () => {
+  /** A message kept until the agent's turn ends, recording how it went: `typing`, then `started` or `not started`. */
+  const waiting = (text: string, heard: string[]) => ({
+    text,
+    typing: () => void heard.push(`${text}: typing`),
+    settled: (started: boolean) => void heard.push(`${text}: ${started ? 'started' : 'not started'}`),
+  });
+
+  it('types the oldest at a ready prompt, counting it until it is typed, and keeps the rest for the next turn to end', async () => {
+    const { deliveries, writes, land } = setup([row('a')]);
+    const heard: string[] = [];
+    deliveries.queueAfterTurn('a', waiting('First', heard));
+    deliveries.queueAfterTurn('a', waiting('Second', heard));
+    deliveries.deliverAfterTurn('a');
+    // Being typed, it is still counted: a send meanwhile goes behind it.
+    expect(deliveries.waitingAfterTurn('a')).toBe(2);
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'First'],
+      ['a', '\r'],
+    ]);
+    expect(heard).toEqual(['First: typing', 'First: started']);
+    expect(deliveries.waitingAfterTurn('a')).toBe(1);
+  });
+
+  it('keeps one first in line when the agent goes to work before it is typed', async () => {
+    const { deliveries, writes, ready, advance } = setup([row('a')]);
+    const heard: string[] = [];
+    deliveries.queueAfterTurn('a', waiting('First', heard));
+    // A crew flag is being typed at it first; by the time that is done, it is at work.
+    void deliveries.tell('a', 'A crew flag');
+    deliveries.deliverAfterTurn('a');
+    ready.why = 'it is at work';
+    await advance(10_000);
+    expect(writes.filter(([, data]) => data === 'First')).toEqual([]);
+    expect(heard).toEqual(['First: typing', 'First: not started']);
+    expect(deliveries.waitingAfterTurn('a')).toBe(1);
+
+    ready.why = undefined;
+    deliveries.deliverAfterTurn('a');
+    await advance(200);
+    expect(writes.filter(([, data]) => data === 'First')).toHaveLength(1);
+  });
+
+  it('hands back the one being typed, with those behind it, when its session ends or the daemon closes, settling each once', async () => {
+    for (const end of ['session', 'daemon'] as const) {
+      const a = row('a');
+      const { deliveries, undelivered, land } = setup([a]);
+      const heard: string[] = [];
+      deliveries.queueAfterTurn('a', waiting('First', heard));
+      deliveries.queueAfterTurn('a', waiting('Second', heard));
+      deliveries.deliverAfterTurn('a');
+      if (end === 'session') {
+        a.ended_at = '2026-10-22T10:00:01Z';
+        deliveries.ended('a');
+      } else {
+        deliveries.handBackQueued();
+      }
+      await land('a');
+      const reason = end === 'session' ? 'its session ended before its turn did' : 'the daemon shut down before its turn ended';
+      expect(undelivered).toEqual([`a A message: First (${reason})`, `a A message: Second (${reason})`]);
+      expect(heard).toEqual(['First: typing', 'First: not started', 'Second: not started']);
+      expect(deliveries.waitingAfterTurn('a')).toBe(0);
+    }
+  });
+
+  it('hands back one that could not be typed, saying so plainly, and goes on to the next', async () => {
+    const { deliveries, undelivered, failing, land, writes } = setup([row('a')]);
+    const heard: string[] = [];
+    deliveries.queueAfterTurn('a', waiting('First', heard));
+    deliveries.queueAfterTurn('a', waiting('Second', heard));
+    failing.write = new Error('write EIO');
+    deliveries.deliverAfterTurn('a');
+    await land('a');
+    expect(undelivered).toEqual(['a A message: First (it could not be typed)']);
+    expect(heard).toEqual(['First: typing', 'First: not started']);
+    expect(deliveries.waitingAfterTurn('a')).toBe(1);
+
+    failing.write = undefined;
+    deliveries.deliverAfterTurn('a');
+    await land('a');
+    expect(writes).toEqual([
+      ['a', 'Second'],
+      ['a', '\r'],
+    ]);
   });
 });
 

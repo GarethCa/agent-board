@@ -140,13 +140,14 @@ import { zoneDeleteText, type ZoneToDelete } from './editing/delete-zones';
 import { historyKey, itemChange, patched, useHistory, type BoardState, type Change, type DissolvedGroup } from './editing/use-history';
 import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
-import { tileOpenAction, type ClickOpens } from './click-opens';
+import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
 import { crewFrames, crewMoves, landingRects, withCrewFollowing } from './crews';
-import { ConnectionCountsContext, edgeCounts, nextConnectionsView, shownEdges, type ConnectionsView } from './connections-view';
+import { restoreViewSettings, setCrewLook, setViewSetting, useViewSettings } from './view-settings';
+import { ConnectionCountsContext, edgeCounts, nextConnectionsView, shownEdges } from './connections-view';
 import { railOf, withRailSelected } from './rails';
-import { CrewFramesContext, CrewViewContext, lightCrew, nextCrewLook, type CrewLook, type CrewView } from './crew-view';
-import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
+import { CrewFramesContext, CrewViewContext, nextCrewLook, type CrewView } from './crew-view';
+import { AgentNoteLookContext } from './items/agent-note-look';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
 import { TetherEdge } from './items/TetherEdge';
 import {
@@ -214,11 +215,11 @@ import { ToolOverlay, TOOL_DRAG_MIN, type ArmedTool } from './ToolOverlay';
 import { useAgentStarts } from './use-agent-starts';
 import { usePlaceSession } from './use-place-session';
 import { dropPlace, issueStartIn } from './place-session';
+import type { ZoneBindingActions } from './menu-model';
 import {
   AddIssueContext,
   BindZoneContext,
   ZoneBindingContext,
-  type ZoneBindingActions,
   CancelCloneContext,
   DropTargetContext,
   NewAgentContext,
@@ -391,8 +392,6 @@ function BoardView() {
   selectedConnectorsRef.current = selectedConnectors;
   /** Whether a drag snaps to the grid rather than to what is near it; kept in the view state. */
   const [grid, setGrid] = useState(false);
-  /** When a zone's menu last asked for Settings, which the board menu then opens on. */
-  const [settingsAsked, setSettingsAsked] = useState<number>();
   /** What was selected as a Shift-drag on empty board or a zone's bare body began: its marquee adds to that (WbTools). */
   const keptSelection = useRef<{ nodes: ReadonlySet<string>; connectors: ReadonlySet<string> }>(undefined);
   /** The connector label being typed. */
@@ -431,38 +430,14 @@ function BoardView() {
   const [gateCommandZone, setGateCommandZone] = useState<Zone>();
   const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
-  /** What a double-click on an agent's or shell tile opens: read with the board, so the first one already obeys it. */
-  const [clickOpens, setClickOpens] = useState<ClickOpens>('window');
-  const pickClickOpens = useCallback((value: ClickOpens) => {
-    setClickOpens(value);
-    void window.agentBoard.view.set(VIEW_KEYS.clickOpens, value).catch(() => {});
-  }, []);
-  /** How the board shows who started whom: crew frames, or chips. */
-  const [crewLook, setCrewLook] = useState<CrewLook>('frames');
+  /** The view settings every window shares: what a double-click opens, how crews and agent notes look, which connections are drawn. */
+  const { clickOpens, crewLook, connections, agentNoteLook } = useViewSettings();
   const crewLookRef = useRef(crewLook);
   crewLookRef.current = crewLook;
-  const pickCrewLook = useCallback((value: CrewLook) => {
-    setCrewLook(value);
-    // A chip under the pointer may go with the change, and takes its mouse-leave with it: put the light out.
-    lightCrew(undefined);
-    void window.agentBoard.view.set(VIEW_KEYS.crewLook, value).catch(() => {});
-  }, []);
-  const cycleCrewLook = useCallback(() => pickCrewLook(nextCrewLook(crewLookRef.current)), [pickCrewLook]);
-  /** Which connections are drawn: all, hand-offs only or none; view only, hand-offs go on either way. */
-  const [connections, setConnections] = useState<ConnectionsView>('all');
-  const pickConnections = useCallback((value: ConnectionsView) => {
-    setConnections(value);
-    void window.agentBoard.view.set(VIEW_KEYS.connections, value).catch(() => {});
-  }, []);
-  /** How agent notes look: document cards or terminal cards, every one switching at once. */
-  const [agentNoteLook, setAgentNoteLook] = useState<AgentNoteLook>('document');
-  const pickAgentNoteLook = useCallback((value: AgentNoteLook) => {
-    setAgentNoteLook(value);
-    void window.agentBoard.view.set(VIEW_KEYS.agentNoteLook, value).catch(() => {});
-  }, []);
+  const cycleCrewLook = useCallback(() => setCrewLook(nextCrewLook(crewLookRef.current)), []);
   const connectionsRef = useRef(connections);
   connectionsRef.current = connections;
-  const cycleConnections = useCallback(() => pickConnections(nextConnectionsView(connectionsRef.current)), [pickConnections]);
+  const cycleConnections = useCallback(() => setViewSetting('connections', nextConnectionsView(connectionsRef.current)), []);
   /** The tile the pointer is over, whose own connections show meanwhile, and a moment after it leaves: time to reach one. */
   const [hoveredTile, setHoveredTile] = useState<string>();
   const hoverEnds = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -616,10 +591,7 @@ function BoardView() {
   /** Puts back the view state read with the board, all in the render that shows its lists. */
   const restoreView = useCallback((view: SavedView) => {
     restoreTiles.current(view);
-    setClickOpens(view.clickOpens);
-    setCrewLook(view.crewLook);
-    setConnections(view.connections);
-    setAgentNoteLook(view.agentNoteLook);
+    restoreViewSettings(view);
   }, []);
 
   const flow = useFlowEdges(report, history.record);
@@ -891,6 +863,17 @@ function BoardView() {
           confirm: agent.endedAt === null ? 'Delete anyway' : 'Delete agent',
           keepLabel: agent.ownsWorktree ? 'Keep worktree and branch' : undefined,
           run: (keep) => deleteAgent(sessionId, false, keep),
+        });
+      },
+      // A live agent may be mid-task: ask first. Its worktree, branch and conversation stay, for Restart to carry on.
+      stopAgent(sessionId) {
+        const agent = agentsRef.current.find((known) => known.sessionId === sessionId);
+        if (agent === undefined || agent.endedAt !== null) return;
+        askDelete({
+          title: 'Stop agent?',
+          lines: [`${agent.name} is still running. Stopping it ends its session; its worktree, branch and conversation stay, and Restart carries it on.`],
+          confirm: 'Stop agent',
+          run: () => void window.agentBoard.agents.stop(sessionId).catch(report('stop the agent')),
         });
       },
       // From its own repo's zone, wherever its tile sits, picked as the daemon picks it.
@@ -2491,7 +2474,7 @@ function BoardView() {
           tidyZone(zone.id, spacing);
         }, report('change the zone’s spacing'));
       },
-      openSettings: () => setSettingsAsked(performance.now()),
+      openSettings: () => void window.agentBoard.setup.openSettings('board.tidying').catch(report('open Settings')),
       rename: (zone, name) => tileActions.rename({ kind: 'zone', zoneId: zone.id }, name),
       recolor(zone, color) {
         const { fillOpacity } = zone;
@@ -2596,6 +2579,7 @@ function BoardView() {
   );
 
   const masterPanel = useMasterPanel();
+  const openSettings = () => void window.agentBoard.setup.openSettings().catch(report('open Settings'));
   // The board's items as they are drawn: the master's panel shows its latest digest note.
   const boardItems = useMemo(() => nodes.filter(isItemNode).map((node) => node.data.item), [nodes]);
   const boardCommands = useMemo<BoardCommands>(
@@ -3211,14 +3195,15 @@ function BoardView() {
           {cheatSheet.sheet}
           <BoardChrome
             onKeyboardHelp={cheatSheet.open}
-            settingsAsked={settingsAsked}
             loaded={loaded}
             empty={loaded && nodes.length === 0 && newAgent === undefined}
             loadedEmpty={loadedEmpty}
             zones={zones}
             agents={agents}
-            masterOpen={masterPanel.open}
-            onMaster={masterPanel.toggle}
+            pane={masterPanel.open ? masterPanel.side : undefined}
+            onMaster={() => masterPanel.toggle('captain')}
+            onNeedsYou={() => masterPanel.toggle('needs-you')}
+            onSettings={openSettings}
             shells={shells}
             onOpenShell={openShell}
             onAddZone={openAddZone}
@@ -3236,14 +3221,6 @@ function BoardView() {
             minimapColor={minimapColor}
             grid={grid}
             onGrid={toggleGrid}
-            clickOpens={clickOpens}
-            onClickOpens={pickClickOpens}
-            crewLook={crewLook}
-            onCrewLook={pickCrewLook}
-            connections={connections}
-            onConnections={pickConnections}
-            agentNoteLook={agentNoteLook}
-            onAgentNoteLook={pickAgentNoteLook}
             mode={mode}
             onMode={pickMode}
             tool={tool}
@@ -3259,8 +3236,10 @@ function BoardView() {
               agents={agents}
               zones={zones}
               items={boardItems}
+              side={masterPanel.side}
               focusRequest={masterPanel.focusRequest}
               onClose={masterPanel.close}
+              onSettings={openSettings}
               onShowAgent={(sessionId) => boardCommands.showTile({ kind: 'agent', id: sessionId })}
               onShowZone={(zoneId) => boardCommands.showZone(zoneId)}
               onOpenAgent={openAgent}

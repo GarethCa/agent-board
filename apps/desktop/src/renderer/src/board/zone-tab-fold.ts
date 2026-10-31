@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useSimplified } from '../design';
 
 /** One of a zone tab's chips that can fold into its ⋯ menu, and its width on the tab. */
 export interface FoldingChip {
@@ -57,7 +58,9 @@ export function useZoneTabFold<Key extends string>(
   }, []);
 
   const orderKey = order.join(' ');
-  // Measured only when the zone's width, the chips or the text change: never as the zone is merely dragged.
+  // The Simplified design sets the chips in another font, so their widths change with it.
+  const simplified = useSimplified();
+  // Measured only when the zone's width, the chips, the text or the design change: never as the zone is merely dragged.
   useLayoutEffect(() => {
     const [strip, tab] = [stripRef.current, tabRef.current];
     if (strip === null || tab === null) return;
@@ -74,7 +77,7 @@ export function useZoneTabFold<Key extends string>(
     const next = chipsToFold(strip.clientWidth, rest, chips, gap) as ReadonlySet<Key>;
     if (!sameKeys(next, folded)) setFolded(next);
     // `order` is read through `orderKey`, so a new array with the same chips measures nothing.
-  }, [orderKey, content, folded, resized]);
+  }, [orderKey, content, folded, resized, simplified]);
 
   return { stripRef, tabRef, folded };
 }

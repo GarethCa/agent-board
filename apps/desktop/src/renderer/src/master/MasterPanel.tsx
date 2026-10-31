@@ -11,6 +11,7 @@ import { PermissionRow } from '../inbox/PermissionRow';
 import { useNow } from '../inbox/use-now';
 import { KIND_TAGS } from '../inbox/kind-tags';
 import { ChatView } from '../session/ChatView';
+import { ChatAgentsButton } from '../session/ChatAgentsFilter';
 import { ChatStyleButton } from '../session/ChatStyleSwitch';
 import { Composer } from '../session/Composer';
 import { Markdown } from '../session/Markdown';
@@ -19,6 +20,10 @@ import type { RunsChoice } from '../session/chat';
 import { clockTime } from '../board/items/agent-note';
 import { askLine, boardMaster, latestDigest, usageHolds, watchRows, type UsageHoldEntry } from './master-view';
 import { upperFirst } from '../upper-first';
+import { Captain } from '../board/Character';
+import { useSimplified } from '../design';
+import { Inbox } from '../inbox/Inbox';
+import type { PaneSide } from './use-master-panel';
 import { PanelHandle } from './PanelHandle';
 import { usePanelRoom } from './use-panel-room';
 import {
@@ -41,6 +46,10 @@ interface MasterPanelProps {
   agents: readonly Agent[];
   zones: readonly Zone[];
   items: readonly BoardItem[];
+  /** Under the Simplified design, which side of the one pane shows; Classic's panel is always the Captain's. */
+  side: PaneSide;
+  /** Opens the Settings window. */
+  onSettings(): void;
   /** Grows each time ⌘⇧M asks for the message box. */
   focusRequest: number;
   onClose(): void;
@@ -62,8 +71,11 @@ const RUNS: RunsChoice = { mode: 'auto', at: 0 };
  * of two views of the master, beside its tile: closing it stops nothing. With no master yet it offers to start one,
  * which only this click does.
  */
-export function MasterPanel({ agents, zones, items, focusRequest, onClose, onShowAgent, onShowZone, onOpenAgent, onOpenPlan, onOpenLink }: MasterPanelProps) {
+export function MasterPanel({ agents, zones, items, side, focusRequest, onSettings, onClose, onShowAgent, onShowZone, onOpenAgent, onOpenPlan, onOpenLink }: MasterPanelProps) {
   const master = boardMaster(agents);
+  // Under the Simplified design the one pane has two sides; Classic's has only the Captain's, with its sections.
+  const simplified = useSimplified();
+  const listSide = simplified && side === 'needs-you';
   const panel = useRef<HTMLElement>(null);
   // The board it sits on bounds its width; the width is the user's, kept across reloads.
   const chosen = usePanelWidth();
@@ -87,10 +99,10 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label="Captain" style={{ width }} onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width }} onKeyDown={onKeyDown}>
       <PanelHandle
         orientation="vertical"
-        label="Resize the Captain’s panel"
+        label={listSide ? 'Resize the pane' : 'Resize the Captain’s panel'}
         testId="master-panel-handle"
         value={width}
         min={MIN_PANEL_WIDTH}
@@ -99,35 +111,53 @@ export function MasterPanel({ agents, zones, items, focusRequest, onClose, onSho
         onChange={(next) => setPanelWidth(clampPanelWidth(next, board, taken))}
         onReset={() => setPanelWidth(undefined)}
       />
-      <header className="master-panel-head">
-        <span className="master-glyph" aria-hidden>
-          C
-        </span>
-        <h2>Captain</h2>
-        {/* Short of room, its scope gives way before its model, and then the model is cut too. */}
-        <small className="master-panel-scope">
-          {master === undefined ? (
-            <span className="master-panel-scope-what">not started</span>
+      {listSide ? (
+        <header className="master-panel-head">
+          <h2>Needs you</h2>
+          <span className="master-panel-actions">
+            <ToolButton size="sm" icon={<X />} label="Close" hint="Close the pane" onClick={onClose} />
+          </span>
+        </header>
+      ) : (
+        <header className="master-panel-head">
+          {simplified ? (
+            <Captain size="avatar" />
           ) : (
-            <>
-              <span className="master-panel-scope-what">board scope</span>
-              <span className="master-panel-scope-model"> · {master.model ?? master.harness}</span>
-            </>
+            <span className="master-glyph" aria-hidden>
+              C
+            </span>
           )}
-        </small>
-        <span className="master-panel-actions">
-          {master !== undefined && <ChatStyleButton />}
-          {master !== undefined && <ToolButton size="sm" icon={<Crosshair />} label="Show on board" onClick={() => onShowAgent(master.sessionId)} />}
-          {master !== undefined && <ToolButton size="sm" icon={<SquareArrowOutUpRight />} label="Open its session window" onClick={() => onOpenAgent(master)} />}
-          <ToolButton size="sm" icon={<X />} label="Close" hint="Close the panel: the Captain keeps running" onClick={onClose} />
-        </span>
-      </header>
-      {master === undefined ? (
+          <h2>Captain</h2>
+          {/* Short of room, its scope gives way before its model, and then the model is cut too. */}
+          <small className="master-panel-scope">
+            {master === undefined ? (
+              <span className="master-panel-scope-what">not started</span>
+            ) : (
+              <>
+                <span className="master-panel-scope-what">board scope</span>
+                <span className="master-panel-scope-model"> · {master.model ?? master.harness}</span>
+              </>
+            )}
+          </small>
+          <span className="master-panel-actions">
+            {master !== undefined && <ChatStyleButton />}
+            {master !== undefined && <ChatAgentsButton sessionId={master.sessionId} />}
+            {master !== undefined && <ToolButton size="sm" icon={<Crosshair />} label="Show on board" onClick={() => onShowAgent(master.sessionId)} />}
+            {master !== undefined && <ToolButton size="sm" icon={<SquareArrowOutUpRight />} label="Open its session window" onClick={() => onOpenAgent(master)} />}
+            <ToolButton size="sm" icon={<X />} label="Close" hint="Close the panel: the Captain keeps running" onClick={onClose} />
+          </span>
+        </header>
+      )}
+      {listSide ? (
+        <div className="master-panel-needs-you">
+          <Inbox agents={agents} onOpen={onOpenAgent} onSettings={onSettings} heading={false} />
+        </div>
+      ) : master === undefined ? (
         <StartMaster />
       ) : (
         <>
-          <Watching agents={agents} zones={zones} onShowAgent={onShowAgent} onShowZone={onShowZone} />
-          <ForYou panel={panel} agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />
+          {!simplified && <Watching agents={agents} zones={zones} onShowAgent={onShowAgent} onShowZone={onShowZone} />}
+          {!simplified && <ForYou panel={panel} agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />}
           {/* Dark in every theme, as a session window's chat is. */}
           <section className="master-panel-chat" data-surface="window" aria-label="Chat with the Captain">
             {canRestart(master) && (

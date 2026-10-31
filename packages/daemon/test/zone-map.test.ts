@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentNoteSize } from '../src/agent-notes.ts';
-import { arrangeTiles, CLUSTER_LABEL_SIZE, lanesOf, type ArrangeTile } from '../src/board-arrange.ts';
+import { arrangeTiles, CLUSTER_LABEL_SIZE, lanesOf, type ArrangeOptions, type ArrangeTile } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, GRID_COLUMN, ROW_STEP } from '../src/board-layout.ts';
 import { ARRANGE_SPACINGS, DEFAULT_ARRANGE_SETTINGS, type ArrangeBy, type ArrangeLayout, type ArrangeSpacing, type ZoneMap, type ZoneMapThing } from '../src/protocol.ts';
 import { boxPicture, buildZoneMap, laneTable, spareSlots } from '../src/zone-map.ts';
@@ -26,8 +26,9 @@ function arrangedZone(
   noteHeights?: ReadonlyMap<string, number>,
   by: ArrangeBy = 'issue',
   spacing: ArrangeSpacing = 'normal',
+  shape: Pick<ArrangeOptions, 'width' | 'window'> = { width: 600 },
 ): ZoneMap {
-  const { positions, clusters, size } = arrangeTiles(tiles, links, { by, layout, width: 600, clusters: true, noteHeights, spacing });
+  const { positions, clusters, size } = arrangeTiles(tiles, links, { by, layout, clusters: true, noteHeights, spacing, ...shape });
   const things: ZoneMapThing[] = [
     ...tiles.map((tile) => ({ key: tile.id, itemKind: null, name: tile.name, state: tile.state, ...positions.get(tile.id)!, ...(tile.size ?? AGENT_TILE_SIZE) })),
     ...clusters.flatMap((cluster) => [
@@ -82,11 +83,14 @@ describe('a zone map', () => {
   it('finds a tile nudged down off its row in every layout and grouping, the lead and shells too', () => {
     const tiles = [...crew, agent('review-b', { role: 'reviewer', reviewOf: 'agent:impl-b', createdAt: '9' })];
     for (const by of ['issue', 'role', 'state'] as const) {
-      for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
+      for (const layout of ['rows', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const) {
         expect(arrangedZone(tiles, undefined, layout, [], undefined, by).offGrid, `${by} ${layout}`).toEqual([]);
+        // Masonry and a treemap place a lane by the window's and the zone's shape as they were: its tiles go unlinted.
+        const packs = layout === 'masonry' || layout === 'treemap';
         for (const key of ['agent:lead', 'shell:gate', 'agent:review-a']) {
           const nudged = arrangedZone(tiles, (thing) => (thing.key === key ? { ...thing, y: thing.y + 30 } : thing), layout, [], undefined, by);
-          expect(nudged.offGrid, `${key} ${by} ${layout}`).toContain(key);
+          if (packs && key === 'agent:review-a') expect(nudged.offGrid, `${key} ${by} ${layout}`).toEqual([]);
+          else expect(nudged.offGrid, `${key} ${by} ${layout}`).toContain(key);
         }
       }
     }
@@ -149,10 +153,10 @@ describe('a zone map', () => {
       { from: 'agent:impl-c', to: 'agent:review-c' },
       { from: 'agent:review-c', to: 'agent:impl-c' },
     ];
-    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const) {
       const map = arrangedZone(mixed, undefined, layout, links);
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
-      expect(laneTable(map, 'zone:z', ref), layout).toContain(`next lane → ${{ rows: 'row', columns: 'column', cards: 'card', wrap: 'lane' }[layout]} 4`);
+      expect(laneTable(map, 'zone:z', ref), layout).toContain(`next lane → ${{ rows: 'row', columns: 'column', cards: 'card', wrap: 'lane', masonry: 'lane', treemap: 'lane' }[layout]} 4`);
     }
   });
 
@@ -169,7 +173,7 @@ describe('a zone map', () => {
       { from: `agent:impl-${lane}`, to: `agent:review-${lane}` },
       { from: `agent:review-${lane}`, to: `agent:impl-${lane}` },
     ]);
-    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const) {
       const map = arrangedZone(tiles, undefined, layout, links, new Map([['issue:ACME-11', 140]]));
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
     }
@@ -180,7 +184,7 @@ describe('a zone map', () => {
       ['issue:ACME-9', agentNoteSize(Array.from({ length: 10 }, (_, index) => `- step ${index + 1}`).join('\n'), 256, 0).height],
       ['issue:ACME-12', 400],
     ]);
-    for (const layout of ['rows', 'columns', 'cards', 'wrap'] as const) {
+    for (const layout of ['rows', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const) {
       const map = arrangedZone(crew, undefined, layout, [], tall);
       expect(map.things.find((thing) => thing.key === 'item:issue:ACME-12-note')!.height, layout).toBe(400);
       expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), layout).toMatch(/^lint {2}ok · /);
@@ -208,6 +212,34 @@ describe('a zone map', () => {
     // A lane dragged down, away from the one above it, is that many rows apart.
     const lastLane = (thing: ZoneMapThing) => thing.key.includes('ACME-9') || thing.key.startsWith('agent:review-a') || thing.key === 'agent:impl-a';
     expect(arrangedZone(tiles, (thing) => (lastLane(thing) ? { ...thing, y: thing.y + 3 * ROW_STEP } : thing), 'wrap', links).laneGap).toBe(3);
+  });
+
+  it('lints lanes packed as masonry in several columns, or as a treemap of a long window, ok', () => {
+    // Lanes of ten, four (with an edge both ways), and four of one, with a tall note: masonry in a wide window packs them
+    // in columns of lanes, a free grid column between, and a treemap of a tall window leaves holes between its blocks.
+    const lane = (issue: string, count: number, at: number) =>
+      Array.from({ length: count }, (_, index) =>
+        agent(`${issue}-${index}`, { role: index === 0 ? 'implementer' : 'reviewer', issue, reviewOf: index === 0 ? null : `agent:${issue}-0`, createdAt: `${at}${index}` }),
+      );
+    const tiles = [...crew.slice(0, 2), ...lane('ACME-1', 10, 1), ...lane('ACME-2', 4, 2), ...[3, 4, 5, 6].flatMap((n) => lane(`ACME-${n}`, 1, n))];
+    const links = [
+      { from: 'agent:ACME-2-0', to: 'agent:ACME-2-1' },
+      { from: 'agent:ACME-2-1', to: 'agent:ACME-2-0' },
+    ];
+    const tall = new Map([['issue:ACME-3', 400]]);
+    for (const [layout, shape] of [
+      ['masonry', { width: 600, window: { width: 2400, height: 900 } }],
+      ['masonry', { width: 600, window: { width: 3200, height: 600 } }],
+      ['treemap', { width: 600, window: { width: 900, height: 2400 } }],
+      ['treemap', { width: 600, window: { width: 2400, height: 900 } }],
+    ] as const) {
+      const map = arrangedZone(tiles, undefined, layout, links, tall, 'issue', 'normal', shape);
+      const at = `${layout} ${JSON.stringify(shape)}`;
+      if (layout === 'masonry') expect(new Set(map.lanes.map((lane) => map.things.find((thing) => thing.key === lane.labelItem)!.x)).size, at).toBeGreaterThan(1);
+      expect([map.overlaps, map.offGrid, map.widestGap, map.laneGap, map.labelGap], at).toEqual([[], [], 0, 0, 0]);
+      // No empty band across it wider than a lint names: masonry's free column between its columns of lanes is one.
+      expect(laneTable(map, 'zone:z', ref).split('\n').at(-1), at).toMatch(/^lint {2}ok · /);
+    }
   });
 
   it('counts the widest gap in a lane in slots', () => {

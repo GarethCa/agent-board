@@ -1,11 +1,16 @@
 import type { Harness } from '@agent-board/daemon/protocol';
 import { HARNESSES } from '../harness';
-import { Character, CHARACTER_POSES } from './Character';
+import { Captain, CAPTAIN_SIZES, Character, CHARACTER_POSES } from './Character';
 
 const GALLERY_HARNESSES: Harness[] = ['claude', 'codex'];
 
-/** Every character pose in every body, for checking how they look. The app shows it at `#gallery`. */
-export function CharacterGallery() {
+const CAPTAIN_PLACES = Object.keys(CAPTAIN_SIZES) as (keyof typeof CAPTAIN_SIZES)[];
+
+/**
+ * Every character pose in every body, for checking how they look, and with `captain` (the Simplified design) the
+ * Captain at each of its sizes. The app shows it at `#gallery`.
+ */
+export function CharacterGallery({ captain = false }: { captain?: boolean }) {
   return (
     <table className="character-gallery" data-testid="character-gallery">
       <thead>
@@ -27,6 +32,16 @@ export function CharacterGallery() {
             ))}
           </tr>
         ))}
+        {captain && (
+          <tr>
+            <th>captain</th>
+            <td colSpan={GALLERY_HARNESSES.length}>
+              {CAPTAIN_PLACES.map((place) => (
+                <Captain key={place} size={place} />
+              ))}
+            </td>
+          </tr>
+        )}
       </tbody>
     </table>
   );

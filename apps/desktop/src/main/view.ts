@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import type { LayoutMeasured } from '@agent-board/daemon/protocol';
 import { VIEW_IPC } from '../preload/api';
+import { sendToWindowsExcept } from './broadcast';
 
 /** The daemon's view state: how the app left the board. */
 export interface ViewState {
@@ -34,6 +35,9 @@ export function daemonViewState(daemon: DaemonLink): ViewState {
 /** The view state IPC the preload's `view` API calls. */
 export function registerViewIpc(view: ViewState): void {
   ipcMain.handle(VIEW_IPC.get, (_event, key: string) => view.get(key));
-  ipcMain.handle(VIEW_IPC.set, (_event, key: string, value: unknown) => view.set(key, value));
+  ipcMain.handle(VIEW_IPC.set, async (event, key: string, value: unknown) => {
+    await view.set(key, value);
+    sendToWindowsExcept(event.sender, VIEW_IPC.changed, { key, value });
+  });
   ipcMain.handle(VIEW_IPC.measured, (_event, report: LayoutMeasured) => view.measured(report));
 }

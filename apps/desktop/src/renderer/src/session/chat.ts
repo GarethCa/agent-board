@@ -1,4 +1,4 @@
-import type { Agent, AgentState, ChatEntry, TranscriptChunk } from '@agent-board/daemon/protocol';
+import type { Agent, AgentState, ChatEntry, MessageSender, TranscriptChunk } from '@agent-board/daemon/protocol';
 
 /** The most entries the chat view shows: the latest. Earlier ones are only in the terminal. */
 export const MAX_SHOWN_ENTRIES = 500;
@@ -38,11 +38,15 @@ export interface SubagentMessage {
  * messages) between two messages. `at` is when the transcript wrote it.
  */
 export type ChatItem =
-  | { kind: 'user' | 'assistant' | 'notice'; key: string; text: string; at?: string }
+  | { kind: 'assistant' | 'notice'; key: string; text: string; at?: string }
+  /** `from` names the agent a message came from (ADR-0023); a message without one is the user's. */
+  | { kind: 'user'; key: string; text: string; from?: MessageSender; at?: string }
   | { kind: 'thinking'; key: string; text: string; ms?: number; at?: string }
   | { kind: 'compacted'; key: string; at?: string }
   | { kind: 'interrupted'; key: string; stopped?: ToolCall; at?: string }
-  | { kind: 'tools'; key: string; rows: (ToolCall | SubagentMessage)[]; at?: string };
+  | { kind: 'tools'; key: string; rows: (ToolCall | SubagentMessage)[]; at?: string }
+  /** A run of `count` agents' messages the chat leaves out while it shows only the user's own (`foldAgentMessages`). */
+  | { kind: 'agents-hidden'; key: string; count: number };
 
 /** The notice both harnesses' adapters make of a turn the user interrupted. */
 const INTERRUPTED = 'Interrupted';
@@ -114,6 +118,10 @@ export function chatItems(entries: readonly ChatEntry[]): ChatItem[] {
                 : undefined;
           if (stopped !== undefined) stopped.stopped = true;
           items.push({ kind: 'interrupted', key: `interrupted-${index}`, ...(stopped === undefined ? {} : { stopped }), ...stamp(entry.at) });
+          break;
+        }
+        if (entry.kind === 'user') {
+          items.push({ kind: 'user', key: `user-${index}`, text: entry.text, ...(entry.from === undefined ? {} : { from: entry.from }), ...stamp(entry.at) });
           break;
         }
         items.push({ kind: entry.kind, key: `${entry.kind}-${index}`, text: entry.text, ...stamp(entry.at) });

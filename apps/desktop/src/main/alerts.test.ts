@@ -61,6 +61,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   trustFolder: null,
   trustedByZone: false,
   queuedUntilUp: 0,
+  messagesWaiting: 0,
   undelivered: [],
   status: null,
   workFinishedAt: null,

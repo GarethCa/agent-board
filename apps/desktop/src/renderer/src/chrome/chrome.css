@@ -130,6 +130,7 @@
 
 .board-menu-title {
   margin: 0;
+  font-family: var(--font-wordmark);
   font-size: var(--font-size-md);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
@@ -226,18 +227,22 @@
   margin-top: var(--space-1-5);
 }
 
+/* The Settings… row, between sections: inset and spaced as a section's actions are. */
+.board-menu-settings {
+  margin: 0;
+  padding: var(--space-2) var(--space-3-5);
+}
+
+.board-menu-settings:not(:last-child) {
+  border-bottom: 1px solid var(--separator);
+}
+
 .board-menu .ui-empty,
 .board-menu-popover .ui-empty {
   padding: var(--space-2) 0;
 }
 
-.settings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-/* Settings › Appearance's Theme control: the choice's swatch and name, opening the Theme popover. */
+/* Settings › General › Appearance's Theme control: the choice's swatch and name, opening the Theme popover. */
 .theme-setting {
   display: flex;
 }
@@ -1395,6 +1400,14 @@
   font-weight: normal;
 }
 
+/* The Simplified pane's Needs-you side: the inbox fills what the header leaves, its list scrolling inside. */
+.master-panel-needs-you {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
 .master-panel-chat {
   display: flex;
   /* Takes what the sections above leave, never less than a few messages: the For you list, sized by the user, gives way first. */
@@ -1425,17 +1438,107 @@
 }
 
 /*
+ * The Simplified design's islands, with fewer buttons in each: Draw and New agent as menus on the creation toolbar, View
+ * on the zoom bar, and Needs you, the Captain and Settings top right. Needs you is the one orange, on its count.
+ */
+.create-toolbar .create-toolbar-draw .ui-button {
+  margin-left: 0;
+}
+
+.create-toolbar-split {
+  display: inline-flex;
+  margin-left: var(--space-1);
+}
+
+.create-toolbar .create-toolbar-split .ui-button {
+  margin-left: 0;
+}
+
+.create-toolbar-split .create-toolbar-agent:not(:only-child) {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.create-toolbar .create-toolbar-split .create-toolbar-agent-more {
+  margin-left: var(--space-px);
+  padding: 0 var(--space-1);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.view-switches {
+  display: grid;
+  gap: var(--space-2);
+}
+
+:root[data-design='simplified'] .needs-you-pill.ui-button {
+  color: var(--text);
+}
+
+:root[data-design='simplified'] .needs-you-pill.ui-button[data-attention='true'] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+:root[data-design='simplified'] .needs-you-pill.ui-button > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+
+:root[data-design='simplified'] .needs-you-pill.ui-button[data-attention='true'] > svg {
+  color: var(--state-waiting);
+}
+
+.needs-you-count {
+  min-width: var(--space-4);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--badge);
+  color: var(--on-badge);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-bold);
+  text-align: center;
+}
+
+:root[data-design='simplified'] .master-button.ui-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+:root[data-design='simplified'] .master-button.ui-button[aria-pressed='true'] {
+  background: var(--pressed);
+}
+
+/*
  * In a narrower window the island would reach the creation toolbar: the Captain button drops its word, then itself
- * (⌘⇧M and the master's tile still reach it). The widths are where the islands would otherwise meet.
+ * (⌘⇧M and the master's tile still reach it). The widths are where the islands would otherwise meet, Classic's here and
+ * the Simplified design's, whose toolbar is narrower, below.
  */
 @media (max-width: 1239px) {
-  .master-button-label {
+  :root:not([data-design='simplified']) .master-button-label {
     display: none;
   }
 }
 
 @media (max-width: 1099px) {
-  .master-button.ui-button {
+  :root:not([data-design='simplified']) .master-button.ui-button {
+    display: none;
+  }
+}
+
+@media (max-width: 919px) {
+  :root[data-design='simplified'] .master-button-label {
+    display: none;
+  }
+}
+
+@media (max-width: 799px) {
+  :root[data-design='simplified'] .master-button.ui-button {
     display: none;
   }
 }
@@ -1553,12 +1656,12 @@
   border-top: 1px solid var(--on-inverse-soft);
 }
 
-/* In Settings the block sits on the panel, not on the inverse tooltip: its divider and width follow the panel. */
-.settings .usage-detail {
+/* In Settings the block sits on the page, not on the inverse tooltip: its divider and width follow the page. */
+.settings-box .usage-detail {
   width: auto;
 }
 
-.settings .usage-detail-fresh {
+.settings-box .usage-detail-fresh {
   border-top-color: var(--border);
 }
 
@@ -1592,5 +1695,263 @@
   background: var(--warning-soft);
   color: var(--warning-ink);
   font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+/*
+ * The Settings window (SettingsWindow.tsx): a title bar the traffic lights sit in, a sidebar of collapsible groups
+ * under a search field, and the picked group's page, each section's controls in a box under its heading. The sidebar
+ * row picked is the accent with white text; its switches' tracks and fields' edges are firm enough to read at 3:1.
+ */
+.settings-window {
+  display: grid;
+  grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--settings-bar-height) minmax(0, 1fr);
+  height: 100vh;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+}
+
+.settings-window-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--separator);
+  background: var(--panel);
+}
+
+.settings-window-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+.settings-window-sidebar {
+  overflow: auto;
+  padding: var(--space-2-5) var(--space-2);
+  border-right: 1px solid var(--separator);
+  background: var(--panel);
+}
+
+.settings-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-sm);
+  margin: 0 var(--space-0-5) var(--space-2-5);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-item);
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.settings-search:focus-within {
+  border-color: var(--focus-edge);
+  box-shadow: var(--shadow-focus);
+}
+
+.settings-search svg {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  flex: none;
+}
+
+.settings-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-search input::placeholder {
+  color: var(--placeholder);
+}
+
+.settings-search-empty {
+  margin: 0;
+  padding: var(--space-1-5);
+  color: var(--muted);
+}
+
+.settings-group-head,
+.settings-section-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: 100%;
+  min-height: var(--space-7);
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-group-head {
+  font-weight: var(--weight-bold);
+}
+
+.settings-group-head svg {
+  width: var(--space-4);
+  height: var(--space-4);
+  flex: none;
+  color: var(--text-soft);
+}
+
+.settings-group-head .settings-group-chevron {
+  width: var(--space-3);
+  height: var(--space-3);
+  color: var(--muted);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.settings-group[data-open='true'] .settings-group-chevron {
+  transform: rotate(90deg);
+}
+
+.settings-group-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-badge);
+  font-weight: var(--weight-medium);
+}
+
+.settings-group-sections {
+  margin: 0;
+  padding: var(--space-px) 0 var(--space-1-5);
+  list-style: none;
+}
+
+.settings-section-link {
+  min-height: var(--space-6-5);
+  padding-left: var(--space-7-5);
+  color: var(--text-soft);
+}
+
+.settings-group-head:hover:not([data-found]),
+.settings-section-link:hover {
+  background: var(--hover);
+}
+
+/* Searching, a group is a heading over what it holds, not a row that opens. */
+.settings-group-head[data-found] {
+  cursor: default;
+}
+
+.settings-section-link mark {
+  background: var(--accent-soft);
+  color: inherit;
+}
+
+.settings-section-link .settings-group-count {
+  color: inherit;
+}
+
+.settings-section-link[aria-current='page'] {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: var(--weight-semibold);
+}
+
+.settings-window-page {
+  overflow: auto;
+  padding: var(--space-4-5) var(--space-6-5) var(--space-7);
+}
+
+.settings-page-title {
+  margin: 0;
+  font-size: var(--font-size-3xl-minus);
+  font-weight: var(--weight-heavy);
+  letter-spacing: var(--tracking-snug);
+}
+
+.settings-page-section {
+  max-width: var(--settings-page-width);
+  padding-top: var(--space-3-5);
+  scroll-margin-top: var(--space-2);
+}
+
+.settings-page-section-title {
+  margin: 0 0 var(--space-1-5) var(--space-0-5);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+}
+
+/* Searching, a section's heading is its place: the group and the section. */
+.settings-found-place {
+  margin: 0 0 var(--space-1) var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+::highlight(settings-search) {
+  background-color: var(--accent-soft);
+}
+
+.settings-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+}
+
+/* The Simplified design's starter cards: three equal cards in a row inside the welcome. */
+.empty-board-cards {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.empty-board-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.empty-board-card:hover {
+  background: var(--hover);
+}
+
+.empty-board-card:active {
+  background: var(--pressed);
+}
+
+.empty-board-card:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.empty-board-card-title {
+  font-weight: var(--weight-bold);
+}
+
+.empty-board-card-body {
+  color: var(--muted);
+  font-size: var(--font-size-sm-plus);
   line-height: var(--leading-snug);
 }

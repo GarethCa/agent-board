@@ -5,6 +5,7 @@ import { shortCommit } from '@agent-board/daemon/gate-rules';
 import { HARNESSES } from '../harness';
 import { Button, Input, Menu, type MenuEntry } from '../ui';
 import { HarnessMark } from './HarnessMark';
+import { useTechnicalDetails } from '../technical';
 
 /** The models offered for each harness, besides its own default; any other can be typed (Other…). */
 const MODELS: Record<Harness, string[]> = { claude: ['opus', 'sonnet', 'haiku'], codex: ['gpt-5-codex', 'gpt-5'] };
@@ -66,10 +67,16 @@ const choice = (label: string, picked: boolean, onSelect: () => void): MenuEntry
 });
 
 /**
- * The three chip menus always in New agent's footer: harness ▾, model ▾ and role ▾, so what will start
- * is always on show. The model menu has Default, the harness's models, and Other… for a typed model id.
+ * The three chip menus in New agent's footer: harness ▾, model ▾ and role ▾, so what will start is on show.
+ * With `technical` set (New agent's), the Simplified design treats the model and role as technical details: only the
+ * harness shows until Show technical details is on, and Classic shows all three. Without it all three always show.
+ * The model menu has Default, the harness's models, and Other… for a typed model id.
  */
-export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChange(next: AgentSetup): void }) {
+export function AgentSetupChips({ setup, onChange, technical = false }: { setup: AgentSetup; onChange(next: AgentSetup): void; technical?: boolean }) {
+  const technicalShown = useTechnicalDetails();
+  /** What marks the model and role chips as technical, for the Simplified design to leave out. */
+  const detail = technical ? { 'data-technical-detail': '' } : {};
+  const hidden = technical && !technicalShown;
   const { harness, model, role } = setup;
   /** The model id being typed after Other…, or undefined while the chip shows. */
   const [typing, setTyping] = useState<string>();
@@ -111,7 +118,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
   ];
 
   return (
-    <span className="agent-setup" role="group" aria-label="Harness, model and role">
+    <span className="agent-setup" role="group" aria-label={hidden ? 'Harness' : 'Harness, model and role'}>
       <Menu entries={harnesses} side="top">
         <Button size="sm" variant="ghost" className="agent-setup-chip" aria-label={`Harness: ${HARNESSES[harness].label}`} icon={<HarnessMark harness={harness} />} trailingIcon={<ChevronDown />}>
           <span className="agent-setup-text">{HARNESSES[harness].label}</span>
@@ -119,7 +126,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
       </Menu>
       {typing === undefined ? (
         <Menu entries={models} side="top">
-          <Button size="sm" variant="ghost" className="agent-setup-chip agent-setup-model-chip" aria-label={`Model: ${model || 'Default'}`} title={model || undefined} trailingIcon={<ChevronDown />}>
+          <Button size="sm" variant="ghost" className="agent-setup-chip agent-setup-model-chip" {...detail} aria-label={`Model: ${model || 'Default'}`} title={model || undefined} trailingIcon={<ChevronDown />}>
             <span className="agent-setup-text">{model === '' ? 'Default' : modelLabel(model)}</span>
           </Button>
         </Menu>
@@ -127,6 +134,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
         <Input
           size="sm"
           className="agent-setup-model add-zone-mono"
+          {...detail}
           aria-label="Model id"
           placeholder="Model id"
           autoFocus
@@ -148,7 +156,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
       )}
       {naming === undefined ? (
         <Menu entries={roles} side="top">
-          <Button size="sm" variant="ghost" className="agent-setup-chip" aria-label={`Role: ${typedRoleText(role)}`} title={named ?? undefined} trailingIcon={<ChevronDown />}>
+          <Button size="sm" variant="ghost" className="agent-setup-chip" {...detail} aria-label={`Role: ${typedRoleText(role)}`} title={named ?? undefined} trailingIcon={<ChevronDown />}>
             <span className="agent-setup-text">{typedRoleText(role)}</span>
           </Button>
         </Menu>
@@ -156,6 +164,7 @@ export function AgentSetupChips({ setup, onChange }: { setup: AgentSetup; onChan
         <Input
           size="sm"
           className="agent-setup-model"
+          {...detail}
           aria-label="Role name"
           placeholder="designer, researcher…"
           maxLength={MAX_ROLE_NAME_LENGTH}

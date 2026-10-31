@@ -2,7 +2,7 @@
 // goes to the orchestrator that started it, not to the user. It is typed at that orchestrator's prompt as a hand-off
 // is, through the same queue and only once the orchestrator is ready for its next message, as one message for every
 // flag still to tell.
-import type { Agent, AgentState } from './protocol.ts';
+import { agentRefOf, type Agent, type AgentState } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 
 /** States of a live agent at its prompt: only these are worth asking the deliveries about. */
@@ -27,7 +27,7 @@ export interface CrewFlags {
 }
 
 /** The ref an agent's message names it by: the start of its id, as `BoardRefs` resolves it. */
-export const refOf = (agent: Pick<Agent, 'sessionId'>): string => `agent:${agent.sessionId.slice(0, 8)}`;
+export const refOf = (agent: Pick<Agent, 'sessionId'>): string => agentRefOf(agent.sessionId);
 
 /** What the orchestrator reads of its crew's flags. */
 function crewFlagMessage(flagged: readonly Agent[]): string {

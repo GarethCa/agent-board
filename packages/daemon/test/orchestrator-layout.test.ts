@@ -1958,6 +1958,42 @@ describe('sizes the app measured', () => {
     return { me, impl, review };
   }
 
+  it('packs masonry to the shape of the window the app says it has', async () => {
+    const setup = await measuredDaemon();
+    const me = await lead(setup, setup.zone.id);
+    for (const name of ['one', 'two', 'three', 'four']) await me.connection.call('orchestrator.spawn', { token: me.token, name });
+    const window = await app(setup);
+    // How many columns of lanes an arrange packs them into, the app's window as `size`.
+    const columns = async (size: { width: number; height: number }) => {
+      await window.client.call('layout.measured', { boxes: [], expanded: [], window: size });
+      await me.connection.call('orchestrator.arrange', { token: me.token, layout: 'masonry' });
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      expect(map.lanes).toHaveLength(4);
+      return new Set(map.lanes.map((lane) => map.things.find((thing) => thing.key === lane.labelItem)!.x)).size;
+    };
+    expect(await columns({ width: 2400, height: 600 })).toBe(3);
+    expect(await columns({ width: 600, height: 2400 })).toBe(1);
+  });
+
+  it('arranges a treemap the same way again in the zone it fitted, with no window or one', async () => {
+    const setup = await measuredDaemon();
+    const me = await lead(setup, setup.zone.id);
+    for (const name of ['one', 'two', 'three', 'four', 'five', 'six']) await me.connection.call('orchestrator.spawn', { token: me.token, name });
+    /** The zone's size and where each thing in it is, after `times` arranges as a treemap. */
+    const arranged = async (times: number) => {
+      for (let round = 0; round < times; round++) await me.connection.call('orchestrator.arrange', { token: me.token, layout: 'treemap' });
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      return { width: map.width, height: map.height, things: map.things.map(({ key, x, y }) => ({ key, x, y })) };
+    };
+    const once = await arranged(1);
+    expect(await arranged(4)).toEqual(once);
+    const window = await app(setup);
+    await window.client.call('layout.measured', { boxes: [], expanded: [], window: { width: 900, height: 1400 } });
+    const tall = await arranged(1);
+    expect(tall.width / tall.height).toBeLessThan(once.width / once.height);
+    expect(await arranged(4)).toEqual(tall);
+  });
+
   it('maps a zone as unmeasured with no app window, and measured while one reports', async () => {
     const setup = await measuredDaemon();
     const { me } = await arrangedCrew(setup);
@@ -2283,6 +2319,8 @@ describe('sizes the app measured', () => {
       { boxes: 'all', expanded: [] },
       { boxes: [], expanded: [{ key: 'agent:x', x: 0 }] },
       { boxes: [], expanded: [], away: 'yes' },
+      { boxes: [], expanded: [], window: { width: 0, height: 900 } },
+      { boxes: [], expanded: [], window: 'wide' },
     ]) {
       await expect(client.call('layout.measured', params as never)).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
     }

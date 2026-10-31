@@ -4,7 +4,7 @@ import { useBoardCommands, type TileRef } from '../board/commands';
 import { shownWindow } from '../windows/session-windows';
 import { useSessionWindows } from '../windows/SessionWindows';
 import { rowKeyOf, Spotlight, windowTargetOf, type SpotlightHandle, type SpotlightPlace } from './Spotlight';
-import type { SpotlightSubject } from './spotlight-results';
+import type { BoardSubject } from './spotlight-results';
 
 /**
  * Where ⌘K was pressed in the board's window: the board, the session window shown over it, or an expanded tile with the
@@ -13,7 +13,7 @@ import type { SpotlightSubject } from './spotlight-results';
 type BoardContext = { kind: 'board' } | { kind: 'window'; id: string } | { kind: 'expanded'; nodeId: string; id: string };
 
 /** The tile a session row is about, or undefined for a zone. */
-const tileOf = (subject: SpotlightSubject): TileRef | undefined =>
+const tileOf = (subject: BoardSubject): TileRef | undefined =>
   subject.kind === 'agent' ? { kind: 'agent', id: subject.agent.sessionId } : subject.kind === 'shell' ? { kind: 'shell', id: subject.shell.id } : undefined;
 
 /**
@@ -36,7 +36,7 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
     return { context: { kind: 'expanded', nodeId, id }, mode: 'switch', current: nodeId };
   };
 
-  const onPick = (context: BoardContext, subject: SpotlightSubject, open: boolean): boolean => {
+  const onPick = (context: BoardContext, subject: BoardSubject, open: boolean): boolean => {
     if (subject.kind === 'zone') {
       const shown = board.showZone(subject.zone.id, context.kind === 'expanded' ? context.nodeId : undefined);
       if (shown && context.kind === 'window') sessionWindows.close(context.id);

@@ -221,6 +221,14 @@ test('⌘K with no match offers a new agent by that name, in the zone', async ()
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
+    // A name a setting holds too: New agent is still offered, first and picked, and the setting is listed under it.
+    await window.keyboard.press(windowKey('k'));
+    await window.keyboard.type('web');
+    await expect(spotlight(window).getByTestId('spotlight-new-agent')).toHaveAttribute('aria-selected', 'true');
+    await expect(spotlight(window).getByTestId('spotlight-row').filter({ hasText: 'Web tabs' })).toHaveAttribute('aria-selected', 'false');
+    await window.keyboard.press('Escape');
+    await expect(spotlight(window)).toHaveCount(0);
+
     await window.keyboard.press(windowKey('k'));
     await window.keyboard.type('Write the changelog');
     await expect(spotlight(window).getByTestId('spotlight-row')).toHaveCount(0);
@@ -303,7 +311,7 @@ test('⌘K pressed in a web tab’s page opens the switcher, which takes the key
     await addEmptyZone(window, 'Frontend');
     await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: 'Web…' }).click();
+    await window.getByRole('menuitem', { name: /^Web…/ }).click();
     // A new tab has no page and its address bar is focused: the URL typed there loads.
     const address = window.getByTestId('web-address');
     await expect(address).toBeFocused();

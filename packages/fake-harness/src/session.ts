@@ -35,6 +35,24 @@ function keysAsTheyCome(): void {
   process.once('exit', () => stty('icanon'));
 }
 
+/**
+ * Hands Ctrl-U to the session rather than to the terminal's line discipline, as the real TUIs (which read raw) get it:
+ * it clears what sits at the prompt, the text of a lost Enter too (`afterClearKey`). The terminal's own comes back as
+ * the process exits, for the shell its pane drops into.
+ */
+function ownClearKey(): void {
+  if (!process.stdin.isTTY) return;
+  const stty = (...settings: string[]) => spawnSync('stty', settings, { stdio: [process.stdin, 'ignore', 'ignore'] });
+  stty('kill', 'undef');
+  process.once('exit', () => stty('kill', '^U'));
+}
+
+/** Ctrl-U: clears the prompt's line up to the cursor. */
+const CLEAR_KEY = '\x15';
+
+/** What is left at the prompt of `line` once each Ctrl-U in it cleared what came before it. */
+const afterClearKey = (line: string) => line.slice(line.lastIndexOf(CLEAR_KEY) + 1);
+
 /** How many bytes of a long line typed at Claude reach it in one read of its terminal. */
 const TERMINAL_READ = 1024;
 
@@ -232,6 +250,7 @@ export class FakeSession {
   constructor(dialect: Dialect) {
     this.dialect = dialect;
     if (this.rawInput) keysAsTheyCome();
+    ownClearKey();
     this.lines = createInterface({ input: process.stdin, terminal: false })[Symbol.asyncIterator]();
     // Like the real TUIs: Ctrl-C (SIGINT, or \x03 through a PTY) interrupts a turn; twice at the prompt exits.
     // Print and exec modes keep the default and die.
@@ -820,22 +839,23 @@ export class FakeSession {
   /**
    * The next line the user typed. Like the real TUIs, ESC CR (Alt+Enter, which the app sends for Shift+Enter) is a
    * new line within it rather than its end; and a bracketed paste of several lines (the app's composer sends one, as a
-   * terminal pastes) is one prompt, its line breaks kept and its markers dropped.
+   * terminal pastes) is one prompt, its line breaks kept and its markers dropped. Ctrl-U clears what came before it.
    */
   async readLine(): Promise<string | undefined> {
     let line = await this.readMessage();
     if (line !== undefined && line !== '' && this.linesKept > 0) {
       this.linesKept -= 1;
-      return line;
+      return afterClearKey(line);
     }
-    // A lost Enter leaves the text at the prompt until the next one, and whatever is typed before it joins it.
+    // A lost Enter leaves the text at the prompt until the next one, and whatever is typed before it joins it: a Ctrl-U
+    // typed meanwhile clears it.
     while (line !== undefined && line !== '' && this.entersToLose > 0) {
       this.entersToLose -= 1;
       const more = await this.readMessage();
       if (more === undefined) break;
       line = `${line}${more}`;
     }
-    return line;
+    return line === undefined ? line : afterClearKey(line);
   }
 
   /** The next prompt or paste as it ended at an Enter. */

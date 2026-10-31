@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.6.9 (2026-10-31)
+
+- The Simplified board and docked-pane shots are retaken with the calm tile
+- check:local gives the visual suite 20 minutes, now it runs over 100 shots
+- The agent-message bubble uses the semibold weight token, and the token test knows its --sender variable
+- The chat shows an agent's message as its own bubble, from the sender, never as the user's
+- An agent's tile is a calm tile under the Simplified design, with its window controls always shown
+- Needs you and the Captain open one docked pane, each on its own side
+- An agent's window has one header and switches between Chat, Timeline and Terminal
+- Messages another agent sends carry a sender mark, read back into the chat entry's from
+- Settings can be searched, and ⌘K finds settings too
+- The toolbar keeps today's islands, with fewer buttons in each
+- Agents, shells and zones take their menus from one model
+- New agent and new zone open as tidy sheets
+- Every agent shows one of six statuses, as a glyph and a word
+- Settings spec follows Simplified-only controls, and setClickOpens closes the Settings window it opened
+- An empty board offers three starter cards under the Simplified design
+- Sends to a busy orchestrator are queued, and any orchestrator may message the Captain
+- Dialogs keep today's confirmations, drawn in the Simplified design's language
+- Connections keep today's rails, restyled in the Simplified design
+- One Show technical details switch adds the technical layer back under the Simplified design
+- Settings is its own window, with a sidebar of seven collapsible groups
+- The Captain is the orange Claude character in a pirate hat
+- Flaky specs wait for the view to settle and for the ripple they watch; release PR tests get a timeout sized to their git work
+- The app menu gets About, Settings… (⌘,) and Check for Updates…
+- Board view settings are kept where every window hears them
+- A Simplified design setting switches the whole app to the new look
+- A send left typed but unsent says so, and orchestrators can send --submit or --clear the draft
+- Agent and shell tile controls stay visible at rest
+- Arrange gets masonry and treemap layouts, available by name
+- Web tabs keep logins in one shared session, with private tabs and Clear browsing data
+
 ## v0.6.8 (2026-10-29)
 
 - Arrange gets an opt-in wrap layout: lanes wrap their tiles onto new rows after 4

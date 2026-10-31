@@ -3,18 +3,18 @@ import { rmSync } from 'node:fs';
 import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 type Mode = 'All' | 'Hand-offs only' | 'None';
 
-/** Picks which connections the board draws, from the board menu's Settings, and closes the menu again. */
+/** Picks which connections the board draws, in the Settings window's Board › Connections. */
 async function showConnections(window: Page, mode: Mode): Promise<void> {
-  const menu = window.getByRole('dialog', { name: 'Board menu' });
-  await window.getByRole('button', { name: 'Board menu' }).dispatchEvent('click');
-  const choice = menu.getByRole('group', { name: 'Show connections' }).getByRole('button', { name: mode });
+  const settings = await openSettings(window, 'board.connections');
+  const choice = settingsSection(settings, 'Connections').getByRole('group', { name: 'Show connections' }).getByRole('button', { name: mode });
   await choice.click();
   await expect(choice).toHaveAttribute('aria-pressed', 'true');
-  await window.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
+  // The pointer leaves the board's tiles, as clicking in another window does: a hovered tile shows its own connections.
+  await window.mouse.move(5, 5);
 }
 
 const savedMode = (window: Page) => window.evaluate(() => globalThis.window.agentBoard.view.get('connections'));
@@ -109,7 +109,7 @@ test('connections are hidden, hand-offs only or shown from the board menu or ⇧
     await window.evaluate((sessionId) => globalThis.window.agentBoard.agents.answer(sessionId, 'Ship it'), id('Write the code'));
     await expect
       .poll(async () => (await agents(window)).find((agent) => agent.sessionId === id('Review the code'))?.lastMessage)
-      .toBe('Done: Hand-off from Write the code (its final message): Done: Ship it..');
+      .toBe(`Done: ⟨hand-off from Write the code · agent:${id('Write the code').slice(0, 8)}⟩ Hand-off from Write the code (its final message): Done: Ship it..`);
     await expect(edges).toHaveCount(0);
 
     // ⇧E cycles: None, All, Hand-offs only, None; a plain E does nothing.

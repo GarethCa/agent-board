@@ -16,7 +16,7 @@ A plan's 5-hour and weekly allowances run out, and when they do every agent on t
 ## The user's priorities
 
 - **A priority per zone**, High, Normal or Low, on its tab (a chip with a menu), Normal until set (`zone.configure`, kept on undo).
-- **Thresholds in Settings › Usage**, each a used percentage: at the 5-hour or weekly only-High threshold, zones that aren't High may have their starts held; at the 5-hour pause threshold, Low zones' idle agents may be paused. The thresholds speak in tiers rather than a ranked list, so the tab says where each zone stands.
+- **Thresholds in Settings › Usage › Thresholds**, each a used percentage: at the 5-hour or weekly only-High threshold, zones that aren't High may have their starts held; at the 5-hour pause threshold, Low zones' idle agents may be paused. The thresholds speak in tiers rather than a ranked list, so the tab says where each zone stands.
 - **Read by** `agent-board usage priorities` and the `usage` tool with `priorities`: the switch, the thresholds, and per zone its priority, its hold and what the thresholds allow there now (`usagePace`).
 
 ## The budget hold

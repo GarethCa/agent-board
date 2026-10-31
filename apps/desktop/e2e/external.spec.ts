@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
 import { claudeInTerminal, tileAction, zones } from './agent-helpers.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 function writeStatus(repo: string, status: Record<string, unknown>): void {
   mkdirSync(join(repo, '.agent-board'), { recursive: true });
@@ -43,18 +44,14 @@ test('with global hooks on, claude sessions started in other terminals appear in
     await expect(window.getByTestId('zone')).toHaveCount(2);
     const zone = (await zones(window)).find((known) => known.kind === 'folder');
 
-    // The setting is in Settings, behind the gear on the top-right island.
-    const settingsButton = window.getByRole('button', { name: 'Settings', exact: true });
-    await settingsButton.click();
-    const toggle = window.getByRole('switch', { name: 'Show sessions from other terminals' });
+    // The setting is in the Settings window, under Accounts › Other terminals.
+    const settingsWindow = await openSettings(window, 'accounts.terminals');
+    const toggle = settingsSection(settingsWindow, 'Other terminals').getByRole('switch', { name: 'Show sessions from other terminals' });
     await expect(toggle).toBeEnabled();
     await expect(toggle).not.toBeChecked();
     await toggle.click();
     await expect(toggle).toBeChecked();
     expect(readFileSync(settings, 'utf8')).toContain('agent-board-hook');
-    // Out of the way of the board.
-    await window.keyboard.press('Escape');
-    await expect(toggle).toBeHidden();
 
     writeStatus(repo, { state: 'running', summary: 'Writing the tests first' });
     const session = claudeInTerminal(join(repo, 'apps', 'web'), home, ['Pick a database'], 'waiting');
@@ -107,7 +104,7 @@ test('with global hooks on, claude sessions started in other terminals appear in
     // The group stays, empty, as any group does.
     await expect(unsortedZone).toHaveCount(1);
 
-    await settingsButton.click();
+    await openSettings(window, 'accounts.terminals');
     await toggle.click();
     await expect(toggle).not.toBeChecked();
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual(own);

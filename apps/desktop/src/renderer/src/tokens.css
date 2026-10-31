@@ -66,6 +66,7 @@
   --check-edge: #cfc9bb; /* an unchecked box */
   --switch-off: var(--neutral-edge); /* an unchecked switch's track */
   --switch-knob: #ffffff;
+  --settings-control-edge-mix: 85%; /* the muted text's share, over the box, of an edge or track in the Settings window: 3:1 */
 
   /* Focus: one ring for every control reached from the keyboard; a text field shows it as its edge and halo */
   --focus: var(--accent);
@@ -421,6 +422,9 @@
   --rail-token-wait: var(--state-waiting-ink); /* waiting for Send */
   --rail-token-send: var(--rail-token-wait); /* its Send button, under white text */
   --rail-token-fail: var(--danger); /* its last delivery skipped */
+  --rail-token-held: var(--flow-held); /* a hand-off its edge holds until its conditions pass */
+  --rail-token-held-ink: var(--flow-held-ink);
+  --rail-token-font: var(--font-mono); /* a token's caption */
   --flow-condition-passed: var(--success-soft); /* an Edge rules condition that passed its last check */
   --flow-condition-passed-edge: color-mix(in srgb, var(--success) 22%, transparent);
   --flow-condition-passed-ink: var(--success);
@@ -453,6 +457,8 @@
   /* Characters: the line and the light parts (eyes, a carried doc) drawn over a body */
   --figure-ink: var(--text);
   --figure-paper: var(--raised);
+  --figure-hat: #1c1c1e; /* the Captain's tricorn, near-black in every theme */
+  --figure-hat-emblem: #f4f1ea; /* the skull and crossbones on it, bone-white in every theme */
 
   /* Session window: a terminal is dark whatever the theme */
   --window-bg: #1b1a18; /* the terminal */
@@ -625,6 +631,7 @@
   --font-size-sm: 12px; /* a label, a small button, a tooltip */
   --font-size-sm-plus: 12.5px; /* an empty state's body */
   --font-display: var(--font-sans); /* titles on link cards */
+  --font-wordmark: var(--font-sans); /* the app's name atop the board menu */
   --font-size-md: 13px; /* body */
   --font-size-lg: 14.5px; /* a tile's name */
   --font-size-xl: 15px; /* an empty state's title */
@@ -676,7 +683,7 @@
   --size-shape-picker-list: 440px; /* its shapes' tallest, before they scroll */
   --size-shape-cell: 38px; /* one shape's button in it */
   --size-shape-cell-height: 34px;
-  --size-theme-popover: 340px; /* the Theme popover in Settings › Appearance */
+  --size-theme-popover: 340px; /* the Theme popover in Settings › General › Appearance */
   --size-theme-popover-list: 380px; /* its choices' tallest, before they scroll */
   --size-ask-claude: 340px; /* Ask Claude's popover beside a selection (CM) */
   --size-quick-insert: 300px; /* the / palette at the pointer */
@@ -717,6 +724,9 @@
   --size-composer: 42px; /* the composer's field, one line high */
   --size-composer-max: 200px; /* the most the composer's field grows to with the lines typed, before it scrolls */
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
+  --settings-bar-height: 38px; /* the Settings window's title bar: the traffic lights' midline there (main/chrome.ts) */
+  --settings-sidebar-width: 224px; /* the Settings window's sidebar of groups */
+  --settings-page-width: 620px; /* the widest a Settings page's rows get */
   --size-dock-item: 260px; /* a window's chip in the dock, widest */
   --window-gutter: var(--space-6); /* the margin the board's session window leaves round itself when it fills the board */
   --size-dock-min: 200px; /* the dock's narrowest, when there is the room; the zones pill is capped so there is */
@@ -1086,4 +1096,159 @@
   --shadow-sheet: 0 1px 0 rgb(0 0 0 / 30%), 0 30px 60px -20px rgb(0 0 0 / 75%), 0 8px 18px -10px rgb(0 0 0 / 40%);
   --shadow-coach: 0 1px 0 rgb(0 0 0 / 30%), 0 24px 48px -16px rgb(0 0 0 / 75%);
   --tour-scrim: rgb(0 0 0 / 62%);
+}
+
+/*
+ * The Simplified design (docs/adr/0022-simplified-design.md): a flag over the same components, shown while the root
+ * has data-design='simplified'. A native macOS look: SF Pro and SF Mono, system greys, a plain desk with no dots, the
+ * accent on controls only, orange only for Needs you and red only for Problem, a hairline and one soft shadow. Bricolage
+ * Grotesque stays for the wordmark alone. Under it the window shows only the app's own light or dark theme, never a
+ * pack (themes.ts), so these two blocks are all it reads over the app's own. Every colour the light block writes, the
+ * dark one writes too (tokens.test.ts).
+ */
+:root[data-design='simplified'] {
+  /* Surfaces */
+  --surface: #f3f3f5;
+  --surface-dot: var(--surface); /* no dots */
+  --raised: #ffffff;
+  --raised-edge: #d2d2d7;
+  --border: #dedee3;
+  --control-edge: #d2d2d7;
+  --separator: #e8e8ed;
+  --hover: #ececf0;
+  --panel: #f9f9fb;
+  --pressed: #e2e2e7;
+  --key-hint: #8e8e93;
+  --neutral-edge: #d2d2d7;
+  --check-edge: #c7c7cc;
+
+  /* Text */
+  --text: #1d1d1f;
+  --text-soft: #3c3c43;
+  --muted: #5e5e66;
+  --placeholder: #6e6e73;
+  --neutral-ink: #55555c;
+
+  /* Accent: the system's default blue, on controls only */
+  --accent: #2f5bd3;
+  --accent-strong: #2549b5;
+  --accent-soft: #eaf0fd;
+  --accent-faint: #f5f8fe;
+  --toggle-on-ink: #1f3f9e;
+  --focus-edge: #8aa5ea;
+
+  /* Disabled */
+  --disabled: #f2f2f4;
+  --disabled-edge: #e5e5ea;
+  --disabled-ink: #8e8e93;
+
+  /* Orange only for Needs you, red only for Problem */
+  --state-waiting: #c2410c;
+  --state-waiting-soft: #fff3ea;
+  --state-failed: #c4161c;
+  --state-failed-soft: #fdeeee;
+  --danger: #c4161c;
+  --danger-soft: #fdeeee;
+  --danger-edge: #fae0e0;
+
+  /* Connections: today's rails in neutral greys, their tokens plain chips; the accent stays on a selection */
+  --rail: #aeaeb2;
+  --rail-cap: #8e8e93;
+  --rail-width: 1.5px;
+  --rail-token-edge: var(--control-edge);
+  --rail-token-ink: var(--text-soft);
+  --rail-token-wait: var(--state-waiting);
+  --rail-token-held: var(--hover);
+  --rail-token-held-ink: var(--muted);
+  --rail-token-font: var(--font-sans);
+
+  /* A hairline and one soft shadow */
+  --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
+  --shadow-expanded: var(--shadow-tile);
+  --shadow-control: none;
+  --shadow-primary: none;
+  --shadow-input: none;
+  --shadow-overlay: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 8px 24px -8px rgb(0 0 0 / 22%);
+  --shadow-island: var(--shadow-overlay);
+  --scrim: rgb(0 0 0 / 18%); /* a sheet dims the window behind it lightly */
+
+  /* Radii: 10 for tiles, 6 for controls, 12 for cards and windows */
+  --radius-lg: 6px;
+  --radius-item: 6px;
+  --radius-window: 12px;
+  --radius-2xl: 12px;
+
+  /* Type: SF Pro at 13 and 11, SF Mono */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-wordmark: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+  --font-size-xs: 11px;
+  --font-size-2xl: 15px; /* a dialog's title; also the session window name, the cheat-sheet and tour titles, the onboarding lead */
+}
+
+:root[data-design='simplified'][data-theme='dark'] {
+  /* Surfaces */
+  --surface: #1b1b1e;
+  --raised: #2a2a2e;
+  --raised-edge: #48484e;
+  --border: #38383d;
+  --control-edge: #44444a;
+  --separator: #303034;
+  --hover: #333338;
+  --panel: #232327;
+  --pressed: #3d3d43;
+  --key-hint: #7c7c84;
+  --neutral-edge: #48484e;
+  --check-edge: #5c5c63;
+
+  /* Text */
+  --text: #f2f2f4;
+  --text-soft: #d6d6dc;
+  --muted: #a1a1a8;
+  --placeholder: #98989f;
+  --neutral-ink: #b4b4bb;
+
+  /* Accent: a fill under white text; as text it is lifted */
+  --accent: #2f5bd3;
+  --accent-strong: #b3c6ff;
+  --accent-soft: #23293d;
+  --accent-faint: #212330;
+  --accent-ink: #9fb6ff;
+  --toggle-on-ink: #9fb6ff;
+  --primary-edge: #4a73e8;
+  --primary-hover: #2549b5;
+  --focus-edge: #5f82e6;
+
+  /* Disabled */
+  --disabled: #2c2c30;
+  --disabled-edge: #38383d;
+  --disabled-ink: #6e6e75;
+
+  /* Orange only for Needs you, red only for Problem */
+  --state-waiting: #ff9f5a;
+  --state-waiting-soft: #3a2517;
+  --state-failed: #ff7b7b;
+  --state-failed-soft: #3a1c1d;
+  --danger: #ff7b7b;
+  --danger-soft: #3a1c1d;
+  --danger-edge: #5a2d30;
+
+  /* Connections */
+  --rail: #5c5c63;
+  --rail-cap: #7c7c84;
+
+  /* A hairline and one soft shadow */
+  --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
+  --shadow-overlay: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 8px 24px -8px rgb(0 0 0 / 60%);
+  --scrim: rgb(0 0 0 / 45%);
+}
+
+/*
+ * The Settings window's controls: an unchecked switch's track and a box's or field's edge are the muted text mixed into the
+ * box, so each reads at 3:1 on it in every theme, as controls the window is made of must.
+ */
+.settings-window {
+  --control-edge: color-mix(in srgb, var(--muted) var(--settings-control-edge-mix), var(--raised));
+  --check-edge: var(--control-edge);
+  --switch-off: var(--control-edge);
 }

@@ -131,7 +131,7 @@ export function PaneStrip({
       scripts={panes.scripts}
       sessions={panes.sessionChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.showSession(pane.id, choice.surface) }))}
       pullRequests={panes.pullRequestChoices.map((choice) => ({ label: choice.label, onSelect: () => panes.open(choice.surface, pane.id) }))}
-      onOpenWeb={() => panes.openBlankWeb(pane.id)}
+      onOpenWeb={(options) => panes.openBlankWeb(pane.id, options)}
       named={panes.surfaces.length === 1}
       shells={panes.holdsShells}
       onSplit={() => panes.split('horizontal', pane.id)}

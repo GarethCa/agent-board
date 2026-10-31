@@ -18,7 +18,7 @@ What is not covered: the plan looks one step deep. What `scripts/check-local.sh`
 
 ## Held payloads: a copy by default, or only the path
 
-- A setting (Settings › Held hand-offs, `settings.heldPayloads` in the daemon's new `settings` table) picks **Keep a copy (default)** or **Path only, read at delivery**.
+- A setting (Settings › Advanced › Held hand-offs, `settings.heldPayloads` in the daemon's new `settings` table) picks **Keep a copy (default)** or **Path only, read at delivery**.
 - With a copy, a held or queued hand-off delivers its file as it was when the agent handed off.
 - With only the path, `held_text` and `queued_text` stay NULL, and the file is read again when the hand-off is delivered. A file that has gone or turned invalid by then is skipped, saying why. Changing the setting to path only drops the copies held now.
 - A final message isn't a file and is kept anyway (`agents.final_message`), so the setting applies to file payloads.

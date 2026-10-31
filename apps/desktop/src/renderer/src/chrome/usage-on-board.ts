@@ -1,5 +1,5 @@
 // Whether the plan usage pill shows on the board, beside the zoom controls. A view setting, kept in the daemon's view
-// state and shared by Settings › Usage, which turns it on, and the zoom controls, which show it.
+// state and shared by Settings › Usage › Plan usage, which turns it on, and the zoom controls, which show it.
 import { useEffect, useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 
@@ -23,7 +23,7 @@ const subscribe = (listener: () => void) => {
   return () => void listeners.delete(listener);
 };
 
-/** The setting and its setter, read from the view state on first use and again whenever this window comes to the front. */
+/** The setting and its setter, read from the view state on first use, followed as any window changes it, and read again whenever this window comes to the front. */
 export function useUsageOnBoard(): [boolean, (on: boolean) => void] {
   const on = useSyncExternalStore(subscribe, () => value);
   useEffect(() => {
@@ -36,7 +36,16 @@ export function useUsageOnBoard(): [boolean, (on: boolean) => void] {
     };
     read();
     window.addEventListener('focus', read);
-    return () => window.removeEventListener('focus', read);
+    // Another window (Settings) changing it reaches this one at once.
+    const stop = window.agentBoard.view.onChanged((key, saved) => {
+      if (key !== VIEW_KEYS.usageOnBoard) return;
+      epoch++;
+      publish(usageOnBoardFrom(saved));
+    });
+    return () => {
+      window.removeEventListener('focus', read);
+      stop();
+    };
   }, []);
   return [
     on,

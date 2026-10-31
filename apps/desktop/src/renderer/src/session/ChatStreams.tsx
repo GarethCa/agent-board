@@ -1,10 +1,11 @@
-import { Fragment, memo, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Asterisk, Bot, ChevronRight, ListCollapse, RefreshCw, Square } from 'lucide-react';
-import type { Agent } from '@agent-board/daemon/protocol';
+import type { Agent, MessageSender } from '@agent-board/daemon/protocol';
 import { HarnessMark } from '../board/HarnessMark';
 import { Button } from '../ui';
+import { AgentBubble, AgentMessage, HiddenAgents, useSenderTone } from './AgentMessage';
 import { Markdown } from './Markdown';
-import { chatItems, duration, editCounts, pastedParts, toolKind, toolLine, type ChatItem, type SubagentMessage, type ToolCall } from './chat';
+import { chatItems, duration, editCounts, toolKind, toolLine, type ChatItem, type SubagentMessage, type ToolCall } from './chat';
 import type { LiveState } from './chat-live';
 import {
   callStatus,
@@ -13,6 +14,7 @@ import {
   hasActions,
   LiveActions,
   LiveGlyph,
+  MessageText,
   liveLine,
   ToolBody,
   ToolIcon,
@@ -39,28 +41,17 @@ export const ChatStream = memo(function ChatStream({ items }: { items: ChatItem[
   });
 });
 
-/** A user's message as typed, each block pasted into it folded to its line count, opening to what was pasted. */
-export function MessageText({ text }: { text: string }) {
-  return pastedParts(text).map((part, index) =>
-    part.kind === 'text' ? (
-      <Fragment key={index}>{part.text}</Fragment>
-    ) : (
-      <details key={index} className="chat-pasted" data-testid="chat-pasted">
-        <summary>
-          Pasted text ({part.lines} {part.lines === 1 ? 'line' : 'lines'})
-        </summary>
-        <pre className="chat-pasted-text">{part.text}</pre>
-      </details>
-    ),
-  );
-}
-
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="chat-user" data-testid="chat-user">
       <MessageText text={text} />
     </div>
   );
+}
+
+/** A message the user typed, or one another agent sent, drawn apart. */
+function SaidMessage({ item }: { item: Extract<ChatItem, { kind: 'user' }> }) {
+  return item.from === undefined ? <UserMessage text={item.text} /> : <AgentMessage text={item.text} from={item.from} />;
 }
 
 function AssistantMessage({ text }: { text: string }) {
@@ -88,7 +79,9 @@ function CardItem({ item, last }: { item: ChatItem; last: boolean }) {
   const { atWork, liveCallId } = useChatSetting();
   switch (item.kind) {
     case 'user':
-      return <UserMessage text={item.text} />;
+      return <SaidMessage item={item} />;
+    case 'agents-hidden':
+      return <HiddenAgents count={item.count} />;
     case 'assistant':
       return <AssistantMessage text={item.text} />;
     case 'notice':
@@ -243,10 +236,19 @@ function RailItem({ item, last }: { item: ChatItem; last: boolean }) {
   const { atWork } = useChatSetting();
   switch (item.kind) {
     case 'user':
-      return (
+      return item.from === undefined ? (
         <div className="chat-ev chat-ev-user">
           <span className="chat-dot" data-hollow aria-hidden />
           <UserMessage text={item.text} />
+        </div>
+      ) : (
+        <RailAgentMessage text={item.text} from={item.from} />
+      );
+    case 'agents-hidden':
+      return (
+        <div className="chat-ev">
+          <span className="chat-dot" data-tone="muted" aria-hidden />
+          <HiddenAgents count={item.count} />
         </div>
       );
     case 'assistant':
@@ -281,6 +283,17 @@ function RailItem({ item, last }: { item: ChatItem; last: boolean }) {
     case 'tools':
       return <RailRun item={item} going={atWork && last} />;
   }
+}
+
+/** An agent's message on the rail: its dot ringed in the sender's colour. */
+function RailAgentMessage({ text, from }: { text: string; from: MessageSender }) {
+  const tone = useSenderTone(from);
+  return (
+    <div className="chat-ev" data-sender={tone}>
+      <span className="chat-dot" data-hollow data-agent aria-hidden />
+      <AgentBubble text={text} from={from} tone={tone} />
+    </div>
+  );
 }
 
 function RailThinking({ item }: { item: Extract<ChatItem, { kind: 'thinking' }> }) {
@@ -465,7 +478,9 @@ function ChipStream({ items }: { items: ChatItem[] }) {
     const { item } = segment;
     switch (item.kind) {
       case 'user':
-        return <UserMessage key={item.key} text={item.text} />;
+        return <SaidMessage key={item.key} item={item} />;
+      case 'agents-hidden':
+        return <HiddenAgents key={item.key} count={item.count} />;
       case 'assistant':
         return <AssistantMessage key={item.key} text={item.text} />;
       case 'compacted':

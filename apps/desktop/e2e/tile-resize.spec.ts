@@ -5,6 +5,7 @@ import { claudeInTerminal, launch, spawnAgent, tile } from './agent-helpers.ts';
 import { drag, settledBox } from './board-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, connectedDaemonPid, launchApp, placeWithTool, stopDaemon } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
 async function addRepoZone(page: Page, app: Parameters<typeof pickFolderNext>[0], repo: string): Promise<void> {
   await pickFolderNext(app, repo);
@@ -220,11 +221,10 @@ test('an external session tile resizes and resets on a double-click', async () =
     const window = await app.firstWindow();
     await connectedDaemonPid(window);
     await addRepoZone(window, app, repo);
-    await window.getByRole('button', { name: 'Settings', exact: true }).click();
-    const toggle = window.getByRole('switch', { name: 'Show sessions from other terminals' });
+    const settings = await openSettings(window, 'accounts.terminals');
+    const toggle = settingsSection(settings, 'Other terminals').getByRole('switch', { name: 'Show sessions from other terminals' });
     await toggle.click();
     await expect(toggle).toBeChecked();
-    await window.keyboard.press('Escape');
     // Started once the hooks are on, as the session is then reported.
     session = claudeInTerminal(repo, home, ['Pick a database'], 'waiting');
     session.stdout.resume();

@@ -174,42 +174,94 @@ export const Character = memo(function Character({
   /** What the subagent is, e.g. `Explore`; read out with its pose. */
   label?: string;
 }) {
-  const body = BODIES[harness];
-  const { eyes, legs, arms, prop, toppled } = FIGURES[pose];
-  const color = HARNESSES[harness].color;
+  const figure = FIGURES[pose];
   return (
     <svg
       className="character"
       data-testid="character"
       data-pose={pose}
       data-harness={harness}
-      data-body={body}
+      data-body={BODIES[harness]}
       role="img"
       aria-label={label === undefined ? POSE_LABELS[pose] : `${label}: ${POSE_LABELS[pose]}`}
       viewBox="0 0 32 36"
       width="28"
       height="32"
     >
-      <g className="character-figure" transform={toppled ? 'translate(0 7) rotate(90 16 22)' : undefined}>
-        <g style={{ stroke: INK }} strokeWidth="2" strokeLinecap="round">
-          {legs.map(([x1, y1, x2, y2], index) => (
-            <line key={`leg${index}`} className="character-leg" x1={x1} y1={y1} x2={x2} y2={y2} />
-          ))}
-          {arms.map(([x1, y1, x2, y2], index) => (
-            <line key={`arm${index}`} x1={x1} y1={y1} x2={x2} y2={y2} />
-          ))}
-        </g>
-        {body === 'bean' ? (
-          <path d="M16 8 C22.5 8 24.5 12.5 24 19 C23.5 25.5 21 29 16 29 C10.5 29 7.8 25.5 8 18.5 C8.2 12 10 8 16 8 Z" style={{ fill: color }} />
-        ) : (
-          <rect x="8.5" y="8.5" width="15" height="20" rx="2.5" style={{ fill: color }} />
-        )}
-        <Face eyes={eyes} />
+      <g className="character-figure" transform={figure.toppled ? 'translate(0 7) rotate(90 16 22)' : undefined}>
+        <Body harness={harness} figure={figure} />
       </g>
-      {prop}
+      {figure.prop}
     </svg>
   );
 });
+
+/** How tall the Captain is drawn in each place it appears, in px. */
+export const CAPTAIN_SIZES = { toolbar: 18, bubble: 22, avatar: 28, 'first-run': 200 } as const;
+
+/** Standing at ease: the Captain's, and a message sender's. */
+const AT_EASE: Figure = { eyes: 'open', legs: STANDING, arms: ARMS_DOWN };
+
+/**
+ * The Captain: Claude's character standing at ease in a pirate tricorn. The hat is near-black with a hairline of the
+ * figure's ink, so it reads on a dark desk too, with a bone-white skull and crossbones on its crown.
+ */
+export const Captain = memo(function Captain({ size }: { size: keyof typeof CAPTAIN_SIZES }) {
+  const height = CAPTAIN_SIZES[size];
+  return (
+    <svg
+      className="captain"
+      data-testid="captain"
+      data-size={size}
+      role="img"
+      aria-label="The Captain"
+      // Taller than a character's, for the crown of the hat.
+      viewBox="0 -4 32 40"
+      width={Math.round(height * 0.8)}
+      height={height}
+    >
+      <Body harness="claude" figure={AT_EASE} />
+      {/* A hairline at every size: never wider than 1 px, so the large Captain's hat stays near-black. */}
+      <g style={{ fill: 'var(--figure-hat)', stroke: INK }} strokeWidth={Math.min(0.6, 40 / height)} strokeLinejoin="round">
+        <path d="M10.6 10 Q16 -2.2 21.4 10 Z" />
+        <path d="M4.5 11.2 Q16 5.4 27.5 11.2 Q22 9.2 16 9.5 Q10 9.2 4.5 11.2 Z" />
+      </g>
+      <circle cx="16" cy="5.4" r="1.4" style={{ fill: 'var(--figure-hat-emblem)' }} />
+      <path d="M14 8.1 L18 7.2 M14 7.2 L18 8.1" fill="none" style={{ stroke: 'var(--figure-hat-emblem)' }} strokeWidth="0.7" strokeLinecap="round" />
+    </svg>
+  );
+});
+
+/** A character standing at ease, eyes open and arms down, in its harness's body and colour: who a message is from. */
+export const Sender = memo(function Sender({ harness }: { harness: Harness }) {
+  return (
+    <svg className="character" data-testid="sender-figure" data-harness={harness} data-body={BODIES[harness]} aria-hidden viewBox="0 0 32 36" width="28" height="32">
+      <Body harness={harness} figure={AT_EASE} />
+    </svg>
+  );
+});
+
+/** A figure's limbs, body and face, in its harness's body and colour. */
+function Body({ harness, figure: { eyes, legs, arms } }: { harness: Harness; figure: Figure }) {
+  return (
+    <>
+      <g style={{ stroke: INK }} strokeWidth="2" strokeLinecap="round">
+        {legs.map(([x1, y1, x2, y2], index) => (
+          <line key={`leg${index}`} className="character-leg" x1={x1} y1={y1} x2={x2} y2={y2} />
+        ))}
+        {arms.map(([x1, y1, x2, y2], index) => (
+          <line key={`arm${index}`} x1={x1} y1={y1} x2={x2} y2={y2} />
+        ))}
+      </g>
+      {BODIES[harness] === 'bean' ? (
+        <path d="M16 8 C22.5 8 24.5 12.5 24 19 C23.5 25.5 21 29 16 29 C10.5 29 7.8 25.5 8 18.5 C8.2 12 10 8 16 8 Z" style={{ fill: HARNESSES[harness].color }} />
+      ) : (
+        <rect x="8.5" y="8.5" width="15" height="20" rx="2.5" style={{ fill: HARNESSES[harness].color }} />
+      )}
+      <Face eyes={eyes} />
+    </>
+  );
+}
 
 function Face({ eyes }: { eyes: Eyes }) {
   const at = [13, 19];

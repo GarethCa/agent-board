@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { MiniMap, useReactFlow, useStore, type Node } from '@xyflow/react';
 import { Grid3x3, Map as MapIcon, Minus, Plus } from 'lucide-react';
+import { useSimplified } from '../design';
 import { Button, Island, IslandSeparator, ToolButton } from '../ui';
 import { UsagePill } from './UsagePill';
 import { useUsageOnBoard } from './usage-on-board';
@@ -9,6 +10,7 @@ import { ViewPopover, type ViewPopoverProps } from './ViewPopover';
 /**
  * The bottom-right island (chrome C): zoom out, the zoom (a click fits the board), zoom in, snapping to the grid, and
  * the minimap's toggle, with the minimap over it, and the usage pill first when Settings › Usage shows it here. The View button opens the popover of view settings.
+ * Under the Simplified design the grid and the minimap move into the View menu, and the minimap is off until turned on.
  */
 export function ZoomControls({
   nodeColor,
@@ -18,7 +20,10 @@ export function ZoomControls({
 }: { nodeColor(node: Node): string; grid: boolean; onGrid(): void } & ViewPopoverProps) {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
-  const [minimap, setMinimap] = useState(true);
+  const simplified = useSimplified();
+  // Shown by default under Classic and hidden under the Simplified design, until it is turned on or off here.
+  const [picked, setMinimap] = useState<boolean>();
+  const minimap = picked ?? !simplified;
   const [usageOnBoard] = useUsageOnBoard();
   return (
     <>
@@ -38,9 +43,15 @@ export function ZoomControls({
         </Button>
         <ToolButton size="sm" icon={<Plus />} label="Zoom in" onClick={() => void zoomIn()} />
         <IslandSeparator />
-        <ViewPopover {...view} />
-        <ToolButton size="sm" icon={<Grid3x3 />} label="Snap to grid" hint={grid ? 'Stop snapping to the grid' : 'Snap what you drag to the grid'} pressed={grid} onClick={onGrid} />
-        <ToolButton size="sm" icon={<MapIcon />} label="Minimap" hint={minimap ? 'Hide the minimap' : 'Show the minimap'} pressed={minimap} onClick={() => setMinimap(!minimap)} />
+        {simplified ? (
+          <ViewPopover {...view} toggles={{ grid, onGrid, minimap, onMinimap: () => setMinimap(!minimap) }} />
+        ) : (
+          <>
+            <ViewPopover {...view} />
+            <ToolButton size="sm" icon={<Grid3x3 />} label="Snap to grid" hint={grid ? 'Stop snapping to the grid' : 'Snap what you drag to the grid'} pressed={grid} onClick={onGrid} />
+            <ToolButton size="sm" icon={<MapIcon />} label="Minimap" hint={minimap ? 'Hide the minimap' : 'Show the minimap'} pressed={minimap} onClick={() => setMinimap(!minimap)} />
+          </>
+        )}
       </Island>
     </>
   );
