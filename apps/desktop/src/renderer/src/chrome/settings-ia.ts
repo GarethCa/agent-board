@@ -98,6 +98,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'agentNoteLook', label: 'How a note an agent writes looks', home: 'board.notes', also: 'document terminal card' },
   { id: 'arrangeSpacing', label: 'Arrange spacing', home: 'board.tidying', also: 'tidy gap layout' },
   { id: 'opensOn', label: 'Agent windows open on', home: 'agents.chat', simplifiedOnly: true, also: 'chat terminal timeline view default open' },
+  { id: 'conversationAs', label: 'Show the conversation as', home: 'agents.chat', simplifiedOnly: true, also: 'terminal style timeline rail tui transcript' },
   { id: 'chatStyle', label: 'Style', home: 'agents.chat', also: 'cards timeline rail status line conversation' },
   { id: 'compactWindow', label: "Compact agents' context at", home: 'agents.context', also: 'context window tokens' },
   { id: 'clickableLinks', label: 'Clickable links from Claude', home: 'agents.links', also: 'urls open browser' },

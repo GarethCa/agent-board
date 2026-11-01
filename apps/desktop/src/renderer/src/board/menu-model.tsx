@@ -2,11 +2,13 @@
 // handler it calls, with a stable id. Any menu of one of them (its tile's or tab's ⋯, a right-click, the menu bar) takes
 // its rows from here, so a row reads and does the same wherever it shows. Pure, so it is unit-tested.
 import {
+  Check,
   CircleDot,
   Bell,
   BellOff,
   Clock,
   Coins,
+  Ellipsis,
   Expand,
   FileCheck,
   FileSearch,
@@ -24,6 +26,7 @@ import {
   ListTodo,
   Maximize2,
   Network,
+  Palette,
   Pause,
   Pencil,
   Play,
@@ -33,6 +36,7 @@ import {
   Rows3,
   ShieldCheck,
   SquareArrowOutUpRight,
+  StickyNote,
   Trash2,
   Unlink,
   X,
@@ -482,5 +486,210 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       hint: 'Its tiles stay on the board where they are',
       onSelect: () => actions.deleteZone(zone),
     },
+  ];
+}
+
+/** What a project's menus do under the Simplified design: everything its zone's tab and ⋯ do, but rename. */
+export type ProjectMenuActions = ZoneMenuActions & ZoneTabActions;
+
+/** What a project's ⋯ menu is drawn from, under the Simplified design. */
+export interface ProjectMenuInput {
+  zone: Zone;
+  /** Why no agent can start in it, if one can't. */
+  noAgents: string | undefined;
+  /** Whether rows use their technical names (Show technical details): "repo", "board MCP", "orchestrate". */
+  technical: boolean;
+  /** The spacing new projects take, named as it is (read as the menu opens). */
+  newZones: ArrangeSpacing | undefined;
+  /** The fill opacity the theme gives it while it has none of its own, in percent. */
+  themeFill: number;
+  /** Starts renaming it in place. */
+  rename(): void;
+  actions: ProjectMenuActions;
+}
+
+const newAgentRow = ({ zone, noAgents, actions }: ProjectMenuInput, label: string): ModelEntry => ({
+  id: 'new-agent',
+  label,
+  icon: <Plus />,
+  disabled: noAgents !== undefined,
+  hint: noAgents,
+  onSelect: () => actions.newAgent(zone),
+});
+
+const newShellRow = ({ zone, actions }: ProjectMenuInput, label: string): ModelEntry => ({
+  id: 'new-shell',
+  label,
+  icon: <Plus />,
+  onSelect: () => actions.newShell(zone),
+});
+
+const addIssueRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'add-issue', label: 'Add issue…', icon: <ListPlus />, detail: zone.tracker?.scope, onSelect: () => actions.addIssue(zone) });
+
+const tidyUpRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'tidy', label: 'Tidy up', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', onSelect: () => actions.tidy(zone) });
+
+const colourRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({
+  id: 'colour',
+  label: 'Colour',
+  swatches: ZONE_COLORS.map((color) => ({ name: ZONE_COLOR_NAMES[color] ?? color, value: color, pressed: zone.color === color })),
+  onPick: (color: string) => actions.recolor(zone, color),
+});
+
+const deleteRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({
+  id: 'delete',
+  label: 'Delete project…',
+  icon: <X />,
+  danger: true,
+  hint: 'Its agents stay on the board where they are',
+  onSelect: () => actions.deleteZone(zone),
+});
+
+/** A project's Folder ›: its folder, trusting it and unbinding it; for a project with none, the ways to get one; or Cancel clone. */
+function folderEntries({ zone, technical, actions }: ProjectMenuInput): ModelEntry[] {
+  if (zone.clone !== null) return [{ id: 'cancel-clone', label: 'Cancel clone', icon: <X />, danger: true, onSelect: () => actions.cancelClone(zone) }];
+  if (zone.repoRoot !== null) {
+    return [
+      { heading: zone.folder === '' ? zone.repoRoot : `${zone.repoRoot}/${zone.folder}` },
+      {
+        id: 'trust-folder',
+        label: 'Trust this folder for new agents',
+        icon: zone.trustsFolder ? <Check /> : <FolderCheck />,
+        checked: zone.trustsFolder,
+        hint: "Claude's trust prompt is answered for agents started in this folder",
+        onSelect: () => actions.setTrustsFolder(zone, !zone.trustsFolder),
+      },
+      { id: 'unbind', label: technical ? 'Unbind from its repo' : 'Unbind from its folder', icon: <Unlink />, hint: 'Its agents keep their folders, and it keeps its issues', onSelect: () => actions.unbind(zone) },
+    ];
+  }
+  return [
+    { id: 'repo', label: 'Open a folder as a repo…', icon: <GitBranch />, onSelect: () => actions.bind(zone, 'repo') },
+    { id: 'project', label: 'Open a folder as a project…', icon: <FolderPlus />, onSelect: () => actions.bind(zone, 'project') },
+    { id: 'tracker', label: 'Link to a Linear team or GitHub repo…', icon: <ListTodo />, onSelect: () => actions.pickTracker(zone) },
+    {
+      id: 'default-repo',
+      label: technical ? 'Default repo for new agents…' : 'Default folder for new agents…',
+      icon: <FolderGit2 />,
+      detail: zone.defaultRepo === null ? undefined : folderLabel(zone.defaultRepo, undefined),
+      hint: 'New agents here start in it without asking',
+      onSelect: () => actions.pickDefaultRepo(zone),
+    },
+    ...(zone.userFolder
+      ? [{ id: 'init-repo', label: 'Make it a git repo', icon: <GitBranch />, hint: 'New agents then get folders of their own', onSelect: () => actions.initRepo(zone) }]
+      : []),
+  ];
+}
+
+/** A project's Agents in this project ›: what the agents started in it get and may do. */
+function agentSettingEntries({ zone, technical, actions }: ProjectMenuInput): ModelEntry[] {
+  return [
+    {
+      id: 'board-mcp',
+      label: technical ? 'Board MCP for new agents' : 'Board tools for new agents',
+      icon: zone.boardMcp ? <Check /> : <Plug />,
+      checked: zone.boardMcp,
+      hint: 'Agents started here can see and use the board',
+      onSelect: () => actions.setBoardMcp(zone, !zone.boardMcp),
+    },
+    {
+      id: 'orchestrate',
+      label: technical ? 'Let agents orchestrate' : 'Let agents start and manage agents',
+      icon: zone.agentsOrchestrate ? <Check /> : <Network />,
+      checked: zone.agentsOrchestrate,
+      hint: zone.agentsOrchestrate ? 'Turning it off stops every agent here doing so now' : 'Agents you start here may start, message and close agents in it',
+      onSelect: () => actions.setAgentsOrchestrate(zone, !zone.agentsOrchestrate),
+    },
+    {
+      id: 'gate-command',
+      label: technical ? 'Gate command…' : 'Check before merging…',
+      icon: <ShieldCheck />,
+      detail: technical ? (zone.gateCommand ?? undefined) : undefined,
+      hint: "What checks an agent's work before it is merged",
+      onSelect: () => actions.editGateCommand(zone),
+    },
+    { id: 'role-templates', label: 'Role templates…', icon: <FileText />, hint: 'What agents started here in a role begin with', onSelect: () => actions.editRoleTemplates(zone) },
+  ];
+}
+
+/**
+ * A project's ⋯ menu under the Simplified design: every control of its zone's tab and ⋯, its settings in submenus.
+ * While it clones, only what a cloning zone offers.
+ */
+export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
+  const { zone, newZones, themeFill, rename, actions } = input;
+  const issues: ModelEntry = {
+    id: 'issues',
+    label: 'Issues',
+    icon: <CircleDot />,
+    entries: [
+      { id: 'tracker', label: 'Where issues come from…', icon: <CircleDot />, detail: zone.tracker?.scope, onSelect: () => actions.pickTracker(zone) },
+      ...(zone.tracker === null ? [] : [addIssueRow(input)]),
+    ],
+  };
+  const priority: ModelEntry = { id: 'priority', label: 'Priority', icon: <Gauge />, entries: priorityEntries(zone, actions) };
+  const folder: ModelEntry = { id: 'folder', label: 'Folder', icon: <FolderGit2 />, entries: folderEntries(input) };
+  if (zone.clone !== null) return [newAgentRow(input, 'New agent'), newShellRow(input, 'New terminal'), 'separator', tidyUpRow(input), priority, issues, folder];
+  return [
+    newAgentRow(input, 'New agent'),
+    newShellRow(input, 'New terminal'),
+    'separator',
+    { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
+    colourRow(input),
+    {
+      id: 'fill-opacity',
+      label: 'Fill',
+      value: zone.fillOpacity ?? themeFill,
+      ...ZONE_FILL_OPACITY,
+      format: (value: number) => `${value}%`,
+      onChange: (value: number) => actions.previewFill(zone, value),
+      onCommit: (value: number) => actions.setFill(zone, value),
+      onCancel: () => actions.cancelFill(zone),
+    },
+    'separator',
+    tidyUpRow(input),
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      icon: <Rows3 />,
+      entries: [
+        ...spacingEntries(zone, actions),
+        'separator',
+        { id: 'new-zone-spacing', label: 'Default for new projects…', icon: <Rows3 />, detail: newZones === undefined ? 'Settings' : `${SPACING_LABELS[newZones]} · Settings`, onSelect: actions.openSettings },
+      ],
+    },
+    priority,
+    issues,
+    folder,
+    { id: 'agents', label: 'Agents in this project', icon: <Network />, entries: agentSettingEntries(input) },
+    'separator',
+    deleteRow(input),
+  ];
+}
+
+/** What a project's right-click menu adds to its ⋯: a note where it was asked for. */
+export interface ProjectContextMenuInput extends ProjectMenuInput {
+  newNote(): void;
+}
+
+/**
+ * A project's right-click menu under the Simplified design: making things in it and the everyday actions first, then its
+ * ⋯ as Project options ›, so every row of ⋯ is one level down from here too.
+ */
+export function projectContextMenu(input: ProjectContextMenuInput): ModelEntry[] {
+  const { zone, rename, newNote } = input;
+  const note: ModelEntry = { id: 'new-note', label: 'New note here', icon: <StickyNote />, onSelect: newNote };
+  const options: ModelEntry = { id: 'options', label: 'Project options', icon: <Ellipsis />, entries: projectMenu(input) };
+  if (zone.clone !== null) return [newShellRow(input, 'New terminal here'), note, 'separator', options];
+  return [
+    newAgentRow(input, 'New agent here'),
+    newShellRow(input, 'New terminal here'),
+    note,
+    ...(zone.tracker === null ? [] : [addIssueRow(input)]),
+    'separator',
+    { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
+    tidyUpRow(input),
+    { id: 'colour-menu', label: 'Colour', icon: <Palette />, entries: [colourRow(input)] },
+    options,
+    'separator',
+    deleteRow(input),
   ];
 }

@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, pickInChip, tile, zones, zoneNamed } from './agent-helpers.ts';
+import { agents, launch, pickInChip, tile, zoneControl, zones } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -15,7 +15,7 @@ for (const technical of [false, true]) {
     try {
       await pickFolderNext(app, repo);
       await browseForZone(window);
-      await zoneNamed(window, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+      await zoneControl(window, 'monorepo', 'New agent', 'New agent');
       const form = window.getByRole('dialog', { name: 'New agent' });
       await expect(form.getByRole('button', { name: /^Harness:/ })).toBeVisible();
       await expect(form.getByLabel('Task')).toBeVisible();
@@ -41,7 +41,7 @@ test('New agent under the Simplified design still starts an agent from its task,
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await zoneNamed(window, 'monorepo').getByRole('button', { name: 'New agent' }).click();
+    await zoneControl(window, 'monorepo', 'New agent', 'New agent');
     const form = window.getByRole('dialog', { name: 'New agent' });
     await pickInChip(form, 'Role', 'Reviewer');
     await expect(form).toContainText("Uses monorepo's Reviewer template.");

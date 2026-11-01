@@ -152,6 +152,12 @@ describe('a key of the Simplified design', () => {
     expect([keyText('window.stopStep', true), keyText('window.stopStep', false)]).toEqual(['⌘.', 'Ctrl+Shift+.']);
     expect(pressed('window.stopStep', press('.', 'Period', { metaKey: true }), { isMac: true, simplified: true })).toBe(true);
     expect(pressed('window.stopStep', press('.', 'Period', { metaKey: true }), { isMac: true, simplified: false })).toBe(false);
+    expect(pressed('window.decideLater', press('Escape', 'Escape'), { isMac: true, simplified: true })).toBe(true);
+    expect(pressed('window.decideLater', press('Escape', 'Escape'), { isMac: true, simplified: false })).toBe(false);
+    expect([keyText('window.approvePlan', true), keyText('window.approvePlan', false)]).toEqual(['⌘↵', 'Ctrl+Shift+↵']);
+    expect(pressed('window.approvePlan', press('Enter', 'Enter', { metaKey: true }), { isMac: true, simplified: true })).toBe(true);
+    expect(pressed('window.approvePlan', press('Enter', 'Enter'), { isMac: true, simplified: true })).toBe(false);
+    expect(pressed('window.approvePlan', press('Enter', 'Enter', { ctrlKey: true, shiftKey: true }), { isMac: false, simplified: true })).toBe(true);
   });
 
   it('is on the cheat sheet only under it', () => {

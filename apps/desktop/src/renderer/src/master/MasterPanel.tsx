@@ -23,6 +23,7 @@ import { upperFirst } from '../upper-first';
 import { Captain } from '../board/Character';
 import { useSimplified } from '../design';
 import { Inbox } from '../inbox/Inbox';
+import { SinceYouLooked } from './SinceYouLooked';
 import type { PaneSide } from './use-master-panel';
 import { PanelHandle } from './PanelHandle';
 import { usePanelRoom } from './use-panel-room';
@@ -151,6 +152,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
       {listSide ? (
         <div className="master-panel-needs-you">
           <Inbox agents={agents} onOpen={onOpenAgent} onSettings={onSettings} heading={false} />
+          <SinceYouLooked agents={agents} onOpenAgent={onOpenAgent} />
         </div>
       ) : master === undefined ? (
         <StartMaster />

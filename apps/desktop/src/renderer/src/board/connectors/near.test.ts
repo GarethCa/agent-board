@@ -29,6 +29,13 @@ describe('the object a pointer is near, while an arrow is drawn or an end dragge
     expect(nearestObject([zone], { x: 1020, y: 400 }, 40)).toBe('zone');
   });
 
+  it("is a project anywhere over its heading inside its top, however far from the outline", () => {
+    const project = { ...zone, head: 30 };
+    expect(nearestObject([project], { x: 500, y: 28 }, 10)).toBe('zone');
+    expect(nearestObject([project], { x: 500, y: 60 }, 10)).toBeUndefined();
+    expect(nearestObject([project, tile('a', 400, 0)], { x: 450, y: 20 }, 10)).toBe('a');
+  });
+
   it('leaves out the objects it is told to', () => {
     expect(nearestObject([tile('a', 100, 100)], { x: 150, y: 150 }, 40, new Set(['a']))).toBeUndefined();
   });

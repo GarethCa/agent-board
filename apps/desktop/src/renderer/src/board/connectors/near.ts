@@ -5,11 +5,15 @@ import { useReactFlow } from '@xyflow/react';
 import type { ConnectorSide, EdgePoint } from '@agent-board/daemon/protocol';
 import type { Rect } from '../../geometry';
 
-/** A board object an arrow can end on: a zone is near only by its outline, since its body holds other objects. */
+/**
+ * A board object an arrow can end on: a zone is near only by its outline, since its body holds other objects, and
+ * over its heading when it has one inside its edge, `head` deep (a project's, under the Simplified design).
+ */
 export interface NearCandidate {
   id: string;
   rect: Rect;
   zone: boolean;
+  head?: number;
 }
 
 /** How far `point` is from `rect`'s outside, or 0 inside it. */
@@ -19,10 +23,11 @@ function distanceOutside(rect: Rect, point: EdgePoint): number {
   return Math.hypot(dx, dy);
 }
 
-/** How far `point` is from `rect`'s outline, inside or out. */
-function distanceToOutline(rect: Rect, point: EdgePoint): number {
+/** How far `point` is from `rect`'s outline, inside or out; over a heading `head` deep inside its top, none. */
+function distanceToOutline(rect: Rect, point: EdgePoint, head = 0): number {
   const outside = distanceOutside(rect, point);
   if (outside > 0) return outside;
+  if (point.y - rect.y <= head) return 0;
   return Math.min(point.x - rect.x, rect.x + rect.width - point.x, point.y - rect.y, rect.y + rect.height - point.y);
 }
 
@@ -41,12 +46,18 @@ export function nearestObject(objects: readonly NearCandidate[], point: EdgePoin
   }
   if (best !== undefined) return best.id;
   let zone: { id: string; distance: number } | undefined;
-  for (const { id, rect, zone: isZone } of objects) {
+  for (const { id, rect, zone: isZone, head } of objects) {
     if (!isZone || skip?.has(id)) continue;
-    const distance = distanceToOutline(rect, point);
+    const distance = distanceToOutline(rect, point, head);
     if (distance <= margin && (zone === undefined || distance < zone.distance)) zone = { id, distance };
   }
   return zone?.id;
+}
+
+/** How deep a project's heading reaches inside its top edge, in board px; none for a zone whose tab sits above it. */
+function headingDepth(zoneId: string): number | undefined {
+  const heading = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(zoneId)}"] .project-heading`);
+  return heading === null ? undefined : heading.offsetTop + heading.offsetHeight;
 }
 
 /** How near, on screen, the pointer must come to an object for its handles to show. */
@@ -89,7 +100,8 @@ export function useFindNear(): (client: EdgePoint, accept?: (nodeId: string) => 
         const internal = node.hidden === true || accept?.(node.id) === false ? undefined : getInternalNode(node.id);
         if (internal === undefined) return [];
         const { width = 0, height = 0 } = internal.measured;
-        return [{ id: node.id, rect: { ...internal.internals.positionAbsolute, width, height }, zone: node.type === 'zone' }];
+        const zone = node.type === 'zone';
+        return [{ id: node.id, rect: { ...internal.internals.positionAbsolute, width, height }, zone, ...(zone && { head: headingDepth(node.id) }) }];
       });
       const id = nearestObject(candidates, point, NEAR_MARGIN / getZoom());
       setNearNode(id);

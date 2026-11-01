@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { storedValue, type StoredValue } from '../stored-value';
 
 const TOUCH_INTERVAL_MS = 1000;
 
@@ -59,4 +60,44 @@ export function useSeenWhileShown(sessionId: string | undefined, visible: boolea
       touch.cancel();
     };
   }, [sessionId, visible]);
+}
+
+/** The user's last look at the Needs-you list, kept in `store` as epoch ms. */
+export function lastLookClock(store: StoredValue, now: () => number = Date.now): { since(): number; stamp(): void } {
+  return {
+    /** The last look, or now for the first look ever, when there is nothing to have missed. */
+    since() {
+      const stored = Number(store.get());
+      return Number.isFinite(stored) && stored > 0 ? stored : now();
+    },
+    stamp: () => store.set(String(now())),
+  };
+}
+
+const lastLook = lastLookClock(storedValue('agent-board.pane-last-looked'));
+
+/**
+ * The other half of "seen": for the whole Needs-you list, not one agent's ask. While the list is on screen it is the
+ * user's last look. `since` is the look before this one, fixed for as long as the list stays up, so "since you last
+ * looked" holds still while it is read; the look is stamped when the list opens, when it goes and when the window
+ * unloads (a quit or reload runs no cleanup), so what happened while it was open is not shown to the user again.
+ * `markSeen` moves `since` to now (Mark as seen).
+ */
+export function useSinceLastLooked(): { since: number; markSeen(): void } {
+  const [since, setSince] = useState(lastLook.since);
+  useEffect(() => {
+    lastLook.stamp();
+    window.addEventListener('pagehide', lastLook.stamp);
+    return () => {
+      window.removeEventListener('pagehide', lastLook.stamp);
+      lastLook.stamp();
+    };
+  }, []);
+  return {
+    since,
+    markSeen() {
+      lastLook.stamp();
+      setSince(lastLook.since());
+    },
+  };
 }

@@ -1,12 +1,14 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { agents, launch, listFinishedTurns, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, TURN_MS, windowKey, zones } from './agent-helpers.ts';
-import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
+import { runDesign, test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
 
 const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session or zone' });
 const field = (page: Page) => spotlight(page).getByRole('combobox', { name: 'Jump to a session or zone' });
+/** The button that closes a session window: Classic's Close, the Simplified header's Done. */
+const closeWindow = (page: Page) => page.getByRole('button', { name: /^(Close session window|Done, close )/ });
 const agentTile = (page: Page, name: string) => tile(page).filter({ hasText: name });
 const shellTile = (page: Page, name: string) => page.getByTestId('shell-tile').filter({ hasText: name });
 
@@ -139,6 +141,8 @@ test('⌘K from a session window’s terminal switches the window to the agent p
     await twoAgents(app, window, repo);
     await agentTile(window, 'Tidy the docs').dblclick();
     await expect(sessionWindow(window).getByRole('heading')).toHaveText('Tidy the docs');
+    // The Simplified window opens on its chat: its View switch goes to the terminal.
+    if (runDesign() === 'simplified') await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Terminal' }).click();
     await sessionWindow(window).getByTestId('session-terminal').click();
     await expect.poll(() => terminalFocusedIn(window, '[data-testid="session-window"]')).toBe(true);
 
@@ -156,7 +160,8 @@ test('⌘K from a session window’s terminal switches the window to the agent p
     await window.keyboard.press('Enter');
     await expect(sessionWindow(window).getByRole('heading')).toHaveText('Pick a database');
     await expect(sessionWindow(window)).toHaveCount(1);
-    await expect.poll(() => terminalFocusedIn(window, '[data-testid="session-window"]')).toBe(true);
+    // Under Classic the window keeps its terminal; the Simplified one opens each session on its own view, the chat.
+    if (runDesign() !== 'simplified') await expect.poll(() => terminalFocusedIn(window, '[data-testid="session-window"]')).toBe(true);
 
     // A zone picked leaves the window for the board, the zone in view.
     await window.keyboard.press(windowKey('k'));
@@ -255,7 +260,7 @@ test('the switcher follows the board while it is open: an agent that starts aski
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
     // Seen, so it is Recent rather than Needs you.
     await tile(window).dblclick();
-    await window.getByRole('button', { name: 'Close session window' }).click();
+    await closeWindow(window).click();
 
     await window.keyboard.press(windowKey('k'));
     const groups = spotlight(window).locator('.spotlight-group');

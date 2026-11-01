@@ -9,6 +9,8 @@ import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
+import { useSimplified } from '../design';
+import { ProjectWell } from './ProjectWell';
 import { priorityChip, zoneHold, zonePriority } from './zone-priority';
 import {
   MIN_ZONE_SIZE,
@@ -145,7 +147,7 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
  * Sets a zone's priority, or lifts its hold for usage; `failed` hears why a change didn't go through (a daemon from before
  * priorities refuses one).
  */
-function priorityActions(failed: (why: string) => void = () => {}): ZonePriorityActions {
+export function priorityActions(failed: (why: string) => void = () => {}): ZonePriorityActions {
   const fail = (what: string) => (error: unknown) => failed(`Couldn't ${what}: ${ipcErrorMessage(error)}`);
   return {
     setPriority: (zone, priority) => void window.agentBoard.zones.configure(zone.id, { priority }).catch(fail('set its priority')),
@@ -201,8 +203,8 @@ export function zoneNode(zone: Zone): ZoneNodeType {
   };
 }
 
-/** A zone: a tinted region with a labelled tab, resizable from its edges once selected. */
-export const ZoneNode = memo(function ZoneNode({
+/** A zone under Classic: a tinted region with a labelled tab. */
+function ClassicZone({
   data: { zone, tileCount = 0, resizeMin },
   selected,
   positionAbsoluteX,
@@ -461,4 +463,12 @@ export const ZoneNode = memo(function ZoneNode({
       </div>
     </div>
   );
+}
+
+/**
+ * A zone, drawn as the design has it: under Classic a tinted region with a labelled tab, under the Simplified design a
+ * project's neutral well (`ProjectWell`). Resizable from its edges once selected.
+ */
+export const ZoneNode = memo(function ZoneNode(props: NodeProps<ZoneNodeType>) {
+  return useSimplified() ? <ProjectWell {...props} /> : <ClassicZone {...props} />;
 });

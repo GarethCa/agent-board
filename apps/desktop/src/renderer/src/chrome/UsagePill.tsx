@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { UsageReading } from '@agent-board/daemon/protocol';
-import { IslandSeparator, Tooltip } from '../ui';
+import { Button, IslandSeparator, Popover, Tooltip } from '../ui';
 import { cx } from '../ui/cx';
-import { usageMeter, type UsageMeter } from './usage-view';
+import { usageIslandText, usageMeter, type UsageMeter } from './usage-view';
 
 /** How often the pill's "read N min ago" is worked out again. */
 const TICK_MS = 30_000;
@@ -60,6 +60,72 @@ export function UsagePill({ separated = false }: { separated?: boolean }) {
           {meter.stale && <span className="usage-pill-stale">stale</span>}
         </button>
       </Tooltip>
+      {separated && <IslandSeparator />}
+    </>
+  );
+}
+
+/**
+ * The usage as figures in the Simplified toolbar, before Needs you, when Settings › Usage turns it on: `5h 86% · wk 41%`,
+ * and a click opens the popover of bars with each window's % used, % left and refill time. Nothing shows before a
+ * reading, as in the pill; a stale one is muted and the popover says so. `separated` draws the island's divider after it.
+ */
+export function UsageIsland({ separated = false }: { separated?: boolean }) {
+  const { reading, now } = useUsage();
+  const [open, setOpen] = useState(false);
+  const meter = reading === undefined ? undefined : usageMeter(reading, now);
+  if (meter === undefined || meter.windows.length === 0) return null;
+  return (
+    <>
+      <Popover
+        open={open}
+        onOpenChange={setOpen}
+        aria-label="Allowance"
+        align="end"
+        className="usage-popover"
+        content={
+          <div className={cx('usage-allowance', meter.stale && 'is-stale')} data-testid="usage-popover">
+            <span className="usage-allowance-title">Allowance</span>
+            {meter.windows.map((each) => (
+              <div key={each.short} className="usage-allowance-window">
+                <span className="usage-allowance-head">
+                  <span>{each.name}</span>
+                  <span className="usage-allowance-refills">{each.refills}</span>
+                </span>
+                <UsageBar used={each.used} window={each.short} wide />
+                <span className="usage-allowance-foot">
+                  <span>
+                    <b>{each.used}%</b> used
+                  </span>
+                  <span>{each.left}% left</span>
+                </span>
+              </div>
+            ))}
+            <p className="usage-allowance-fresh">{meter.fresh}</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="usage-allowance-settings"
+              onClick={() => {
+                setOpen(false);
+                void window.agentBoard.setup.openSettings('usage.plan').catch(() => {});
+              }}
+            >
+              Usage settings…
+            </Button>
+          </div>
+        }
+      >
+        <Button
+          size="md"
+          variant="ghost"
+          className={cx('usage-island', meter.stale && 'is-stale')}
+          aria-label={`${usageIslandText(meter)}, plan usage${meter.stale ? ', stale' : ''}`}
+          data-testid="usage-island"
+        >
+          {usageIslandText(meter)}
+        </Button>
+      </Popover>
       {separated && <IslandSeparator />}
     </>
   );

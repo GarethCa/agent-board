@@ -13,7 +13,8 @@ import { useSimplified } from '../design';
 import { Kbd, StatusPill, Tag, useToast } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
-import { SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
+import type { SessionWindows } from '../windows/session-windows';
+import { ACTIONS_GROUP, SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
 
 /**
  * Where ⌘K was pressed, as the window it opens in reads it: what ↵ does there, and the session that view shows already.
@@ -41,13 +42,16 @@ export interface SpotlightProps<C> {
   /** Undefined until they are listed. */
   shells: readonly Shell[] | undefined;
   zones: readonly Zone[];
+  /** The board's session windows, listed first under the Simplified design; the other windows have none. */
+  windows?: SessionWindows;
   /** Where ⌘K was pressed: `at`, the element it was pressed in (the page's host, for a web tab's page). */
   placeOf(at: Element | null): SpotlightPlace<C>;
   /**
    * Does what ↵ (with `open`, ⌘↵) asks of the subject. False (now, or once it has asked the main process) if it showed
-   * nothing here, and the focus goes back. A setting is the switcher's own to open, from every window.
+   * nothing here, and the focus goes back. `windowed`: the row is one of the Windows group's, which brings its window
+   * back whatever `open` says. A setting is the switcher's own to open, from every window.
    */
-  onPick(context: C, subject: BoardSubject, open: boolean): boolean | Promise<boolean>;
+  onPick(context: C, subject: BoardSubject, open: boolean, windowed: boolean): boolean | Promise<boolean>;
   /** Whether a new agent can start from here: "New agent named …" is offered only then. */
   canStartAgent: boolean;
   onNewAgent(context: C, name: string): void;
@@ -91,7 +95,7 @@ function focusKeeper(at: Element | null): () => void {
  * window's: the board's shows the tile or switches the view in focus (`BoardSpotlight`), a popped-out window switches
  * its session (`PopOutSpotlight`).
  */
-export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canStartAgent, onNewAgent }: SpotlightProps<C>) {
+export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onPick, canStartAgent, onNewAgent }: SpotlightProps<C>) {
   const [opened, setOpened] = useState<Opened<C>>();
   const [query, setQuery] = useState('');
   const [activeKey, setActiveKey] = useState<string>();
@@ -127,15 +131,18 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
 
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
+  // The id of the session the view shows already, from its row key (`agent:<id>`, `shell:<id>`).
+  const current = opened?.place.current?.replace(/^(agent|shell):/, '');
   const groups = useMemo(
-    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, simplified }),
-    [query, agents, shells, zones, shows, simplified],
+    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows, current, canStartAgent, simplified }),
+    [query, agents, shells, zones, shows, windows, current, canStartAgent, simplified],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;
   const newName = query.trim();
-  // Offered whenever no session or zone matches, settings or not: first, so ↵ still starts it.
-  const offerNew = newName !== '' && canStartAgent && groups.every((group) => group.label === SETTINGS_GROUP);
+  // Offered whenever no session or zone matches, settings and actions or not: first, so ↵ still starts it. Not beside
+  // the New agent action, which matches it: that one is first then, and starts a blank one.
+  const offerNew = newName !== '' && canStartAgent && groups.every((group) => group.label === SETTINGS_GROUP || group.label === ACTIONS_GROUP) && !rows.some((row) => row.key === 'action:newAgent');
   const keys = [...(offerNew ? [NEW_AGENT_KEY] : []), ...rows.map((row) => row.key)];
   // Kept by key as the rows change under it; the first once it has gone.
   const activeKeyNow = activeKey !== undefined && keys.includes(activeKey) ? activeKey : keys[0];
@@ -150,20 +157,23 @@ export function Spotlight<C>({ ref, agents, shells, zones, placeOf, onPick, canS
 
   function pick(row: SpotlightRow, open: boolean) {
     if (opened === undefined) return;
-    if (row.key === opened.place.current) return dismiss(opened);
-    setOpened(undefined);
     const { subject } = row;
+    const target = windowTargetOf(subject);
+    const sessionKey = (target && rowKeyOf(target)) ?? row.key;
+    if (sessionKey === opened.place.current) return dismiss(opened);
+    setOpened(undefined);
     // The Settings window comes forward with the focus; if it can't, it says so and the focus goes back here.
+    if (subject.kind === 'action' && subject.action === 'newAgent') return onNewAgent(opened.place.context, '');
     const shown =
-      subject.kind === 'setting'
-        ? window.agentBoard.setup.openSettings(subject.pane).then(
+      subject.kind === 'setting' || subject.kind === 'action'
+        ? window.agentBoard.setup.openSettings(subject.kind === 'setting' ? subject.pane : undefined).then(
             () => true,
             (error: unknown) => {
               toasts.show({ id: 'open Settings', tone: 'error', message: `Could not open Settings: ${errorMessage(error)}` });
               return false;
             },
           )
-        : onPick(opened.place.context, subject, open);
+        : onPick(opened.place.context, subject, open, row.window !== undefined);
     void Promise.resolve(shown).then((done) => done || requestAnimationFrame(opened.restore));
   }
 
@@ -311,8 +321,8 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
       onClick={onPick}
     >
       <span className="spotlight-mark" aria-hidden>
-        {subject.kind === 'setting' ? (
-          <Settings />
+        {subject.kind === 'setting' || subject.kind === 'action' ? (
+          subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : <Settings />
         ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
           <span className="spotlight-zone-ring" style={{ '--zone-color': subject.zone.color } as CSSProperties} />
@@ -332,6 +342,8 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
         <Tag>shell</Tag>
       ) : subject.kind === 'zone' ? (
         <span className="spotlight-act">show zone</span>
+      ) : subject.kind === 'action' ? (
+        <span className="spotlight-act">run</span>
       ) : (
         <span className="spotlight-act">open setting</span>
       )}

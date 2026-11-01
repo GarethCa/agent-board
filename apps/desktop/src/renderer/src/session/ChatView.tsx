@@ -10,6 +10,7 @@ import { liveCallId, liveState } from './chat-live';
 import { ChatSettingContext, MessageText, useChatSetting, type ChatSetting } from './chat-parts';
 import { useChatStyle, type ChatStyle } from './chat-style';
 import { ChatStream, LiveCard, RailLive, StatusLine } from './ChatStreams';
+import { TimelineLive, TimelineRail } from './TimelineRail';
 import { sentLabel, sentMessages, settle, useSentMessages, type SentMessage } from './sent-messages';
 import { useLiveAgents } from './use-live-board';
 import { useTranscript } from './use-transcript';
@@ -28,8 +29,8 @@ interface ChatViewProps {
   onOpenLink(url: string): void;
   /** Opens the agent's plans, from a plan's card or line; without it they have no Open plan. */
   onOpenPlan?(): void;
-  /** The style it is drawn in, over the one picked for every chat: the Simplified design's Timeline view is the rail. */
-  style?: ChatStyle;
+  /** Drawn as the Simplified design's Timeline view, the rail with the time down the side, over the style picked for every chat. */
+  rail?: boolean;
 }
 
 /**
@@ -39,7 +40,7 @@ interface ChatViewProps {
  * waits on you for is answered where it shows. A transcript its adapter can't read leaves only the terminal, saying
  * so. It shows the latest messages of a long one; the earlier ones are in the terminal.
  */
-export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOpenPlan, style: drawnIn }: ChatViewProps) {
+export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOpenPlan, rail = false }: ChatViewProps) {
   const { sessionId, harness, name } = agent;
   const transcript = useTranscript(active, (since, generation) => window.agentBoard.agents.transcript(sessionId, since, generation), {
     // The daemon says when the transcript changes; a change of state (its hooks) may come before it can watch the file.
@@ -80,7 +81,9 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
   );
 
   const picked = useChatStyle();
-  const style = drawnIn ?? picked;
+  // The rail's subagents' conversations, opened from a call, are drawn as the classic rail.
+  const style: ChatStyle = rail ? 'timeline' : picked;
+  const drawnAs = rail ? 'rail' : style;
   // What the agent is doing now, from its hooks and its transcript, at the end of the chat.
   const live = useMemo(() => liveState(agent, items, transcript?.status === 'ok' ? transcript.entries : []), [agent, items, transcript]);
   const standsAt = liveCallId(live);
@@ -100,7 +103,7 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
   // Follows the conversation while the reader is at its end; leaves them be while they read back.
   useLayoutEffect(() => {
     if (log && atBottom.current) log.scrollTop = log.scrollHeight;
-  }, [log, transcript, waiting, active, live?.kind, style]);
+  }, [log, transcript, waiting, active, live?.kind, style, rail]);
   // And while it shrinks, as when the Captain's For you is dragged taller: a resize moves no scroll position.
   useEffect(() => {
     if (!log) return;
@@ -136,25 +139,29 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
     );
   }
   const liveProps = live && { agent, live, onOpenPlan, onShowTerminal };
-  const stream = (
+  const sentBubbles = waiting.map((message) => (
+    <SentBubble key={message.id} message={message} label={sentLabel(message, agent)} onRetry={() => void sentMessages.retry(sessionId, message.id, atWork)} onDrop={() => sentMessages.drop(sessionId, message.id)} />
+  ));
+  const said = (children: ReactNode) => (senderRefs.length === 0 ? children : <WithSenders refs={senderRefs}>{children}</WithSenders>);
+  const stream = rail ? (
+    <ChatSettingContext.Provider value={setting}>
+      {said(<TimelineRail items={shown} after={sentBubbles} foot={liveProps && live?.kind !== 'interrupted' ? <TimelineLive {...liveProps} /> : undefined} />)}
+    </ChatSettingContext.Provider>
+  ) : (
     <>
-      <ChatSettingContext.Provider value={setting}>
-        {senderRefs.length === 0 ? <ChatStream items={shown} /> : <WithSenders refs={senderRefs}><ChatStream items={shown} /></WithSenders>}
-      </ChatSettingContext.Provider>
-      {waiting.map((message) => (
-        <SentBubble key={message.id} message={message} label={sentLabel(message, agent)} onRetry={() => void sentMessages.retry(sessionId, message.id, atWork)} onDrop={() => sentMessages.drop(sessionId, message.id)} />
-      ))}
+      <ChatSettingContext.Provider value={setting}>{said(<ChatStream items={shown} />)}</ChatSettingContext.Provider>
+      {sentBubbles}
       {liveProps && style === 'cards' && <LiveCard {...liveProps} />}
       {liveProps && style === 'timeline' && <RailLive {...liveProps} />}
     </>
   );
   return (
-    <div className="chat-frame" data-style={style} data-testid="chat-frame">
+    <div className="chat-frame" data-style={drawnAs} data-testid="chat-frame">
       <div
         ref={setLog}
         className="chat-view"
         data-testid="chat-view"
-        data-style={style}
+        data-style={drawnAs}
         role="log"
         aria-label={`Conversation with ${name}`}
         onScroll={(event) => {
@@ -163,7 +170,7 @@ export function ChatView({ agent, active, onShowTerminal, runs, onOpenLink, onOp
         }}
       >
         {transcript?.earlier && <p className="chat-turn-notice">Earlier messages are in the terminal.</p>}
-        {style === 'timeline' ? <div className="chat-rail">{stream}</div> : stream}
+        {style === 'timeline' && !rail ? <div className="chat-rail">{stream}</div> : stream}
       </div>
       {liveProps && style === 'status-line' && <StatusLine {...liveProps} />}
     </div>

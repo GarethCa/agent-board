@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, CircleStop, MoreHorizontal, PanelLeft, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
+import { ChevronDown, CircleStop, MoreHorizontal, PanelRight, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import { agentMenu, type ModelEntry } from '../board/menu-model';
@@ -64,10 +64,11 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
       {agent && <StateAction agent={agent} placement={placement} />}
       <span className="session-window-view-slot" ref={onViewSlot} />
       <IconButton
-        icon={<PanelLeft />}
+        icon={<PanelRight />}
         size="sm"
         aria-label={detailsOpen ? 'Hide details' : 'Show details'}
         aria-pressed={detailsOpen}
+        data-details-toggle
         tooltip={`${detailsOpen ? 'Hide' : 'Show'} its details  ${keyText('window.details')}`}
         onClick={() => onDetailsOpen(!detailsOpen)}
       />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_STATES } from '@agent-board/daemon/protocol';
-import { composerBlock } from './composer-block';
+import { composerBlock, composerPlaceholder } from './composer-block';
 
 const live = { endedAt: null, state: 'idle', reviewOf: null } as const;
 
@@ -34,5 +34,31 @@ describe('composerBlock', () => {
 
   it("offers a reviewer, whose round ended with it, no way to restart", () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'done', reviewOf: 'impl-1' })).toEqual({ reason: 'The agent has ended' });
+  });
+});
+
+describe('composerPlaceholder', () => {
+  const agent = (more: Partial<Parameters<typeof composerPlaceholder>[0]> = {}) => ({ ...live, queuedUntilUp: 0, ...more });
+
+  it('invites a message, or a reply once the agent is waiting on the user', () => {
+    expect(composerPlaceholder(agent({ state: 'running' }))).toBe('Message this agent…');
+    expect(composerPlaceholder(agent({ state: 'waiting' }))).toBe('Reply…');
+  });
+
+  it("keeps a placeholder the caller gave while the agent can take a message, as the Captain's does", () => {
+    expect(composerPlaceholder(agent(), 'Ask the Captain…')).toBe('Ask the Captain…');
+    expect(composerPlaceholder(agent({ state: 'waiting' }), 'Ask the Captain…')).toBe('Ask the Captain…');
+  });
+
+  it('says in a sentence what each state the field cannot simply take a message in is', () => {
+    expect(composerPlaceholder(agent({ endedAt: '2026-10-11T10:00:00Z', state: 'hibernated' }))).toBe('Paused: sending wakes it');
+    expect(composerPlaceholder(agent({ state: 'rate-limited' }))).toBe('Rate-limited: your message will wait');
+    expect(composerPlaceholder(agent({ state: 'starting', queuedUntilUp: 1 }))).toBe('1 message queued until it is up');
+    expect(composerPlaceholder(agent({ state: 'starting', queuedUntilUp: 3 }))).toBe('3 messages queued until it is up');
+  });
+
+  it('gives the reason a blocked field is off, over a placeholder the caller gave', () => {
+    expect(composerPlaceholder(agent({ state: 'needs-permission' }), 'Ask the Captain…')).toBe('Waiting on a permission prompt');
+    expect(composerPlaceholder(agent({ endedAt: '2026-10-11T10:00:00Z', state: 'done' }))).toBe('The agent has ended');
   });
 });

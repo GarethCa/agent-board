@@ -14,7 +14,7 @@ import { chmodSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFile
 import { join } from 'node:path';
 import type { FakeNotification } from '../src/main/notifications.ts';
 import { launch, LINEAR_API_KEY } from './agent-helpers.ts';
-import { test, pickFolderNext, tempDataDir, newShell } from './launch.ts';
+import { test, classicOnly, pickFolderNext, tempDataDir, newShell } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 // First-run onboarding. The app runs on a bare PATH with an empty bin dir first, so it finds none of the CLIs
@@ -69,6 +69,8 @@ async function shot(window: Page, name: string) {
 }
 
 test('first run: everything missing, then fixed through the fakes, then the tour, then a zone', async () => {
+  // Classic's four steps; the Simplified design's two are onboarding-simplified.spec.ts's.
+  classicOnly();
   const run = firstRun();
   const dataDir = tempDataDir();
   // Linear's part needs a throwaway keychain file, which only macOS has.
@@ -207,6 +209,8 @@ test('first run: everything missing, then fixed through the fakes, then the tour
 });
 
 test('onboarding can be skipped, stays closed on later launches, and Getting started reopens it', async () => {
+  // Classic's four steps; the Simplified design's two are onboarding-simplified.spec.ts's.
+  classicOnly();
   const run = firstRun();
   const dataDir = tempDataDir();
   try {
@@ -256,6 +260,8 @@ test('onboarding can be skipped, stays closed on later launches, and Getting sta
 });
 
 test('the sample board shows agents in every state, and leaving it shows the real board', async () => {
+  // Classic's four steps; the Simplified design's two are onboarding-simplified.spec.ts's.
+  classicOnly();
   const run = firstRun();
   const dataDir = tempDataDir();
   try {
@@ -297,6 +303,8 @@ test('a board that holds only a session is not a first run: onboarding stays clo
 });
 
 test('a Linear key Linear refuses is said so, and nothing is stored', async () => {
+  // Classic's four steps; the Simplified design's two are onboarding-simplified.spec.ts's.
+  classicOnly();
   const run = firstRun();
   const dataDir = tempDataDir();
   const { interactions } = JSON.parse(readFileSync(RECORDED_LINEAR_FIXTURES, 'utf8')) as { interactions: HttpInteraction[] };

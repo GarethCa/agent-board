@@ -1,6 +1,6 @@
 // What first-run onboarding decides, apart from how it draws: when it opens, what each Connect row says, and where
 // the quick tour's callouts go.
-import type { ToolCheck } from '@agent-board/daemon/protocol';
+import type { SetupTool, ToolCheck } from '@agent-board/daemon/protocol';
 import type { Rect } from '../geometry';
 
 /** What the app keeps about onboarding in the daemon's view state (`VIEW_KEYS.onboarding`). */
@@ -31,6 +31,48 @@ export type OnboardingEnd = 'board' | 'zone' | 'sample';
 
 export const STEP_LABELS: Record<OnboardingStep, string> = { welcome: 'Welcome', connect: 'Connect', tour: 'Quick tour', finish: 'Finish' };
 
+/** The Simplified design's first run: the Captain says hello, then gets Claude ready. No tour, no Finish card. */
+export const SIMPLIFIED_STEPS = ['welcome', 'connect'] as const satisfies readonly OnboardingStep[];
+
+/**
+ * Anthropic's own installer for Claude Code, shown for the user to run in a terminal (the app never runs it): its shell
+ * script on macOS and Linux, its PowerShell one on Windows, where a terminal opens in PowerShell or cmd.
+ */
+export function claudeInstallCommand(windows: boolean): string {
+  return windows ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash';
+}
+
+/** What signs each CLI in, after its path: run in a shell tile on the user's click, where the user can answer it. */
+export const SIGN_IN_ARGS: Record<SetupTool, string> = { claude: 'auth login', codex: 'login', gh: 'auth login --web' };
+
+/** Anthropic's page on who can sign in to Claude Code: the plans and account types it takes. */
+export const CLAUDE_PLANS_URL = 'https://code.claude.com/docs/en/authentication';
+
+/**
+ * How far Claude Code is from ready, for the Simplified first run's two rows: installed, then signed in. Signing in
+ * waits on installing. A CLI that can't say whether it is signed in counts as signed in, as the Classic row does.
+ */
+export interface ClaudeReadiness {
+  /** `unknown` when the check itself failed, so whether it is installed was never found out. */
+  installed: 'checking' | 'yes' | 'no' | 'unknown';
+  /** `waiting` until it is installed; `problem` when it could not be asked, with why. */
+  signedIn: 'waiting' | 'yes' | 'no' | 'problem';
+  /** Why the check, or the sign-in probe, failed. */
+  problem?: string;
+  /** Both rows done: the step's Continue is open. */
+  ready: boolean;
+}
+
+/** `failed` is why the check itself failed (the daemon, not Claude Code), when it did: `check` then says nothing. */
+export function claudeReadiness(check: ToolCheck | undefined, failed?: string): ClaudeReadiness {
+  if (failed !== undefined) return { installed: 'unknown', signedIn: 'waiting', problem: failed, ready: false };
+  if (check === undefined) return { installed: 'checking', signedIn: 'waiting', ready: false };
+  if (!check.found) return { installed: 'no', signedIn: 'waiting', ready: false };
+  if (check.problem !== undefined) return { installed: 'yes', signedIn: 'problem', problem: check.problem, ready: false };
+  if (check.signedIn === false) return { installed: 'yes', signedIn: 'no', ready: false };
+  return { installed: 'yes', signedIn: 'yes', ready: true };
+}
+
 /** How far along a Connect row is: its badge. */
 export type RowStatus = 'ready' | 'action' | 'missing' | 'checking';
 
@@ -58,6 +100,11 @@ export function readySummary(rows: readonly { status: RowStatus; required: boole
   const required = left.filter((row) => row.required).length;
   const optional = `${left.length - required} optional left`;
   return { ready, total, title: `${ready} of ${total} ready`, detail: required === 0 ? optional : `${required} required · ${optional}` };
+}
+
+/** A path as one shell word, in any shell agent-board runs (sh, bash, zsh, fish). */
+export function shellQuote(path: string): string {
+  return `'${path.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Between a callout and its target, and the least between a callout and the window's edge. */

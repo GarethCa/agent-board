@@ -7,7 +7,7 @@ import { changedLineCount, editHint } from '../doc/doc-view';
 import { binding, isActive, keyText, pressed } from '../keys/registry';
 import { Markdown } from '../session/Markdown';
 import { useWebViewBounds } from '../session/use-web-view';
-import { Button, ErrorText, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
+import { Button, ErrorText, Kbd, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
 import { shortWhen } from '../when';
 import { approveLabel, planStamp, shownPlan, versionAuthor } from './plan-view';
@@ -238,15 +238,17 @@ interface PlanDecisionBarProps {
   plan: PlanSummary;
   /** The inbox's single row, with a one-line field; the tab's field is taller. */
   compact?: boolean;
+  /** Approve is pressed with its key (⌘↵) too, while the bar has focus, and shows it: the pane's, under the Simplified design. */
+  approveKey?: boolean;
 }
 
 /**
  * The decision on a plan the agent waits on: comments for it, then Reject, Request changes and Approve, which each send
  * them. Request changes needs comments, unless the version is the user's own edit, whose diff says what to change; and
  * Approve then approves their edits. Held while the Plan tab has an unsaved edit of it. Shared by the Plan tab, the
- * inbox and a plan card.
+ * inbox, a plan card and the pane under the Simplified design.
  */
-export function PlanDecisionBar({ agent, plan, compact = false }: PlanDecisionBarProps) {
+export function PlanDecisionBar({ agent, plan, compact = false, approveKey = false }: PlanDecisionBarProps) {
   const [comments, setComments] = useState('');
   const { busy, error, run } = useAction();
   const decide = (outcome: PlanOutcome) => run(() => window.agentBoard.asks.decide(agent.sessionId, plan.id, outcome, comments).then(() => {}), () => setComments(''));
@@ -256,8 +258,13 @@ export function PlanDecisionBar({ agent, plan, compact = false }: PlanDecisionBa
   // Never decided past an edit the user hasn't saved: the decision would drop it.
   const held = useUnsavedEdit(agent.sessionId, plan.id) ? 'Save or cancel your edit in the Plan tab first' : undefined;
   const stopped = busy || held !== undefined;
+  const onKey = (event: KeyboardEvent<HTMLElement>) => {
+    if (!approveKey || !pressed('window.approvePlan', event)) return;
+    event.preventDefault();
+    if (!stopped) decide('approved');
+  };
   return (
-    <footer className="plan-decision" data-compact={compact || undefined} data-testid="plan-decision" data-author={plan.author}>
+    <footer className="plan-decision" data-compact={compact || undefined} data-testid="plan-decision" data-author={plan.author} onKeyDown={onKey}>
       <Textarea
         className="plan-decision-comments"
         rows={compact ? 1 : 3}
@@ -281,6 +288,7 @@ export function PlanDecisionBar({ agent, plan, compact = false }: PlanDecisionBa
         </Button>
         <Button size="sm" variant="primary" disabled={stopped} tooltip={held} aria-label={`Approve ${named}`} onClick={() => decide('approved')}>
           {approveLabel(plan)}
+          {approveKey && <Kbd aria-hidden>{keyText('window.approvePlan')}</Kbd>}
         </Button>
       </div>
       {held !== undefined && (

@@ -58,10 +58,12 @@ test("an agent's window opens on its chat, and the header's switch and ⌥⌘T r
     await picked(window, 'Terminal');
     await expect(screen(window)).toBeVisible();
 
-    // Timeline: the same conversation drawn as its rail; ⌥⌘T goes to the terminal and back to it.
+    // Timeline: the same conversation drawn as its rail, the reply on it; ⌥⌘T goes to the terminal and back to it.
     await view(window).getByRole('button', { name: 'Timeline' }).click();
     await picked(window, 'Timeline');
-    await expect(chat).toHaveAttribute('data-style', 'timeline');
+    await expect(chat).toHaveAttribute('data-style', 'rail');
+    await expect(chat.getByTestId('timeline-turn').getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+    await expect(chat.getByTestId('timeline-turn').getByTestId('timeline-time').first()).toBeVisible();
     await window.keyboard.press(terminalKey);
     await picked(window, 'Terminal');
     await window.keyboard.press(terminalKey);
@@ -106,6 +108,39 @@ test('with Agent windows open on Terminal, a window with no view picked opens on
     await picked(window, 'Terminal');
     await expect(screen(window)).toContainText('Which database should I use');
     await expect(sessionWindow(window).getByTestId('chat-view')).toBeHidden();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('with the conversation shown in Terminal style, a window opens on its Timeline, and ⌥⌘T comes back to it from the terminal', async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+
+    const settings = await openSettings(window, 'agents.chat');
+    const terminalStyle = settingsSection(settings, 'Chat').getByRole('group', { name: 'Show the conversation as' }).getByRole('button', { name: 'Terminal style' });
+    await terminalStyle.click();
+    await expect(terminalStyle).toHaveAttribute('aria-pressed', 'true');
+    await settings.close();
+
+    await tile(window).dblclick();
+    await picked(window, 'Timeline');
+    const chat = sessionWindow(window).getByTestId('chat-view');
+    await expect(chat).toHaveAttribute('data-style', 'rail');
+    await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+
+    // To the terminal and back, to the Timeline it opened on.
+    await window.keyboard.press(terminalKey);
+    await picked(window, 'Terminal');
+    await window.keyboard.press(terminalKey);
+    await picked(window, 'Timeline');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

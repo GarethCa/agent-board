@@ -1,9 +1,12 @@
 import { memo, useContext, useState, type MouseEvent } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { Trash2, UnfoldVertical } from 'lucide-react';
+import { humanStatus } from '@agent-board/daemon/human-status';
+import { useSimplified } from '../design';
 import { ContextMenu, StatusPill } from '../ui';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { HarnessMark } from './HarnessMark';
+import { StatusMark } from './StatusMark';
 import { TileActionsContext } from './tile';
 
 /**
@@ -24,10 +27,11 @@ export const FoldedChip = memo(function FoldedChip({ id, agent }: { id: string; 
   const { setFolded, deleteAgent } = useContext(TileActionsContext);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
   const pill = chipPill(agent);
+  const simplified = useSimplified();
   const unfold = () => setFolded(id, false);
   return (
     <div
-      className="folded-chip"
+      className={simplified ? 'folded-chip calm-chip' : 'folded-chip'}
       data-testid="agent-tile"
       data-folded
       data-harness={agent.harness}
@@ -53,7 +57,12 @@ export const FoldedChip = memo(function FoldedChip({ id, agent }: { id: string; 
     >
       <HarnessMark className="folded-chip-mark" harness={agent.harness} />
       <span className="folded-chip-name">{agent.name}</span>
-      <StatusPill state={pill.state} label={pill.label} title={STATE_LABELS[agent.state]} />
+      {simplified ? (
+        // Its status as the calm tile draws it: a closed agent has no Needs you of its own to show, so 'explicit' as the pill has it.
+        <StatusMark status={humanStatus(agent, 'explicit').status} />
+      ) : (
+        <StatusPill state={pill.state} label={pill.label} title={STATE_LABELS[agent.state]} />
+      )}
       {menuAt !== undefined && (
         <ContextMenu
           at={menuAt}

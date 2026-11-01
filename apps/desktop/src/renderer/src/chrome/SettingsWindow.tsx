@@ -18,6 +18,7 @@ import { CompactWindowSetting } from './CompactWindowSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { KeyboardSetting } from './KeyboardSetting';
 import { NotificationsSetting } from './NotificationsSetting';
+import { ConversationAsSetting } from './ConversationAsSetting';
 import { OpensOnSetting } from './OpensOnSetting';
 import { SETTINGS_GROUPS, settingsPaneFrom, settingsPaneText, type SettingsGroupId, type SettingsHome, type SettingsPane } from './settings-ia';
 import { searchable, searchSettings, type SettingsHit } from './settings-search';
@@ -46,11 +47,16 @@ function MutedNotificationsSetting({ onError }: { onError: OnError }) {
   return <NotificationsSetting muted={agents.filter((agent) => agent.muted).length} onError={onError} />;
 }
 
-/** Settings › Agents › Chat: under the Simplified design, the view windows open on first, then the chat's style. */
+/**
+ * Settings › Agents › Chat: under the Simplified design, the view windows open on and how the conversation is shown
+ * first, then the chat's style.
+ */
 function AgentsChatSettings() {
+  const simplified = useSimplified();
   return (
     <>
-      {useSimplified() && <OpensOnSetting />}
+      {simplified && <OpensOnSetting />}
+      {simplified && <ConversationAsSetting />}
       <ChatStyleSetting />
     </>
   );

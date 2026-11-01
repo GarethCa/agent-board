@@ -36,13 +36,20 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
     return { context: { kind: 'expanded', nodeId, id }, mode: 'switch', current: nodeId };
   };
 
-  const onPick = (context: BoardContext, subject: BoardSubject, open: boolean): boolean => {
+  const onPick = (context: BoardContext, subject: BoardSubject, open: boolean, windowed: boolean): boolean => {
     if (subject.kind === 'zone') {
       const shown = board.showZone(subject.zone.id, context.kind === 'expanded' ? context.nodeId : undefined);
       if (shown && context.kind === 'window') sessionWindows.close(context.id);
       return shown;
     }
     const tile = tileOf(subject)!;
+    // A row of the Windows group brings its window back, minimised or not, wherever ⌘K was pressed, and flies the board
+    // to its tile behind it. ⌘↵ asks for what ↵ does: the window is the open form already.
+    if (windowed) {
+      board.showTile(tile);
+      sessionWindows.show(windowTargetOf(subject)!);
+      return true;
+    }
     if (context.kind === 'board') return open ? board.openTile(tile) : board.showTile(tile);
     // Out in an OS window of its own, it comes forward there, and the view here stays as it was: it can't show it.
     const target = windowTargetOf(subject)!;
@@ -68,6 +75,7 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       agents={agents}
       shells={shells}
       zones={zones}
+      windows={sessionWindows.windows}
       placeOf={placeOf}
       onPick={onPick}
       canStartAgent={board.canStartAgent()}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { calmFace, technicalLine } from './calm-tile';
-import { galleryAgent } from './TileGallery';
+import { calmFace, calmShellFace, shellPanesLine, technicalLine } from './calm-tile';
+import { galleryAgent, SHELL } from './TileGallery';
 
 const AT = '2026-10-22T12:00:00.000Z';
 
@@ -137,5 +137,32 @@ describe('technicalLine', () => {
 
   it('says when it shares a folder rather than having a worktree of its own', () => {
     expect(technicalLine(working({ plainFolder: true, branch: '' }))).toBe('Claude · default model · shared folder, no worktree · running');
+  });
+});
+
+describe('calmShellFace', () => {
+  const running = { ...SHELL, endedPanes: [], stoppedPanes: [] };
+
+  it('gives a running shell no status, line or button: it is a prompt, not work', () => {
+    expect(calmShellFace(running)).toEqual({ status: null, line: null, resume: false });
+  });
+
+  it('asks the user to resume a shell a restart stopped, as the calm tile does an agent', () => {
+    expect(calmShellFace({ ...running, stoppedPanes: ['left'] })).toEqual({ status: 'needs-you', line: 'Stopped by a restart', resume: true });
+  });
+
+  it('calls a shell done once every pane has ended, with nothing to press', () => {
+    expect(calmShellFace({ ...running, endedPanes: ['left', 'right'] })).toEqual({ status: 'done', line: 'Every pane has ended', resume: false });
+  });
+
+  it('ignores an ended id for a pane that has left its layout', () => {
+    const stale = { ...running, endedPanes: ['gone'] };
+    expect(calmShellFace(stale).status).toBeNull();
+    expect(shellPanesLine(stale)).toBe('2 panes');
+  });
+
+  it('counts its panes and the live ones for the technical layer', () => {
+    expect(shellPanesLine(running)).toBe('2 panes');
+    expect(shellPanesLine({ ...running, endedPanes: ['right'] })).toBe('2 panes · 1 live');
   });
 });

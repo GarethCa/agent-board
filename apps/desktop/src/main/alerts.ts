@@ -5,8 +5,14 @@ import { appStateOf, type AppStatus } from './app-state';
 /** An OS notification about one agent. Clicking it opens that agent. */
 export interface AgentNotification {
   sessionId: string;
+  /** Why the agent is in the needs-you inbox. */
+  kind: NeedsYouKind;
+  /** The agent's name. */
+  name: string;
   title: string;
   body: string;
+  /** For a question, which it is and the answers it offers, so a banner can list them. */
+  ask?: { askId: string; question: string; options: string[] };
 }
 
 /** The settings alerts follow: what Needs you lists, and whether and when it notifies. */
@@ -22,6 +28,11 @@ export interface AgentAlertsOptions {
   showState(state: AppStatus): void;
   /** Whether one of the app's windows is in front, so the user sees the board change: no notification then, unless asked. */
   inFront?(): boolean;
+  /**
+   * Whether the Simplified design is on. It has no switch for notifications, leaving on and off to the OS, so a switch
+   * left off under Classic raises none there no longer.
+   */
+  simplified?(): boolean;
 }
 
 /**
@@ -65,24 +76,24 @@ function notificationFor(agent: Agent, kind: NeedsYouKind): AgentNotification {
   const { sessionId, name } = agent;
   switch (kind) {
     case 'turn':
-      return { sessionId, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
+      return { sessionId, kind, name, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
     case 'asks': {
-      const { question, options } = agent.ask!;
-      return { sessionId, title: `${name} asks you`, body: options.length === 0 ? question : `${question} (${options.join(' · ')})` };
+      const { id, question, options } = agent.ask!;
+      return { sessionId, kind, name, title: `${name} asks you`, body: options.length === 0 ? question : `${question} (${options.join(' · ')})`, ask: { askId: id, question, options } };
     }
     case 'plan':
-      return { sessionId, title: `${name} has a plan to review`, body: `${agent.plan!.title} · v${agent.plan!.version}` };
+      return { sessionId, kind, name, title: `${name} has a plan to review`, body: `${agent.plan!.title} · v${agent.plan!.version}` };
     case 'flagged': {
       const { reason, via } = agent.flag!;
-      return { sessionId, title: `${name} needs you`, body: via === null ? reason : `${reason} (via ${via})` };
+      return { sessionId, kind, name, title: `${name} needs you`, body: via === null ? reason : `${reason} (via ${via})` };
     }
     case 'permission': {
       const [prompt] = agent.permissions;
-      if (prompt === undefined) return { sessionId, title: `${name} needs your permission`, body: 'It is asking in its terminal.' };
+      if (prompt === undefined) return { sessionId, kind, name, title: `${name} needs your permission`, body: 'It is asking in its terminal.' };
       const summary = toolSummary(prompt);
       const asked = summary === '' ? prompt.toolName : `${prompt.toolName}: ${summary}`;
       const body = prompt.subagent === null ? asked : `Its ${prompt.subagent.type} subagent: ${asked}`;
-      return { sessionId, title: `${name} needs your permission`, body };
+      return { sessionId, kind, name, title: `${name} needs your permission`, body };
     }
   }
 }
@@ -111,7 +122,7 @@ export function createAgentAlerts(options: AgentAlertsOptions): AgentAlerts {
     if (before === undefined || told === undefined || agent.muted) return;
     const fresh = requests.find((request) => !told.has(request.key));
     if (fresh === undefined) return;
-    if (!settings.notifications || (!settings.notifyInFront && options.inFront?.() === true)) return;
+    if ((!settings.notifications && options.simplified?.() !== true) || (!settings.notifyInFront && options.inFront?.() === true)) return;
     options.notify(notificationFor(agent, fresh.kind));
   };
 

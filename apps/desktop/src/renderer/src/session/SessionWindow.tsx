@@ -13,7 +13,8 @@ import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SimplifiedHeader } from './SimplifiedHeader';
-import { useSimplified } from '../design';
+import { isSimplified, useSimplified } from '../design';
+import { inspectorShown } from './inspector';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
@@ -80,7 +81,9 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
-  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
+  // Classic's details open collapsed to their rail in each window; the Simplified design's inspector is shown or
+  // hidden as it last was.
+  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(isSimplified() && content.kind === 'session' && inspectorShown.get() === 'shown'));
   const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
@@ -120,6 +123,18 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   useNavKeys(nav);
   // Under the Simplified design an agent's window has one header, which holds its view switch.
   const simplified = useSimplified() && content.kind === 'session';
+  const remembers = useRef(simplified);
+  remembers.current = simplified;
+  const wasShown = useRef(!detailsCollapsed);
+  useEffect(() => {
+    if (remembers.current) {
+      inspectorShown.set(detailsCollapsed ? undefined : 'shown');
+      // Hidden from its handle (dragged or stepped below its least), the focus the handle had goes to the header's toggle.
+      const toggle = root.current?.querySelector<HTMLElement>('[data-details-toggle]');
+      if (wasShown.current && detailsCollapsed && document.activeElement === document.body) toggle?.focus();
+    }
+    wasShown.current = !detailsCollapsed;
+  }, [detailsCollapsed]);
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const terminalToggle = useRef<(() => void) | null>(null);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
@@ -263,6 +278,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           onAttachState={setAttach}
           shown={showing === 'terminal'}
           viewSlot={simplified ? viewSlot : undefined}
+          inspector={simplified}
           terminalToggle={simplified ? terminalToggle : undefined}
         />
       </div>

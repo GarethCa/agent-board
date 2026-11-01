@@ -209,7 +209,7 @@ const LONG_DESCRIPTION: Agent = {
  * An agent starting: its start's tile making its worktree, the agent's tile with its harness's last line once its
  * session runs, and a start that failed, both before its agent was made and as its harness started.
  */
-const START: AgentStart = {
+export const START: AgentStart = {
   sessionId: 'gallery-start',
   zoneId: 'gallery',
   position: null,
@@ -221,7 +221,7 @@ const START: AgentStart = {
   error: null,
   confirm: false,
 };
-const START_FAILED: AgentStart = {
+export const START_FAILED: AgentStart = {
   ...START,
   sessionId: 'gallery-start-failed',
   name: 'Prune old jobs',
@@ -285,7 +285,7 @@ const START_EXITED: Agent = {
 };
 
 /** A shell tile split in two, one of its panes ended. */
-const SHELL: Shell = {
+export const SHELL: Shell = {
   id: 'gallery-shell',
   zoneId: 'gallery',
   position: null,

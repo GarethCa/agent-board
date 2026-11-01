@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, bindEntries, externalMenu, menuIds, priorityEntries, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ZoneMenuInput, type ShellMenuInput, type ZonePriorityActions } from './menu-model';
+import { agentMenu, bindEntries, externalMenu, menuIds, priorityEntries, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type ZonePriorityActions } from './menu-model';
 import { galleryAgent } from './TileGallery';
 
 const AT = '2026-10-22T12:00:00.000Z';
@@ -1201,5 +1201,249 @@ describe("every row's handler", () => {
         "new-zone-spacing → openSettings()",
       ]
     `);
+  });
+});
+
+function projectInput(zone: Zone, more: Partial<ProjectContextMenuInput> = {}): ProjectContextMenuInput {
+  return { zone, noAgents: undefined, technical: false, newZones: undefined, themeFill: 8, rename: () => {}, newNote: () => {}, actions: spies(), ...more };
+}
+
+/** What each action of a menu does, by its row's own id: no submenu or path, and a tab chip's row as ⋯'s. */
+function doings(entries: readonly ModelEntry[], calls: [string, unknown[]][]): Map<string, Set<string>> {
+  const done = new Map<string, Set<string>>();
+  for (const line of wiring(entries, calls)) {
+    const [path, made] = line.split(' → ') as [string, string];
+    const id = path.split('/').at(-1)!.replace(/^tab-/, '');
+    done.set(id, (done.get(id) ?? new Set()).add(made));
+  }
+  return done;
+}
+
+/** Handlers that remember every call, renaming among them. */
+function recording() {
+  const actions = spies<ProjectContextMenuInput['actions']>();
+  return { actions, rename: () => void actions.calls.push(['rename', []]) };
+}
+
+/** What today's zone tab and ⋯ do, every chip folded in, with the tab's Tidy ▾. */
+function classicDoings(zone: Zone): Map<string, Set<string>> {
+  const { actions, rename } = recording();
+  const tab = zoneTabEntries(zone, undefined, actions);
+  const order = ['cancel-clone', 'agent', 'shell', 'default-repo', 'bind', 'tracker', 'priority', 'issue', 'tidy'] as const;
+  const folded = order.flatMap((chip) => (tab[chip] === undefined ? [] : [tab[chip]]));
+  return doings([...zoneMenu({ zone, folded, themeFill: 8, rename, actions }), ...(zone.clone === null ? tidyMenu(zone, undefined, actions) : [])], actions.calls);
+}
+
+/** What `menu` does for `zone`'s project, with handlers that remember every call. */
+function projectDoings(zone: Zone, menu: (input: ProjectContextMenuInput) => ModelEntry[]): Map<string, Set<string>> {
+  const { actions, rename } = recording();
+  return doings(menu(projectInput(zone, { actions, rename })), actions.calls);
+}
+
+/** Today's actions `project` lacks: each as `id → what it does`, missing when no row of that id does the same. */
+function lost(classic: Map<string, Set<string>>, project: Map<string, Set<string>>): string[] {
+  return [...classic].flatMap(([id, made]) => [...made].filter((call) => !project.get(id)?.has(call)).map((call) => `${id} → ${call}`));
+}
+
+const projects: [string, Zone][] = [
+  ['a repo', { ...repoZone, tracker: { provider: 'github', scope: 'acme/web' } as Zone['tracker'], gateCommand: 'pnpm check', trustsFolder: true }],
+  ['a group with a default repo, outside git', { ...group, defaultRepo: '/code/web', userFolder: true, fillOpacity: 30 }],
+  ['a held project', { ...repoZone, priority: 'high', usageHold: { reason: 'over budget', since: AT } }],
+  ['a cloning project', { ...repoZone, clone: {} as Zone['clone'] }],
+];
+
+describe("a project's menus, under the Simplified design", () => {
+  it.each(projects)("keep every control of today's zone tab and ⋯ for %s, doing the same, in ⋯ and in the right-click menu", (_name, zone) => {
+    const classic = classicDoings(zone);
+    expect(classic.size).toBeGreaterThan(0);
+    expect(lost(classic, projectDoings(zone, projectMenu))).toEqual([]);
+    expect(lost(classic, projectDoings(zone, projectContextMenu))).toEqual([]);
+  });
+
+  it("wires every row of a project's menus", () => {
+    const { actions, rename } = recording();
+    const newNote = () => void actions.calls.push(['newNote', []]);
+    expect(
+      projects.flatMap(([name, zone]) => [`— ${name}`, ...wiring(projectContextMenu(projectInput(zone, { actions, rename, newNote })), actions.calls)]),
+    ).toMatchInlineSnapshot(`
+      [
+        "— a repo",
+        "new-agent → newAgent(#z1)",
+        "new-shell → newShell(#z1)",
+        "new-note → newNote()",
+        "add-issue → addIssue(#z1)",
+        "rename → rename()",
+        "tidy → tidy(#z1)",
+        "colour-menu/colour → recolor(#z1, "picked")",
+        "options/new-agent → newAgent(#z1)",
+        "options/new-shell → newShell(#z1)",
+        "options/rename → rename()",
+        "options/colour → recolor(#z1, "picked")",
+        "options/fill-opacity → setFill(#z1, 12)",
+        "options/tidy → tidy(#z1)",
+        "options/spacing/spacing-compact → setSpacing(#z1, "compact")",
+        "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
+        "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "options/spacing/new-zone-spacing → openSettings()",
+        "options/priority/priority-high → setPriority(#z1, "high")",
+        "options/priority/priority-normal → setPriority(#z1, "normal")",
+        "options/priority/priority-low → setPriority(#z1, "low")",
+        "options/issues/tracker → pickTracker(#z1)",
+        "options/issues/add-issue → addIssue(#z1)",
+        "options/folder/trust-folder → setTrustsFolder(#z1, false)",
+        "options/folder/unbind → unbind(#z1)",
+        "options/agents/board-mcp → setBoardMcp(#z1, false)",
+        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
+        "options/agents/gate-command → editGateCommand(#z1)",
+        "options/agents/role-templates → editRoleTemplates(#z1)",
+        "options/delete → deleteZone(#z1)",
+        "delete → deleteZone(#z1)",
+        "— a group with a default repo, outside git",
+        "new-agent → newAgent(#z1)",
+        "new-shell → newShell(#z1)",
+        "new-note → newNote()",
+        "rename → rename()",
+        "tidy → tidy(#z1)",
+        "colour-menu/colour → recolor(#z1, "picked")",
+        "options/new-agent → newAgent(#z1)",
+        "options/new-shell → newShell(#z1)",
+        "options/rename → rename()",
+        "options/colour → recolor(#z1, "picked")",
+        "options/fill-opacity → setFill(#z1, 12)",
+        "options/tidy → tidy(#z1)",
+        "options/spacing/spacing-compact → setSpacing(#z1, "compact")",
+        "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
+        "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "options/spacing/new-zone-spacing → openSettings()",
+        "options/priority/priority-high → setPriority(#z1, "high")",
+        "options/priority/priority-normal → setPriority(#z1, "normal")",
+        "options/priority/priority-low → setPriority(#z1, "low")",
+        "options/issues/tracker → pickTracker(#z1)",
+        "options/folder/repo → bind(#z1, "repo")",
+        "options/folder/project → bind(#z1, "project")",
+        "options/folder/tracker → pickTracker(#z1)",
+        "options/folder/default-repo → pickDefaultRepo(#z1)",
+        "options/folder/init-repo → initRepo(#z1)",
+        "options/agents/board-mcp → setBoardMcp(#z1, false)",
+        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
+        "options/agents/gate-command → editGateCommand(#z1)",
+        "options/agents/role-templates → editRoleTemplates(#z1)",
+        "options/delete → deleteZone(#z1)",
+        "delete → deleteZone(#z1)",
+        "— a held project",
+        "new-agent → newAgent(#z1)",
+        "new-shell → newShell(#z1)",
+        "new-note → newNote()",
+        "rename → rename()",
+        "tidy → tidy(#z1)",
+        "colour-menu/colour → recolor(#z1, "picked")",
+        "options/new-agent → newAgent(#z1)",
+        "options/new-shell → newShell(#z1)",
+        "options/rename → rename()",
+        "options/colour → recolor(#z1, "picked")",
+        "options/fill-opacity → setFill(#z1, 12)",
+        "options/tidy → tidy(#z1)",
+        "options/spacing/spacing-compact → setSpacing(#z1, "compact")",
+        "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
+        "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
+        "options/spacing/new-zone-spacing → openSettings()",
+        "options/priority/priority-high → setPriority(#z1, "high")",
+        "options/priority/priority-normal → setPriority(#z1, "normal")",
+        "options/priority/priority-low → setPriority(#z1, "low")",
+        "options/priority/override → releaseHold(#z1)",
+        "options/issues/tracker → pickTracker(#z1)",
+        "options/folder/trust-folder → setTrustsFolder(#z1, true)",
+        "options/folder/unbind → unbind(#z1)",
+        "options/agents/board-mcp → setBoardMcp(#z1, false)",
+        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
+        "options/agents/gate-command → editGateCommand(#z1)",
+        "options/agents/role-templates → editRoleTemplates(#z1)",
+        "options/delete → deleteZone(#z1)",
+        "delete → deleteZone(#z1)",
+        "— a cloning project",
+        "new-shell → newShell(#z1)",
+        "new-note → newNote()",
+        "options/new-agent → newAgent(#z1)",
+        "options/new-shell → newShell(#z1)",
+        "options/tidy → tidy(#z1)",
+        "options/priority/priority-high → setPriority(#z1, "high")",
+        "options/priority/priority-normal → setPriority(#z1, "normal")",
+        "options/priority/priority-low → setPriority(#z1, "low")",
+        "options/issues/tracker → pickTracker(#z1)",
+        "options/folder/cancel-clone → cancelClone(#z1)",
+      ]
+    `);
+  });
+
+  it("lists a repo project's ⋯, its settings in submenus", () => {
+    expect(menuIds(projectMenu(projectInput(projects[0]![1])))).toEqual([
+      'new-agent',
+      'new-shell',
+      'rename',
+      'colour',
+      'fill-opacity',
+      'tidy',
+      'spacing',
+      'spacing/spacing-compact',
+      'spacing/spacing-normal',
+      'spacing/spacing-roomy',
+      'spacing/new-zone-spacing',
+      'priority',
+      'priority/priority-high',
+      'priority/priority-normal',
+      'priority/priority-low',
+      'issues',
+      'issues/tracker',
+      'issues/add-issue',
+      'folder',
+      'folder/trust-folder',
+      'folder/unbind',
+      'agents',
+      'agents/board-mcp',
+      'agents/orchestrate',
+      'agents/gate-command',
+      'agents/role-templates',
+      'delete',
+    ]);
+  });
+
+  it("gives a project with no folder the ways to get one, and a cloning one only Cancel clone", () => {
+    const folder = (zone: Zone) => menuIds(projectMenu(projectInput(zone))).filter((id) => id.startsWith('folder/'));
+    expect(folder(projects[1]![1])).toEqual(['folder/repo', 'folder/project', 'folder/tracker', 'folder/default-repo', 'folder/init-repo']);
+    expect(folder(projects[3]![1])).toEqual(['folder/cancel-clone']);
+  });
+
+  it('lists the right-click menu: making things first, then the everyday actions, then ⋯ as Project options', () => {
+    const ids = menuIds(projectContextMenu(projectInput(projects[0]![1]))).filter((id) => !id.startsWith('options/'));
+    expect(ids).toEqual(['new-agent', 'new-shell', 'new-note', 'add-issue', 'rename', 'tidy', 'colour-menu', 'colour-menu/colour', 'options', 'delete']);
+  });
+
+  it('marks its agent settings on or off, and flips them', () => {
+    const actions = spies<ProjectContextMenuInput['actions']>();
+    const entries = projectMenu(projectInput(projects[0]![1], { actions }));
+    const agents = row(entries, 'agents') as { entries: ModelEntry[] };
+    expect(row(agents.entries, 'board-mcp')).toMatchObject({ checked: true });
+    expect(row(agents.entries, 'orchestrate')).toMatchObject({ checked: false });
+    (row(agents.entries, 'board-mcp') as { onSelect(): void }).onSelect();
+    (row(agents.entries, 'orchestrate') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([
+      ['setBoardMcp', [projects[0]![1], false]],
+      ['setAgentsOrchestrate', [projects[0]![1], true]],
+    ]);
+  });
+
+  it('names rows plainly, and technically with Show technical details', () => {
+    const labels = (technical: boolean) => {
+      const agents = row(projectMenu(projectInput(projects[0]![1], { technical })), 'agents') as { entries: ModelEntry[] };
+      return agents.entries.flatMap((entry) => (entry !== 'separator' && 'label' in entry ? [entry.label] : []));
+    };
+    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…']);
+    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…']);
+  });
+
+  it("says why it can't start an agent, and Delete… is last and red", () => {
+    const entries = projectContextMenu(projectInput(repoZone, { noAgents: 'Still cloning' }));
+    expect(row(entries, 'new-agent')).toMatchObject({ disabled: true, hint: 'Still cloning' });
+    expect(entries.at(-1)).toMatchObject({ id: 'delete', label: 'Delete project…', danger: true });
   });
 });

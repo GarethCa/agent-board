@@ -1,8 +1,51 @@
 import { useEffect, useState } from 'react';
 import type { DaemonSettings } from '@agent-board/daemon/protocol';
-import { Choice, Choices, Fieldset, Hint, Switch, Tag } from '../ui';
+import { useSimplified } from '../design';
+import { NOTIFY_WHEN, needsYouShowsFrom, showsInFrontSwitch } from './notify-when';
+import { useTechnicalDetails } from '../technical';
+import { Choice, Choices, Fieldset, Field, Hint, Select, Switch, Tag } from '../ui';
 
 type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notifications' | 'notifyInFront'>;
+
+/**
+ * Under the Simplified design, one pop-up in place of the three rows: what pings, as the inbox lists it (explicit requests
+ * only) or with every finished turn too. Turning notifications off and quiet hours are the Mac's (System Settings, Focus);
+ * while the app is in front, only with technical details shown.
+ */
+function NotifyMeWhen({ settings, disabled, change }: { settings: NotificationSettings | undefined; disabled: boolean; change: (changed: Partial<NotificationSettings>) => void }) {
+  const technical = useTechnicalDetails();
+  return (
+    <>
+      <Field label="Notify me when">
+        <Select
+          aria-label="Notify me when"
+          value={settings?.needsYouShows ?? 'explicit'}
+          disabled={disabled}
+          onChange={(event) => change({ needsYouShows: needsYouShowsFrom(event.target.value) })}
+        >
+          {NOTIFY_WHEN.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {settings?.needsYouShows === 'turns' && <Hint>A finished turn shows in Needs you too.</Hint>}
+      <Hint>To turn notifications off, use System Settings. Quiet hours follow your Mac’s Focus (System Settings › Focus).</Hint>
+      {showsInFrontSwitch(technical) && (
+        <>
+          <Switch
+            label="Also while agent-board is in front"
+            checked={settings?.notifyInFront ?? false}
+            disabled={disabled}
+            onChange={(event) => change({ notifyInFront: event.target.checked })}
+          />
+          <Hint>Off: only the pill changes while you are looking at the board.</Hint>
+        </>
+      )}
+    </>
+  );
+}
 
 /**
  * Settings › Alerts › Notifications: what the needs-you inbox lists (explicit requests only, the default, or every finished turn
@@ -12,6 +55,7 @@ type NotificationSettings = Pick<DaemonSettings, 'needsYouShows' | 'notification
 export function NotificationsSetting({ muted, onError }: { muted: number; onError: (action: string) => (error: unknown) => void }) {
   const [settings, setSettings] = useState<NotificationSettings>();
   const [busy, setBusy] = useState(false);
+  const simplified = useSimplified();
 
   useEffect(() => {
     window.agentBoard.flowEdges.settings().then(setSettings, onError('read the notification settings'));
@@ -27,6 +71,19 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
   };
 
   const disabled = settings === undefined || busy;
+  const mutedHint = (
+    <Hint data-testid="muted-agents">
+      {muted === 0 ? 'No agent is muted.' : `${muted} muted agent${muted === 1 ? '' : 's'}.`} A tile muted from its ⋯ menu never notifies. It still shows in the list.
+    </Hint>
+  );
+  if (simplified) {
+    return (
+      <>
+        <NotifyMeWhen settings={settings} disabled={disabled} change={change} />
+        {mutedHint}
+      </>
+    );
+  }
   return (
     <>
       <Fieldset legend="Needs you shows">
@@ -67,9 +124,7 @@ export function NotificationsSetting({ muted, onError }: { muted: number; onErro
         onChange={(event) => change({ notifyInFront: event.target.checked })}
       />
       <Hint>Off: only the pill changes while you are looking at the board.</Hint>
-      <Hint data-testid="muted-agents">
-        {muted === 0 ? 'No agent is muted.' : `${muted} muted agent${muted === 1 ? '' : 's'}.`} A tile muted from its ⋯ menu never notifies. It still shows in the list.
-      </Hint>
+      {mutedHint}
     </>
   );
 }
