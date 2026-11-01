@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
-import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { agents, expectShellsHeldBy, launch, sessionWindow, setClickOpens, SHELL_ENV, showTerminalView, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
+import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test, tabText, newShellInZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const undoKey = `${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`;
@@ -150,14 +150,14 @@ test("a shell tab drags onto another agent's tile, the board and another window'
     // Onto the reviewer's tile: one of its tabs now, the same shell running.
     await dragTo(tabNamed(implWindow, 'sh'), await middleOf(agentTile(window, review!.sessionId)));
     await expect(tabsOf(implWindow)).toHaveCount(1);
-    await expect(agentTile(window, review!.sessionId).getByTestId('tile-shells')).toContainText('1 shell');
+    await expectShellsHeldBy(window, review!.sessionId, 1);
     expect(await holderOf(window, pane)).toEqual({ id: tab.id, owner: { kind: 'agent', id: review!.sessionId }, name: 'sh' });
     expect(await running(window, pane)).toBe(true);
 
     // ⌘Z puts it back in the implementer's tabs.
     await undo(window);
     await expect(tabsOf(implWindow)).toHaveCount(2);
-    await expect(agentTile(window, review!.sessionId).getByTestId('tile-shells')).toHaveCount(0);
+    await expectShellsHeldBy(window, review!.sessionId, 0);
 
     // Onto bare board: a shell tile of its own where it is dropped, named as the tab was.
     await dragTo(tabNamed(implWindow, 'sh'), await bareBoard(window));
@@ -214,9 +214,9 @@ test("a pane of a shell tile's split drags out onto the board as a shell tile of
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await setClickOpens(window, 'Expand in place');
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     await expect(shellTiles(window)).toHaveCount(1);
-    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
     await shellTiles(window).dblclick();
     const tileWindow = window.getByTestId('expanded-tile');
     // Its own panes split from its details, tmux-style.
@@ -259,6 +259,7 @@ test("a shell tab drags out of an agent's session window onto the board beside i
     await agentTile(window, impl!.sessionId).dblclick();
     const implWindow = sessionWindow(window);
     await expect(implWindow).toBeVisible();
+    await showTerminalView(window);
     await window.keyboard.press(windowKey('t'));
     await expect(tabsOf(implWindow)).toHaveCount(2);
     const tab = (await shells(window)).find((shell) => shell.owner?.id === impl!.sessionId)!;
@@ -307,22 +308,22 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
     // The agent's own tab, alone, let go in the middle of its pane, stays where it is, and nothing throws.
     const errors: string[] = [];
     window.on('pageerror', (error) => errors.push(error.message));
-    await dragTo(tabNamed(win, 'claude'), await middleOf(agentView));
-    await expect(tabsOf(win)).toHaveText(['claude']);
+    await dragTo(tabNamed(win, tabText('claude')), await middleOf(agentView));
+    await expect(tabsOf(win)).toHaveText([tabText('claude')]);
     expect(errors).toEqual([]);
     await window.keyboard.press(windowKey('t'));
     await window.keyboard.press(windowKey('t'));
-    await expect(tabsOf(win)).toHaveText(['claude', 'sh', 'sh 2']);
+    await expect(tabsOf(win)).toHaveText([tabText('claude'), 'sh', 'sh 2']);
     // A tab dropped back where it is stays: let go on its own strip or in the middle of its pane.
     await dragTo(tabNamed(win, 'sh 2'), await middleOf(shownViews(win)));
-    await expect(tabsOf(win)).toHaveText(['claude', 'sh', 'sh 2']);
+    await expect(tabsOf(win)).toHaveText([tabText('claude'), 'sh', 'sh 2']);
     // The agent's own tab has no ×; every other does.
-    await expect(tabNamed(win, 'claude').getByRole('button', { name: 'Close claude' })).toHaveCount(0);
+    await expect(tabNamed(win, tabText('claude')).getByRole('button', { name: `Close ${tabText('claude')}` })).toHaveCount(0);
 
     // Onto the right edge of its pane: a new pane there, holding and showing it.
     await dragTo(tabNamed(win, 'sh 2'), await nearEdge(shownViews(win), 'right'));
     await expect(panesOf(win)).toHaveCount(2);
-    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText(['claude', 'sh']);
+    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText([tabText('claude'), 'sh']);
     await expect(panesOf(win).nth(1).getByTestId('session-tab')).toHaveText(['sh 2']);
     // A pane's only tab let go on its own strip, or in the middle of its own pane, leaves the pane as it is.
     await dragTo(tabNamed(win, 'sh 2'), await middleOf(panesOf(win).nth(1).getByTestId('session-tabs')));
@@ -334,12 +335,12 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
 
     // Onto the other pane's strip, after its tab; then the agent's own too, and the pane it leaves closes.
     await dragTo(tabNamed(win, 'sh'), await middleOf(panesOf(win).nth(1).getByTestId('session-tabs')));
-    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText(['claude']);
+    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText([tabText('claude')]);
     await expect(panesOf(win).nth(1).getByTestId('session-tab')).toHaveText(['sh 2', 'sh']);
-    await dragTo(tabNamed(win, 'claude'), await middleOf(panesOf(win).nth(1).getByTestId('session-tabs')));
+    await dragTo(tabNamed(win, tabText('claude')), await middleOf(panesOf(win).nth(1).getByTestId('session-tabs')));
     await expect(panesOf(win)).toHaveCount(0);
-    await expect(tabsOf(win)).toHaveText(['sh 2', 'sh', 'claude']);
-    await expect(tabNamed(win, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabsOf(win)).toHaveText(['sh 2', 'sh', tabText('claude')]);
+    await expect(tabNamed(win, tabText('claude'))).toHaveAttribute('data-active', 'true');
     await expect(agentView.locator('.xterm[data-kept="yes"]')).toHaveCount(1);
 
     // + shows another agent's session as a tab, its own still: × only takes the tab away.
@@ -370,7 +371,7 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
     expect((await shells(again)).map((shell) => shell.id).sort()).toEqual(shellsBefore);
     expect(await sessionsNow(again)).toEqual(sessionsBefore);
     await expect(panesOf(winAgain)).toHaveCount(2);
-    await expect(panesOf(winAgain).nth(0).getByTestId('session-tab')).toHaveText(['sh 2', 'sh', 'claude']);
+    await expect(panesOf(winAgain).nth(0).getByTestId('session-tab')).toHaveText(['sh 2', 'sh', tabText('claude')]);
     await expect(panesOf(winAgain).nth(1).getByTestId('session-tab')).toHaveText([review!.name]);
   } finally {
     await (relaunched ?? app).close().catch(() => {});
@@ -445,11 +446,12 @@ test("a window whose shells can't be listed, or whose layout can't be read, says
     await agentTile(window, impl!.sessionId).dblclick();
     const win = sessionWindow(window);
     await expect(win.locator('[data-testid="session-tab-view"][data-tab="own"]')).toContainText('Which database should I use', { timeout: TURN_MS });
+    await showTerminalView(window);
     await window.keyboard.press(windowKey('t'));
     await expect(tabsOf(win)).toHaveCount(2);
     await window.keyboard.press(windowKey('d'));
     await expect(panesOf(win)).toHaveCount(2);
-    await win.getByRole('button', { name: 'Close session window' }).click();
+    await win.getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
     const owner = { kind: 'agent', id: impl!.sessionId } as const;
     const kept = await window.evaluate((owner) => globalThis.window.agentBoard.shells.windowLayout(owner), owner);
     expect(kept).not.toBeNull();
@@ -473,7 +475,7 @@ test("a window whose shells can't be listed, or whose layout can't be read, says
     await window.waitForTimeout(1500);
     expect(await saves()).toBe(0);
     await expect(win.getByTestId('session-window-status')).toContainText('could not list the shells');
-    await win.getByRole('button', { name: 'Close session window' }).click();
+    await win.getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
 
     // Its layout can't be read either: it says so, and still saves nothing.
     await app.evaluate(({ ipcMain }) => {
@@ -565,7 +567,7 @@ test("a tab split inside itself before windows had panes is laid out as panes as
     await agentTile(window, impl!.sessionId).dblclick();
     const win = sessionWindow(window);
     await expect(panesOf(win)).toHaveCount(2);
-    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText(['claude']);
+    await expect(panesOf(win).nth(0).getByTestId('session-tab')).toHaveText([tabText('claude')]);
     await expect(panesOf(win).nth(1).getByTestId('session-tab')).toHaveText(['sh']);
     expect((await holderOf(window, shellPane))?.owner).toEqual({ kind: 'agent', id: impl!.sessionId });
     expect(await running(window, shellPane)).toBe(true);

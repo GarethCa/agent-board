@@ -155,6 +155,12 @@ describe('spotlightGroups and settings', () => {
     expect(names(settingRows('technical', true))).toEqual(['Show technical details']);
   });
 
+  it("leaves out Classic's Agent notes section under the Simplified design, and lists it under Classic", () => {
+    expect(names(settingRows('agent notes'))).toContain('Agent notes');
+    expect(names(settingRows('agent notes', true))).not.toContain('Agent notes');
+    expect(names(settingRows('terminal card', true))).toEqual([]);
+  });
+
   it('lists no settings before anything is typed', () => {
     expect(spotlightGroups('', { agents: [], shells: [], zones: [], shows: 'turns' })).toEqual([]);
   });

@@ -270,6 +270,7 @@
    */
   --sticky-other-ink: var(--text);
   --sticky-link: var(--accent); /* a link written on a note: on paper in every theme */
+  --sticky-shadow: var(--shadow-tile); /* a note's lift off the board */
   --sticky-yellow: #fff3a3;
   --sticky-yellow-ink: var(--sticky-other-ink);
   --sticky-orange: #ffd8a8;
@@ -540,6 +541,7 @@
   --shadow-rail-token-selected: 0 0 0 3px var(--connector-halo); /* round a selected rail's token */
   --shadow-loose-dot: inset 0 0 0 1.5px var(--muted); /* the hollow dot for the board's loose sessions */
   --shadow-pane-focused: inset 0 -2px 0 var(--window-focus); /* under the strip of a session window's focused pane, of several */
+  --shadow-window-tab-picked: 0 0 0 1px var(--window-line); /* the picked tab in a session window's strip, under the Simplified design */
   --shadow-island: 0 1px 0 rgb(43 42 39 / 5%), 0 12px 32px -8px rgb(43 42 39 / 28%), 0 2px 6px rgb(43 42 39 / 8%);
   --shadow-tooltip: 0 6px 16px -6px rgb(0 0 0 / 40%);
   --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 45%);
@@ -1104,9 +1106,9 @@
  * The Simplified design (docs/adr/0022-simplified-design.md): a flag over the same components, shown while the root
  * has data-design='simplified'. A native macOS look: SF Pro and SF Mono, system greys, a plain desk with no dots, the
  * accent on controls only, orange only for Needs you and red only for Problem, a hairline and one soft shadow. Bricolage
- * Grotesque stays for the wordmark alone. Under it the window shows only the app's own light or dark theme, never a
- * pack (themes.ts), so these two blocks are all it reads over the app's own. Every colour the light block writes, the
- * dark one writes too (tokens.test.ts).
+ * Grotesque stays for the wordmark alone. These two blocks are its look over the app's own light and dark themes; over a
+ * theme pack, theme-packs.css gives it a block of its own per pack that sets every token these do, in the pack's
+ * colours. Every colour the light block writes, the dark one writes too (tokens.test.ts).
  */
 :root[data-design='simplified'] {
   /* Surfaces */
@@ -1166,6 +1168,10 @@
 
   /* A hairline and one soft shadow */
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
+  /* A sticky is the user's own: its ink, link and lift stay Classic's. */
+  --sticky-other-ink: #2b2a27;
+  --sticky-link: #3b5bdb;
+  --sticky-shadow: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
   --shadow-expanded: var(--shadow-tile);
   --shadow-control: none;
   --shadow-primary: none;
@@ -1241,6 +1247,9 @@
 
   /* A hairline and one soft shadow */
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
+  --sticky-other-ink: #2b2614;
+  --sticky-link: #1f3590;
+  --sticky-shadow: 0 1px 0 rgb(0 0 0 / 45%), 0 3px 0 -1px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
   --shadow-overlay: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 8px 24px -8px rgb(0 0 0 / 60%);
   --scrim: rgb(0 0 0 / 45%);
 }

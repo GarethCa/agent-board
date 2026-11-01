@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, type TabOwner } from './tabs';
+import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -233,5 +233,42 @@ describe("a window's surfaces", () => {
       ['impl-auth', session('agent', 'agent-2')],
       ['Shell 3', session('shell', 'more')],
     ]);
+  });
+});
+
+describe('worded tab labels', () => {
+  const surfaces = (shown: Surface[] = []) => windowSurfaces(byAgent, [shell('zsh', pane('p1'))], shown, { agents: [], tiles: [] });
+  const labels = (shown?: Surface[]) => surfaces(shown).map((surface) => wordedTabLabel(surface, agent));
+
+  it("names the agent's own tab Chat, never for the command it runs", () => {
+    expect(labels()[0]).toBe('Chat');
+  });
+
+  it('keeps the names of the panes split beside the own tab', () => {
+    const own = shell('own', split(pane('agent-1'), pane('p4', 'tests')), { name: 'zsh 2' });
+    const [first] = windowSurfaces(byAgent, [own], [], { agents: [], tiles: [] });
+    expect(first!.label).toBe('claude │ tests');
+    expect(wordedTabLabel(first!, agent)).toBe('Chat │ tests');
+  });
+
+  it("leaves a shell tile's own tab to the name it has", () => {
+    const tile = shell('build', pane('x'), { owner: null });
+    const [first] = windowSurfaces({ kind: 'shell', shell: tile }, [], [], { agents: [], tiles: [] });
+    expect(wordedTabLabel(first!, undefined)).toBe('build');
+  });
+
+  it('leaves a shell tab to the name it has', () => {
+    expect(labels()[1]).toBe('zsh');
+  });
+
+  it('spells a pull request out', () => {
+    const shown: Surface[] = [{ kind: 'pr', repo: 'acme/web', number: 214 } as Surface];
+    expect(labels(shown)).toEqual(['Chat', 'zsh', 'Pull request #214']);
+  });
+
+  it("leaves a codex agent's own tab as worded as a claude one's", () => {
+    const codex = { sessionId: 'agent-1', harness: 'codex' } as Agent;
+    const [first] = windowSurfaces({ kind: 'agent', agent: codex }, [], [], { agents: [], tiles: [] });
+    expect(wordedTabLabel(first!, codex)).toBe('Chat');
   });
 });

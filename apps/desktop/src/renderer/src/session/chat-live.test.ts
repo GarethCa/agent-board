@@ -49,6 +49,7 @@ const prompt = (toolName: string, subagent: PermissionPrompt['subagent'] = null)
   subagent,
   requestedAt: '2026-10-10T21:10:15.000Z',
   heldUntil: '2026-10-10T21:11:15.000Z',
+  sessionGrant: null,
 });
 
 const plan = (fields: Partial<PlanSummary> = {}): PlanSummary => ({

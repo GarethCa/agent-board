@@ -1,4 +1,4 @@
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { launch, windowKey } from './agent-helpers.ts';
 import { test, tempDataDir, removeDataDir } from './launch.ts';
 import { isSettingsWindow, openSettings, settingsSection } from './settings-helpers.ts';
@@ -168,6 +168,57 @@ test('searching settings filters the sidebar across groups, and ⌘K opens the w
     await expect(settings.getByRole('main', { name: 'General' })).toBeVisible();
     await expect(settingsSection(settings, 'Appearance')).toBeInViewport();
     expect(window.context().pages().filter(isSettingsWindow)).toHaveLength(1);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+test('Esc closes the Settings window at once, but only leaves a text field being edited', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, {});
+  // The key can close the window before Playwright hears back, which rejects it; that's only a failure if it stays open.
+  const press = (page: Page) =>
+    page.keyboard.press('Escape').catch((error: unknown) => {
+      if (!page.isClosed()) throw error;
+    });
+  const closed = () => expect.poll(() => window.context().pages().filter(isSettingsWindow).length).toBe(0);
+  try {
+    // Opened and untouched: one Esc.
+    let settings = await openSettings(window, 'usage');
+    await press(settings);
+    await closed();
+
+    // After a click on a button in the page: still one Esc.
+    settings = await openSettings(window, 'usage');
+    await settings.getByRole('navigation', { name: 'Settings' }).getByRole('button', { name: /^General/ }).click();
+    await press(settings);
+    await closed();
+
+    // After a click on a switch (an input that isn't text) or into the empty search field: still one Esc.
+    settings = await openSettings(window, 'agents.links');
+    const toggle = settings.getByRole('switch', { name: 'Clickable links from Claude' });
+    await toggle.focus();
+    await expect(toggle).toBeFocused();
+    await press(settings);
+    await closed();
+    settings = await openSettings(window, 'agents.links');
+    const search = settings.getByRole('searchbox', { name: 'Search settings' });
+    await search.focus();
+    await expect(search).toBeFocused();
+    await press(settings);
+    await closed();
+
+    // In a path field with a half-typed path: the first Esc leaves the field and saves it, the second closes.
+    settings = await openSettings(window, 'advanced.programs');
+    const path = settings.getByLabel('Claude path');
+    await path.fill('/usr/local/bin/claude-fake');
+    await press(settings);
+    expect(settings.isClosed()).toBe(false);
+    await expect(path).not.toBeFocused();
+    await expect(path).toHaveValue('/usr/local/bin/claude-fake');
+    await press(settings);
+    await closed();
   } finally {
     await app.close();
     await removeDataDir(dataDir);

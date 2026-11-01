@@ -767,6 +767,7 @@ export const AGENT_IPC = {
   resume: 'agent:resume',
   restart: 'agent:restart',
   decidePermission: 'agent:decidePermission',
+  releasePermission: 'agent:releasePermission',
   link: 'agent:link',
   setSchedule: 'agent:setSchedule',
   markSeen: 'agent:markSeen',
@@ -864,6 +865,8 @@ export interface AgentsApi {
   restart(sessionId: string, force?: boolean): Promise<RestartAgentResult>;
   /** Allows or denies the agent's permission prompt `requestId`, while the inbox can still answer it. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): Promise<void>;
+  /** Lets the harness ask in its terminal now, instead of when the hold on its prompt `requestId` lapses. Answers nothing. */
+  releasePermission(sessionId: string, requestId: string): Promise<void>;
   /** Links the agent to an issue in its repo zone's tracker, or unlinks it with null. */
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Gives the agent a cron schedule, replacing any it had, or takes it away with null. */

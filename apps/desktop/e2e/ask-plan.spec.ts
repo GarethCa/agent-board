@@ -3,7 +3,7 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, screen, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
 import { drag } from './board-helpers.ts';
@@ -222,7 +222,7 @@ test('a plan opens in a Plan tab from the inbox, changes requested there come ba
     await item(window, agent).getByRole('button', { name: `Approve plan v2 for ${agent.name}` }).click();
     await expect(item(window, agent)).toHaveCount(0);
     await expect(planView(window).getByTestId('plan-version').first()).toContainText('Approved');
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user approved plan v2. Go ahead with it.');
   });
 });
@@ -282,7 +282,7 @@ test('a plan shown on the board is a card beside its agent, decided from Review 
 
     expect(readFileSync(join((await latest(window, agent)).worktree, 'docs/migration.md'), 'utf8')).toContain('- Backfill from the board file, with a down step');
     await card.dispatchEvent('dblclick');
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user approved plan v2, their edit of your v1.');
   });
 });
@@ -351,7 +351,7 @@ test('an HTML plan runs its script in a view of its own, and reaches neither the
 
       // Still waiting on the user: only their click decides it.
       await planView(window).getByRole('button', { name: `Reject plan v1 for ${agent.name}` }).click();
-      await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+      await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
       await expect(screen(window)).toContainText("The user rejected plan v1. Don't carry it out.");
     });
   } finally {

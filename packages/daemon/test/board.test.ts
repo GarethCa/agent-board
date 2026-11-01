@@ -109,6 +109,7 @@ describe('what a board token may call', () => {
     const refused = [
       agentSide.call('session.write', { sessionId: pane, data: 'y\r' }),
       agentSide.call('agent.decidePermission', { sessionId: pane, requestId: 'r1', behavior: 'allow' }),
+      agentSide.call('agent.releasePermission', { sessionId: pane, requestId: 'r1' }),
       agentSide.call('agent.spawn', { zoneId: zone.id, cols: 80, rows: 24 }),
       agentSide.call('agent.stop', { sessionId: pane }),
       agentSide.call('agent.markSeen', { sessionId: pane }),

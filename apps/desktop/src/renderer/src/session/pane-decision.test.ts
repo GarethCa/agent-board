@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentAsk, PlanSummary } from '@agent-board/daemon/protocol';
+import type { AgentAsk, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
 import { decisionId, deferDecision, deferredDecision, deferredDecisions, paneDecision, subscribeDeferred } from './pane-decision';
 
 const ask: AgentAsk = {
@@ -24,6 +24,35 @@ const plan = {
   decision: null,
   author: 'agent',
 } as PlanSummary;
+
+const prompt = (id: string, heldUntil: string | null = '2026-10-31T09:00:20Z'): PermissionPrompt => ({
+  id,
+  toolName: 'Bash',
+  toolInput: { command: 'pnpm test' },
+  subagent: null,
+  requestedAt: '2026-10-31T09:00:00Z',
+  heldUntil,
+  sessionGrant: null,
+});
+
+describe('paneDecision: a permission prompt', () => {
+  it('is the oldest prompt the board still holds the harness for, ahead of a question or plan', () => {
+    const first = prompt('p1');
+    expect(paneDecision({ ask, plan, permissions: [first, prompt('p2')] })).toEqual({ kind: 'permission', prompt: first });
+  });
+
+  it('is never one asking in the terminal now, which the banner above sends the user to', () => {
+    expect(paneDecision({ ask: null, plan: null, permissions: [prompt('p1', null)] })).toBeUndefined();
+    expect(paneDecision({ ask, plan: null, permissions: [prompt('p1', null)] })?.kind).toBe('ask');
+  });
+
+  it('passes to the next prompt once one is put off, and decisionId names it by its prompt', () => {
+    const permissions = [prompt('p1'), prompt('p2')];
+    expect(decisionId({ kind: 'permission', prompt: permissions[0]! })).toBe('p1');
+    expect(paneDecision({ ask: null, plan: null, permissions }, new Set(['p1']))).toEqual({ kind: 'permission', prompt: permissions[1] });
+    expect(deferredDecision({ ask: null, plan: null, permissions }, new Set(['p1']))).toEqual({ kind: 'permission', prompt: permissions[0] });
+  });
+});
 
 describe('paneDecision', () => {
   it('is none while the agent waits on nothing', () => {

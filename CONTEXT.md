@@ -218,7 +218,7 @@ The setting, under Settings › General › Appearance, that picks the theme: a 
 _Avoid_: dark mode (a mode of macOS), theme setting
 
 **Simplified design**:
-The calmer, native-looking design being built beside today's, which is **Classic**: off by default, turned on in Settings › General › Design (marked Preview while it is built), and one per user, every window following it at once. It is a flag over the same components, not a second app: its own theme token values, and for the few components that must show something different, a different rendering. While it is on, the app's own light or dark theme shows in the picked mode and theme packs wait. See `docs/adr/0022-simplified-design.md`.
+The calmer, native-looking design being built beside today's, which is **Classic**: off by default, turned on in Settings › General › Design (marked Preview while it is built), and one per user, every window following it at once. It is a flag over the same components, not a second app: its own theme token values, and for the few components that must show something different, a different rendering. The theme picked in Appearance, a theme pack included, shows under it too, in its shapes and type with the pack's colours. See `docs/adr/0022-simplified-design.md`.
 _Avoid_: Pro, simple mode, new UI, redesign
 
 **Technical details**:

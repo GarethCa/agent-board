@@ -4,11 +4,13 @@ import { newShell, test, tempDataDir } from './launch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
 // Settings › Simplified design: off by default, and every open window switches at once when it is turned on or off,
-// with no reload. Under it a theme pack waits, and the app's own theme shows in the pack's mode.
+// with no reload. Under it a theme pack shows in the Simplified design's shapes and type, and follows a pick at once.
 
 const design = (page: Page) => page.evaluate(() => document.documentElement.dataset.design ?? null);
 const theme = (page: Page) => page.evaluate(() => document.documentElement.dataset.theme);
 const desk = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+/** The board's surface token, as the window resolves it. */
+const surface = (page: Page) => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--surface').trim());
 /** The font an open terminal draws its rows in: xterm's own option, which it doesn't take from CSS. */
 const terminalFont = (page: Page) => page.getByTestId('session-terminal').first().evaluate((pane) => getComputedStyle(pane.querySelector('.xterm-rows')!).fontFamily);
 /** Marks the page, so a later check can tell it was never reloaded: a reload loses the mark. */
@@ -60,19 +62,27 @@ test('turning on the Simplified design in Settings switches the board and a popp
   }
 });
 
-test('opened in the Simplified design, a theme pack waits: the app’s own theme shows in its mode, and the pack is back under Classic', async () => {
+test('opened in the Simplified design, a theme pack shows on its own desk, and picking another pack changes the surface at once', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { AGENT_BOARD_APPEARANCE: 'catppuccin-latte' }, [], { design: 'simplified' });
   try {
     expect(await design(window)).toBe('simplified');
-    expect(await theme(window)).toBe('light');
-    expect(await desk(window)).toBe(SIMPLIFIED_DESK);
-    // The window opened on the Simplified desk too, so it never flashed the Classic one.
-    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBackgroundColor())).toBe('#F3F3F5');
+    expect(await theme(window)).toBe('catppuccin-latte');
+    expect(await surface(window)).toBe('#e6e9ef');
+    expect(await desk(window)).toBe('rgb(230, 233, 239)');
+    // The window opened on the pack's desk too, so it never flashed the Simplified design's own.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBackgroundColor())).toBe('#E6E9EF');
+    // The Simplified design's own type still shows over the pack.
+    expect(await window.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain('-apple-system');
+
+    await window.evaluate(() => globalThis.window.agentBoard.appearance.set({ mode: 'light', theme: 'gruvbox' }));
+    await expect.poll(() => theme(window)).toBe('gruvbox-light');
+    expect(await design(window)).toBe('simplified');
+    expect(await surface(window)).toBe('#f2e5bc');
 
     await window.evaluate(() => globalThis.window.agentBoard.design.set('classic'));
-    await expect.poll(() => theme(window)).toBe('catppuccin-latte');
-    expect(await design(window)).toBeNull();
+    await expect.poll(() => design(window)).toBeNull();
+    expect(await theme(window)).toBe('gruvbox-light');
   } finally {
     await app.close();
   }

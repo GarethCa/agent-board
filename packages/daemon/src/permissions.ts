@@ -43,6 +43,11 @@ export interface PermissionHolds {
    * beside it settle nothing. Returns whether any prompt went.
    */
   afterHook(sessionId: string, payload: Record<string, unknown>): boolean;
+  /**
+   * Releases the held hook of the session's prompt `requestId` with no decision, so the harness asks in its terminal
+   * now, as it does when the hold lapses; the prompt stays listed. Returns false if it is not held (any more).
+   */
+  release(sessionId: string, requestId: string): boolean;
   /** Forgets the session's prompts, releasing their hooks with no decision. */
   drop(sessionId: string): void;
   /** Releases every held hook and stops telling anyone about changes. */
@@ -51,6 +56,8 @@ export interface PermissionHolds {
 
 interface Held {
   prompt: PermissionPrompt;
+  /** What the harness suggested allowing with this request, to be granted for the session. */
+  suggestions: object[];
   /** Answers the hook; gone once it has been answered. */
   reply: ((reply: HookReply) => void) | undefined;
 }
@@ -68,15 +75,52 @@ export function stateWithPrompts(state: SessionState, prompts: { pending: number
   return prompts.settled && state === 'needs-permission' ? 'running' : state;
 }
 
-/** The PermissionRequest hook reply that carries `decision`. */
-export function permissionReply(decision: PermissionDecision): Record<string, unknown> {
+/**
+ * The PermissionRequest hook reply that carries `decision`. Allowing for the session sends the harness's own
+ * `suggestions` back as its `updatedPermissions`, each scoped to the session, which is how its TUI's "don't ask again"
+ * is granted without writing to a settings file.
+ */
+export function permissionReply(decision: PermissionDecision, suggestions: readonly object[] = []): Record<string, unknown> {
   const { behavior, message } = decision;
-  return {
-    hookSpecificOutput: {
-      hookEventName: 'PermissionRequest',
-      decision: behavior === 'deny' && message !== undefined ? { behavior, message } : { behavior },
-    },
-  };
+  let answer: Record<string, unknown>;
+  if (behavior === 'deny') answer = message !== undefined ? { behavior, message } : { behavior };
+  else if (decision.scope === 'session' && suggestions.length > 0) {
+    answer = { behavior, updatedPermissions: suggestions.map((suggestion) => ({ ...suggestion, destination: 'session' })) };
+  } else answer = { behavior };
+  return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: answer } };
+}
+
+/** What the harness's rule for `suggestion` allows, in words for a button; undefined where it can't be worded. */
+function grantOf(suggestion: Record<string, unknown>): string | undefined {
+  if (suggestion.type === 'setMode') return suggestion.mode === 'acceptEdits' ? 'all edits' : undefined;
+  if (suggestion.type === 'addDirectories') {
+    const dirs = suggestion.directories;
+    return Array.isArray(dirs) && dirs.length > 0 && dirs.every((dir) => typeof dir === 'string') ? dirs.join(', ') : undefined;
+  }
+  if (suggestion.type !== 'addRules' || (suggestion.behavior !== undefined && suggestion.behavior !== 'allow')) return undefined;
+  const rules = suggestion.rules;
+  if (!Array.isArray(rules) || rules.length === 0) return undefined;
+  const words = rules.map((rule: { toolName?: unknown; ruleContent?: unknown } | null) => {
+    if (typeof rule?.toolName !== 'string') return undefined;
+    if (typeof rule.ruleContent !== 'string' || rule.ruleContent === '') return `all ${rule.toolName} calls`;
+    return rule.toolName === 'Bash' ? rule.ruleContent : `${rule.toolName}(${rule.ruleContent})`;
+  });
+  return words.every((word) => word !== undefined) ? words.join(', ') : undefined;
+}
+
+/**
+ * What allowing the request's suggestions for the session grants, in words ("npm run:*", "all edits"), or null where
+ * there are none or one can't be worded: the button must say what it grants, so it isn't offered for what it can't.
+ */
+function sessionGrantOf(suggestions: readonly object[]): string | null {
+  const grants = suggestions.map((suggestion) => grantOf(suggestion as Record<string, unknown>));
+  return grants.length === 0 || grants.some((grant) => grant === undefined) ? null : grants.join(' and ');
+}
+
+/** The permission updates the harness suggested with a request (Claude's `permission_suggestions`), as objects. */
+function suggestionsOf(payload: Record<string, unknown>): object[] {
+  const suggestions = payload.permission_suggestions;
+  return Array.isArray(suggestions) ? suggestions.filter((each): each is object => typeof each === 'object' && each !== null && !Array.isArray(each)) : [];
 }
 
 export function createPermissionHolds(options: PermissionHoldsOptions): PermissionHolds {
@@ -108,7 +152,9 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
       return new Promise<HookReply>((resolve) => {
         const now = Date.now();
         const subagent = subagentOf(payload);
+        const suggestions = suggestionsOf(payload);
         const entry: Held = {
+          suggestions,
           prompt: {
             id: randomUUID(),
             toolName: typeof payload.tool_name === 'string' ? payload.tool_name : 'tool',
@@ -119,6 +165,7 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
                 : { id: subagent, type: typeof payload.agent_type === 'string' ? payload.agent_type : 'agent' },
             requestedAt: new Date(now).toISOString(),
             heldUntil: new Date(now + options.holdMs).toISOString(),
+            sessionGrant: sessionGrantOf(suggestions),
           },
           reply: (reply) => {
             clearTimeout(timer);
@@ -144,8 +191,17 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
     decide(sessionId, requestId, decision) {
       const entry = sessions.get(sessionId)?.find((held) => held.prompt.id === requestId);
       if (entry?.reply === undefined) return false;
-      answer(entry, permissionReply(decision));
+      // Allowing for the session needs what the harness suggested; without it the request stays held.
+      if (decision.behavior === 'allow' && decision.scope === 'session' && entry.prompt.sessionGrant === null) return false;
+      answer(entry, permissionReply(decision, entry.suggestions));
       settle(sessionId, (held) => held === entry);
+      return true;
+    },
+
+    release(sessionId, requestId) {
+      const entry = sessions.get(sessionId)?.find((held) => held.prompt.id === requestId);
+      if (entry?.reply === undefined) return false;
+      answer(entry, undefined);
       return true;
     },
 

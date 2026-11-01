@@ -1820,6 +1820,7 @@ describe('the needs-you inbox', () => {
         subagent: null,
         requestedAt: expect.any(String),
         heldUntil: expect.any(String),
+        sessionGrant: null,
       },
     ]);
     const decided = recorder.events.length;

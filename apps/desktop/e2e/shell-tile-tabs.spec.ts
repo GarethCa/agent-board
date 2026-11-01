@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { launch, sessionWindow, SHELL_ENV, windowKey } from './agent-helpers.ts';
-import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test, newShellInZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
@@ -34,7 +34,7 @@ test("a shell tile's window has tabs and panes as an agent's does (⌘T, + menu,
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
 
     // One tab, the tile's own panes, named after it, and a named + to open another.
     await expect(tabs(window)).toHaveCount(1);

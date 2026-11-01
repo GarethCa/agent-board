@@ -360,6 +360,8 @@ export interface AgentHost {
   resume(sessionId: string, why: string, force: boolean, fresh?: { prompt?: string }): Promise<Agent>;
   /** Answers one of the agent's held permission prompts. */
   decidePermission(sessionId: string, requestId: string, decision: PermissionDecision): void;
+  /** Releases one of the agent's held permission prompts unanswered, so the harness asks in its terminal now. */
+  releasePermission(sessionId: string, requestId: string): void;
   /**
    * Starts a scheduled run. An agent sitting at its prompt (idle, or after a failed turn) gets `prompt` as its next
    * message. An ended agent is relaunched in its worktree with `prompt`: Claude resumes its conversation, Codex starts
@@ -1692,6 +1694,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     decidePermission(sessionId, requestId, decision) {
       const agent = requireAgent(sessionId);
+      const prompt = permissions.prompts(sessionId).find((each) => each.id === requestId);
+      if (decision.behavior === 'allow' && decision.scope === 'session' && prompt?.heldUntil != null && prompt.sessionGrant === null) {
+        throw invalidParams('the harness suggested nothing to allow for the session with that prompt');
+      }
       if (!permissions.decide(sessionId, requestId, decision)) {
         throw new RpcMethodError(AGENT_ERROR.permissionGone, `${agent.name} is no longer waiting on that permission here`);
       }
@@ -1700,6 +1706,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const row = getRow(sessionId)!;
       hookStates.permissionDecided(sessionId);
       save(row, stateWithPrompts(row.state, { pending, settled: true }), subagents.of(sessionId), true);
+    },
+
+    releasePermission(sessionId, requestId) {
+      const agent = requireAgent(sessionId);
+      if (!permissions.release(sessionId, requestId)) {
+        throw new RpcMethodError(AGENT_ERROR.permissionGone, `${agent.name} is no longer waiting on that permission here`);
+      }
+      // Its prompt stays, now asking in the terminal.
+      options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
     },
 
     async link(sessionId, issueId) {
@@ -2058,7 +2073,13 @@ export function agentHandlers<Context>(
       const behavior = p.behavior;
       if (behavior !== 'allow' && behavior !== 'deny') throw invalidParams('behavior must be allow or deny');
       const message = optionalStringParam(p, 'message');
-      agents.decidePermission(stringParam(p, 'sessionId'), stringParam(p, 'requestId'), { behavior, message });
+      if (p.scope !== undefined && p.scope !== 'session') throw invalidParams('scope must be session');
+      agents.decidePermission(stringParam(p, 'sessionId'), stringParam(p, 'requestId'), { behavior, message, ...(p.scope === 'session' ? { scope: 'session' as const } : {}) });
+      return null;
+    },
+    'agent.releasePermission': (params) => {
+      const p = paramsObject(params);
+      agents.releasePermission(stringParam(p, 'sessionId'), stringParam(p, 'requestId'));
       return null;
     },
     'agent.link': (params) => {

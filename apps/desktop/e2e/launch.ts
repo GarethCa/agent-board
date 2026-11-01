@@ -120,6 +120,15 @@ export interface LaunchOptions {
  */
 export const runDesign = (): Design | undefined => (process.env.E2E_DESIGN === 'simplified' ? 'simplified' : undefined);
 
+/**
+ * A tab's name as the strip shows it in this run: under the Simplified design the agent's own tab is worded (`claude` is
+ * Chat) and a pull request's spelled out (`PR #41` is Pull request #41); every other name is the same in both.
+ */
+export function tabText(name: string): string {
+  if (runDesign() !== 'simplified') return name;
+  return name === 'claude' ? 'Chat' : name.replace(/^PR #/, 'Pull request #');
+}
+
 /** Skips a test about Classic's own look in a run under the Simplified design (`E2E_DESIGN`). */
 export function classicOnly(): void {
   test.skip(runDesign() === 'simplified', "about Classic's own look");
@@ -234,6 +243,22 @@ export async function placeWithTool(page: Page, tool: 'New agent' | 'New shell',
 /** Puts a new shell loose in the middle of the board with the Shell tool. */
 export async function newShell(page: Page): Promise<void> {
   await placeWithTool(page, 'New shell');
+}
+
+/**
+ * Makes a shell tile in the board's one zone, and opens its window: Classic's zone button, or under the Simplified design
+ * the project's right-click menu, as a project has no button for it.
+ */
+export async function newShellInZone(page: Page): Promise<void> {
+  const zone = page.getByTestId('zone');
+  if (runDesign() !== 'simplified') {
+    await zone.getByRole('button', { name: 'New shell in zone' }).click();
+    return;
+  }
+  const box = (await zone.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 24, { button: 'right' });
+  await expect(page.getByRole('menu')).toBeVisible();
+  await page.getByRole('menu', { name: /project$/ }).getByRole('menuitem', { name: /^New terminal here/ }).click();
 }
 
 /** Makes the next folder picker in the app's main process return `path`, as if the user had picked it. */

@@ -15,6 +15,7 @@ import { ChatView } from './ChatView';
 import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
 import { PaneDecisions } from './PaneDecision';
+import { paneDecision, useDeferredDecisions } from './pane-decision';
 import type { RunsChoice, RunsMode } from './chat';
 import { ChatAgentsSwitch } from './ChatAgentsFilter';
 import { ChatStyleSwitch } from './ChatStyleSwitch';
@@ -22,7 +23,7 @@ import { ShellPanes } from './ShellPanes';
 import { TerminalPane, type AttachState, type PaneStatus } from './TerminalPane';
 import { composerBlock } from './composer-block';
 import { canRestart, endedShellLabel, exitText, RestartAgent } from './RestartAgent';
-import { HARNESS_COMMANDS, planSurfaceOf, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
+import { HARNESS_COMMANDS, wordedTabLabel, planSurfaceOf, pullRequestSurfaceOf, shellOwner, tabLiveShells, windowShells, worstState, type TabOwner, type WindowSurface } from './tabs';
 import { agentWorktrees, dropKey, dropOver as dropOverValue, foreignFolder, tabMover } from './shell-moves';
 import type { StripTab } from './TabStrip';
 import { useWindowPanes, type WindowPanesControl } from './use-window-panes';
@@ -160,6 +161,7 @@ export function SessionBody({
   const headerSwitch = viewSlot !== undefined;
   const opensOn = useOpensOn();
   const simplified = useSimplified();
+  const deferredIds = useDeferredDecisions();
   const conversationAs = useConversationAs();
   const windowOpensOn = headerSwitch ? openingView(opensOn, conversationAs) : 'terminal';
   const [pickedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
@@ -258,7 +260,9 @@ export function SessionBody({
   /** A surface's tab: an agent's own dot is its attachment unless a shell split beside it failed; a shell's, its shells'. */
   const stripTabOf = (surface: WindowSurface): StripTab => {
     const closable = panes?.closable(surface) ?? false;
-    const base = { id: surface.key, label: surface.label, closable };
+    // Under the Simplified design a tab is named in words: Chat, not the command the agent runs (`wordedTabLabel`).
+    const label = simplified ? wordedTabLabel(surface, agent) : surface.label;
+    const base = { id: surface.key, label, closable };
     if (surface.kind === 'agent') return { ...base, dot: paneStatuses[surface.agent.sessionId]?.state ?? 'attaching', closeHint: 'Close the tab; the session keeps running' };
     if (surface.kind === 'pr') return { ...base, icon: <GitPullRequest />, title: `${surface.pr.repo}#${surface.pr.number}`, closeHint: 'Close the tab' };
     if (surface.kind === 'web') return { ...base, icon: <Globe />, title: surface.web.url || 'New tab', closeHint: 'Close the tab and forget its cookies' };
@@ -281,7 +285,7 @@ export function SessionBody({
         autoFocus={autoFocus}
         onPaneStatus={onPaneStatus}
         onProblem={setProblem}
-        agentPane={surface.key === OWN_SURFACE && agent ? { sessionId: agent.sessionId, label: HARNESS_COMMANDS[agent.harness], content: sessionView } : undefined}
+        agentPane={surface.key === OWN_SURFACE && agent ? { sessionId: agent.sessionId, label: simplified ? 'Chat' : HARNESS_COMMANDS[agent.harness], content: sessionView } : undefined}
         dragFrom={dragFrom}
       />
     );
@@ -350,7 +354,7 @@ export function SessionBody({
           {!split && viewSwitch}
         </div>
         {notice}
-        {agent && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
+        {agent && !(simplified && chat && paneDecision(agent, deferredIds)?.kind === 'permission' && agent.permissions.every((prompt) => prompt.heldUntil !== null)) && <BlockedBanner agent={agent} chat={chat} onShowTerminal={onShowTerminal} />}
         {agent && canRestart(agent) && (
           <div className="agent-exit-banner" role="status" data-testid="agent-exit-banner">
             {exitText(agent)}
@@ -366,7 +370,7 @@ export function SessionBody({
             <p className="session-window-pending">Loading panes…</p>
           )}
         </div>
-        {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} />}
+        {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} onShowTerminal={onShowTerminal} />}
         {agent && chat && <Composer agent={agent} />}
       </div>
       {trailing && !detailsCollapsed && (

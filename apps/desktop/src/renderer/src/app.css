@@ -2921,6 +2921,54 @@ kbd {
   display: none;
 }
 
+/*
+ * The Simplified design's tabs: light and worded. A tab is a word in the system's face on the strip, the one showing a
+ * raised page tab, its × always there but quiet. Only the look changes: the slot, the dragged tab's dim and its ghost
+ * are the strip's own.
+ */
+:root[data-design='simplified'] .session-tabs {
+  align-items: flex-end;
+  align-self: stretch;
+}
+
+:root[data-design='simplified'] .session-tabs-list {
+  gap: var(--space-0-5);
+  align-items: flex-end;
+}
+
+:root[data-design='simplified'] .session-tab {
+  align-self: flex-end;
+  height: calc(var(--control-sm) + var(--space-0-5));
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+:root[data-design='simplified'] .session-tab[data-active] {
+  background: var(--window-bg);
+  box-shadow: var(--shadow-window-tab-picked);
+}
+
+:root[data-design='simplified'] .session-tab-button {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+}
+
+:root[data-design='simplified'] .session-tab[data-active] .session-tab-button {
+  font-weight: var(--weight-semibold);
+}
+
+:root[data-design='simplified'] .session-tab .session-tab-close {
+  opacity: 0.55;
+}
+
+:root[data-design='simplified'] .session-tab:is(:hover, :focus-within, [data-active]) .session-tab-close {
+  opacity: 1;
+}
+
+:root[data-design='simplified'] .ui-button.session-tab-new {
+  align-self: center;
+  border-color: transparent;
+}
+
 /* Where a tab dragged over a pane would land: its strip from the middle, or a new pane at the nearest edge. */
 .window-pane-drop {
   position: absolute;
@@ -4644,7 +4692,7 @@ button.chat-chip[aria-expanded='true'] {
   border-radius: var(--sticky-radius);
   background: var(--sticky-color);
   /* Crisp layers only, like tiles: hundreds of notes repaint on every pan frame. */
-  box-shadow: var(--shadow-tile);
+  box-shadow: var(--sticky-shadow);
   color: var(--sticky-ink, var(--sticky-other-ink));
   font-family: var(--font-hand);
   font-weight: var(--sticky-weight);
@@ -5299,6 +5347,53 @@ button.chat-chip[aria-expanded='true'] {
 .question-card-handle {
   visibility: hidden;
   pointer-events: none;
+}
+
+/* Under the Simplified design a note an agent writes is a plain white card: no dashed edge or tab, a hairline and one soft
+   shadow like a tile's, and a byline that names its agent in the foot. Stickies are not touched. */
+:root[data-design='simplified'] .agent-note-card {
+  border: 0;
+  border-radius: var(--radius-2xl);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+}
+
+:root[data-design='simplified'] .agent-note-byline {
+  /* The agent's name is what the card is for: the rest of the foot gives way before it does. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design='simplified'] .agent-note-foot > :not(time, .agent-note-byline) {
+  flex: 0 100000 auto;
+}
+
+:root[data-design='simplified'] .agent-note-byline-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+:root[data-design='simplified'] .agent-note-byline-link:hover {
+  text-decoration: underline;
+}
+
+:root[data-design='simplified'] .agent-note-more > span {
+  background: var(--raised);
+  box-shadow: 0 0 var(--space-2) var(--space-2) var(--raised);
 }
 
 /* The agent's terminal, cut out and pinned. */
@@ -10302,6 +10397,49 @@ tr[data-status='running'] .gate-step-icon {
 .pane-decision-later-text {
   flex: 1;
   min-width: 0;
+}
+
+/* A permission prompt's card: the call in mono under its sentence, the hold's countdown, and the buttons at the trailing edge. */
+.pane-decision-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  padding: var(--space-1-5) var(--space-2);
+  background: var(--window-field);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.pane-decision-countdown {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.pane-decision[data-destructive] .pane-decision-countdown {
+  color: var(--danger);
+}
+
+.pane-decision-actions {
+  gap: var(--space-2);
+  align-items: center;
+  padding-bottom: var(--space-2-5);
+}
+
+.pane-decision-grant {
+  min-width: 0;
+  max-width: 24em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-decision-actions > :first-child {
+  margin-right: auto;
 }
 
 /* Under a decision, the composer's well carries on: no second line between them. */

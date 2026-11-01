@@ -3,7 +3,7 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, screen, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
 
@@ -72,7 +72,7 @@ test('a document shown on the board is a card beside its agent; its Document tab
     await expect(card).toContainText('you edited');
 
     // Typed at its prompt once its turn is over.
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user edited docs/release-plan.md (v2)', { timeout: TURN_MS });
     await expect(screen(window)).toContainText('+ Hold the pin bump to 1.5.', { timeout: TURN_MS });
 
@@ -115,7 +115,7 @@ test('Save and ⌘S never write over a version the agent saved while the user wa
     await banner.getByRole('button', { name: 'Keep mine' }).click();
     await expect(docView(window)).toHaveAttribute('data-mode', 'read');
     expect(readFileSync(path, 'utf8')).toBe('# Release 1.4 plan\n\nMine.\n');
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user kept their version of plan.md over your v2', { timeout: TURN_MS });
   });
 });
@@ -147,7 +147,7 @@ test('esc leaves Edit with nothing written, and an HTML document is view-only wi
     await comments.getByLabel(`Comments on Cache benchmark for ${page.name}`).fill('Was this with WAL on?');
     await comments.getByRole('button', { name: 'Send comments' }).click();
     await expect(comments).toContainText('Sent');
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user commented on bench.html (v1):', { timeout: TURN_MS });
     await expect(screen(window)).toContainText('Was this with WAL on?', { timeout: TURN_MS });
   });

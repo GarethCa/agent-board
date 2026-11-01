@@ -41,16 +41,12 @@ function setting<Value>(initial: Value) {
   };
 }
 
-/** The design today's tests open in. */
-const classic = () => setting<Design>('classic').source;
-
 describe('followTheme', () => {
   it('under System, shows the theme for the window’s light or dark mode, and again whenever it switches', () => {
     const os = scheme(false);
     const appearance = setting(at('system'));
     const root = { dataset: {} as DOMStringMap };
-    const design = setting<Design>('classic');
-    const stop = followTheme(root, os.query, appearance.source, design.source);
+    const stop = followTheme(root, os.query, appearance.source);
     expect(root.dataset.theme).toBe('light');
     os.flip(true);
     expect(root.dataset.theme).toBe('dark');
@@ -59,14 +55,13 @@ describe('followTheme', () => {
     stop();
     expect(os.listening()).toBe(0);
     expect(appearance.listening()).toBe(0);
-    expect(design.listening()).toBe(0);
   });
 
   it('shows a picked theme whatever the mode, and follows a pick made in any window', () => {
     const os = scheme(false);
     const appearance = setting(at('dark'));
     const root = { dataset: {} as DOMStringMap };
-    followTheme(root, os.query, appearance.source, classic());
+    followTheme(root, os.query, appearance.source);
     expect(root.dataset.theme).toBe('dark');
     appearance.pick(at('light'));
     expect(root.dataset.theme).toBe('light');
@@ -79,7 +74,7 @@ describe('followTheme', () => {
     const os = scheme(false);
     const appearance = setting(at('dark', 'catppuccin'));
     const root = { dataset: {} as DOMStringMap };
-    followTheme(root, os.query, appearance.source, classic());
+    followTheme(root, os.query, appearance.source);
     expect(root.dataset).toMatchObject({ theme: 'catppuccin-mocha', scheme: 'dark' });
     appearance.pick(at('system', 'catppuccin'));
     expect(root.dataset).toMatchObject({ theme: 'catppuccin-latte', scheme: 'light' });
@@ -89,19 +84,16 @@ describe('followTheme', () => {
     expect(root.dataset).toMatchObject({ theme: 'dark', scheme: 'dark' });
   });
 
-  it('shows a theme pack as the app’s own theme in its mode under the Simplified design, and the pack again under Classic', () => {
+  it('shows a theme pack by its id whatever the design, so the Simplified design draws it too', () => {
     const os = scheme(false);
     const appearance = setting(at('system', 'catppuccin'));
-    const design = setting<Design>('simplified');
-    const root = { dataset: {} as DOMStringMap };
-    followTheme(root, os.query, appearance.source, design.source);
-    expect(root.dataset).toMatchObject({ theme: 'light', scheme: 'light' });
+    const root = { dataset: { design: 'simplified' } as DOMStringMap };
+    followTheme(root, os.query, appearance.source);
+    expect(root.dataset).toMatchObject({ theme: 'catppuccin-latte', scheme: 'light', design: 'simplified' });
     os.flip(true);
-    expect(root.dataset).toMatchObject({ theme: 'dark', scheme: 'dark' });
-    design.pick('classic');
     expect(root.dataset).toMatchObject({ theme: 'catppuccin-mocha', scheme: 'dark' });
-    design.pick('simplified');
-    expect(root.dataset).toMatchObject({ theme: 'dark', scheme: 'dark' });
+    appearance.pick(at('system', 'nord'));
+    expect(root.dataset).toMatchObject({ theme: 'nord', scheme: 'dark' });
   });
 });
 

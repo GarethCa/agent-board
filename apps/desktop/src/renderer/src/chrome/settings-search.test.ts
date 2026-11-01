@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { searchSettings, type SettingsHit } from './settings-search';
+import { drawnPane, searchSettings, type SettingsHit } from './settings-search';
 
 /** Each hit as `Group › Section: control, control`. */
 const shown = (hits: readonly SettingsHit[]) =>
@@ -27,6 +27,12 @@ describe('searchSettings', () => {
     expect(shown(searchSettings('  CLAUDE PÁTH ', { simplified: false }))).toEqual(['Advanced › Programs: Claude path']);
   });
 
+  it("leaves out Classic's agent note look under the Simplified design, and with it the section that holds only it", () => {
+    expect(shown(searchSettings('notes', { simplified: false }))).toEqual(['Board › Agent notes: How a note an agent writes looks']);
+    expect(shown(searchSettings('notes', { simplified: true }))).toEqual([]);
+    expect(shown(searchSettings('terminal card', { simplified: true }))).toEqual([]);
+  });
+
   it('leaves out the controls only the Simplified design draws, under Classic', () => {
     expect(shown(searchSettings('technical', { simplified: false }))).toEqual([]);
     expect(shown(searchSettings('technical', { simplified: true }))).toEqual(['General › Design: Show technical details']);
@@ -38,5 +44,13 @@ describe('searchSettings', () => {
     expect(searchSettings('', { simplified: false })).toEqual([]);
     expect(searchSettings('   ', { simplified: false })).toEqual([]);
     expect(searchSettings('zzzz', { simplified: false })).toEqual([]);
+  });
+});
+
+describe('drawnPane', () => {
+  it("keeps a section that is drawn, and falls back to its group when it isn't under this design", () => {
+    expect(drawnPane({ group: 'board', section: 'notes' }, false)).toEqual({ group: 'board', section: 'notes' });
+    expect(drawnPane({ group: 'board', section: 'notes' }, true)).toEqual({ group: 'board' });
+    expect(drawnPane({ group: 'board' }, true)).toEqual({ group: 'board' });
   });
 });

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Columns2, EyeOff, FolderOpen, GitPullRequest, Globe, PanelsTopLeft, Play, Plus, SquareTerminal, X } from 'lucide-react';
 import type { PackageScripts } from '@agent-board/daemon/protocol';
+import { useSimplified } from '../design';
 import { binding, chordText, keyText } from '../keys/registry';
 import { Button, IconButton, Kbd, Menu, type MenuEntry } from '../ui';
 import type { AttachState } from './TerminalPane';
@@ -91,6 +92,7 @@ export function TabStrip({
   drop,
   trailing,
 }: TabStripProps) {
+  const simplified = useSimplified();
   const list = useRef<HTMLDivElement>(null);
   // A tab or pane held over the strip that would land here shows a slot where it would go.
   const dragging = useTabDrag();
@@ -143,7 +145,9 @@ export function TabStrip({
     { label: `New shell ${here}`, icon: <SquareTerminal />, shortcut: keyText('window.newTab'), onSelect: onNewShell },
     { label: 'New shell at a folder…', icon: <FolderOpen />, onSelect: onNewShellAt },
   ];
+  // Under the Simplified design the menu says where its entries open, and holds Split, in place of the strip's icon.
   const entries: MenuEntry[] = [
+    ...(simplified ? ([{ heading: 'Open in this pane' }] as MenuEntry[]) : []),
     ...(shells ? shellEntries : []),
     ...(onOpenWeb === undefined
       ? []
@@ -156,6 +160,7 @@ export function TabStrip({
     ...sessions.map((session): MenuEntry => ({ label: session.label, icon: <PanelsTopLeft />, onSelect: session.onSelect })),
     ...(pullRequests.length === 0 ? [] : (['separator', { heading: 'Open a pull request' }] as MenuEntry[])),
     ...pullRequests.map((pr): MenuEntry => ({ label: pr.label, icon: <GitPullRequest />, onSelect: pr.onSelect })),
+    ...(simplified && shells ? (['separator', { heading: 'Split' }, { label: 'Split right', icon: <Columns2 />, shortcut: keyText('window.splitBeside'), onSelect: onSplit }] as MenuEntry[]) : []),
   ];
   const slot = over !== undefined && accepting ? <span className="session-tab-slot" data-testid="session-tab-slot" aria-hidden /> : null;
   return (
@@ -258,7 +263,7 @@ export function TabStrip({
           {named ? 'Shell' : undefined}
         </Button>
       </Menu>
-      {shells && (
+      {shells && !simplified && (
       <IconButton
         className="session-tab-split"
         icon={<Columns2 />}

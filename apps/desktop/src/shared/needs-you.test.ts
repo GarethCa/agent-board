@@ -75,6 +75,7 @@ const prompt: PermissionPrompt = {
   subagent: null,
   requestedAt: '2026-10-09T10:00:00.000Z',
   heldUntil: '2026-10-09T10:00:20.000Z',
+  sessionGrant: null,
 };
 const lapsed: PermissionPrompt = { ...prompt, id: 'p2', heldUntil: null };
 
