@@ -10,7 +10,7 @@ import { ViewPopover, type ViewPopoverProps } from './ViewPopover';
 /**
  * The bottom-right island (chrome C): zoom out, the zoom (a click fits the board), zoom in, snapping to the grid, and
  * the minimap's toggle, with the minimap over it, and the usage pill first when Settings › Usage shows it here. The View button opens the popover of view settings.
- * Under the Simplified design the grid and the minimap move into the View menu, and the minimap is off until turned on.
+ * Under the Simplified design the grid and the minimap move into the View menu, the minimap is off until turned on, and the usage goes to the top right, before Needs you.
  */
 export function ZoomControls({
   nodeColor,
@@ -29,7 +29,7 @@ export function ZoomControls({
     <>
       {minimap && <MiniMap className="board-minimap" pannable zoomable nodeColor={nodeColor} nodeStrokeColor="var(--raised-edge)" ariaLabel="Minimap" />}
       <Island className="zoom-controls island-bottom-right" role="group" aria-label="Zoom">
-        {usageOnBoard && <UsagePill separated />}
+        {usageOnBoard && !simplified && <UsagePill separated />}
         <ToolButton size="sm" icon={<Minus />} label="Zoom out" onClick={() => void zoomOut()} />
         <Button
           size="sm"

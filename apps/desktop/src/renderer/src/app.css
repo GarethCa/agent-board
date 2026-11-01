@@ -1603,6 +1603,52 @@ kbd {
   white-space: nowrap;
 }
 
+/* The calm tile's other faces under the Simplified design: a shell's tile and a start's tile are the calm tile (CalmShellTile.tsx,
+   StartTile.tsx), so they take its rules above; what follows is only what they add. */
+.calm-tile .hybrid-tile-folder {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.calm-tile[data-start] .hybrid-tile-step[data-state='done'] {
+  color: var(--muted);
+}
+
+/* The gallery's folded chips, stacked as they sit in a zone. */
+.calm-chip-gallery {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+/* A folded chip (FoldedChip.tsx): its status drawn as the calm tile draws it, at full strength rather than dimmed. */
+.folded-chip.calm-chip {
+  opacity: 1;
+}
+
+.folded-chip.calm-chip .status-mark {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+}
+
+/* An expanded tile (ExpandedTile.tsx): a hairline around the session window, its header controls each
+   a 24px target, and the header's facts (branch, folder, panes, pull requests) the technical layer. */
+:root[data-design='simplified'] .expanded-tile {
+  border-width: 0.5px;
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+:root[data-design='simplified'] .expanded-tile-head .ui-icon-button {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+
+.expanded-tile-facts {
+  display: contents;
+}
+
 .zone[data-kind='unbound'] {
   border-style: dashed;
 }
@@ -4037,6 +4083,122 @@ button.chat-rail-line {
 
 .chat-pop.chat-tools {
   padding-left: var(--space-2-25);
+}
+
+/*
+ * The Simplified design's Timeline view: each turn on one rail, the time down its side, every step a muted line with
+ * its dot and the replies in full; what was said to the agent stays off the rail. The live line is its last step.
+ */
+.timeline-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-25);
+}
+
+.timeline-turn {
+  display: grid;
+  /* Wide enough for an earlier day's "Thu 09:14", so every turn's rail lines up. */
+  grid-template-columns: var(--space-16) minmax(0, 1fr);
+  column-gap: var(--space-2-5);
+}
+
+.timeline-time {
+  padding-top: var(--space-0-5);
+  color: var(--window-ink-soft);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.timeline-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-0-5) 0 var(--space-1-5) var(--space-2-5);
+  border-left: 2px solid var(--window-line);
+}
+
+/* A step's dot on the rail, in its state's colour; a reply and the live line, which has its glyph, take none. */
+.timeline-step:not([data-tone='reply'], [data-live])::before {
+  position: absolute;
+  top: calc(var(--space-0-5) + 0.5lh - var(--space-1-5) / 2);
+  left: calc(-1 * var(--space-1));
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--window-ink-soft);
+  content: '';
+}
+
+.timeline-step[data-tone='think']::before {
+  background: var(--window-think);
+}
+
+.timeline-step[data-tone='danger']::before {
+  background: var(--window-danger);
+}
+
+.timeline-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--window-ink-soft);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+button.timeline-line {
+  cursor: pointer;
+}
+
+button.timeline-line:hover {
+  color: var(--window-ink);
+}
+
+button.timeline-line:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: var(--focus-ring-width) solid var(--focus);
+}
+
+.timeline-detail {
+  min-width: 0;
+  color: var(--window-ink-soft);
+}
+
+.timeline-step[data-tone='reply'] {
+  color: var(--window-ink);
+}
+
+/* The live line: its glyph and words in its state's colour. */
+.timeline-live {
+  align-items: center;
+  color: var(--window-ink);
+}
+
+.timeline-step[data-tone='think'] > .timeline-live {
+  color: var(--window-think);
+}
+
+.timeline-step[data-tone='wait'] > .timeline-live {
+  color: var(--window-warning);
+}
+
+.timeline-step[data-tone='limit'] > .timeline-live {
+  color: var(--window-limit);
+}
+
+.timeline-step[data-tone='danger'] > .timeline-live {
+  color: var(--window-danger);
 }
 
 /* A compaction: a break across the rail. */
@@ -6562,6 +6724,96 @@ button.chat-chip[aria-expanded='true'] {
   border-radius: var(--radius-pill);
   background: var(--clone-fill);
   transition: width var(--motion-base) var(--ease-out);
+}
+
+/*
+ * A project under the Simplified design: a neutral well with a hairline, its colour only in its heading's dot. A fill
+ * picked in its ⋯ tints the well as a zone's does; a repo, a group or a clone all look the same, so these come after
+ * the zone's own rules.
+ */
+.zone.project-well {
+  border: 0.5px solid var(--border);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.zone.project-well[data-fill] {
+  background: color-mix(in srgb, var(--zone-color) var(--zone-fill-mix), transparent);
+}
+
+/* A dragged tile or note would move into it: the edge strengthens. */
+.zone.project-well[data-drop-target] {
+  border: 1.5px solid color-mix(in srgb, var(--text) 35%, transparent);
+}
+
+/* Its heading, inside the well above its first row of tiles; pressed anywhere but ⋯, it drags the project. */
+.project-heading {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-1-5);
+  left: var(--space-3);
+  display: flex;
+  gap: var(--space-1-75);
+  align-items: center;
+  height: var(--space-6);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.project-dot {
+  flex: none;
+  width: var(--size-dot-md);
+  height: var(--size-dot-md);
+  border-radius: var(--radius-pill);
+  background: var(--zone-color);
+}
+
+.project-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+}
+
+.project-heading .editable-name {
+  cursor: inherit;
+}
+
+.project-needs-you {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--state-waiting);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.project-summary,
+.project-note {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.project-heading-gap {
+  flex: 1;
+}
+
+.project-folder {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+}
+
+.project-options {
+  --chip: transparent;
+  --chip-edge: transparent;
+
+  flex: none;
 }
 
 /* Issue cards and the "issue brief" flow edge that feeds an agent from one (R1) */
@@ -9860,4 +10112,327 @@ tr[data-status='running'] .gate-step-icon {
 
 .ui-segmented.session-header-view-switch {
   flex: none;
+}
+
+/* The composer under the Simplified design: a "+" menu at the field's start, a round send button at its end, and the
+   system font in place of the prompt's mono. Classic keeps the prompt glyph, the Send label and the hint line. The
+   field keeps Classic's radius and its bottom alignment, as the chosen drawing has them: the buttons stay on the last line
+   of a tall draft. */
+:root[data-design='simplified'] .composer-field {
+  padding-left: var(--space-1-25);
+}
+
+:root[data-design='simplified'] .composer-plus,
+:root[data-design='simplified'] .composer-send {
+  flex: none;
+  border-radius: var(--radius-pill);
+}
+
+:root[data-design='simplified'] .composer-plus {
+  color: var(--muted);
+}
+
+:root[data-design='simplified'] .ui-input.composer-input,
+:root[data-design='simplified'] .ui-input.composer-input:is(:hover, :focus) {
+  font-family: inherit;
+}
+
+/*
+ * The question or plan an agent waits on, above the composer under the Simplified design (PaneDecision.tsx): a card in
+ * the composer's well, numbered choices or the plan's decision, the primary at the trailing edge and Decide later at the
+ * leading one. Put off, it is one line there that brings it back.
+ */
+.pane-decision,
+.pane-decision-later {
+  flex: none;
+  margin: 0;
+  padding: var(--space-2-5) var(--space-3-5) 0;
+  background: var(--window-composer);
+  border-top: 1px solid var(--window-line);
+}
+
+.pane-decision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The card takes the keyboard as it shows: no ring for that, only when it is reached from the keyboard. */
+.pane-decision:focus {
+  outline: none;
+}
+
+.pane-decision:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.pane-decision > * {
+  margin: 0;
+}
+
+.pane-decision-from {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.pane-decision-question {
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-semibold);
+}
+
+.pane-decision-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.pane-decision-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--space-8);
+  padding: var(--space-1-5) var(--space-2-5);
+  border: 1px solid var(--window-edge);
+  border-radius: var(--radius-xl);
+  background: var(--window-field);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.pane-decision-choice:hover:not(:disabled) {
+  border-color: var(--focus);
+}
+
+.pane-decision-choice:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--space-px);
+}
+
+.pane-decision-choice:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.pane-decision-number {
+  flex: none;
+  padding: 0 var(--space-1-25);
+  border: 1px solid var(--window-edge);
+  border-radius: var(--radius-key);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.pane-decision-choice-text {
+  font-weight: var(--weight-semibold);
+}
+
+.pane-decision-reply {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.pane-decision-reply .ui-input {
+  flex: 1;
+}
+
+/* Its send is the composer's round one. */
+:root[data-design='simplified'] .pane-decision-reply .ui-icon-button {
+  border-radius: var(--radius-pill);
+}
+
+.pane-decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.pane-decision-kind {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--state-thinking-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.pane-decision-kind svg,
+.pane-decision-later svg {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+}
+
+.pane-decision-title {
+  min-width: 0;
+  font-size: var(--font-size-md-plus);
+  font-weight: var(--weight-semibold);
+}
+
+.pane-decision-read {
+  margin-left: auto;
+}
+
+/* Reject at the leading edge, apart from Request changes and Approve. */
+.pane-decision .plan-decision-actions > :first-child {
+  margin-right: auto;
+}
+
+.pane-decision-foot {
+  display: flex;
+}
+
+.pane-decision-later-button kbd {
+  margin-left: var(--space-1);
+}
+
+.pane-decision-later {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-bottom: 0;
+  color: var(--state-waiting-ink);
+  font-size: var(--font-size-sm);
+}
+
+.pane-decision-later-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Under a decision, the composer's well carries on: no second line between them. */
+:is(.pane-decision, .pane-decision-later) + .composer {
+  border-top: 0;
+}
+
+/*
+ * An agent's inspector under the Simplified design (SimplifiedInspector.tsx): at the window's trailing edge, a status
+ * line on top, then short grouped rows. Its width is the details strip's, dragged on the handle before it.
+ */
+.inspector {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: var(--size-details);
+  min-width: var(--size-details-min);
+  max-width: 50%;
+  overflow-y: auto;
+  padding-bottom: var(--space-2-5);
+  border-left: 1px solid var(--separator);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.inspector-status {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+}
+
+.inspector-status-word {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.inspector-status-line {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.inspector-group-label {
+  margin: 0;
+  padding: var(--space-2-5) var(--space-4) var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.inspector-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inspector-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-75);
+  box-sizing: border-box;
+  width: calc(100% - 2 * var(--space-1-5));
+  min-height: var(--space-6-5);
+  margin: 0 var(--space-1-5);
+  padding: var(--space-1) var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+button.inspector-row:hover {
+  background: var(--hover);
+}
+
+.inspector-row-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.inspector-row-icon svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.inspector-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-row-name[data-mono] {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+}
+
+.inspector-row-end {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.inspector-more {
+  margin-top: var(--space-2);
+}
+
+.inspector-more-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-3-5) var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+.inspector-more-head svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }

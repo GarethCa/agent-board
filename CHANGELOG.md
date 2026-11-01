@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.10 (2026-11-01)
+
+- The ⌘K windows test's branch is not named like a ticket branch
+- The inspector test measures the Work group once the window holds still
+- "Since you last looked" shows what got done and what's up next
+- Notifications look like macOS banners, with one "Notify me when" choice
+- First run introduces the Captain and gets Claude ready in two steps (Simplified design)
+- The usage popover shot masks its refill times in a fixed box
+- Shell tiles, folded chips, expanded tiles and start tiles match the calm tile
+- Questions and plans are answered in the pane, where you type
+- The Timeline view shows the run as a rail, with a "Show the conversation as" setting
+- Usage sits in the Simplified toolbar as numbers, with the bars a click away
+- ⌘K lists open and minimised windows first under the Simplified design
+- A project shows as a coloured dot and a well, and every zone feature is in its right-click and ⋯ menus
+- The composer's extras live behind one + menu
+- An agent's details become a short grouped inspector under the Simplified design
+
 ## v0.6.9 (2026-10-31)
 
 - The Simplified board and docked-pane shots are retaken with the calm tile

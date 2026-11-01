@@ -50,7 +50,9 @@ test('a closed agent folds to a chip that keeps its edge, unfolds on click, fold
     const node = window.locator('.react-flow__node').filter({ has: window.locator(`[data-session-id="${fixer!.sessionId}"]`) });
     await expect.poll(() => node.evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(34);
     await expect(chip(window)).toContainText('Fix checkout flake');
-    await expect(chip(window).locator('.ui-pill')).toContainText('ended');
+    // Under the Simplified design its status is the calm tile's mark, not Classic's pill.
+    if (runDesign() === 'simplified') await expect(chip(window).getByTestId('status-mark')).toBeVisible();
+    else await expect(chip(window).locator('.ui-pill')).toContainText('ended');
     await expect(window.locator('[data-testid="agent-tile"]:not([data-folded])')).toHaveCount(1);
 
     // The chip is centred in its tile's place, as it is drawn: its edge leaves from the same height as the tile's did.
@@ -153,8 +155,10 @@ test('a chip stays exactly where it was through a zone delete and its undo, twic
     const box = await chip(window).boundingBox();
 
     for (let round = 0; round < 2; round++) {
-      await zoneNamed(window, 'monorepo').getByRole('button', { name: 'Zone options' }).click();
-      await window.getByRole('menuitem', { name: 'Delete zone…' }).click();
+      // Under the Simplified design the zone is a project, its Delete in its ⋯.
+      const simplified = runDesign() === 'simplified';
+      await zoneNamed(window, 'monorepo').getByRole('button', { name: simplified ? 'Project options' : 'Zone options' }).click();
+      await window.getByRole('menuitem', { name: simplified ? 'Delete project…' : 'Delete zone…' }).click();
       await window.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
       await expect(zoneNamed(window, 'monorepo')).toHaveCount(0);
       await window.keyboard.press('Meta+Z');

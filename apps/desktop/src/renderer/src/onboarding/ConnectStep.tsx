@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowRight, Bell, Check, ExternalLink, RotateCw, SquareTerminal, Webhook } from 'lucide-react';
 import type { ExternalHooksStatus, SetupTool, ToolCheck, TrackerScope } from '@agent-board/daemon/protocol';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { HarnessMark } from '../board/HarnessMark';
 import { errorMessage } from '../../../shared/errors';
 import { Button, ErrorText, IconButton, Input, Switch, Tag } from '../ui';
-import { readySummary, toolRow, type RowStatus } from './first-run';
+import { readySummary, shellQuote, SIGN_IN_ARGS, toolRow, type RowStatus } from './first-run';
+import { useToolChecks } from './use-tool-checks';
 
 /** Where to get each CLI. */
 const INSTALL_GUIDES: Record<SetupTool, string> = {
@@ -13,9 +14,6 @@ const INSTALL_GUIDES: Record<SetupTool, string> = {
   codex: 'https://github.com/openai/codex#installing-and-running-codex-cli',
   gh: 'https://cli.github.com',
 };
-
-/** What signs each CLI in, after its path: run in a shell tile, where the user can answer it. */
-const SIGN_IN_ARGS: Record<SetupTool, string> = { claude: 'auth login', codex: 'login', gh: 'auth login --web' };
 
 const LINEAR_KEYS_URL = 'https://linear.app/settings/account/security';
 
@@ -33,24 +31,11 @@ export interface ConnectStepProps {
  * step opens and fixable in place. Nothing is required, so the count says how many are left as optional.
  */
 export function ConnectStep({ progress, onSignIn, onOpenLink, onLater, onNext }: ConnectStepProps) {
-  const [checks, setChecks] = useState<Partial<Record<SetupTool, ToolCheck>>>({});
+  const { checks, check } = useToolChecks();
   const [linear, setLinear] = useState<LinearState>({ status: 'checking' });
   const [hooks, setHooks] = useState<ExternalHooksStatus>();
   const [notifications, setNotifications] = useState<NotificationsState>();
   const [problem, setProblem] = useState<string>();
-  /** The latest check asked of each CLI: an older one's answer, arriving after, is dropped. */
-  const latest = useRef<Partial<Record<SetupTool, number>>>({});
-
-  const check = useCallback((tool: SetupTool) => {
-    const asked = (latest.current[tool] ?? 0) + 1;
-    latest.current[tool] = asked;
-    setChecks((current) => ({ ...current, [tool]: undefined }));
-    const answer = (found: ToolCheck) => {
-      if (latest.current[tool] === asked) setChecks((current) => ({ ...current, [tool]: found }));
-    };
-    // A check that fails reads as a CLI that could not be asked, never as one still being checked.
-    window.agentBoard.setup.check(tool).then(answer, (error: unknown) => answer({ tool, found: true, path: tool, problem: `could not be checked: ${errorMessage(error)}` }));
-  }, []);
 
   useEffect(() => {
     for (const tool of ['claude', 'codex', 'gh'] as const) check(tool);
@@ -387,11 +372,6 @@ function ReadyRing({ ready, total }: { ready: number; total: number }) {
       )}
     </svg>
   );
-}
-
-/** A path as one shell word, in any shell agent-board runs (sh, bash, zsh, fish). */
-function shellQuote(path: string): string {
-  return `'${path.replaceAll("'", `'"'"'`)}'`;
 }
 
 function GitHubMark() {

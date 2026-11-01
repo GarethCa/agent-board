@@ -160,6 +160,66 @@ describe('spotlightGroups and settings', () => {
   });
 });
 
+describe('spotlightGroups and windows', () => {
+  const docs = agent('Docs', { sessionId: 's-docs', branch: 'margins-docs' });
+  const api = agent('API', { sessionId: 's-api' });
+  const other = agent('Other', { sessionId: 's-other' });
+  const windows = [
+    { kind: 'session' as const, id: 's-api', title: 'API', placement: 'docked' as const },
+    { kind: 'session' as const, id: 's-docs', title: 'Docs', placement: 'shown' as const },
+  ];
+  const sources = { agents: [docs, api, other], shells: [], zones, shows: 'turns' as const, windows, simplified: true };
+
+  it('lists open windows before minimised ones, first, and not again below', () => {
+    const groups = spotlightGroups('', sources);
+    expect(groups.map((group) => group.label)).toEqual(['Windows', 'Recent', 'Zones']);
+    expect(names(groups[0]!.rows)).toEqual(['Docs', 'API']);
+    expect(groups[0]!.rows.map((row) => row.window)).toEqual(['shown', 'docked']);
+    expect(groups[0]!.rows.map((row) => row.sub.split(' · ')[0])).toEqual(['Open', 'Minimised']);
+    expect(names(groups[1]!.rows)).toEqual(['Other']);
+  });
+
+  it('puts a matching window above the other matches, and keeps one that matched only by its branch below', () => {
+    const [windowsGroup, ...rest] = spotlightGroups('doc', sources);
+    expect(windowsGroup!.label).toBe('Windows');
+    expect(names(windowsGroup!.rows)).toEqual(['Docs']);
+    expect(rest.flatMap((group) => group.rows).some((row) => row.key === 'agent:s-docs')).toBe(false);
+    const byBranch = spotlightGroups('margins', sources);
+    expect(byBranch.some((group) => group.label === 'Windows')).toBe(false);
+    expect(names(byBranch[0]!.rows)).toEqual(['Docs']);
+  });
+
+  it('lists the window of the session the view shows last, so ↵ lands on another', () => {
+    const [group] = spotlightGroups('', { ...sources, current: 's-docs' });
+    expect(names(group!.rows)).toEqual(['API', 'Docs']);
+  });
+
+  it('lists no windows under Classic, whose dock holds them', () => {
+    const groups = spotlightGroups('', { ...sources, simplified: false });
+    expect(groups.some((group) => group.label === 'Windows')).toBe(false);
+    expect(names(groups.flatMap((group) => group.rows))).toEqual(expect.arrayContaining(['Docs', 'API']));
+  });
+});
+
+describe('spotlightGroups and actions', () => {
+  const sources = { agents: [], shells: [], zones, shows: 'turns' as const, canStartAgent: true, simplified: true };
+  const actionNames = (query: string, more = {}) => names(spotlightGroups(query, { ...sources, ...more }).find((group) => group.label === 'Actions')?.rows ?? []);
+
+  it('finds New agent and Open Settings by their name or other words', () => {
+    expect(actionNames('new ag')).toEqual(['New agent']);
+    expect(actionNames('preferences')).toEqual(['Open Settings']);
+    // A whole run of letters, as settings need: scattered ones in "New agent" or "Open Settings" don't.
+    expect(actionNames('ops')).toEqual([]);
+    expect(actionNames('nw')).toEqual([]);
+  });
+
+  it('offers New agent only where one can start, lists no actions before typing, and none under Classic', () => {
+    expect(actionNames('new ag', { canStartAgent: false })).toEqual([]);
+    expect(spotlightGroups('', sources).some((group) => group.label === 'Actions')).toBe(false);
+    expect(actionNames('new ag', { simplified: false })).toEqual([]);
+  });
+});
+
 describe('fuzzyMatch', () => {
   it('matches letters in order, ignoring case, and scores a whole run above scattered letters', () => {
     const run = fuzzyMatch('rev', 'Review 202');

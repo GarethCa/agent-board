@@ -1,6 +1,7 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
 import { needsYouNow, planPending, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import type { Placement, SessionWindows } from '../windows/session-windows';
 import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, searchable } from './settings-search';
 
@@ -9,10 +10,14 @@ export type SpotlightSubject =
   | { kind: 'agent'; agent: Agent }
   | { kind: 'shell'; shell: Shell }
   | { kind: 'zone'; zone: Zone }
-  | { kind: 'setting'; pane: string };
+  | { kind: 'setting'; pane: string }
+  | { kind: 'action'; action: SpotlightAction };
+
+/** What an action row does: start an agent, or open the Settings window. */
+export type SpotlightAction = 'newAgent' | 'openSettings';
 
 /** A row's subject that the window ⌘K opened in shows: a session or a zone. */
-export type BoardSubject = Exclude<SpotlightSubject, { kind: 'setting' }>;
+export type BoardSubject = Exclude<SpotlightSubject, { kind: 'setting' | 'action' }>;
 
 export interface SpotlightRow {
   key: string;
@@ -22,6 +27,8 @@ export interface SpotlightRow {
   sub: string;
   /** Which letters of the name the query matched, for the row to underline. */
   marks: readonly number[];
+  /** Set on a row of the Windows group: where its session window is (its sub line says so too). */
+  window?: Placement;
 }
 
 /** A run of rows, under a heading before anything is typed; one with no heading once something is. */
@@ -36,6 +43,12 @@ export interface SpotlightSources {
   zones: readonly Zone[];
   /** What the needs-you inbox lists: the agents in it lead, as there. */
   shows: NeedsYouShows;
+  /** The board's session windows, listed first under the Simplified design (it has no dock); none if unset. */
+  windows?: SessionWindows;
+  /** The id of the session or shell the view in focus shows, if any: its window is listed last, as picking it only closes. */
+  current?: string;
+  /** Whether a new agent can start from here, so New agent is offered among the actions; not if unset. */
+  canStartAgent?: boolean;
   /** Whether the Simplified design is on, so the settings it alone draws are found; Classic's if unset. */
   simplified?: boolean;
 }
@@ -49,25 +62,62 @@ export const SETTINGS_LIMIT = 5;
 /** The heading the settings found are listed under. */
 export const SETTINGS_GROUP = 'Settings';
 
+/** The heading the session windows that are open or minimised are listed under, above every other group. */
+const WINDOWS_GROUP = 'Windows';
+
+/** The heading the actions found are listed under, above the settings. */
+export const ACTIONS_GROUP = 'Actions';
+
+/** What ⌘K can do besides jump, under the Simplified design: the name it is found by, and the other words that find it. */
+const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; also: string }[] = [
+  { action: 'newAgent', name: 'New agent', sub: 'Start an agent in a zone', also: 'start create run' },
+  { action: 'openSettings', name: 'Open Settings', sub: 'Settings window', also: 'preferences options' },
+];
+
 /**
  * The switcher's rows for `query`. Before anything is typed: the agents that need you, then the other sessions most
  * recently active, then the zones, leaving out an empty group. Once something is: the sessions and zones that match,
  * best first, ranked on the name, then the issue, the branch, the zone and what the agent asks, in that order; then,
  * under Settings, the few settings sections and controls that match best.
+ *
+ * Under the Simplified design (`simplified`) there is more: a Windows group leads, with the session windows that are
+ * open, then minimised, then out in their own window (the view's own last), before typing and for those whose name
+ * matches once something is typed, and a session with a window is listed there only; and once something is typed an
+ * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has neither.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, simplified = false }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, simplified = false }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
   const wanted = query.trim();
+  // Under the Simplified design a session with a window on the board is listed once, under Windows, whatever it asks.
+  const listed = simplified ? windowSessions(windows) : new Set<string>();
+  const windowRows = (match: (name: string) => readonly number[] | undefined): { id: string; row: SpotlightRow }[] => {
+    if (!simplified) return [];
+    const found: { score: number; id: string; row: SpotlightRow }[] = [];
+    for (const entry of windows) {
+      const agent = entry.kind === 'session' ? agents.find((each) => each.sessionId === entry.id) : undefined;
+      const shell = entry.kind === 'shell' ? tiles.find((each) => each.id === entry.id) : undefined;
+      const base = agent !== undefined ? agentRow(agent, zoneName, [], shows) : shell !== undefined ? shellRow(shell, zoneName, []) : undefined;
+      if (base === undefined) continue;
+      const marks = match(base.name);
+      if (marks === undefined) continue;
+      // The session the view shows already goes last: ↵ on it only closes, so the others are the ones to reach.
+      const score = PLACEMENT_ORDER.indexOf(entry.placement) + (entry.id === current ? PLACEMENT_ORDER.length : 0);
+      found.push({ score, id: entry.id, row: { ...base, key: `window:${entry.id}`, sub: joined(PLACEMENT_LABELS[entry.placement], base.sub), marks, window: entry.placement } });
+    }
+    // Open before minimised before out in an OS window; the order they were opened within each.
+    return found.sort((a, b) => a.score - b.score);
+  };
   if (wanted === '') {
-    const needing = agents.filter((agent) => needsYouNow(agent, shows));
+    const needing = agents.filter((agent) => needsYouNow(agent, shows) && !listed.has(agent.sessionId));
     const rest = [
-      ...agents.filter((agent) => !needsYouNow(agent, shows)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, zoneName, [], shows) })),
-      ...tiles.map((shell) => ({ at: shell.createdAt, row: shellRow(shell, zoneName, []) })),
+      ...agents.filter((agent) => !needsYouNow(agent, shows) && !listed.has(agent.sessionId)).map((agent) => ({ at: agent.finishedAt ?? agent.createdAt, row: agentRow(agent, zoneName, [], shows) })),
+      ...tiles.filter((shell) => !listed.has(shell.id)).map((shell) => ({ at: shell.createdAt, row: shellRow(shell, zoneName, []) })),
     ];
     const recent = rest.sort((a, b) => b.at.localeCompare(a.at)).slice(0, RECENT_LIMIT);
     const groups: SpotlightGroup[] = [
+      { label: WINDOWS_GROUP, rows: windowRows(() => []).map(({ row }) => row) },
       { label: 'Needs you', rows: needing.map((agent) => agentRow(agent, zoneName, [], shows)) },
       { label: 'Recent', rows: recent.map(({ row }) => row) },
       { label: 'Zones', rows: [...zones].sort((a, b) => a.name.localeCompare(b.name)).map((zone) => zoneRow(zone, agents, tiles, [])) },
@@ -75,6 +125,10 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, s
     return groups.filter((group) => group.rows.length > 0);
   }
 
+  // The windows that match lead, in their own group, whatever else matches better: they are what is on screen. A
+  // session whose window matched is listed there only; one that matched by its branch or issue stays in the list.
+  const matchedWindows = windowRows((name) => fuzzyMatch(wanted, name)?.positions);
+  const inWindows = new Set(matchedWindows.map(({ id }) => id));
   const ranked: { score: number; row: SpotlightRow }[] = [];
   const consider = (fields: readonly Field[], row: (marks: readonly number[]) => SpotlightRow) => {
     let score = 0;
@@ -84,6 +138,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, s
     ranked.push({ score, row: row(fuzzyMatch(wanted, name ?? '')?.positions ?? []) });
   };
   for (const agent of agents) {
+    if (inWindows.has(agent.sessionId)) continue;
     consider(
       [
         [agent.name, 1],
@@ -97,6 +152,7 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, s
     );
   }
   for (const shell of tiles) {
+    if (inWindows.has(shell.id)) continue;
     consider(
       [
         [shell.name, 1],
@@ -107,8 +163,21 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, s
   }
   for (const zone of zones) consider([[zone.name, 1]], (marks) => zoneRow(zone, agents, tiles, marks));
   ranked.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
-  const groups: SpotlightGroup[] = [{ rows: ranked.map(({ row }) => row) }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
+  const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: simplified ? actionRows(wanted, canStartAgent) : [] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
   return groups.filter((group) => group.rows.length > 0);
+}
+
+/** The actions whose name or other words hold `wanted`, a match in the name first. */
+function actionRows(wanted: string, canStartAgent: boolean): SpotlightRow[] {
+  const found: { score: number; row: SpotlightRow }[] = [];
+  for (const { action, name, sub, also } of ACTIONS) {
+    if (action === 'newAgent' && !canStartAgent) continue;
+    const named = fuzzyMatch(wanted, name, true);
+    const other = fuzzyMatch(wanted, also, true);
+    const score = Math.max(named?.score ?? 0, (other?.score ?? 0) * FIELD_WEIGHTS.also);
+    if (score > 0) found.push({ score, row: { key: `action:${action}`, subject: { kind: 'action', action }, name, sub, marks: named?.positions ?? [] } });
+  }
+  return found.sort((a, b) => b.score - a.score).map(({ row }) => row);
 }
 
 /**
@@ -136,6 +205,15 @@ function settingRows(wanted: string, simplified: boolean): SpotlightRow[] {
   found.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
   return found.slice(0, SETTINGS_LIMIT).map(({ row }) => row);
 }
+
+/** Where a window is, in the order the Windows group lists them: on the board, minimised, then out in its own window. */
+const PLACEMENT_ORDER: readonly Placement[] = ['shown', 'docked', 'popped'];
+
+/** What a window row's sub line starts with: where its window is. */
+const PLACEMENT_LABELS: Record<Placement, string> = { shown: 'Open', docked: 'Minimised', popped: 'In its own window' };
+
+/** The ids of the sessions and shells that have a window on the board or out. */
+const windowSessions = (windows: SessionWindows): ReadonlySet<string> => new Set(windows.filter((entry) => entry.kind !== 'tabs').map((entry) => entry.id));
 
 /** A field to match: its text, how much a match in it counts, and whether only a whole run of letters does. */
 type Field = readonly [text: string | null | undefined, weight: number, runOnly?: boolean];

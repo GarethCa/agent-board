@@ -250,6 +250,9 @@ import { useMeasuredBoxes } from './measured-boxes';
 import { AgentNoteMeasurer } from './items/AgentNoteMeasurer';
 import { CAPTURE_FRAME, captureViewport, edgesAmong, nodesInZone, useCaptureReady } from './capture-mode';
 import { useDemoCamera } from '../demo/use-demo-camera';
+import { NewNoteContext } from './ProjectWell';
+import { projectSummaries, ProjectSummaryContext } from './project-summary';
+import { useNeedsYouShows } from '../needs-you-setting';
 
 // Module-level so React Flow never sees a new object and re-mounts every node.
 const nodeTypes: NodeTypes = {
@@ -651,6 +654,12 @@ function BoardView() {
     () => (crewLook === 'frames' ? crewFrames(nodes.filter(isSessionTile), shown.filter(isSessionTile)) : []),
     [crewLook, nodes, shown],
   );
+  // Each project's heading under the Simplified design: how many of its agents need you, and the rest by status.
+  const needsYouShows = useNeedsYouShows();
+  const summaries = useMemo(() => projectSummaries(agents, needsYouShows), [agents, needsYouShows]);
+  // The same map until a count changes: every well reads it, and agents change on every bit of activity.
+  const summariesKey = JSON.stringify([...summaries]);
+  const projectSummary = useMemo(() => summaries, [summariesKey]);
   restoreTiles.current = restoreExpanded;
   // An agent's question, beside its tile as drawn, when it asked for it on the board.
   const questionCards = useQuestionCards(agents, shown, report('move the question card'));
@@ -2290,6 +2299,9 @@ function BoardView() {
 
   const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
 
+  /** A new sticky note where the screen point `at` is, from a project's right-click menu. */
+  const newNoteAt = useCallback((at: { x: number; y: number }) => void createItem('sticky', screenToFlowPosition(at)), [createItem, screenToFlowPosition]);
+
   /** Starts a shell tile in the zone and opens its window. */
   const newShell = useCallback(
     (zone: Zone) => {
@@ -2955,6 +2967,8 @@ function BoardView() {
                       <CrewViewContext value={crewView}>
                       <AgentNoteLookContext value={agentNoteLook}>
                       <CrewFramesContext value={shownFrames}>
+                      <ProjectSummaryContext value={projectSummary}>
+                      <NewNoteContext value={newNoteAt}>
                       <ShellFoldersContext value={shellFolders}>
                       <RenameRequestContext value={renameRequests}>
                         <ItemActionsContext value={itemActions}>
@@ -3170,6 +3184,8 @@ function BoardView() {
                         </ItemActionsContext>
                       </RenameRequestContext>
                       </ShellFoldersContext>
+                      </NewNoteContext>
+                      </ProjectSummaryContext>
                       </CrewFramesContext>
                       </AgentNoteLookContext>
                       </CrewViewContext>

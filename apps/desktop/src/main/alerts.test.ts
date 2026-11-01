@@ -82,10 +82,10 @@ const prompt: PermissionPrompt = {
 const TURNS: AlertSettings = { ...DEFAULT_ALERT_SETTINGS, needsYouShows: 'turns' };
 
 /** Alerts under `settings` (Needs you listing every finished turn, by default), recording what they notify and every app state they show. */
-function recorded(settings: AlertSettings = TURNS, inFront = false) {
+function recorded(settings: AlertSettings = TURNS, inFront = false, simplified = false) {
   const notifications: AgentNotification[] = [];
   const states: AppStatus[] = [];
-  const created = createAgentAlerts({ notify: (n) => notifications.push(n), showState: (s) => states.push(s), inFront: () => inFront });
+  const created = createAgentAlerts({ notify: (n) => notifications.push(n), showState: (s) => states.push(s), inFront: () => inFront, simplified: () => simplified });
   // A listing comes with the settings, as `followAgents` reads them.
   const alerts: AgentAlerts = { ...created, reset: (agents, given = settings) => created.reset(agents, given) };
   return { alerts, notifications, states };
@@ -106,8 +106,8 @@ describe('agent notifications for explicit requests only, the default', () => {
     alerts.updated(agent('b', 'idle', { flag: flag('2026-10-10T10:02:00.000Z', 'Fix checkout flake') }));
 
     expect(notifications).toEqual([
-      { sessionId: 'b', title: 'Agent b needs you', body: 'PR #241 is ready for review.' },
-      { sessionId: 'b', title: 'Agent b needs you', body: 'PR #241 is ready for review. (via Fix checkout flake)' },
+      { sessionId: 'b', kind: 'flagged', name: 'Agent b', title: 'Agent b needs you', body: 'PR #241 is ready for review.' },
+      { sessionId: 'b', kind: 'flagged', name: 'Agent b', title: 'Agent b needs you', body: 'PR #241 is ready for review. (via Fix checkout flake)' },
     ]);
   });
 
@@ -169,6 +169,15 @@ describe('agent notifications for explicit requests only, the default', () => {
     }
   });
 
+  it('under the Simplified design, which has no switch for it, ignores a notifications switch left off in Classic', () => {
+    const { alerts, notifications } = recorded({ ...DEFAULT_ALERT_SETTINGS, notifications: false }, false, true);
+    alerts.reset([agent('a', 'running')]);
+
+    alerts.updated(agent('a', 'idle', { flag: flag('2026-10-10T10:01:00.000Z') }));
+
+    expect(notifications).toHaveLength(1);
+  });
+
   it('recounts the badge when the setting changes what Needs you lists', () => {
     const { alerts, states } = recorded(DEFAULT_ALERT_SETTINGS);
     alerts.reset([agent('a', 'waiting')]);
@@ -188,7 +197,7 @@ describe('agent notifications for every finished turn too', () => {
     alerts.updated(agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?' }));
     alerts.updated(agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?', pullRequests: [] }));
 
-    expect(notifications).toEqual([{ sessionId: 'a', title: 'Agent a is waiting for you', body: 'Postgres or SQLite?' }]);
+    expect(notifications).toEqual([{ sessionId: 'a', kind: 'turn', name: 'Agent a', title: 'Agent a is waiting for you', body: 'Postgres or SQLite?' }]);
   });
 
   it('notifies again each time it comes back to a state after leaving it', () => {
@@ -208,7 +217,7 @@ describe('agent notifications for every finished turn too', () => {
 
     alerts.updated(agent('a', 'needs-permission', { permissions: [prompt] }));
 
-    expect(notifications).toEqual([{ sessionId: 'a', title: 'Agent a needs your permission', body: 'Bash: rm -rf dist' }]);
+    expect(notifications).toEqual([{ sessionId: 'a', kind: 'permission', name: 'Agent a', title: 'Agent a needs your permission', body: 'Bash: rm -rf dist' }]);
   });
 
   it('says something when the agent left no message', () => {
@@ -228,7 +237,7 @@ describe('agent notifications for every finished turn too', () => {
     alerts.updated(agent('a', 'needs-permission', { permissions: [prompt] }));
 
     expect(notifications).toEqual([
-      { sessionId: 'a', title: 'Agent a needs your permission', body: 'Its Explore subagent: Bash: rm -rf dist' },
+      { sessionId: 'a', kind: 'permission', name: 'Agent a', title: 'Agent a needs your permission', body: 'Its Explore subagent: Bash: rm -rf dist' },
     ]);
   });
 
@@ -238,7 +247,7 @@ describe('agent notifications for every finished turn too', () => {
 
     alerts.updated(agent('a', 'needs-permission'));
 
-    expect(notifications).toEqual([{ sessionId: 'a', title: 'Agent a needs your permission', body: 'It is asking in its terminal.' }]);
+    expect(notifications).toEqual([{ sessionId: 'a', kind: 'permission', name: 'Agent a', title: 'Agent a needs your permission', body: 'It is asking in its terminal.' }]);
   });
 
   it('notifies as an agent asks you something or has a plan to review, each a new ask', () => {
@@ -254,8 +263,8 @@ describe('agent notifications for every finished turn too', () => {
     alerts.updated(agent('a', 'running', { plan: { ...plan, decision: { outcome: 'approved', comments: '', decidedAt: '' } } }));
 
     expect(notifications).toEqual([
-      { sessionId: 'a', title: 'Agent a asks you', body: 'Which cache should the product pages use? (Redis · CDN only)' },
-      { sessionId: 'a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v2' },
+      { sessionId: 'a', kind: 'asks', name: 'Agent a', title: 'Agent a asks you', ask: { askId: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'] }, body: 'Which cache should the product pages use? (Redis · CDN only)' },
+      { sessionId: 'a', kind: 'plan', name: 'Agent a', title: 'Agent a has a plan to review', body: 'Cache product pages in Redis · v2' },
     ]);
   });
 

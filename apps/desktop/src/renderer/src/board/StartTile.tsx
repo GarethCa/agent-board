@@ -2,8 +2,10 @@ import { useCallback, useContext, useRef, type RefCallback } from 'react';
 import { Check, RotateCcw, Trash2, X } from 'lucide-react';
 import type { Agent, Harness, StartStep } from '@agent-board/daemon/protocol';
 import { HARNESSES } from '../harness';
+import { useSimplified } from '../design';
 import { Button, EditableName, IconButton, RenameButton, Spinner, StatusPill, Tag, useRenaming } from '../ui';
 import { HarnessMark } from './HarnessMark';
+import { StatusMark } from './StatusMark';
 import { modelLabel } from './AgentSetup';
 import { TileActionsContext } from './tile';
 import { useRenameRequest } from './rename';
@@ -58,7 +60,7 @@ function useSpareSteps(key: string): RefCallback<HTMLElement> {
     const fit = () => {
       for (const row of spare) row.style.display = '';
       // Its footer is the tile's last row: past the tile's padding, there is no room.
-      const footer = tile.querySelector(':scope > .hybrid-tile-footer')?.getBoundingClientRect().bottom ?? 0;
+      const footer = tile.querySelector(':scope > :is(.hybrid-tile-footer, .calm-tile-foot)')?.getBoundingClientRect().bottom ?? 0;
       const inside = tile.getBoundingClientRect().bottom - parseFloat(getComputedStyle(tile).paddingBottom);
       for (const row of spare) row.style.display = footer > inside + 0.5 ? 'none' : '';
     };
@@ -121,12 +123,13 @@ export function StartFailedActions({ onRetry, onDelete }: { onRetry?(): void; on
  */
 export function StartTile({ id, start }: { id: string; start: ShownStart }) {
   const { retryStart, dismissStart, renameStart } = useContext(TileActionsContext);
+  const simplified = useSimplified();
   const failed = start.error !== null;
   const renaming = useRenaming(start.name, (name) => renameStart(start.sessionId, name));
   useRenameRequest(id, renaming);
   return (
     <div
-      className="hybrid-tile hybrid-tile-agent"
+      className={simplified ? 'hybrid-tile hybrid-tile-agent calm-tile' : 'hybrid-tile hybrid-tile-agent'}
       data-testid="start-tile"
       data-representation="hybrid"
       data-harness={start.harness}
@@ -135,22 +138,11 @@ export function StartTile({ id, start }: { id: string; start: ShownStart }) {
       data-zone={start.zoneId ?? ''}
     >
       <div className="hybrid-tile-head">
-        {failed ? <HarnessMark className="hybrid-tile-icon" harness={start.harness} /> : <Spinner />}
+        {!failed ? <Spinner /> : simplified ? null : <HarnessMark className="hybrid-tile-icon" harness={start.harness} />}
         <EditableName className="hybrid-tile-name" value={start.name} title={start.name} renaming={renaming} label="Agent name" />
         <RenameButton renaming={renaming} />
         {!failed && (
-          <span className="hybrid-tile-corner">
-            <span className="hybrid-tile-actions">
-              <IconButton
-                size="xs"
-                className="nodrag"
-                icon={<X />}
-                aria-label="Stop starting it"
-                onClick={() => dismissStart(start.sessionId)}
-                onDoubleClick={(event) => event.stopPropagation()}
-              />
-            </span>
-          </span>
+          <StopStarting simplified={simplified} onStop={() => dismissStart(start.sessionId)} />
         )}
       </div>
       <StartSteps lines={start.steps.map((step) => stepLine(step, start.harness))} />
@@ -158,15 +150,28 @@ export function StartTile({ id, start }: { id: string; start: ShownStart }) {
       {failed ? (
         <StartFailedActions onRetry={start.lost ? undefined : () => retryStart(start)} onDelete={() => dismissStart(start.sessionId)} />
       ) : (
-        <span className="hybrid-tile-footer">
-          <StatusPill state="starting" />
+        <span className={simplified ? 'calm-tile-foot' : 'hybrid-tile-footer'}>
+          {/* A starting agent's calm tile says Working, so the start's tile hands over to it without changing its status. */}
+          {simplified ? <StatusMark status="working" /> : <StatusPill state="starting" />}
           {start.model !== null && (
-            <Tag className="hybrid-tile-setup" data-testid="tile-model">
+            <Tag className="hybrid-tile-setup" data-testid="tile-model" data-technical-detail="">
               <span className="hybrid-tile-badge-text">{modelLabel(start.model)}</span>
             </Tag>
           )}
         </span>
       )}
     </div>
+  );
+}
+
+/** The control that stops a start: a plain 24 px button in the calm tile's controls, or Classic's softer one in its corner. */
+function StopStarting({ simplified, onStop }: { simplified: boolean; onStop(): void }) {
+  const stop = <IconButton size="xs" className="nodrag" icon={<X />} aria-label="Stop starting it" onClick={onStop} onDoubleClick={(event) => event.stopPropagation()} />;
+  return simplified ? (
+    <span className="calm-tile-controls">{stop}</span>
+  ) : (
+    <span className="hybrid-tile-corner">
+      <span className="hybrid-tile-actions">{stop}</span>
+    </span>
   );
 }

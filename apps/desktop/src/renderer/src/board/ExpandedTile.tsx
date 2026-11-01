@@ -11,6 +11,8 @@ import { SessionBody, type WindowContent } from '../session/SessionBody';
 import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
 import { panesLabel } from '../session/panes';
+import { humanStatus } from '@agent-board/daemon/human-status';
+import { useSimplified } from '../design';
 import { agentPill, STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
@@ -18,6 +20,7 @@ import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, resizeAllowed, type ExpandedParen
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './HybridTile';
+import { StatusMark } from './StatusMark';
 import { SubagentPerch } from './SubagentPerch';
 import { TileActionsContext, type TileProps } from './tile';
 import { dropKey } from '../session/shell-moves';
@@ -40,6 +43,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
   const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const shows = useNeedsYouShows();
+  const simplified = useSimplified();
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
   const { agent, shell, external } = tile;
@@ -86,9 +90,9 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
       <header className="session-window-head expanded-tile-head">
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
-        {agent && <StatusPill {...agentPill(agent, shows)} />}
+        {agent && (simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />)}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
-        <HeadFacts agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
+        <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
         <span className="session-window-head-fill" />
         {/* Its merge gate, as in its session window; not a drag handle. */}
         {agent && gated(agent) && (
@@ -142,12 +146,14 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
 
 /** The header's facts after the state: the branch (or a shell's folder), and an agent's issue and pull requests. */
 function HeadFacts({
+  simplified,
   agent,
   shell,
   external,
   openLink,
   openPullRequest,
 }: {
+  simplified: boolean;
   agent?: Agent;
   shell?: Shell;
   external?: ExternalSession;
@@ -179,7 +185,14 @@ function HeadFacts({
   }
   if (agent) for (const pr of agent.pullRequests) facts.push(<PullRequestChip key={pr.number} pr={pr} open={() => openPullRequest(agent, pr)} />);
   if (agent) for (const pr of agent.pushedPullRequests) facts.push(<PullRequestChip key={pr.number} pr={pr} pushed open={() => openPullRequest(agent, pr)} />);
-  return <>{facts}</>;
+  // Branch, folder, panes and pull requests are the technical layer: Show technical details adds them to the header's end.
+  return simplified ? (
+    <span className="expanded-tile-facts" data-technical-detail="">
+      {facts}
+    </span>
+  ) : (
+    <>{facts}</>
+  );
 }
 
 /**

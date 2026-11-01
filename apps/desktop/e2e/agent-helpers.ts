@@ -67,6 +67,17 @@ export const zoneNamed = (window: Page, name: string): Locator =>
   window.getByTestId('zone').filter({ has: window.getByTestId('zone-tab').getByText(name, { exact: true }) });
 
 /**
+ * Uses a control of the zone `zoneName`: the button `button` on its tab, or under the Simplified design, where the tab has
+ * none, the row `row` of its project's ⋯ menu.
+ */
+export async function zoneControl(window: Page, zoneName: string, button: string, row: string): Promise<void> {
+  const zone = zoneNamed(window, zoneName);
+  if ((await window.locator('html').getAttribute('data-design')) !== 'simplified') return zone.getByRole('button', { name: button }).click();
+  await zone.getByRole('button', { name: 'Project options' }).click();
+  await window.getByRole('menuitem', { name: row, exact: true }).click();
+}
+
+/**
  * Starts an agent with `prompt` from the zone named `zoneName`'s New agent button: a Claude one unless `harness` says
  * Codex (past Codex's one-time hooks notice), working on the zone tracker's issue `issue` if given. It waits until the agent has started, unless `started` is false.
  */
@@ -76,7 +87,7 @@ export async function spawnAgent(
   prompt: string,
   { harness = 'Claude', issue, name, started = true }: { harness?: 'Claude' | 'Codex'; issue?: string; name?: string; started?: boolean } = {},
 ): Promise<void> {
-  await zoneNamed(window, zoneName).getByRole('button', { name: 'New agent' }).click();
+  await zoneControl(window, zoneName, 'New agent', 'New agent');
   const form = window.getByRole('dialog', { name: 'New agent' });
   await pickInChip(form, 'Harness', harness);
   if (issue !== undefined) await form.getByRole('listbox', { name: 'Issues' }).getByRole('option').filter({ hasText: issue }).click();

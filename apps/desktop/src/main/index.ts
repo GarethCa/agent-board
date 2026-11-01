@@ -241,7 +241,8 @@ registerAgentIpc(daemon, dataDir);
 registerShellIpc(daemon);
 registerExternalIpc(daemon);
 registerTrackerIpc(daemon);
-const notify = createNotifier();
+const isSimplified = () => design.current() === 'simplified';
+const notify = createNotifier(isSimplified);
 registerSetupIpc(daemon, notify);
 // Before any window opens. Tests pin the theme with AGENT_BOARD_APPEARANCE, the default when nothing was picked, so a
 // machine in dark mode doesn't change their screenshots.
@@ -270,7 +271,7 @@ let stopNotifications: (() => void) | undefined;
 
 void app.whenReady().then(() => {
   registerImageProtocol(dataDir);
-  stopNotifications = registerNotifications(daemon, notify, openAgent, () => revealWindow(board ?? openBoard()));
+  stopNotifications = registerNotifications(daemon, notify, openAgent, () => revealWindow(board ?? openBoard()), isSimplified);
   setAppMenu(() => board ?? openBoard(), () => settingsWindow.show(), { design, technical });
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));

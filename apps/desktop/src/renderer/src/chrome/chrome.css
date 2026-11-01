@@ -1408,6 +1408,104 @@
   flex-direction: column;
 }
 
+/* With the digest drawn, the list takes what its rows need and scrolls past the room, and the digest follows it, as the chosen drawing has it. */
+.master-panel-needs-you:has(> .since-looked) > .inbox {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* "Since you last looked", under the Simplified pane's list: Done from the app, Up next from the Captain. */
+.since-looked {
+  display: grid;
+  flex: none;
+  max-height: 45%;
+  gap: var(--space-1-5);
+  padding: var(--space-3);
+  border-top: 1px solid var(--separator);
+  overflow-y: auto;
+  font-size: var(--font-size-xs);
+}
+
+.since-looked-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.since-looked-head > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.since-looked-head h3 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.since-looked-head small,
+.since-looked-group small {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.since-looked-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-xs);
+}
+
+.since-looked-group > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--success);
+}
+
+.since-looked-done {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.since-looked-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.since-looked-row b,
+.since-looked-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.since-looked-row time,
+.since-looked-row span {
+  color: var(--muted);
+}
+
+.since-looked-row span {
+  grid-column: 1 / -1;
+}
+
+.since-looked-more,
+.since-looked-next {
+  margin: 0;
+  color: var(--muted);
+}
+
 .master-panel-chat {
   display: flex;
   /* Takes what the sections above leave, never less than a few messages: the For you list, sized by the user, gives way first. */
@@ -1543,6 +1641,24 @@
   }
 }
 
+/*
+ * With the usage island in it, the Simplified top-right island is wider, so it gives way sooner: the Captain's word
+ * below 1240 px, then the figures themselves below 1100 px (Settings › Usage still has them), when the Captain's word
+ * goes by its own rule, below 920 px.
+ */
+@media (min-width: 1100px) and (max-width: 1239px) {
+  :root[data-design='simplified'] .needs-you:has(.usage-island) .master-button-label {
+    display: none;
+  }
+}
+
+@media (max-width: 1099px) {
+  :root[data-design='simplified'] .needs-you .usage-island,
+  :root[data-design='simplified'] .needs-you .usage-island + .ui-island-separator {
+    display: none;
+  }
+}
+
 /* The usage pill, first in the zoom island: the 5-hour and weekly windows, detail on hover. */
 
 .usage-pill {
@@ -1654,6 +1770,72 @@
 .usage-detail-fresh {
   padding-top: var(--space-1-5);
   border-top: 1px solid var(--on-inverse-soft);
+}
+
+/* The Simplified toolbar's usage island, before Needs you: figures, with a popover of bars on a click. */
+
+.usage-island.ui-button {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-island.ui-button.is-stale {
+  color: var(--muted);
+}
+
+.ui-popover.usage-popover {
+  width: 240px;
+}
+
+.usage-allowance {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.usage-allowance-title {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.usage-allowance-window {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.usage-allowance-head,
+.usage-allowance-foot {
+  display: flex;
+  justify-content: space-between;
+}
+
+.usage-allowance-refills,
+.usage-allowance-foot,
+.usage-allowance-fresh {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.usage-allowance-foot b {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.usage-allowance .usage-bar.is-wide {
+  background: var(--hover);
+}
+
+.usage-allowance.is-stale .usage-allowance-window {
+  opacity: 0.55;
+}
+
+.usage-allowance-fresh {
+  margin: 0;
+}
+
+.usage-allowance-settings.ui-button {
+  justify-self: start;
+  padding-left: 0;
 }
 
 /* In Settings the block sits on the page, not on the inverse tooltip: its divider and width follow the page. */

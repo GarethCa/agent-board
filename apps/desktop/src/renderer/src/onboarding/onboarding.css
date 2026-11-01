@@ -1104,3 +1104,186 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The Simplified design's first run: the Captain's welcome, then getting Claude ready. Its own classes only, so
+   nothing here reaches Classic's steps. */
+.captain-step {
+  display: flex;
+  flex-direction: column;
+  width: var(--size-onboarding-captain);
+  padding: var(--space-7) var(--space-7) 0;
+}
+
+.captain-welcome {
+  align-items: center;
+  text-align: center;
+}
+
+.captain-welcome-figure {
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.captain-step-title {
+  margin: 0;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+}
+
+.captain-step-lead {
+  margin: var(--space-2) 0 0;
+  color: var(--text);
+  font-size: var(--font-size-lg);
+  line-height: var(--leading-snug);
+}
+
+.captain-step-note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-md);
+  line-height: var(--leading-body);
+}
+
+.captain-step-foot {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-7) calc(-1 * var(--space-7)) 0;
+  padding: var(--space-4) var(--space-7);
+  border-top: 1px solid var(--separator);
+  text-align: start;
+}
+
+.captain-ready-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.captain-ready-head .captain-step-lead {
+  color: var(--text-soft);
+  font-size: var(--font-size-md);
+}
+
+.captain-ready-figure {
+  flex: none;
+  padding-top: var(--space-0-5);
+}
+
+.captain-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.captain-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2-5) 0;
+  border-top: 1px solid var(--separator);
+}
+
+.captain-check:first-child {
+  border-top: 0;
+}
+
+.captain-check-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--size-onboarding-check-mark);
+  height: var(--size-onboarding-check-mark);
+  border-radius: var(--radius-pill);
+}
+
+.captain-check-mark svg {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+}
+
+.captain-check[data-state='done'] .captain-check-mark {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.captain-check[data-state='todo'] .captain-check-mark {
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+}
+
+.captain-check[data-state='checking'] .captain-check-mark,
+.captain-check[data-state='waiting'] .captain-check-mark {
+  border: 1.5px dashed var(--control-edge);
+}
+
+.captain-check-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-top: var(--space-0-5);
+}
+
+.captain-check-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+}
+
+.captain-check[data-state='waiting'] .captain-check-title,
+.captain-check[data-state='checking'] .captain-check-title {
+  color: var(--muted);
+  font-weight: var(--weight-regular);
+}
+
+.captain-check-detail {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+}
+
+.captain-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.captain-command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--sunken);
+}
+
+.captain-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.captain-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.captain-link:hover {
+  text-decoration: underline;
+}

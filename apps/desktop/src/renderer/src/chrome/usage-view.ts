@@ -10,10 +10,16 @@ export interface UsageMeterWindow {
   short: string;
   /** `5-hour window`. */
   label: string;
+  /** The toolbar popover's name for it: `5-hour`, `Weekly`. */
+  name: string;
+  /** The toolbar island's name for it in the figures: `5h`, `wk`. */
+  figure: string;
   used: number;
   left: number;
   /** `resets 14:00`, or empty when the reading didn't say. */
   resets: string;
+  /** `refills 14:00`, as the toolbar's popover words it; empty when the reading didn't say. */
+  refills: string;
 }
 
 export interface UsageMeter {
@@ -34,18 +40,21 @@ function age(ms: number): string {
 export function usageMeter(reading: UsageReading, now: number, when: (iso: string) => string = shortWhen): UsageMeter | undefined {
   if (reading.readAt === null) return undefined;
   const windows: UsageMeterWindow[] = [];
-  const add = (short: string, label: string, window: UsageWindow | null) => {
+  const add = (short: string, label: string, name: string, figure: string, window: UsageWindow | null) => {
     if (window === null) return;
     windows.push({
       short,
       label,
+      name,
+      figure,
       used: Math.round(window.usedPercent),
       left: Math.round(window.remainingPercent),
       resets: window.resetsAt === null ? '' : `resets ${when(window.resetsAt)}`,
+      refills: window.resetsAt === null ? '' : `refills ${when(window.resetsAt)}`,
     });
   };
-  add('5h', '5-hour window', reading.fiveHour);
-  add('7d', '7-day window', reading.sevenDay);
+  add('5h', '5-hour window', '5-hour', '5h', reading.fiveHour);
+  add('7d', '7-day window', 'Weekly', 'wk', reading.sevenDay);
   const old = now - Date.parse(reading.readAt);
   const ago = age(old);
   // Stale by the daemon's word, or by the clock, should no word come.
@@ -56,4 +65,9 @@ export function usageMeter(reading: UsageReading, now: number, when: (iso: strin
     hot: !stale && windows.some((window) => window.used >= HOT_PERCENT),
     fresh: stale ? `Stale: last read ${ago} ago. Updates when an agent runs.` : `Read ${ago} ago`,
   };
+}
+
+/** The toolbar island's figures: each window's figure name and use, `5h 86% · wk 41%`. */
+export function usageIslandText(meter: UsageMeter): string {
+  return meter.windows.map((each) => `${each.figure} ${each.used}%`).join(' · ');
 }

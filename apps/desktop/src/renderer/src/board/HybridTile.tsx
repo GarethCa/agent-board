@@ -15,7 +15,6 @@ import {
   planPending,
   type ExternalSession,
   type PullRequest,
-  type RecentFolder,
   type Shell,
 } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
@@ -31,13 +30,12 @@ import { useNow } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
 import { ArrowUpRight, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
-import { Button, Chip, EditableName, FlowPill, HoverCard, Menu, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename, type MenuEntry } from '../ui';
+import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { Character } from './Character';
 import { CommandFigure } from './CommandFigure';
 import { HandoffsContext } from './flow-edges';
 import { badgeLine, checksLabel, foldRanking, isStarting, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
-import { ResumeButton } from './RestartBanner';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { SubagentPerch } from './SubagentPerch';
@@ -46,9 +44,8 @@ import { windowShells } from '../session/tabs';
 import { useRenameRequest } from './rename';
 import { useFittedLines } from './use-fitted-lines';
 import { splitReviewerName } from './tile-name';
-import { ClickOpensContext, ShellFoldersContext, TileActionsContext, type TileData, type TileProps } from './tile';
+import { ClickOpensContext, TileActionsContext, type TileData, type TileProps } from './tile';
 import { CrewViewContext, lightCrew } from './crew-view';
-import { folderLabel } from './folders';
 import { panesLabel } from '../session/panes';
 import { canRestart, endedShellLabel } from '../session/RestartAgent';
 import { useReviews } from '../review/ReviewsProvider';
@@ -56,7 +53,10 @@ import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { pausedLine } from './paused';
 import { agentMenu, externalMenu, shellMenu } from './menu-model';
+import { CalmShellTile } from './CalmShellTile';
 import { CalmTile } from './CalmTile';
+import { ResumeButton } from './RestartBanner';
+import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
 import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
@@ -74,6 +74,7 @@ export const HybridTile = memo(function HybridTile({ id, tile, selected = false 
     return <CalmTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} implementer={tile.implementer} />;
   }
   if (tile.agent !== undefined) return <AgentTile id={id} selected={selected} agent={tile.agent} repo={tile.repo} from={tile.from} crew={tile.crew} crewFlags={tile.crewFlags} tabs={tile.tabs} />;
+  if (tile.shell !== undefined && simplified) return <CalmShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.shell !== undefined) return <ShellTile id={id} shell={tile.shell} selected={selected} />;
   if (tile.external !== undefined) return <ExternalTile id={id} session={tile.external} />;
   return (
@@ -529,51 +530,6 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
         </Tag>
       </span>
     </div>
-  );
-}
-
-/**
- * A shell tile's folder chip: the folder its first live pane is in, following `cd`, `~` at home. It opens
- * a menu to start a new pane elsewhere: home, a recent folder, or one browsed for. Running panes never move.
- */
-function ShellFolderChip({ shell }: { shell: Shell }) {
-  const folders = useContext(ShellFoldersContext);
-  const [recent, setRecent] = useState<RecentFolder[]>([]);
-  const live = paneIds(shell.layout).find((pane) => !shell.endedPanes.includes(pane));
-  const folder = (live === undefined ? undefined : shell.paneFolders[live]) ?? shell.cwd;
-  const elsewhere = recent.filter((each) => each.path !== folder);
-  const entries: MenuEntry[] = [
-    ...(folders.home === undefined || folders.home === folder
-      ? []
-      : [{ label: 'Home ~', icon: <Folder />, onSelect: () => folders.newPaneIn(shell, folders.home) }]),
-    ...elsewhere.map((each) => ({
-      label: each.branch === null ? each.name : `${each.name} (${each.branch})`,
-      icon: <GitBranch />,
-      hint: each.path,
-      onSelect: () => folders.newPaneIn(shell, each.path),
-    })),
-    ...(elsewhere.length > 0 || folders.home !== folder ? ['separator' as const] : []),
-    { label: 'Browse…', icon: <Folder />, onSelect: () => folders.newPaneIn(shell) },
-  ];
-  return (
-    <Menu
-      entries={entries}
-      onOpenChange={(open) => {
-        if (open) void folders.recent().then(setRecent, () => setRecent([]));
-      }}
-    >
-      <Chip
-        className="hybrid-tile-folder nodrag"
-        icon={<Folder />}
-        mono
-        aria-label="Shell folder"
-        data-testid="shell-folder"
-        title={`${folder}: start a new pane in another folder`}
-        onDoubleClick={stopPropagation}
-      >
-        {folderLabel(folder, folders.home)}
-      </Chip>
-    </Menu>
   );
 }
 

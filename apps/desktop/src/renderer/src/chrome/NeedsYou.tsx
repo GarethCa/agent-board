@@ -9,6 +9,8 @@ import { RunningCount } from './RunningCount';
 import { unseenCount } from '../../../shared/needs-you';
 import { Button, Island, Popover, ToolButton } from '../ui';
 import { useNeedsYouShows } from '../needs-you-setting';
+import { UsageIsland } from './UsagePill';
+import { useUsageOnBoard } from './usage-on-board';
 import { keyText } from '../keys/registry';
 import type { PaneSide } from '../master/use-master-panel';
 
@@ -33,14 +35,17 @@ export interface NeedsYouProps {
  *
  * Under the Simplified design it is three buttons: Needs you with its count, the Captain drawn as the character in the
  * pirate hat, with no count of its own, and the sliders that open Settings. Needs you and the Captain each open the one
- * docked pane on their own side, and a second click on the open side closes it.
+ * docked pane on their own side, and a second click on the open side closes it. When Settings › Usage shows usage on the
+ * board, its figures come first, before Needs you.
  */
 export function NeedsYou({ agents, onOpen, onSettings, onMaster, onNeedsYou, pane }: NeedsYouProps) {
   const [open, setOpen] = useState(false);
   const count = unseenCount(agents, useNeedsYouShows());
   const simplified = useSimplified();
+  const [usageOnBoard] = useUsageOnBoard();
   return (
     <Island className="needs-you island-top-right" data-tour="needs-you">
+      {simplified && usageOnBoard && <UsageIsland separated />}
       {simplified ? (
         <Button
           size="md"

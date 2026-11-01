@@ -795,6 +795,8 @@
   --size-onboarding-picture: 128px; /* a welcome point's drawing */
   --size-onboarding-choice-picture: 210px; /* a finish choice's drawing */
   --size-onboarding-choice-icon: 28px;
+  --size-onboarding-captain: 480px; /* the Simplified first run's sheets */
+  --size-onboarding-check-mark: 22px; /* a readiness row's tick */
   --size-onboarding-menu-row: 24px;
   --size-onboarding-ring: 40px; /* the Connect step's progress ring */
   --size-onboarding-key: 300px; /* the Linear key field */

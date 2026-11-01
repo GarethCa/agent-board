@@ -3,15 +3,18 @@ import { createPortal } from 'react-dom';
 import { ChevronsDownUp, ChevronsUpDown, ClipboardList, FileText, GitPullRequest, Globe, SquareTerminal } from 'lucide-react';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import { OWN_SURFACE } from '@agent-board/daemon/window-layout';
-import type { Agent, Shell, ShellOwner } from '@agent-board/daemon/protocol';
+import type { Agent, PullRequest, Shell, ShellOwner } from '@agent-board/daemon/protocol';
 import { STATE_LABELS } from '../states';
 import { Button, Dialog, ErrorText, Segmented, Tag, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
 import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
+import { SimplifiedInspector } from './SimplifiedInspector';
 import { ChatView } from './ChatView';
+import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
+import { PaneDecisions } from './PaneDecision';
 import type { RunsChoice, RunsMode } from './chat';
 import { ChatAgentsSwitch } from './ChatAgentsFilter';
 import { ChatStyleSwitch } from './ChatStyleSwitch';
@@ -37,6 +40,7 @@ import { gateDot } from '../gate/gate-view';
 import { useGateRuns } from '../gate/GatesProvider';
 import { WebLinkContext } from './web-links';
 import { useSeenWhileShown } from './mark-seen';
+import { useSimplified } from '../design';
 
 /**
  * What a session window or an expanded tile shows: one session's terminal (with its agent, live, for an agent's
@@ -68,6 +72,11 @@ interface SessionBodyProps {
   viewSlot?: HTMLElement | null;
   /** Set to what ⌥⌘T does, with the switch in the header, for the header's menu to do too. */
   terminalToggle?: RefObject<(() => void) | null>;
+  /**
+   * Whether an agent's details are the Simplified design's inspector, at the trailing edge and hidden while collapsed,
+   * rather than the details strip on the left: in the session window under the Simplified design.
+   */
+  inspector?: boolean;
 }
 
 /**
@@ -85,6 +94,7 @@ export function SessionBody({
   shown = true,
   viewSlot,
   terminalToggle,
+  inspector = false,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -134,13 +144,24 @@ export function SessionBody({
     [],
   );
   useEffect(() => onAttachState?.(own.state), [own.state, onAttachState]);
+  /** Opens a pull request in a PR tab, or in the OS browser where it can't be one. */
+  const openPullRequest = (pr: Pick<PullRequest, 'url'>) => {
+    const surface = pullRequestSurfaceOf(pr);
+    if (surface === undefined || panes === undefined) openLink(pr.url);
+    else panes.open(surface);
+  };
+  // The agent the inspector is of, when its details are the inspector.
+  const trailing = inspector ? agent : undefined;
   // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
   // The Timeline is the chat drawn as its rail, in the Simplified design's window, whose header has the switch and which
-  // opens on the view its setting names. Anywhere else (Classic, an expanded tile) a Timeline pick shows as the chat,
-  // in the chat's own style, and the terminal is what shows until a view is picked.
+  // opens on the view its settings name: the terminal, or the conversation as it is shown. Anywhere else (Classic, an
+  // expanded tile) a Timeline pick shows as the chat, in the chat's own style, and the terminal is what shows until a
+  // view is picked.
   const headerSwitch = viewSlot !== undefined;
   const opensOn = useOpensOn();
-  const windowOpensOn = headerSwitch ? opensOn : 'terminal';
+  const simplified = useSimplified();
+  const conversationAs = useConversationAs();
+  const windowOpensOn = headerSwitch ? openingView(opensOn, conversationAs) : 'terminal';
   const [pickedView, pickView] = useSessionView(agent?.sessionId, windowOpensOn);
   const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
@@ -167,11 +188,12 @@ export function SessionBody({
     // window opens (a row of the shells chip) still shows.
     if (next !== 'terminal') select?.(OWN_SURFACE);
   };
-  // ⌥⌘T, with the switch in the header: the terminal, and from it back to the chat or timeline last shown.
-  const lastConversation = useRef<SessionView>('chat');
+  // ⌥⌘T, with the switch in the header: the terminal, and from it back to the chat or timeline last shown, or to the
+  // conversation as it is shown when neither has shown yet.
+  const lastConversation = useRef<SessionView | undefined>(undefined);
   if (pickedView !== 'terminal') lastConversation.current = pickedView;
   const toggleTerminal = useRef(() => {});
-  toggleTerminal.current = () => switchView(chat ? 'terminal' : lastConversation.current);
+  toggleTerminal.current = () => switchView(chat ? 'terminal' : (lastConversation.current ?? conversationAs));
   if (terminalToggle) terminalToggle.current = () => toggleTerminal.current();
   // Not while the window's Review or Activity tab covers the body: the switch it would change can't be seen.
   const listening = headerSwitch && agent !== undefined && shown;
@@ -215,7 +237,7 @@ export function SessionBody({
             runs={runs}
             onOpenLink={openLink}
             onOpenPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))}
-            style={headerSwitch && pickedView === 'timeline' ? 'timeline' : undefined}
+            rail={headerSwitch && pickedView === 'timeline'}
           />
         </div>
       )}
@@ -272,7 +294,7 @@ export function SessionBody({
       data-tab-drop={from === undefined ? undefined : dropKey(from)}
       data-drop-over={(from !== undefined && dropOver === dropKey(from)) || undefined}
     >
-      {content.kind !== 'tabs' && (
+      {content.kind !== 'tabs' && !inspector && (
       <SessionDetails
         sessionId={controlSession}
         agent={agent}
@@ -285,19 +307,12 @@ export function SessionBody({
         collapsed={detailsCollapsed}
         onCollapsed={onDetailsCollapsed}
         onOpenLink={openLink}
-        onOpenPullRequest={
-          panes &&
-          ((pr) => {
-            const surface = pullRequestSurfaceOf(pr);
-            if (surface === undefined) openLink(pr.url);
-            else panes.open(surface);
-          })
-        }
+        onOpenPullRequest={panes && openPullRequest}
         onOpenSurface={panes && ((surface) => panes.open(surface))}
         onOpenWeb={panes?.openWeb}
       />
       )}
-      {content.kind !== 'tabs' && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
+      {content.kind !== 'tabs' && !inspector && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
           {panes ? (
@@ -351,8 +366,15 @@ export function SessionBody({
             <p className="session-window-pending">Loading panes…</p>
           )}
         </div>
+        {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} />}
         {agent && chat && <Composer agent={agent} />}
       </div>
+      {trailing && !detailsCollapsed && (
+        <>
+          <DetailsHandle side="end" collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
+          <SimplifiedInspector agent={trailing} onProblem={setProblem} onOpenLink={openLink} onOpenPullRequest={openPullRequest} onOpenSurface={panes && ((surface) => panes.open(surface))} onOpenWeb={panes?.openWeb ?? openLink} />
+        </>
+      )}
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
       {headerViewSwitch}
     </div>

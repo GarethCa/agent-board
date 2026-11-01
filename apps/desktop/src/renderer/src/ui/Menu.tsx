@@ -171,6 +171,8 @@ interface MenuProps {
   /** Whether it is open, for a menu opened from elsewhere too; it opens and closes itself without. */
   open?: boolean;
   onOpenChange?(open: boolean): void;
+  /** Called as the menu closes, before focus goes back to its button; `preventDefault()` keeps focus where the pick put it. */
+  onCloseFocus?(event: Event): void;
 }
 
 /** The rows of a menu, its submenus' too. */
@@ -250,12 +252,12 @@ const contentProps = {
  * and typing a label's first letters move between rows, wrapping round; Enter or a click picks one; Esc or a click elsewhere closes it
  * and gives focus back to the button.
  */
-export function Menu({ children, entries, align = 'start', side = 'bottom', open, onOpenChange }: MenuProps) {
+export function Menu({ children, entries, align = 'start', side = 'bottom', open, onOpenChange, onCloseFocus }: MenuProps) {
   return (
     <RadixMenu.Root modal={false} open={open} onOpenChange={onOpenChange}>
       <RadixMenu.Trigger asChild>{children}</RadixMenu.Trigger>
       <RadixMenu.Portal>
-        <RadixMenu.Content {...contentProps} align={align} side={side}>
+        <RadixMenu.Content {...contentProps} align={align} side={side} onCloseAutoFocus={onCloseFocus}>
           <Entries entries={entries} />
         </RadixMenu.Content>
       </RadixMenu.Portal>

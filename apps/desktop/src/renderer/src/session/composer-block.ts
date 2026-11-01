@@ -19,3 +19,17 @@ export function composerBlock(agent: Pick<Agent, 'endedAt' | 'state' | 'reviewOf
   if (agent.state === 'needs-permission') return { reason: 'Waiting on a permission prompt', action: 'show-prompt' };
   return undefined;
 }
+
+/**
+ * What the empty field says under the Simplified design: the reason it is off, or a sentence for the state the agent is
+ * in (paused, rate-limited, a message queued until it is up), else `fallback` (the Captain's "Ask the Captain…"), else an
+ * invitation: "Reply…" while the agent waits on the user and "Message this agent…" otherwise.
+ */
+export function composerPlaceholder(agent: Pick<Agent, 'endedAt' | 'state' | 'reviewOf' | 'queuedUntilUp'>, fallback?: string): string {
+  const blocked = composerBlock(agent);
+  if (blocked !== undefined) return blocked.reason;
+  if (agent.state === 'hibernated') return 'Paused: sending wakes it';
+  if (agent.state === 'rate-limited') return 'Rate-limited: your message will wait';
+  if (agent.queuedUntilUp > 0) return `${agent.queuedUntilUp} ${agent.queuedUntilUp === 1 ? 'message' : 'messages'} queued until it is up`;
+  return fallback ?? (agent.state === 'waiting' ? 'Reply…' : 'Message this agent…');
+}

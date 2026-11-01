@@ -50,7 +50,7 @@ function UserMessage({ text }: { text: string }) {
 }
 
 /** A message the user typed, or one another agent sent, drawn apart. */
-function SaidMessage({ item }: { item: Extract<ChatItem, { kind: 'user' }> }) {
+export function SaidMessage({ item }: { item: Extract<ChatItem, { kind: 'user' }> }) {
   return item.from === undefined ? <UserMessage text={item.text} /> : <AgentMessage text={item.text} from={item.from} />;
 }
 
@@ -65,13 +65,13 @@ function AssistantMessage({ text }: { text: string }) {
 }
 
 /** How long the model thought, as its item says it: "Thought for 12s", or just "Thought" untimed. */
-const thoughtFor = (ms: number | undefined) => (ms === undefined ? 'Thought' : `Thought for ${duration(ms)}`);
+export const thoughtFor = (ms: number | undefined) => (ms === undefined ? 'Thought' : `Thought for ${duration(ms)}`);
 
 /** What a compaction left, in a few words. */
-const COMPACTED = 'earlier turns summarised';
+export const COMPACTED = 'earlier turns summarised';
 
 /** What an interruption stopped, if it cut a call short. */
-const stoppedText = (stopped: ToolCall | undefined) => (stopped === undefined ? 'what should it do instead?' : `${toolLine(stopped).detail || stopped.name} stopped`);
+export const stoppedText = (stopped: ToolCall | undefined) => (stopped === undefined ? 'what should it do instead?' : `${toolLine(stopped).detail || stopped.name} stopped`);
 
 // ---------- Cards ----------
 
@@ -159,7 +159,7 @@ function ThinkingCard({ item }: { item: Extract<ChatItem, { kind: 'thinking' }> 
 }
 
 /** The tone of a call's card, dot or chip: as it went. */
-const callTone = (status: CallStatus): StateTone => (status === 'failed' || status === 'stopped' ? 'danger' : 'run');
+export const callTone = (status: CallStatus): StateTone => (status === 'failed' || status === 'stopped' ? 'danger' : 'run');
 
 /** A call as a card: its line, opening on a click to what went in and came out, and a subagent's own conversation. */
 function CallCard({ call, status }: { call: ToolCall; status: CallStatus }) {
@@ -420,7 +420,7 @@ function ToolRow({ call, status }: { call: ToolCall; status: CallStatus }) {
 }
 
 /** What a call took and gave, and a Claude subagent's own conversation. */
-function CallBody({ call }: { call: ToolCall }) {
+export function CallBody({ call }: { call: ToolCall }) {
   const { harness } = useChatSetting();
   return (
     <>
@@ -628,7 +628,7 @@ function SubagentThread({ call }: { call: ToolCall }) {
 }
 
 /** A message between Codex agents: a task handed on (encrypted in the rollout) or an answer. */
-function SubagentMessageRow({ message }: { message: SubagentMessage }) {
+export function SubagentMessageRow({ message }: { message: SubagentMessage }) {
   return (
     <p className="chat-subagent-message" data-testid="chat-subagent-message">
       <Bot className="chat-tool-icon" aria-hidden />

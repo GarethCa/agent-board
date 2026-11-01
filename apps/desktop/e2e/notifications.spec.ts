@@ -1,9 +1,9 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
-import type { AppNotification } from '../src/main/notifications.ts';
+import type { AppNotification, FakeNotification } from '../src/main/notifications.ts';
 import { launch, listFinishedTurns, screen, spawnAgent, tile, tileAction } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone } from './launch.ts';
+import { test, type LaunchOptions, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone } from './launch.ts';
 import type { FakeScenario } from '@agent-board/fake-harness';
 import { scratch } from './scratch.ts';
 
@@ -46,10 +46,14 @@ async function answer(page: Page, text: string): Promise<void> {
  * Runs `body` with the app open on a fresh repo zone whose agents run the fake claude's waiting scenario, Needs you
  * listing every finished turn, so a waiting agent notifies; or with `scenario`, as by default: explicit requests only.
  */
-async function withApp(body: (page: Page, app: ElectronApplication, dataDir: string) => Promise<void>, scenario?: FakeScenario): Promise<void> {
+async function withApp(
+  body: (page: Page, app: ElectronApplication, dataDir: string) => Promise<void>,
+  scenario?: FakeScenario,
+  options: LaunchOptions = {},
+): Promise<void> {
   const setup = scratch(scenario ?? 'waiting');
   const dataDir = tempDataDir();
-  const { app, window: page } = await launch(dataDir, setup.env);
+  const { app, window: page } = await launch(dataDir, setup.env, [], options);
   try {
     if (scenario === undefined) await listFinishedTurns(page);
     await pickFolderNext(app, setup.repo);
@@ -185,4 +189,50 @@ test("clicking the notification of an agent whose session window is popped out b
     // The board keeps it in its dock as out, rather than showing a second copy.
     await expect(page.getByTestId('session-window')).toHaveCount(0);
   });
+});
+
+/** The banners the app raised so far as they are drawn, with what they list under Options. */
+const banners = (app: ElectronApplication) =>
+  app.evaluate(() => (globalThis.agentBoardNotifications ?? []).map(({ title, subtitle, body, answers }: FakeNotification) => ({ title, subtitle, body, answers })));
+
+test('under the Simplified design, a question’s banner lists its answers and picking one answers it, once', async () => {
+  await withApp(
+    async (page, app) => {
+      const agent = await spawn(page, 'Ask: Which cache should the product pages use? | Redis | CDN only');
+      await expect.poll(() => banners(app)).toEqual([
+        {
+          title: agent.name,
+          subtitle: 'Question',
+          body: 'Which cache should the product pages use?',
+          answers: ['Redis', 'CDN only'],
+        },
+      ]);
+
+      await app.evaluate(() => globalThis.agentBoardNotifications![0]!.answer(1));
+
+      await expect.poll(() => badge(app)).toBe(0);
+      expect(await banners(app)).toHaveLength(1);
+      // The answer picked, "CDN only", is what reached the agent.
+      await clickNotification(app, 0);
+      // Whether its window opens on the chat or the terminal, it says so.
+      await expect(page.getByTestId('session-window')).toContainText('The user answered: CDN only');
+    },
+    'orchestrate',
+    { design: 'simplified' },
+  );
+});
+
+test('under the Simplified design, a permission banner offers nothing to answer with: it opens the agent', async () => {
+  await withApp(
+    async (page, app) => {
+      const agent = await spawn(page, 'Run the tests');
+      await expect.poll(async () => (await banners(app)).length).toBe(1);
+      expect((await banners(app))[0]).toMatchObject({ title: agent.name, subtitle: 'Permission', answers: [] });
+
+      await clickNotification(app, 0);
+      await expect(page.getByTestId('session-window')).toHaveAttribute('data-session-id', agent.sessionId);
+    },
+    'permission',
+    { design: 'simplified' },
+  );
 });

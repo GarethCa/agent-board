@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_USAGE_THRESHOLDS, type DaemonSettings, type UsageReading, type UsageThresholds } from '@agent-board/daemon/protocol';
 import { Fieldset, Hint, Switch } from '../ui';
+import { useSimplified } from '../design';
 import { UsageDetail, useUsage } from './UsagePill';
 import { useUsageOnBoard } from './usage-on-board';
 import { usageMeter } from './usage-view';
@@ -35,6 +36,7 @@ function useUsageSettings(onError: OnError) {
 export function UsagePlanSetting() {
   const { reading, now } = useUsage();
   const [usageOnBoard, setUsageOnBoard] = useUsageOnBoard();
+  const simplified = useSimplified();
   const meter = reading === undefined ? undefined : usageMeter(reading, now);
   return (
     <>
@@ -42,7 +44,7 @@ export function UsagePlanSetting() {
         {meter === undefined || meter.windows.length === 0 ? <Hint>No reading yet: it comes from a Claude agent&apos;s status line.</Hint> : <UsageDetail meter={meter} />}
       </Fieldset>
       <Switch label="Show usage on the board" checked={usageOnBoard} onChange={(event) => setUsageOnBoard(event.target.checked)} />
-      <Hint>{usageOnBoard ? 'On' : 'Off'} · shows the figures beside the zoom controls, bottom right</Hint>
+      <Hint>{usageOnBoard ? 'On' : 'Off'} · shows the figures {simplified ? 'in the toolbar, before Needs you' : 'beside the zoom controls, bottom right'}</Hint>
     </>
   );
 }

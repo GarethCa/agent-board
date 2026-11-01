@@ -1,11 +1,13 @@
 // What an agent's calm tile says under the Simplified design: its status, one grey line, and at most one button. Pure, so it
 // is unit-tested; `CalmTile` draws it.
 
-import { continuesOnCredits, isOrchestratorRole, needsYouKind, planPending, statusLine, type Agent, type ChecksState, type NeedsYouShows } from '@agent-board/daemon/protocol';
+import { continuesOnCredits, isOrchestratorRole, needsYouKind, planPending, statusLine, type Agent, type ChecksState, type NeedsYouShows, type Shell } from '@agent-board/daemon/protocol';
+import { paneIds } from '@agent-board/daemon/pane-layout';
 import { inRepoCheckout } from '@agent-board/daemon/gate-rules';
 import { asksInWords, humanStatus, type HumanStatus, type ImplementerFacts } from '@agent-board/daemon/human-status';
 import { HARNESSES } from '../harness';
 import { toolSummary } from '../../../shared/needs-you';
+import { panesLabel } from '../session/panes';
 import { STATE_LABELS } from '../states';
 import { branchLine, modelLabel } from './AgentSetup';
 
@@ -88,4 +90,30 @@ export function technicalLine(agent: Agent): string {
     STATE_LABELS[agent.state],
     ...(agent.endedAt === null || agent.exitCode === null ? [] : [`exit ${agent.exitCode}`]),
   ].join(' · ');
+}
+
+/**
+ * A shell's calm tile: a status only when there is one to give (a running shell has none, being a prompt rather than work),
+ * a grey line for what a restart or its panes' ending left, and whether it offers Resume.
+ */
+export interface CalmShellFace {
+  status: HumanStatus | null;
+  line: string | null;
+  resume: boolean;
+}
+
+/** The panes in its layout that haven't ended; an ended id for a pane since closed out of the layout counts for nothing. */
+const livePanes = (shell: Pick<Shell, 'layout' | 'endedPanes'>): number => paneIds(shell.layout).filter((pane) => !shell.endedPanes.includes(pane)).length;
+
+export function calmShellFace(shell: Pick<Shell, 'layout' | 'endedPanes' | 'stoppedPanes'>): CalmShellFace {
+  if (shell.stoppedPanes.length > 0) return { status: 'needs-you', line: 'Stopped by a restart', resume: true };
+  if (livePanes(shell) === 0) return { status: 'done', line: 'Every pane has ended', resume: false };
+  return { status: null, line: null, resume: false };
+}
+
+/** The panes a shell has and how many are live, for the technical layer: "2 panes · 1 live". */
+export function shellPanesLine(shell: Pick<Shell, 'layout' | 'endedPanes'>): string {
+  const panes = paneIds(shell.layout).length;
+  const live = livePanes(shell);
+  return `${panesLabel(panes)}${live < panes ? ` · ${live} live` : ''}`;
 }

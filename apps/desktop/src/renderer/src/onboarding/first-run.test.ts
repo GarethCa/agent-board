@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolCheck } from '@agent-board/daemon/protocol';
-import { onboardingState, placeCallout, toolRow, readySummary, shouldOpenOnboarding, type RowStatus } from './first-run';
+import { claudeInstallCommand, claudeReadiness, onboardingState, placeCallout, toolRow, readySummary, shouldOpenOnboarding, type RowStatus } from './first-run';
 
 describe('first run', () => {
   it('opens onboarding on an empty board that has never been through it', () => {
@@ -49,6 +49,42 @@ describe('a CLI row', () => {
   it('is missing when not on PATH, and checking before it is known', () => {
     expect(toolRow({ tool: 'codex', found: false })).toEqual({ status: 'missing', detail: 'not found' });
     expect(toolRow(undefined)).toEqual({ status: 'checking', detail: 'checking…' });
+  });
+});
+
+describe("the Simplified first run's Claude check", () => {
+  const found = (extra: Partial<Extract<ToolCheck, { found: true }>> = {}): ToolCheck => ({ tool: 'claude', found: true, path: '/usr/local/bin/claude', ...extra });
+
+  it('is checking until the check answers, with signing in waiting on it', () => {
+    expect(claudeReadiness(undefined)).toEqual({ installed: 'checking', signedIn: 'waiting', ready: false });
+  });
+
+  it('asks for an install when Claude Code is not found, and signing in waits', () => {
+    expect(claudeReadiness({ tool: 'claude', found: false })).toEqual({ installed: 'no', signedIn: 'waiting', ready: false });
+  });
+
+  it('asks for a sign-in when installed but signed out', () => {
+    expect(claudeReadiness(found({ version: '2.1.0', signedIn: false }))).toEqual({ installed: 'yes', signedIn: 'no', ready: false });
+  });
+
+  it('is ready once installed and signed in, or when it cannot say whether it is signed in', () => {
+    expect(claudeReadiness(found({ signedIn: true }))).toEqual({ installed: 'yes', signedIn: 'yes', ready: true });
+    expect(claudeReadiness(found())).toEqual({ installed: 'yes', signedIn: 'yes', ready: true });
+  });
+
+  it('claims nothing about the install when the check itself failed, and is not ready', () => {
+    // The fallback answer a failed check leaves, which reads as found: the failure wins over it.
+    const fallback = found({ path: 'claude', problem: 'could not be checked: no daemon' });
+    expect(claudeReadiness(fallback, 'could not be checked: no daemon')).toEqual({ installed: 'unknown', signedIn: 'waiting', problem: 'could not be checked: no daemon', ready: false });
+  });
+
+  it("gives Anthropic's installer for the platform: the shell script, or the PowerShell one on Windows", () => {
+    expect(claudeInstallCommand(false)).toBe('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(claudeInstallCommand(true)).toBe('irm https://claude.ai/install.ps1 | iex');
+  });
+
+  it('says why when Claude Code could not be asked, and is not ready', () => {
+    expect(claudeReadiness(found({ problem: 'did not answer in time' }))).toEqual({ installed: 'yes', signedIn: 'problem', problem: 'did not answer in time', ready: false });
   });
 });
 
