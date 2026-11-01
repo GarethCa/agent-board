@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { runHooks, runStatusLine, permissionDecision, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
+import { runHooks, runStatusLine, permissionDecision, permissionUpdates, type HooksConfig, type HookRunOptions, type HookOutput } from './hooks.ts';
 import { execFile, spawnSync } from 'node:child_process';
 import { McpClient, type McpServerConfig, type McpToolResult } from './mcp.ts';
 import type { HarnessName } from './paths.ts';
@@ -921,10 +921,25 @@ export class FakeSession {
     }
   }
 
+  /** Tools the user allowed for the session (an allow carrying `updatedPermissions`), which are not asked about again. */
+  private readonly allowedForSession = new Set<string>();
+
   private async askPermission(name: string, input: Record<string, unknown>, inside?: SubagentScope): Promise<boolean> {
+    if (this.allowedForSession.has(name)) return true;
     const fields: Record<string, unknown> = { ...inside, tool_name: name, tool_input: input };
-    if (this.dialect.permissionSuggestions) fields.permission_suggestions = [];
-    const decision = permissionDecision(await this.fire('PermissionRequest', fields));
+    // Claude suggests the rule its "don't ask again" would add; `FAKE_HARNESS_PERMISSION_SUGGESTIONS=1` has the fake do too.
+    if (this.dialect.permissionSuggestions) {
+      fields.permission_suggestions =
+        process.env.FAKE_HARNESS_PERMISSION_SUGGESTIONS === '1'
+          ? [{ type: 'addRules', rules: [typeof input.command === 'string' ? { toolName: name, ruleContent: input.command } : { toolName: name }], behavior: 'allow', destination: 'localSettings' }]
+          : [];
+    }
+    const outputs = await this.fire('PermissionRequest', fields);
+    const decision = permissionDecision(outputs);
+    if (decision === 'allow' && permissionUpdates(outputs).some((update) => update.destination === 'session')) {
+      this.allowedForSession.add(name);
+      this.print(`  ⎿ Allowed ${name} for the session\n`);
+    }
     if (decision) return decision === 'allow';
 
     if (this.dialect.demo) this.printLines(demo.permissionPrompt(this.dialect.harness, input, this.dialect.cwd));

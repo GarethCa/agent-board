@@ -215,6 +215,13 @@ PTY.
   - The hold is verified for Codex (a blocking hook's decision is honoured and the TUI shows "Running hook"),
     so its terminal is blocked while a prompt is held. This is the same case as the fake claude, with the same 20 s
     cap.
+- **Allowing for the session.** A request from Claude carries `permission_suggestions`, the rules its menu's "don't ask
+  again" would add. An allow with `scope: 'session'` (`agent.decidePermission`) replies with them as the decision's
+  `updatedPermissions`, each with its `destination` set to `session`, so the grant ends with the run and nothing is written
+  to a settings file. A prompt shows it only where the suggestion can be put in words (`sessionGrant`: "npm run:*", "all edits"), and the
+  button names it; the daemon refuses it otherwise. `agent.releasePermission` lets the harness ask in its terminal at once, as a
+  lapse does, for the pane's Review…. Codex's hook reply takes only `allow` or `deny` as far as is known, so a Codex prompt has no such
+  button: its "for this session" choice is its terminal's.
 - **Answering a waiting agent.** The daemon types the text into its PTY and submits it with `\r` 50 ms later. Line
   breaks are flattened to spaces, and answers to one agent are typed one at a time. A line over 512 bytes goes as a
   bracketed paste instead: Claude 2.1.312 kept only the end of a longer line typed as keys (2,691 characters sent, the

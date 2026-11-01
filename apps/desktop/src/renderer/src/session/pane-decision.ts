@@ -1,27 +1,37 @@
 import { useSyncExternalStore } from 'react';
-import { planPending, type Agent, type AgentAsk, type PlanSummary } from '@agent-board/daemon/protocol';
+import { planPending, type Agent, type AgentAsk, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
 
 /** A decision the agent waits on the user for, shown above the pane's composer under the Simplified design. */
-export type PaneDecision = { kind: 'ask'; ask: AgentAsk } | { kind: 'plan'; plan: PlanSummary };
+export type PaneDecision = { kind: 'permission'; prompt: PermissionPrompt } | { kind: 'ask'; ask: AgentAsk } | { kind: 'plan'; plan: PlanSummary };
+
+/** What the pane reads of an agent: its question, plan and permission prompts. */
+type Waiting = Pick<Agent, 'ask' | 'plan'> & { permissions?: readonly PermissionPrompt[] };
 
 /** Names a decision across updates: its question's or its plan version's id, so a new one is never taken for an old. */
-export const decisionId = (decision: PaneDecision): string => (decision.kind === 'ask' ? decision.ask.id : decision.plan.id);
+export const decisionId = (decision: PaneDecision): string => (decision.kind === 'permission' ? decision.prompt.id : decision.kind === 'ask' ? decision.ask.id : decision.plan.id);
 
-/** What `agent` waits on the user for, as the Needs you inbox lists it: its question, then its plan still to be decided. */
-function pendingDecisions(agent: Pick<Agent, 'ask' | 'plan'>): PaneDecision[] {
-  return [...(agent.ask !== null ? [{ kind: 'ask', ask: agent.ask } as const] : []), ...(planPending(agent) ? [{ kind: 'plan', plan: agent.plan } as const] : [])];
+/**
+ * What `agent` waits on the user for: the permission prompts the board still holds the harness for (oldest first, as
+ * their hold runs out and the terminal asks instead; one asking there already is the banner's), then, as the Needs you
+ * inbox lists them, its question and its plan still to be decided.
+ */
+function pendingDecisions(agent: Waiting): PaneDecision[] {
+  const held = (agent.permissions ?? []).filter((prompt) => prompt.heldUntil !== null).sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  return [
+    ...held.map((prompt): PaneDecision => ({ kind: 'permission', prompt })),
+    ...(agent.ask !== null ? [{ kind: 'ask', ask: agent.ask } as const] : []), ...(planPending(agent) ? [{ kind: 'plan', plan: agent.plan } as const] : [])];
 }
 
 /**
  * The decision the pane shows for `agent`: the first it waits on that the user hasn't put off ("Decide later", `deferred`
  * has its id). One put off stays pending, in Needs you and on its tile, and a new question or plan version shows again.
  */
-export function paneDecision(agent: Pick<Agent, 'ask' | 'plan'>, deferred: ReadonlySet<string> = new Set()): PaneDecision | undefined {
+export function paneDecision(agent: Waiting, deferred: ReadonlySet<string> = new Set()): PaneDecision | undefined {
   return pendingDecisions(agent).find((decision) => !deferred.has(decisionId(decision)));
 }
 
 /** The first decision `agent` waits on that the user put off, for the pane's line that brings it back. */
-export function deferredDecision(agent: Pick<Agent, 'ask' | 'plan'>, deferred: ReadonlySet<string>): PaneDecision | undefined {
+export function deferredDecision(agent: Waiting, deferred: ReadonlySet<string>): PaneDecision | undefined {
   return pendingDecisions(agent).find((decision) => deferred.has(decisionId(decision)));
 }
 

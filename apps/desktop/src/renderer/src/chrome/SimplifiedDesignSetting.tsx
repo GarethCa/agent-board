@@ -20,7 +20,7 @@ export function SimplifiedDesignSetting({ onError }: { onError: OnError }) {
   return (
     <Fieldset legend="Simplified design · Preview">
       <Switch label="Use the Simplified design" checked={simplified} onChange={(event) => change(event.target.checked)} />
-      <Hint>A calmer, native look, still being built: parts of the app look as they do now until theirs is done. Theme packs wait while it is on.</Hint>
+      <Hint>A calmer, native look, still being built: parts of the app look as they do now until theirs is done. It keeps the theme picked in Appearance.</Hint>
       {simplified && (
         <>
           <Switch label="Show technical details" checked={technical} onChange={(event) => changeTechnical(event.target.checked)} />

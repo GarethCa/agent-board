@@ -197,3 +197,12 @@ export function permissionDecision(outputs: HookOutput[]): PermissionDecision {
   if (behaviours.includes('allow')) return 'allow';
   return undefined;
 }
+
+/** The permission updates an allow carries (`updatedPermissions`), as the harness would apply them. */
+export function permissionUpdates(outputs: HookOutput[]): { destination?: string }[] {
+  return outputs.flatMap((output) => {
+    const specific = output.hookSpecificOutput as { decision?: { behavior?: string; updatedPermissions?: unknown } } | undefined;
+    const updates = specific?.decision?.behavior === 'allow' ? specific.decision.updatedPermissions : undefined;
+    return Array.isArray(updates) ? (updates as { destination?: string }[]) : [];
+  });
+}

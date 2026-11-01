@@ -3,7 +3,7 @@
 import { needsYouNow, planPending, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { SETTINGS_GROUPS } from './settings-ia';
-import { controlsIn, searchable } from './settings-search';
+import { controlsIn, drawnSections, searchable } from './settings-search';
 
 /** What a row of the switcher is about: a setting's row opens the Settings window at its section (`group.section`). */
 export type SpotlightSubject =
@@ -196,7 +196,7 @@ function settingRows(wanted: string, simplified: boolean): SpotlightRow[] {
     if (score > 0) found.push({ score, row: { key: `setting:${key}`, subject: { kind: 'setting', pane }, name, sub, marks: named?.positions ?? [] } });
   };
   for (const group of SETTINGS_GROUPS) {
-    for (const section of group.sections) {
+    for (const section of drawnSections(group, simplified)) {
       const pane = `${group.id}.${section.id}`;
       consider(pane, pane, section.name, `Settings · ${group.name}`, group.name);
       for (const control of controlsIn(pane, simplified)) consider(control.id, pane, control.label, `Settings · ${group.name} › ${section.name}`, control.also);

@@ -357,8 +357,17 @@ const SIMPLIFIED_SCOPES = [
   { id: 'simplified', scheme: 'light' as const, stack: [SIMPLIFIED] },
   { id: 'simplified-dark', scheme: 'dark' as const, stack: [SIMPLIFIED_DARK, SIMPLIFIED, DARK] },
 ];
-/** Every look the app can show: each theme, and the Simplified design in each mode. */
-const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES];
+/**
+ * The Simplified design over each theme pack: its own block for the pack outranks the rest, then the pack's, which comes
+ * after tokens.css and so wins over the Simplified light block where both set a token. The app's own dark blocks never
+ * match a pack.
+ */
+const SIMPLIFIED_PACK_SCOPES = THEME_SCOPES.filter(({ family }) => family !== undefined).map((theme) => {
+  const scope = `:root[data-design='simplified'][data-theme='${theme.id}']`;
+  return { ...theme, id: `simplified-${theme.id}`, theme, scope, stack: [scope, theme.scope, SIMPLIFIED] };
+});
+/** Every look the app can show: each theme, and the Simplified design in each mode and over each theme pack. */
+const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES];
 
 /**
  * A colour token's hex value in the first of `scope` that sets it (falling back to `:root`), following var() aliases.
@@ -502,7 +511,8 @@ describe('themes', () => {
   it("makes theme-packs.css from the packs' palettes, each setting every colour but those the same in every theme", async () => {
     const declarations = (scope: string) => new Map([...scopes.get(scope)!]);
     const required = literalColours().filter((name) => !SAME_IN_EVERY_THEME.has(name));
-    const css = themePacksCss({ light: declarations(':root'), dark: declarations(":root[data-theme='dark']") }, required);
+    const simplified = { light: declarations(SIMPLIFIED), dark: declarations(SIMPLIFIED_DARK) };
+    const css = themePacksCss({ light: declarations(':root'), dark: declarations(DARK), simplified }, required);
     await expect(css).toMatchFileSnapshot('./theme-packs.css');
   });
 
@@ -534,7 +544,34 @@ describe('the Simplified design', () => {
   });
 
   it('draws the desk plain, with no dots', () => {
-    for (const { stack } of SIMPLIFIED_SCOPES) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
+    for (const { stack } of [...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
+  });
+
+  describe.each(SIMPLIFIED_PACK_SCOPES)('over $name', ({ scope, scheme, theme }) => {
+    const block = () => scopes.get(scope)!;
+    /** What the Simplified design's own blocks set in the pack's mode: its light block, and its dark one over it. */
+    const own = () => new Map([...simplified, ...(scheme === 'dark' ? simplifiedDark : [])]);
+
+    it('sets every token the Simplified design sets in its mode, and no other', () => {
+      expect(scopes.has(scope)).toBe(true);
+      expect([...block().keys()].sort()).toEqual([...own().keys()].sort());
+    });
+
+    it("keeps the Simplified design's shapes, type, shadows and aliases as they are in its mode", () => {
+      const kept = [...own()].filter(([, value]) => !/^#[0-9a-f]{6}$/i.test(value));
+      expect(kept.length).toBeGreaterThan(0);
+      for (const [name, value] of kept) expect(block().get(name), name).toBe(value);
+    });
+
+    it("draws its surfaces, text and accent in the pack's own colours", () => {
+      for (const name of ['--surface', '--raised', '--border', '--text', '--muted', '--accent']) {
+        expect(hexOf(name, scope), name).toBe(hexOf(name, theme.scope));
+      }
+    });
+
+    it("opens a window on the pack's desk", () => {
+      expect(hexOf('--surface', scope)).toBe(deskFor('simplified', theme));
+    });
   });
 });
 

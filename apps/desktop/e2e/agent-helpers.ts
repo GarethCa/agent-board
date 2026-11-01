@@ -6,7 +6,7 @@ import { RECORDED_LINEAR_FIXTURES, serveFixtures, type HttpInteraction } from '@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { drag } from './board-helpers.ts';
-import { connectedDaemonPid, launchApp, type LaunchOptions } from './launch.ts';
+import { connectedDaemonPid, launchApp, runDesign, type LaunchOptions } from './launch.ts';
 import { isSettingsWindow, openSettings } from './settings-helpers.ts';
 
 /** Launches the app on `dataDir` with `env` and extra switches `args`, and waits for it to reach its daemon. */
@@ -54,6 +54,37 @@ export async function serveLinearFixtures(edit?: (interactions: HttpInteraction[
 
 export const agents = (page: Page): Promise<Agent[]> => page.evaluate(() => window.agentBoard.agents.list());
 export const zones = (page: Page): Promise<Zone[]> => page.evaluate(() => window.agentBoard.zones.list());
+/**
+ * Pops the session window in `scope` out into a window of its own: Classic's header button, or the Simplified header's
+ * ⋯ menu, Open in its own window. A shell's window keeps Classic's header under both designs.
+ */
+export async function clickPopOut(scope: Locator): Promise<void> {
+  const button = scope.getByRole('button', { name: 'Pop out session window' });
+  if (await button.count()) return button.click();
+  await scope.getByRole('button', { name: 'More', exact: true }).click();
+  await scope.page().getByRole('menuitem', { name: 'Open in its own window' }).click();
+}
+
+/**
+ * The count of shells an agent's tile holds, read from the daemon: the tile's chip counts them under Classic and the
+ * calm tile has none. A tab dragged onto the tile joins them.
+ */
+export async function expectShellsHeldBy(page: Page, sessionId: string, count: number): Promise<void> {
+  await expect.poll(async () => (await page.evaluate(() => window.agentBoard.shells.list())).filter((shell) => shell.owner?.id === sessionId).length).toBe(count);
+}
+
+/**
+ * Shows the agent's terminal in its window: under the Simplified design a window opens on its chat, so a spec that reads
+ * the terminal picks the Terminal view first. A no-op under Classic.
+ */
+export async function showTerminalView(page: Page): Promise<void> {
+  if (runDesign() !== 'simplified') return;
+  const terminal = sessionWindow(page).getByRole('button', { name: 'Terminal', exact: true });
+  // A shell's window has no view switch: its terminal is all it shows.
+  if ((await terminal.count()) === 0) return;
+  if ((await terminal.getAttribute('aria-pressed')) !== 'true') await terminal.click();
+}
+
 export const sessionWindow = (page: Page) => page.getByTestId('session-window');
 
 /** Opens the details strip of a session window or expanded tile, which start collapsed to the icon rail. */

@@ -95,7 +95,8 @@ function openWindow(
     y,
     hidden = false,
     offscreenScale,
-  }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean; offscreenScale?: number } = {},
+    parent,
+  }: { title?: string; width?: number; height?: number; x?: number; y?: number; hidden?: boolean; offscreenScale?: number; parent?: BrowserWindow } = {},
 ): BrowserWindow {
   const kind: ChromeFor = WINDOW_QUERY.popOut in query ? 'pop-out' : WINDOW_QUERY.settings in query ? 'settings' : 'board';
   const window = new BrowserWindow({
@@ -104,6 +105,8 @@ function openWindow(
     x,
     y,
     title,
+    // A child window stays on its parent's Space, so it must not be able to take a full-screen one of its own.
+    ...(parent === undefined ? {} : { parent, fullscreenable: false }),
     // A capture window: its page is exactly its size, and it is never shown.
     ...(hidden ? { useContentSize: true, enableLargerThanScreen: true } : {}),
     // A recorded window may be bigger than the screen: it is never shown.
@@ -212,7 +215,13 @@ registerUnsavedPlanEditIpc();
 // to sessions of their own and it is emptied, once, not again at every other setting's change while it stays off; and
 // emptied as the app connects while it is off, should anything have been left in it.
 let keptWebLogins: boolean | undefined;
-const settingsWindow = registerSettingsWindow({ open: openWindow });
+const settingsWindow = registerSettingsWindow({
+  open: openWindow,
+  board: () => board,
+  // A headless test can't use a real full screen, which shows the window and takes a Space (background.ts), so it sets
+  // this variable in the main process to have the board count as full screen. Never in a packaged build.
+  isFullScreen: (window) => window.isFullScreen() || (!app.isPackaged && process.env.AGENT_BOARD_TEST_FULL_SCREEN === '1'),
+});
 const webTabs = registerWebTabIpc({
   isBoard: (contents) => board !== undefined && !board.isDestroyed() && board.webContents === contents,
   isSettings: settingsWindow.isSettings,

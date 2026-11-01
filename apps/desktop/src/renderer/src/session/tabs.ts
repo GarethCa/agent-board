@@ -53,10 +53,27 @@ export function windowTabs(owner: TabOwner, shells: readonly Shell[]): WindowTab
   return [first, ...owned.filter((shell) => shell !== first.shell).map((shell) => ({ id: shell.id, shell, layout: shell.layout, label: shell.name }))];
 }
 
+/**
+ * The tab's name under the Simplified design, in words: the agent's own tab is Chat, whichever view it shows, in place of
+ * the command it runs (then any panes split beside it, as `windowTabs` names them), and a pull request's is spelled out.
+ * Every other tab keeps the name it has.
+ */
+export function wordedTabLabel(surface: WindowSurface, agent: Pick<Agent, 'sessionId'> | undefined): string {
+  if (surface.kind === 'pr') return `Pull request #${surface.pr.number}`;
+  if (surface.kind !== 'tab' || surface.tab.id !== OWN_TAB || agent === undefined) return surface.label;
+  return ['Chat', ...otherPaneLabels(surface.tab.layout, surface.tab.shell, agent.sessionId)].join(PANE_JOIN);
+}
+
+/** What a tab's name puts between the panes it holds. */
+const PANE_JOIN = ' │ ';
+
+/** The names of the shell panes split beside the agent's own, in layout order. */
+const otherPaneLabels = (layout: PaneLayout, own: Shell | undefined, agentSession: string): string[] => paneIds(layout).filter((id) => id !== agentSession).map((id) => shellPaneLabel(own!, id));
+
 /** The agent's own tab: named after its command, then any shell panes split beside it. */
 function agentOwnTab(agent: Pick<Agent, 'sessionId' | 'harness'>, own: Shell | undefined): WindowTab {
   const layout: PaneLayout = own?.layout ?? { type: 'pane', sessionId: agent.sessionId };
-  const label = [HARNESS_COMMANDS[agent.harness], ...paneIds(layout).filter((id) => id !== agent.sessionId).map((id) => shellPaneLabel(own!, id))].join(' │ ');
+  const label = [HARNESS_COMMANDS[agent.harness], ...otherPaneLabels(layout, own, agent.sessionId)].join(PANE_JOIN);
   return { id: OWN_TAB, shell: own, layout, label };
 }
 

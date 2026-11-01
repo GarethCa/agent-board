@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { agents, clickPopOut, launch, sessionWindow, SHELL_ENV, showTerminalView, spawnAgent, TURN_MS, windowKey } from './agent-helpers.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText, newShellInZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { serveWebPages } from './web-server.ts';
 
@@ -147,7 +147,7 @@ const bareBoard = (page: Page) =>
 
 /** Pops the session window shown on the board out, by its button. */
 async function popOutShown(app: ElectronApplication, board: Page): Promise<Locator> {
-  const [popped] = await Promise.all([app.waitForEvent('window'), sessionWindow(board).getByRole('button', { name: 'Pop out session window' }).click()]);
+  const [popped] = await Promise.all([app.waitForEvent('window'), clickPopOut(sessionWindow(board))]);
   const shown = sessionWindow(popped);
   await expect(shown).toBeVisible();
   return shown;
@@ -170,6 +170,7 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
     await agentTile(window, impl!.sessionId).dblclick();
     const implWindow = sessionWindow(window);
     await expect(implWindow).toBeVisible();
+    await showTerminalView(window);
     await window.keyboard.press(windowKey('t'));
     await expect(tabsOf(implWindow)).toHaveCount(2);
     await shownTab(implWindow).getByTestId('session-terminal').click();
@@ -220,6 +221,7 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
 
     // Between two pop-outs, onto the body of the reviewer's, and back with ⌘Z on the board.
     const reviewPopped = await popOutShown(app, window);
+    await showTerminalView(reviewPopped.page());
     await expect(tabsOf(reviewPopped)).toHaveCount(1);
     await dragAcross(tabNamed(implPopped, 'sh'), reviewPopped.getByTestId('session-terminal').first(), reviewPopped.getByTestId('window-pane-drop'), { attribute: 'data-zone', value: 'center' });
     await expect(tabsOf(reviewPopped)).toHaveCount(2);
@@ -284,7 +286,7 @@ test('a shell tab drags out to a window of its own, from a pop-out onto another 
     expect(await running(board, pane)).toBe(true);
 
     // The agent's own tab let go on bare board pops its window back in.
-    const own = await startDrag(tabNamed(implPopped, 'claude'));
+    const own = await startDrag(tabNamed(implPopped, tabText('claude')));
     const spot = await bareBoard(board);
     await holdOver(board, spot, own);
     await Promise.all([implPopped.page().waitForEvent('close'), dragEventAt(board, 'drop', spot, own)]);
@@ -303,7 +305,7 @@ test("a pane of a shell tile's split drags out to a window of its own, and ⌘Z 
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     const tileWindow = sessionWindow(window);
     await expect(tileWindow).toBeVisible();
     // Its own panes split from its details, tmux-style.
@@ -338,12 +340,11 @@ test("a web tab pops out into a tab window and back with its page as it was, nev
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    const newShell = window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' });
     // Two shell tiles: the second's window is the one on the board, a web tab in it.
-    await newShell.click();
+    await newShellInZone(window);
     await expect(shellTiles(window)).toHaveCount(1);
-    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
-    await newShell.click();
+    await sessionWindow(window).getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
+    await newShellInZone(window);
     await expect(shellTiles(window)).toHaveCount(2);
     const tileWindow = sessionWindow(window);
     await expect(tileWindow).toBeVisible();
@@ -452,12 +453,11 @@ test("a web tab dropped on a tile whose window isn't open keeps its cookies: its
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    const newShell = window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' });
-    await newShell.click();
+    await newShellInZone(window);
     await expect(shellTiles(window)).toHaveCount(1);
-    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await sessionWindow(window).getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
     const closedId = (await shells(window)).find((shell) => shell.owner === null)!.id;
-    await newShell.click();
+    await newShellInZone(window);
     await expect(shellTiles(window)).toHaveCount(2);
     const tileWindow = sessionWindow(window);
     const tileId = (await tileWindow.getAttribute('data-shell-id'))!;
@@ -489,7 +489,7 @@ test("a web tab dropped on a tile whose window isn't open keeps its cookies: its
     await expect(tabNamed(tileWindow, host)).toHaveCount(0);
 
     // Its window opened: the page loads afresh, its cookie kept.
-    await tileWindow.getByRole('button', { name: 'Close session window' }).click();
+    await tileWindow.getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
     await window.locator(`[data-testid="shell-tile"][data-shell-id="${closedId}"]`).dblclick();
     await expect(tabNamed(sessionWindow(window), host)).toHaveCount(1);
     await tabNamed(sessionWindow(window), host).getByRole('tab').click();
@@ -514,7 +514,7 @@ test('a tab window open as the app quits comes back, with its tabs, at the next 
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     const tileWindow = sessionWindow(window);
     await tileWindow.getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: /^Web…/ }).click();

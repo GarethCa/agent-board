@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { launch, sessionWindow, SHELL_ENV } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, newShellInZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 import { serveWebPages } from './web-server.ts';
@@ -101,7 +101,7 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     await expect(tabs(window)).toHaveCount(1);
 
     // + › Web… opens a tab at once with no page and its address bar focused, saying how to start a server while none runs;
@@ -399,7 +399,7 @@ async function closeWebTab(app: ElectronApplication, window: Page, host: string)
  * data (Clear browsing data… or the switch turned off), then opens the board's session window again, its web tab loaded afresh.
  */
 async function confirmClear(window: Page, action: (webTabs: Locator) => Promise<void>): Promise<void> {
-  await window.getByRole('button', { name: 'Close session window' }).click();
+  await window.getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
   await expect(sessionWindow(window)).toBeHidden();
   const settings = await openSettings(window, 'advanced.webTabs');
   await action(settingsSection(settings, 'Web tabs'));
@@ -419,7 +419,7 @@ test('web tabs keep a login across closing the tab and a restart, as a browser d
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     await expect(tabs(window)).toHaveCount(1);
 
     // A private tab signs in for itself alone, says it is private, and forgets the login as it closes.
@@ -504,7 +504,7 @@ test("a local address in a shell's output opens in a web tab of its window on a 
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     const terminal = sessionWindow(window).getByTestId('session-terminal');
     await terminal.click();
     // The address alone on a line of output, as a dev server prints it.
@@ -546,7 +546,7 @@ test("an https address in a shell's output, wrapped over rows, opens in the OS b
     await stubBrowser(app);
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     const terminal = sessionWindow(window).getByTestId('session-terminal');
     await terminal.click();
     // Longer than a row of the terminal, so the terminal wraps it.
@@ -605,7 +605,7 @@ test("OSC 8 hyperlinks as Claude Code writes them open whole in the OS browser o
     await stubBrowser(app);
     await pickFolderNext(app, repo);
     await browseForZone(window);
-    await window.getByTestId('zone').getByRole('button', { name: 'New shell in zone' }).click();
+    await newShellInZone(window);
     const terminal = sessionWindow(window).getByTestId('session-terminal');
     await terminal.click();
     await window.keyboard.type(`cat '${CLAUDE_OSC8}'`);

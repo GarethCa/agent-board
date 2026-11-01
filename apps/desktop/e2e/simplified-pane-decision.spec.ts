@@ -111,7 +111,7 @@ test('a plan shows above the composer with Reject leading and Approve trailing, 
     await frame.getByRole('button', { name: 'Read the plan ›' }).click();
     await expect(sessionWindow(window).getByTestId('plan-view')).toBeVisible();
     // The card is the chat's: back on it, the plan is decided there.
-    await sessionWindow(window).getByRole('tab', { name: 'claude', exact: true }).click();
+    await sessionWindow(window).getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(comments).toBeFocused();
 
     // Its comments take the keyboard, Return is a new line in them, and ⌘↵ approves.

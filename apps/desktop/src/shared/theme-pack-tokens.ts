@@ -8,10 +8,14 @@ import { THEME_PACKS, type PackTheme } from './theme-packs';
  * to the renderer's theme-packs.css and holds every pack to the same rules as the app's own dark theme.
  */
 
-/** The app's own two themes' declarations, as tokens.css writes them: `:root` and the dark theme's block. */
+/**
+ * The app's own two themes' declarations, as tokens.css writes them: `:root` and the dark theme's block, and the
+ * Simplified design's light and dark blocks.
+ */
 export interface BaseThemes {
   light: ReadonlyMap<string, string>;
   dark: ReadonlyMap<string, string>;
+  simplified: { light: ReadonlyMap<string, string>; dark: ReadonlyMap<string, string> };
 }
 
 /** How much less than its text on its panel a pack's agent note tab text may read (tokens.test.ts holds the same bar). */
@@ -271,20 +275,65 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   return new Map([...tokens].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)));
 }
 
-/** theme-packs.css: one `:root[data-theme]` block per pack theme, headed by its credit. */
+/**
+ * The Simplified design over a pack theme: every token the design's own blocks set in the theme's mode, so it outranks
+ * both those blocks and the pack's (whichever comes later). Its shapes, type, shadows and aliases stay the design's;
+ * each colour is the pack's own (`classic`, the pack's tokens), but for the two the design draws its own way: its rails
+ * are the palette's muted text faded into the desk, as its greys are, and its waiting orange is the one that reads as
+ * text, as the design writes it.
+ */
+function simplifiedPackTokens(theme: PackTheme, classic: ReadonlyMap<string, string>, base: BaseThemes): Map<string, string> {
+  const p = theme.palette;
+  const own = new Map([...base.simplified.light, ...(theme.scheme === 'dark' ? base.simplified.dark : [])]);
+  // The pack's own value: what its block sets, or for a light pack what it leaves to the light theme (an alias, such
+  // as a sticky's ink, that then reads the pack's colours).
+  const pack = (name: string) => {
+    const value = classic.get(name) ?? (theme.scheme === 'light' ? base.light.get(name) : undefined);
+    if (value === undefined) throw new Error(`${theme.id}: no Simplified value for ${name}`);
+    return value;
+  };
+  const drawn: Record<string, string> = {
+    '--rail': mix(p.muted, p.desk, 0.47),
+    '--rail-cap': mix(p.muted, p.desk, 0.7),
+    '--state-waiting': pack('--state-waiting-ink'),
+  };
+  const tokens = new Map<string, string>();
+  for (const [name, value] of own) {
+    if (!HEX.test(value)) {
+      tokens.set(name, value);
+      continue;
+    }
+    tokens.set(name, drawn[name] ?? pack(name));
+  }
+  return tokens;
+}
+
+const block = (selector: string, declarations: ReadonlyMap<string, string>, head: string[] = []) =>
+  [`${selector} {`, ...head, ...[...declarations].map(([name, value]) => `  ${name}: ${value};`), '}'].join('\n');
+
+/**
+ * theme-packs.css: one `:root[data-theme]` block per pack theme, headed by its credit, then the Simplified design's
+ * block for each.
+ */
 export function themePacksCss(base: BaseThemes, required: readonly string[]): string {
-  const blocks = THEME_PACKS.flatMap(({ credit, themes }) =>
-    themes.map((theme) => {
-      const declarations = [...packTokens(theme, base, required)].map(([name, value]) => `  ${name}: ${value};`);
-      return [`/* ${theme.name}: ${credit} */`, `:root[data-theme='${theme.id}'] {`, `  color-scheme: ${theme.scheme};`, ...declarations, '}'].join('\n');
-    }),
+  const themes = THEME_PACKS.flatMap(({ credit, themes }) => themes.map((theme) => ({ credit, theme, tokens: packTokens(theme, base, required) })));
+  const classic = themes.map(({ credit, theme, tokens }) =>
+    [`/* ${theme.name}: ${credit} */`, block(`:root[data-theme='${theme.id}']`, tokens, [`  color-scheme: ${theme.scheme};`])].join('\n'),
+  );
+  const simplified = themes.map(({ theme, tokens }) =>
+    [`/* ${theme.name} */`, block(`:root[data-design='simplified'][data-theme='${theme.id}']`, simplifiedPackTokens(theme, tokens, base))].join('\n'),
   );
   return [
     '/*',
     ' * The theme packs, made from their palettes (shared/theme-packs.ts) by shared/theme-pack-tokens.ts. Generated: edit',
     ' * the palette, then run `pnpm vitest run apps/desktop/src/renderer/src/tokens.test.ts -u` to write this file again.',
     ' */',
-    ...blocks,
+    ...classic,
+    '/*',
+    ' * The Simplified design over each pack (docs/adr/0022-simplified-design.md): its shapes, type and shadows, in the',
+    " * pack's colours.",
+    ' */',
+    ...simplified,
     '',
   ].join('\n');
 }

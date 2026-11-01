@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.11 (2026-11-01)
+
+- The permission test's pushed branch is not named like a ticket branch
+- The Simplified design honours the chosen theme pack and accent
+- Settings opens as an overlay when the main window is full screen
+- Agent notes become cards with a linked byline, and stickies stay exactly as they are
+- Permission prompts are answered in the pane, in plain English
+- Tabs stay as capable as today, drawn as light, worded tabs
+
 ## v0.6.10 (2026-11-01)
 
 - The ⌘K windows test's branch is not named like a ticket branch

@@ -3,7 +3,7 @@ import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from 
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, showDetails, spawnAgent, tile } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, pickFolderNext, removeDataDir, runDesign, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
@@ -17,6 +17,13 @@ async function stubBrowser(app: ElectronApplication): Promise<void> {
     (globalThis as { opened?: string[] }).opened = opened;
     shell.openExternal = async (url: string) => void opened.push(url);
   });
+}
+/** Opens the agent's pull request as a tab from the strip's + menu, which lists it until it has a tab. */
+async function openPullRequestFromMenu(page: Page): Promise<void> {
+  await expect(async () => {
+    await sessionWindow(page).getByRole('button', { name: 'New tab' }).click();
+    await page.getByRole('menuitem', { name: '#41 Send users home after login' }).click({ timeout: 2000 });
+  }).toPass({ timeout: 20000 });
 }
 const opened = (app: ElectronApplication) => app.evaluate(() => (globalThis as { opened?: string[] }).opened);
 
@@ -54,13 +61,20 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
     });
     // GitHub's rate limit is reached as the agent opens a draft PR.
     github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [pullRequest({ isDraft: true })] });
+    const classic = runDesign() !== 'simplified';
+    // The calm tile has no PR chip: its window is opened from the tile and the tab from the + menu.
     const chip = tile(window).getByTestId('tile-pr');
-    await expect(chip).toHaveText('#41');
+    if (classic) await expect(chip).toHaveText('#41');
+    else await expect.poll(async () => (await agents(window))[0]?.pullRequests.length).toBe(1);
     github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [pullRequest({ isDraft: true })], rateLimited: true });
 
     // Its chip opens its window on a PR tab, which says why it can't read it.
-    await chip.click();
-    await expect(tabNamed(window, 'PR #41')).toHaveAttribute('data-active', 'true');
+    if (classic) await chip.click();
+    else {
+      await tile(window).dblclick();
+      await openPullRequestFromMenu(window);
+    }
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveAttribute('data-active', 'true');
     await expect(prView(window).getByTestId('pr-error')).toContainText(/rate limit/i);
 
     // Refresh reads it again: a draft can't be approved or merged, and says so.
@@ -111,28 +125,32 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
     await expect(prView(window).getByTestId('pr-merge')).toHaveCount(0);
     expect(github.calls().find((call) => call.args[1] === 'merge')?.args).toEqual(['pr', 'merge', '41', '--repo', 'acme/app', '--squash', '--match-head-commit', 'b'.repeat(40)]);
     // The tile hears of it at once.
-    await expect(chip).toHaveAttribute('data-state', 'merged');
+    if (classic) await expect(chip).toHaveAttribute('data-state', 'merged');
 
     // Its row in the window's details shows the tab already open, not a second one.
-    await tabNamed(window, 'claude').getByRole('tab').click();
-    await showDetails(sessionWindow(window));
-    await sessionWindow(window).getByRole('button', { name: /#41 Send users home after login/ }).click();
-    await expect(tabNamed(window, 'PR #41')).toHaveCount(1);
-    await expect(tabNamed(window, 'PR #41')).toHaveAttribute('data-active', 'true');
+    await tabNamed(window, tabText('claude')).getByRole('tab').click();
+    if (classic) await showDetails(sessionWindow(window));
+    else {
+      await sessionWindow(window).getByRole('button', { name: 'Show details' }).click();
+      await expect(sessionWindow(window).getByTestId('inspector')).toBeVisible();
+    }
+    await sessionWindow(window).getByRole('button', { name: classic ? /#41 Send users home after login/ : /^Pull request #41/ }).click();
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveCount(1);
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveAttribute('data-active', 'true');
 
     // Left behind the agent's own tab, it is kept across a restart, and isn't read until it shows.
-    await tabNamed(window, 'claude').getByRole('tab').click();
+    await tabNamed(window, tabText('claude')).getByRole('tab').click();
     await app.close();
     const before = github.calls().filter((call) => call.args[1] === 'view' && call.args[0] === 'pr').length;
     ({ app, window } = await launch(dataDir, appEnv));
     // The window open when it quit opens again, with its tabs as they were.
-    await expect(tabNamed(window, 'PR #41')).toHaveCount(1);
-    await expect(tabNamed(window, 'PR #41')).not.toHaveAttribute('data-active', 'true');
-    await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveCount(1);
+    await expect(tabNamed(window, tabText('PR #41'))).not.toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('claude'))).toHaveAttribute('data-active', 'true');
     // The watcher reads the agent's pull requests meanwhile, but not the PR tab's.
-    await expect(tile(window).getByTestId('tile-pr')).toHaveAttribute('data-state', 'merged');
+    if (classic) await expect(tile(window).getByTestId('tile-pr')).toHaveAttribute('data-state', 'merged');
     expect(github.calls().filter((call) => call.args[1] === 'view' && call.args[0] === 'pr').length).toBe(before);
-    await tabNamed(window, 'PR #41').getByRole('tab').click();
+    await tabNamed(window, tabText('PR #41')).getByRole('tab').click();
     await expect(prView(window).getByTestId('pr-state')).toHaveText('Merged');
     expect(github.calls().filter((call) => call.args[1] === 'view' && call.args[0] === 'pr').length).toBe(before + 1);
 
@@ -140,21 +158,21 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
     const page = window;
     const view = sessionWindow(page).locator('[data-testid="session-tab-view"]:not([hidden])');
     const box = (await view.boundingBox())!;
-    const from = (await tabNamed(page, 'PR #41').boundingBox())!;
+    const from = (await tabNamed(page, tabText('PR #41')).boundingBox())!;
     await page.mouse.move(from.x + Math.min(20, from.width / 2), from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width - 12, box.y + box.height / 2, { steps: 16 });
     await page.mouse.up();
     await expect(sessionWindow(page).getByTestId('window-pane')).toHaveCount(2);
-    await expect(sessionWindow(page).getByTestId('window-pane').nth(1).getByTestId('session-tab')).toHaveText(['PR #41']);
+    await expect(sessionWindow(page).getByTestId('window-pane').nth(1).getByTestId('session-tab')).toHaveText([tabText('PR #41')]);
     await expect(prView(page).getByTestId('pr-state')).toHaveText('Merged');
 
     // It closes like any tab, and the + menu offers it again.
-    await tabNamed(window, 'PR #41').getByRole('button', { name: /Close/ }).click();
-    await expect(tabNamed(window, 'PR #41')).toHaveCount(0);
+    await tabNamed(window, tabText('PR #41')).getByRole('button', { name: /Close/ }).click();
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveCount(0);
     await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
     await window.getByRole('menuitem', { name: '#41 Send users home after login' }).click();
-    await expect(tabNamed(window, 'PR #41')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('PR #41'))).toHaveAttribute('data-active', 'true');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

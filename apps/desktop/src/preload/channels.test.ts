@@ -23,6 +23,7 @@ const CHANNELS: string[] = [
   'agent:pasteImage',
   'agent:pause',
   'agent:readDoc',
+  'agent:releasePermission',
   'agent:resendUndelivered',
   'agent:restart',
   'agent:resume',

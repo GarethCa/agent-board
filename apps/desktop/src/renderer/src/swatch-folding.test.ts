@@ -117,14 +117,20 @@ describe('the Simplified design', () => {
   /** The tokens a Simplified design block sets: `blocks` reads theme blocks alone, so it never sees these. */
   const simplifiedSets = (selector: string) => {
     const names = new Set<string>();
-    postcss.parse(readFileSync(join(here, 'tokens.css'), 'utf8')).walkRules((rule) => {
-      if (rule.selector === selector) rule.walkDecls((decl) => void names.add(decl.prop));
-    });
+    for (const file of ['tokens.css', 'theme-packs.css']) {
+      postcss.parse(readFileSync(join(here, file), 'utf8')).walkRules((rule) => {
+        if (rule.selector === selector) rule.walkDecls((decl) => void names.add(decl.prop));
+      });
+    }
     return names;
   };
 
-  it.each([":root[data-design='simplified']", ":root[data-design='simplified'][data-theme='dark']"])(
-    '%s sets none of the tokens the colour rows read, so they fold as in the app’s own theme in its mode',
+  it.each([
+    ":root[data-design='simplified']",
+    ":root[data-design='simplified'][data-theme='dark']",
+    ...THEMES.filter(({ family }) => family !== undefined).map(({ id }) => `:root[data-design='simplified'][data-theme='${id}']`),
+  ])(
+    '%s sets none of the tokens the colour rows read, so they fold as in the theme it is drawn over',
     (selector) => {
       const set = simplifiedSets(selector);
       expect(set.size).toBeGreaterThan(0);

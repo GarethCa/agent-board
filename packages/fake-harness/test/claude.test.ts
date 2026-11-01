@@ -190,6 +190,27 @@ describe('fake claude', () => {
     expect(recorder.events[3]).toMatchObject({ tool_name: 'Bash', tool_input: { command: 'rm -rf dist' }, permission_suggestions: [] });
   });
 
+  it('permission: an allow carrying a session-scoped rule is remembered, and a plain allow is not', async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) =>
+      event.hook_event_name === 'PermissionRequest'
+        ? {
+            hookSpecificOutput: {
+              hookEventName: 'PermissionRequest',
+              decision: { behavior: 'allow', updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }] },
+            },
+          }
+        : undefined,
+    );
+
+    const result = await runFake('claude', { scenario: 'permission', env: { FAKE_HARNESS_PERMISSION_SUGGESTIONS: '1' }, args: ['-p', '--settings', settings(), 'clean up'] });
+
+    expect(result.stdout).toContain('Allowed Bash for the session');
+    expect(recorder.events.find((event) => event.hook_event_name === 'PermissionRequest')).toMatchObject({
+      permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'rm -rf dist' }], behavior: 'allow', destination: 'localSettings' }],
+    });
+  });
+
   it('permission: a deny decision skips the tool', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>

@@ -263,6 +263,7 @@ const api: AgentBoardApi = {
     resume: (sessionId) => invoke(AGENT_IPC.resume, sessionId),
     restart: (sessionId, force = false) => invoke(AGENT_IPC.restart, sessionId, force),
     decidePermission: (sessionId, requestId, decision) => invoke(AGENT_IPC.decidePermission, sessionId, requestId, decision),
+    releasePermission: (sessionId, requestId) => invoke(AGENT_IPC.releasePermission, sessionId, requestId),
     link: (sessionId, issueId) => invoke(AGENT_IPC.link, sessionId, issueId),
     setSchedule: (sessionId, schedule) => invoke(AGENT_IPC.setSchedule, sessionId, schedule),
     markSeen: (sessionId) => invoke(AGENT_IPC.markSeen, sessionId),

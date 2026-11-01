@@ -76,6 +76,7 @@ const prompt: PermissionPrompt = {
   subagent: null,
   requestedAt: '2026-10-10T10:00:00.000Z',
   heldUntil: '2026-10-10T10:00:20.000Z',
+  sessionGrant: null,
 };
 
 /** As before explicit requests: Needs you lists every finished turn too. */

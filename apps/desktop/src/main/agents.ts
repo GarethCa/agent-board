@@ -71,6 +71,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
     }
   });
   passthroughVoid(daemon, AGENT_IPC.decidePermission, 'agent.decidePermission', (sessionId: string, requestId: string, decision: PermissionDecision) => ({ sessionId, requestId, ...decision }));
+  passthroughVoid(daemon, AGENT_IPC.releasePermission, 'agent.releasePermission', (sessionId: string, requestId: string) => ({ sessionId, requestId }));
   passthrough(daemon, AGENT_IPC.link, 'agent.link', (sessionId: string, issueId: string | null) => ({ sessionId, issueId }));
   passthrough(daemon, AGENT_IPC.setSchedule, 'agent.setSchedule', (sessionId: string, schedule: ScheduleSpec | null) => ({ sessionId, schedule }));
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));

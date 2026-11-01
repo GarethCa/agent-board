@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { launch, sessionWindow, showTerminalView, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
+import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, classicOnly, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
@@ -20,10 +20,13 @@ async function openAgent(page: Page, app: Parameters<typeof pickFolderNext>[0], 
   await spawnAgent(page, 'monorepo', 'Pick a database');
   await expect(tile(page)).toHaveCount(1);
   await tile(page).dblclick();
+  await showTerminalView(page);
   await expect(shownScreen(page)).toContainText('Which database should I use', { timeout: TURN_MS });
 }
 
 test("Chat picked while a shell tab shows brings the agent's own tab forward in its chat, and its shell tabs stay terminals", async () => {
+  // About Classic's Terminal / Chat switch in the pane strip; the Simplified window's header switch has its own spec.
+  classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -35,7 +38,7 @@ test("Chat picked while a shell tab shows brings the agent's own tab forward in 
     const chat = sessionWindow(window).getByTestId('chat-view');
     const composer = sessionWindow(window).getByLabel('Message to the agent');
     await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
-    await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('claude'))).toHaveAttribute('data-active', 'true');
     await expect(chat).toBeVisible();
     await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
     await expect(composer).toBeVisible();
@@ -48,7 +51,7 @@ test("Chat picked while a shell tab shows brings the agent's own tab forward in 
     await expect(sessionWindow(window).getByRole('button', { name: 'Expand all' })).toHaveCount(0);
 
     // Back on the agent's tab, its chat again.
-    await tabNamed(window, 'claude').getByRole('tab').click();
+    await tabNamed(window, tabText('claude')).getByRole('tab').click();
     await expect(chat).toBeVisible();
     await expect(composer).toBeVisible();
   } finally {
@@ -67,7 +70,7 @@ test('a shell tab closes by ⌘W, a middle-click or its ×, asking first while i
     const ask = window.getByRole('alertdialog', { name: 'Close tab?' });
 
     // The agent's own tab has no close, and ⌘W there closes nothing.
-    await expect(tabNamed(window, 'claude').getByRole('button', { name: /^Close/ })).toHaveCount(0);
+    await expect(tabNamed(window, tabText('claude')).getByRole('button', { name: /^Close/ })).toHaveCount(0);
 
     // ⌘W on a live shell asks; Cancel keeps it.
     await window.keyboard.press(windowKey('t'));
@@ -85,7 +88,7 @@ test('a shell tab closes by ⌘W, a middle-click or its ×, asking first while i
     await ask.getByRole('button', { name: 'Close tab' }).click();
     await expect(tabs(window)).toHaveCount(1);
     await expect.poll(async () => (await liveSessions(window)).some((session) => session.id === first)).toBe(false);
-    await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('claude'))).toHaveAttribute('data-active', 'true');
     // The keyboard goes to the tab now showing, so the window's shortcuts still work.
     await expect(paneInput(window)).toBeFocused();
 

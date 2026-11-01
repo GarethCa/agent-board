@@ -46,6 +46,7 @@ describe('permission holds', () => {
       subagent: null,
       requestedAt: T0.toISOString(),
       heldUntil: new Date(T0.getTime() + HOLD_MS).toISOString(),
+      sessionGrant: null,
     });
     expect(await settled(reply)).toBeUndefined();
 
@@ -61,6 +62,83 @@ describe('permission holds', () => {
     expect(permissionReply({ behavior: 'deny', message: 'Not on main' })).toEqual({
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'Not on main' } },
     });
+  });
+
+  describe('allowing for the session', () => {
+    const suggestion = { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'pnpm test:*' }], behavior: 'allow', destination: 'localSettings' };
+
+    it("is offered only for a request that carries the harness's own suggestions, and sends them scoped to the session", async () => {
+      const { permissions } = holds();
+      const without = permissions.hold('s1', request({ permission_suggestions: [] }), open());
+      const withSuggestion = permissions.hold('s1', request({ permission_suggestions: [suggestion] }), open());
+      const [none, some] = permissions.prompts('s1');
+      expect(none!.sessionGrant).toBeNull();
+      expect(some!.sessionGrant).toBe('pnpm test:*');
+
+      // A request with nothing to scope can't be allowed for the session: it stays held.
+      expect(permissions.decide('s1', none!.id, { behavior: 'allow', scope: 'session' })).toBe(false);
+      expect(await settled(without)).toBeUndefined();
+
+      expect(permissions.decide('s1', some!.id, { behavior: 'allow', scope: 'session' })).toBe(true);
+      expect(await withSuggestion).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PermissionRequest',
+          decision: { behavior: 'allow', updatedPermissions: [{ ...suggestion, destination: 'session' }] },
+        },
+      });
+    });
+
+    it('sends a plain allow when the user allows it once, suggestions or not', async () => {
+      const { permissions } = holds();
+      const reply = permissions.hold('s1', request({ permission_suggestions: [suggestion] }), open());
+      permissions.decide('s1', permissions.prompts('s1')[0]!.id, { behavior: 'allow' });
+      expect(await reply).toEqual(permissionReply({ behavior: 'allow' }));
+    });
+
+    it.each([
+      [[{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }], behavior: 'allow', destination: 'localSettings' }], 'npm run:*'],
+      [[{ type: 'addRules', rules: [{ toolName: 'WebFetch', ruleContent: 'domain:example.com' }], behavior: 'allow' }], 'WebFetch(domain:example.com)'],
+      [[{ type: 'addRules', rules: [{ toolName: 'Read' }], behavior: 'allow' }], 'all Read calls'],
+      [[{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }], 'all edits'],
+      [[{ type: 'addDirectories', directories: ['/tmp/a', '/tmp/b'], destination: 'session' }], '/tmp/a, /tmp/b'],
+      [
+        [
+          { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow' },
+          { type: 'setMode', mode: 'acceptEdits' },
+        ],
+        'ls and all edits',
+      ],
+      // Anything it can't word is not offered: the user would grant more than the button says.
+      [[{ type: 'setMode', mode: 'bypassPermissions' }], null],
+      [[{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'deny' }], null],
+      [[{ type: 'replaceRules', rules: [] }], null],
+      [[{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow' }, { type: 'mystery' }], null],
+    ])('words what an allow for the session grants: %j -> %s', (suggestions, grant) => {
+      const { permissions } = holds();
+      void permissions.hold('s1', request({ permission_suggestions: suggestions }), open());
+      expect(permissions.prompts('s1')[0]!.sessionGrant).toBe(grant);
+    });
+
+    it('ignores suggestions that are not objects, and never scopes a deny', async () => {
+      const { permissions } = holds();
+      const reply = permissions.hold('s1', request({ permission_suggestions: ['x', null, 3] }), open());
+      expect(permissions.prompts('s1')[0]!.sessionGrant).toBeNull();
+      permissions.decide('s1', permissions.prompts('s1')[0]!.id, { behavior: 'deny', scope: 'session' });
+      expect(await reply).toEqual(permissionReply({ behavior: 'deny' }));
+    });
+  });
+
+  it('releases a held request with no decision, so the harness asks now, and keeps it listed as asking there', async () => {
+    const { permissions, changed } = holds();
+    const reply = permissions.hold('s1', request(), open());
+    const [prompt] = permissions.prompts('s1');
+    expect(permissions.release('s1', prompt!.id)).toBe(true);
+    expect(await reply).toBeUndefined();
+    expect(permissions.prompts('s1')).toEqual([{ ...prompt, heldUntil: null }]);
+    expect(changed).toEqual([]);
+    // Once released it can't be decided or released again.
+    expect(permissions.release('s1', prompt!.id)).toBe(false);
+    expect(permissions.decide('s1', prompt!.id, { behavior: 'allow' })).toBe(false);
   });
 
   it('holds every request at once, each answered on its own', async () => {

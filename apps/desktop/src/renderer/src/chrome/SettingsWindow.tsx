@@ -21,7 +21,7 @@ import { NotificationsSetting } from './NotificationsSetting';
 import { ConversationAsSetting } from './ConversationAsSetting';
 import { OpensOnSetting } from './OpensOnSetting';
 import { SETTINGS_GROUPS, settingsPaneFrom, settingsPaneText, type SettingsGroupId, type SettingsHome, type SettingsPane } from './settings-ia';
-import { searchable, searchSettings, type SettingsHit } from './settings-search';
+import { drawnPane, drawnSections, searchable, searchSettings, type SettingsHit } from './settings-search';
 import { SimplifiedDesignSetting } from './SimplifiedDesignSetting';
 import { UsagePacingSetting, UsagePlanSetting, UsageThresholdsSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
@@ -116,6 +116,9 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
   }
 }
 
+/** The `<input>` types that take typed text. */
+const TEXT_ENTRY: ReadonlySet<string> = new Set(['text', 'search', 'url', 'email', 'number', 'password', 'tel']);
+
 /**
  * The Settings window: a sidebar of seven groups, each opening to list its sections, and a page per group with each
  * section's controls in a box under its heading. A section in the sidebar opens its group's page scrolled to it. The
@@ -126,10 +129,10 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
  * those sections, with what matched highlighted. A section picked there ends the search and opens in its group.
  */
 export function SettingsWindow({ initial }: { initial: string }) {
-  const [pane, setPane] = useState<SettingsPane>(() => settingsPaneFrom(initial || lastPane.get()));
+  const simplified = useSimplified();
+  const [pane, setPane] = useState<SettingsPane>(() => drawnPane(settingsPaneFrom(initial || lastPane.get()), simplified));
   const [open, setOpen] = useState<ReadonlySet<SettingsGroupId>>(() => new Set([pane.group]));
   const [query, setQuery] = useState('');
-  const simplified = useSimplified();
   const wanted = query.trim();
   const hits = useMemo(() => searchSettings(wanted, { simplified }), [wanted, simplified]);
   const searching = wanted !== '';
@@ -146,7 +149,7 @@ export function SettingsWindow({ initial }: { initial: string }) {
     setOpen((current) => (current.has(next.group) ? current : new Set([...current, next.group])));
   }, []);
 
-  useEffect(() => window.agentBoard.setup.onSettingsPane((asked) => show(settingsPaneFrom(asked))), [show]);
+  useEffect(() => window.agentBoard.setup.onSettingsPane((asked) => show(drawnPane(settingsPaneFrom(asked), simplified))), [show, simplified]);
 
   // Kept as it changes, and the page brought to the section picked, or to its top.
   useEffect(() => {
@@ -155,6 +158,23 @@ export function SettingsWindow({ initial }: { initial: string }) {
     if (target) target.scrollIntoView({ block: 'start' });
     else page.current?.scrollTo({ top: 0 });
   }, [pane]);
+
+  // Esc closes the window, unless it was clearing the search (which says so by handling the key).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // In a text field Esc leaves the field (saving it, as a blur does), rather than closing the window on the edit. The
+      // search field, empty, has nothing to leave; a switch, radio or range isn't being edited, so Esc closes at once.
+      const field = document.activeElement;
+      if (field instanceof HTMLTextAreaElement || (field instanceof HTMLInputElement && TEXT_ENTRY.has(field.type) && !(field.type === 'search' && field.value === ''))) {
+        field.blur();
+        return;
+      }
+      window.close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   useSearchHighlight(page, wanted);
 
@@ -185,6 +205,7 @@ export function SettingsWindow({ initial }: { initial: string }) {
         {searching && <FoundSections hits={hits} query={wanted} onPick={show} />}
         {(searching ? [] : SETTINGS_GROUPS).map((each) => {
           const expanded = open.has(each.id);
+          const sections = drawnSections(each, simplified);
           return (
             <div key={each.id} className="settings-group" data-open={expanded}>
               <button
@@ -204,16 +225,16 @@ export function SettingsWindow({ initial }: { initial: string }) {
                 <ChevronRight className="settings-group-chevron" aria-hidden />
                 {GROUP_ICONS[each.id]}
                 <span>{each.name}</span>
-                {!expanded && <span className="settings-group-count">{each.sections.length}</span>}
+                {!expanded && <span className="settings-group-count">{sections.length}</span>}
               </button>
               {expanded && (
                 <ul className="settings-group-sections" aria-label={each.name}>
-                  {each.sections.map((section) => (
+                  {sections.map((section) => (
                     <li key={section.id}>
                       <button
                         type="button"
                         className="settings-section-link"
-                        aria-current={each.id === pane.group && section.id === (pane.section ?? each.sections[0]!.id) ? 'page' : undefined}
+                        aria-current={each.id === pane.group && section.id === (pane.section ?? sections[0]!.id) ? 'page' : undefined}
                         onClick={() => show({ group: each.id, section: section.id })}
                       >
                         {section.name}
@@ -228,7 +249,7 @@ export function SettingsWindow({ initial }: { initial: string }) {
       </nav>
       <main className="settings-window-page" ref={page} aria-label={searching ? 'Search' : group.name}>
         {searching ? <FoundPage hits={hits} query={wanted} onError={onError} /> : <h2 className="settings-page-title">{group.name}</h2>}
-        {(searching ? [] : group.sections).map((section) => {
+        {(searching ? [] : drawnSections(group, simplified)).map((section) => {
           const id = `settings-section-${group.id}-${section.id}`;
           return (
             <section key={section.id} id={id} className="settings-page-section" aria-labelledby={`${id}-heading`}>

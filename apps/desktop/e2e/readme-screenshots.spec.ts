@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { agents, launch, listFinishedTurns, screen, sessionWindow, setClickOpens, tile, tileAction } from './agent-helpers.ts';
 import { demoReady, makeRepo, pinPaths, pinRandomLooks, scenarioPicker, seedBoard, stillBoard } from './demo-board.ts';
-import { openAddZone, removeDataDir, tempDataDir, test } from './launch.ts';
+import { openAddZone, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { ignorePointer, RENDER_ARGS, RENDER_ENV, settle, VIEWPORT } from './render.ts';
 import { scratch } from './scratch.ts';
 
@@ -555,7 +555,7 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
     await shoot(page, 'pr-tab');
 
     // Two panes, each with its own strip: the agent beside a shell, the PR tab and a second shell.
-    await win.getByRole('tab', { name: 'claude', exact: true }).click();
+    await win.getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control+Shift'}+d`);
     const panes = win.getByTestId('window-pane');
     await expect(panes).toHaveCount(2);
@@ -564,7 +564,7 @@ test('the README screenshots: a session window with two panes, a PR tab and a we
     await page.keyboard.type('ls');
     await page.keyboard.press('Enter');
     await expect(shell).toContainText('README.md');
-    await panes.nth(0).getByRole('tab', { name: 'claude', exact: true }).click();
+    await panes.nth(0).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await pinRandomLooks(page);
     await pinPaths(page);
     await pinPullRequestLooks(page, agent.branch);

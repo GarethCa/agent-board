@@ -2,8 +2,8 @@ import { expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
-import { browseForZone, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { agents, launch, showTerminalView, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from './agent-helpers.ts';
+import { browseForZone, connectedDaemonPid, runDesign, launchApp, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const tabs = (page: Page) => sessionWindow(page).getByTestId('session-tab');
@@ -41,10 +41,11 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
     await expect(tile(window)).toHaveCount(1);
     await tile(window).dblclick();
     const [agent] = await agents(window);
+    await showTerminalView(window);
 
     // One tab, the agent's own, and a named + to open a shell beside it.
     await expect(tabs(window)).toHaveCount(1);
-    await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('claude'))).toHaveAttribute('data-active', 'true');
     await expect(shownScreen(window)).toContainText('Which database should I use', { timeout: TURN_MS });
     await expect(sessionWindow(window).getByRole('button', { name: 'New tab' })).toHaveText('Shell');
 
@@ -57,13 +58,13 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
 
     // ⌘1 back to the agent, whose run is still there; ⌘D splits its pane, a new shell tab in a pane beside it.
     await window.keyboard.press(windowKey('1'));
-    await expect(tabNamed(window, 'claude')).toHaveAttribute('data-active', 'true');
+    await expect(tabNamed(window, tabText('claude'))).toHaveAttribute('data-active', 'true');
     await expect(windowPanes(window)).toHaveCount(0);
     // Its terminal is tagged, to tell that the split keeps it, attached, rather than mounting it afresh.
     await shown(window).locator('.shell-pane[data-agent] .xterm').evaluate((element) => ((element as HTMLElement).dataset.kept = 'yes'));
     await window.keyboard.press(windowKey('d'));
     await expect(windowPanes(window)).toHaveCount(2);
-    await expect(windowPanes(window).nth(0).getByTestId('session-tab')).toHaveText(['claude', 'sh']);
+    await expect(windowPanes(window).nth(0).getByTestId('session-tab')).toHaveText([tabText('claude'), 'sh']);
     await expect(windowPanes(window).nth(1).getByTestId('session-tab')).toHaveText(['sh 2']);
     await expect(tabNamed(window, 'sh 2')).toHaveAttribute('data-active', 'true');
     const agentView = sessionWindow(window).locator('[data-testid="session-tab-view"][data-tab="own"]');
@@ -100,18 +101,25 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
     await window.keyboard.press(windowKey('w'));
     await window.getByRole('alertdialog', { name: 'Close tab?' }).getByRole('button', { name: 'Close tab' }).click();
     await expect(windowPanes(window)).toHaveCount(2);
-    await expect(tabs(window)).toHaveText(['claude', 'sh', 'sh 2', 'npm greet']);
+    await expect(tabs(window)).toHaveText([tabText('claude'), 'sh', 'sh 2', 'npm greet']);
 
     // Closed, the window leaves the tile counting its shells; its list opens the window on one.
-    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
-    const chip = tile(window).getByTestId('tile-shells');
-    await expect(chip).toContainText('3 shells');
-    await chip.hover();
-    const rows = window.getByTestId('tile-shells-row');
-    await expect(rows).toHaveCount(3);
-    await expect(rows.filter({ hasText: 'last command failed · exit 1' })).toHaveCount(1);
-    await expect(chip.locator('.tile-shells-dot[data-state="failed"]')).toHaveCount(1);
-    await rows.filter({ hasText: 'npm greet' }).click();
+    await sessionWindow(window).getByRole('button', { name: /^(Close session window|Done, close)/u }).click();
+    if (runDesign() === 'simplified') {
+      // The calm tile has no shells chip: the window opens again from the tile, and the tab is picked in the strip.
+      await tile(window).dblclick();
+      await expect(sessionWindow(window)).toBeVisible();
+      await tabNamed(window, 'npm greet').getByRole('tab').click();
+    } else {
+      const chip = tile(window).getByTestId('tile-shells');
+      await expect(chip).toContainText('3 shells');
+      await chip.hover();
+      const rows = window.getByTestId('tile-shells-row');
+      await expect(rows).toHaveCount(3);
+      await expect(rows.filter({ hasText: 'last command failed · exit 1' })).toHaveCount(1);
+      await expect(chip.locator('.tile-shells-dot[data-state="failed"]')).toHaveCount(1);
+      await rows.filter({ hasText: 'npm greet' }).click();
+    }
     await expect(tabNamed(window, 'npm greet')).toHaveAttribute('data-active', 'true');
     await expect(windowPanes(window).nth(1)).toHaveAttribute('data-focused', 'true');
 
@@ -128,13 +136,48 @@ test("an agent's window opens shell tabs beside its run (⌘T, + menu, a package
     relaunched = await launchApp(dataDir, env);
     const again = await relaunched.firstWindow();
     await connectedDaemonPid(again);
-    await expect(tile(again).getByTestId('tile-shells')).toContainText('2 shells');
+    if (runDesign() !== 'simplified') await expect(tile(again).getByTestId('tile-shells')).toContainText('2 shells');
     // The window open when it quit opens again, laid out as it was.
     await expect(windowPanes(again)).toHaveCount(2);
-    await expect(windowPanes(again).nth(0).getByTestId('session-tab')).toHaveText(['claude', 'sh']);
+    await expect(windowPanes(again).nth(0).getByTestId('session-tab')).toHaveText([tabText('claude'), 'sh']);
     await expect(windowPanes(again).nth(1).getByTestId('session-tab')).toHaveText(['sh 2']);
   } finally {
     await (relaunched ?? app).close();
+    removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the + menu holds Split under the Simplified design, headed 'Open in this pane', and Classic keeps its Split button", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await expect(tile(window)).toHaveCount(1);
+    await tile(window).dblclick();
+    await showTerminalView(window);
+    await expect(tabs(window)).toHaveCount(1);
+    const split = sessionWindow(window).getByRole('button', { name: 'Split pane' });
+    await sessionWindow(window).getByRole('button', { name: 'New tab' }).click();
+    if (runDesign() === 'simplified') {
+      // No strip button: the menu is headed, and Split right is in it, with its key.
+      await expect(split).toHaveCount(0);
+      await expect(window.getByRole('menu').getByText('Open in this pane', { exact: true })).toBeVisible();
+      await window.getByRole('menuitem', { name: /^Split right/ }).click();
+      await expect(windowPanes(window)).toHaveCount(2);
+    } else {
+      await expect(window.getByRole('menu').getByText('Open in this pane')).toHaveCount(0);
+      await expect(window.getByRole('menuitem', { name: /^Split right/ })).toHaveCount(0);
+      await window.keyboard.press('Escape');
+      await expect(split).toHaveCount(1);
+      await split.click();
+      await expect(windowPanes(window)).toHaveCount(2);
+    }
+  } finally {
+    await app.close();
     removeDataDir(dataDir);
     rmSync(dir, { recursive: true, force: true });
   }

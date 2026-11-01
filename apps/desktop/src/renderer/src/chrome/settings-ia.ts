@@ -80,6 +80,8 @@ export interface SettingsControl {
   home: SettingsHome;
   /** Drawn only under the Simplified design: anything that lists controls leaves it out under Classic. */
   simplifiedOnly?: true;
+  /** Drawn only under Classic: the Simplified design has one look for what it sets, so it leaves the control out. */
+  classicOnly?: true;
   /** Other words searching finds it by: what it sets, what it was called, where it used to be. */
   also?: string;
 }
@@ -95,7 +97,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'clickOpens', label: 'Double-clicking a tile opens', home: 'board.opening', also: 'double-click expand session window' },
   { id: 'connections', label: 'Show connections', home: 'board.connections', also: 'edges rails lines' },
   { id: 'crewLook', label: 'Agents an orchestrator starts', home: 'board.crews', also: 'orchestrator crew layout' },
-  { id: 'agentNoteLook', label: 'How a note an agent writes looks', home: 'board.notes', also: 'document terminal card' },
+  { id: 'agentNoteLook', label: 'How a note an agent writes looks', home: 'board.notes', classicOnly: true, also: 'document terminal card' },
   { id: 'arrangeSpacing', label: 'Arrange spacing', home: 'board.tidying', also: 'tidy gap layout' },
   { id: 'opensOn', label: 'Agent windows open on', home: 'agents.chat', simplifiedOnly: true, also: 'chat terminal timeline view default open' },
   { id: 'conversationAs', label: 'Show the conversation as', home: 'agents.chat', simplifiedOnly: true, also: 'terminal style timeline rail tui transcript' },

@@ -24,7 +24,10 @@ export function designFrom(saved: unknown): Design {
  */
 const SIMPLIFIED_DESK: Record<Theme['scheme'], string> = { light: '#f3f3f5', dark: '#1b1b1e' };
 
-/** The desk a window opens on: the theme's own, or under the Simplified design its desk in the theme's mode. */
+/**
+ * The desk a window opens on: the theme's own, but under the Simplified design its own desk in the theme's mode for the
+ * app's own themes. A theme pack keeps its desk under either design.
+ */
 export function deskFor(design: Design, theme: Theme): string {
-  return design === 'simplified' ? SIMPLIFIED_DESK[theme.scheme] : theme.desk;
+  return design === 'simplified' && theme.family === undefined ? SIMPLIFIED_DESK[theme.scheme] : theme.desk;
 }

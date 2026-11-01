@@ -147,7 +147,8 @@ import { restoreViewSettings, setCrewLook, setViewSetting, useViewSettings } fro
 import { ConnectionCountsContext, edgeCounts, nextConnectionsView, shownEdges } from './connections-view';
 import { railOf, withRailSelected } from './rails';
 import { CrewFramesContext, CrewViewContext, nextCrewLook, type CrewView } from './crew-view';
-import { AgentNoteLookContext } from './items/agent-note-look';
+import { AgentNoteLookContext, type AgentNoteLook } from './items/agent-note-look';
+import { useSimplified } from '../design';
 import { agentNoteTethers, isTether, TETHER_EDGE_TYPE } from './items/agent-note-tethers';
 import { TetherEdge } from './items/TetherEdge';
 import {
@@ -434,7 +435,9 @@ function BoardView() {
   const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
   /** The view settings every window shares: what a double-click opens, how crews and agent notes look, which connections are drawn. */
-  const { clickOpens, crewLook, connections, agentNoteLook } = useViewSettings();
+  const { clickOpens, crewLook, connections, agentNoteLook: savedNoteLook } = useViewSettings();
+  // The Simplified design has one look for a note an agent writes, a card: the setting is Classic's alone.
+  const agentNoteLook: AgentNoteLook = useSimplified() ? 'document' : savedNoteLook;
   const crewLookRef = useRef(crewLook);
   crewLookRef.current = crewLook;
   const cycleCrewLook = useCallback(() => setCrewLook(nextCrewLook(crewLookRef.current)), []);

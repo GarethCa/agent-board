@@ -2139,12 +2139,21 @@ export interface PermissionPrompt {
   requestedAt: string;
   /** While the daemon holds the hook, when the hold lapses to the terminal; null once only the terminal can answer. */
   heldUntil: string | null;
+  /**
+   * What an allow for the session would grant, in words ("npm run:*", "all edits"): the rule the harness suggested with
+   * the request (Claude does). Null where it suggested none, or none that can be worded; then it can't be offered.
+   */
+  sessionGrant: string | null;
 }
 
-/** The user's answer to a permission prompt. A deny's `message` tells the agent why. */
+/**
+ * The user's answer to a permission prompt. A deny's `message` tells the agent why. An allow with `scope: 'session'`
+ * also grants what the harness suggested for the rest of the session; only for a prompt with a `sessionGrant`.
+ */
 export interface PermissionDecision {
   behavior: 'allow' | 'deny';
   message?: string;
+  scope?: 'session';
 }
 
 /**
@@ -3848,6 +3857,12 @@ export interface DaemonMethods {
    * `AGENT_ERROR.permissionGone` when that prompt is no longer held: it was answered, or went to the terminal.
    */
   'agent.decidePermission': { params: SessionRef & { requestId: string } & PermissionDecision; result: null };
+  /**
+   * Releases the agent's held permission prompt `requestId` with no decision, so the harness asks in its terminal at
+   * once instead of when the hold lapses. Answers nothing for the user. Fails with `AGENT_ERROR.permissionGone` if it is
+   * not held any more.
+   */
+  'agent.releasePermission': { params: SessionRef & { requestId: string }; result: null };
   /**
    * Links the agent to an issue in the tracker of a zone of its own repo (the one it sits in, if it is one), or
    * unlinks it with null. Its branch stays as it is.

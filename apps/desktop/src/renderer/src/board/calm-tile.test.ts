@@ -21,7 +21,7 @@ describe('calmFace', () => {
   it('asks for permission in the tool’s own words, with one filled Review & allow', () => {
     const agent = working({
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, sessionGrant: null }],
     });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });
