@@ -13,8 +13,12 @@ import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SimplifiedHeader } from './SimplifiedHeader';
+import { DetailsToggle } from './DetailsToggle';
 import { isSimplified, useSimplified } from '../design';
 import { inspectorShown } from './inspector';
+import { showsInspector, sidebarFor } from './agent-sidebar';
+import { useAgentSidebar } from './use-agent-sidebar';
+import { viewSettings } from '../board/view-settings';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
@@ -81,9 +85,18 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
-  // Classic's details open collapsed to their rail in each window; the Simplified design's inspector is shown or
-  // hidden as it last was.
-  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(isSimplified() && content.kind === 'session' && inspectorShown.get() === 'shown'));
+  // Classic's details strip opens collapsed to its rail in each window; the inspector (the Simplified design's, or
+  // Classic's with its Simple sidebar) is shown or hidden as it last was.
+  const inspector = showsInspector(useAgentSidebar(), content);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(showsInspector(sidebarFor(isSimplified(), viewSettings().agentSidebar), content) && inspectorShown.get() === 'shown'));
+  // Switched to the other sidebar while open (a pick in Settings, the design, or its agent listed or gone), it opens as
+  // that sidebar opens.
+  const wasInspector = useRef(inspector);
+  useEffect(() => {
+    if (wasInspector.current === inspector) return;
+    wasInspector.current = inspector;
+    setDetailsCollapsed(!(inspector && inspectorShown.get() === 'shown'));
+  }, [inspector]);
   const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
@@ -123,8 +136,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   useNavKeys(nav);
   // Under the Simplified design an agent's window has one header, which holds its view switch.
   const simplified = useSimplified() && content.kind === 'session';
-  const remembers = useRef(simplified);
-  remembers.current = simplified;
+  const remembers = useRef(inspector);
+  remembers.current = inspector;
   const wasShown = useRef(!detailsCollapsed);
   useEffect(() => {
     if (remembers.current) {
@@ -215,6 +228,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         <span className="session-window-head-fill" />
         {/* Its merge gate, for an agent with a branch of its own. */}
         {agent && gated(agent) && <GateControls agent={agent} visible />}
+        {/* The inspector has no rail of its own to bring it back: this shows and hides it, as the Simplified header's does. */}
+        {inspector && <DetailsToggle open={!detailsCollapsed} onOpen={(open) => setDetailsCollapsed(!open)} />}
         {onMinimise && (
           <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip="Minimise to the dock; it keeps running">
             <span className="session-window-folding-label">Minimise</span>
@@ -278,7 +293,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           onAttachState={setAttach}
           shown={showing === 'terminal'}
           viewSlot={simplified ? viewSlot : undefined}
-          inspector={simplified}
+          inspector={inspector}
           terminalToggle={simplified ? terminalToggle : undefined}
         />
       </div>

@@ -55,6 +55,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  ledBy: null,
   startup: null,
   unsent: null,
   untypedPrompt: null,

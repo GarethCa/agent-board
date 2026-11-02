@@ -163,7 +163,25 @@ describe('one line per tool call', () => {
   });
 
   test('spans of time read as the chat shows them', () => {
-    expect([4_150, 12_400, 252_000, 3_900_000].map(duration)).toEqual(['4.1s', '12s', '4m 12s', '1h 5m']);
+    expect([4_150, 12_400, 252_000, 3_900_000].map((ms) => duration(ms))).toEqual(['4.1s', '12s', '4m 12s', '1h 5m']);
+  });
+
+  test('a span still going counts whole seconds, and the same span ended shows its precise value', () => {
+    const rows: [number, string, string][] = [
+      [0, '0s', '0.0s'],
+      [999, '0s', '0.9s'],
+      [1_000, '1s', '1.0s'],
+      [2_400, '2s', '2.4s'],
+      [9_999, '9s', '9.9s'],
+      [10_000, '10s', '10s'],
+      [59_999, '59s', '59s'],
+      [60_000, '1m 0s', '1m 0s'],
+      [65_400, '1m 5s', '1m 5s'],
+      [3_900_000, '1h 5m', '1h 5m'],
+    ];
+    for (const [ms, live, ended] of rows) {
+      expect([duration(ms, { live: true }), duration(ms)], `${ms} ms`).toEqual([live, ended]);
+    }
   });
 
   test("and how a Codex exec script went, from its report's output, not its header", () => {

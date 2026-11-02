@@ -82,7 +82,10 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
     await drag(window, handle, -100, 0);
     await expect.poll(() => widthOf(window)).toBe(460);
 
-    // The For you list is as tall as its line is dragged to.
+    // The For you list is as tall as its line is dragged to (the panel ends above the minimap, so the window is made tall enough to give it room).
+    const shorter = (await panelOf(window).boundingBox())!.height;
+    await window.setViewportSize({ width: 1280, height: 1000 });
+    await expect.poll(async () => (await panelOf(window).boundingBox())!.height).toBeGreaterThan(shorter);
     const forYou = window.getByRole('region', { name: 'For you' });
     const before = Math.round((await forYou.boundingBox())!.height);
     await drag(window, window.getByTestId('master-for-you-handle'), 0, 60);
@@ -98,6 +101,7 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
     await current.app.close();
     current = await launch(dataDir, env);
     window = current.window;
+    await window.setViewportSize({ width: 1280, height: 1000 });
     await window.getByTestId('master-button').click();
     await expect.poll(() => widthOf(window)).toBe(460);
     await expect.poll(async () => Math.round((await window.getByRole('region', { name: 'For you' }).boundingBox())!.height)).toBe(taller);
@@ -110,7 +114,7 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
   }
 });
 
-test('the Captain’s panel sits above the dock: its bottom ends at the dock’s top and nothing of it is hidden behind', async () => {
+test('the Captain’s panel sits above the dock and the zoom bar: its bottom ends above both and nothing of it is hidden behind', async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -124,10 +128,10 @@ test('the Captain’s panel sits above the dock: its bottom ends at the dock’s
     const dock = window.getByTestId('dock-item');
     await expect(dock).toHaveCount(1);
     const dockBox = async () => (await window.locator('.session-dock').boundingBox())!;
-    // The panel gives way to the dock: it ends above the dock's top edge, and the zoom island is clear of both.
+    // The panel gives way to the dock: it ends above the dock's top edge, and the zoom island, under it, stays put.
     await expect.poll(async () => (await panel.boundingBox())!.y + (await panel.boundingBox())!.height).toBeLessThanOrEqual((await dockBox()).y);
     const box = (await panel.boundingBox())!;
-    expect(box.y + box.height).toBeLessThan(bottomBefore.y + bottomBefore.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(bottomBefore.y + bottomBefore.height);
     // Every corner of the panel is the panel's own: the dock isn't drawn over it, and it isn't drawn over the dock.
     const owner = await window.evaluate(
       ({ x, y }) => (document.elementFromPoint(x, y)?.closest('[data-testid="master-panel"]') ? 'panel' : 'other'),
@@ -137,7 +141,7 @@ test('the Captain’s panel sits above the dock: its bottom ends at the dock’s
     const dockNow = await dockBox();
     expect(dockNow.x + dockNow.width <= box.x || dockNow.y >= box.y + box.height).toBe(true);
     const zoom = (await window.locator('.island-bottom-right').boundingBox())!;
-    expect(zoom.x + zoom.width).toBeLessThanOrEqual(box.x);
+    expect(zoom.y - (box.y + box.height)).toBeGreaterThanOrEqual(12);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

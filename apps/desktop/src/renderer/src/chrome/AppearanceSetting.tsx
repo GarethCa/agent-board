@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react';
-import { ChevronDown, Moon, Search, Sun, SunMoon } from 'lucide-react';
-import { choiceFor, missingMode, themeFor, type Appearance, type Mode } from '../../../shared/appearance';
+import { useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react';
+import { ChevronDown, Search } from 'lucide-react';
+import { choiceFor, missingMode, themeFor, type Mode } from '../../../shared/appearance';
 import { THEME_CHOICES, THEMES, type ThemeChoice, type ThemePreview } from '../../../shared/themes';
 import { darkQuery } from '../themes';
 import { EmptyState, Fieldset, Hint, Input, Popover, Segmented } from '../ui';
+import { MODE_OPTIONS, useAppearance } from './appearance-mode';
 
 /** Whether the window is in dark mode now: the OS's own while the setting is System. */
 function useDark(): boolean {
@@ -19,12 +20,6 @@ function useDark(): boolean {
 
 /** What the OS is called in the hints: macOS where the app has its inset chrome, else a word for any. */
 const OS = window.agentBoard.windows.chrome === 'inset' ? 'macOS' : 'your system';
-
-const MODE_OPTIONS = [
-  { id: 'light', label: 'Light', icon: <Sun /> },
-  { id: 'dark', label: 'Dark', icon: <Moon /> },
-  { id: 'system', label: 'System', icon: <SunMoon /> },
-] as const;
 
 const MODE_NAMES: Record<Mode, string> = { light: 'Light', dark: 'Dark', system: 'System' };
 
@@ -184,25 +179,9 @@ function ThemeList({ picked, onPick }: { picked: string; onPick(theme: string): 
  * (main/appearance.ts), which every window follows at once; this shows it, as picked in any window, and changes it.
  */
 export function AppearanceSetting({ onError }: { onError(action: string): (error: unknown) => void }) {
-  const [appearance, setAppearance] = useState<Appearance>();
+  const { appearance, pick } = useAppearance(onError);
   const [open, setOpen] = useState(false);
   const dark = useDark();
-  useEffect(() => {
-    const api = window.agentBoard.appearance;
-    api.get().then(setAppearance, onError('read the appearance'));
-    return api.onChanged(setAppearance);
-  }, [onError]);
-
-  const pick = (change: Partial<Appearance>) => {
-    if (appearance === undefined) return;
-    const was = appearance;
-    const next = { ...appearance, ...change };
-    setAppearance(next);
-    window.agentBoard.appearance.set(next).catch((error: unknown) => {
-      setAppearance(was);
-      onError('change the appearance')(error);
-    });
-  };
 
   const choice = appearance && choiceFor(appearance);
   const missing = appearance && missingMode(appearance);

@@ -64,7 +64,7 @@ describe('lookedAt', () => {
 
 describe('askingIds', () => {
   const waiting = (id: string, over: Partial<Agent> = {}) =>
-    agent(id, { state: 'waiting', createdAt: at(0), finishedAt: null, permissions: [], ask: null, plan: null, flag: null, seen: false, ...over } as Partial<Agent>);
+    agent(id, { state: 'waiting', createdAt: at(0), finishedAt: null, permissions: [], ask: null, plan: null, flag: null, ledBy: null, seen: false, ...over } as Partial<Agent>);
 
   it('leaves a finished agent waiting at its prompt out, so it is Done under "every agent waiting" too', () => {
     const finished = waiting('finished', { workFinishedAt: at(20) });

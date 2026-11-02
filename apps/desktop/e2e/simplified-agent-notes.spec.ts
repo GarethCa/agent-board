@@ -5,8 +5,8 @@ import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from 
 import { scratch } from './scratch.ts';
 import { openSettings } from './settings-helpers.ts';
 
-// A note an agent writes under the Simplified design is a white card with a byline, "by ‹agent›", that flies to its
-// agent. A sticky is not touched, and Classic's Agent notes setting is not drawn.
+// A note an agent writes under the Simplified design is a sheet of paper, not a tile: a quiet header with a byline,
+// "by ‹agent›", that flies to its agent, a paper tone, a left rule and no shadow. A sticky is not touched, and Classic's Agent notes setting is not drawn.
 
 const LONG = Array.from({ length: 30 }, (_, row) => `- item ${row + 1} of a long list the card must scroll or grow for`).join('\n');
 
@@ -41,9 +41,28 @@ test("an agent note is a card whose byline flies to its agent, long markdown sta
     // A card, not a tab under a dashed edge, and the agent is named in a byline.
     await expect(note).toHaveAttribute('data-look', 'document');
     await expect(note.locator('.agent-note-tab')).toHaveCount(0);
-    await expect(note.locator('.agent-note-card')).toHaveCSS('border-top-style', 'none');
+    await expect(note.locator('.agent-note-card')).toHaveCSS('box-shadow', 'none');
+    await expect(note.locator('.agent-note-card')).toHaveCSS('border-left-style', 'solid');
+    // The byline and time are a quiet header above the text, and the card is paper, not the tile's surface.
+    await expect(note.locator('.agent-note-head .agent-note-byline')).toBeVisible();
+    await expect(note.locator('.agent-note-head time')).toBeVisible();
+    const [paper, tileWhite] = await note.locator('.agent-note-card').evaluate((card) => {
+      const probe = document.createElement('div');
+      probe.style.background = 'var(--raised)';
+      document.body.append(probe);
+      const raised = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return [getComputedStyle(card).backgroundColor, raised];
+    });
+    expect(paper).not.toBe(tileWhite);
+    expect(await note.locator('.agent-note-card').evaluate((card) => card.getBoundingClientRect().top)).toBeLessThan(await note.locator('strong').evaluate((strong) => strong.getBoundingClientRect().top));
     await expect(note.locator('.agent-note-byline')).toContainText(`by ${agent!.name}`);
     await expect(note.locator('strong')).toHaveText('Round 2 of 3');
+    // Its stamp says the day, and the full date and time on hover.
+    const stamp = note.locator('.agent-note-time');
+    await expect(stamp).toHaveText(/^Today \d\d:\d\d$/);
+    await expect(stamp).toHaveAttribute('title', /\d{4}, \d\d:\d\d$/);
+    await expect(stamp).toHaveAttribute('aria-label', (await stamp.getAttribute('title'))!);
     // A sticky stays a sticky, drawn exactly as Classic draws it.
     const sticky = window.getByTestId('sticky');
     await expect(sticky).toHaveCount(1);
@@ -67,8 +86,10 @@ test("an agent note is a card whose byline flies to its agent, long markdown sta
     const body = long.locator('.agent-note-body');
     await expect.poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     const card = (await long.locator('.agent-note-card').boundingBox())!;
-    const foot = (await long.locator('.agent-note-foot').boundingBox())!;
-    expect(foot.y + foot.height).toBeLessThanOrEqual(card.y + card.height + 1);
+    const head = (await long.locator('.agent-note-head').boundingBox())!;
+    expect(head.y).toBeGreaterThanOrEqual(card.y - 1);
+    expect(head.y + head.height).toBeLessThanOrEqual(card.y + card.height + 1);
+    expect((await body.boundingBox())!.y + (await body.boundingBox())!.height).toBeLessThanOrEqual(card.y + card.height + 1);
 
     // The byline flies to its agent: the board is panned away from it first, and the click brings its tile into view and selects it.
     const inView = async () => {

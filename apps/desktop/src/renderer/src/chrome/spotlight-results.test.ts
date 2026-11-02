@@ -16,6 +16,7 @@ const agent = (name: string, more: Partial<Agent> = {}): Agent =>
     permissions: [],
     seen: false,
     flag: null,
+    ledBy: null,
     ask: null,
     plan: null,
     issue: null,
@@ -159,6 +160,11 @@ describe('spotlightGroups and settings', () => {
     expect(names(settingRows('agent notes'))).toContain('Agent notes');
     expect(names(settingRows('agent notes', true))).not.toContain('Agent notes');
     expect(names(settingRows('terminal card', true))).toEqual([]);
+  });
+
+  it("lists the agent sidebar's choice under Classic, and not under the Simplified design", () => {
+    expect(names(settingRows('agent sidebar'))).toContain('Agent sidebar');
+    expect(names(settingRows('agent sidebar', true))).not.toContain('Agent sidebar');
   });
 
   it('lists no settings before anything is typed', () => {

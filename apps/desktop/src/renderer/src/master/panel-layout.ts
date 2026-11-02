@@ -16,8 +16,8 @@ const MIN_CHAT_HEIGHT = 160;
 export const PANEL_KEY_STEP = 16;
 
 /**
- * The widest the panel goes on a board this wide: at most 60% of it, and leaving the bottom row `taken` px, which is
- * what the zoom bar, the zones pill, the dock and the Edge rules panel need beside it (see `usePanelRoom`).
+ * The widest the panel goes on a board this wide: at most 60% of it, and leaving `taken` px, which is
+ * the panel's margin and the Edge rules panel beside it (see `usePanelRoom`).
  */
 export const maxPanelWidth = (boardWidth: number, taken = 0): number => Math.max(MIN_PANEL_WIDTH, Math.min(Math.floor(boardWidth * MAX_PANEL_FRACTION), boardWidth - taken));
 

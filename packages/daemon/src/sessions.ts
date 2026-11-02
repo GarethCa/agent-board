@@ -85,6 +85,8 @@ export interface SessionHostOptions {
   killGraceMs?: number;
   /** Called when a session's process has exited and its row is marked ended, before clients hear of it. */
   onExit?(session: SessionInfo): void;
+  /** Called once a session is live (its row marked running), whether new, resumed or relaunched. */
+  onStart?(sessionId: string): void;
   /** Called as a session's process prints something. */
   onOutput?(sessionId: string): void;
   /**
@@ -504,6 +506,12 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
       exited: new Promise((resolve) => (resolveExited = resolve)),
     };
     sessions.set(id, session);
+    try {
+      options.onStart?.(id);
+    } catch (error) {
+      // Telling others it started must not leave a live terminal with no owner.
+      options.log(`onStart for ${id} failed: ${(error as Error).message}`);
+    }
 
     // Flow control for the model: xterm drops (throws on) writes once too much is waiting to be parsed.
     let unparsed = 0;

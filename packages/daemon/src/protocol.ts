@@ -1631,7 +1631,7 @@ export type NeedsYouShows = (typeof NEEDS_YOU_SHOWS)[number];
 export type NeedsYouKind = 'permission' | 'asks' | 'plan' | 'flagged' | 'turn';
 
 /** The agent fields the needs-you rule reads. */
-export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'flag'>;
+export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'flag' | 'ledBy'>;
 
 /** Why the agent is in the needs-you inbox under `shows` (an ended one only for its flag), or null if it isn't. */
 export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsYouKind | null {
@@ -1641,12 +1641,13 @@ export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsY
   if (agent.ask !== null) return 'asks';
   if (planPending(agent)) return 'plan';
   if (agent.flag?.to === 'user') return 'flagged';
-  return shows === 'turns' && agent.state === 'waiting' ? 'turn' : null;
+  // A crew member's finished turn is its live orchestrator's to handle, not the user's.
+  return shows === 'turns' && agent.state === 'waiting' && agent.ledBy === null ? 'turn' : null;
 }
 
 /**
  * Whether an agent waits for the user (`needsYouKind`): the app's needs-you inbox holds these, and the daemon's start
- * banner counts them. A crew member's flag goes to its orchestrator, so never counts here.
+ * banner counts them. A crew member's flag, and its finished turns, go to its live orchestrator, so never count here.
  */
 export function waitsForYou(agent: NeedsYouFacts, shows: NeedsYouShows): boolean {
   return needsYouKind(agent, shows) !== null;
@@ -1847,6 +1848,11 @@ export interface Agent {
   orchestrate: OrchestrateScope | null;
   /** The orchestrator that started it, or null for an agent the user started (or once that orchestrator is deleted). */
   spawnedBy: string | null;
+  /**
+   * The name of the orchestrator that started it while that one is live, else null (a loose agent, or one whose
+   * orchestrator has ended). Its turns, questions and open changes go to that orchestrator, not the user.
+   */
+  ledBy: string | null;
   /** What it flagged for attention (`board.needsYou`) and hasn't cleared; null for none. */
   flag: AgentFlag | null;
   /**

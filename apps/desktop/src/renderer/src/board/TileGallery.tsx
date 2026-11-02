@@ -144,6 +144,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  ledBy: null,
   unsent: null,
   untypedPrompt: null,
   trustFolder: null,
@@ -251,6 +252,7 @@ const STARTING_BY_ORCHESTRATOR: Agent = {
   roleName: 'implementer',
   issue: { provider: 'linear', id: 'ACME-184', title: 'Movable sessions follow-up', url: '' },
   spawnedBy: 'gallery-orchestrator',
+  ledBy: 'web-app orchestrator',
   status: { summary: 'Starting up', progress: null, updatedAt: AT, setBy: 'web-app orchestrator' },
   startup: { output: '✻ Welcome to Claude Code · loading MCP servers and the project’s settings…', failed: false },
 };

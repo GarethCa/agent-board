@@ -36,8 +36,8 @@ export type DraggedTool = 'agent' | 'shell';
  * the sessions to start. The Zone tool (Z) drags out where a new zone goes, then asks what it is for (P1). The
  * Agent (A) and Shell (`) tools carry a ghost tile to where the new session goes, in a zone or loose.
  *
- * Under the Simplified design it holds fewer buttons: Select, Hand, a Draw menu with the drawing tools and Box select,
- * and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
+ * Under the Simplified design it holds fewer buttons: Select, Box select and Hand as in Classic, a Draw menu with the
+ * drawing tools, and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
  */
 export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
@@ -61,13 +61,20 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       New agent
     </Button>
   );
+  // How a drag acts, the same under both designs.
+  const pointerTools = (
+    <>
+      <ToolButton label="Select" icon={<MousePointer2 />} shortcut={keyText('move.select')} hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
+      <ToolButton label="Box select" icon={<SquareDashed />} shortcut={keyText('move.box')} hint="Draw a box round what to select, in a zone too" pressed={mode === 'box' && tool === undefined} onClick={() => onMode('box')} />
+      <ToolButton label="Hand" icon={<Hand />} shortcut={keyText('move.hand')} hint="Pan the board" pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
+    </>
+  );
   if (simplified) {
     return (
       <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
-        <ToolButton label="Select" icon={<MousePointer2 />} hint="Select and move" shortcut={keyText('move.select')} pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
-        <ToolButton label="Hand" icon={<Hand />} hint="Pan the board" shortcut={keyText('move.hand')} pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
+        {pointerTools}
         <IslandSeparator />
-        <DrawMenu mode={mode} tool={tool} onMode={onMode} onTool={onTool} onSticky={onSticky} />
+        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} />
         <IslandSeparator />
         <div className="create-toolbar-split">
           {newAgent}
@@ -87,9 +94,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
   }
   return (
     <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
-      <ToolButton label="Select" icon={<MousePointer2 />} shortcut={keyText('move.select')} hint="Select and move" pressed={mode === 'select' && tool === undefined} onClick={() => onMode('select')} />
-      <ToolButton label="Box select" icon={<SquareDashed />} shortcut={keyText('move.box')} hint="Draw a box round what to select, in a zone too" pressed={mode === 'box' && tool === undefined} onClick={() => onMode('box')} />
-      <ToolButton label="Hand" icon={<Hand />} shortcut={keyText('move.hand')} hint="Pan the board" pressed={mode === 'hand' && tool === undefined} onClick={() => onMode('hand')} />
+      {pointerTools}
       <IslandSeparator />
       <ToolButton label="Sticky note" icon={<StickyNote />} shortcut={keyText('make.note')} hint="Add a sticky note, or double-click the board" onClick={onSticky} />
       <ToolButton label="Text" icon={<Type />} shortcut={keyText('make.text')} hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
@@ -116,21 +121,19 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
 const DRAW_TOOLS: ReadonlySet<ArmedTool> = new Set(['text', 'shape', 'zone']);
 
 /**
- * The Simplified design's Draw menu: a sticky note, Text, Shape and Zone, then Box select, each with its key. Picking
+ * The Simplified design's Draw menu: a sticky note, Text, Shape and Zone, each with its key. Picking
  * Shape, or pressing S, opens the shape picker under the button, as the Shape tool's own button does under Classic. A
  * pick arms its tool, even one already armed: a menu row is no toggle.
  */
-function DrawMenu({ mode, tool, onMode, onTool, onSticky }: Pick<CreateToolbarProps, 'mode' | 'tool' | 'onMode' | 'onTool' | 'onSticky'>) {
+function DrawMenu({ tool, onTool, onSticky }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky'>) {
   const shapes = useShapePicker(tool === 'shape', onTool);
   const entries: MenuEntry[] = [
     { label: 'Sticky note', icon: <StickyNote />, shortcut: keyText('make.note'), onSelect: onSticky },
     { label: 'Text', icon: <Type />, shortcut: keyText('make.text'), onSelect: () => onTool('text') },
     { label: 'Shape', icon: <Shapes />, shortcut: keyText('make.shape'), onSelect: () => onTool('shape') },
     { label: 'Zone', icon: <SquareDashedMousePointer />, shortcut: keyText('make.zone'), onSelect: () => onTool('zone') },
-    'separator',
-    { label: 'Box select', icon: <SquareDashed />, shortcut: keyText('move.box'), onSelect: () => onMode('box') },
   ];
-  const pressed = (tool !== undefined && DRAW_TOOLS.has(tool)) || (tool === undefined && mode === 'box');
+  const pressed = tool !== undefined && DRAW_TOOLS.has(tool);
   return (
     <AnchoredPopover
       {...shapes.popover}

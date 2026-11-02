@@ -5349,17 +5349,44 @@ button.chat-chip[aria-expanded='true'] {
   pointer-events: none;
 }
 
-/* Under the Simplified design a note an agent writes is a plain white card: no dashed edge or tab, a hairline and one soft
-   shadow like a tile's, and a byline that names its agent in the foot. Stickies are not touched. */
+/* Under the Simplified design a note an agent writes is a sheet of paper, not a tile: a warm paper tone off the tile's
+   white, a hairline and a rule down its left edge instead of the tile's soft shadow and big radius, and a quiet header
+   (the byline and the time) where a tile has its name row. It has no status, window controls or shadow. Stickies are not
+   touched. */
 :root[data-design='simplified'] .agent-note-card {
-  border: 0;
-  border-radius: var(--radius-2xl);
-  background: var(--raised);
-  box-shadow: var(--shadow-tile);
+  border: 1px solid var(--border);
+  border-left: var(--space-1) solid var(--agent-note-edge);
+  border-radius: var(--radius-sm);
+  background: var(--agent-note-paper);
+  box-shadow: none;
+}
+
+:root[data-design='simplified'] .agent-note-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: baseline;
+  min-height: var(--size-chip);
+  padding: var(--space-1-5) var(--space-3) 0;
+  color: var(--agent-note-head-ink);
+  font-size: var(--font-size-2xs);
+}
+
+/* "You asked" is read as part of the header, so it is drawn in its ink. */
+:root[data-design='simplified'] .agent-note-asked {
+  color: var(--agent-note-head-ink);
+}
+
+:root[data-design='simplified'] .agent-note-head > :not(time, .agent-note-byline) {
+  /* The agent's name is what the header is for: the marker beside the stamp gives way before it does. */
+  flex: 0 100000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 :root[data-design='simplified'] .agent-note-byline {
-  /* The agent's name is what the card is for: the rest of the foot gives way before it does. */
+  /* The agent's name is what the header is for: the time keeps its room, and the name gives way with an ellipsis. */
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -5367,8 +5394,12 @@ button.chat-chip[aria-expanded='true'] {
   white-space: nowrap;
 }
 
-:root[data-design='simplified'] .agent-note-foot > :not(time, .agent-note-byline) {
-  flex: 0 100000 auto;
+:root[data-design='simplified'] .agent-note-edited-text {
+  /* Beside the longer stamp the chip is its pencil, with its words for a screen reader and on hover. */
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 :root[data-design='simplified'] .agent-note-byline-link {
@@ -5392,8 +5423,8 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 :root[data-design='simplified'] .agent-note-more > span {
-  background: var(--raised);
-  box-shadow: 0 0 var(--space-2) var(--space-2) var(--raised);
+  background: var(--agent-note-paper);
+  box-shadow: 0 0 var(--space-2) var(--space-2) var(--agent-note-paper);
 }
 
 /* The agent's terminal, cut out and pinned. */
@@ -6822,22 +6853,22 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 /*
- * A project under the Simplified design: a neutral well with a hairline, its colour only in its heading's dot. A fill
- * picked in its ⋯ tints the well as a zone's does; a repo, a group or a clone all look the same, so these come after
- * the zone's own rules.
+ * A project under the Simplified design: a well tinted from its colour as a zone's is, so the board keeps its colour.
+ * It takes the zone's own fill and edge tokens, which the Simplified design sets a little stronger than Classic's (a
+ * Classic zone has a tab to carry its colour), so the colour, the fill picked in its ⋯ and the theme (light, dark, any
+ * pack) all apply as in Classic, and the slider's percent is the paint's. Its hairline is one px, and its colour is
+ * also in its heading's dot. A repo, a group or a clone all look the same, so these come after the zone's own rules.
  */
 .zone.project-well {
-  border: 0.5px solid var(--border);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
+  border-width: 1px;
+  /* A group's and a clone's dashes are the zone's own; here a dashed edge is the drop cue alone. */
+  border-style: solid;
 }
 
-.zone.project-well[data-fill] {
-  background: color-mix(in srgb, var(--zone-color) var(--zone-fill-mix), transparent);
-}
-
-/* A dragged tile or note would move into it: the edge strengthens. */
+/* A dragged tile or note would move into it: the edge takes the colour whole, and the fill is the resting one and more. */
 .zone.project-well[data-drop-target] {
-  border: 1.5px solid color-mix(in srgb, var(--text) 35%, transparent);
+  border: 1.5px dashed var(--zone-color);
+  background: color-mix(in srgb, var(--zone-color) min(100%, max(var(--zone-drop-mix), calc(var(--zone-fill-mix) + var(--zone-drop-mix) / 2))), transparent);
 }
 
 /* Its heading, inside the well above its first row of tiles; pressed anywhere but ⋯, it drags the project. */
@@ -6850,6 +6881,10 @@ button.chat-chip[aria-expanded='true'] {
   gap: var(--space-1-75);
   align-items: center;
   height: var(--space-6);
+  padding: 0 var(--space-1-5) 0 var(--space-1);
+  border-radius: var(--radius-md);
+  /* The desk behind the text, so it keeps the theme's own contrast whatever fill the well has. */
+  background: color-mix(in srgb, var(--surface) var(--project-heading-backing), transparent);
   color: var(--text);
   white-space: nowrap;
 }
@@ -10448,8 +10483,9 @@ tr[data-status='running'] .gate-step-icon {
 }
 
 /*
- * An agent's inspector under the Simplified design (SimplifiedInspector.tsx): at the window's trailing edge, a status
- * line on top, then short grouped rows. Its width is the details strip's, dragged on the handle before it.
+ * An agent's inspector (SimplifiedInspector.tsx), the Simplified design's sidebar and Classic's Simple one: at the
+ * window's trailing edge, a status line on top, then its work's rows and two folds. Its width is the details strip's,
+ * dragged on the handle before it. It reads role tokens only, so it takes each design's and theme's values.
  */
 .inspector {
   display: flex;
@@ -10466,32 +10502,11 @@ tr[data-status='running'] .gate-step-icon {
   color: var(--text);
 }
 
-.inspector-status {
-  padding: var(--space-3) var(--space-4) var(--space-1);
-}
-
-.inspector-status-word {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  font-size: var(--font-size-sm);
-  font-weight: var(--weight-semibold);
-}
-
 .inspector-status-line {
-  margin: var(--space-1) 0 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-2);
   color: var(--muted);
   font-size: var(--font-size-xs);
-}
-
-.inspector-group-label {
-  margin: 0;
-  padding: var(--space-2-5) var(--space-4) var(--space-0-5);
-  color: var(--muted);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
 }
 
 .inspector-rows {
@@ -10518,8 +10533,12 @@ tr[data-status='running'] .gate-step-icon {
   text-align: left;
 }
 
-button.inspector-row:hover {
+button.inspector-row:hover:enabled {
   background: var(--hover);
+}
+
+button.inspector-row:disabled {
+  color: var(--muted);
 }
 
 .inspector-row-icon {

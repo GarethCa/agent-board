@@ -8,6 +8,7 @@ import { useSimplified } from '../design';
 import { storedValue } from '../stored-value';
 import { Hint, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
+import { AgentSidebarSetting } from './AgentSidebarSetting';
 import { AppearanceSetting } from './AppearanceSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
 import { AgentNoteLookSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting } from './BoardViewSettings';
@@ -87,6 +88,8 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <ArrangeSpacingSetting onError={onError} />;
     case 'agents.chat':
       return <AgentsChatSettings />;
+    case 'agents.sidebar':
+      return <AgentSidebarSetting />;
     case 'agents.context':
       return <CompactWindowSetting onError={onError} />;
     case 'agents.links':

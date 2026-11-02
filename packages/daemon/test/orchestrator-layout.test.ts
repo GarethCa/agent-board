@@ -8,6 +8,7 @@ import { CLUSTER_LABEL_SIZE } from '../src/board-arrange.ts';
 import { AGENT_TILE_SIZE, clearOf, overlaps as rectsOverlap, CREW_GAP, GRID_COLUMN as COLUMN, GRID_ORIGIN as FIRST, gridPoint, PERCH_ROOM, RAIL_GAP, ROW_STEP, sizedFootprint, SPACING_GAPS, TILE_GAP, tileSlot, ZONE_PADDING, type Rect } from '../src/board-layout.ts';
 import type { DaemonClient } from '../src/client.ts';
 import { daemonPaths } from '../src/paths.ts';
+import { lintLine } from '../src/zone-map.ts';
 import { AGENT_NOTE_SIZE, BOARD_ERROR, measuredText, RPC_ERROR, STICKY_SIZE, type Agent, type AgentUpdatedEvent, type ArrangeLayout, type BoardItem, type DaemonEvent, type ExpandedBox, type MeasuredBox, type Zone } from '../src/protocol.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, TEST_CLI_LAUNCHER, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -744,6 +745,49 @@ describe('orchestrator.arrange', () => {
     expect(items.find((item) => item.id === written.id)?.data.text).toBe('impl: waiting on design\n\n🤖 lead · 23:20');
     expectNoOverlap(await rectsIn(setup.client, setup.zone.id));
   });
+
+  it.each(['rows', 'grid', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const)(
+    "lays the lead's own notes in rows right of the crew, from the zone's top edge, in %s, leaving no empty band and moving nothing the second time",
+    async (layout) => {
+      const setup = await layoutDaemon();
+      // Room to grow wider: the notes' block is right of the crew.
+      await setup.client.call('zone.update', { id: setup.other.id, x: 12_000, y: 0, width: 720, height: 480 });
+      const me = await lead(setup, setup.zone.id);
+      const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
+      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+      // The lead's notes, long and stacked in a column down the zone's left edge, as they were after earlier arranges.
+      const notes: BoardItem[] = [];
+      for (let index = 0; index < 10; index++) {
+        const text = `lead note ${index}\n${'a long line of status. '.repeat(20)}`;
+        const note = await me.connection.call('orchestrator.addNote', { token: me.token, text, near: { kind: 'agent', id: me.agent.sessionId } });
+        expect(note.kind).toBe('agent-note');
+        const y = ZONE_PADDING + index * (note.height + TILE_GAP);
+        await setup.client.call('item.update', { id: note.id, zoneId: setup.zone.id, x: ZONE_PADDING, y });
+        notes.push({ ...note, x: ZONE_PADDING, y });
+      }
+      await setup.client.call('agent.move', { sessionId: me.agent.sessionId, zoneId: setup.zone.id, ...tileSlot(0, 1200) });
+      const arrangeAgain = () => me.connection.call('orchestrator.arrange', { token: me.token, layout });
+      const result = await arrangeAgain();
+      const rects = await rectsIn(setup.client, setup.zone.id);
+      const top = rects.get('lead')!;
+      const placed = notes.map((note) => rects.get(`item:${note.data.text}`)!);
+      const tiles = ['lead', 'impl', 'review'].map((name) => rects.get(name)!);
+      expect(Math.min(...tiles.map((tile) => tile.y)), layout).toBe(FIRST.y);
+      expect(Math.min(...placed.map((box) => box.y)), layout).toBe(Math.min(...tiles.map((tile) => tile.y)));
+      for (const box of placed) expect(box.x, layout).toBeGreaterThanOrEqual(top.x + top.width + TILE_GAP);
+      expectNoOverlap(rects);
+      expect(result.height, layout).toBeGreaterThanOrEqual(Math.max(...placed.map((box) => box.y + box.height)));
+      // The lint finds nothing wrong with the zone as it is fitted.
+      const map = await me.connection.call('orchestrator.map', { token: me.token });
+      const lint = lintLine(map, (key) => key);
+      expect(lint, layout).not.toContain('mostly empty');
+      expect(lint, layout).not.toContain('bigger than its contents');
+      // Arranging again moves nothing, the zone included.
+      const again = await arrangeAgain();
+      expect(await rectsIn(setup.client, setup.zone.id), layout).toEqual(rects);
+      expect([again.width, again.height], layout).toEqual([result.width, result.height]);
+    },
+  );
 
   it("removes an earlier arrange's PR card when it arranges another way, too", async () => {
     const setup = await layoutDaemon();

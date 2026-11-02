@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.6.12 (2026-11-02)
+
+- The agent pane's sidebar is simpler, and a setting offers it outside the Simplified design
+- Agent notes look clearly like notes, not agents, under the Simplified design
+- Box select sits with Select and Hand in the Simplified toolbar, not the Draw menu
+- A crew member at its prompt reads Working with its orchestrator, not Needs you
+- Test gate speed spike: what the gate catches, where the time goes, and 3 processes workers under load
+- Zones keep their colour under the Simplified design, and theme-pack colours really show
+- Settings looks finished, and the board menu keeps a few quick settings
+- The chat's live timer counts whole seconds and shows the precise value when the step ends
+- The docked pane ends above the zoom bar and minimap, which stay put
+- Arrange packs a zone from its top edge, leaving no empty band above
+- Agent notes show the day as well as the time they were updated
+- A ticket-like name in a test fails the unit tests, not the release
+
 ## v0.6.11 (2026-11-01)
 
 - The permission test's pushed branch is not named like a ticket branch

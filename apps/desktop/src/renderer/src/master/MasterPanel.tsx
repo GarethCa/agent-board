@@ -80,15 +80,8 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
   const panel = useRef<HTMLElement>(null);
   // The board it sits on bounds its width; the width is the user's, kept across reloads.
   const chosen = usePanelWidth();
-  const { board, taken } = usePanelRoom(panel);
+  const { board, taken, lift } = usePanelRoom(panel);
   const width = board === 0 ? chosen : clampPanelWidth(chosen, board, taken);
-  // The islands at the bottom right and the dock make room for it (`:root:has(.master-panel)`), whatever its width.
-  useLayoutEffect(() => {
-    document.documentElement.style.setProperty('--master-panel-width', `${width}px`);
-    return () => {
-      document.documentElement.style.removeProperty('--master-panel-width');
-    };
-  }, [width]);
   // Esc in the panel closes it, as it does a popover; the chat's own keys come first.
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
@@ -100,7 +93,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width }} onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width, '--controls-lift': `${lift}px` } as CSSProperties} onKeyDown={onKeyDown}>
       <PanelHandle
         orientation="vertical"
         label={listSide ? 'Resize the pane' : 'Resize the Captain’s panel'}

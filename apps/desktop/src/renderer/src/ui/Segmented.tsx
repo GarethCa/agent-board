@@ -15,19 +15,22 @@ interface SegmentedProps<T extends string> {
   onChange(value: T): void;
   'aria-label': string;
   className?: string;
+  /** Not yet usable, such as while the setting it shows is being read. */
+  disabled?: boolean;
 }
 
 /**
  * A few toggle buttons side by side on a sunken track, one of them pressed: how something is shown, or which kind it
  * is, such as an edge's payload or a session window's terminal or chat view.
  */
-export function Segmented<T extends string>({ options, value, onChange, className, 'aria-label': label }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ options, value, onChange, className, disabled, 'aria-label': label }: SegmentedProps<T>) {
   return (
     <div className={cx('ui-segmented', className)} role="group" aria-label={label}>
       {options.map((option) => (
         <button
           key={option.id}
           type="button"
+          disabled={disabled}
           aria-pressed={option.id === value}
           data-preview={option.preview}
           onClick={() => option.id !== value && onChange(option.id)}

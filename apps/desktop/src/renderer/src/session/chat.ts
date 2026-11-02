@@ -311,9 +311,13 @@ export function editCounts(input: unknown): { added: number; removed: number } {
   };
 }
 
-/** A span of time as the chat shows it: `4.1s` under ten seconds, `12s`, `4m 12s`, `1h 5m`. */
-export function duration(ms: number): string {
-  if (ms < 10_000) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
+/**
+ * A span of time as the chat shows it: `4.1s` under ten seconds, `12s`, `4m 12s`, `1h 5m`. A span still `live` counts
+ * whole seconds (`4s`), as its clock ticks once a second and a tenth would always read 0; it gets its precise value
+ * when it ends.
+ */
+export function duration(ms: number, { live = false }: { live?: boolean } = {}): string {
+  if (ms < 10_000) return live ? `${Math.max(0, Math.floor(ms / 1000))}s` : `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);

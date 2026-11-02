@@ -15,7 +15,7 @@ export const BOARD_SESSION_VARS = [
 
 /**
  * The `AGENT_BOARD_*` variables that steer a run rather than the app under test, which a run keeps: the merge gate's
- * marks (ADR-0013), the e2e worker count and lock, headed e2e windows and onboarding screenshots. scripts/check-local.sh
+ * marks (ADR-0013), the e2e worker count and lock, headed e2e windows, onboarding screenshots and a forced Vitest worker count. scripts/check-local.sh
  * keeps the same list.
  */
 export const RUN_KNOBS = [
@@ -25,6 +25,7 @@ export const RUN_KNOBS = [
   'AGENT_BOARD_E2E_LOCK_WAIT_MIN',
   'AGENT_BOARD_HEADED',
   'AGENT_BOARD_E2E_SHOTS',
+  'AGENT_BOARD_VITEST_WORKERS',
 ] as const;
 
 /** Removes the `FORCE_HYPERLINK` an enclosing board gave its Claude agent (its marker names it), which is not a user's own. */

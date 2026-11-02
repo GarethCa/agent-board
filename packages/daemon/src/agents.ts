@@ -418,6 +418,8 @@ export interface AgentHost {
    * harness hangs up first).
    */
   onHook(sessionId: string, payload: Record<string, unknown>, signal: AbortSignal): HookReply | Promise<HookReply>;
+  /** A session is live: the crew it leads are told, as they now read as led by it. */
+  onStart(sessionId: string): void;
   /** Settles the session's agent, if it has one, once its process has exited. */
   onExit(session: SessionInfo): void;
   /** The agent's session printed something: an agent still `starting` with no hook for a while stops being. */
@@ -1207,13 +1209,25 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectLiveSession = db.prepare('SELECT 1 FROM sessions WHERE id = ? AND ended_at IS NULL');
   const selectCrew = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
 
+  /** The name of the agent's orchestrator while that one is live; null for a loose agent, the Captain's, or one whose orchestrator ended. */
+  const led = (row: AgentRow): string | null => {
+    if (row.spawned_by === null) return null;
+    const lead = getRow(row.spawned_by);
+    // Never the Captain (ADR-0019): what its leads ask or plan waits for the user, never for it to settle.
+    return lead === undefined || lead.master === 1 || selectLiveSession.get(row.spawned_by) === undefined ? null : lead.name;
+  };
+
+  /** Tells every client about the agents `leadId` started, whose `ledBy` changed with it: its start, end or new name. */
+  const announceCrew = (leadId: string) => {
+    for (const { session_id: crewId } of selectCrew.all(leadId) as { session_id: string }[]) announce(crewId);
+  };
+
   /** The agent's flag, reaching its orchestrator while that one is live, else the user. */
   const flagOf = (row: AgentRow): AgentFlag | null => {
     const kept = flags.get(row.session_id);
     if (kept === undefined || (row.ended_at !== null && kept.keepsEnded !== true)) return null;
     const { id, reason, at, via, forUser } = kept;
-    const led = forUser !== true && row.spawned_by !== null && selectLiveSession.get(row.spawned_by) !== undefined;
-    return { id, reason, at, via, to: led ? 'orchestrator' : 'user' };
+    return { id, reason, at, via, to: forUser !== true && led(row) !== null ? 'orchestrator' : 'user' };
   };
 
   const toAgent = (row: AgentRow): Agent => {
@@ -1315,6 +1329,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       plainFolder: row.plain_folder === 1 || inGroupFolder(options.groupsDir, row.worktree),
       orchestrate: orchestrateNow(row),
       spawnedBy: row.spawned_by,
+      ledBy: led(row),
       records: records.of(row.session_id),
       guessedDoc: guessedDocOf(row.worktree),
       startup,
@@ -1752,7 +1767,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // What still waits on the user under the flag read away stands again.
       if (unflagged) resurface(sessionId);
       // Seen is the user having looked, whatever Needs you lists: a finished turn too, so listing those later shows it read.
-      const seeing = row.seen === 0 && waitsForYou(toAgent(row), 'turns');
+      const seeing = row.seen === 0 && waitsForYou({ ...toAgent(row), ledBy: null }, 'turns');
       if (seeing) updateSeen.run(1, sessionId);
       if (seeing || unflagged) options.broadcast({ type: 'agent.updated', agent: get(sessionId)! });
       return get(sessionId)!;
@@ -1799,6 +1814,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       updateName.run(name, sessionId);
       const agent = get(sessionId)!;
       options.broadcast({ type: 'agent.updated', agent });
+      // Its crew read "With" its name.
+      announceCrew(sessionId);
       return agent;
     },
 
@@ -1917,6 +1934,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       deliveries.outputSeen(sessionId);
     },
 
+    onStart(sessionId) {
+      announceCrew(sessionId);
+    },
+
     onExit(session) {
       if (lifecycle.shellExited(session.id)) return;
       permissions.drop(session.id);
@@ -1938,10 +1959,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       resurface(session.id, true);
       const row = getRow(session.id);
       if (row === undefined) return;
-      // Its crew's flags reach the user now.
-      for (const { session_id: crewId } of selectCrew.all(session.id) as { session_id: string }[]) {
-        if (flags.has(crewId)) announce(crewId);
-      }
+      // Its crew's flags, turns, questions and changes reach the user now.
+      announceCrew(session.id);
       // Always tell clients: the agent has ended even if its state already said so. Stopped by the user is not a failure.
       const state = lifecycle.isStopping(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
       save(row, state, subagentsAfterExit(subagents.of(session.id), state, new Date()), true);

@@ -196,6 +196,7 @@
   --zone-fill-default: 8;
   --zone-edge-base: 30%;
   --zone-edge-slope: 1.875;
+  --project-heading-backing: 94%; /* the desk's share behind a Simplified project's heading, over its tinted well */
   --zone-tab-mix: 50%; /* a zone's tab: its colour, half shaded */
   --zone-tab-shade: var(--text);
   --on-zone: #ffffff; /* text on a zone's tab */
@@ -231,6 +232,10 @@
   --agent-note-edited: var(--warning-ink); /* "edited by you": the warning as text, readable on its soft fill */
   --agent-note-edited-soft: var(--warning-soft);
   --agent-note-code: var(--hover); /* `code` in the document card */
+  --agent-note-paper-mix: 60%; /* the warning tint in the Simplified design's note: paper, off a tile's raised surface */
+  --agent-note-head-mix: 75%; /* the share of the muted text in the note header's ink, the rest the text: quiet, and AA on the paper */
+  --agent-note-head-ink: color-mix(in srgb, var(--muted) var(--agent-note-head-mix), var(--text));
+  --agent-note-paper: color-mix(in srgb, var(--warning-soft) var(--agent-note-paper-mix), var(--surface));
   --agent-note-term-strong: #ffffff; /* bold in the terminal card */
   /* A question card: an agent's question as a speech bubble beside its tile, in the waiting orange */
   --question-card-edge: var(--state-waiting);
@@ -728,6 +733,7 @@
   --window-header-height: 50px; /* a session window's header: the traffic lights' midline when popped out (main/chrome.ts) */
   --settings-bar-height: 38px; /* the Settings window's title bar: the traffic lights' midline there (main/chrome.ts) */
   --settings-sidebar-width: 224px; /* the Settings window's sidebar of groups */
+  --size-settings-control: 264px; /* the width of a Settings control that fills its column: a segmented control, the Theme pop-up */
   --settings-page-width: 620px; /* the widest a Settings page's rows get */
   --size-dock-item: 260px; /* a window's chip in the dock, widest */
   --window-gutter: var(--space-6); /* the margin the board's session window leaves round itself when it fills the board */
@@ -1252,6 +1258,18 @@
   --sticky-shadow: 0 1px 0 rgb(0 0 0 / 45%), 0 3px 0 -1px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
   --shadow-overlay: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 8px 24px -8px rgb(0 0 0 / 60%);
   --scrim: rgb(0 0 0 / 45%);
+}
+
+/*
+ * Zones under the Simplified design: a project well has no tab, so its colour is in its tint and edge, a little more
+ * than a Classic zone's. Written with data-theme too, to outrank a pack's own zone tokens, in every look.
+ */
+:root[data-design='simplified'][data-theme] {
+  --zone-fill-mix: 12%;
+  --zone-edge-mix: 55%;
+  --zone-fill-default: 12;
+  --zone-edge-base: 40%;
+  --zone-edge-slope: 1.25;
 }
 
 /*

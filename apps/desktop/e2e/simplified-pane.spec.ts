@@ -91,7 +91,7 @@ async function drag(window: Page, handle: Locator, dx: number): Promise<void> {
   await window.mouse.up();
 }
 
-test('the pane resizes on its edge from either side, keeps its width across a switch and a reopen, and leaves the islands their room', async () => {
+test('the pane resizes on its edge from either side, keeps its width across a switch and a reopen, and ends above the islands', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV, [], { design: 'simplified' });
   try {
@@ -107,9 +107,9 @@ test('the pane resizes on its edge from either side, keeps its width across a sw
     await expect.poll(width).toBe(460);
     await expect(handle).toHaveAttribute('aria-valuenow', '460');
     await expect(handle).toHaveAccessibleName('Resize the pane');
-    await expect.poll(() => window.evaluate(() => document.documentElement.style.getPropertyValue('--master-panel-width'))).toBe('460px');
     const zoomIn = (await window.getByRole('button', { name: 'Zoom in' }).boundingBox())!;
-    expect(zoomIn.x + zoomIn.width).toBeLessThanOrEqual((await pane.boundingBox())!.x);
+    const paneBox = (await pane.boundingBox())!;
+    expect(paneBox.y + paneBox.height).toBeLessThanOrEqual(zoomIn.y);
 
     // The Captain's side is the same pane, as wide; a close and a reopen keep it.
     await window.getByTestId('master-button').click();
@@ -143,6 +143,76 @@ test('switching the design off with the list open leaves the Classic Captain pan
     await expect(pane).not.toHaveAttribute('data-side', /.+/);
     await window.getByTestId('master-button').click();
     await expect(pane).toHaveCount(0);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+const controlsOf = async (window: Page) => {
+  const box = async (locator: Locator) => ((await locator.count()) === 0 ? null : locator.first().boundingBox());
+  return { zoom: await box(window.locator('.island-bottom-right')), minimap: await box(window.locator('.board-minimap')) };
+};
+
+for (const design of ['classic', 'simplified'] as const) {
+  for (const minimap of [true, false]) {
+    test(`${design}, minimap ${minimap ? 'on' : 'off'}: the docked pane ends a gap above the zoom bar and the minimap, which stay exactly where they were`, async () => {
+      const dataDir = tempDataDir();
+      const { app, window } = await launch(dataDir, SHELL_ENV, [], { design });
+      try {
+        // Classic shows the minimap and Simplified hides it until the View menu turns it on; set the one wanted.
+        const shown = (await window.locator('.board-minimap').count()) > 0;
+        if (shown !== minimap) {
+          if (design === 'simplified') {
+            await window.getByRole('button', { name: 'View', exact: true }).click();
+            await window.getByRole('switch', { name: 'Minimap' }).click();
+            await window.keyboard.press('Escape');
+          } else {
+            await window.getByRole('button', { name: 'Minimap' }).click();
+          }
+        }
+        await expect(window.locator('.board-minimap')).toHaveCount(minimap ? 1 : 0);
+        const before = await controlsOf(window);
+        expect(before.zoom).not.toBeNull();
+        const gap = await window.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--size-dock-gap')));
+        const top = Math.min(...[before.zoom, before.minimap].flatMap((box) => (box ? [box.y] : [])));
+        const pane = window.getByTestId('master-panel');
+        const buttons = design === 'simplified' ? ['inbox-count', 'master-button'] : ['master-button'];
+        for (const id of buttons) {
+          await window.getByTestId(id).click();
+          await expect(pane).toBeVisible();
+          const open = (await pane.boundingBox())!;
+          expect(await controlsOf(window)).toEqual(before);
+          expect(top - (open.y + open.height)).toBeGreaterThanOrEqual(gap - 1);
+          // A wider pane moves nothing either.
+          await drag(window, window.getByTestId('master-panel-handle'), -120);
+          expect(await controlsOf(window)).toEqual(before);
+          await window.getByTestId(id).click();
+          await expect(pane).toHaveCount(0);
+          expect(await controlsOf(window)).toEqual(before);
+        }
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
+test('at the least window height the Captain’s pane still shows its Start button', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV, [], { design: 'simplified' });
+  try {
+    await window.setViewportSize({ width: 1280, height: 480 });
+    await window.getByRole('button', { name: 'View', exact: true }).click();
+    await window.getByRole('switch', { name: 'Minimap' }).click();
+    await window.keyboard.press('Escape');
+    await window.getByTestId('master-button').click();
+    await expect(window.getByTestId('master-start')).toBeVisible();
+    const pane = (await window.getByTestId('master-panel').boundingBox())!;
+    const start = await window.getByTestId('master-start').boundingBox();
+    expect(start).not.toBeNull();
+    expect(start!.y + start!.height).toBeLessThanOrEqual(pane.y + pane.height);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

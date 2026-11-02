@@ -1,5 +1,5 @@
-// The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, and which connections
-// are drawn. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, which connections
+// are drawn, and which sidebar an agent's window shows. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
 import { useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
@@ -7,12 +7,14 @@ import { clickOpensFrom, type ClickOpens } from './click-opens';
 import { connectionsViewFrom, type ConnectionsView } from './connections-view';
 import { crewLookFrom, lightCrew, type CrewLook } from './crew-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
+import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
   crewLook: CrewLook;
   connections: ConnectionsView;
   agentNoteLook: AgentNoteLook;
+  agentSidebar: AgentSidebar;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -20,6 +22,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   crewLook: crewLookFrom(undefined),
   connections: connectionsViewFrom(undefined),
   agentNoteLook: agentNoteLookFrom(undefined),
+  agentSidebar: agentSidebarFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -28,6 +31,7 @@ const SETTINGS = {
   crewLook: { key: VIEW_KEYS.crewLook, from: crewLookFrom },
   connections: { key: VIEW_KEYS.connections, from: connectionsViewFrom },
   agentNoteLook: { key: VIEW_KEYS.agentNoteLook, from: agentNoteLookFrom },
+  agentSidebar: { key: VIEW_KEYS.agentSidebar, from: agentSidebarFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;

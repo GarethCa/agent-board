@@ -417,6 +417,24 @@ describe("a crew member's flag", () => {
     expect(sent.typed).toBe(markSender('reply', lead.agent.name, refOf(lead.agent), 'Use the fake clock'));
   });
 
+  it("is led by its orchestrator's name while that one is live, and by none once it has ended", async () => {
+    const { setup, lead, member } = await crew();
+    expect(member.agent.ledBy).toBe(lead.agent.name);
+    expect(lead.agent.ledBy).toBeNull();
+    await setup.client.call('agent.stop', { sessionId: lead.agent.sessionId });
+    expect((await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.ledBy === null)).spawnedBy).toBe(lead.agent.sessionId);
+  });
+
+  it("is led again when its orchestrator is resumed, and by its new name once that is renamed", async () => {
+    const { setup, lead, member } = await crew();
+    await setup.client.call('agent.stop', { sessionId: lead.agent.sessionId });
+    await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.ledBy === null);
+    await setup.client.call('agent.resume', { sessionId: lead.agent.sessionId });
+    expect((await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.ledBy !== null)).ledBy).toBe(lead.agent.name);
+    await setup.client.call('agent.setName', { sessionId: lead.agent.sessionId, name: 'Renamed lead' });
+    expect((await untilAgent(setup.recorder, member.agent.sessionId, (a) => a.ledBy === 'Renamed lead')).ledBy).toBe('Renamed lead');
+  });
+
   it('reaches the user once its orchestrator has ended', async () => {
     const { setup, lead, member } = await crew();
     await member.connection.call('board.needsYou', { token: member.token, reason: 'Still blocked' });

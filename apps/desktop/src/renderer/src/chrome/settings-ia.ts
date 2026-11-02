@@ -42,6 +42,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     name: 'Agents',
     sections: [
       { id: 'chat', name: 'Chat' },
+      { id: 'sidebar', name: 'Sidebar' },
       { id: 'context', name: 'Context' },
       { id: 'links', name: 'Links' },
     ],
@@ -102,6 +103,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'opensOn', label: 'Agent windows open on', home: 'agents.chat', simplifiedOnly: true, also: 'chat terminal timeline view default open' },
   { id: 'conversationAs', label: 'Show the conversation as', home: 'agents.chat', simplifiedOnly: true, also: 'terminal style timeline rail tui transcript' },
   { id: 'chatStyle', label: 'Style', home: 'agents.chat', also: 'cards timeline rail status line conversation' },
+  { id: 'agentSidebar', label: 'Agent sidebar', home: 'agents.sidebar', classicOnly: true, also: 'details inspector strip panel simple full window' },
   { id: 'compactWindow', label: "Compact agents' context at", home: 'agents.context', also: 'context window tokens' },
   { id: 'clickableLinks', label: 'Clickable links from Claude', home: 'agents.links', also: 'urls open browser' },
   { id: 'needsYouShows', label: 'Needs you shows', home: 'alerts.notifications', also: 'inbox turns' },

@@ -62,6 +62,18 @@ describe('board guard', () => {
     expect(kept).toEqual([...RUN_KNOBS]);
   });
 
+  it('keeps a forced Vitest worker count through the scrub in scripts/check-local.sh, so a gate can set it', () => {
+    const script = readFileSync(fileURLToPath(new URL('../../../scripts/check-local.sh', import.meta.url)), 'utf8');
+    const scrub = /^if \[ -n "\$\{AGENT_BOARD_FORCED_HYPERLINK.*?^done$/ms.exec(script)?.[0];
+    expect(scrub).toBeDefined();
+    const run = (env: Record<string, string>) =>
+      spawnSync('sh', ['-c', `${scrub}\nprintf '%s %s' "\${AGENT_BOARD_VITEST_WORKERS:-unset}" "\${AGENT_BOARD_SOCKET:-unset}"`], {
+        env: { PATH: process.env.PATH!, ...env },
+        encoding: 'utf8',
+      }).stdout;
+    expect(run({ AGENT_BOARD_VITEST_WORKERS: '1', AGENT_BOARD_SOCKET: '/live/board.sock' })).toBe('1 unset');
+  });
+
   it("drops agent-board's own FORCE_HYPERLINK with its marker in scripts/check-local.sh, and keeps a user's", () => {
     const script = readFileSync(fileURLToPath(new URL('../../../scripts/check-local.sh', import.meta.url)), 'utf8');
     const scrub = /^if \[ -n "\$\{AGENT_BOARD_FORCED_HYPERLINK.*?^done$/ms.exec(script)?.[0];

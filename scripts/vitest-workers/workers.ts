@@ -15,7 +15,11 @@ export interface WorkerCounts {
   why: string;
 }
 
-/** The `processes` project's cap: each of its workers runs a daemon, fake harnesses and git. */
+/**
+ * The `processes` project's workers: each runs a daemon, fake harnesses and git. The load doesn't lower it: a
+ * worker spends most of its time waiting on the processes it starts, so on a machine at load 8–12 one worker took the
+ * project 25–28 minutes and three took 10, using about 2.5 cores between them.
+ */
 const PROCESSES_CAP = 3;
 /**
  * Processes one `processes` worker can have alive at once, with headroom: a daemon, a few fake harnesses, git and the
@@ -25,7 +29,10 @@ const PROCESSES_PER_WORKER = 150;
 
 const clamp = (n: number, max: number): number => (Number.isFinite(n) ? Math.max(1, Math.min(max, Math.floor(n))) : 1);
 
-/** How many Vitest workers each project may use, from the cores, the load average and the room left under the per-user process limit. */
+/**
+ * How many Vitest workers each project may use: `unit` from the cores and the load average, `processes` from the cores
+ * alone (see PROCESSES_CAP); both from the room left under the per-user process limit.
+ */
 export function chooseWorkers(input: WorkerInputs): WorkerCounts {
   let note = '';
   if (input.override !== undefined) {
@@ -36,7 +43,7 @@ export function chooseWorkers(input: WorkerInputs): WorkerCounts {
   const load = Number.isFinite(input.load) ? input.load : 0;
   const idle = input.cores - load;
   let unit = clamp(Math.min(input.cores - 1, idle), input.cores - 1);
-  let processes = clamp(Math.min(PROCESSES_CAP, idle / 2), PROCESSES_CAP);
+  let processes = clamp(Math.min(PROCESSES_CAP, input.cores - 1), PROCESSES_CAP);
   let why = `${input.cores} cores, load ${load.toFixed(1)}`;
   if (input.processCount !== null && input.processLimit !== null) {
     const room = Math.floor((input.processLimit - input.processCount) / PROCESSES_PER_WORKER);

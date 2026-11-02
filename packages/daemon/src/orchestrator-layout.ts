@@ -1083,6 +1083,25 @@ export function layoutHandlers<Context extends BoardConnection>({
     return adopted;
   };
 
+  /**
+   * The lead's own notes: agent notes about `me` itself (`note add --near` its tile) that its crew made in `zoneId` and no
+   * arrange made. The lead is in no lane to take them, so an arrange lays them out as a block right of the crew instead of leaving
+   * them where they were, in the way of the top row. A turned note (`rotation` not 0) is left alone, as the user's: it stays
+   * an obstacle where it is.
+   */
+  const leadNotesOf = (me: Orchestrator, zoneId: string, items: readonly BoardItem[]): BoardItem[] =>
+    me.agent === null
+      ? []
+      : items.filter(
+          (item) =>
+            item.kind === 'agent-note' &&
+            item.zoneId === zoneId &&
+            item.data.arrange === undefined &&
+            item.data.about === me.agent!.sessionId &&
+            item.rotation === 0 &&
+            access.madeByCrew(me, madeBy(itemMadeBy, item.id)),
+        );
+
   /** The sticky of the cluster an arrange put `sessionId`'s tile in, in `zoneId`, if any. */
   const clusterStickyOf = (board: Board, zoneId: string, sessionId: string): BoardItem | undefined =>
     board.items.find(
@@ -1273,14 +1292,17 @@ export function layoutHandlers<Context extends BoardConnection>({
     const notes = [...parts].filter(([slot]) => slot.endsWith(CLUSTER_NOTE_SLOT));
     const noteHeights = new Map(notes.map(([slot, item]) => [clusterKeyOf(slot), item.height] as const));
     const noteWidths = new Map(notes.map(([slot, item]) => [clusterKeyOf(slot), userSize(item)?.width ?? 0] as const));
+    const leadNotes = leadNotesOf(me, zone.id, board.items);
+    const noted = new Set(leadNotes.map((item) => `item:${item.id}`));
     const arranged = arrangeTiles(crew, links, {
+      leadNotes: leadNotes.map((item) => ({ id: item.id, size: { width: item.width, height: item.height } })),
       by: arrange.by,
       layout: arrange.layout,
       spacing: zone.spacing,
       width: zone.width,
       window: measures.window(),
       obstacles: placedOf(board)
-        .filter((each) => each.zoneId === zone.id && !ids.has(each.key) && !own.has(each.key))
+        .filter((each) => each.zoneId === zone.id && !ids.has(each.key) && !own.has(each.key) && !noted.has(each.key))
         .map((each) => takenBy(asDrawn(each))),
       clusters: arrange.by === 'issue' && arrange.layout !== 'grid',
       noteHeights,
@@ -1348,6 +1370,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         const { parts, stale } = clusterParts(me, zone.id, board.items);
         const ownParts = new Set([...parts.values(), ...stale].map((item) => `item:${item.id}`));
         const links = await linksOf();
+        // The lead's own notes are laid out with the crew, not kept clear of.
+        const leadNotes = leadNotesOf(me, zone.id, board.items);
+        for (const item of leadNotes) moving.add(`item:${item.id}`);
         const keep = (excluding: ReadonlySet<string>) => inZone.filter((each) => !moving.has(each.key) && !excluding.has(each.key)).map(takenBy);
         const standing = (id: string) => {
           const tile = tiles.find((each) => each.id === id)!;
@@ -1366,7 +1391,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         const current = new Map((await call('item.list', undefined)).map((item) => [item.id, item]));
         const filling = [...matchParts(first, parts).matched, ...byHand].map(([slot, item]) => [slot, current.get(item.id) ?? item] as const);
         const noteHeights = noteHeightsOf(me, first, new Map(filling), standing);
-        return { board, zone, by, layout, inZone, tiles, clusters, parts, stale, links, standing, spacing, grid, first, byHand, obstacles, filling, noteHeights };
+        return { board, zone, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, first, byHand, obstacles, filling, noteHeights };
       };
       let now = await read();
       // A lane's agent note about to say something new says it first, in place, so the app can measure what its text
@@ -1418,12 +1443,23 @@ export function layoutHandlers<Context extends BoardConnection>({
           throw error;
         }
       }
-      const { board, zone, by, layout, inZone, tiles, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
+      const { board, zone, by, layout, inZone, tiles, leadNotes, clusters, parts, stale, links, standing, spacing, grid, obstacles, byHand } = now;
       const { heights: noteHeights, widths: noteWidths } = now.noteHeights;
       const unmeasured = !measures.live() || (clusters && now.noteHeights.guessed.size > 0);
       // Laid out round `stay` too: the parts it could find no room to park, left where they are.
       const plan = (stay: readonly Rect[]) => {
-        const arranged = arrangeTiles(tiles, links, { by, layout, spacing, width: zone.width, window: measures.window(), obstacles: [...obstacles, ...stay], clusters, noteHeights, noteWidths });
+        const arranged = arrangeTiles(tiles, links, {
+          by,
+          layout,
+          spacing,
+          width: zone.width,
+          window: measures.window(),
+          obstacles: [...obstacles, ...stay],
+          clusters,
+          noteHeights,
+          noteWidths,
+          leadNotes: leadNotes.map((item) => ({ id: item.id, size: { width: item.width, height: item.height } })),
+        });
         const { positions } = arranged;
         // By issue, each cluster takes its parts, re-anchoring a note whose cluster's key changed. Arranged another way,
         // what an arrange by issue made is kept, parked beside the crew, until it is again; so is a sticky someone edited
@@ -1438,6 +1474,7 @@ export function layoutHandlers<Context extends BoardConnection>({
         const parkKeys = [...new Set(toPark.map((item) => clusterKeyOf(String(item.data.arrange))))];
         const placedRects = [
           ...tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE)),
+          ...leadNotes.map((item) => ({ ...arranged.notes.get(item.id)!, width: item.width, height: item.height })),
           ...arranged.clusters.flatMap((cluster) => [
             { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
             { ...cluster.noteAt, ...cluster.noteSize },
@@ -1491,6 +1528,10 @@ export function layoutHandlers<Context extends BoardConnection>({
         moved.push({ target: { kind: placed.kind as LayoutTarget['kind'], id: placed.id }, zoneId: zone.id, ...spot });
       }
       await growTo(zone, { width, height });
+      for (const item of leadNotes) {
+        const spot = arranged.notes.get(item.id)!;
+        if (item.x !== spot.x || item.y !== spot.y) await call('item.update', { id: item.id, zoneId: zone.id, ...spot });
+      }
       entry.detail = `${tiles.length} tile${tiles.length === 1 ? '' : 's'} by ${by}, in ${layout}${how}`;
       if (clusters) {
         const used = await placeClusters(me, zone.id, arranged.clusters, matched, standing);

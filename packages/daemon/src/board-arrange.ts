@@ -76,6 +76,12 @@ export interface ArrangeOptions {
   noteWidths?: ReadonlyMap<string, number>;
   /** The zone's spacing (`SPACING_GAPS`): normal without. */
   spacing?: ArrangeSpacing;
+  /**
+   * The lead's own notes (its agent notes about itself), by id: laid out as a block of rows (`LEAD_NOTES_ACROSS` across),
+   * its top at the lead's and right of the rest of the crew, so they are never stacked above the lead or in the way of
+   * any row.
+   */
+  leadNotes?: readonly { id: string; size: Size }[];
 }
 
 /** The parts of a cluster, as `arrangeTiles` places them: its label in the column before its tiles, its note after them. */
@@ -449,6 +455,71 @@ export function arrangeTiles(
   tiles: readonly ArrangeTile[],
   links: readonly ArrangeLink[],
   options: ArrangeOptions,
+): { positions: Map<string, Point>; clusters: ArrangedCluster[]; size: Size; notes: Map<string, Point> } {
+  const lead = tiles.find((tile) => tile.lead);
+  const wanted = options.leadNotes ?? [];
+  if (lead === undefined || wanted.length === 0) return { ...layoutTiles(tiles, links, options), notes: new Map() };
+  const grid = zoneGrid(options.spacing ?? 'normal');
+  const { gaps } = grid;
+  // The notes are a block of at most `LEAD_NOTES_ACROSS` to a row, whatever the zone's width: a wrap that followed the
+  // zone's width would change as the zone grew to fit, and move the crew at every arrange.
+  const across = Math.min(wanted.length, LEAD_NOTES_ACROSS);
+  const offsets = new Map<string, Point>();
+  let [y, blockWidth] = [0, 0];
+  for (let start = 0; start < wanted.length; start += across) {
+    const line = wanted.slice(start, start + across);
+    let x = 0;
+    for (const { id, size } of line) {
+      offsets.set(id, { x, y });
+      x += size.width + gaps.tile;
+    }
+    blockWidth = Math.max(blockWidth, x - gaps.tile);
+    y += Math.max(...line.map(({ size }) => size.height)) + gaps.tile;
+  }
+  // A grid or masonry fills the zone's width, which the block's strip is part of: lay them out in what is left of it, so
+  // the zone fitted to crew and block is the width it had and arranging again lays out the same.
+  const widthDriven = options.layout === 'grid' || options.layout === 'masonry';
+  // Never narrower than a roughly square grid of the crew needs, whatever the zone's width: a floor that came from the
+  // zone's would collapse the grid to one column in a zone narrower than the block, and it would stay so.
+  const columns = Math.ceil(Math.sqrt(tiles.length));
+  const floor = columns * (Math.max(...tiles.map((tile) => sizeOf(tile).width)) + gaps.tile) - gaps.tile + 2 * gaps.padding;
+  const reserved = { ...options, width: Math.max(floor, options.width - blockWidth - gaps.tile) };
+  let first = layoutTiles(tiles, links, widthDriven ? reserved : options);
+  // What it laid out wider than that (lanes joined by edges, which no width narrows) is the width the next arrange would
+  // lay it out in, so it is laid out in that now: arranging again moves nothing.
+  if (widthDriven) {
+    const reach = Math.max(...tiles.map((tile) => first.positions.get(tile.id)!.x + sizeOf(tile).width)) + gaps.padding;
+    if (reach > reserved.width) first = layoutTiles(tiles, links, { ...reserved, width: reach });
+  }
+  const placed = [
+    ...tiles.map((tile) => sizedFootprint(first.positions.get(tile.id)!, sizeOf(tile))),
+    ...first.clusters.flatMap((cluster) => [
+      { ...cluster.labelAt, ...CLUSTER_LABEL_SIZE },
+      { ...cluster.noteAt, ...cluster.noteSize },
+    ]),
+  ];
+  // Right of everything the crew is laid out in, from the top of the crew (the lead's, but for a grid, which fills round lanes), so no lane is ever pushed below the block; right of
+  // what stays put in the way too. The zone grows wider for it, not taller.
+  const top = Math.min(...tiles.map((tile) => first.positions.get(tile.id)!.y));
+  const boxAt = (x: number, { id, size }: { id: string; size: Size }): Rect => ({ x: x + offsets.get(id)!.x, y: top + offsets.get(id)!.y, ...size });
+  let left = Math.max(...placed.map((rect) => rect.x + rect.width)) + gaps.tile;
+  for (let step = 0; step <= (options.obstacles ?? []).length; step++) {
+    const blocking = (options.obstacles ?? []).filter((obstacle) => wanted.some((note) => !clearOf(boxAt(left, note), [obstacle])));
+    if (blocking.length === 0) break;
+    left = Math.max(left + 1, ...blocking.map((obstacle) => obstacle.x + obstacle.width + gaps.tile));
+  }
+  const boxes = wanted.map((note) => boxAt(left, note));
+  const notes = new Map(wanted.map((note, index) => [note.id, { x: boxes[index]!.x, y: boxes[index]!.y }] as const));
+  return { ...first, notes, size: fittedSize([...placed, ...boxes], options.obstacles ?? [], grid) };
+}
+
+/** The most of the lead's own notes in a row of the block they are laid out as. */
+const LEAD_NOTES_ACROSS = 4;
+
+function layoutTiles(
+  tiles: readonly ArrangeTile[],
+  links: readonly ArrangeLink[],
+  options: ArrangeOptions,
 ): { positions: Map<string, Point>; clusters: ArrangedCluster[]; size: Size } {
   const obstacles = options.obstacles ?? [];
   const grid = zoneGrid(options.spacing ?? 'normal');
@@ -481,7 +552,7 @@ export function arrangeTiles(
     // it: clear of its tiles and of the box round each two its rails join, where its rails and their tokens are.
     const inRows = joinedUnits(tiles, links, rows, options.by);
     const block = tiles.filter((tile) => inRows.has(tile.id));
-    positions = block.length === 0 ? new Map() : arrangeTiles(block, links, { ...options, layout: 'rows', clusters: false }).positions;
+    positions = block.length === 0 ? new Map() : layoutTiles(block, links, { ...options, layout: 'rows', clusters: false }).positions;
     const footprint = (tile: ArrangeTile) => sizedFootprint(positions.get(tile.id)!, sizeOf(tile));
     const railed = links.flatMap((link) => {
       const [from, to] = [block.find((tile) => tile.id === link.from), block.find((tile) => tile.id === link.to)];

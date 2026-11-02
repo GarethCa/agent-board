@@ -22,7 +22,7 @@ function px(positions: Map<string, Point>): Record<string, [number, number]> {
   return Object.fromEntries([...positions].map(([id, { x, y }]) => [id, [x, y]]));
 }
 /** Every part an arrange placed, as boxes: each tile at its size (its perch above it), each lane's label and note. */
-function partsOf(arranged: ReturnType<typeof arrangeTiles>, tiles: readonly ArrangeTile[]): { id: string; rect: Rect }[] {
+function partsOf(arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>, tiles: readonly ArrangeTile[]): { id: string; rect: Rect }[] {
   return [
     ...tiles.map((tile) => ({ id: tile.id, rect: sizedFootprint(arranged.positions.get(tile.id)!, tile.size ?? AGENT_TILE_SIZE) })),
     ...arranged.clusters.flatMap((cluster) => [
@@ -37,7 +37,7 @@ function partsOf(arranged: ReturnType<typeof arrangeTiles>, tiles: readonly Arra
  * right after another part (in any row: a column shared by rows starts past the widest of the one before). A loose check
  * of the shape only, blind to tiles drifting together: the exact px expected in the tests, and `spread`, pin the layout.
  */
-function offGrid(arranged: ReturnType<typeof arrangeTiles>, tiles: readonly ArrangeTile[]): string[] {
+function offGrid(arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>, tiles: readonly ArrangeTile[]): string[] {
   const parts = partsOf(arranged, tiles);
   return tiles
     .filter(({ id }) => {
@@ -920,7 +920,7 @@ describe('packing lanes as masonry or a treemap', () => {
     return { x, y, width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x, height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y };
   };
   /** Each lane's parts (its tiles, label and note) and the top row's tiles, as boxes, by group. */
-  const groupsOf = (arranged: ReturnType<typeof arrangeTiles>, tiles: readonly ArrangeTile[]): Rect[][] => {
+  const groupsOf = (arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>, tiles: readonly ArrangeTile[]): Rect[][] => {
     const parts = new Map(partsOf(arranged, tiles).map(({ id, rect }) => [id, rect]));
     const lanes = arranged.clusters.map((cluster) => [...cluster.members, `${cluster.key}#label`, `${cluster.key}#note`].map((id) => parts.get(id)!));
     const inLanes = new Set(arranged.clusters.flatMap((cluster) => cluster.members));
@@ -1011,7 +1011,7 @@ describe('packing lanes as masonry or a treemap', () => {
   });
 
   it('as masonry, packs more columns of lanes in a wider window, and with none, as many as the zone’s width holds, the same again once fitted to them', () => {
-    const across = (arranged: ReturnType<typeof arrangeTiles>) => new Set(arranged.clusters.map((cluster) => cluster.labelAt.x)).size;
+    const across = (arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>) => new Set(arranged.clusters.map((cluster) => cluster.labelAt.x)).size;
     expect(across(pack(thirty, 'masonry', { window: { width: 2400, height: 900 } }))).toBeGreaterThan(across(pack(thirty, 'masonry', { window: { width: 900, height: 1400 } })));
     expect(across(pack(thirty, 'masonry', { width: 600 }))).toBe(1);
     const wide = pack(thirty, 'masonry', { width: 5000 });
@@ -1021,11 +1021,11 @@ describe('packing lanes as masonry or a treemap', () => {
   });
 
   it('as a treemap, gives a bigger lane a bigger box, and fills a wider window wider', () => {
-    const box = (arranged: ReturnType<typeof arrangeTiles>, key: string) => hullOf(groupsOf(arranged, thirty)[arranged.clusters.findIndex((cluster) => cluster.key === key)]!);
+    const box = (arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>, key: string) => hullOf(groupsOf(arranged, thirty)[arranged.clusters.findIndex((cluster) => cluster.key === key)]!);
     const area = (rect: Rect) => rect.width * rect.height;
     const square = pack(thirty, 'treemap', { window: { width: 1400, height: 1400 } });
     expect(area(box(square, 'issue:ACME-10'))).toBeGreaterThan(area(box(square, 'issue:ACME-19')));
-    const shape = (arranged: ReturnType<typeof arrangeTiles>) => arranged.size.width / arranged.size.height;
+    const shape = (arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>) => arranged.size.width / arranged.size.height;
     expect(shape(pack(thirty, 'treemap', { window: { width: 2400, height: 900 } }))).toBeGreaterThan(shape(pack(thirty, 'treemap', { window: { width: 900, height: 2400 } })));
     // With no window, a laptop screen's shape, whatever the zone's.
     expect(pack(thirty, 'treemap', { width: 3000 }).positions).toEqual(pack(thirty, 'treemap', { width: 600 }).positions);
@@ -1241,7 +1241,7 @@ describe('arranging cards round an expanded tile in the top row, with no lead', 
  * neighbours, or a rail's room where `railed` says a rail runs between them; and down, more than a tile gap between a line's
  * lowest bottom and the next line's top (a rail's room more where one crosses).
  */
-function spread(arranged: ReturnType<typeof arrangeTiles>, tiles: readonly ArrangeTile[], railed: (a: string, b: string) => boolean = () => false, railBetween: (above: number) => boolean = () => false): string[] {
+function spread(arranged: Pick<ReturnType<typeof arrangeTiles>, 'positions' | 'clusters' | 'size'>, tiles: readonly ArrangeTile[], railed: (a: string, b: string) => boolean = () => false, railBetween: (above: number) => boolean = () => false): string[] {
   const parts = partsOf(arranged, tiles);
   // A line is the parts whose top (a tile's below its perch) is level.
   const top = (part: { id: string; rect: Rect }) => (arranged.positions.has(part.id) ? part.rect.y + PERCH_ROOM : part.rect.y);
@@ -1323,5 +1323,75 @@ describe('arranging in pixels', () => {
     expect(result.positions.get('review-a')!.y).toBe(implA.y + OPEN.height + TILE_GAP + PERCH_ROOM);
     expect(offGrid(result, tiles)).toEqual([]);
     expectClear(result.positions, tiles);
+  });
+});
+
+describe("arranging round the lead's own notes", () => {
+  const NOTE = { width: 240, height: 320 };
+  const notes = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `note:${index}`, size: NOTE }));
+  const LAYOUTS = ['rows', 'grid', 'columns', 'cards', 'wrap', 'masonry', 'treemap'] as const;
+  /** A lead, two shells and six lanes of an implementer and its reviewer. */
+  const crowd = [
+    agent('lead', { lead: true }),
+    { ...agent('shell-a'), kind: 'shell' as const, state: null },
+    { ...agent('shell-b'), kind: 'shell' as const, state: null },
+    ...Array.from({ length: 6 }, (_, lane) => [
+      agent(`i${lane}`, { issue: `ACME-${lane}`, role: 'implementer', createdAt: `2026-01-0${lane + 1}` }),
+      agent(`r${lane}`, { issue: `ACME-${lane}`, role: 'reviewer', reviewOf: `i${lane}`, createdAt: `2026-01-0${lane + 1}` }),
+    ]).flat(),
+  ];
+  const links = Array.from({ length: 6 }, (_, lane) => ({ from: `i${lane}`, to: `r${lane}` }));
+  const arrange = (layout: (typeof LAYOUTS)[number], width: number, count: number, joined = true) =>
+    arrangeTiles(crowd, joined ? links : [], { by: 'issue', layout, width, clusters: true, leadNotes: notes(count), window: { width: 1600, height: 1000 } });
+
+  it('starts at the zone’s top edge, with the notes in rows right of the crew, never above the lead or over any tile', () => {
+    for (const layout of LAYOUTS) {
+      const arranged = arrange(layout, 1200, 8);
+      expect(Math.min(...crowd.map((tile) => arranged.positions.get(tile.id)!.y)), layout).toBe(ZONE_PADDING + PERCH_ROOM);
+      if (layout !== 'grid') expect(arranged.positions.get('lead'), layout).toEqual({ x: ZONE_PADDING, y: ZONE_PADDING + PERCH_ROOM });
+      const boxes = notes(8).map(({ id }) => ({ ...arranged.notes.get(id)!, ...NOTE }));
+      const parts = partsOf(arranged, crowd).map((part) => part.rect);
+      expect(boxes.flatMap((box) => parts.filter((part) => !clearOf(box, [part]))), layout).toEqual([]);
+      expect(Math.min(...boxes.map((box) => box.x)), layout).toBeGreaterThanOrEqual(Math.max(...parts.map((part) => part.x + part.width)));
+      expect(boxes[0]!.y, layout).toBe(ZONE_PADDING + PERCH_ROOM);
+      expect(new Set(boxes.map((box) => box.y)).size, layout).toBe(2);
+      expect(boxes.flatMap((box, index) => boxes.slice(index + 1).filter((other) => !clearOf(box, [other]))), layout).toEqual([]);
+      expect(arranged.size.height, layout).toBeGreaterThanOrEqual(Math.max(...boxes.map((box) => box.y + box.height)) + ZONE_PADDING);
+    }
+  });
+
+  it('lays out the same when arranged again at the size the zone was fitted to, in every layout and at any width, joined by edges or not', () => {
+    for (const joined of [true, false]) {
+      for (const layout of LAYOUTS) {
+        for (const width of [600, 1000, 1600, 2400]) {
+          const once = arrange(layout, width, 6, joined);
+          const again = arrange(layout, once.size.width, 6, joined);
+          const label = `${layout} ${joined ? 'joined' : 'unjoined'} from ${width}`;
+          expect([px(again.positions), px(again.notes), again.size], label).toEqual([px(once.positions), px(once.notes), once.size]);
+          const thrice = arrange(layout, again.size.width, 6, joined);
+          expect([px(thrice.positions), px(thrice.notes), thrice.size], `${label}, a third time`).toEqual([px(once.positions), px(once.notes), once.size]);
+        }
+      }
+    }
+  });
+
+  it('grows the zone wider for the notes, never more than a row of them taller than without, joined by edges or not', () => {
+    for (const joined of [true, false]) {
+      for (const layout of LAYOUTS) {
+        for (const width of [600, 1000, 1600, 2400]) {
+          const without = arrangeTiles(crowd, joined ? links : [], { by: 'issue', layout, width, clusters: true, window: { width: 1600, height: 1000 } });
+          const fitted = arrange(layout, width, 4, joined);
+          expect(fitted.size.height - without.size.height, `${layout} ${joined ? 'joined' : 'unjoined'} at ${width}`).toBeLessThanOrEqual(NOTE.height + TILE_GAP + ZONE_PADDING);
+        }
+      }
+    }
+  });
+
+  it('pushes a block clear of what stays put, and places nothing with no lead or no notes', () => {
+    const stay = { x: 700, y: 44, width: 200, height: 200 };
+    const arranged = arrangeTiles([agent('lead', { lead: true })], [], { by: 'issue', layout: 'rows', width: 1200, leadNotes: notes(2), obstacles: [stay] });
+    expect(notes(2).flatMap(({ id }) => (clearOf({ ...arranged.notes.get(id)!, ...NOTE }, [stay]) ? [] : [id]))).toEqual([]);
+    expect(arrangeTiles([agent('a')], [], { by: 'issue', layout: 'rows', width: 1200, leadNotes: notes(3) }).notes.size).toBe(0);
+    expect(arrangeTiles(crowd, links, { by: 'issue', layout: 'rows', width: 1200 }).notes.size).toBe(0);
   });
 });

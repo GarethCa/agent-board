@@ -54,6 +54,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   plainFolder: false,
   orchestrate: null,
   spawnedBy: null,
+  ledBy: null,
   startup: null,
   unsent: null,
   untypedPrompt: null,
@@ -140,6 +141,17 @@ describe('the needs-you inbox', () => {
       agent('crew-asks', 'waiting', { spawnedBy: 'lead', ask }),
     ];
     expect(needsYou(agents, 'explicit').map((a) => a.sessionId)).toEqual(['crew-permission', 'crew-asks']);
+  });
+
+  it("leaves a crew member's finished turn out while its orchestrator is live, and lists it again once it has ended", () => {
+    const agents = [
+      agent('crew-turn', 'waiting', { spawnedBy: 'lead', ledBy: 'lead' }),
+      agent('orphan-turn', 'waiting', { spawnedBy: 'lead', ledBy: null }),
+      agent('loose-turn', 'waiting'),
+      agent('crew-permission', 'needs-permission', { spawnedBy: 'lead', ledBy: 'lead', permissions: [prompt] }),
+    ];
+    expect(needsYou(agents, 'turns').map((a) => a.sessionId)).toEqual(['orphan-turn', 'loose-turn', 'crew-permission']);
+    expect(unseenCount(agents, 'turns')).toBe(3);
   });
 
   it('puts the oldest request first', () => {

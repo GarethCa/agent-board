@@ -350,6 +350,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       },
       harnessPath: (harness) => harnessPaths.path(harness),
       shellIntegrationDir: join(paths.dataDir, 'shell-integration'),
+      onStart: (sessionId) => agents.onStart(sessionId),
       onOutput: (sessionId) => agents.onOutput(sessionId),
       onExit: (session) => {
         agents.onExit(session);

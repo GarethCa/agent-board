@@ -34,6 +34,14 @@ export async function settle(page: Page) {
 }
 
 /**
+ * The page's clock fixed (timers keep running), so a stamp of "Yesterday" or "Today" draws the same on any day. Call it
+ * before the notes it dates are made. The default is the morning after the time the shots give their notes.
+ */
+export async function pinNow(page: Page, now = new Date('2026-10-16T09:00:00.000Z')) {
+  await page.clock.setFixedTime(now);
+}
+
+/**
  * Nothing hovered, wherever the real cursor rests over the window: tiles show their actions on hover, and the gallery
  * holds its own hover states. Returns a function that gives the pointer back, for a test that clicks after its shots.
  */

@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document' });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'full' });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
@@ -48,8 +48,8 @@ describe('the board view settings', () => {
   });
 
   it('read back what was saved, a value it does not know as the default', () => {
-    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense' });
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document' });
+    restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', agentSidebar: 'simple' });
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'simple' });
   });
 
   it('are read as a window follows them, and a change another window makes is heard', async () => {
@@ -58,6 +58,8 @@ describe('the board view settings', () => {
     await vi.waitFor(() => expect(viewSettings().crewLook).toBe('off'));
     change('clickOpens', 'expand');
     expect(viewSettings().clickOpens).toBe('expand');
+    change('agentSidebar', 'simple');
+    expect(viewSettings().agentSidebar).toBe('simple');
     change('viewport', { x: 1 });
     expect(viewSettings()).toMatchObject({ clickOpens: 'expand', crewLook: 'off' });
   });
