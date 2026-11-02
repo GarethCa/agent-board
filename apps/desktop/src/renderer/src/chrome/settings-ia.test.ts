@@ -42,6 +42,8 @@ describe('the Settings window’s groups', () => {
       'statusLook',
       'opensOn',
       'conversationAs',
+      // Added since, under Classic only: the Simplified design always has the simple sidebar.
+      'agentSidebar',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -62,6 +64,7 @@ describe('the Settings window’s groups', () => {
     expect(home('technicalDetails')).toBe('general.design');
     expect(home('statusLook')).toBe('general.design');
     expect(home('conversationAs')).toBe('agents.chat');
+    expect(home('agentSidebar')).toBe('agents.sidebar');
   });
 
   it('have no empty group or section', () => {

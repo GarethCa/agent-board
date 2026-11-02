@@ -3,9 +3,14 @@ import type { Agent, AgentState } from '@agent-board/daemon/protocol';
 import { appIndicator, appStateOf } from './app-state';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent =>
-  ({ sessionId, name: `Agent ${sessionId}`, state, endedAt: null, permissions: [], ask: null, plan: null, ...fields }) as Agent;
+  ({ sessionId, name: `Agent ${sessionId}`, state, endedAt: null, permissions: [], ask: null, plan: null, flag: null, ledBy: null, ...fields }) as Agent;
 
 describe('appStateOf', () => {
+  it("leaves a crew member's finished turn out while its orchestrator is live: nothing waits on the user", () => {
+    const agents = [agent('a', 'waiting', { ledBy: 'lead' }), agent('b', 'waiting')];
+    expect(appStateOf(agents, 'turns')).toEqual({ state: 'needs', waiting: 1 });
+  });
+
   it('is needs while any agent waits for input or permission, counting each waiting agent', () => {
     const agents = [agent('a', 'waiting'), agent('b', 'needs-permission'), agent('c', 'running')];
     expect(appStateOf(agents, 'turns')).toEqual({ state: 'needs', waiting: 2 });

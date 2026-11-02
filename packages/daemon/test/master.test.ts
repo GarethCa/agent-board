@@ -167,7 +167,8 @@ describe('the Captain', () => {
 
     // A zone with none: it starts one there, its own lead, which orchestrates by the zone.
     const started = await connection.call('orchestrator.spawn', { token, zoneId: docs.id, role: 'orchestrator', prompt: 'Print your board identity' });
-    expect(started).toMatchObject({ zoneId: docs.id, roleName: 'orchestrator', spawnedBy: master.sessionId, orchestrate: 'zone' });
+    // Its questions are the user's (ADR-0019), so the Captain never leads it in the status sense.
+    expect(started).toMatchObject({ zoneId: docs.id, roleName: 'orchestrator', spawnedBy: master.sessionId, orchestrate: 'zone', ledBy: null });
   });
 
   it("won't start an orchestrator in a zone that doesn't let its agents orchestrate: the user is the one to hear of it", async () => {

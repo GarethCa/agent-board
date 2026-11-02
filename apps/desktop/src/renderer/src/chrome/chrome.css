@@ -227,14 +227,29 @@
   margin-top: var(--space-1-5);
 }
 
-/* The Settings… row, between sections: inset and spaced as a section's actions are. */
+/* Quick settings: a segmented control and switches, one per row, each label at the leading edge. */
+.quick-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.quick-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.quick-setting-label {
+  font-size: var(--font-size-sm);
+}
+
+/* The Settings… row, last in the panel, under Help and Quick settings: inset and spaced as a section's actions are. */
 .board-menu-settings {
   margin: 0;
   padding: var(--space-2) var(--space-3-5);
-}
-
-.board-menu-settings:not(:last-child) {
-  border-bottom: 1px solid var(--separator);
+  border-top: 1px solid var(--separator);
 }
 
 .board-menu .ui-empty,
@@ -660,18 +675,14 @@
   box-shadow: var(--shadow-island);
 }
 
-/* The Edge rules panel and the Captain's panel cover the right of the board: the zoom island and the minimap move clear of them. */
+/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. The docked pane doesn't move them: it ends a gap above them (`--controls-lift`, measured by `usePanelRoom`). */
 :root:has(.edge-rules) {
   --edge-room: calc(var(--island-inset) + var(--size-edge-rules));
 }
 
-:root:has(.master-panel):not(:has([data-testid='session-window'])) {
-  --master-room: calc(var(--island-inset) + var(--master-panel-width, var(--size-master-panel)));
-}
-
-:root:has(.edge-rules, .master-panel) .island-bottom-right,
-:root:has(.edge-rules, .master-panel) .react-flow__panel.board-minimap {
-  right: calc(var(--island-inset) + var(--edge-room, 0px) + var(--master-room, 0px));
+:root:has(.edge-rules) .island-bottom-right,
+:root:has(.edge-rules) .react-flow__panel.board-minimap {
+  right: calc(var(--island-inset) + var(--edge-room, 0px));
 }
 
 .react-flow__panel.board-minimap svg {
@@ -1092,9 +1103,9 @@
 .master-panel {
   position: absolute;
   top: calc(var(--island-inset) * 2 + var(--island-height));
-  /* Left of the Edge rules panel when both are open, and ending at the dock's top edge while the dock shows. */
+  /* Left of the Edge rules panel when both are open, and ending a gap above the zoom bar, the minimap and the dock. */
   right: calc(var(--island-inset) + var(--edge-room, 0px));
-  bottom: calc(var(--island-inset) + var(--dock-lift, 0px));
+  bottom: calc(var(--island-inset) + max(var(--dock-lift, 0px), var(--controls-lift, 0px)));
   z-index: var(--layer-panel);
   display: flex;
   flex-direction: column;
@@ -1629,13 +1640,13 @@
   }
 }
 
-@media (max-width: 919px) {
+@media (max-width: 959px) {
   :root[data-design='simplified'] .master-button-label {
     display: none;
   }
 }
 
-@media (max-width: 799px) {
+@media (max-width: 839px) {
   :root[data-design='simplified'] .master-button.ui-button {
     display: none;
   }
@@ -1643,16 +1654,16 @@
 
 /*
  * With the usage island in it, the Simplified top-right island is wider, so it gives way sooner: the Captain's word
- * below 1240 px, then the figures themselves below 1100 px (Settings › Usage still has them), when the Captain's word
- * goes by its own rule, below 920 px.
+ * below 1240 px, then the figures themselves below 1140 px (Settings › Usage still has them), when the Captain's word
+ * goes by its own rule, below 960 px.
  */
-@media (min-width: 1100px) and (max-width: 1239px) {
+@media (min-width: 1140px) and (max-width: 1239px) {
   :root[data-design='simplified'] .needs-you:has(.usage-island) .master-button-label {
     display: none;
   }
 }
 
-@media (max-width: 1099px) {
+@media (max-width: 1139px) {
   :root[data-design='simplified'] .needs-you .usage-island,
   :root[data-design='simplified'] .needs-you .usage-island + .ui-island-separator {
     display: none;
@@ -1959,8 +1970,9 @@
 
 .settings-search-empty {
   margin: 0;
-  padding: var(--space-1-5);
+  padding: var(--space-4) var(--space-1-5);
   color: var(--muted);
+  text-align: center;
 }
 
 .settings-group-head,
@@ -2061,12 +2073,12 @@
 
 .settings-page-section {
   max-width: var(--settings-page-width);
-  padding-top: var(--space-3-5);
+  padding-top: var(--space-4-5);
   scroll-margin-top: var(--space-2);
 }
 
 .settings-page-section-title {
-  margin: 0 0 var(--space-1-5) var(--space-0-5);
+  margin: 0 0 var(--space-2) var(--space-0-5);
   font-size: var(--font-size-md);
   font-weight: var(--weight-bold);
 }
@@ -2083,11 +2095,32 @@
   background-color: var(--accent-soft);
 }
 
+/*
+ * One control column. In the Settings window's boxes and the board menu's Quick settings, a switch's label leads and
+ * its switch ends the row, and a segmented control or pop-up (the Mode, the Theme) takes the column's width at the
+ * trailing edge, so every control of a page lines up on the right.
+ */
+.settings-box .ui-check:has(.ui-switch),
+.quick-settings .ui-check:has(.ui-switch) {
+  flex-direction: row-reverse;
+  justify-content: space-between;
+}
+
+.settings-box .ui-fieldset > .ui-segmented,
+.settings-box .ui-fieldset > .theme-setting {
+  width: var(--size-settings-control);
+  align-self: flex-end;
+}
+
+.settings-box .theme-control {
+  width: 100%;
+}
+
 .settings-box {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-3-5);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: var(--raised);

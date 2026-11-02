@@ -40,18 +40,28 @@ describe('chooseWorkers', () => {
     expect(chooseWorkers(base)).toMatchObject({ unit: 9, processes: 3 });
   });
 
-  it('backs off both projects as the load rises', () => {
-    expect(chooseWorkers({ ...base, load: 8 })).toMatchObject({
-      unit: 2,
-      processes: 1,
+  it('backs the unit project off as the load rises', () => {
+    expect(chooseWorkers({ ...base, load: 8 }).unit).toBe(2);
+  });
+
+  it('keeps the processes project at 3 on a busy machine: its workers mostly wait on the processes they start', () => {
+    for (const load of [6, 8, 12, 30]) expect(chooseWorkers({ ...base, load }).processes).toBe(3);
+  });
+
+  it('never goes below one unit worker, even when the load exceeds the cores', () => {
+    expect(chooseWorkers({ ...base, load: 40 })).toMatchObject({
+      unit: 1,
+      processes: 3,
     });
   });
 
-  it('never goes below one worker, even when the load exceeds the cores', () => {
-    expect(chooseWorkers({ ...base, load: 40 })).toMatchObject({
-      unit: 1,
-      processes: 1,
-    });
+  it('gives the processes project no more workers than cores - 1', () => {
+    expect(chooseWorkers({ ...base, cores: 2 }).processes).toBe(1);
+    expect(chooseWorkers({ ...base, cores: 3 }).processes).toBe(2);
+  });
+
+  it('still cuts the processes project on a busy machine near the process limit', () => {
+    expect(chooseWorkers({ ...base, load: 12, processCount: 2400 }).processes).toBe(1);
   });
 
   it('cuts the processes project when the user is near the process limit', () => {

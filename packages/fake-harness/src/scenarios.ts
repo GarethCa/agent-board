@@ -433,6 +433,17 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Two workers started.');
       return session.stop();
     }
+    // A worker whose turn ends on a question, for its orchestrator to take.
+    const askBack = /^Ask back: (.*)/.exec(prompt)?.[1];
+    if (askBack !== undefined) {
+      await session.say(askBack);
+      return session.stop();
+    }
+    if (prompt === 'Lead a worker that asks back') {
+      await session.callMcpTool('agent-board', 'new_agent', { prompt: 'Ask back: Which database should I use, Postgres or SQLite?', name: 'worker asking' });
+      await session.say('A worker started.');
+      return session.stop();
+    }
     const crowded = /^Lead a crowded crew: (.*)/.exec(prompt)?.[1];
     if (crowded !== undefined) {
       // An implementer with a long name and a role, its orchestrator's line on its tile and a reviewer of it, all while they start.

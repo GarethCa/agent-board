@@ -1,4 +1,6 @@
 import { expect, type Page } from '@playwright/test';
+import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
+import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { agents, launch, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
@@ -229,6 +231,77 @@ test('an orchestrator expanded in place, arranging by itself, starts its crew be
         { timeout: 4 * TURN_MS },
       )
       .toEqual({ below: true, besideLabels: true, apart: true });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("under the Simplified design an orchestrator's worker that ends its turn on a question reads Working, not Needs you, and offers no Answer button", async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV }, [], { design: 'simplified' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Lead a worker that asks back');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(2, { timeout: 2 * TURN_MS });
+    const worker = agentTile(window, 'worker asking');
+    // Its turn ended asking, at its prompt: its orchestrator answers, so the user is not asked.
+    await expect(worker).toHaveAttribute('data-state', /^(idle|waiting)$/, { timeout: 2 * TURN_MS });
+    await expect(worker).toHaveAttribute('data-status', 'working');
+    await expect(worker.locator('[data-testid="tile-action"][data-prominent]')).toHaveCount(0);
+    await expect(worker).toContainText('With ');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("under the Simplified design an orchestrator's worker with an open pull request reads Working, not Needs you, with no Review changes button", async () => {
+  const github = createFakeGitHub({ ...FAKE_GITHUB_STATE, pullRequests: [] });
+  const { dir, repo, env } = scratch('orchestrate');
+  // gh finds an agent's pull requests in the repo its worktree's remote names.
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' }, [], { design: 'simplified' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
+    const worker = agentTile(window, 'worker one');
+    await expect(worker).toHaveAttribute('data-state', /^(idle|waiting)$/, { timeout: 2 * TURN_MS });
+
+    // It opens a pull request, as a loose agent would: its orchestrator takes it, so the user is not asked to review.
+    const [crewMember] = (await agents(window)).filter((each) => each.name === 'worker one');
+    github.setState({
+      ...FAKE_GITHUB_STATE,
+      pullRequests: [
+        {
+          repo: 'acme/app',
+          number: 41,
+          title: 'Fix the flaky test',
+          headRefName: crewMember!.branch,
+          headRefOid: 'b'.repeat(40),
+          state: 'OPEN',
+          isDraft: false,
+          body: '',
+          statusCheckRollup: [],
+          files: [],
+          comments: [],
+          reviewComments: [],
+        },
+      ],
+    });
+    await expect.poll(async () => (await agents(window)).find((each) => each.name === 'worker one')?.pullRequests.some((pr) => pr.state === 'open')).toBe(true);
+    await expect(worker).toHaveAttribute('data-status', 'working');
+    await expect(worker.locator('[data-testid="tile-action"][data-prominent]')).toHaveCount(0);
+    await expect(worker).not.toContainText('Review changes');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

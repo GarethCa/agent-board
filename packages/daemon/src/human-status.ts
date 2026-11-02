@@ -75,7 +75,9 @@ export function asksInWords(message: string): boolean {
  * plan, a flag, every finished turn when the inbox lists them (`shows`), an agent a restart stopped, a last message
  * at its prompt that asks something, and open changes waiting for review, at its prompt or ended as done. A reviewer at its
  * prompt asking none of that is Paused while `implementer`, the agent it reviews, works or is paused. An ended agent
- * is a Problem when the daemon says it failed, else Done, whatever its exit code (a stop can leave one). The mapping
+ * is a Problem when the daemon says it failed, else Done, whatever its exit code (a stop can leave one). A crew member
+ * at its prompt, its orchestrator live (`ledBy`), is Working "With" that orchestrator, which takes its turns, questions
+ * and changes: only a permission prompt, a flag to the user or a restart that stopped it reach the user. The mapping
  * reads no harness: Claude's and Codex's agents share these states.
  */
 export function humanStatus(agent: HumanStatusFacts, shows: NeedsYouShows, implementer?: ImplementerFacts | null): HumanStatusReading {
@@ -90,11 +92,15 @@ export function humanStatus(agent: HumanStatusFacts, shows: NeedsYouShows, imple
   if (state === 'rate-limited') return { status: 'paused', detail: 'Usage limit' };
   const ended = agent.endedAt !== null;
   const atPrompt = !ended && (state === 'idle' || state === 'waiting');
+  // A reviewer waiting on its implementer is paused, whoever leads it.
+  const waiting = atPrompt && agent.reviewOf !== null && implementer != null && waitedOn(implementer);
+  // A crew member at its prompt is between turns for its live orchestrator, which takes its questions and its changes.
+  if (atPrompt && !waiting && agent.ledBy !== null) return { status: 'working', detail: `With ${agent.ledBy}` };
   // Its question goes with its session; its open changes outlive it.
   if (atPrompt && agent.lastMessage !== null && asksInWords(agent.lastMessage)) return needsYou('Asks you');
   if ((atPrompt || ended) && agent.pullRequests.some((pr) => pr.state === 'open')) return needsYou('Changes ready to review');
   if (ended) return { status: 'done', detail: null };
-  if (atPrompt && agent.reviewOf !== null && implementer != null && waitedOn(implementer)) {
+  if (waiting && implementer != null) {
     return { status: 'paused', detail: `Waits for ${implementer.name}` };
   }
   return { status: BY_STATE[state], detail: null };

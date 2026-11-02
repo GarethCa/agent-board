@@ -1,11 +1,13 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { launch, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
-import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
+import { browseForZone, classicOnly, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
+import { openSettings, settingsSection } from './settings-helpers.ts';
 
-// An agent's inspector under the Simplified design: hidden until shown, at the window's trailing edge, a short grouped
-// list resized on the handle before it, with its technical details only while Show technical details is on.
+// An agent's inspector: under the Simplified design hidden until shown, at the window's trailing edge, a short list
+// resized on the handle before it, with its technical details only while Show technical details is on; under Classic,
+// in place of the details strip while the Agent sidebar setting is Simple.
 
 const inspector = (window: Page) => sessionWindow(window).getByTestId('inspector');
 const handle = (window: Page) => sessionWindow(window).getByTestId('details-handle');
@@ -98,7 +100,7 @@ test("an agent's inspector opens from the header at the window's trailing edge, 
     await tile(window).dblclick();
     await expect(inspector(window)).toBeVisible();
 
-    // Show technical details adds its branch, folder and AI, and nothing moves above them.
+    // Show technical details adds a fold of its branch, folder and AI, and nothing moves above it.
     // Once its turn has ended, so its status line holds still.
     await expect(inspector(window).getByTestId('inspector-status-line')).toContainText('Asks you', { timeout: TURN_MS });
     // Measured from the inspector's top once two reads agree: while the window eases in, its scale shrinks the offset too.
@@ -117,8 +119,13 @@ test("an agent's inspector opens from the header at the window's trailing edge, 
     await setTechnical(window, true);
     const technical = inspector(window).getByRole('region', { name: 'Technical details' });
     await expect(technical).toBeVisible();
-    await expect(technical).toContainText('Claude · default model');
     expect(Math.round(await workTop())).toBe(Math.round(work));
+    // Closed at first, it opens on its heading.
+    const technicalHead = technical.getByRole('button', { name: 'Technical details' });
+    await expect(technicalHead).toHaveAttribute('aria-expanded', 'false');
+    await expect(technical).not.toContainText('Claude · default model');
+    await technicalHead.click();
+    await expect(technical).toContainText('Claude · default model');
 
     // Its folder row copies the folder's path.
     const folderRow = technical.getByTestId('inspector-folder-row').getByRole('button');
@@ -166,6 +173,66 @@ test("an agent's inspector folds what it showed and pinned under More details, o
     await expect(sessionWindow(window).getByRole('tab', { name: 'localhost:9' })).toBeVisible();
     await fold(window).getByTestId('inspector-document').getByRole('button').click();
     await expect(sessionWindow(window).getByTestId('document-view')).toBeVisible();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Classic's Simple sidebar puts the inspector in place of the details strip, resizes it on its handle, is kept across a restart, and Full brings the strip back", async () => {
+  classicOnly();
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  let { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await tile(window).dblclick();
+
+    // Full by default: the details strip's rail, no inspector and no header toggle.
+    await expect(sessionWindow(window).locator('.session-details')).toBeVisible();
+    await expect(inspector(window)).toHaveCount(0);
+    await expect(toggle(window)).toHaveCount(0);
+
+    // Simple, picked in Settings while the window is open: the inspector replaces the strip at once, shown, with its
+    // controls folded.
+    const settings = await openSettings(window, 'agents.sidebar');
+    const choice = settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' });
+    await choice.getByRole('button', { name: 'Simple' }).click();
+    await expect(inspector(window)).toBeVisible();
+    await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
+    await expect(toggle(window)).toHaveAttribute('aria-pressed', 'true');
+    await expect(inspector(window).getByRole('region', { name: 'Work' })).toContainText('Pull request');
+    await fold(window).getByRole('button', { name: /^More details/ }).click();
+    await expect(fold(window).getByRole('list', { name: 'Controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(inspector(window).getByRole('region', { name: 'Technical details' })).toBeVisible();
+
+    // It resizes on its handle as the Simplified design's does, and the header's toggle hides and shows it.
+    await expect.poll(() => width(window)).toBe(316);
+    await dragHandle(window, -80);
+    await expect.poll(() => width(window)).toBe(396);
+    await handle(window).dblclick();
+    await expect.poll(() => width(window)).toBe(316);
+    await toggle(window).click();
+    await expect(inspector(window)).toHaveCount(0);
+    await window.keyboard.press('ControlOrMeta+i');
+    await expect(inspector(window)).toBeVisible();
+
+    // Full again: the strip is back on its rail, and the toggle goes with the inspector.
+    await choice.getByRole('button', { name: 'Full' }).click();
+    await expect(inspector(window)).toHaveCount(0);
+    await expect(sessionWindow(window).locator('.session-details-rail')).toBeVisible();
+    await expect(toggle(window)).toHaveCount(0);
+
+    // Simple again, it is kept across a restart: the window open as the app quit opens again with the inspector.
+    await choice.getByRole('button', { name: 'Simple' }).click();
+    await expect(inspector(window)).toBeVisible();
+    await app.close();
+    ({ app, window } = await launch(dataDir, env));
+    await expect(inspector(window)).toBeVisible();
+    await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

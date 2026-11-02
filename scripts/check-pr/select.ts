@@ -12,6 +12,9 @@
  */
 import { matchesGlob } from 'node:path';
 
+/** The release's leak rules, as a unit test: `vitest related` would never pick it, so any change that runs unit tests runs it too. */
+const LEAK_RULES_TEST = 'scripts/release-public/leak-rules.test.ts';
+
 /** Files whose change falls back to the full gate. */
 const FULL_GATE_GLOBS = [
   'scripts/check-*',
@@ -228,8 +231,10 @@ export function selectChecks(changed: readonly string[], exists: (file: string) 
   }
 
   plan.unit = files.filter((file) => /\.(ts|tsx|css|json)$/.test(file) && !file.startsWith('apps/desktop/e2e/') && !file.startsWith('docs/'));
+  const changedCode = plan.unit.length;
+  if (changedCode > 0 && exists(LEAK_RULES_TEST) && !plan.unit.includes(LEAK_RULES_TEST)) plan.unit.push(LEAK_RULES_TEST);
   plan.reasons.push(
-    plan.unit.length > 0 ? `unit: vitest related on ${plan.unit.length} changed file(s)` : 'unit: skipped, no code changed',
+    changedCode > 0 ? `unit: vitest related on ${changedCode} changed file(s)${plan.unit.length > changedCode ? ', and the release leak rules' : ''}` : 'unit: skipped, no code changed',
   );
 
   const specs = new Set<string>();

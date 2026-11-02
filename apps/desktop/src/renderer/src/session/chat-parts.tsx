@@ -109,7 +109,7 @@ export function CallOutcome({ call, status, now }: { call: ToolCall; status: Cal
   return (
     <span className="chat-tool-outcome" data-testid="chat-tool-outcome" data-tone={outcome.tone}>
       {status === 'running' && <span className="chat-tool-run-pulse" aria-hidden />}
-      {status === 'running' ? (elapsed === undefined ? 'running…' : <span data-testid="chat-time">{duration(elapsed)}</span>) : outcome.text}
+      {status === 'running' ? (elapsed === undefined ? 'running…' : <span data-testid="chat-time">{duration(elapsed, { live: true })}</span>) : outcome.text}
     </span>
   );
 }
@@ -187,7 +187,7 @@ export interface LiveLine {
 export function liveLine(live: LiveState, now: number): LiveLine {
   const since = (at: string | undefined) => {
     const ms = msBetween(at, new Date(now).toISOString());
-    return ms === undefined ? {} : { time: duration(ms) };
+    return ms === undefined ? {} : { time: duration(ms, { live: true }) };
   };
   switch (live.kind) {
     case 'permission': {

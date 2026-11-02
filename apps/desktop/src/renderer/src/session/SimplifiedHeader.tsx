@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, CircleStop, MoreHorizontal, PanelRight, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
+import { ChevronDown, CircleStop, MoreHorizontal, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import { agentMenu, type ModelEntry } from '../board/menu-model';
@@ -14,6 +14,7 @@ import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
 import { Button, Dialog, IconButton, Menu, useToast, type MenuEntry } from '../ui';
 import { errorMessage } from '../../../shared/errors';
+import { DetailsToggle } from './DetailsToggle';
 import { SessionName } from './SessionName';
 import type { WindowNav } from './SessionWindow';
 
@@ -63,15 +64,7 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
       )}
       {agent && <StateAction agent={agent} placement={placement} />}
       <span className="session-window-view-slot" ref={onViewSlot} />
-      <IconButton
-        icon={<PanelRight />}
-        size="sm"
-        aria-label={detailsOpen ? 'Hide details' : 'Show details'}
-        aria-pressed={detailsOpen}
-        data-details-toggle
-        tooltip={`${detailsOpen ? 'Hide' : 'Show'} its details  ${keyText('window.details')}`}
-        onClick={() => onDetailsOpen(!detailsOpen)}
-      />
+      <DetailsToggle open={detailsOpen} onOpen={onDetailsOpen} />
       <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, onClose, onEnd: () => setEnding(true), board })}>
         <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More actions" />
       </Menu>

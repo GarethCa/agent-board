@@ -19,6 +19,9 @@ interface SessionsProps {
   shells: readonly Shell[] | undefined;
   /** Narrows the rows to those whose name holds it. */
   filter?: string;
+  /** Whether the list is open: it starts closed behind its heading. */
+  open: boolean;
+  onOpenChange(open: boolean): void;
   /** Hears that a row was picked, so the menu can close. */
   onPicked?(): void;
   onOpenAgent(agent: Agent): void;
@@ -29,7 +32,7 @@ interface SessionsProps {
  * The board menu's agents and running shells: each agent by name with its state, each shell tile with a live pane,
  * and any other session the daemon runs. Clicking a row shows its tile; Open opens its window on the board.
  */
-export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAgent, onOpenShell }: SessionsProps) {
+export function Sessions({ agents, shells = [], filter = '', open, onOpenChange, onPicked, onOpenAgent, onOpenShell }: SessionsProps) {
   const shows = useNeedsYouShows();
   const sessions = useLiveSessions();
   const windows = useSessionWindows();
@@ -52,7 +55,7 @@ export function Sessions({ agents, shells = [], filter = '', onPicked, onOpenAge
   const count = agents.length + liveShells.length + others.length;
 
   return (
-    <Section label="Agents and shells" meta={count === 0 ? 'None' : `${agents.length} agents · ${liveShells.length + others.length} shells`}>
+    <Section label={`Agents and shells (${count})`} meta={count === 0 ? undefined : `${agents.length} agents · ${liveShells.length + others.length} shells`} open={open} onOpenChange={onOpenChange}>
       {shownAgents.length + shownShells.length + shownOthers.length === 0 ? (
         <EmptyState framed={false} title={count === 0 ? 'Nothing running' : 'Nothing matches'}>
           {count === 0 ? 'Agents and shells you start show here.' : undefined}

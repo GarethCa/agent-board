@@ -13,6 +13,7 @@ const agent = (patch: Partial<Agent>): Agent =>
     ask: null,
     plan: null,
     flag: null,
+    ledBy: null,
     reviewOf: null,
     lastMessage: null,
     pullRequests: [],
@@ -115,6 +116,49 @@ describe("an agent's status, one of six", () => {
     expect(humanStatus(reviewer, 'explicit', agent({ name: 'impl', state: 'hibernated', endedAt: '1' }))).toEqual({ status: 'paused', detail: 'Waits for impl' });
     // One that has ended is waited on no longer.
     expect(humanStatus(reviewer, 'explicit', agent({ name: 'impl', state: 'done', endedAt: '1' })).status).toBe('done');
+  });
+
+  describe("a crew member's orchestrator takes its turns, questions and changes", () => {
+    const flagToLead = { ...flag, to: 'orchestrator' as const };
+    const crew = (patch: Partial<Agent>) => agent({ spawnedBy: 'lead-id', ledBy: 'Release lead', ...patch });
+    const openChanges = [pr('open')];
+    const withLead = { status: 'working', detail: 'With Release lead' };
+
+    it.each([
+      ['an open PR', { state: 'idle', pullRequests: openChanges }, 'explicit', withLead],
+      ['a last message that asks', { state: 'waiting', lastMessage: 'Shall I merge it?' }, 'explicit', withLead],
+      ['a finished turn the inbox lists', { state: 'waiting' }, 'turns', withLead],
+      ['a finished turn, idle', { state: 'idle' }, 'turns', withLead],
+      ['a flag to its orchestrator', { state: 'idle', flag: flagToLead }, 'explicit', withLead],
+      ['a permission prompt', { state: 'needs-permission', permissions: [permission] }, 'explicit', { status: 'needs-you', detail: 'Wants your permission' }],
+      ['a flag to the user', { state: 'idle', flag }, 'explicit', { status: 'needs-you', detail: 'Ready for review' }],
+      ['a restart that stopped it', { state: 'stopped-by-restart', endedAt: '1' }, 'explicit', { status: 'needs-you', detail: 'Stopped when the app restarted' }],
+      ['a pause for usage', { state: 'hibernated', endedAt: '1', hibernated: { at: '', by: null, byId: null, reason: 'usage' } }, 'turns', { status: 'paused', detail: 'Paused for usage' }],
+      ['having failed', { state: 'failed', endedAt: '1', exitCode: 1 }, 'turns', { status: 'problem', detail: 'Ended · exit 1' }],
+      ['working on a turn', { state: 'running' }, 'turns', { status: 'working', detail: null }],
+      ['its usage limit', { state: 'rate-limited' }, 'turns', { status: 'paused', detail: 'Usage limit' }],
+    ] as const)('with %s reads %j under %s', (_what, patch, shows, expected) => {
+      expect(humanStatus(crew(patch as Partial<Agent>), shows)).toEqual(expected);
+    });
+
+    it("keeps today's rules once its orchestrator has ended, and for an agent the user started", () => {
+      for (const orphan of [agent({ spawnedBy: 'lead-id', ledBy: null }), agent({ spawnedBy: null, ledBy: null })]) {
+        expect(humanStatus({ ...orphan, state: 'idle', pullRequests: openChanges }, 'explicit')).toEqual({ status: 'needs-you', detail: 'Changes ready to review' });
+        expect(humanStatus({ ...orphan, state: 'waiting', lastMessage: 'Shall I merge it?' }, 'explicit')).toEqual({ status: 'needs-you', detail: 'Asks you' });
+        expect(humanStatus({ ...orphan, state: 'waiting' }, 'turns').status).toBe('needs-you');
+        expect(humanStatus({ ...orphan, state: 'idle' }, 'explicit').status).toBe('done');
+      }
+    });
+
+    it('is Done, with its changes still to review, after it has ended, as before', () => {
+      expect(humanStatus(crew({ state: 'done', endedAt: '1', pullRequests: openChanges }), 'explicit')).toEqual({ status: 'needs-you', detail: 'Changes ready to review' });
+    });
+
+    it('stays Paused for a reviewer that waits on a working implementer', () => {
+      const reviewer = crew({ state: 'idle', reviewOf: 'impl-id' });
+      expect(humanStatus(reviewer, 'explicit', agent({ name: 'impl', state: 'running' }))).toEqual({ status: 'paused', detail: 'Waits for impl' });
+      expect(humanStatus(reviewer, 'explicit', agent({ name: 'impl', state: 'done', endedAt: '1' }))).toEqual(withLead);
+    });
   });
 
   it('has a word for each status', () => {

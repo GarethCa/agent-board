@@ -19,6 +19,7 @@ const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
     ask: null,
     plan: null,
     flag: null,
+    ledBy: null,
     ...fields,
   }) as Agent;
 

@@ -8,6 +8,8 @@ import { binding, chordText, isActive, keyText } from '../keys/registry';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
+import { useSessionsOpen } from './board-menu-fold';
+import { QuickSettings } from './QuickSettings';
 
 /** Whether the board menu is open, and whether it put the focus in its search field as it opened. */
 export type BoardMenuState = { open: false } | { open: true; at?: 'search'; asked?: number };
@@ -48,6 +50,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const simplified = useSimplified();
+  const [sessionsOpen, setSessionsOpen] = useSessionsOpen();
   const at = menu.open ? menu.at : undefined;
   /** When it was last asked to focus there: asked again while open, it focuses again. */
   const asked = menu.open ? menu.asked : undefined;
@@ -130,20 +133,7 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
             </Button>
           </div>
         </Section>
-        <Sessions agents={agents} shells={shells} filter={filter} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
-        <div className="board-menu-actions board-menu-settings">
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={<SettingsIcon />}
-            onClick={() => {
-              close();
-              onSettings();
-            }}
-          >
-            Settings…{SETTINGS_KEY !== undefined && <Kbd>{SETTINGS_KEY}</Kbd>}
-          </Button>
-        </div>
+        <Sessions agents={agents} shells={shells} filter={filter} open={wanted !== '' || sessionsOpen} onOpenChange={setSessionsOpen} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
         {onGettingStarted !== undefined && (
           <Section label="Help">
             <div className="board-menu-actions">
@@ -161,6 +151,20 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
             </div>
           </Section>
         )}
+        <QuickSettings />
+        <div className="board-menu-actions board-menu-settings">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<SettingsIcon />}
+            onClick={() => {
+              close();
+              onSettings();
+            }}
+          >
+            Settings…{SETTINGS_KEY !== undefined && <Kbd>{SETTINGS_KEY}</Kbd>}
+          </Button>
+        </div>
       </div>
     </div>
   );

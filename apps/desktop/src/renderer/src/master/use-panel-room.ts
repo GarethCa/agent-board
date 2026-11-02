@@ -4,35 +4,53 @@ import { tokenNumber } from '../theme';
 export interface PanelRoom {
   /** The board's width, 0 until measured. */
   board: number;
-  /** What the rest of the bottom row takes beside the panel, in px. */
+  /** What the Edge rules panel and the panel's margin take beside it, in px. */
   taken: number;
+  /** How far above the board's bottom inset the zoom bar's top is, or the minimap's when it shows, plus a gap: where the panel's bottom goes. */
+  lift: number;
 }
 
 /**
- * The board the panel is docked on and what its bottom row needs besides the panel: the zoom bar (which sits left of
- * it), the zones pill and the dock at their least, their gaps, and the Edge rules panel when it is open, which the
- * panel sits beside. Measured again when the board, the zoom bar or those panels change, so the width stays one the
- * bottom row fits beside.
+ * The board the panel is docked on, where its bottom goes (a gap above the zoom bar and the minimap, whatever size they are) and what it needs beside it: its own margin and the Edge rules panel when it is
+ * open, which the panel sits beside. The zoom bar, the minimap, the zones pill and the dock are in the bottom rows the
+ * panel ends above, so they take none of its width. Measured again when the board or the Edge rules panel changes.
  */
 export function usePanelRoom(panel: RefObject<HTMLElement | null>): PanelRoom {
-  const [room, setRoom] = useState<PanelRoom>({ board: 0, taken: 0 });
+  const [room, setRoom] = useState<PanelRoom>({ board: 0, taken: 0, lift: 0 });
   useLayoutEffect(() => {
     const parent = panel.current?.parentElement;
     if (!parent) return;
     const inset = tokenNumber('--island-inset');
     const measure = () => {
-      const zoom = parent.querySelector<HTMLElement>('.island-bottom-right')?.offsetWidth ?? 0;
       const edge = parent.querySelector<HTMLElement>('.edge-rules') === null ? 0 : inset + tokenNumber('--size-edge-rules');
-      const taken = 3 * inset + edge + zoom + tokenNumber('--size-zones-min') + tokenNumber('--size-dock-min') + 2 * tokenNumber('--size-dock-gap');
-      setRoom((was) => (was.board === parent.clientWidth && was.taken === taken ? was : { board: parent.clientWidth, taken }));
+      const taken = inset + edge;
+      const top = Math.min(...[...parent.querySelectorAll<HTMLElement>('.island-bottom-right, .board-minimap')].map((thing) => thing.getBoundingClientRect().top));
+      const lift = Number.isFinite(top) ? Math.round(parent.getBoundingClientRect().bottom - top + tokenNumber('--size-dock-gap') - inset) : 0;
+      setRoom((was) => (was.board === parent.clientWidth && was.taken === taken && was.lift === lift ? was : { board: parent.clientWidth, taken, lift }));
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
-    const zoom = parent.querySelector('.island-bottom-right');
-    if (zoom) observer.observe(zoom);
+    // The zoom bar and the minimap are watched as they come and go (the minimap's switch, the usage pill), so the lift follows their real size.
+    const watched = new Set<Element>();
+    const watch = () => {
+      const present = new Set(parent.querySelectorAll('.island-bottom-right, .board-minimap'));
+      // What the minimap's switch removed is let go.
+      for (const thing of watched) {
+        if (present.has(thing)) continue;
+        observer.unobserve(thing);
+        watched.delete(thing);
+      }
+      for (const thing of present) {
+        if (watched.has(thing)) continue;
+        watched.add(thing);
+        observer.observe(thing);
+      }
+      measure();
+    };
+    watch();
     // Edge rules comes and goes with the selected edge.
-    const changed = new MutationObserver(measure);
+    const changed = new MutationObserver(watch);
     changed.observe(parent, { childList: true, subtree: true });
     return () => {
       observer.disconnect();

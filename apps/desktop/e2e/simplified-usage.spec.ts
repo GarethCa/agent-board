@@ -39,7 +39,7 @@ test('under the Simplified design usage is figures in the top-right island, befo
     // A narrower window never lets the island reach the creation toolbar: the figures give way first.
     const room = () =>
       window.evaluate(() => document.querySelector('.island-top-right')!.getBoundingClientRect().left - document.querySelector('.island-top-centre')!.getBoundingClientRect().right);
-    for (const width of [1400, 1240, 1140, 1139, 1100, 1099, 1050, 920, 800]) {
+    for (const width of [1400, 1240, 1239, 1140, 1139, 1100, 1050, 960, 959, 840, 839]) {
       await window.setViewportSize({ width, height: 800 });
       expect(await room(), `the islands' room at ${width}px`).toBeGreaterThanOrEqual(8);
     }

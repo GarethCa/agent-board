@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from './states';
 
-const agent = (patch: Partial<Agent>) => ({ state: 'waiting', seen: false, endedAt: null, permissions: [], ask: null, plan: null, exitCode: null, shellSessionId: null, shellHarness: null, ...patch }) as Agent;
+const agent = (patch: Partial<Agent>) => ({ state: 'waiting', seen: false, endedAt: null, permissions: [], ask: null, plan: null, flag: null, ledBy: null, exitCode: null, shellSessionId: null, shellHarness: null, ...patch }) as Agent;
 
 describe("an agent's pill", () => {
   it('shows a turn that ended asking nothing as idle, and a flag to the user as needs you, under explicit requests only', () => {

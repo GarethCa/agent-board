@@ -188,9 +188,12 @@ export async function setClickOpens(window: Page, opens: 'Session window' | 'Exp
   if (!wasOpen) await settings.close();
 }
 
-/** The board menu's running sessions, opening the menu first if it is closed. */
+/** The board menu's running sessions, opening the menu first if it is closed, and its Agents and shells list if that is. */
 export async function sessionItems(window: Page): Promise<Locator> {
-  return (await openBoardMenu(window)).getByTestId('session-item');
+  const menu = await openBoardMenu(window);
+  const fold = menu.getByRole('button', { name: /^Agents and shells/ });
+  if ((await fold.getAttribute('aria-expanded')) === 'false') await fold.click();
+  return menu.getByTestId('session-item');
 }
 
 /** Picks `action` from a tile's More menu: Delete agent, Link issue…, Schedule…, Mute notifications, Delete shell. */

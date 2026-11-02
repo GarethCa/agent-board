@@ -65,14 +65,14 @@ case "${AGENT_BOARD_GATE:-}:$log_dir" in 1:/*) marks=1 ;; esac
 if [ -n "${AGENT_BOARD_FORCED_HYPERLINK:-}" ]; then unset FORCE_HYPERLINK; fi
 for var in $(env | sed -n 's/^\(AGENT_BOARD_[A-Za-z0-9_]*\)=.*/\1/p'); do
   case $var in
-    AGENT_BOARD_GATE | AGENT_BOARD_E2E_WORKERS | AGENT_BOARD_E2E_LOCK | AGENT_BOARD_E2E_LOCK_WAIT_MIN | AGENT_BOARD_HEADED | AGENT_BOARD_E2E_SHOTS) ;;
+    AGENT_BOARD_GATE | AGENT_BOARD_E2E_WORKERS | AGENT_BOARD_E2E_LOCK | AGENT_BOARD_E2E_LOCK_WAIT_MIN | AGENT_BOARD_HEADED | AGENT_BOARD_E2E_SHOTS | AGENT_BOARD_VITEST_WORKERS) ;;
     *) unset "$var" ;;
   esac
 done
 
 # Each stage's wall-clock limit in minutes, about three times a usual run on a loaded machine. The unit tests get more:
-# on a busy machine they may run on one worker per project (scripts/vitest-workers), about 15 minutes, and a stuck test
-# is caught within a minute or so by the watchdog anyway. The visual suite gets 20: it runs over 100 shots, about 8–10 minutes when the machine is quiet. The visual and e2e limits start once the e2e lock is held.
+# on a busy machine they took about 10 minutes when measured, longer if the process limit cuts the processes
+# project's workers (scripts/vitest-workers), and a stuck test is caught within a minute or so by the watchdog anyway. The visual suite gets 20: it runs over 100 shots, about 8–10 minutes when the machine is quiet. The visual and e2e limits start once the e2e lock is held.
 # CHECK_LIMIT_MIN sets them all (the gate's own test does: scripts/deadline/check-local.test.ts).
 checks_min=${CHECK_LIMIT_MIN:-10}
 test_min=${CHECK_LIMIT_MIN:-45}

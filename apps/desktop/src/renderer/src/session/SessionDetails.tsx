@@ -74,7 +74,7 @@ export function SessionDetails(props: SessionDetailsProps) {
 
   const act = (id: ControlId) => {
     if (sessionId === undefined) return;
-    run(actionFor(id, sessionId, agent));
+    run(controlAction(id, sessionId, agent));
   };
   const controls = external ? [] : sessionControls({ agent, live });
   const closePane = () => {
@@ -715,7 +715,7 @@ function subagentsLabel(agent: Pick<Agent, 'subagents'>): string {
  * What a control does: the agent's daemon call, or for a shell, the keystroke or kill. Its failure says which control
  * failed.
  */
-function actionFor(id: ControlId, sessionId: string, agent: Agent | undefined): () => Promise<unknown> {
+export function controlAction(id: ControlId, sessionId: string, agent: Agent | undefined): () => Promise<unknown> {
   const { agents, sessions } = window.agentBoard;
   const failing = (verb: string, action: () => Promise<unknown>) => () =>
     action().catch((failure: unknown) => {

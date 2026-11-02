@@ -6,7 +6,8 @@ import { useBoardCommands } from '../commands';
 import { HarnessMark } from '../HarnessMark';
 import { isZone, tileNodeId } from '../tiles';
 import { IconButton, Kbd } from '../../ui';
-import { acceptLabel, agentNoteData, agentNoteFooter, clockTime } from './agent-note';
+import { acceptLabel, agentNoteData, agentNoteFooter, noteStamp, noteStampFull } from './agent-note';
+import { useMinute } from '../../inbox/use-minute';
 import { useSuggestionActions } from '../ask/SuggestionGhosts';
 import { AgentNoteLookContext, type AgentNoteLook } from './agent-note-look';
 import { ItemActionsContext, useOnlySelected, type ItemNodeType } from './items';
@@ -207,8 +208,8 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
     </div>
   );
 
-  // Under the Simplified design a note is a plain white card, with no tab: its agent is named in the byline, which
-  // flies to its tile while it is on the board.
+  // Under the Simplified design a note is a sheet of paper, with no tab or agent chrome: a quiet header names its agent
+  // in a byline, which flies to its tile while it is on the board, beside the time.
   if (simplified) {
     return (
       <div
@@ -216,15 +217,13 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
         data-testid={measuring ? undefined : 'agent-note'}
         data-look={look}
         data-zone={item.zoneId ?? ''}
+        style={zoneColor === undefined ? undefined : ({ '--agent-note-zone': zoneColor } as CSSProperties)}
         ref={rootRef}
         onDoubleClick={onDoubleClick}
       >
         {children}
         <div className="agent-note-card">
-          {note.asked !== undefined && <div className="agent-note-asked">You asked: “{note.asked}”</div>}
-          {body}
-          {suggested}
-          <div className="agent-note-foot">
+          <div className="agent-note-head">
             <span className="agent-note-byline">
               by{' '}
               {tileShown ? (
@@ -235,12 +234,15 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
                 <span title={`${agent.name} is no longer on the board`}>{agent.name}</span>
               )}
             </span>
-            <time className="agent-note-time" dateTime={note.writtenAt}>
-              {clockTime(note.writtenAt)}
-            </time>
-            {footer?.kind === 'edited' && <span className="agent-note-edited">✎ edited by you</span>}
-            {footer?.kind === 'updated' && <span>updated {footer.time}</span>}
+            <NoteStamp writtenAt={note.writtenAt} />
+            {footer?.kind === 'edited' && <span className="agent-note-edited" title="Edited by you">
+              ✎<span className="agent-note-edited-text"> edited by you</span>
+            </span>}
+            {footer?.kind === 'updated' && <span>updated</span>}
           </div>
+          {note.asked !== undefined && <div className="agent-note-asked">You asked: “{note.asked}”</div>}
+          {body}
+          {suggested}
         </div>
       </div>
     );
@@ -278,11 +280,11 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
         {body}
         {suggested}
         <div className="agent-note-foot">
-          <time className="agent-note-time" dateTime={note.writtenAt}>
-            {clockTime(note.writtenAt)}
-          </time>
-          {footer?.kind === 'edited' && <span className="agent-note-edited">✎ edited by you</span>}
-          {footer?.kind === 'updated' && <span>updated {footer.time}</span>}
+          <NoteStamp writtenAt={note.writtenAt} />
+          {footer?.kind === 'edited' && <span className="agent-note-edited" title="Edited by you">
+              ✎<span className="agent-note-edited-text"> edited by you</span>
+            </span>}
+          {footer?.kind === 'updated' && <span>updated</span>}
           {tileShown && (
             <button type="button" className="agent-note-show nodrag" onClick={onShowAgent}>
               {terminal ? '↗ show agent' : '↗ Show agent'}
@@ -291,6 +293,16 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
         </div>
       </div>
     </div>
+  );
+}
+
+/** When an agent wrote a note: the day and time ("Yesterday 07:51"), and the full date and time on hover and as its accessible name. */
+function NoteStamp({ writtenAt }: { writtenAt: string }) {
+  const full = noteStampFull(writtenAt);
+  return (
+    <time className="agent-note-time" dateTime={writtenAt} title={full} aria-label={full}>
+      {noteStamp(writtenAt, useMinute())}
+    </time>
   );
 }
 

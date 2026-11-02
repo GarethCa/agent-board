@@ -17,13 +17,13 @@ async function pick(page: Page, opener: string, item: string | RegExp) {
 
 const draw = (page: Page, item: string) => pick(page, 'Draw', item);
 
-test('the Simplified toolbar: Draw reaches every drawing tool and Box select, View turns on the minimap, and top right is Needs you, the Captain and Settings', async () => {
+test('the Simplified toolbar: Select, Box select and Hand sit together, Draw reaches every drawing tool, View turns on the minimap, and top right is Needs you, the Captain and Settings', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, SHELL_ENV, [], { design: 'simplified' });
   try {
     const names = () => toolbar(window).getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? button.textContent));
-    await expect.poll(names).toEqual(['Select', 'Hand', 'Draw', 'New agent', 'More to start']);
-    await expect(toolbar(window).getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(names).toEqual(['Select', 'Box select', 'Hand', 'Draw', 'New agent', 'More to start']);
+    await expect(toolbar(window).getByRole('button', { name: 'Select', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
     await draw(window, 'Text');
     await expect(boardTool(window)).toHaveAttribute('data-tool', 'text');
@@ -54,10 +54,22 @@ test('the Simplified toolbar: Draw reaches every drawing tool and Box select, Vi
     await window.keyboard.press('Escape');
     await expect(boardTool(window)).toHaveCount(0);
 
-    await draw(window, 'Box select');
+    // Box select is a selection tool: its own button between Select and Hand, never in the Draw menu, and B enters it.
+    const box = toolbar(window).getByRole('button', { name: 'Box select' });
+    await toolbar(window).getByRole('button', { name: 'Draw' }).click();
+    await expect(window.getByRole('menuitem', { name: 'Box select' })).toHaveCount(0);
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('menu')).toHaveCount(0);
+    await box.click();
     await expect(window.locator('.board')).toHaveAttribute('data-mode', 'box');
-    await toolbar(window).getByRole('button', { name: 'Select' }).click();
+    await expect(box).toHaveAttribute('aria-pressed', 'true');
+    await toolbar(window).getByRole('button', { name: 'Select', exact: true }).click();
     await expect(window.locator('.board')).toHaveAttribute('data-mode', 'select');
+    await expect(box).toHaveAttribute('aria-pressed', 'false');
+    await window.mouse.click(pane.x + pane.width - 20, pane.y + pane.height / 2);
+    await window.keyboard.press('b');
+    await expect(window.locator('.board')).toHaveAttribute('data-mode', 'box');
+    await toolbar(window).getByRole('button', { name: 'Select', exact: true }).click();
 
     await draw(window, 'Sticky note');
     await expect(window.getByTestId('sticky')).toHaveCount(1);
@@ -98,7 +110,7 @@ test('the Simplified toolbar: Draw reaches every drawing tool and Box select, Vi
     const room = () =>
       window.evaluate(() => document.querySelector('.island-top-right')!.getBoundingClientRect().left - document.querySelector('.island-top-centre')!.getBoundingClientRect().right);
     // Each breakpoint's edges, so a wider toolbar or island fails here before the two touch.
-    for (const [width, word] of [[1050, true], [920, true], [919, false], [800, false]] as const) {
+    for (const [width, word] of [[1050, true], [960, true], [959, false], [840, false]] as const) {
       await window.setViewportSize({ width, height: 800 });
       await expect(captain).toBeVisible();
       await expect(label).toBeVisible({ visible: word });

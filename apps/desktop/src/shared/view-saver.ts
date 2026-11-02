@@ -38,6 +38,8 @@ export const VIEW_KEYS = {
   connections: 'connections',
   /** How agent notes look: document cards or terminal cards. */
   agentNoteLook: 'agentNoteLook',
+  /** Which sidebar an agent's window shows under Classic: the full details strip or the simple inspector. */
+  agentSidebar: 'agentSidebar',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

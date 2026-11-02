@@ -170,6 +170,7 @@ describe('subagents on a Hybrid tile', () => {
         plainFolder: false,
         orchestrate: null,
         spawnedBy: null,
+        ledBy: null,
         startup: null,
         unsent: null,
         untypedPrompt: null,

@@ -74,8 +74,8 @@ interface SessionBodyProps {
   /** Set to what ⌥⌘T does, with the switch in the header, for the header's menu to do too. */
   terminalToggle?: RefObject<(() => void) | null>;
   /**
-   * Whether an agent's details are the Simplified design's inspector, at the trailing edge and hidden while collapsed,
-   * rather than the details strip on the left: in the session window under the Simplified design.
+   * Whether an agent's details are the inspector, at the trailing edge and hidden while collapsed, rather than the
+   * details strip on the left: in an agent's session window under the Simplified design, or Classic's Simple sidebar.
    */
   inspector?: boolean;
 }
@@ -376,7 +376,15 @@ export function SessionBody({
       {trailing && !detailsCollapsed && (
         <>
           <DetailsHandle side="end" collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
-          <SimplifiedInspector agent={trailing} onProblem={setProblem} onOpenLink={openLink} onOpenPullRequest={openPullRequest} onOpenSurface={panes && ((surface) => panes.open(surface))} onOpenWeb={panes?.openWeb ?? openLink} />
+          <SimplifiedInspector
+            agent={trailing}
+            onProblem={setProblem}
+            onOpenLink={openLink}
+            onOpenPullRequest={openPullRequest}
+            onOpenSurface={panes && ((surface) => panes.open(surface))}
+            onOpenWeb={panes?.openWeb ?? openLink}
+            controls={simplified ? undefined : { live, onSplit: panes?.splitFromDetails }}
+          />
         </>
       )}
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}

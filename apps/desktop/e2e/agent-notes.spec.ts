@@ -44,7 +44,8 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
             text: '**Round 2 of 3**\n\n- implementer: `2 of 3` done\n- reviewer: idle',
             agent: { sessionId, name, harness: 'claude', role: 'orchestrator of the long-running crew' },
             about: sessionId,
-            writtenAt: new Date().toISOString(),
+            // Five minutes on from when it is made: its agent wrote it again, so the footer says it was updated.
+            writtenAt: new Date(Date.now() + 5 * 60_000).toISOString(),
             editedByUser: false,
           },
         });
@@ -53,6 +54,8 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
     );
     const note = window.getByTestId('agent-note');
     await expect(note).toHaveAttribute('data-look', 'document');
+    // Its agent wrote it again after it was made, until the user edits it.
+    await expect(note.locator('.agent-note-foot')).toContainText('updated');
     // Its tab and edge are tints of the colour of the zone it sits in.
     await expect(note).toHaveCSS('--agent-note-zone', zone!.color);
     // The tab itself is painted from it; out of every zone it is neutral, and in another zone it takes that zone's colour.
@@ -97,6 +100,10 @@ test("an agent note: its badge selects its agent's tile, a tether leads there, t
     await expect(note).toContainText('✎ edited by you');
     // The time stays whole in the narrow footer; the other text gives way.
     const time = note.locator('.agent-note-time');
+    // The day with the time (five minutes ahead can be tomorrow, near midnight), and the full date on hover and as its accessible name.
+    await expect(time).toHaveText(/ \d\d:\d\d$/);
+    await expect(time).toHaveAttribute('title', /\d{4}, \d\d:\d\d$/);
+    await expect(time).toHaveAttribute('aria-label', (await time.getAttribute('title'))!);
     expect(await time.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     // Whole, and inside the card: a clipped time would run past the card's right edge.
     const timeBox = (await time.boundingBox())!;

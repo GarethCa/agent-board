@@ -10,7 +10,7 @@ describe('selectChecks', () => {
   it('runs related unit tests and visual, but no e2e, for a CSS-only change', () => {
     const plan = selectChecks(['apps/desktop/src/renderer/src/app.css']);
     expect(plan.full).toBe(false);
-    expect(plan.unit).toEqual(['apps/desktop/src/renderer/src/app.css']);
+    expect(plan.unit).toEqual(['apps/desktop/src/renderer/src/app.css', 'scripts/release-public/leak-rules.test.ts']);
     expect(plan.visual).toBe(true);
     expect(plan.e2e).toEqual([]);
   });
@@ -19,7 +19,7 @@ describe('selectChecks', () => {
     const plan = selectChecks(['packages/daemon/src/flow-edges.ts']);
     expect(plan.e2e).toEqual(['flow-edges.spec.ts']);
     expect(plan.visual).toBe(false);
-    expect(plan.unit).toEqual(['packages/daemon/src/flow-edges.ts']);
+    expect(plan.unit).toEqual(['packages/daemon/src/flow-edges.ts', 'scripts/release-public/leak-rules.test.ts']);
   });
 
   it('maps renderer zone files to the zone specs', () => {
@@ -63,10 +63,17 @@ describe('selectChecks', () => {
     }
   });
 
+  it('always runs the release leak rules with the unit tests, since vitest related would never pick them', () => {
+    expect(selectChecks(['apps/desktop/src/x.test.ts']).unit).toEqual(['apps/desktop/src/x.test.ts', 'scripts/release-public/leak-rules.test.ts']);
+    expect(selectChecks(['docs/BRIEF.md']).unit).toEqual([]);
+    // A tree without the test pins nothing.
+    expect(selectChecks(['apps/desktop/src/x.test.ts'], (file) => file !== 'scripts/release-public/leak-rules.test.ts').unit).toEqual(['apps/desktop/src/x.test.ts']);
+  });
+
   it('does not run e2e for a unit test change', () => {
     const plan = selectChecks(['packages/daemon/src/cron.test.ts']);
     expect(plan.e2e).toEqual([]);
-    expect(plan.unit).toEqual(['packages/daemon/src/cron.test.ts']);
+    expect(plan.unit).toEqual(['packages/daemon/src/cron.test.ts', 'scripts/release-public/leak-rules.test.ts']);
   });
 
   it.each([

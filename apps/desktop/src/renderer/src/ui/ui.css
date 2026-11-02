@@ -1630,6 +1630,11 @@ button.ui-row:focus-visible {
   background: var(--panel);
 }
 
+.ui-segmented button:disabled {
+  color: var(--disabled-ink);
+  cursor: not-allowed;
+}
+
 .ui-segmented button {
   display: inline-flex;
   flex: 1;
