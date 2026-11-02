@@ -675,7 +675,7 @@
   box-shadow: var(--shadow-island);
 }
 
-/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. The docked pane doesn't move them: it ends a gap above them (`--controls-lift`, measured by `usePanelRoom`). */
+/* The Edge rules panel covers the right of the board: the zoom island and the minimap move clear of it. The docked pane doesn't move them: it draws over them at full height, or ends a gap above them when dragged up (`--controls-lift` is its bottom offset; `usePanelRoom` measures the gap). */
 :root:has(.edge-rules) {
   --edge-room: calc(var(--island-inset) + var(--size-edge-rules));
 }
@@ -1103,7 +1103,7 @@
 .master-panel {
   position: absolute;
   top: calc(var(--island-inset) * 2 + var(--island-height));
-  /* Left of the Edge rules panel when both are open, and ending a gap above the zoom bar, the minimap and the dock. */
+  /* Left of the Edge rules panel when both are open, full height by default over the zoom bar and the minimap, ending a gap above the dock; `--controls-lift` is how far its bottom edge was dragged up. */
   right: calc(var(--island-inset) + var(--edge-room, 0px));
   bottom: calc(var(--island-inset) + max(var(--dock-lift, 0px), var(--controls-lift, 0px)));
   z-index: var(--layer-panel);
@@ -1158,6 +1158,13 @@
 
 .master-panel-handle[data-orientation='horizontal']::after {
   inset: calc(50% - 1px) 0;
+}
+
+/* The bottom border's handle sits on the panel's edge, not in the flow. */
+.master-panel-handle[data-edge='bottom'] {
+  position: absolute;
+  inset: auto 0 0 0;
+  margin: 0;
 }
 
 .master-panel-handle:hover::after,

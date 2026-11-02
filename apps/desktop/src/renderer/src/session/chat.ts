@@ -312,12 +312,13 @@ export function editCounts(input: unknown): { added: number; removed: number } {
 }
 
 /**
- * A span of time as the chat shows it: `4.1s` under ten seconds, `12s`, `4m 12s`, `1h 5m`. A span still `live` counts
- * whole seconds (`4s`), as its clock ticks once a second and a tenth would always read 0; it gets its precise value
- * when it ends.
+ * A span of time as the chat shows it: `4.1s` under ten seconds, `12s`, `4m 12s`, `1h 5m`. A span still `live` shows
+ * tenths up to a minute (`4.1s`, `12.3s`, `59.9s`) as its clock ticks every 100 ms, then `1m 5s`; it gets the
+ * ended format when it ends.
  */
 export function duration(ms: number, { live = false }: { live?: boolean } = {}): string {
-  if (ms < 10_000) return live ? `${Math.max(0, Math.floor(ms / 1000))}s` : `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
+  if (live && ms < 60_000) return `${(Math.floor(Math.max(0, ms) / 100) / 10).toFixed(1)}s`;
+  if (ms < 10_000) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -392,4 +393,41 @@ export function pastedParts(text: string): MessagePart[] {
   }
   if (at < text.length || parts.length === 0) parts.push({ kind: 'text', text: text.slice(at) });
   return parts;
+}
+
+/** How long a live clock waits to tick: a tenth of a second while it shows tenths, a second once it shows minutes. */
+function tickDelay(elapsedMs: number): number {
+  return elapsedMs < 60_000 ? 100 : 1000;
+}
+
+/**
+ * Calls `onTick` with the time now, every `tickDelay` for a clock started at `since` (an ISO time), until the returned
+ * stop is called. It pauses while `isHidden()` and ticks again once `resume` is called with the window showing.
+ */
+export function startLiveClock(since: string, onTick: (now: number) => void, isHidden: () => boolean = () => false): { stop: () => void; resume: () => void } {
+  const start = Date.parse(since);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const schedule = () => {
+    if (stopped || isHidden()) return;
+    const now = Date.now();
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (stopped || isHidden()) return;
+      onTick(Date.now());
+      schedule();
+    }, tickDelay(Number.isNaN(start) ? 0 : now - start));
+  };
+  schedule();
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    },
+    resume: () => {
+      if (stopped || timer !== undefined || isHidden()) return;
+      onTick(Date.now());
+      schedule();
+    },
+  };
 }

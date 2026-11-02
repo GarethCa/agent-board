@@ -5349,82 +5349,9 @@ button.chat-chip[aria-expanded='true'] {
   pointer-events: none;
 }
 
-/* Under the Simplified design a note an agent writes is a sheet of paper, not a tile: a warm paper tone off the tile's
-   white, a hairline and a rule down its left edge instead of the tile's soft shadow and big radius, and a quiet header
-   (the byline and the time) where a tile has its name row. It has no status, window controls or shadow. Stickies are not
-   touched. */
-:root[data-design='simplified'] .agent-note-card {
-  border: 1px solid var(--border);
-  border-left: var(--space-1) solid var(--agent-note-edge);
-  border-radius: var(--radius-sm);
-  background: var(--agent-note-paper);
-  box-shadow: none;
-}
-
-:root[data-design='simplified'] .agent-note-head {
-  display: flex;
-  flex: none;
-  gap: var(--space-1-5);
-  align-items: baseline;
-  min-height: var(--size-chip);
-  padding: var(--space-1-5) var(--space-3) 0;
-  color: var(--agent-note-head-ink);
-  font-size: var(--font-size-2xs);
-}
-
-/* "You asked" is read as part of the header, so it is drawn in its ink. */
-:root[data-design='simplified'] .agent-note-asked {
-  color: var(--agent-note-head-ink);
-}
-
-:root[data-design='simplified'] .agent-note-head > :not(time, .agent-note-byline) {
-  /* The agent's name is what the header is for: the marker beside the stamp gives way before it does. */
-  flex: 0 100000 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-:root[data-design='simplified'] .agent-note-byline {
-  /* The agent's name is what the header is for: the time keeps its room, and the name gives way with an ellipsis. */
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:root[data-design='simplified'] .agent-note-edited-text {
-  /* Beside the longer stamp the chip is its pencil, with its words for a screen reader and on hover. */
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-}
-
-:root[data-design='simplified'] .agent-note-byline-link {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-  white-space: nowrap;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent-ink);
-  font: inherit;
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-}
-
-:root[data-design='simplified'] .agent-note-byline-link:hover {
-  text-decoration: underline;
-}
-
-:root[data-design='simplified'] .agent-note-more > span {
-  background: var(--agent-note-paper);
-  box-shadow: 0 0 var(--space-2) var(--space-2) var(--agent-note-paper);
+/* A tab that names no agent reads just Note. */
+.agent-note-label:not(.agent-note-label-named)::after {
+  content: none;
 }
 
 /* The agent's terminal, cut out and pinned. */
@@ -10592,4 +10519,51 @@ button.inspector-row:disabled {
 .inspector-more-head svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
+}
+
+/*
+ * The Simplified agent window's header gives the name the room: it shrinks only when the window is narrow (its full text
+ * is the tooltip). The controls lie over the header's trailing edge, so they take none of the name's room, and show
+ * while the pointer is over the header or the focus is anywhere in it, or a menu from one is open. They fade rather than
+ * reflow, so the header keeps its height, and stay focusable while faded, so Tab shows and reaches each. Touch, with no
+ * hover, always shows them, in the row.
+ */
+:root[data-design='simplified'] .session-window-head {
+  position: relative;
+}
+
+:root[data-design='simplified'] .session-window-head .session-window-name {
+  flex: 0 1 auto;
+  max-width: none;
+}
+
+.session-window-controls {
+  display: flex;
+  flex: none;
+  gap: var(--space-2-5);
+  align-items: center;
+}
+
+:root[data-design='simplified'] .session-window-head .session-window-controls {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  padding: 0 var(--space-3) 0 var(--space-6);
+  background: linear-gradient(to right, transparent, var(--panel) var(--space-6));
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+:root[data-design='simplified'] .session-window-head:is(:hover, :focus-within) .session-window-controls,
+:root[data-design='simplified'] .session-window-head:has([aria-expanded='true']) .session-window-controls {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  :root[data-design='simplified'] .session-window-head .session-window-controls {
+    position: static;
+    padding: 0;
+    background: none;
+    opacity: 1;
+  }
 }

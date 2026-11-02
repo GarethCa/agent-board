@@ -34,11 +34,29 @@ export function clampForYouHeight(height: number, max: number): number {
   return Math.min(max, Math.max(MIN_FOR_YOU_HEIGHT, Math.round(height)));
 }
 
+/** The panel is never shorter than this when its bottom edge is dragged up. */
+export const MIN_PANEL_HEIGHT = 240;
+
+/**
+ * Where the panel's bottom edge is, as px up from the board's bottom inset. Nothing chosen is full height, over the zoom bar and the minimap;
+ * `controls` is the snap position, a gap above them (`lift`, from `usePanelRoom`); a number is a dragged height.
+ */
+export function panelBottom(stored: string | undefined, lift: number, max: number): number {
+  const wanted = stored === 'controls' ? lift : positive(stored) ?? 0;
+  return Math.min(Math.max(0, max), Math.max(0, Math.round(wanted)));
+}
+
+/** The furthest up the bottom edge goes on a board this tall (`top` is the panel's top, in px from the board's top): the panel keeps its least height. */
+export const maxPanelBottom = (boardHeight: number, top: number, inset: number): number => Math.max(0, boardHeight - top - inset - MIN_PANEL_HEIGHT);
+
 const widthStore = storedValue('agent-board.master-panel-width');
 const forYouStore = storedValue('agent-board.master-panel-for-you-height');
+const bottomStore = storedValue('agent-board.master-panel-bottom');
 const foldedStore = storedValue('agent-board.master-panel-folded');
 
-const positive = (stored: string | undefined): number | undefined => (Number(stored) > 0 ? Number(stored) : undefined);
+function positive(stored: string | undefined): number | undefined {
+  return Number(stored) > 0 ? Number(stored) : undefined;
+}
 
 /** The panel's chosen width, live across every window of the app. */
 export function usePanelWidth(): number {
@@ -73,3 +91,9 @@ export function useFolded(section: PanelSection): [boolean, () => void] {
     },
   ];
 }
+
+/** Where the panel's bottom edge was left: undefined (full height), `controls` or px; live across every window of the app. */
+export function usePanelBottom(): string | undefined {
+  return useSyncExternalStore(bottomStore.subscribe, bottomStore.get, () => undefined);
+}
+export const setPanelBottom = (bottom: string | number | undefined): void => bottomStore.set(bottom === undefined ? undefined : String(typeof bottom === 'number' ? Math.round(bottom) : bottom));

@@ -23,7 +23,7 @@ import { continuesOnCredits, type Agent, type Harness } from '@agent-board/daemo
 import { Button, ErrorText } from '../ui';
 import { useAction } from '../use-action';
 import { toolSummary } from '../../../shared/needs-you';
-import { duration, editCounts, msBetween, pastedParts, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
+import { duration, editCounts, msBetween, startLiveClock, pastedParts, runOpen, toolKind, toolLine, type RunsMode, type ToolCall, type ToolKind } from './chat';
 import type { SenderLook } from './agent-message';
 import type { LiveState } from './chat-live';
 import type { ChatStyle } from './chat-style';
@@ -105,11 +105,11 @@ export function CallOutcome({ call, status, now }: { call: ToolCall; status: Cal
     );
   }
   const { outcome } = toolLine(call);
-  const elapsed = status === 'running' && now !== undefined && call.at !== undefined ? msBetween(call.at, new Date(now).toISOString()) : undefined;
+  const elapsed = status === 'running' && call.at !== undefined ? (now !== undefined ? msBetween(call.at, new Date(now).toISOString()) : msBetween(call.at, call.at)) : undefined;
   return (
     <span className="chat-tool-outcome" data-testid="chat-tool-outcome" data-tone={outcome.tone}>
       {status === 'running' && <span className="chat-tool-run-pulse" aria-hidden />}
-      {status === 'running' ? (elapsed === undefined ? 'running…' : <span data-testid="chat-time">{duration(elapsed, { live: true })}</span>) : outcome.text}
+      {status === 'running' ? (elapsed === undefined || call.at === undefined ? 'running…' : <span data-testid="chat-time"><LiveTime since={call.at} now={now} /></span>) : outcome.text}
     </span>
   );
 }
@@ -158,17 +158,35 @@ function lines(text: unknown): string[] {
   return typeof text === 'string' && text !== '' ? text.replace(/\n$/, '').split('\n') : [];
 }
 
-/** The time now, once a second while `ticking`, for the live state's count. */
-export function useNow(ticking: boolean): number {
-  const [now, setNow] = useState(Date.now);
+/**
+ * A running span's count, ticking by itself so only this text re-renders: tenths every 100 ms up to a minute, then
+ * every second. It stops when the window is hidden (and catches up when shown) and when it unmounts as the step ends.
+ * `now` pins the time (a static render).
+ */
+export function LiveTime({ since, now }: { since: string; now?: number }) {
+  const [tick, setTick] = useState(Date.now);
+  useEffect(() => setTick(Date.now()), [since]);
   useEffect(() => {
-    if (!ticking) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [ticking]);
-  return now;
+    if (now !== undefined) return;
+    const clock = startLiveClock(since, setTick, () => document.hidden);
+    const onVisible = () => clock.resume();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      clock.stop();
+    };
+  }, [since, now]);
+  const ms = msBetween(since, new Date(now ?? tick).toISOString());
+  return <>{ms === undefined ? '' : duration(ms, { live: true })}</>;
 }
+
+/** A live line's time: a finished span as text, a running one as its own ticking count. */
+export function LineTime({ line }: { line: LiveLine }) {
+  return line.since !== undefined ? <LiveTime since={line.since} /> : <>{line.time}</>;
+}
+
+/** Whether a live line has a time to show. */
+export const hasTime = (line: LiveLine): boolean => line.time !== undefined || line.since !== undefined;
 
 /** The colour of a state, shared by its glyph, its card, its dot and its line. */
 export type StateTone = 'think' | 'run' | 'wait' | 'limit' | 'danger' | 'muted';
@@ -180,15 +198,14 @@ export interface LiveLine {
   label: string;
   detail?: string;
   time?: string;
+  /** When a span still going began: its time then ticks by itself (`LineTime`). */
+  since?: string;
   /** Whether it is still going: its glyph pulses, or spins. */
   going: boolean;
 }
 
-export function liveLine(live: LiveState, now: number): LiveLine {
-  const since = (at: string | undefined) => {
-    const ms = msBetween(at, new Date(now).toISOString());
-    return ms === undefined ? {} : { time: duration(ms, { live: true }) };
-  };
+export function liveLine(live: LiveState): LiveLine {
+  const since = (at: string | undefined) => (at === undefined || msBetween(at, at) === undefined ? {} : { since: at });
   switch (live.kind) {
     case 'permission': {
       const asker = live.prompt.subagent ? `Its ${live.prompt.subagent.type} subagent: allow ${live.prompt.toolName}?` : `Allow ${live.prompt.toolName}?`;

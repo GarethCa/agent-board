@@ -7,7 +7,7 @@ describe('an agent note', () => {
   it('reads its data, with defaults for anything missing', () => {
     expect(agentNoteData({})).toEqual({
       text: '',
-      agent: { sessionId: '', name: 'An agent', harness: 'claude', role: null },
+      agent: { sessionId: '', name: '', harness: 'claude', role: null },
       writtenAt: '',
       editedByUser: false,
     });

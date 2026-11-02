@@ -27,17 +27,22 @@ import { SinceYouLooked } from './SinceYouLooked';
 import type { PaneSide } from './use-master-panel';
 import { PanelHandle } from './PanelHandle';
 import { usePanelRoom } from './use-panel-room';
+import { tokenNumber } from '../theme';
 import {
   clampForYouHeight,
   clampPanelWidth,
   DEFAULT_PANEL_WIDTH,
   maxForYouHeight,
+  maxPanelBottom,
   maxPanelWidth,
+  panelBottom,
   MIN_FOR_YOU_HEIGHT,
   MIN_PANEL_WIDTH,
   setForYouHeight,
+  setPanelBottom,
   setPanelWidth,
   useFolded,
+  usePanelBottom,
   useForYouHeight,
   usePanelWidth,
   type PanelSection,
@@ -80,7 +85,12 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
   const panel = useRef<HTMLElement>(null);
   // The board it sits on bounds its width; the width is the user's, kept across reloads.
   const chosen = usePanelWidth();
-  const { board, taken, lift } = usePanelRoom(panel);
+  const { board, taken, lift, height } = usePanelRoom(panel);
+  // Its bottom edge is full height by default, over the zoom bar and the minimap; dragged up, or double-clicked, it ends above them.
+  const storedBottom = usePanelBottom();
+  const inset = tokenNumber('--island-inset');
+  const maxBottom = height === 0 ? 0 : maxPanelBottom(height, inset * 2 + tokenNumber('--island-height'), inset);
+  const bottom = panelBottom(storedBottom, lift, maxBottom);
   const width = board === 0 ? chosen : clampPanelWidth(chosen, board, taken);
   // Esc in the panel closes it, as it does a popover; the chat's own keys come first.
   const onKeyDown = (event: KeyboardEvent) => {
@@ -93,7 +103,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
     if (focusRequest > 0 && master === undefined) panel.current?.querySelector<HTMLButtonElement>('[data-testid="master-start"]')?.focus();
   }, [focusRequest, master]);
   return (
-    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width, '--controls-lift': `${lift}px` } as CSSProperties} onKeyDown={onKeyDown}>
+    <aside ref={panel} className="master-panel" data-testid="master-panel" aria-label={listSide ? 'Needs you' : 'Captain'} data-side={simplified ? side : undefined} style={{ width, '--controls-lift': `${bottom}px` } as CSSProperties} onKeyDown={onKeyDown}>
       <PanelHandle
         orientation="vertical"
         label={listSide ? 'Resize the pane' : 'Resize the Captain’s panel'}
@@ -104,6 +114,18 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
         grow={-1}
         onChange={(next) => setPanelWidth(clampPanelWidth(next, board, taken))}
         onReset={() => setPanelWidth(undefined)}
+      />
+      <PanelHandle
+        orientation="horizontal"
+        edge="bottom"
+        label="Resize the pane’s height"
+        testId="master-panel-bottom-handle"
+        value={bottom}
+        min={0}
+        max={maxBottom}
+        grow={-1}
+        onChange={(next) => setPanelBottom(Math.min(maxBottom, Math.max(0, next)) || undefined)}
+        onReset={() => setPanelBottom(bottom === 0 ? 'controls' : undefined)}
       />
       {listSide ? (
         <header className="master-panel-head">
