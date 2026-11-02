@@ -175,7 +175,11 @@ describe('shell tiles', () => {
     const two = await client.call('shell.split', { shellId: shell.id, sessionId: paneIds(shell.layout)[0]!, direction: 'vertical' });
 
     await recorder.waitFor((event): event is ShellUpdatedEvent => isUpdated(event) && paneIds(event.shell.layout).length === 2);
-    expect(recorder.events.filter(isUpdated).map((event) => event.shell.id)).toEqual([shell.id, shell.id]);
+    // Its panes' first prompts can announce it again in between, so what counts is that it went from one pane to two.
+    const updates = recorder.events.filter(isUpdated);
+    expect(new Set(updates.map((event) => event.shell.id))).toEqual(new Set([shell.id]));
+    expect(paneIds(updates[0]!.shell.layout)).toHaveLength(1);
+    expect(paneIds(updates.at(-1)!.shell.layout)).toHaveLength(2);
     expect(two.id).toBe(shell.id);
   });
 

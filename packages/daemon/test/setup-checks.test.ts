@@ -5,7 +5,7 @@ import { fakeBinDir } from '@agent-board/fake-harness';
 import { createFakeGitHub, FAKE_GITHUB_STATE } from '@agent-board/tracker/testing';
 import { createHarnessPaths } from '../src/harness-path.ts';
 import { checkTool, parseVersion } from '../src/setup-checks.ts';
-import { connectTestClient, startTestDaemon, tempDataDir } from './helpers.ts';
+import { connectTestClient, LOGIN_SHELL, startTestDaemon, tempDataDir, writeShellRc } from './helpers.ts';
 
 /** launchd's PATH, which has none of the CLIs. */
 const BARE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -51,7 +51,7 @@ describe('a CLI check', () => {
     expect(harnessPaths.path('claude')).toBe(join(local, 'claude'));
   });
 
-  it('runs a script harness with the interactive shell\'s PATH, so its version is read when node is on .zshrc\'s only', async () => {
+  it('runs a script harness with the interactive shell\'s PATH, so its version is read when node is on the rc file\'s only', async () => {
     const dir = tempDataDir();
     const home = join(dir, 'home');
     const nodeBin = join(dir, 'node-bin');
@@ -61,9 +61,9 @@ describe('a CLI check', () => {
     symlinkSync(process.execPath, join(nodeBin, 'node'));
     symlinkSync(join(fakeBinDir, 'claude'), join(local, 'claude'));
     // Starts from the bare PATH, so the harness guard's tripwires (on every child's PATH) are not on it.
-    writeFileSync(join(home, '.zshrc'), `export PATH="${nodeBin}:${BARE_PATH}"\n`);
+    writeShellRc(home, `export PATH="${nodeBin}:${BARE_PATH}"\n`);
     const env: NodeJS.ProcessEnv = { HOME: home, ZDOTDIR: home, PATH: BARE_PATH };
-    const harnessPaths = createHarnessPaths({ shell: '/bin/zsh', shellArgs: ['-l'], env, homeDir: home, knownDirs: [local] });
+    const harnessPaths = createHarnessPaths({ shell: LOGIN_SHELL.path, shellArgs: ['-l'], env, homeDir: home, knownDirs: [local] });
     expect(await checkTool('claude', { env, harnessPaths })).toMatchObject({ found: true, path: join(local, 'claude'), version: '2.1.0' });
   });
 

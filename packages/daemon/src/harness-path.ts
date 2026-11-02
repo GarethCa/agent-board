@@ -46,7 +46,7 @@ export interface HarnessPathsOptions {
 /** What the tile and Restart say when a harness is not found; `configured` is a path set in Settings that is not it. */
 function harnessNotFound(harness: HarnessName, configured: string | undefined): string {
   return configured === undefined
-    ? `${harness} not found on this Mac: install it, or set its path in Settings`
+    ? `${harness} not found on this computer: install it, or set its path in Settings`
     : `${harness} not found at ${configured}: fix its path in Settings, or clear it`;
 }
 
