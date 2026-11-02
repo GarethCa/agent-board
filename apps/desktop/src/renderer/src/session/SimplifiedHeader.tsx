@@ -56,21 +56,23 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
       <SessionName agent={agent} name={name} title={title} />
       {status && <StatusMark status={status} />}
       <span className="session-window-head-fill" />
-      {/* Its merge gate stays a technical detail until the steps strip takes its place. */}
-      {agent && gated(agent) && (
-        <span className="session-window-gate" data-technical-detail>
-          <GateControls agent={agent} visible />
-        </span>
-      )}
-      {agent && <StateAction agent={agent} placement={placement} />}
-      <span className="session-window-view-slot" ref={onViewSlot} />
-      <DetailsToggle open={detailsOpen} onOpen={onDetailsOpen} />
-      <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, onClose, onEnd: () => setEnding(true), board })}>
-        <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More actions" />
-      </Menu>
-      <Button size="sm" onClick={onClose} aria-label={`Done, close ${name}`} tooltip={placement === 'board' ? 'Back to the board; it keeps running' : 'Close this window; it keeps running'}>
-        Done
-      </Button>
+      <div className="session-window-controls" data-testid="session-window-controls">
+        {/* Its merge gate stays a technical detail until the steps strip takes its place. */}
+        {agent && gated(agent) && (
+          <span className="session-window-gate" data-technical-detail>
+            <GateControls agent={agent} visible />
+          </span>
+        )}
+        {agent && <StateAction agent={agent} placement={placement} />}
+        <span className="session-window-view-slot" ref={onViewSlot} />
+        <DetailsToggle open={detailsOpen} onOpen={onDetailsOpen} />
+        <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, onClose, onEnd: () => setEnding(true), board })}>
+          <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More actions" />
+        </Menu>
+        <Button size="sm" onClick={onClose} aria-label={`Done, close ${name}`} tooltip={placement === 'board' ? 'Back to the board; it keeps running' : 'Close this window; it keeps running'}>
+          Done
+        </Button>
+      </div>
       {ending && agent && <EndAgentDialog agent={agent} onDone={() => setEnding(false)} />}
     </>
   );

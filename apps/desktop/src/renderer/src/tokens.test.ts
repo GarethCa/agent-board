@@ -346,11 +346,6 @@ const THEME_SCOPES = THEMES.map((theme) => {
 const OVERRIDES = THEME_SCOPES.filter(({ id }) => id !== 'light');
 
 const DARK = ":root[data-theme='dark']";
-/** What the Simplified note's paper is mixed into (`--agent-note-paper`), and the least contrast ratio it keeps from `--raised`. */
-const PAPER_BASE = '--surface';
-const PAPER_APART = 1.08;
-/** ... or the most a colour channel may differ from `--raised` by, in 0–255, where lightness alone can't. */
-const PAPER_TINT = 7;
 const SIMPLIFIED = ":root[data-design='simplified']";
 const SIMPLIFIED_DARK = ":root[data-design='simplified'][data-theme='dark']";
 /**
@@ -647,30 +642,6 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
     const tab = mix(tint, panel, share('--agent-note-tab-mix'));
     const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
     expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
-  });
-});
-
-// The Simplified design's note is paper: what it draws on it reads at AA, and it stays off the tile's surface by at least
-// the least a viewer can see (a ratio between two surfaces, not a text contrast).
-describe.each([...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES])("the Simplified design's agent note paper in the $id look", ({ stack }) => {
-  const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
-  const paper = () => mix(hexOf('--warning-soft', stack), hexOf(PAPER_BASE, stack), share('--agent-note-paper-mix'));
-
-  it('is mixed into the colour the test mixes it into', () => {
-    expect([...stack, ':root'].map((at) => scopes.get(at)?.get('--agent-note-paper')).find((v) => v !== undefined)).toContain(`var(${PAPER_BASE})`);
-  });
-
-  // The header (and "You asked") draws --agent-note-head-ink, the byline link --accent-ink and the foot's "edited" tint.
-  it.each(['--agent-note-head-ink', '--text', '--accent-ink', '--agent-note-edited'])('carries %s at WCAG AA', (ink) => {
-    const inkOf = ink === '--agent-note-head-ink' ? mix(hexOf('--muted', stack), hexOf('--text', stack), share('--agent-note-head-mix')) : hexOf(ink, stack);
-    expect(contrast(inkOf, paper())).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it('stays off the tile', () => {
-    // Apart by a lighter or darker tone, or, where a theme's surfaces are all alike in lightness (a dark one), by a tint.
-    const [tone, raised] = [paper(), hexOf('--raised', stack)];
-    const tint = Math.max(...[1, 3, 5].map((at) => Math.abs(Number.parseInt(tone.slice(at, at + 2), 16) - Number.parseInt(raised.slice(at, at + 2), 16))));
-    expect(contrast(tone, raised) >= PAPER_APART || tint >= PAPER_TINT, `paper ${tone} on ${raised}: ratio ${contrast(tone, raised).toFixed(3)}, tint ${tint}`).toBe(true);
   });
 });
 

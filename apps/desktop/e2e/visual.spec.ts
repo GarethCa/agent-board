@@ -2380,7 +2380,7 @@ test('connections hidden in the Simplified design: no rail or arrow is drawn, an
   }
 });
 
-/** The Simplified design's agent notes: paper with a byline header beside a sticky and a waiting agent tile, one with long markdown. */
+/** The Simplified design's agent notes: under a tab, one with no author, beside a sticky and a waiting agent tile, one with long markdown. */
 async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'light' | 'dark', shot: string) {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -2438,10 +2438,20 @@ async function shootSimplifiedNotes(appearanceTheme: string, scheme: 'light' | '
             userSized: true,
           },
         });
+        // No known author: its tab reads just Note.
+        await board.items.create({
+          kind: 'agent-note',
+          zoneId,
+          x: 30,
+          y: 240,
+          width: 200,
+          height: 100,
+          data: { text: 'Nobody signed this one.', agent: { sessionId: '', name: '', harness: 'claude', role: null }, writtenAt, editedByUser: false },
+        });
       },
       { zoneId: zone!.id, sessionId: lead!.sessionId },
     );
-    await expect(window.getByTestId('agent-note')).toHaveCount(2);
+    await expect(window.getByTestId('agent-note')).toHaveCount(3);
     await window.getByRole('button', { name: /^Fit view/ }).click();
     await viewSettled(window);
     await pinRandomText(window);
@@ -2699,7 +2709,7 @@ for (const { theme, suffix } of [
     }
   });
 
-  test(`agent notes in the Simplified design: paper with a byline header beside a sticky and a waiting tile, one with long markdown, ${theme}`, async () => {
+  test(`agent notes in the Simplified design: under a tab, one with no author, beside a sticky and a waiting tile, one with long markdown, ${theme}`, async () => {
     needsBaselines(`simplified-agent-notes${suffix}`);
     await shootSimplifiedNotes(theme, theme, `simplified-agent-notes${suffix}`);
   });
@@ -3188,7 +3198,7 @@ for (const { theme, suffix } of THEMES) {
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
   test(`an agent's window as the Simplified design draws it, on its chat and on its terminal, ${theme}`, async () => {
-    needsBaselines(`simplified-session-window${suffix}`, `simplified-session-window-terminal${suffix}`);
+    needsBaselines(`simplified-session-window${suffix}`, `simplified-session-window-terminal${suffix}`, `simplified-session-window-hover${suffix}`);
     await shootSimplifiedSessionWindow(theme, appearance, `simplified-session-window${suffix}`, `simplified-session-window-terminal${suffix}`);
   });
 }
@@ -3252,6 +3262,14 @@ async function shootSimplifiedSessionWindow(scheme: 'light' | 'dark', appearance
     await settle(window);
     await expect.soft(window.locator('body')).toHaveScreenshot(`${chatShot}.png`, SHOT);
     await restorePointer();
+
+    // The pointer over the header shows its controls.
+    const head = sessionWindow(window).locator('.session-window-head');
+    await head.locator('.session-window-name').hover({ position: { x: 20, y: 5 } });
+    await expect(head.getByTestId('session-window-controls')).toHaveCSS('opacity', '1');
+    await settle(window);
+    await expect.soft(window.locator('body')).toHaveScreenshot(`${chatShot.replace('simplified-session-window', 'simplified-session-window-hover')}.png`, SHOT);
+    await window.mouse.move(2, 2);
 
     await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Terminal' }).click();
     await expect(screen(window)).toContainText('Which database should I use');
@@ -3322,7 +3340,7 @@ for (const { theme, scheme } of SIMPLIFIED_PACKS) {
   });
 
   test(`an agent's window as the Simplified design draws it over a theme pack, ${theme}`, async () => {
-    needsBaselines(`simplified-session-window-${theme}`, `simplified-session-window-terminal-${theme}`);
+    needsBaselines(`simplified-session-window-${theme}`, `simplified-session-window-terminal-${theme}`, `simplified-session-window-hover-${theme}`);
     await shootSimplifiedSessionWindow(scheme, appearance, `simplified-session-window-${theme}`, `simplified-session-window-terminal-${theme}`);
   });
 }

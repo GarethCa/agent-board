@@ -14,13 +14,15 @@ interface PanelHandleProps {
   /** A double-click: back to the default. */
   onReset(): void;
   testId?: string;
+  /** `bottom`: a horizontal handle on the panel's bottom border, not between two sections. */
+  edge?: 'bottom';
 }
 
 /**
  * A grab area on the border of the Captain's panel or between two of its sections. Dragging moves the border with the
  * pointer, the arrow keys step it and a double-click resets it, as the details strip's handle does.
  */
-export function PanelHandle({ orientation, label, value, min, max, grow, onChange, onReset, testId }: PanelHandleProps) {
+export function PanelHandle({ orientation, label, value, min, max, grow, onChange, onReset, testId, edge }: PanelHandleProps) {
   const [dragging, setDragging] = useState(false);
   const from = useRef({ pointer: 0, value: 0 });
   const along = (event: { clientX: number; clientY: number }) => (orientation === 'vertical' ? event.clientX : event.clientY);
@@ -46,6 +48,7 @@ export function PanelHandle({ orientation, label, value, min, max, grow, onChang
     <div
       className="master-panel-handle"
       data-orientation={orientation}
+      data-edge={edge}
       data-testid={testId}
       data-dragging={dragging || undefined}
       role="separator"

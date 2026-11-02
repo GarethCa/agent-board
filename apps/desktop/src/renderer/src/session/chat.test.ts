@@ -166,15 +166,16 @@ describe('one line per tool call', () => {
     expect([4_150, 12_400, 252_000, 3_900_000].map((ms) => duration(ms))).toEqual(['4.1s', '12s', '4m 12s', '1h 5m']);
   });
 
-  test('a span still going counts whole seconds, and the same span ended shows its precise value', () => {
+  test('a span still going ticks in tenths under a minute, and the same span ended reads as the chat shows it', () => {
     const rows: [number, string, string][] = [
-      [0, '0s', '0.0s'],
-      [999, '0s', '0.9s'],
-      [1_000, '1s', '1.0s'],
-      [2_400, '2s', '2.4s'],
-      [9_999, '9s', '9.9s'],
-      [10_000, '10s', '10s'],
-      [59_999, '59s', '59s'],
+      [0, '0.0s', '0.0s'],
+      [999, '0.9s', '0.9s'],
+      [1_000, '1.0s', '1.0s'],
+      [2_400, '2.4s', '2.4s'],
+      [9_999, '9.9s', '9.9s'],
+      [10_000, '10.0s', '10s'],
+      [12_340, '12.3s', '12s'],
+      [59_999, '59.9s', '59s'],
       [60_000, '1m 0s', '1m 0s'],
       [65_400, '1m 5s', '1m 5s'],
       [3_900_000, '1h 5m', '1h 5m'],

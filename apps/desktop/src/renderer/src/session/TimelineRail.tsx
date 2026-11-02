@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import { Markdown } from './Markdown';
 import { HiddenAgents } from './AgentMessage';
 import { toolLine, type ChatItem, type ToolCall } from './chat';
-import { callStatus, CallOutcome, LiveActions, LiveGlyph, liveLine, useChatSetting, useNow, useOpen, type StateTone } from './chat-parts';
+import { callStatus, CallOutcome, LiveActions, LiveGlyph, hasTime, LineTime, liveLine, useChatSetting, useOpen, type StateTone } from './chat-parts';
 import { CallBody, callTone, COMPACTED, SaidMessage, stoppedText, SubagentMessageRow, thoughtFor, type LiveProps } from './ChatStreams';
 import { railTurns, type RailStep } from './timeline-rail';
 import { shortWhen } from '../when';
@@ -148,7 +148,7 @@ function CallStep({ call, going, at }: { call: ToolCall; going: boolean; at?: st
  * an interruption, which the rail already shows as a step.
  */
 export function TimelineLive({ agent, live, onOpenPlan, onShowTerminal }: LiveProps) {
-  const line = liveLine(live, useNow(live.kind === 'thinking' || live.kind === 'compacting' || live.kind === 'tool'));
+  const line = liveLine(live);
   return (
     <Row tone={line.tone} data-testid="chat-live" data-live={live.kind}>
       <p className="timeline-line timeline-live">
@@ -156,7 +156,12 @@ export function TimelineLive({ agent, live, onOpenPlan, onShowTerminal }: LivePr
         <span>
           {line.label}
           {line.detail !== undefined && <span className="timeline-detail"> {line.detail}</span>}
-          {line.time !== undefined && <span data-testid="chat-time"> · {line.time}</span>}
+          {hasTime(line) && (
+            <span data-testid="chat-time">
+              {' · '}
+              <LineTime line={line} />
+            </span>
+          )}
         </span>
       </p>
       <LiveActions agent={agent} live={live} onOpenPlan={onOpenPlan} onShowTerminal={onShowTerminal} />

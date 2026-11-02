@@ -8,7 +8,7 @@ export function agentNoteData(data: Record<string, unknown>): AgentNoteData {
     text: typeof data.text === 'string' ? data.text : '',
     agent: {
       sessionId: typeof agent.sessionId === 'string' ? agent.sessionId : '',
-      name: typeof agent.name === 'string' ? agent.name : 'An agent',
+      name: typeof agent.name === 'string' ? agent.name : '',
       harness: HARNESSES.find((harness) => harness === agent.harness) ?? 'claude',
       role: typeof agent.role === 'string' ? agent.role : null,
     },

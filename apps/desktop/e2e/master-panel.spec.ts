@@ -114,7 +114,7 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
   }
 });
 
-test('the Captain’s panel sits above the dock and the zoom bar: its bottom ends above both and nothing of it is hidden behind', async () => {
+test('the Captain’s panel sits above the dock: its bottom ends above it and nothing of it is hidden behind', async () => {
   const { repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -140,8 +140,6 @@ test('the Captain’s panel sits above the dock and the zoom bar: its bottom end
     expect(owner).toBe('panel');
     const dockNow = await dockBox();
     expect(dockNow.x + dockNow.width <= box.x || dockNow.y >= box.y + box.height).toBe(true);
-    const zoom = (await window.locator('.island-bottom-right').boundingBox())!;
-    expect(zoom.y - (box.y + box.height)).toBeGreaterThanOrEqual(12);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

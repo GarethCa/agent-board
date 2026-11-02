@@ -232,10 +232,6 @@
   --agent-note-edited: var(--warning-ink); /* "edited by you": the warning as text, readable on its soft fill */
   --agent-note-edited-soft: var(--warning-soft);
   --agent-note-code: var(--hover); /* `code` in the document card */
-  --agent-note-paper-mix: 60%; /* the warning tint in the Simplified design's note: paper, off a tile's raised surface */
-  --agent-note-head-mix: 75%; /* the share of the muted text in the note header's ink, the rest the text: quiet, and AA on the paper */
-  --agent-note-head-ink: color-mix(in srgb, var(--muted) var(--agent-note-head-mix), var(--text));
-  --agent-note-paper: color-mix(in srgb, var(--warning-soft) var(--agent-note-paper-mix), var(--surface));
   --agent-note-term-strong: #ffffff; /* bold in the terminal card */
   /* A question card: an agent's question as a speech bubble beside its tile, in the waiting orange */
   --question-card-edge: var(--state-waiting);

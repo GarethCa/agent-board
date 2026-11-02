@@ -8,15 +8,17 @@ export interface PanelRoom {
   taken: number;
   /** How far above the board's bottom inset the zoom bar's top is, or the minimap's when it shows, plus a gap: where the panel's bottom goes. */
   lift: number;
+  /** The board's height, 0 until measured. */
+  height: number;
 }
 
 /**
- * The board the panel is docked on, where its bottom goes (a gap above the zoom bar and the minimap, whatever size they are) and what it needs beside it: its own margin and the Edge rules panel when it is
+ * The board the panel is docked on, where its bottom goes (the snap position a gap above the zoom bar and the minimap, whatever size they are, which the panel overlays by default) and what it needs beside it: its own margin and the Edge rules panel when it is
  * open, which the panel sits beside. The zoom bar, the minimap, the zones pill and the dock are in the bottom rows the
  * panel ends above, so they take none of its width. Measured again when the board or the Edge rules panel changes.
  */
 export function usePanelRoom(panel: RefObject<HTMLElement | null>): PanelRoom {
-  const [room, setRoom] = useState<PanelRoom>({ board: 0, taken: 0, lift: 0 });
+  const [room, setRoom] = useState<PanelRoom>({ board: 0, taken: 0, lift: 0, height: 0 });
   useLayoutEffect(() => {
     const parent = panel.current?.parentElement;
     if (!parent) return;
@@ -26,7 +28,7 @@ export function usePanelRoom(panel: RefObject<HTMLElement | null>): PanelRoom {
       const taken = inset + edge;
       const top = Math.min(...[...parent.querySelectorAll<HTMLElement>('.island-bottom-right, .board-minimap')].map((thing) => thing.getBoundingClientRect().top));
       const lift = Number.isFinite(top) ? Math.round(parent.getBoundingClientRect().bottom - top + tokenNumber('--size-dock-gap') - inset) : 0;
-      setRoom((was) => (was.board === parent.clientWidth && was.taken === taken && was.lift === lift ? was : { board: parent.clientWidth, taken, lift }));
+      setRoom((was) => (was.board === parent.clientWidth && was.taken === taken && was.lift === lift && was.height === parent.clientHeight ? was : { board: parent.clientWidth, taken, lift, height: parent.clientHeight }));
     };
     measure();
     const observer = new ResizeObserver(measure);

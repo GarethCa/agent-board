@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.13 (2026-11-02)
+
+- The Simplified agent window's header gives the name the room and shows its controls on hover or focus
+- tickDelay stays module-private (knip on main)
+- The docked pane runs full height over the minimap by default, and its bottom edge drags up
+- The live Thinking timer ticks in tenths of a second
+- Simplified agent notes use Classic's tab naming their agent, with no side stripe
+
 ## v0.6.12 (2026-11-02)
 
 - The agent pane's sidebar is simpler, and a setting offers it outside the Simplified design

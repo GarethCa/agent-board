@@ -202,3 +202,55 @@ test("the header's one action stops a step with ⌘. and wakes a paused agent, a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the header gives a long name the room, and shows its controls on hover or focus, ⌘. working while they are hidden", async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_STEP_DELAY_MS: '800', FAKE_HARNESS_IDLE_NOTIFY_MS: '600000' }, [], { design: 'simplified' });
+  const longName = 'Migrate the billing service to the new payments provider and retire the old webhook handlers';
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Run the tests', { name: longName });
+    await tile(window).dblclick();
+    await view(window).getByRole('button', { name: 'Terminal' }).click();
+    const controls = header(window).getByTestId('session-window-controls');
+    const opacity = () => controls.evaluate((element) => getComputedStyle(element).opacity);
+    const heightBefore = (await header(window).boundingBox())!.height;
+
+    // Pointer away: the name is in full (not cut behind the controls) and the controls are faded out.
+    await window.mouse.move(2, 2);
+    await expect.poll(opacity).toBe('0');
+    await expect(header(window).locator('.session-window-name')).toHaveText(longName);
+    expect(await header(window).locator('.session-window-name').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect((await header(window).boundingBox())!.height).toBe(heightBefore);
+
+    // ⌘. stops the step while they are hidden.
+    await expect(header(window).getByRole('button', { name: 'Stop' })).toHaveCount(1);
+    await expect.poll(async () => (await agents(window))[0]!.state).toMatch(/^(running|thinking)$/);
+    await window.keyboard.press(process.platform === 'darwin' ? 'Meta+Period' : 'Control+Shift+Period');
+    await expect(screen(window)).toContainText('Interrupted');
+
+    // Hovering the header shows them, with the height unchanged.
+    await header(window).locator('.session-window-name').hover({ position: { x: 20, y: 5 } });
+    await expect.poll(opacity).toBe('1');
+    expect((await header(window).boundingBox())!.height).toBe(heightBefore);
+
+    // Focus alone shows them too, and Tab reaches each.
+    await window.mouse.move(2, 2);
+    await expect.poll(opacity).toBe('0');
+    await header(window).getByTestId('session-window-zone').focus();
+    await expect.poll(opacity).toBe('1');
+    const reached = new Set<string>();
+    for (let step = 0; step < 10 && !reached.has('More'); step++) {
+      await window.keyboard.press('Tab');
+      reached.add((await header(window).locator(':focus').getAttribute('aria-label')) ?? (await header(window).locator(':focus').innerText()));
+    }
+    expect([...reached]).toEqual(expect.arrayContaining(['Chat', 'Timeline', 'Terminal', 'More']));
+    expect(await opacity()).toBe('1');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

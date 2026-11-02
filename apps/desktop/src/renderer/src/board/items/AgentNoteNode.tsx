@@ -16,7 +16,6 @@ import { renderInline, renderMarkdown } from './StickyNode';
 import { useDraftText } from './useDraftText';
 import { useFitResize, useGrowToFit, useWindowFocused } from './grow-to-fit';
 import { keyText } from '../../keys/registry';
-import { useSimplified } from '../../design';
 
 /**
  * The height a note `height` tall needs for its text to show whole, at most `MAX_AGENT_NOTE_HEIGHT` (past it, it
@@ -29,7 +28,7 @@ function noteHeightToFit(root: HTMLElement | null, height: number): number {
 }
 
 /**
- * A note an agent wrote (under the Simplified design, a plain white card with a "by ‹agent›" byline instead; see `AgentNoteFace`): a dashed card under a tab, in the colour of its zone (neutral when loose), that reads NOTE and names the agent, so it is never
+ * A note an agent wrote: a card under a tab (dashed in the colour of its zone, neutral when loose; the same under the Simplified design), that reads NOTE and names the agent, so it is never
  * taken for a tile or a handwritten sticky. The badge in the tab (its harness's mark, its name and role) selects its
  * tile; the time is when the agent last wrote it. It is drawn as a document
  * card or a cut of a terminal, as the Agent notes setting says. The user can move, resize, delete and
@@ -38,8 +37,6 @@ function noteHeightToFit(root: HTMLElement | null, height: number): number {
 export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: picked, dragging, width, height }: NodeProps<ItemNodeType>) {
   const selected = useOnlySelected(picked);
   const look = useContext(AgentNoteLookContext);
-  // Under the Simplified design a note has no tab or dashed edge, so the same text needs another height.
-  const simplified = useSimplified();
   const { update, remove, openLink } = useContext(ItemActionsContext);
   const { focusSession } = useBoardCommands();
   const { updateNode } = useReactFlow<ItemNodeType>();
@@ -74,7 +71,7 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
     const body = root.current?.querySelector<HTMLElement>('.agent-note-body');
     setMore(body != null && body.scrollHeight - body.scrollTop - body.clientHeight > 1);
   };
-  useLayoutEffect(checkMore, [width, height, shown, look, simplified, editing, item.data.userSized]);
+  useLayoutEffect(checkMore, [width, height, shown, look, editing, item.data.userSized]);
   // Sized by the user (dragged, or `note edit --size`): the size is theirs, so it no longer grows to its text, which
   // scrolls, and an arrange keeps it.
   const userSized = item.data.userSized === true;
@@ -97,7 +94,7 @@ export const AgentNoteNode = memo(function AgentNoteNode({ id, data, selected: p
       // it for all.
       if (focused) update({ id: item.id, height: taller }, undefined, { silent: true });
     },
-    [focused, width ?? item.width, look, simplified, editing ? draft : shown, note.asked, edits],
+    [focused, width ?? item.width, look, editing ? draft : shown, note.asked, edits],
   );
 
   return (
@@ -193,7 +190,6 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
   const footer = agentNoteFooter(note, item.createdAt);
   const terminal = look === 'terminal';
   const edits = note.suggestions?.length ?? 0;
-  const simplified = useSimplified();
   const suggested = edits > 0 && (
     <div className="agent-note-edits" data-testid={measuring ? undefined : 'agent-note-edits'}>
       <span>
@@ -208,58 +204,20 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
     </div>
   );
 
-  // Under the Simplified design a note is a sheet of paper, with no tab or agent chrome: a quiet header names its agent
-  // in a byline, which flies to its tile while it is on the board, beside the time.
-  if (simplified) {
-    return (
-      <div
-        className="agent-note"
-        data-testid={measuring ? undefined : 'agent-note'}
-        data-look={look}
-        data-zone={item.zoneId ?? ''}
-        style={zoneColor === undefined ? undefined : ({ '--agent-note-zone': zoneColor } as CSSProperties)}
-        ref={rootRef}
-        onDoubleClick={onDoubleClick}
-      >
-        {children}
-        <div className="agent-note-card">
-          <div className="agent-note-head">
-            <span className="agent-note-byline">
-              by{' '}
-              {tileShown ? (
-                <button type="button" className="agent-note-byline-link nodrag" title={`Show ${agent.name}`} onClick={onShowAgent}>
-                  {agent.name}
-                </button>
-              ) : (
-                <span title={`${agent.name} is no longer on the board`}>{agent.name}</span>
-              )}
-            </span>
-            <NoteStamp writtenAt={note.writtenAt} />
-            {footer?.kind === 'edited' && <span className="agent-note-edited" title="Edited by you">
-              ✎<span className="agent-note-edited-text"> edited by you</span>
-            </span>}
-            {footer?.kind === 'updated' && <span>updated</span>}
-          </div>
-          {note.asked !== undefined && <div className="agent-note-asked">You asked: “{note.asked}”</div>}
-          {body}
-          {suggested}
-        </div>
-      </div>
-    );
-  }
-
+  // An agent whose name isn't known is not named: a tab that just reads Note.
+  const named = agent.name.trim() !== '';
   const badge = (
     <button
       type="button"
       className="agent-note-badge nodrag"
-      title={tileShown ? 'Select its tile' : `${agent.name} is no longer on the board`}
+      title={tileShown ? 'Select its tile' : named ? `${agent.name} is no longer on the board` : undefined}
       disabled={!tileShown}
       onClick={onShowAgent}
     >
-      <span className="agent-note-label">Note</span>
-      <HarnessMark harness={agent.harness} className="agent-note-mark" />
-      <span className="agent-note-name">{agent.name}</span>
-      {agent.role !== null && <span className="agent-note-role">· {agent.role}</span>}
+      <span className={named ? 'agent-note-label agent-note-label-named' : 'agent-note-label'}>Note</span>
+      {named && <HarnessMark harness={agent.harness} className="agent-note-mark" />}
+      {named && <span className="agent-note-name">{agent.name}</span>}
+      {named && agent.role !== null && <span className="agent-note-role">· {agent.role}</span>}
     </button>
   );
 

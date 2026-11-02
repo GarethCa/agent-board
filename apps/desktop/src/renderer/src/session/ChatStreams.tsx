@@ -19,7 +19,8 @@ import {
   ToolBody,
   ToolIcon,
   useChatSetting,
-  useNow,
+  hasTime,
+  LineTime,
   useOpen,
   type CallStatus,
   type StateTone,
@@ -165,7 +166,6 @@ export const callTone = (status: CallStatus): StateTone => (status === 'failed' 
 function CallCard({ call, status }: { call: ToolCall; status: CallStatus }) {
   const { harness, onOpenPlan } = useChatSetting();
   const [open, setOpen] = useOpen(call.id, status === 'running');
-  const now = useNow(status === 'running');
   const kind = toolKind(call.name);
   const { label, detail } = toolLine(call);
   const name = kind === 'plan' ? 'Plan' : kind === 'ask' ? 'Question' : label;
@@ -175,7 +175,7 @@ function CallCard({ call, status }: { call: ToolCall; status: CallStatus }) {
         <ToolIcon name={call.name} />
         <b>{name}</b>
         <span className="chat-tool-detail">{detail}</span>
-        <CallOutcome call={call} status={status} now={now} />
+        <CallOutcome call={call} status={status} />
         <ChevronRight className="chat-tool-chevron" aria-hidden />
       </button>
       {kind === 'plan' && onOpenPlan && (
@@ -196,7 +196,7 @@ function CallCard({ call, status }: { call: ToolCall; status: CallStatus }) {
 
 /** The live state as a card at the end of the stream, with its actions; a running call is its own card already. */
 export function LiveCard({ agent, live, onOpenPlan, onShowTerminal }: LiveProps) {
-  const line = liveLine(live, useNow(live.kind === 'thinking' || live.kind === 'compacting'));
+  const line = liveLine(live);
   if (live.kind === 'tool' || live.kind === 'interrupted') return null;
   const thinking = live.kind === 'thinking';
   return (
@@ -206,9 +206,9 @@ export function LiveCard({ agent, live, onOpenPlan, onShowTerminal }: LiveProps)
           <LiveGlyph line={line} />
           <b>{line.label}</b>
           <span className="chat-tool-detail">{line.detail ?? ''}</span>
-          {line.time !== undefined && (
+          {hasTime(line) && (
             <span className="chat-tool-outcome" data-tone={thinking ? 'pending' : 'muted'} data-testid="chat-time">
-              {line.time}
+              <LineTime line={line} />
             </span>
           )}
         </div>
@@ -332,7 +332,6 @@ function RailRun({ item, going }: { item: Extract<ChatItem, { kind: 'tools' }>; 
   const statuses = calls.map((call) => callStatus(call, going));
   const running = statuses.includes('running');
   const [open, setOpen] = useOpen(item.key, false);
-  const now = useNow(running);
   if (calls.length === 0 && messages.length === 0) return null;
   if (calls.length === 1 && messages.length === 0) {
     const call = calls[0]!;
@@ -346,7 +345,7 @@ function RailRun({ item, going }: { item: Extract<ChatItem, { kind: 'tools' }>; 
           <ToolIcon name={call.name} />
           <b>{label}</b>
           <span className="chat-tool-detail">{detail}</span>
-          <CallOutcome call={call} status={status} now={now} />
+          <CallOutcome call={call} status={status} />
         </button>
         {open && (
           <div className="chat-pop" data-testid="chat-tool">
@@ -432,7 +431,7 @@ export function CallBody({ call }: { call: ToolCall }) {
 
 /** The live state at the foot of the rail, its dot ringed while it is going, with its actions. */
 export function RailLive({ agent, live, onOpenPlan, onShowTerminal }: LiveProps) {
-  const line = liveLine(live, useNow(live.kind === 'thinking' || live.kind === 'compacting' || live.kind === 'tool'));
+  const line = liveLine(live);
   if (live.kind === 'interrupted') return null;
   const ringed = live.kind !== 'done';
   return (
@@ -443,9 +442,9 @@ export function RailLive({ agent, live, onOpenPlan, onShowTerminal }: LiveProps)
         {line.label}
       </span>
       {line.detail !== undefined && <span className="chat-rail-live-detail">{line.detail}</span>}
-      {line.time !== undefined && (
+      {hasTime(line) && (
         <span className="chat-rail-live-detail" data-testid="chat-time">
-          {line.time}
+          <LineTime line={line} />
         </span>
       )}
       <LiveActions agent={agent} live={live} onOpenPlan={onOpenPlan} onShowTerminal={onShowTerminal} />
@@ -584,18 +583,18 @@ function ChipRow({ parts, last }: { parts: Extract<ChatItem, { kind: 'thinking' 
 
 /** One live line over the message box: the state now, with its time and its main actions. */
 export function StatusLine({ agent, live, onOpenPlan, onShowTerminal }: LiveProps) {
-  const line = liveLine(live, useNow(live.kind === 'thinking' || live.kind === 'compacting' || live.kind === 'tool'));
+  const line = liveLine(live);
   return (
     <div className="chat-status-line" data-tone={line.tone} data-live={live.kind} data-testid="chat-live">
       <LiveGlyph line={line} />
-      {/* Read out as the state changes; its time, counting every second, and its actions are left out. */}
+      {/* Read out as the state changes; its time, ticking, and its actions are left out. */}
       <span className="chat-status-said" role="status">
         <span className="chat-status-label">{line.label}</span>
         {line.detail !== undefined && <span className="chat-status-detail">{line.detail}</span>}
       </span>
-      {line.time !== undefined && (
+      {hasTime(line) && (
         <span className="chat-status-time" data-testid="chat-time">
-          {line.time}
+          <LineTime line={line} />
         </span>
       )}
       <LiveActions agent={agent} live={live} onOpenPlan={onOpenPlan} onShowTerminal={onShowTerminal} compact />
