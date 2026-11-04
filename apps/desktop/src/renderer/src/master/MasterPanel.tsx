@@ -15,11 +15,10 @@ import { ChatAgentsButton } from '../session/ChatAgentsFilter';
 import { ChatStyleButton } from '../session/ChatStyleSwitch';
 import { Composer } from '../session/Composer';
 import { Markdown } from '../session/Markdown';
-import { canRestart, exitText, RestartAgent } from '../session/RestartAgent';
+import { exitText, RestartAgent } from '../session/RestartAgent';
 import type { RunsChoice } from '../session/chat';
 import { clockTime } from '../board/items/agent-note';
-import { askLine, boardMaster, latestDigest, usageHolds, watchRows, type UsageHoldEntry } from './master-view';
-import { upperFirst } from '../upper-first';
+import { askLine, boardMaster, captainRevival, latestDigest, watchRows } from './master-view';
 import { Captain } from '../board/Character';
 import { useSimplified } from '../design';
 import { Inbox } from '../inbox/Inbox';
@@ -177,12 +176,7 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
           {!simplified && <ForYou panel={panel} agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />}
           {/* Dark in every theme, as a session window's chat is. */}
           <section className="master-panel-chat" data-surface="window" aria-label="Chat with the Captain">
-            {canRestart(master) && (
-              <div className="agent-exit-banner" role="status">
-                {exitText(master)}
-                <RestartAgent agent={master} label="Restart the Captain" testId="master-restart" />
-              </div>
-            )}
+            <CaptainRevive master={master} />
             <div className="session-chat-view">
               <ChatView agent={master} active onShowTerminal={() => onOpenAgent(master)} runs={RUNS} onOpenLink={onOpenLink} onOpenPlan={() => onOpenPlan(master)} />
             </div>
@@ -191,6 +185,31 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
         </>
       )}
     </aside>
+  );
+}
+
+/** Over a Captain that is not running: the one button that brings it back, as its state calls for. */
+function CaptainRevive({ master }: { master: Agent }) {
+  const revival = captainRevival(master);
+  const { busy, error, run } = useAction();
+  if (revival === undefined) return null;
+  if (revival === 'restart') {
+    return (
+      <div className="agent-exit-banner" role="status">
+        {exitText(master)}
+        <RestartAgent agent={master} label="Restart the Captain" testId="master-restart" />
+      </div>
+    );
+  }
+  const resume = revival === 'resume';
+  return (
+    <div className="agent-exit-banner" role="status" data-testid="master-revive">
+      {resume ? 'The Captain was stopped by a restart' : 'The Captain is paused'}
+      <Button size="xs" variant="primary" loading={busy} data-testid="master-resume" onClick={() => run(() => window.agentBoard.agents.resume(master.sessionId))}>
+        {resume ? 'Resume the Captain' : 'Wake the Captain'}
+      </Button>
+      {error && <ErrorText>{error}</ErrorText>}
+    </div>
   );
 }
 
@@ -331,7 +350,6 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
           })}
         </ul>
       )}
-      {!folded && <UsageHolds zones={zones} agents={agents} />}
       {folded ? null : digest === undefined ? (
         <p className="master-panel-muted">No digest yet: the Captain writes one in a note beside its tile.</p>
       ) : (
@@ -357,42 +375,6 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
       />
     )}
     </>
-  );
-}
-
-/**
- * The budget holds on the board, each with why and Override: a zone held for usage (Override lifts the hold) and an
- * agent paused for it (Override wakes it). They are the user's to undo, wherever the Captain put them.
- */
-function UsageHolds({ zones, agents }: Pick<MasterPanelProps, 'zones' | 'agents'>) {
-  const holds = usageHolds(zones, agents);
-  const [pending, setPending] = useState<string>();
-  if (holds.length === 0) return null;
-  const override = (hold: UsageHoldEntry) => {
-    setPending(hold.id);
-    const done = hold.kind === 'zone' ? window.agentBoard.orchestrators.release(hold.id) : window.agentBoard.agents.resume(hold.id);
-    void done.catch(() => {}).finally(() => setPending(undefined));
-  };
-  return (
-    <ul className="master-for-you master-usage-holds" aria-label="Held for usage">
-      {holds.map((hold) => (
-        <li key={hold.id} className="master-for-you-item" data-testid="master-usage-hold" data-kind={hold.kind}>
-          <div className="master-for-you-head">
-            <Tag className="inbox-kind" data-kind="held">
-              held
-            </Tag>
-            <b title={hold.name}>{hold.name}</b>
-            {hold.zone !== null && <small title={hold.zone}>{hold.zone}</small>}
-          </div>
-          <p>
-            {upperFirst(hold.what)}: {hold.reason}
-          </p>
-          <Button size="sm" variant="ghost" disabled={pending === hold.id} aria-label={`Override the hold on ${hold.name}`} onClick={() => override(hold)}>
-            Override
-          </Button>
-        </li>
-      ))}
-    </ul>
   );
 }
 

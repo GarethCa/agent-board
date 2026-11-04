@@ -1,8 +1,10 @@
 import { expect, type ElectronApplication } from '@playwright/test';
+import { connectDaemon } from '@agent-board/daemon/client';
+import { daemonPaths } from '@agent-board/daemon/paths';
 import { isProcessAlive } from '@agent-board/daemon/pid';
 import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from './launch.ts';
 
-test('launching the app starts the daemon once, and a second instance reuses it', async () => {
+test('launching the app starts the daemon once, and a second client reuses it', async () => {
   const dataDir = tempDataDir();
   const apps: ElectronApplication[] = [];
   try {
@@ -12,14 +14,15 @@ test('launching the app starts the daemon once, and a second instance reuses it'
     const pid = await connectedDaemonPid(await first.firstWindow());
     expect(pid).not.toBe(first.process().pid);
 
-    const second = await launchApp(dataDir, env);
-    apps.push(second);
-    expect(await connectedDaemonPid(await second.firstWindow())).toBe(pid);
+    // A second app on the same data dir hands over to the first (single-instance lock; notifications.spec.ts), so the second client is the
+    // CLI's kind: it finds the daemon the app started rather than starting another.
+    const second = await connectDaemon(daemonPaths(dataDir).socket);
+    expect((await second.call('daemon.health')).pid).toBe(pid);
 
-    // The daemon outlives the first app, and goes once no client and no session is left.
+    // The daemon outlives the app, and goes once no client and no session is left.
     await first.close();
     expect(isProcessAlive(pid)).toBe(true);
-    await second.close();
+    second.close();
     await expect.poll(() => isProcessAlive(pid), { timeout: 10_000 }).toBe(false);
   } finally {
     for (const app of apps) await app.close().catch(() => {});

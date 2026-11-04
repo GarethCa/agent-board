@@ -16,8 +16,8 @@ import { flakyTests } from '../e2e-flaky/flaky.ts';
 import { acquireLock } from '../e2e-lock/lock.ts';
 import { reapWorktree } from '../e2e-lock/reap.ts';
 import { keepAwake, readBatteryNote, readSleeps, sleepNote } from '../machine-sleep/sleeps.ts';
-import { selectChecks } from './select.ts';
-import { leakCheckStep, stepsFor, type Step } from './steps.ts';
+import { releaseRulePaths, selectChecks } from './select.ts';
+import { leakCheckStep, STAGES, stepsFor, type Step } from './steps.ts';
 import { filesNamingTickets } from './ticket-ids.ts';
 
 const args = process.argv.slice(2);
@@ -54,7 +54,7 @@ function changedFiles(): { files: string[]; base: string } {
  * more for the unit tests, which may run on one worker per project. Past it, scripts/deadline kills the step and
  * everything it started.
  */
-const LIMIT_MIN: Record<string, number> = { unit: 45, visual: 10, e2e: 30 };
+const LIMIT_MIN: Record<string, number> = { unit: 45, processes: 45, visual: 10, e2e: 30 };
 const limitOf = (step: Step): number => LIMIT_MIN[step.name] ?? 10;
 /** scripts/deadline's exit status, and the start of the line it prints, for a step that ran past its limit. */
 const TIMED_OUT = 124;
@@ -128,7 +128,16 @@ function run(step: Step, logDir: string): Promise<{ name: string; outcome: strin
 }
 
 const { files, base } = changedFiles();
-const plan = selectChecks(files, (file) => existsSync(join(root, file)));
+/** The release config's file names for the release rules test; a checkout without the config has none. */
+async function ruleFiles(): Promise<string[]> {
+  if (!existsSync(join(root, 'release/public.config.ts'))) return [];
+  // A non-literal path: a checkout without release/ must not resolve this import statically (knip, tsc).
+  const configPath = '../../release/public.config.ts';
+  const { config } = (await import(configPath)) as { config: Parameters<typeof releaseRulePaths>[0] };
+  return releaseRulePaths(config);
+}
+
+const plan = selectChecks(files, (file) => existsSync(join(root, file)), await ruleFiles());
 const naming = filesNamingTickets(files, root);
 const leakCheck = naming.length > 0;
 plan.reasons.push(leakCheck ? `release-leaks: ${naming.length} changed file(s) name a ticket ID, so the release leak check runs` : 'release-leaks: skipped, no changed file names a ticket ID');
@@ -158,14 +167,15 @@ if (plan.full) {
     const r = await run(step, logDir);
     results.set(r.name, r);
   };
-  // Stages, as in check-local.sh; the heavy runs never overlap, because the unit tests (5-second timeouts) and the e2e fail
-  // when starved. 1: lint, typecheck, markdownlint and the build. 2: unit. 3: the native visual run, then the e2e.
+  // Stages (STAGES in steps.ts): 1: the static checks and the build. 2: unit. 3: the processes project's related tests. 4: the native visual run, then the e2e.
   const named = (...names: string[]): Step[] => steps.filter((s) => names.includes(s.name));
-  await Promise.all(named('build', 'lint', 'typecheck', 'markdownlint', 'release-leaks').map(settle));
-  await Promise.all(named('unit').map(settle));
+  const [staticStage, unitStage, processesStage, ...electronStages] = STAGES as [string[], string[], string[], ...string[][]];
+  await Promise.all(named(...staticStage).map(settle));
+  await Promise.all(named(...unitStage).map(settle));
+  await Promise.all(named(...processesStage).map(settle));
   if ((results.get('build')?.outcome ?? 'pass') === 'pass') {
     // One Electron run at a time across the machine (scripts/e2e-lock): other gates queue, and this one reaps what its run left.
-    const electronSteps = named('visual', 'e2e');
+    const electronSteps = named(...electronStages.flat());
     if (electronSteps.length > 0) {
       const lock = await acquireLock({ step: electronSteps.map((s) => s.name).join('+'), worktree: root }).catch((error: Error) => {
         console.error(error.message);
@@ -175,7 +185,7 @@ if (plan.full) {
         heldLock = lock;
         try {
           await reapWorktree(root);
-          for (const stage of [['visual'], ['e2e']]) await Promise.all(named(...stage).map(settle));
+          for (const stage of electronStages) await Promise.all(named(...stage).map(settle));
         } finally {
           await reapWorktree(root, process.pid);
           lock.release();

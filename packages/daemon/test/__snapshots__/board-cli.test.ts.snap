@@ -704,7 +704,6 @@ commands do:
   board.openPullRequest
   orchestrator.activity
   usage.get
-  usage.priorities
 
 and, for an agent the user lets orchestrate, the orchestrator commands:
 
@@ -718,9 +717,6 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.restart
   orchestrator.pause
   orchestrator.wake
-  orchestrator.hold
-  orchestrator.release
-  orchestrator.usagePause
   orchestrator.close
   orchestrator.addEdge
   orchestrator.removeEdge
@@ -932,24 +928,11 @@ or a note by its label. It is gone at once; the user gets no Undo for it.
 `;
 
 exports[`agent-board --help > has help for usage 1`] = `
-"usage: agent-board usage [priorities] [--json] | usage hold|release <zone ref> | usage pause <ref>
+"usage: agent-board usage [--json]
 
 The plan's 5-hour and weekly usage: each window's used and left, when it resets, and when it
 was read. A Claude agent's status line posts it as the agent runs, so nothing is asked of anyone
 and no tokens are spent; with no Claude agent running for a while it is stale.
-
-\`usage priorities\` lists the user's priorities: whether they let the Captain pace work by
-usage (off until they turn it on in Settings › Usage), their thresholds, and each zone's
-priority (high, normal or low), its hold, and what the thresholds allow in it now.
-
-The Captain's budget hold, refused unless the user turned pacing on, the reading is fresh, and
-the zone is past a threshold:
-  usage hold <zone ref>     No agent starts in the zone, and hand-offs to its agents wait. Its
-                            tab says why, and the user can Override it.
-  usage release <zone ref>  Lift the hold: what waited goes on.
-  usage pause <ref>         Pause an idle agent in a low-priority zone past the pause threshold,
-                            saying why on its tile, where the user can Override it. Never
-                            mid-turn, as \`pause\`.
 
   --json   Print it as JSON instead.
 "
@@ -1129,8 +1112,7 @@ COMMANDS
   shells                Every shell tile.
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
-  usage [priorities]    The 5-hour and weekly plan usage, or the user's zone priorities and
-                        usage thresholds. See \`usage --help\`.
+  usage                 The 5-hour and weekly plan usage. See \`usage --help\`.
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
@@ -1250,11 +1232,6 @@ ORCHESTRATING
   roles [list]          Each default role and its template's first line.
   roles set <name> [--file <path>] [--] <template>
                         Add or replace one. \`roles remove <name>\` removes one.
-
-  Pacing work by usage (the Captain's, only while the user lets it):
-  usage hold|release <zone ref>
-                        Hold a zone's new starts and hand-offs, or release it.
-  usage pause <ref>     Pause an idle agent in a low-priority zone for usage.
 
 FOR THE USER
   orchestrate on|off <ref> [--scope zone|repo|board]

@@ -7,11 +7,12 @@ const hook = (hook_event_name: string, fields: Record<string, unknown> = {}) => 
 const inSubagent = (id: string) => ({ agent_id: id, agent_type: 'general-purpose' });
 
 const HOLD_MS = 1_000;
+const ASKING_HOLD_MS = 60_000;
 const T0 = new Date('2026-10-09T10:00:00.000Z');
 
 function holds() {
   const changed: string[] = [];
-  const permissions = createPermissionHolds({ holdMs: HOLD_MS, onChange: (sessionId) => changed.push(sessionId) });
+  const permissions = createPermissionHolds({ holdMs: HOLD_MS, askingHoldMs: ASKING_HOLD_MS, onChange: (sessionId) => changed.push(sessionId) });
   return { permissions, changed };
 }
 
@@ -46,6 +47,7 @@ describe('permission holds', () => {
       subagent: null,
       requestedAt: T0.toISOString(),
       heldUntil: new Date(T0.getTime() + HOLD_MS).toISOString(),
+      asksInTerminal: false,
       sessionGrant: null,
     });
     expect(await settled(reply)).toBeUndefined();
@@ -182,6 +184,41 @@ describe('permission holds', () => {
     expect(permissions.afterHook('s1', hook('Notification', { notification_type: 'permission_prompt' }))).toBe(false);
     // Allowed in the terminal: that very call ran.
     expect(permissions.afterHook('s1', hook('PostToolUse', BASH))).toBe(true);
+    expect(permissions.prompts('s1')).toEqual([]);
+  });
+
+  it('holds a request its terminal asks at the same time for the long hold, so the inbox can still answer it after the short one', async () => {
+    const { permissions, changed } = holds();
+    const reply = permissions.hold('s1', request(), open(), true);
+    const [prompt] = permissions.prompts('s1');
+    expect(prompt).toMatchObject({ asksInTerminal: true, heldUntil: new Date(T0.getTime() + ASKING_HOLD_MS).toISOString() });
+
+    await vi.advanceTimersByTimeAsync(HOLD_MS * 5);
+    expect(await settled(reply)).toBeUndefined();
+    expect(changed).toEqual([]);
+
+    expect(permissions.decide('s1', prompt!.id, { behavior: 'allow' })).toBe(true);
+    expect(await reply).toEqual(permissionReply({ behavior: 'allow' }));
+  });
+
+  it('lets a request its terminal asks too lapse at the long hold, and settles it once it is answered in the terminal', async () => {
+    const { permissions, changed } = holds();
+    const lapsing = permissions.hold('s1', request(), open(), true);
+    await vi.advanceTimersByTimeAsync(ASKING_HOLD_MS);
+    expect(await settled(lapsing)).toEqual({ value: undefined });
+    expect(changed).toEqual(['s1']);
+    expect(permissions.afterHook('s1', hook('Stop'))).toBe(true);
+
+    // Allowed in its terminal while held: the call runs, which releases the hook and clears the prompt.
+    const answered = permissions.hold('s1', request(), open(), true);
+    expect(permissions.afterHook('s1', hook('PostToolUse', BASH))).toBe(true);
+    expect(await settled(answered)).toEqual({ value: undefined });
+    expect(permissions.prompts('s1')).toEqual([]);
+
+    // Or it runs and fails: Claude says so with PostToolUseFailure, never a PostToolUse.
+    const failed = permissions.hold('s1', request(), open(), true);
+    expect(permissions.afterHook('s1', hook('PostToolUseFailure', { ...BASH, error: 'exit 1' }))).toBe(true);
+    expect(await settled(failed)).toEqual({ value: undefined });
     expect(permissions.prompts('s1')).toEqual([]);
   });
 

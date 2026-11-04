@@ -1,24 +1,15 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { isProcessAlive } from '@agent-board/daemon/pid';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch, screen, sessionWindow, SHELL_ENV, spawnAgent, tile, tileAction } from './agent-helpers.ts';
-import { test, connectedDaemonPid, launchApp, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
+import { test, connectedDaemonPid, killHard, launchApp, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { scratch } from './scratch.ts';
 
 const dockItem = (page: Page) => page.getByTestId('dock-item');
 const banner = (page: Page) => page.getByTestId('restart-banner');
 const viewport = (page: Page) => page.locator('.react-flow__viewport').getAttribute('style');
-
-/** Kills the app and its daemon at once, with no chance to tidy up, as a power cut or a crash would. */
-async function killHard(app: ElectronApplication, daemonPid: number): Promise<void> {
-  const appPid = app.process().pid!;
-  process.kill(daemonPid, 'SIGKILL');
-  process.kill(appPid, 'SIGKILL');
-  for (let waited = 0; (isProcessAlive(daemonPid) || isProcessAlive(appPid)) && waited < 5_000; waited += 50) await sleep(50);
-}
 
 test('the board looks the same after the app and daemon are killed hard, and resuming brings its agent and shell back', async () => {
   const { dir, repo, env } = scratch('waiting');
@@ -112,6 +103,55 @@ test('the board looks the same after the app and daemon are killed hard, and res
     await again.keyboard.type('pwd -P');
     await again.keyboard.press('Enter');
     await expect(pane).toContainText(`${repo}/apps/web`);
+  } finally {
+    for (const app of apps) await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Resume all after a daemon restart tells the agent it cut off mid-turn to carry on, and leaves an idle one idle', async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const apps: ElectronApplication[] = [];
+  try {
+    // Each turn's tool call never returns, so an agent stays at work until it is interrupted.
+    const first = await launch(dataDir, { ...env, FAKE_HARNESS_HANG_TOOL: '1' });
+    apps.push(first.app);
+    await pickFolderNext(first.app, repo);
+    await browseForZone(first.window);
+    await spawnAgent(first.window, 'monorepo', 'Run the tests', { name: 'busy' });
+    await spawnAgent(first.window, 'monorepo', 'Lint the docs', { name: 'quiet' });
+    const busy = (page: Page) => tile(page).filter({ hasText: 'busy' });
+    const quiet = (page: Page) => tile(page).filter({ hasText: 'quiet' });
+    await expect(busy(first.window)).toHaveAttribute('data-state', 'running');
+    await expect(quiet(first.window)).toHaveAttribute('data-state', 'running');
+    await first.window.evaluate(async () => {
+      const agent = (await self.agentBoard.agents.list()).find((a) => a.name === 'quiet')!;
+      await self.agentBoard.agents.interrupt(agent.sessionId);
+    });
+    await expect(quiet(first.window)).toHaveAttribute('data-state', 'idle');
+    await connectedDaemonPid(first.window);
+    await first.app.close();
+    // A restart, not a crash: the daemon shuts down, ending its sessions.
+    await stopDaemon(dataDir);
+
+    const second = await launch(dataDir, env);
+    apps.push(second.app);
+    const again = second.window;
+    await expect(busy(again)).toHaveAttribute('data-state', 'stopped-by-restart');
+    await expect(quiet(again)).toHaveAttribute('data-state', 'stopped-by-restart');
+    await banner(again).getByRole('button', { name: 'Resume all' }).click();
+    await expect(banner(again)).toBeHidden();
+
+    // The idle one waits at its prompt, saying why it was started again; the cut-off one carries on, told to.
+    await expect(quiet(again)).toContainText('Relaunched after a restart');
+    await busy(again).dblclick();
+    await expect(screen(again)).toContainText('Done: The app restarted; carry on from where you were..');
+    await expect(busy(again)).not.toContainText('Relaunched after a restart');
+    // At its prompt (waiting once Claude's idle prompt fires), with no turn begun.
+    await expect(quiet(again)).toHaveAttribute('data-state', /^(idle|waiting)$/);
+    await expect(quiet(again)).toContainText('Relaunched after a restart');
   } finally {
     for (const app of apps) await app.close().catch(() => {});
     await removeDataDir(dataDir);

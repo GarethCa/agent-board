@@ -8,7 +8,8 @@ import { secondsLeft, toolSummary } from '../../../shared/needs-you';
 const CLAMP_AT = 60;
 
 /**
- * One permission prompt of the agent's, with Allow and Deny while the daemon holds its hook. The tool input is clamped
+ * One permission prompt of the agent's, with Allow and Deny while the daemon holds its hook, counting down to the
+ * terminal taking over where the terminal waits on the hold (not where it asks at the same time, as Claude does). The tool input is clamped
  * to a line so the buttons stay in view, and opens in place; drawn by the inbox and the Captain's panel alike.
  */
 export function PermissionRow({ agent, prompt, now }: { agent: Agent; prompt: PermissionPrompt; now: number }) {
@@ -35,9 +36,11 @@ export function PermissionRow({ agent, prompt, now }: { agent: Agent; prompt: Pe
       )}
       {prompt.heldUntil !== null ? (
         <div className="inbox-item-actions">
-          <span className="inbox-prompt-countdown" title="Then its terminal asks instead">
-            {secondsLeft(prompt, now)} s
-          </span>
+          {!prompt.asksInTerminal && (
+            <span className="inbox-prompt-countdown" title="Then its terminal asks instead">
+              {secondsLeft(prompt, now)} s
+            </span>
+          )}
           <Button size="sm" variant="danger" disabled={busy} aria-label={`Deny ${prompt.toolName} for ${agent.name}`} onClick={() => decide('deny')}>
             Deny
           </Button>

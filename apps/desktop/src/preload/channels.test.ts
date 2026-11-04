@@ -108,7 +108,6 @@ const CHANNELS: string[] = [
   'item:update',
   'orchestrator:activity',
   'orchestrator:logged',
-  'orchestrator:release',
   'orchestrator:usage',
   'orchestrator:usage-changed',
   'plan:decide',

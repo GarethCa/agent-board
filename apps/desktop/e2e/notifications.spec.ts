@@ -1,6 +1,8 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawn as spawnProcess } from 'node:child_process';
 import type { AppNotification, FakeNotification } from '../src/main/notifications.ts';
 import { launch, listFinishedTurns, screen, spawnAgent, tile, tileAction } from './agent-helpers.ts';
 import { test, type LaunchOptions, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, browseForZone } from './launch.ts';
@@ -141,6 +143,78 @@ test('clicking a notification after the window was closed opens a new window on 
 
     const next = await reopened;
     await expect(next.getByTestId('session-window')).toHaveAttribute('data-session-id', agent.sessionId);
+  });
+});
+
+/** The page of every window the app has open: the board, a popped-out session, Settings. */
+const windowsOpen = (app: ElectronApplication) =>
+  app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((window) => window.webContents.getURL()));
+
+for (const state of ['hidden', 'minimised', 'closed'] as const) {
+  test(`clicking a notification with the board's window ${state} brings back the one board window on the agent, never a second`, async () => {
+    // Elsewhere the app quits with its last window, as there's no tray to keep it reachable yet.
+    test.skip(state === 'closed' && process.platform !== 'darwin', 'only macOS keeps the app running with no windows');
+    // A hidden (headless) window can't be minimised, and `hide()` changes nothing there, so hidden then only proves one window.
+    test.skip(state === 'minimised' && process.env.AGENT_BOARD_HEADED !== '1', 'needs a window the OS draws');
+    await withApp(async (page, app, dataDir) => {
+      const agent = await spawn(page, 'Pick a database');
+      await expect.poll(async () => (await notifications(app)).length).toBe(1);
+      expect(await windowsOpen(app)).toHaveLength(1);
+
+      if (state === 'hidden') await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.hide());
+      if (state === 'minimised') {
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.minimize());
+        // macOS minimises with an animation: the click must find it done.
+        await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMinimized())).toBe(true);
+      }
+      if (state === 'closed') {
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+        await expect.poll(() => windowsOpen(app)).toHaveLength(0);
+      }
+      const reopened = state === 'closed' ? app.waitForEvent('window') : undefined;
+
+      // Twice, as a banner clicked again, or the Dock icon's activation arriving with the click, would.
+      await clickNotification(app, 0);
+      await clickNotification(app, 0);
+
+      const board = reopened === undefined ? page : await reopened;
+      await expect(board.getByTestId('session-window')).toHaveAttribute('data-session-id', agent.sessionId);
+      // Exactly one window, and it is the board: no blank page, no popped-out or Settings window.
+      const urls = await windowsOpen(app);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).not.toMatch(/popOut=|settings=/);
+
+      const log = readFileSync(join(dataDir, 'daemon.log'), 'utf8');
+      const traced = log.split('\n').filter((line) => line.includes(`notification clicked: session ${agent.sessionId}`));
+      expect(traced).toHaveLength(2);
+      expect(traced[0]).toContain(`board window ${state}`);
+    });
+  });
+}
+
+test('a second launch on the same data dir exits and brings the running app\'s one board forward', async () => {
+  await withApp(async (_page, app) => {
+    await app.evaluate(({ app: electronApp }) => {
+      (globalThis as { secondLaunches?: number }).secondLaunches = 0;
+      electronApp.on('second-instance', () => ((globalThis as { secondLaunches?: number }).secondLaunches! += 1));
+    });
+    const { execPath, env } = await app.evaluate(() => ({ execPath: process.execPath, env: { ...process.env } as Record<string, string> }));
+    const entry = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath());
+    const second = spawnProcess(execPath, [entry], { env: { ...env, ELECTRON_RUN_AS_NODE: undefined } as NodeJS.ProcessEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    second.stderr.on('data', (chunk: Buffer) => (stderr += chunk));
+    // A second instance that kept running would hang here: give it a few seconds, and always end it.
+    const stuck = setTimeout(() => second.kill('SIGKILL'), 15_000);
+    const code = await new Promise<number | null>((resolve) => second.on('exit', resolve)).finally(() => {
+      clearTimeout(stuck);
+      second.kill('SIGKILL');
+    });
+    expect(code).toBe(0);
+    expect(stderr).toContain('already running');
+    await expect.poll(() => app.evaluate(() => (globalThis as { secondLaunches?: number }).secondLaunches)).toBe(1);
+    const urls = await windowsOpen(app);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).not.toMatch(/popOut=|settings=/);
   });
 });
 

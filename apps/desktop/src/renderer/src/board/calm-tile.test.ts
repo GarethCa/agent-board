@@ -21,7 +21,7 @@ describe('calmFace', () => {
   it('asks for permission in the tool’s own words, with one filled Review & allow', () => {
     const agent = working({
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, sessionGrant: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
     });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });
@@ -63,11 +63,6 @@ describe('calmFace', () => {
   it('wakes a paused agent with a bordered button, never a filled one', () => {
     const agent = working({ state: 'hibernated', endedAt: AT, hibernated: { at: AT, by: 'you', byId: null } });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'paused', line: null, action: { kind: 'wake', label: 'Wake', prominent: false } });
-  });
-
-  it('says why an agent is held for usage', () => {
-    const agent = working({ state: 'hibernated', endedAt: AT, hibernated: { at: AT, by: 'Captain', byId: null, reason: 'weekly cap at 95%' } });
-    expect(calmFace(agent, 'explicit')).toEqual({ status: 'paused', line: 'Paused for usage', action: { kind: 'wake', label: 'Wake', prominent: false } });
   });
 
   it('offers to continue on credits, bordered, while a usage limit stops it', () => {

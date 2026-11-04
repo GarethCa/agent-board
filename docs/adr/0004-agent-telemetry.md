@@ -198,7 +198,7 @@ PTY.
     therefore stays listed until the asker's turn ends.
   - Once a hook settles the last prompt, an agent left at `needs-permission` is `running`. So is an agent straight
     after an inbox decision, unless prompts remain.
-- **Unverified (the maintainer to check once by hand).** Does real Claude show its own permission dialog while the hook is
+- **Verified since (below, "Prompts asked beside the hold"): real Claude does.** Does real Claude show its own permission dialog while the hook is
   held? The docs say hooks and a `--permission-prompt-tool` race ("whichever decides first applies"), which suggests
   it does.
   - If it does, an answer typed in the terminal settles the prompt by the rules above, and the held hook is released
@@ -535,3 +535,28 @@ PTY.
   - Word of another session that lands mid-turn shows the agent `waiting` until its next hook, quoting that word.
   - The net can't tell a dialog closed from one drawn below an unchanged prompt box. One still up after the net's
     look counts as the prompt.
+
+**Prompts asked beside the hold**, as built (`packages/daemon/src/permissions.ts`, `hook-states.ts`):
+
+- **Verified in Claude Code 2.1.316** (read from its bundle, no tokens spent): for the agent's own tool calls, Claude
+  draws its permission dialog and runs the PermissionRequest hooks beside it, in the background; whichever answers
+  first decides, and a later answer is dropped. Answering in the dialog leaves the hook request running until it
+  returns or times out. For some subagents Claude waits on the hooks before it draws the dialog.
+- So a 20 s hold only took the inbox's buttons away: once it lapsed, a prompt the user came back to said "open it to
+  answer", and only the terminal could. A request Claude asks in its terminal at the same time (Claude, `agent_id`
+  absent) is now held until it is settled, marked `asksInTerminal`, with a day as a safety cap
+  (`ASKING_PERMISSION_HOLD_MS`), and Claude's hook `timeout` for PermissionRequest is that plus 10 s. A hold costs one
+  idle connection and blocks nothing (Claude's dialog is up beside it, and Node doesn't time out a held response), so
+  the cap only has to outlast a night or a day away; an hour brought the bug back for a prompt left overnight. An
+  answer in the terminal settles it by the rules above, which releases the hook: its `PostToolUse`, its
+  `PostToolUseFailure` (now subscribed: a call that ran and failed fires no `PostToolUse`), or the turn ending.
+- Codex and Claude subagents keep the short hold (`DEFAULT_PERMISSION_HOLD_MS`, `--permission-hold-ms`), as their
+  terminals show nothing until it lapses.
+- The inbox and the pane show no countdown for such a prompt (the pane says "Its terminal asks too"), and the session
+  window's held notice leaves it out, as its terminal is asking.
+- External sessions never hold (their hooks only report), so none of their prompts is marked so.
+- An agent started before this keeps the `timeout` it was started with, 30 s, so Claude hangs up and the hold lapses
+  then, as before, until the agent is restarted.
+- Not settled: after an answer in the terminal, the inbox keeps the prompt's buttons until the call's `PostToolUse`
+  (a `PreToolUse` settles nothing); a click then is dropped by Claude, and the daemon releases the hook at that
+  `PostToolUse`.

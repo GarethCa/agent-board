@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.6.14 (2026-11-04)
+
+- check-pr's new comments use wording the release leak check accepts
+- the scanner list tests pass in the release, which drops the release tooling
+- check-pr imports the release config by a non-literal path, so the release's knip passes
+- Flake sweep: a zone tab at the edge of fitting no longer crashes the renderer, and the tests that kept needing retries wait for what they need
+- A notification click never opens a second window
+- Pacing by usage is removed; an audit lists other bloat
+- The Codex interrupt handoff test no longer depends on hook start-up speed
+- Markdown in an expanded tile selects and copies, and only the Edit button opens the editor
+- A release reuses a green stamp across a small, safe follow-up commit
+- The Captain's panel offers Resume or Wake for a Captain a restart stopped or paused
+- Screenshot tests run on several workers: visual.spec.ts split by surface
+- Claude's permission prompts stay answerable in Needs you until settled, not only for 20 s
+- check:pr picks suites by blast radius: desktop core skips the daemon suite
+- The web tab's camera check accepts a machine with no camera
+- The agent window's sidebar sits on the left
+- Emoji take two columns in the terminal, so text after them lines up and links stay clickable
+- check:pr runs the tests that scan the repo from a scanner list
+- Resume tells agents a restart cut off mid-turn to carry on
+- check:pr runs knip in stage 1
+
 ## v0.6.13 (2026-11-02)
 
 - The Simplified agent window's header gives the name the room and shows its controls on hover or focus

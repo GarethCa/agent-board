@@ -13,10 +13,6 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
-  holdZone,
-  releaseZone,
-  usagePauseAgent,
-  usagePrioritiesView,
   usageView,
   edgesView,
   handOff,
@@ -154,8 +150,7 @@ COMMANDS
   shells                Every shell tile.
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
-  usage [priorities]    The 5-hour and weekly plan usage, or the user's zone priorities and
-                        usage thresholds. See \`usage --help\`.
+  usage                 The 5-hour and weekly plan usage. See \`usage --help\`.
   status set <summary> [--progress <0-100>] [--done]
                         Set your own tile's status (agents only); --done says your work is
                         finished. See \`status --help\`.
@@ -275,11 +270,6 @@ ORCHESTRATING
   roles [list]          Each default role and its template's first line.
   roles set <name> [--file <path>] [--] <template>
                         Add or replace one. \`roles remove <name>\` removes one.
-
-  Pacing work by usage (the Captain's, only while the user lets it):
-  usage hold|release <zone ref>
-                        Hold a zone's new starts and hand-offs, or release it.
-  usage pause <ref>     Pause an idle agent in a low-priority zone for usage.
 
 FOR THE USER
   orchestrate on|off <ref> [--scope zone|repo|board]
@@ -801,23 +791,10 @@ conversation, as its tile's Wake does. Refused for an agent that is not paused.
   --json     Print the agent as JSON.`,
   },
   usage: {
-    usage: 'agent-board usage [priorities] [--json] | usage hold|release <zone ref> | usage pause <ref>',
+    usage: 'agent-board usage [--json]',
     text: `The plan's 5-hour and weekly usage: each window's used and left, when it resets, and when it
 was read. A Claude agent's status line posts it as the agent runs, so nothing is asked of anyone
 and no tokens are spent; with no Claude agent running for a while it is stale.
-
-\`usage priorities\` lists the user's priorities: whether they let the Captain pace work by
-usage (off until they turn it on in Settings › Usage), their thresholds, and each zone's
-priority (high, normal or low), its hold, and what the thresholds allow in it now.
-
-The Captain's budget hold, refused unless the user turned pacing on, the reading is fresh, and
-the zone is past a threshold:
-  usage hold <zone ref>     No agent starts in the zone, and hand-offs to its agents wait. Its
-                            tab says why, and the user can Override it.
-  usage release <zone ref>  Lift the hold: what waited goes on.
-  usage pause <ref>         Pause an idle agent in a low-priority zone past the pause threshold,
-                            saying why on its tile, where the user can Override it. Never
-                            mid-turn, as \`pause\`.
 
 ${READ_FLAGS}`,
   },
@@ -1927,15 +1904,8 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       throw new UsageError('the schedule commands are `schedule add`, `schedule list` and `schedule remove`');
     }
     case 'usage': {
-      const [sub, ref, ...rest] = positionals;
-      if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
-      if (sub === undefined || sub === 'priorities') {
-        if (ref !== undefined) throw new UsageError(`unexpected ${ref}`);
-        return async (session) => print(await (sub === undefined ? usageView(session) : usagePrioritiesView(session)));
-      }
-      if (sub !== 'hold' && sub !== 'release' && sub !== 'pause') throw new UsageError('the usage commands are `usage`, `usage priorities`, `usage hold`, `usage release` and `usage pause`');
-      if (ref === undefined) throw new UsageError(sub === 'pause' ? 'give one agent ref' : 'give one zone ref');
-      return async (session) => print(await (sub === 'hold' ? holdZone(session, ref) : sub === 'release' ? releaseZone(session, ref) : usagePauseAgent(session, ref)));
+      if (positionals.length > 0) throw new UsageError(`unexpected ${positionals.join(' ')}`);
+      return async (session) => print(await usageView(session));
     }
     case 'roles': {
       const [sub = 'list', ...rest] = positionals;

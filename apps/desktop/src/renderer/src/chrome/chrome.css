@@ -1870,34 +1870,6 @@
   font-weight: var(--weight-bold);
 }
 
-/* Settings › Usage */
-
-.usage-threshold {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.usage-threshold-text small {
-  display: block;
-  color: var(--muted);
-  font-size: var(--font-size-xs);
-}
-
-.usage-threshold input[type='range'] {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.usage-warning {
-  padding: var(--space-1-75) var(--space-2-25);
-  border: 1px solid var(--warning-edge);
-  border-radius: var(--radius-md);
-  background: var(--warning-soft);
-  color: var(--warning-ink);
-  font-size: var(--font-size-sm);
-  line-height: var(--leading-snug);
-}
-
 /*
  * The Settings window (SettingsWindow.tsx): a title bar the traffic lights sit in, a sidebar of collapsible groups
  * under a search field, and the picked group's page, each section's controls in a box under its heading. The sidebar

@@ -28,15 +28,15 @@ test('Settings… opens the Settings window on General, and it reopens on the pa
     // A closed group opens to its sections and shows its page; a section in it shows that page at the section.
     await sidebar.getByRole('button', { name: /^Usage/ }).click();
     await expect(settings.getByRole('main', { name: 'Usage' })).toBeVisible();
-    await sidebar.getByRole('list', { name: 'Usage' }).getByRole('button', { name: 'Pacing' }).click();
-    await expect(sidebar.getByRole('button', { name: 'Pacing' })).toHaveAttribute('aria-current', 'page');
-    await expect(settingsSection(settings, 'Pacing')).toBeInViewport();
+    await sidebar.getByRole('list', { name: 'Usage' }).getByRole('button', { name: 'Plan usage' }).click();
+    await expect(sidebar.getByRole('button', { name: 'Plan usage' })).toHaveAttribute('aria-current', 'page');
+    await expect(settingsSection(settings, 'Plan usage')).toBeInViewport();
     // An open group closes again, keeping its page.
     await sidebar.getByRole('button', { name: 'General' }).click();
     await expect(sidebar.getByRole('button', { name: /^General/ })).toHaveAttribute('aria-expanded', 'false');
     await expect(sidebar.getByRole('list', { name: 'General' })).toBeHidden();
 
-    // Closed, and opened again: on Usage › Pacing, where it was.
+    // Closed, and opened again: on Usage › Plan usage, where it was.
     await settings.close();
     await expect.poll(() => window.context().pages().filter(isSettingsWindow).length).toBe(0);
     const [again] = await Promise.all([
@@ -47,7 +47,7 @@ test('Settings… opens the Settings window on General, and it reopens on the pa
         : window.getByRole('button', { name: 'Settings', exact: true }).click(),
     ]);
     await expect(again.getByRole('main', { name: 'Usage' })).toBeVisible();
-    await expect(again.getByRole('navigation', { name: 'Settings' }).getByRole('button', { name: 'Pacing' })).toHaveAttribute('aria-current', 'page');
+    await expect(again.getByRole('navigation', { name: 'Settings' }).getByRole('button', { name: 'Plan usage' })).toHaveAttribute('aria-current', 'page');
 
     // Asked again while open, it comes forward on the pane asked for, and no second window opens.
     await openSettings(window, 'advanced.webTabs');

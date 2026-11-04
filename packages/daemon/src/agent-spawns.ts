@@ -15,6 +15,7 @@ import { CODEX_HOOK_TIMEOUTS, codexHookCommand, HOOK_ENV_PREFIX, HOOK_TOKEN_ENV,
 import { keyedQueue } from './keyed-queue.ts';
 import { loginShellKind } from './login-path.ts';
 import { invalidParams } from './params.ts';
+import { ASKING_PERMISSION_HOLD_MS } from './permissions.ts';
 import {
   AGENT_ERROR,
   MAX_ASK_WAIT_MS,
@@ -234,7 +235,7 @@ export function createAgentSpawns(
     let harnessCommand: HarnessLaunch;
     if (harness === 'claude') {
       const statusLine = configuredStatusLine([cwd, worktree], options.env);
-      const settings = JSON.stringify(claudeSettings(options.hookUrl(), options.permissionHoldMs, statusLine === undefined ? undefined : 'user' in statusLine ? statusLine.user : null));
+      const settings = JSON.stringify(claudeSettings(options.hookUrl(), Math.max(options.permissionHoldMs, ASKING_PERMISSION_HOLD_MS), statusLine === undefined ? undefined : 'user' in statusLine ? statusLine.user : null));
       harnessCommand = {
         command: harnessPath,
         args: [
@@ -951,8 +952,8 @@ export function claudeStatusLineCommand(own: string | undefined): string {
  * The `claude --settings` that sends every hook event to the daemon (ADR-0004): as an `http` hook, the token
  * interpolated from the session's environment by Claude so it never appears on the command line, except
  * `SessionStart`, which Claude runs only as a `command` hook (`CLAUDE_SESSION_START_COMMAND`). Claude waits on a
- * PermissionRequest hook a little longer than the daemon holds it (`permissionHoldMs`), so the daemon's no-decision
- * answer, not a timeout, is what hands the prompt back to the terminal. Its status line posts the plan usage Claude
+ * PermissionRequest hook a little longer than the daemon holds it at most (`permissionHoldMs`, the longer hold of a
+ * request its terminal asks too), so the daemon's no-decision answer, not a timeout, is what ends the hold. Its status line posts the plan usage Claude
  * passes it to the daemon (`claudeStatusLineCommand`), running the user's own `ownStatusLine` after, if they have one;
  * with `ownStatusLine` null (its project sets a status line), it has none of ours, and Claude runs the project's.
  */

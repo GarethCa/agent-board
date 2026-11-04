@@ -1,5 +1,4 @@
-// Usage pacing: the reading Claude agents' status lines post, the user's priorities, and the budget hold the Captain
-// may place only while the user lets it.
+// Plan usage: the reading Claude agents' status lines post.
 import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -13,21 +12,13 @@ import { claudeSettings, claudeStatusLineCommand, configuredStatusLine } from '.
 import { usageText } from '../src/board-ops.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { migrate } from '../src/migrate.ts';
-import type { Orchestrator, OrchestratorAccess } from '../src/orchestrators.ts';
 import {
-  BOARD_ERROR,
-  DEFAULT_USAGE_THRESHOLDS,
   USAGE_STALE_MS,
-  usagePace,
-  type Agent,
   type DaemonEvent,
-  type DaemonSettings,
   type UsageReading,
   type UsageUpdatedEvent,
-  type Zone,
 } from '../src/protocol.ts';
 import { createUsageHost } from '../src/usage.ts';
-import { createZoneTable } from '../src/zones.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const T0 = Date.parse('2026-10-28T10:00:00Z');
@@ -39,71 +30,13 @@ const statusLine = (five: number, seven: number) => ({
   rate_limits: { five_hour: { used_percentage: five, resets_at: at(2) }, seven_day: { used_percentage: seven, resets_at: at(72) } },
 });
 
-function setup(settings: Partial<DaemonSettings> = {}) {
+function setup() {
   const db = new DatabaseSync(':memory:');
   migrate(db);
   const events: DaemonEvent[] = [];
-  const zones = createZoneTable(db, () => {}, () => undefined, '/repos', '/groups');
-  const add = (name: string) => zones.insert({ repoRoot: null, folder: '', name, color: '#4c6ef5', tracker: null, x: 0, y: 0, width: 400, height: 300 });
-  const priority = (zone: Zone, value: Zone['priority']) => db.prepare('UPDATE zones SET priority = ? WHERE id = ?').run(value, zone.id);
-  const paused: { sessionId: string; by: string | null; reason?: string }[] = [];
-  const agentsById = new Map<string, Agent>();
-  const released: string[] = [];
   let now = T0;
-  const usage = createUsageHost({
-    db,
-    settings: () => ({ usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS, ...settings }) as DaemonSettings,
-    zones,
-    agents: {
-      get: (sessionId) => agentsById.get(sessionId),
-      pause: async (sessionId, by, _why, reason) => {
-        paused.push({ sessionId, by, ...(reason === undefined ? {} : { reason }) });
-        return agentsById.get(sessionId)!;
-      },
-    },
-    released: (zoneId) => released.push(zoneId),
-    broadcast: (event) => events.push(event),
-    log: () => {},
-    now: () => now,
-  });
-  return {
-    db,
-    usage,
-    zones,
-    add,
-    priority,
-    events,
-    paused,
-    released,
-    agentsById,
-    tick: (ms: number) => (now += ms),
-  };
-}
-
-/** An access that lets everyone through, logging nothing: the gate under test is the usage host's own. */
-function openAccess(): OrchestratorAccess {
-  return {
-    caller: (_method, params) => (params as { me: Orchestrator }).me,
-    logged: async (_me, _action, _entry, act) => act(),
-    reachesAgent: () => true,
-    reachesZone: () => true,
-    madeByCrew: () => true,
-    wouldGainOrchestrating: () => false,
-    scopeText: () => 'the board',
-  };
-}
-
-const captain = { sessionId: 'captain', name: 'Captain', zoneId: null, repoRoot: '', orchestrate: 'board', agent: { master: true } as Agent } as Orchestrator;
-const lead = { ...captain, sessionId: 'lead', name: 'lead', agent: { master: false } as Agent } as Orchestrator;
-const user = { ...captain, sessionId: 'user', name: 'you', agent: null } as Orchestrator;
-
-async function refusal(call: Promise<unknown>) {
-  const error = await call.then(
-    () => undefined,
-    (thrown: { code: number; message: string }) => thrown,
-  );
-  expect(error?.code).toBe(BOARD_ERROR.notAllowed);
-  return error!.message;
+  const usage = createUsageHost({ db, broadcast: (event) => events.push(event), now: () => now });
+  return { db, usage, events, tick: (ms: number) => (now += ms) };
 }
 
 describe('the usage reading', () => {
@@ -172,12 +105,7 @@ describe('the usage reading', () => {
     try {
       const again = createUsageHost({
         db,
-        settings: () => ({ usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS }) as DaemonSettings,
-        zones: { list: () => [], find: () => undefined, setUsageHold: () => false },
-        agents: { get: () => undefined, pause: async () => ({}) as Agent },
-        released: () => {},
         broadcast: (event) => events.push(event),
-        log: () => {},
       });
       expect(events).toEqual([]);
       await vi.advanceTimersByTimeAsync(USAGE_STALE_MS);
@@ -193,139 +121,10 @@ describe('the usage reading', () => {
     usage.record(statusLine(72, 41));
     const again = createUsageHost({
       db,
-      settings: () => ({ usagePacing: false, usageThresholds: DEFAULT_USAGE_THRESHOLDS }) as DaemonSettings,
-      zones: { list: () => [], find: () => undefined, setUsageHold: () => false },
-      agents: { get: () => undefined, pause: async () => ({}) as Agent },
-      released: () => {},
       broadcast: () => {},
-      log: () => {},
       now: () => T0 + 1000,
     });
     expect(again.reading()).toMatchObject({ fiveHour: { usedPercent: 72 }, stale: false });
-  });
-});
-
-describe('usage priorities', () => {
-  it("say what the user's thresholds allow in each zone, by its priority, and nothing on a stale reading", () => {
-    const thresholds = DEFAULT_USAGE_THRESHOLDS;
-    const reading = (five: number, seven: number, stale = false): UsageReading => ({
-      fiveHour: { usedPercent: five, remainingPercent: 100 - five, resetsAt: null },
-      sevenDay: { usedPercent: seven, remainingPercent: 100 - seven, resetsAt: null },
-      readAt: new Date(T0).toISOString(),
-      stale,
-    });
-    expect(usagePace(reading(70, 41), 'low', thresholds)).toEqual({ holdStarts: null, pauseIdle: null });
-    expect(usagePace(reading(86, 41), 'low', thresholds)).toEqual({ holdStarts: '5h at 86%, zone low priority', pauseIdle: null });
-    expect(usagePace(reading(86, 41), 'normal', thresholds)).toEqual({ holdStarts: '5h at 86%, zone normal priority', pauseIdle: null });
-    expect(usagePace(reading(99, 95), 'high', thresholds)).toEqual({ holdStarts: null, pauseIdle: null });
-    expect(usagePace(reading(50, 92), 'normal', thresholds)).toEqual({ holdStarts: '7d at 92%, zone normal priority', pauseIdle: null });
-    expect(usagePace(reading(96, 41), 'low', thresholds)).toEqual({ holdStarts: '5h at 96%, zone low priority', pauseIdle: '5h at 96%, zone low priority' });
-    expect(usagePace(reading(96, 41, true), 'low', thresholds)).toEqual({ holdStarts: null, pauseIdle: null });
-  });
-
-  it("list the switch, the thresholds and each zone's priority, hold and pace", async () => {
-    const { usage, add, priority } = setup({ usagePacing: true });
-    const web = add('web');
-    const docs = add('docs');
-    priority(docs, 'low');
-    usage.record(statusLine(86, 41));
-
-    const priorities = await usage.handlers(openAccess())['usage.priorities'](undefined, {} as never);
-
-    expect(priorities).toEqual({
-      pacing: true,
-      thresholds: DEFAULT_USAGE_THRESHOLDS,
-      zones: [
-        { id: web.id, name: 'web', priority: 'normal', hold: null, pace: { holdStarts: '5h at 86%, zone normal priority', pauseIdle: null } },
-        { id: docs.id, name: 'docs', priority: 'low', hold: null, pace: { holdStarts: '5h at 86%, zone low priority', pauseIdle: null } },
-      ],
-    });
-  });
-});
-
-describe('the budget hold', () => {
-  it('is refused while the user has not turned pacing on, whatever the reading', async () => {
-    const { usage, add } = setup();
-    const zone = add('docs');
-    usage.record(statusLine(99, 99));
-    const handlers = usage.handlers(openAccess());
-
-    const message = await refusal(Promise.resolve().then(() => handlers['orchestrator.hold']({ zoneId: zone.id, me: captain } as never, {} as never)));
-
-    expect(message).toMatch(/off in Settings › Usage/);
-  });
-
-  it('is refused with no reading, a stale one, or a zone within the thresholds', async () => {
-    const { usage, add, tick } = setup({ usagePacing: true });
-    const zone = add('docs');
-    const handlers = usage.handlers(openAccess());
-    const hold = () => Promise.resolve().then(() => handlers['orchestrator.hold']({ zoneId: zone.id, me: captain } as never, {} as never));
-
-    expect(await refusal(hold())).toMatch(/no usage reading yet/);
-    usage.record(statusLine(50, 41));
-    expect(await refusal(hold())).toMatch(/within the user's thresholds/);
-    usage.record(statusLine(90, 41));
-    tick(USAGE_STALE_MS + 1);
-    expect(await refusal(hold())).toMatch(/stale/);
-  });
-
-  it('is the Captain\'s alone among agents', async () => {
-    const { usage, add } = setup({ usagePacing: true });
-    const zone = add('docs');
-    usage.record(statusLine(90, 41));
-    const handlers = usage.handlers(openAccess());
-
-    const message = await refusal(Promise.resolve().then(() => handlers['orchestrator.hold']({ zoneId: zone.id, me: lead } as never, {} as never)));
-
-    expect(message).toMatch(/only the Captain/);
-  });
-
-  it("can't be lifted by any other agent: only the Captain, or the user's Override", async () => {
-    const { usage, add } = setup({ usagePacing: true });
-    const zone = add('docs');
-    usage.record(statusLine(90, 41));
-    const handlers = usage.handlers(openAccess());
-    await handlers['orchestrator.hold']({ zoneId: zone.id, me: captain } as never, {} as never);
-
-    const message = await refusal(Promise.resolve().then(() => handlers['orchestrator.release']({ zoneId: zone.id, me: lead } as never, {} as never)));
-
-    expect(message).toMatch(/only the Captain/);
-    expect((await handlers['orchestrator.release']({ zoneId: zone.id, me: captain } as never, {} as never)).usageHold).toBeNull();
-  });
-
-  it('holds the zone, with why, once allowed; a hand-off to its agents waits; the user lifts it', async () => {
-    const { usage, add, zones, agentsById, released } = setup({ usagePacing: true });
-    const zone = add('docs');
-    agentsById.set('worker', { sessionId: 'worker', name: 'worker', zoneId: zone.id } as Agent);
-    usage.record(statusLine(86, 41));
-    const handlers = usage.handlers(openAccess());
-
-    const held = await handlers['orchestrator.hold']({ zoneId: zone.id, me: captain } as never, {} as never);
-
-    expect(held.usageHold).toEqual({ reason: '5h at 86%, zone normal priority', since: expect.any(String) });
-    expect(usage.heldFor('worker')).toBe('held: 5h at 86%, zone normal priority');
-
-    const lifted = await handlers['orchestrator.release']({ zoneId: zone.id, me: user } as never, {} as never);
-
-    expect(lifted.usageHold).toBeNull();
-    expect(zones.find(zone.id)!.usageHold).toBeNull();
-    expect(usage.heldFor('worker')).toBeUndefined();
-    expect(released).toEqual([zone.id]);
-  });
-
-  it('pauses an idle agent for usage only in a low-priority zone past the pause threshold, saying why', async () => {
-    const { usage, add, priority, agentsById, paused } = setup({ usagePacing: true });
-    const zone = add('docs');
-    agentsById.set('worker', { sessionId: 'worker', name: 'worker', zoneId: zone.id } as Agent);
-    usage.record(statusLine(96, 41));
-    const handlers = usage.handlers(openAccess());
-    const pause = () => Promise.resolve().then(() => handlers['orchestrator.usagePause']({ sessionId: 'worker', me: captain } as never, {} as never));
-
-    expect(await refusal(pause())).toMatch(/within the user's thresholds/);
-    priority(zone, 'low');
-    await pause();
-
-    expect(paused).toEqual([{ sessionId: 'worker', by: 'captain', reason: '5h at 96%, zone low priority' }]);
   });
 });
 

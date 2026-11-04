@@ -199,22 +199,6 @@ kbd {
   align-self: center;
 }
 
-/* A zone's priority on its tab: High stands out, Low recedes, and a usage hold says so. */
-.zone-priority[data-priority='high'] {
-  --chip: var(--on-zone);
-  --chip-ink: var(--zone-color);
-}
-
-.zone-priority[data-priority='low'] {
-  --chip: transparent;
-  --chip-edge: var(--on-zone-soft);
-}
-
-.zone-priority[data-held] {
-  --chip: var(--flow-held);
-  --chip-ink: var(--flow-held-ink);
-}
-
 /* Hybrid tiles */
 
 .hybrid-tile {
@@ -422,25 +406,6 @@ kbd {
   gap: var(--space-1);
   align-items: center;
   color: var(--state-hibernated-ink);
-}
-
-/* A tile paused for usage: why, and Override. */
-.hybrid-tile-held {
-  display: flex;
-  gap: var(--space-1-5);
-  align-items: center;
-  padding: var(--space-0-5) var(--space-1-5);
-  border-radius: var(--radius-sm);
-  background: var(--flow-held);
-  color: var(--flow-held-ink);
-}
-
-.hybrid-tile-held-why {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .hybrid-tile-paused-who {
@@ -3346,6 +3311,8 @@ kbd {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+  /* A board node (an expanded tile) is user-select: none; rendered Markdown still selects and copies there. */
+  user-select: text;
 }
 
 .chat-md > :first-child {
@@ -6846,8 +6813,7 @@ button.chat-chip[aria-expanded='true'] {
   font-weight: var(--weight-semibold);
 }
 
-.project-summary,
-.project-note {
+.project-summary {
   flex: none;
   color: var(--muted);
   font-size: var(--font-size-xs);
@@ -10411,8 +10377,8 @@ tr[data-status='running'] .gate-step-icon {
 
 /*
  * An agent's inspector (SimplifiedInspector.tsx), the Simplified design's sidebar and Classic's Simple one: at the
- * window's trailing edge, a status line on top, then its work's rows and two folds. Its width is the details strip's,
- * dragged on the handle before it. It reads role tokens only, so it takes each design's and theme's values.
+ * window's leading edge, a status line on top, then its work's rows and two folds. Its width is the details strip's,
+ * dragged on the handle after it. It reads role tokens only, so it takes each design's and theme's values.
  */
 .inspector {
   display: flex;
@@ -10424,7 +10390,7 @@ tr[data-status='running'] .gate-step-icon {
   max-width: 50%;
   overflow-y: auto;
   padding-bottom: var(--space-2-5);
-  border-left: 1px solid var(--separator);
+  border-right: 1px solid var(--separator);
   background: var(--panel);
   color: var(--text);
 }

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SPINNER_LINE, drawPromptBox } from '@agent-board/fake-harness';
-import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript } from '../src/quiet-turns.ts';
+import { createQuietTurns, QUIET_TURN_MS, readTranscriptTail, showsIdlePrompt, turnEndedInTranscript, turnInterruptedInTranscript } from '../src/quiet-turns.ts';
 import { createFakeClock } from './fake-clock.ts';
 
 /** `lines` as the daemon reads them off a terminal (`screenLines`): box drawing taken out. */
@@ -115,6 +115,21 @@ const call = (id = 'msg_1') => entry('assistant', [{ type: 'tool_use', id: 'tool
 const result = entry('user', [{ type: 'tool_result', tool_use_id: 'toolu_1', content: '12 passed' }]);
 const reply = (id = 'msg_2') => entry('assistant', [{ type: 'text', text: 'All tests pass.' }], { id });
 const turnEnd = [JSON.stringify({ type: 'system', subtype: 'stop_hook_summary' }), JSON.stringify({ type: 'system', subtype: 'turn_duration' })];
+
+describe("a turn the user interrupted, in Claude's transcript", () => {
+  const interrupted = (text: string) => entry('user', [{ type: 'text', text }]);
+
+  it("is one whose last entry is Claude's interrupt, as text or as a part, with a tool call's too", () => {
+    expect(turnInterruptedInTranscript([prompt, call(), interrupted('[Request interrupted by user]')])).toBe(true);
+    expect(turnInterruptedInTranscript([prompt, entry('user', '[Request interrupted by user for tool use]'), ...turnEnd])).toBe(true);
+  });
+
+  it('is not one that went on after the interrupt, nor one still at work', () => {
+    expect(turnInterruptedInTranscript([interrupted('[Request interrupted by user]'), prompt])).toBe(false);
+    expect(turnInterruptedInTranscript([prompt, call()])).toBe(false);
+    expect(turnInterruptedInTranscript([])).toBe(false);
+  });
+});
 
 describe("a turn's end, in Claude's transcript", () => {
   it('is a reply with no tool call after the last prompt or tool result', () => {

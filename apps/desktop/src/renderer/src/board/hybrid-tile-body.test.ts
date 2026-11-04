@@ -41,7 +41,7 @@ describe("an agent tile's body", () => {
       ...idle,
       status,
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, sessionGrant: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
     });
     expect(prompt).toContain('tile-ask');
     expect(prompt).toContain('rm -rf dist');

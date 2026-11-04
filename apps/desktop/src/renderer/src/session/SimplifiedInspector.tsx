@@ -47,7 +47,7 @@ const moreOpen = storedValue('agent-board.inspector-more');
 const technicalOpen = storedValue('agent-board.inspector-technical');
 
 /**
- * An agent's inspector, at its window's trailing edge: the Simplified design's sidebar, and
+ * An agent's inspector, at its window's leading edge (the left): the Simplified design's sidebar, and
  * Classic's when its Agent sidebar setting is Simple. The work comes first: a line with what the header's status leaves
  * out, then its task when linked and its pull requests. Then two folds, closed and remembered: Technical details
  * (branch, folder, AI and model), drawn only while technical details show, and More details, naming what it holds (its

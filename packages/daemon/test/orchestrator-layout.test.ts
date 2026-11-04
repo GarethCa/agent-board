@@ -813,8 +813,9 @@ describe('orchestrator.arrange', () => {
       const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
       await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
       await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${me.agent.sessionId}`, width: 960, height: 600 }] });
-      // Lanes go by state, so wait out the crew's start: left to chance, a loaded run arranges one daemon's crew while still starting.
-      await vi.waitFor(async () => expect((await setup.client.call('agent.list')).map((agent) => agent.state)).not.toContain('starting'), { timeout: 15_000, interval: 20 });
+      // Lanes go by state, so wait until every agent has settled between turns: the lead's Stop comes a while after its identity is
+      // printed, and left to chance, a loaded run arranges one daemon's crew still starting or its lead still mid-turn.
+      await vi.waitFor(async () => expect((await setup.client.call('agent.list')).map((agent) => agent.state).filter((state) => state !== 'idle' && state !== 'waiting')).toEqual([]), { timeout: 15_000, interval: 20 });
       for (const [index, at] of starts.entries()) {
         const clock = await me.connection.call('orchestrator.addClock', { token: me.token, data: { cron: '@daily', does: 'fresh', prompt: `sweep ${index}` } });
         await setup.client.call('item.update', { id: clock.id, ...at });

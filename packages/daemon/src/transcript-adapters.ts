@@ -43,7 +43,7 @@ const CLAUDE_HIDDEN_USER_TEXT = /^<(command-name|command-message|command-args|lo
 const CLAUDE_TASK_NOTIFICATION = /^<task-notification>/;
 
 /** Claude's interrupt, `for tool use` when the user turned down or stopped the call just before it. */
-const CLAUDE_INTERRUPTED = /^\[Request interrupted by user( for tool use)?[^\]]*\]$/;
+export const CLAUDE_INTERRUPTED = /^\[Request interrupted by user( for tool use)?[^\]]*\]$/;
 
 /** How Codex's `exec` tool reports a script that failed, or a call the user stopped. */
 const CODEX_FAILED = /^(?:Script failed|aborted\b)|\bexit_code=(?!0\b)-?\d+/;

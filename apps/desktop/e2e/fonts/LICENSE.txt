@@ -1,6 +1,6 @@
 DejaVu Sans, DejaVu Sans Bold and DejaVu Sans Mono (https://dejavu-fonts.github.io/), version 2.37 as packaged
 by Ubuntu 24.04 (fonts-dejavu-core 2.37-8), subset with fontTools to the glyphs the app shows and saved as WOFF2.
-Only e2e/visual.spec.ts uses them, so its screenshots render the same on every machine.
+Only the specs in e2e/visual/ use them, so its screenshots render the same on every machine.
 
 The fonts' copyright and licence:
 

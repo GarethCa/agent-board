@@ -92,7 +92,7 @@ const CONTEXT_MENU: MenuEntry[] = [
 
 /**
  * Every primitive in every state, for checking how they look: the Soft workbench (docs/adr/0008-design-system.md).
- * The app shows it at `#gallery`, and e2e/visual.spec.ts guards each section with a screenshot.
+ * The app shows it at `#gallery`, and e2e/visual/ guards each section with a screenshot.
  */
 export function ComponentGallery() {
   return (

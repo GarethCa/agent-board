@@ -42,6 +42,12 @@ async function addZone(window: Page): Promise<void> {
   await browseForZone(window);
 }
 
+/** Escape, once no tooltip is up: it closes the topmost layer, and a tooltip left by the pointer's last stop would take the key. */
+async function escapeLayer(window: Page): Promise<void> {
+  await expect(window.locator('.ui-tooltip')).toHaveCount(0);
+  await window.keyboard.press('Escape');
+}
+
 const zoneNamed = (window: Page, name: string): Locator =>
   window.getByTestId('zone').filter({ has: window.getByTestId('zone-tab').getByText(name, { exact: true }) });
 
@@ -79,7 +85,8 @@ test('adds repo and folder zones from the folder picker, rejects a folder that i
     const popover = await openAddZone(window, 'File browser');
     await popover.getByRole('button', { name: 'Choose a folder…' }).click();
     await expect(popover.getByRole('alert')).toHaveText(`${gone} is not a folder`);
-    await window.keyboard.press('Escape');
+    await popover.hover({ position: { x: 4, y: 4 } });
+    await escapeLayer(window);
     await expect(popover).toBeHidden();
     // Counted in the daemon, not on screen: the board draws only the zones in view, and the view has just moved to
     // show the last one added.
@@ -89,7 +96,8 @@ test('adds repo and folder zones from the folder picker, rejects a folder that i
     // one sits under the minimap).
     const before = (await storedZones(dataDir)).find((zone) => zone.folder === 'apps/web')!;
     const tab = web.getByTestId('zone-tab');
-    const tabBox = (await tab.boundingBox())!;
+    // The view is still moving to the zone last added: a tab box read mid-move drags from where the tab no longer is.
+    const tabBox = await settledBox(tab);
     await window.mouse.move(tabBox.x + 10, tabBox.y + tabBox.height / 2);
     await window.mouse.down();
     await window.mouse.move(tabBox.x + 60, tabBox.y + 80, { steps: 8 });
@@ -493,7 +501,7 @@ test('recolours a zone from 16 colours and sets its fill opacity, both saved and
     // Dragging the slider to 30% saves once the drag ends; the zone's fill and edge follow it.
     await options.click();
     const slider = window.locator('.ui-menu-slider input[type=range]');
-    const track = (await slider.boundingBox())!;
+    const track = await settledBox(slider);
     const y = track.y + track.height / 2;
     await window.mouse.move(track.x + track.width / 2, y);
     await window.mouse.down();
@@ -503,18 +511,18 @@ test('recolours a zone from 16 colours and sets its fill opacity, both saved and
     expect(percent).toBeGreaterThan(8);
     await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(percent);
     await expect(zone).toHaveAttribute('data-fill', String(percent));
-    await window.keyboard.press('Escape');
+    await escapeLayer(window);
 
     // Outline only: 0% is a valid fill, and the zone keeps a visible edge.
     await options.click();
     await window.locator('.ui-menu-slider input[type=range]').fill('0');
     await window.locator('.ui-menu-slider input[type=range]').dispatchEvent('pointerup');
     await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(0);
-    await window.keyboard.press('Escape');
+    await escapeLayer(window);
 
     // One undo takes back the whole 0% change (not a tick of the drag), the next the 30% before it.
     // Clicking empty zone floor gives the board the keyboard.
-    const box = (await zone.boundingBox())!;
+    const box = await settledBox(zone);
     await window.mouse.click(box.x + 12, box.y + box.height - 12);
     await window.keyboard.press('ControlOrMeta+z');
     await expect.poll(async () => (await storedZones(dataDir))[0]?.fillOpacity).toBe(percent);
@@ -558,12 +566,13 @@ test('the fill opacity slider is reached and set with the keyboard alone, and a 
     await window.keyboard.press('ArrowDown');
     await expect(slider).not.toBeFocused();
     await expect(window.getByRole('menuitem').filter({ hasText: /default repo/ })).toBeFocused();
-    await window.keyboard.press('Escape');
+    await escapeLayer(window);
 
     // Dragged away and back to where it began: nothing is saved, and the zone is drawn as saved.
     await options.click();
     const input = window.locator('.ui-menu-slider input[type=range]');
-    const box = (await input.boundingBox())!;
+    // The menu eases open: a box read mid-ease drags from where the slider no longer is.
+    const box = await settledBox(input);
     const y = box.y + box.height / 2;
     const begin = { x: box.x + 2, y };
     await window.mouse.move(begin.x, y);
@@ -574,7 +583,7 @@ test('the fill opacity slider is reached and set with the keyboard alone, and a 
     await window.mouse.up();
     await expect(zone).toHaveAttribute('data-fill', '0');
     expect(await fill()).toBe(0);
-    await window.keyboard.press('Escape');
+    await escapeLayer(window);
 
     // Closed mid-drag: the preview is taken back.
     await options.click();
@@ -582,13 +591,13 @@ test('the fill opacity slider is reached and set with the keyboard alone, and a 
     await window.mouse.down();
     await window.mouse.move(box.x + box.width * 0.8, y);
     await expect(zone).not.toHaveAttribute('data-fill', '0');
-    await window.keyboard.press('Escape');
+    await escapeLayer(window);
     await window.mouse.up();
     await expect(zone).toHaveAttribute('data-fill', '0');
     expect(await fill()).toBe(0);
 
     // Neither left an undo step: one undo takes back the keyboard's last change (End then Home: 40 to 0), not a drag.
-    const floor = (await zone.boundingBox())!;
+    const floor = await settledBox(zone);
     await window.mouse.click(floor.x + 12, floor.y + floor.height - 12);
     await window.keyboard.press('ControlOrMeta+z');
     await expect.poll(fill).toBe(40);

@@ -212,11 +212,10 @@ test("approving and denying a permission from the inbox answer the agent's Permi
     await expect(asking).toContainText('Wants to use Bash');
     await expect(asking.getByTestId('inbox-tool-input')).toHaveText('rm -rf dist');
     await asking.getByRole('button', { name: 'Allow' }).click();
-    // The inbox answered it: it ran, and its terminal never asked.
+    // The inbox answered it: it ran.
     await expect(asking).not.toContainText('Wants to use Bash');
     await openFromTile(window, allowed);
     await expect(screen(window)).toContainText('Removed dist.');
-    await expect(screen(window)).not.toContainText('(y/n)');
     await window.getByRole('button', { name: 'Close session window' }).click();
 
     const denied = await spawn(window, 'Clean up again');
@@ -227,7 +226,6 @@ test("approving and denying a permission from the inbox answer the agent's Permi
     await expect(second).not.toContainText('Wants to use Bash');
     await openFromTile(window, denied);
     await expect(screen(window)).toContainText('Okay, I left dist alone.');
-    await expect(screen(window)).not.toContainText('(y/n)');
   });
 });
 
@@ -291,26 +289,45 @@ test("a long tool input is clamped in the Captain's panel, so Allow and Deny sta
   });
 });
 
-test('a permission the inbox held too long falls back to the terminal, and answering it there clears the item', async () => {
+test("a Claude agent's permission prompt stays answerable in the inbox long after the short hold, with its window never opened", async () => {
   await withApp(
     scratch('permission'),
     async (window) => {
       const agent = await spawn(window, 'Clean up');
       const asking = item(window, agent.sessionId);
       await openInbox(window);
-      await expect(asking).toContainText('Asking in its terminal now');
-      await expect(asking.getByRole('button', { name: 'Allow' })).toHaveCount(0);
+      await expect(asking).toContainText('Wants to use Bash');
+      // Well past the short hold a Codex agent's prompt gets: Claude asks in its terminal at the same time, so it is held on.
+      await window.waitForTimeout(1_500);
+      await expect(asking.getByTestId('inbox-prompt')).toHaveAttribute('data-held', 'true');
+      await expect(asking.getByRole('button', { name: 'Deny' })).toBeVisible();
+      await expect(asking).not.toContainText('Asking in its terminal now');
 
-      await asking.getByRole('button', { name: 'Open' }).click();
-      await expect(screen(window)).toContainText('(y/n)');
-      await window.getByTestId('session-terminal').click();
-      await window.keyboard.type('y');
-      await window.keyboard.press('Enter');
-      await expect(screen(window)).toContainText('Removed dist.');
+      await asking.getByRole('button', { name: 'Allow' }).click();
       await expect(count(window)).toHaveAttribute('data-count', '0');
+      await openFromTile(window, agent);
+      await expect(screen(window)).toContainText('Removed dist.');
     },
-    { AGENT_BOARD_PERMISSION_HOLD_MS: '500' },
+    { AGENT_BOARD_PERMISSION_HOLD_MS: '200' },
   );
+});
+
+test("a Claude agent's permission prompt answered in its terminal instead leaves the inbox", async () => {
+  await withApp(scratch('permission'), async (window) => {
+    const agent = await spawn(window, 'Clean up');
+    const asking = item(window, agent.sessionId);
+    await openInbox(window);
+    await expect(asking.getByRole('button', { name: 'Allow' })).toBeVisible();
+
+    await asking.getByRole('button', { name: 'Open' }).click();
+    await expect(screen(window)).toContainText('(y/n)');
+    await expect(window.getByTestId('held-prompts-notice')).toHaveCount(0);
+    await window.getByTestId('session-terminal').click();
+    await window.keyboard.type('y');
+    await window.keyboard.press('Enter');
+    await expect(screen(window)).toContainText('Removed dist.');
+    await expect(count(window)).toHaveAttribute('data-count', '0');
+  });
 });
 
 test("two subagents asking at once each get a row in the inbox, answered on their own, and the agent's terminal says why it waits", async () => {

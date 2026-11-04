@@ -23,6 +23,28 @@ export function chipsToFold(room: number, rest: number, chips: readonly FoldingC
   return folded;
 }
 
+/**
+ * How much room a chip needs to spare to unfold. The tab is measured in whole pixels, and with a chip folded or not its
+ * rest can read a pixel apart: with none to spare, a tab that fits to the pixel folds a chip, measures a pixel less,
+ * unfolds it again, and so on until React gives up on the board.
+ */
+const UNFOLD_SLACK = 3;
+
+/**
+ * Which chips fold now: `chipsToFold`, except that chips already `folded` unfold only if there is `UNFOLD_SLACK` to
+ * spare once they have, which leaves a tab at the edge of fitting as it is.
+ */
+export function foldedNext(folded: ReadonlySet<string>, room: number, rest: number, chips: readonly FoldingChip[], gap: number): ReadonlySet<string> {
+  const fits = chipsToFold(room, rest, chips, gap);
+  if (fits.size >= folded.size) return fits;
+  const roomy = chipsToFold(room - UNFOLD_SLACK, rest, chips, gap);
+  if (roomy.size < folded.size) return roomy;
+  // Held as it is only while it is still the chips that fold first: a changed order (a zone's priority raised) or a chip
+  // gone leaves another set to fold, which is `fits`.
+  const firsts = chips.slice(0, folded.size).map((chip) => chip.key);
+  return firsts.length === folded.size && firsts.every((key) => folded.has(key)) ? folded : fits;
+}
+
 const sameKeys = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((key) => b.has(key));
 
 /** What on a zone's tab gives way, cut short, once its chips have all folded: its name, and a clone's progress. */
@@ -74,7 +96,8 @@ export function useZoneTabFold<Key extends string>(
     for (const text of tab.querySelectorAll<HTMLElement>(SHRINKS)) cut += text.scrollWidth - text.clientWidth;
     const rest = tab.offsetWidth - shown + cut;
     const chips = order.map((key) => ({ key, width: widths.current.get(key) ?? 0 }));
-    const next = chipsToFold(strip.clientWidth, rest, chips, gap) as ReadonlySet<Key>;
+    // Not `chipsToFold`: a tab at the edge of fitting measures a pixel apart folded or not, and would fold and unfold for ever.
+    const next = foldedNext(folded, strip.clientWidth, rest, chips, gap) as ReadonlySet<Key>;
     if (!sameKeys(next, folded)) setFolded(next);
     // `order` is read through `orderKey`, so a new array with the same chips measures nothing.
   }, [orderKey, content, folded, resized, simplified]);

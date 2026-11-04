@@ -274,10 +274,10 @@ function Answer({ agent }: { agent: Agent }) {
 
 /**
  * Says why an agent's terminal shows no permission prompt yet: the daemon is holding its request for the inbox.
- * Nothing while none is held.
+ * Nothing while none is held, or only ones its terminal asks at the same time.
  */
 export function HeldPromptsNotice({ agent }: { agent: Agent }) {
-  const held = heldPrompts(agent);
+  const held = heldPrompts(agent).filter((prompt) => !prompt.asksInTerminal);
   const now = useNow(held.length > 0);
   if (held.length === 0) return null;
   const seconds = Math.max(...held.map((prompt) => secondsLeft(prompt, now)));

@@ -86,6 +86,7 @@ import { createSettings } from './settings.ts';
 import { createUsageHost } from './usage.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
+import { markTurnsCutOff } from './agent-lifecycle.ts';
 import { createSessionHost, reconcileLostSessions, type SessionHost, type SessionSubscriber } from './sessions.ts';
 import { watchPullRequests } from './pull-requests.ts';
 import { createPullRequestLookup } from './agent-pull-requests.ts';
@@ -307,6 +308,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     };
 
     // Sessions a crashed daemon left live would otherwise keep this one up for good.
+    markTurnsCutOff(db);
     const lost = reconcileLostSessions(db);
     if (lost > 0) log(`marked ${lost} session(s) left by a previous daemon as ended`);
     const shell = options.shell ?? defaultShell();
@@ -473,8 +475,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         deliver: (...args) => agents.deliver(...args),
         announce: (sessionId) => agents.announce(sessionId),
       },
-      // `zoneTable` is created below, before any clock fires.
-      zoneHold: (zoneId) => (zoneId === null ? undefined : (zoneTable.find(zoneId)?.usageHold?.reason ?? undefined)),
       call: async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never,
       broadcast,
       log,
@@ -522,7 +522,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         },
         now: () => new Date(),
       }),
-      heldFor: (sessionId) => usage.heldFor(sessionId),
       heldPayloads: () => settings.get().heldPayloads,
       recheckMs: options.flowRecheckMs ?? (Number(process.env.AGENT_BOARD_FLOW_RECHECK_MS) || DEFAULT_FLOW_RECHECK_MS),
       broadcast,
@@ -591,7 +590,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         clocks.turnEnded(sessionId);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
-      onWoken: () => flowEdges.recheckAll(),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
       onTurnBoundary: (sessionId) => {
         flowEdges.turnBoundary(sessionId);
@@ -641,12 +639,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const zoneTable = createZoneTable(db, broadcast, (id) => sources.progress(id), reposDir, groupsDir, () => settings.get().arrangeSpacing);
     const usage = createUsageHost({
       db,
-      settings: () => settings.get(),
-      zones: zoneTable,
-      agents: { get: (sessionId) => agents.get(sessionId), pause: (...args) => agents.pause(...args) },
-      released: () => flowEdges.recheckAll(),
       broadcast,
-      log,
     });
     const sources: ZoneSources = createZoneSources({
       db,
@@ -845,7 +838,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.orchestratorHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
-      ...usage.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),
+      ...usage.handlers<SessionSubscriber & BoardConnection>(),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
         const sessionId = stringParam(paramsObject(params), 'sessionId');

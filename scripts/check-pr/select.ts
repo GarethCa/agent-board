@@ -3,17 +3,41 @@
  *
  * The rules, in order:
  *  1. A change to the gate itself, the shared config, the e2e helpers, the fake CLIs, the daemon protocol, a heavily shared
- *     module (`CORE_GLOBS`) or any file nothing here recognises can break anything, so the plan is the full gate
+ *     daemon module (`DAEMON_CORE_GLOBS`) or any file nothing here recognises can break anything, so the plan is the full gate
  *     (`pnpm check:local`). Unknown means full: the fallback never runs less than it should.
- *  2. Unit tests: `vitest related` on the changed files.
+ *  2. Unit tests: `vitest related` on the changed files, plus the scanners (`SCANNERS`): tests that read the repo's files
+ *     rather than import them, which `related` never selects.
  *  3. E2E: the specs the change maps to (`E2E_MAP`), plus any changed spec that still exists and runs in the `app` project. A changed app file that maps to nothing runs
  *     the smoke set. Tests, docs and scripts alone run no e2e.
+ *     Desktop core (`DESKTOP_CORE_GLOBS`) runs the whole `unit` project and every spec instead.
  *  4. Visual: when anything under the renderer (styles, markup, layout code) or the baselines changed.
  */
 import { matchesGlob } from 'node:path';
 
-/** The release's leak rules, as a unit test: `vitest related` would never pick it, so any change that runs unit tests runs it too. */
-const LEAK_RULES_TEST = 'scripts/release-public/leak-rules.test.ts';
+/**
+ * A test that finds its inputs by reading the repo (`git ls-files`, a walk of the source tree, a stylesheet) is in no
+ * import graph, so `vitest related` never picks it. Each one is listed with the files it reads; `select.test.ts` fails
+ * when a test that scans the repo is missing. `globs` is `'always'` for a test that reads every file, run with any code change.
+ * `release` stands for the files the release rules name outright (`releaseRulePaths`). Rules that name files by a glob, or
+ * none, are not tracked per PR: only the full gate and the batch runs catch a stale one.
+ */
+export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly string[] | 'always' | 'release'; why: string }> = [
+  {
+    tests: [
+      'apps/desktop/src/renderer/src/tokens.test.ts',
+      'apps/desktop/src/renderer/src/swatch-folding.test.ts',
+      'apps/desktop/src/renderer/src/chrome/drag-regions.test.ts',
+      'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
+    ],
+    // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
+    globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],
+    why: 'stylesheets and theme sources',
+  },
+  { tests: ['scripts/release-public/public-config.test.ts'], globs: 'release', why: 'release rules and the files they name' },
+  { tests: ['scripts/release-public/leak-rules.test.ts'], globs: 'always', why: 'the release leak rules' },
+  { tests: ['packages/daemon/src/import-meta-glob.test.ts'], globs: ['{apps,packages}/*/src/**/*.{ts,tsx}'], why: 'source files' },
+  { tests: ['scripts/worker-hooks/status-hook.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker status hook it runs' },
+];
 
 /** Files whose change falls back to the full gate. */
 const FULL_GATE_GLOBS = [
@@ -45,16 +69,17 @@ const FULL_GATE_GLOBS = [
   'packages/daemon/src/protocol.ts',
   'packages/daemon/src/migrations/**',
   'packages/daemon/src/migrate.ts',
-  'apps/desktop/src/shared/**',
-  'apps/desktop/src/preload/**',
 ];
 
-/** Run when an app file changes and no `E2E_MAP` entry claims it: the acceptance journey and a few core specs. */
 /**
- * Modules nearly every journey goes through: a change here can break any spec, so it runs the full gate rather than the
- * smoke set. CSS is not in this list; a style change is covered by the visual tests.
+ * Desktop modules nearly every journey goes through: a change here can break any spec, so it runs the whole `unit` project
+ * and every app e2e spec rather than the mapped ones or the smoke set. CSS is not in this list; a style change is covered by
+ * the visual tests.
  */
-const CORE_GLOBS = [
+const DESKTOP_CORE_GLOBS = [
+  // What the main and renderer processes both import, and the bridge between them.
+  'apps/desktop/src/shared/**',
+  'apps/desktop/src/preload/**',
   'apps/desktop/src/renderer/src/{App,main}.tsx',
   'apps/desktop/src/renderer/src/{harness,states,errors,use-action}.ts',
   // The key registry: every handler on every surface matches its keys through it.
@@ -64,11 +89,15 @@ const CORE_GLOBS = [
   'apps/desktop/src/renderer/src/board/{Board,commands,representations,TileNode,HybridTile}.tsx',
   'apps/desktop/src/renderer/src/board/{tile,tiles}.ts',
   'apps/desktop/src/main/{index,items,view,setup}.ts',
+];
+
+/** Daemon-side modules nearly every journey goes through. Nothing under `apps/desktop` can reach the daemon's tests, but these can break the desktop's, so they keep the full gate. */
+const DAEMON_CORE_GLOBS = [
   'packages/daemon/src/{rpc,params,index,daemon,sessions,agents,agent-spawns,agent-lifecycle,hook-states,deliveries,items,view-state,spawn,stop,permissions,subagents,worktrees,client,board-layout}.ts',
   'packages/daemon/src/{harness-state,claude-state,codex-state,terminal-backend,terminal-input}.ts',
 ];
 
-/** Files that need no check beyond lint, typecheck and the Markdown lint: docs, notes, the worker prompts and tooling with its own unit tests. */
+/** Files that need no check beyond lint, typecheck, the Markdown lint and knip: docs, notes, the worker prompts and tooling with its own unit tests. */
 const NO_CHECK_GLOBS = [
   'docs/**',
   '**/*.md',
@@ -93,6 +122,7 @@ const NO_CHECK_GLOBS = [
   'scripts/promo-capture.sh',
 ];
 
+/** Run when an app file changes and no `E2E_MAP` entry claims it: the acceptance journey and a few core specs. */
 export const SMOKE_SPECS = ['acceptance.spec.ts', 'app.spec.ts', 'tiles.spec.ts', 'session.spec.ts'];
 
 /** Source globs to the specs that cover them. Every glob that matches a file adds its specs. */
@@ -119,6 +149,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/board/*racker*', ['trackers.spec.ts']],
   ['apps/desktop/src/renderer/src/board/editing/**', ['selection.spec.ts', 'stickies.spec.ts']],
   ['apps/desktop/src/renderer/src/inbox/**', ['inbox.spec.ts']],
+  ['apps/desktop/src/renderer/src/master/**', ['master-panel.spec.ts', 'board-master.spec.ts', 'master-restart.spec.ts']],
   ['apps/desktop/src/renderer/src/onboarding/**', ['onboarding.spec.ts']],
   ['apps/desktop/src/renderer/src/review/**', ['reviews.spec.ts']],
   ['apps/desktop/src/renderer/src/session/Shell*', ['shell-panes.spec.ts']],
@@ -178,6 +209,23 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/{asks,board-mcp,board-mcp-http,board-ops,hook-ingress}.ts', ['ask-plan.spec.ts']],
 ];
 
+/** The parts of the release config that name files: its rewrite rules, replaced and backported files, and section cuts. */
+export interface ReleaseConfigPaths {
+  sanitise: {
+    rewrite: ReadonlyArray<{ paths?: readonly string[] }>;
+    replace: Record<string, unknown>;
+    backport: readonly string[];
+    dropSections: ReadonlyArray<{ path: string }>;
+  };
+}
+
+/** The files the release config names outright, so a change to one runs the test that checks the rules. A glob names no one file and is left out. */
+export function releaseRulePaths(config: ReleaseConfigPaths): string[] {
+  const { rewrite, replace, backport, dropSections } = config.sanitise;
+  const named = [...rewrite.flatMap((rule) => rule.paths ?? []), ...Object.keys(replace), ...backport, ...dropSections.map((section) => section.path)];
+  return [...new Set(named.filter((path) => !/[*?{}[\]!]/.test(path)))];
+}
+
 export interface Plan {
   /** True when the whole gate (`pnpm check:local`) is needed; the rest is then empty. */
   full: boolean;
@@ -186,6 +234,14 @@ export interface Plan {
   /** Spec file names under apps/desktop/e2e. Empty means no e2e run. */
   e2e: string[];
   visual: boolean;
+  /** Desktop core changed: run the whole `unit` project (`vitest run --project unit`), not `vitest related`. */
+  unitAll?: boolean;
+  /** Desktop core changed: run every app e2e spec; `e2e` is then empty. */
+  e2eAll?: boolean;
+  /** With `unitAll`: the changed files whose tests can live in the `processes` project, for `vitest related --project processes`. */
+  processes?: string[];
+  /** With `e2eAll`: also the perf project (frame-time benchmark). */
+  perf?: boolean;
   /** One line per decision, for the reviewer to check. */
   reasons: string[];
 }
@@ -195,7 +251,9 @@ const matches = (file: string, globs: readonly string[]): boolean => globs.some(
 const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 const isSpec = (file: string): boolean => /^apps\/desktop\/e2e\/[^/]+\.spec\.ts$/.test(file);
 /** Specs that `playwright test --project app` does not run: playwright.config.ts gives them their own projects. */
-const OTHER_PROJECT_SPECS = ['visual.spec.ts', 'board-perf.spec.ts', 'packaged.spec.ts', 'readme-screenshots.spec.ts'];
+const OTHER_PROJECT_SPECS = ['board-perf.spec.ts', 'packaged.spec.ts', 'readme-screenshots.spec.ts'];
+/** A visual spec or its shared helpers, in apps/desktop/e2e/visual/: the visual step runs them, not the app project's e2e. */
+const isVisualSpec = (file: string): boolean => /^apps\/desktop\/e2e\/visual\/[^/]+\.ts$/.test(file);
 const specName = (file: string): string => file.split('/').pop() as string;
 const isSnapshot = (file: string): boolean => file.startsWith('apps/desktop/e2e/visual.spec.ts-snapshots/');
 const isRenderer = (file: string): boolean =>
@@ -204,23 +262,66 @@ const isAppSource = (file: string): boolean =>
   /^(apps\/desktop\/src|packages\/[^/]+\/src)\//.test(file) && /\.(ts|tsx|html|json|sql)$/.test(file) && !isTest(file);
 
 /**
+ * Blast radius of a change to `apps/desktop`: it cannot reach the daemon, fake or tracker tests (no test in a package's `test` directory
+ * imports anything from the desktop), so only the daemon-side core, the gate and shared config run the full gate. Desktop core,
+ * which any desktop journey goes through, runs the whole `unit` project, all e2e specs and visual (docs/agents/testing-speed-spike.md, section 3).
+ */
+const isDesktopCore = (file: string): boolean => matches(file, DESKTOP_CORE_GLOBS) && !isTest(file);
+
+/** Core files a frame-time regression comes from: `check:local` ran the perf project for every core change, and this is the only per-PR gate it has. */
+const PERF_GLOBS = ['apps/desktop/src/renderer/src/{App,main}.tsx', 'apps/desktop/src/renderer/src/board/**/*.{ts,tsx}'];
+
+/** The `unit` project's tests (vitest.config.ts), which a whole-unit run already covers. */
+const isUnitProjectTest = (file: string): boolean =>
+  isTest(file) && matches(file, ['apps/*/{src,test}/**', 'packages/*/src/**', 'scripts/release-public/leak-rules.test.ts']);
+
+/** Whether `vitest related --project processes` can find anything for this file: nothing under `apps/desktop` is imported by that project's tests, and its own tests live in the packages' `test` directories and under `scripts`. */
+const canReachProcesses = (file: string): boolean => !file.startsWith('apps/desktop/') && !isUnitProjectTest(file);
+
+function widenForDesktopCore(plan: Plan, core: readonly string[]): void {
+  plan.unitAll = true;
+  plan.e2eAll = true;
+  plan.e2e = [];
+  plan.processes = plan.unit.filter(canReachProcesses);
+  plan.reasons = plan.reasons.filter((reason) => !/^(e2e|unit): /.test(reason));
+  plan.reasons.push(
+    `unit: desktop core changed (${core.join(', ')}), so the whole unit project runs, and ${plan.processes.length > 0 ? `vitest related in the processes project on ${plan.processes.length} file(s)` : 'nothing else'}`,
+    'e2e: desktop core changed, so every app spec runs',
+  );
+  if (core.some((file) => matches(file, PERF_GLOBS))) {
+    plan.perf = true;
+    plan.reasons.push('e2e: a board or app-shell core file changed, so the perf project runs too (check:local ran it; no other per-PR gate has it)');
+  }
+  if (core.some((file) => !file.startsWith('apps/desktop/src/main/')) && !plan.visual) {
+    plan.visual = true;
+    plan.reasons = plan.reasons.filter((reason) => !reason.startsWith('visual: '));
+    plan.reasons.push('visual: a renderer, shared or preload core file changed');
+  }
+}
+
+/**
  * `exists` says whether a changed path is still in the working tree (a deleted or renamed-away spec is not, and cannot run).
  * It defaults to true so the selection stays pure for callers that have no checkout.
  */
-export function selectChecks(changed: readonly string[], exists: (file: string) => boolean = () => true): Plan {
+export function selectChecks(
+  changed: readonly string[],
+  exists: (file: string) => boolean = () => true,
+  /** Files a release rule names, which `main.ts` reads from the release config; empty when there is none. */
+  releaseRulePaths: readonly string[] = [],
+): Plan {
   const files = [...new Set(changed)].sort();
   const plan: Plan = { full: false, unit: [], e2e: [], visual: false, reasons: [] };
   if (files.length === 0) {
-    plan.reasons.push('no changed files: only lint, typecheck and markdownlint');
+    plan.reasons.push('no changed files: only lint, typecheck, markdownlint and knip');
     return plan;
   }
 
   const isRecognised = (file: string): boolean =>
-    matches(file, NO_CHECK_GLOBS) || isTest(file) || isSpec(file) || isSnapshot(file) || isAppSource(file) || isRenderer(file);
+    matches(file, NO_CHECK_GLOBS) || isTest(file) || isSpec(file) || isVisualSpec(file) || isSnapshot(file) || isAppSource(file) || isRenderer(file);
   const gate = files.filter(
     (file) =>
       (matches(file, FULL_GATE_GLOBS) && !isSpec(file)) ||
-      matches(file, CORE_GLOBS) ||
+      matches(file, DAEMON_CORE_GLOBS) ||
       (isSpec(file) && file.endsWith('board-perf.spec.ts')) ||
       !isRecognised(file),
   );
@@ -232,16 +333,24 @@ export function selectChecks(changed: readonly string[], exists: (file: string) 
 
   plan.unit = files.filter((file) => /\.(ts|tsx|css|json)$/.test(file) && !file.startsWith('apps/desktop/e2e/') && !file.startsWith('docs/'));
   const changedCode = plan.unit.length;
-  if (changedCode > 0 && exists(LEAK_RULES_TEST) && !plan.unit.includes(LEAK_RULES_TEST)) plan.unit.push(LEAK_RULES_TEST);
-  plan.reasons.push(
-    changedCode > 0 ? `unit: vitest related on ${changedCode} changed file(s)${plan.unit.length > changedCode ? ', and the release leak rules' : ''}` : 'unit: skipped, no code changed',
-  );
+  const scanned: string[] = [];
+  for (const { tests, globs, why } of SCANNERS) {
+    const named = globs === 'release' ? releaseRulePaths : globs === 'always' ? [] : globs;
+    const hit = globs === 'always' ? changedCode > 0 : files.some((file) => (globs === 'release' ? matches(file, ['release/**']) || named.includes(file) : matches(file, named)));
+    const add = tests.filter((test) => hit && exists(test) && !plan.unit.includes(test));
+    if (add.length === 0) continue;
+    plan.unit.push(...add);
+    scanned.push(`${add.map((test) => test.split('/').pop()).join(', ')} (${why})`);
+  }
+  const related = changedCode > 0 ? `vitest related on ${changedCode} changed file(s)` : '';
+  const scanners = scanned.length > 0 ? `the scanners: ${scanned.join('; ')}` : '';
+  plan.reasons.push(related || scanners ? `unit: ${[related, scanners].filter(Boolean).join(', and ')}` : 'unit: skipped, no code changed');
 
   const specs = new Set<string>();
   for (const file of files.filter(isSpec)) {
     const name = specName(file);
     if (OTHER_PROJECT_SPECS.includes(name)) {
-      plan.reasons.push(`e2e: ${file} runs in its own project, not in the app one; ${name === 'visual.spec.ts' ? 'the visual step covers it' : 'no gate step runs it'}`);
+      plan.reasons.push(`e2e: ${file} runs in its own project, not in the app one; no gate step runs it`);
     } else if (!exists(file)) {
       plan.reasons.push(`e2e: ${file} was deleted or moved, so nothing to run`);
     } else {
@@ -264,8 +373,10 @@ export function selectChecks(changed: readonly string[], exists: (file: string) 
   plan.e2e = [...specs].sort();
   if (plan.e2e.length === 0) plan.reasons.push('e2e: skipped, no app source or spec changed');
 
-  const look = files.filter((file) => isRenderer(file) || isSnapshot(file) || file === 'apps/desktop/e2e/visual.spec.ts');
+  const look = files.filter((file) => isRenderer(file) || isSnapshot(file) || isVisualSpec(file));
   plan.visual = look.length > 0;
-  plan.reasons.push(plan.visual ? `visual: renderer code, styles or baselines changed (${look.length} file(s))` : 'visual: skipped, no renderer file or baseline changed');
+  plan.reasons.push(plan.visual ? `visual: renderer code, styles, visual specs or baselines changed (${look.length} file(s))` : 'visual: skipped, no renderer file or baseline changed');
+  const core = files.filter(isDesktopCore);
+  if (core.length > 0) widenForDesktopCore(plan, core);
   return plan;
 }

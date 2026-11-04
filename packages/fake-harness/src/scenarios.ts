@@ -4,7 +4,7 @@ import { demoScripts } from './demo-scenarios.ts';
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'ask-selection', 'background', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'emoji-link', 'ask-selection', 'background', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -395,6 +395,8 @@ const scripts: Record<FakeScenario, Script> = {
    * `Lead a crowded crew: <task>` starts a worker with a long name, a role and a model, sets its status line, and starts a reviewer of it, leaving both running.
    * `Print your board identity` echoes the board token. `Gate in the background` ends two turns, each followed by its
    * idle prompt, as a gate runs in its background, then writes its handover and runs `agent-board handoff`.
+   * `Work until interrupted` says so and holds the turn open until the user interrupts it, `Work until interrupted, Stop in flight` then
+   * fires its `Stop` too, after the interrupt;
    * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
    * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
    * `Ask permission` plays `permission`; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
@@ -517,6 +519,14 @@ const scripts: Record<FakeScenario, Script> = {
       await session.say('Handed off.');
       return session.stop();
     }
+    if (prompt === 'Work until interrupted') {
+      await session.say('Working until interrupted.');
+      return session.holdTurn();
+    }
+    if (prompt === 'Work until interrupted, Stop in flight') {
+      await session.say('Working until interrupted.');
+      return session.holdTurn(true);
+    }
     if (prompt === 'Work slowly') {
       await session.runShell('sleep 5');
       await session.say('Slow work done.');
@@ -558,6 +568,16 @@ const scripts: Record<FakeScenario, Script> = {
     await session.say(
       ['## The plan', '', ...reply!.split('\n').map((line) => `- ${line.trim()}`), '', '```ts', 'const answer: number = 42;', '```'].join('\n'),
     );
+    await session.stop();
+  },
+
+  /**
+   * Answers with a line of emoji (plain, a skin tone, a ZWJ family, a flag, and two that need a variation selector)
+   * followed by the prompt, which a test makes an address: the terminal must lay the address out where it is drawn.
+   */
+  async 'emoji-link'(session, prompt) {
+    await session.submit(prompt);
+    await session.say(`🚀 👍🏽 👨‍👩‍👧 🇬🇧 ❤️ ⚠️ ${prompt.trim()}`, true);
     await session.stop();
   },
 

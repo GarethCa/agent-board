@@ -228,7 +228,8 @@ function PermissionCard({ agent, prompt, onDefer, onShowTerminal }: { agent: Age
         </code>
       )}
       <p className="pane-decision-countdown" data-testid="permission-countdown">
-        {call.destructive ? 'This can’t be undone. ' : ''}Then its terminal asks · {secondsLeft(prompt, now)} s
+        {call.destructive ? 'This can’t be undone. ' : ''}
+        {prompt.asksInTerminal ? 'Its terminal asks too' : `Then its terminal asks · ${secondsLeft(prompt, now)} s`}
       </p>
       <footer className="pane-decision-foot pane-decision-actions">
         <DecideLater onDefer={onDefer} />

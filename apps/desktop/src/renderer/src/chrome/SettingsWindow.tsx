@@ -24,7 +24,7 @@ import { OpensOnSetting } from './OpensOnSetting';
 import { SETTINGS_GROUPS, settingsPaneFrom, settingsPaneText, type SettingsGroupId, type SettingsHome, type SettingsPane } from './settings-ia';
 import { drawnPane, drawnSections, searchable, searchSettings, type SettingsHit } from './settings-search';
 import { SimplifiedDesignSetting } from './SimplifiedDesignSetting';
-import { UsagePacingSetting, UsagePlanSetting, UsageThresholdsSetting } from './UsageSetting';
+import { UsagePlanSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
 
 type OnError = (action: string) => (error: unknown) => void;
@@ -98,10 +98,6 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <MutedNotificationsSetting onError={onError} />;
     case 'usage.plan':
       return <UsagePlanSetting />;
-    case 'usage.thresholds':
-      return <UsageThresholdsSetting onError={onError} />;
-    case 'usage.pacing':
-      return <UsagePacingSetting onError={onError} />;
     case 'accounts.terminals':
       return <ExternalHooksToggle onError={onError} />;
     case 'advanced.programs':

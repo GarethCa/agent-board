@@ -29,7 +29,6 @@
       ],
       "ignoreDependencies": [
         "node-pty",
-        "@xterm/headless",
         "@xterm/addon-serialize"
       ]
     },

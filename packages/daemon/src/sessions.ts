@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import xtermHeadless from '@xterm/headless';
 import xtermSerialize from '@xterm/addon-serialize';
+import xtermGraphemes from '@xterm/addon-unicode-graphemes';
 import { BOARD_SESSION_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV, BOARD_ZONE_ENV } from './board-env.ts';
 import { HOOK_TOKEN_ENV, HOOK_URL_ENV } from './hook-forwarder.ts';
 import { hashToken, newToken } from './tokens.ts';
@@ -484,6 +485,8 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     const model = new xtermHeadless.Terminal({ cols, rows, scrollback: SCROLLBACK_LINES, allowProposedApi: true });
     const serializer = new xtermSerialize.SerializeAddon();
     model.loadAddon(serializer);
+    // The same widths as the renderer's terminal, so a snapshot's rows hold the cells the harness drew.
+    model.loadAddon(new xtermGraphemes.UnicodeGraphemesAddon());
     if (spec.restore !== undefined) model.write(spec.restore);
     const info: SessionInfo = {
       id,

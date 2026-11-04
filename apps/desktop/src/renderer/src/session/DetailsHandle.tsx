@@ -16,9 +16,6 @@ export function useDetailsWidth(): number {
   return useSyncExternalStore(onDetailsWidth, chosenDetailsWidth, () => DEFAULT_DETAILS_WIDTH);
 }
 
-/** For a strip at the body's end, the arrow that widens it is the left one. */
-const MIRRORED_KEYS: Record<string, string> = { ArrowLeft: 'ArrowRight', ArrowRight: 'ArrowLeft' };
-
 /** The icon rail's width, which `--size-rail` sets: the handle's value while the strip is collapsed. */
 const RAIL_WIDTH = 54;
 
@@ -26,11 +23,10 @@ const RAIL_WIDTH = 54;
  * The drag handle on the border between a session's details strip and its terminal: drag it to resize the
  * strip, below its minimum to collapse it to the icon rail, and out from the rail to open it again; arrow keys step it
  * and a double-click resets it. The width is one preference for every window, so the terminal beside it just refits
- * (throttled) when its element changes size. Placed in the body, right after the strip; or, for a strip
- * at the body's `end` (the Simplified design's inspector), right before it, where dragging and the arrows go the other
- * way and pulling it below its minimum hides it.
+ * (throttled) when its element changes size. Placed in the body, right after the strip (the details
+ * strip or the inspector, both on the left); pulling the inspector below its minimum hides it.
  */
-export function DetailsHandle({ collapsed, onCollapsed, side = 'start' }: { collapsed: boolean; onCollapsed(collapsed: boolean): void; side?: 'start' | 'end' }) {
+export function DetailsHandle({ collapsed, onCollapsed }: { collapsed: boolean; onCollapsed(collapsed: boolean): void }) {
   const width = useDetailsWidth();
   const handle = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -56,15 +52,15 @@ export function DetailsHandle({ collapsed, onCollapsed, side = 'start' }: { coll
     if (collapsed) onCollapsed(false);
   };
 
-  /** How far the pointer is from the body's edge on the strip's side, on screen. */
-  const fromSide = (clientX: number, box: DOMRect) => (side === 'start' ? clientX - box.left : box.right - clientX);
+  /** How far the pointer is from the body's left edge, on screen. */
+  const fromSide = (clientX: number, box: DOMRect) => clientX - box.left;
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const body = event.currentTarget.parentElement;
     if (event.button !== 0 || !body) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const edge = (side === 'start' ? event.currentTarget.previousElementSibling : event.currentTarget.nextElementSibling) as HTMLElement | null;
+    const edge = event.currentTarget.previousElementSibling as HTMLElement | null;
     const box = body.getBoundingClientRect();
     grab.current = body.offsetWidth > 0 ? fromSide(event.clientX, box) / (box.width / body.offsetWidth) - (edge?.offsetWidth ?? 0) : 0;
     setDragging(true);
@@ -77,7 +73,7 @@ export function DetailsHandle({ collapsed, onCollapsed, side = 'start' }: { coll
     apply(detailsAfterDrag(fromSide(event.clientX, box) / scale - grab.current, body.offsetWidth));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const size = detailsAfterKey(side === 'start' ? event.key : (MIRRORED_KEYS[event.key] ?? event.key), width, collapsed, bodyWidth());
+    const size = detailsAfterKey(event.key, width, collapsed, bodyWidth());
     if (!size) return;
     event.preventDefault();
     apply(size);

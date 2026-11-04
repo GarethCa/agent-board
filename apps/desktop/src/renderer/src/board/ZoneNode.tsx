@@ -3,15 +3,13 @@ import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
 import { ChevronDown, CircleDot, Ellipsis, GitBranch, LayoutGrid, Link2, ListPlus, Plus, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming } from '../ui';
 import { folderLabel } from './folders';
-import { bindEntries, priorityEntries, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZonePriorityActions, type ZoneTabChip } from './menu-model';
-import { ipcErrorMessage } from '../../../shared/errors';
+import { bindEntries, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
 import { useSimplified } from '../design';
 import { ProjectWell } from './ProjectWell';
-import { priorityChip, zoneHold, zonePriority } from './zone-priority';
 import {
   MIN_ZONE_SIZE,
   TRACKER_PROVIDERS,
@@ -143,43 +141,8 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
   );
 }
 
-/**
- * Sets a zone's priority, or lifts its hold for usage; `failed` hears why a change didn't go through (a daemon from before
- * priorities refuses one).
- */
-export function priorityActions(failed: (why: string) => void = () => {}): ZonePriorityActions {
-  const fail = (what: string) => (error: unknown) => failed(`Couldn't ${what}: ${ipcErrorMessage(error)}`);
-  return {
-    setPriority: (zone, priority) => void window.agentBoard.zones.configure(zone.id, { priority }).catch(fail('set its priority')),
-    releaseHold: (zone) => void window.agentBoard.orchestrators.release(zone.id).catch(fail('lift the hold')),
-  };
-}
-
-/**
- * The zone's priority on its tab, which the usage thresholds in Settings speak in, as a menu to change it; while the
- * zone is held for usage, it says so, with why and Override in the menu. A change that fails says why on the chip.
- */
-function PriorityChip({ zone }: { zone: Zone }) {
-  const [failed, setFailed] = useState<string>();
-  const chip = priorityChip(zone);
-  return (
-    <Menu entries={priorityEntries(zone, priorityActions(setFailed))} onOpenChange={(open) => open && setFailed(undefined)}>
-      <Chip
-        className="zone-tab-control zone-priority nodrag"
-        data-priority={zonePriority(zone)}
-        data-held={zoneHold(zone) !== null || undefined}
-        data-failed={failed === undefined ? undefined : ''}
-        aria-label={chip.label}
-        title={failed ?? chip.title}
-      >
-        {chip.text}
-      </Chip>
-    </Menu>
-  );
-}
-
 /** The tab's chips, the first to fold into ⋯ first when the zone is too narrow for them all. */
-const FOLD_ORDER: readonly ZoneTabChip[] = ['tidy', 'issue', 'priority', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
+const FOLD_ORDER: readonly ZoneTabChip[] = ['tidy', 'issue', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
 
 /** A chip on the tab now, and what ⋯ offers in its place once it folds: nothing when ⋯ has it already. */
 interface TabChip {
@@ -246,7 +209,7 @@ function ClassicZone({
         ? zone.repoRoot
         : `${zone.repoRoot}/${zone.folder}`;
   const tracker = zone.tracker && { ...TRACKER_PROVIDERS[zone.tracker.provider], scope: zone.tracker.scope };
-  const tabEntries = zoneTabEntries(zone, noAgents, { newAgent, newShell, pickTracker, bind, cancelClone, addIssue, pickDefaultRepo: binding.pickDefaultRepo, tidy: binding.tidy, ...priorityActions() });
+  const tabEntries = zoneTabEntries(zone, noAgents, { newAgent, newShell, pickTracker, bind, cancelClone, addIssue, pickDefaultRepo: binding.pickDefaultRepo, tidy: binding.tidy });
   // The chips on the tab now, in the order drawn, each with what ⋯ offers in its place once it folds. A chip is
   // drawn under the same rule `zoneTabEntries` gives it a row by: change one, change the other.
   const chips: TabChip[] = [
@@ -367,24 +330,17 @@ function ClassicZone({
       entry: tabEntries.shell,
     },
     {
-      key: 'priority',
-      chip: <PriorityChip zone={zone} />,
-      entry: tabEntries.priority,
-    },
-    {
       key: 'tidy',
       chip: <TidyChips zone={zone} binding={binding} />,
       entry: tabEntries.tidy,
     },
   ];
-  // A Normal zone that isn't held gives up its priority chip first: it is the one the user rarely changes.
-  const order = zonePriority(zone) === 'normal' && zoneHold(zone) === null ? (['priority', ...FOLD_ORDER.filter((key) => key !== 'priority')] as const) : FOLD_ORDER;
-  const foldable = order.filter((key) => chips.some((chip) => chip.key === key));
+  const foldable = FOLD_ORDER.filter((key) => chips.some((chip) => chip.key === key));
   // What changes the tab's width without changing the zone's.
-  const content = [zone.name, zone.tracker?.scope, zone.defaultRepo, clone?.phase, clone?.percent, zonePriority(zone), zoneHold(zone)?.reason].join('\n');
+  const content = [zone.name, zone.tracker?.scope, zone.defaultRepo, clone?.phase, clone?.percent].join('\n');
   const { stripRef, tabRef, folded } = useZoneTabFold(foldable, content);
   // Each folded chip's action, at the head of ⋯, the most needed first.
-  const foldedEntries = order.toReversed().flatMap((key) => {
+  const foldedEntries = FOLD_ORDER.toReversed().flatMap((key) => {
     const entry = folded.has(key) ? chips.find((chip) => chip.key === key)?.entry : undefined;
     return entry === undefined ? [] : [entry];
   });

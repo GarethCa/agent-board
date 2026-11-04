@@ -12,7 +12,7 @@ import { cutText } from './text-cut.ts';
  * Hooks of a turn's work, which a turn interrupted mid-hook can still deliver after the interrupt. Until the next
  * prompt they are stale: none may move the agent off the `idle` the interrupt left it in.
  */
-const TURN_WORK_HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact']);
+const TURN_WORK_HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact']);
 
 /** Whether `payload` is a hook from an interrupted turn's work, landing after the interrupt. */
 function isStaleAfterInterrupt(payload: Record<string, unknown>): boolean {
@@ -279,7 +279,9 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         drafting.delete(sessionId);
       } else if (interrupted.has(sessionId) && isStaleAfterInterrupt(payload)) return undefined;
       const settled = permissions.afterHook(sessionId, payload);
-      const reply = payload.hook_event_name === 'PermissionRequest' ? permissions.hold(sessionId, payload, signal) : undefined;
+      // Claude asks in its terminal while the agent's own request is held; a subagent's dialog may wait on its hook first.
+      const asksInTerminal = row.harness === 'claude' && payload.agent_id === undefined;
+      const reply = payload.hook_event_name === 'PermissionRequest' ? permissions.hold(sessionId, payload, signal, asksInTerminal) : undefined;
       if (payload.hook_event_name === 'PermissionRequest') {
         permissionSettled.delete(sessionId);
         // Another prompt is a new ask, even when the state was already needs-permission.

@@ -5,8 +5,8 @@ import { browseForZone, classicOnly, pickFolderNext, removeDataDir, tempDataDir,
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
-// An agent's inspector: under the Simplified design hidden until shown, at the window's trailing edge, a short list
-// resized on the handle before it, with its technical details only while Show technical details is on; under Classic,
+// An agent's inspector: under the Simplified design hidden until shown, at the window's leading edge, a short list
+// resized on the handle after it, with its technical details only while Show technical details is on; under Classic,
 // in place of the details strip while the Agent sidebar setting is Simple.
 
 const inspector = (window: Page) => sessionWindow(window).getByTestId('inspector');
@@ -32,7 +32,7 @@ async function dragHandle(window: Page, dx: number): Promise<void> {
   await window.mouse.up();
 }
 
-test("an agent's inspector opens from the header at the window's trailing edge, resizes on its handle, hides below its minimum and is remembered", async () => {
+test("an agent's inspector opens from the header at the window's leading edge, resizes on its handle, hides below its minimum and is remembered", async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -48,13 +48,13 @@ test("an agent's inspector opens from the header at the window's trailing edge, 
     await expect(handle(window)).toHaveCount(0);
     await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
 
-    // Shown from the header, at the trailing edge: its status, who started it, and the Work group.
+    // Shown from the header, at the leading edge: its status, who started it, and the Work group.
     await toggle(window).click();
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'true');
     await expect(inspector(window)).toBeVisible();
     const body = (await sessionWindow(window).locator('.session-window-body').boundingBox())!;
     const box = (await inspector(window).boundingBox())!;
-    expect(Math.round(box.x + box.width)).toBe(Math.round(body.x + body.width));
+    expect(Math.round(box.x)).toBe(Math.round(body.x));
     await expect(inspector(window).getByTestId('inspector-status-line')).toContainText('started by you');
     await expect(inspector(window).getByRole('region', { name: 'Work' })).toContainText('Pull request');
     // Its technical details wait for the switch, and its fold for something to hold.
@@ -62,20 +62,20 @@ test("an agent's inspector opens from the header at the window's trailing edge, 
     await expect(inspector(window).getByRole('region', { name: 'More details' })).toHaveCount(0);
     await expect.poll(() => width(window)).toBe(316);
 
-    // Dragged left it widens, and the left arrow widens it too: it is the leading edge.
-    await dragHandle(window, -80);
+    // Dragged right it widens, and the right arrow widens it too: the handle is on its trailing edge.
+    await dragHandle(window, 80);
     await expect.poll(() => width(window)).toBe(396);
     await handle(window).focus();
-    await window.keyboard.press('ArrowLeft');
-    await expect.poll(() => width(window)).toBe(412);
     await window.keyboard.press('ArrowRight');
+    await expect.poll(() => width(window)).toBe(412);
+    await window.keyboard.press('ArrowLeft');
     await expect.poll(() => width(window)).toBe(396);
     // Double-click goes back to the default width.
     await handle(window).dblclick();
     await expect.poll(() => width(window)).toBe(316);
 
     // Pulled below its minimum it hides; ⌘I shows it again at its width.
-    await dragHandle(window, 2000);
+    await dragHandle(window, -2000);
     await expect(inspector(window)).toHaveCount(0);
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'false');
     await window.keyboard.press('ControlOrMeta+i');
@@ -83,10 +83,10 @@ test("an agent's inspector opens from the header at the window's trailing edge, 
     await expect.poll(() => width(window)).toBe(316);
 
     // Stepped below its minimum from the keyboard it hides too, and the focus goes to the header's toggle.
-    await dragHandle(window, 116);
+    await dragHandle(window, -116);
     await expect.poll(() => width(window)).toBe(200);
     await handle(window).focus();
-    await window.keyboard.press('ArrowRight');
+    await window.keyboard.press('ArrowLeft');
     await expect(inspector(window)).toHaveCount(0);
     await expect(toggle(window)).toBeFocused();
     await window.keyboard.press('Enter');
@@ -211,7 +211,7 @@ test("Classic's Simple sidebar puts the inspector in place of the details strip,
 
     // It resizes on its handle as the Simplified design's does, and the header's toggle hides and shows it.
     await expect.poll(() => width(window)).toBe(316);
-    await dragHandle(window, -80);
+    await dragHandle(window, 80);
     await expect.poll(() => width(window)).toBe(396);
     await handle(window).dblclick();
     await expect.poll(() => width(window)).toBe(316);

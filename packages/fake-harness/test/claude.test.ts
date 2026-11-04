@@ -10,6 +10,18 @@ afterAll(removeTempDirs);
 const COMMON_FIELDS = ['session_id', 'transcript_path', 'cwd', 'permission_mode', 'hook_event_name'];
 
 
+/**
+ * The hooks' names in order, but for a permission prompt's `Notification` and `PermissionRequest`, which go out side by
+ * side as the prompt shows: those two come notification first, whichever arrived first.
+ */
+function asked(events: { hook_event_name?: unknown }[]): unknown[] {
+  const names = events.map((event) => event.hook_event_name);
+  const request = names.indexOf('PermissionRequest');
+  const notification = names.indexOf('Notification');
+  if (request !== -1 && notification === request + 1) [names[request], names[notification]] = [names[notification], names[request]];
+  return names;
+}
+
 describe('fake claude', () => {
   let recorder: HookRecorder;
 
@@ -174,7 +186,7 @@ describe('fake claude', () => {
     expect(recorder.events.at(-1)).toMatchObject({ hook_event_name: 'SessionEnd', reason: 'prompt_input_exit' });
   });
 
-  it('permission: a PermissionRequest hook that answers allow lets the tool run without prompting', async () => {
+  it('permission: a PermissionRequest hook that answers allow lets the tool run, with no answer typed at the prompt it shows meanwhile', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
       event.hook_event_name === 'PermissionRequest'
@@ -185,9 +197,32 @@ describe('fake claude', () => {
     const result = await runFake('claude', { scenario: 'permission', args: ['-p', '--settings', settings(), 'clean up'] });
 
     expect(result.stdout).toContain('Removed dist.');
-    const names = recorder.events.map((event) => event.hook_event_name);
-    expect(names).toEqual(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd']);
-    expect(recorder.events[3]).toMatchObject({ tool_name: 'Bash', tool_input: { command: 'rm -rf dist' }, permission_suggestions: [] });
+    expect(asked(recorder.events)).toEqual([
+      'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd',
+    ]);
+    expect(recorder.events.find((event) => event.hook_event_name === 'PermissionRequest')).toMatchObject({
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf dist' },
+      permission_suggestions: [],
+    });
+  });
+
+  it("permission: asks at its own prompt while the PermissionRequest hook is held, as Claude does, and an answer typed there wins", async () => {
+    await recorder.close();
+    // The hook is held and never answers, as the board holds it for the Needs-you inbox.
+    recorder = await startHookRecorder((event) => (event.hook_event_name === 'PermissionRequest' ? new Promise(() => {}) : undefined));
+    const { child, done } = startFake('claude', { scenario: 'permission', args: ['--settings', settings(), 'clean up'] });
+    const shown = untilStdout(child, 'Do you want to allow Bash? (y/n)');
+    await untilEvents(recorder, 'PermissionRequest');
+    await shown;
+
+    const ran = untilStdout(child, 'Removed dist.');
+    child.stdin.write('y\n');
+    await ran;
+    await untilEvents(recorder, 'Stop');
+    expect(recorder.events.map((event) => event.hook_event_name)).toContain('PostToolUse');
+    child.stdin.end();
+    await done;
   });
 
   it('permission: an allow carrying a session-scoped rule is remembered, and a plain allow is not', async () => {
@@ -231,10 +266,10 @@ describe('fake claude', () => {
     expect(result.stdout).toContain('Do you want to allow Bash? (y/n)');
     expect(result.stdout).toContain('Removed dist.');
     const names = recorder.events.map((event) => event.hook_event_name);
-    expect(names).toEqual([
-      'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'Notification', 'PostToolUse', 'Stop', 'SessionEnd',
+    expect(asked(names.map((hook_event_name) => ({ hook_event_name })))).toEqual([
+      'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd',
     ]);
-    expect(recorder.events[4]).toMatchObject({ notification_type: 'permission_prompt' });
+    expect(recorder.events.find((event) => event.hook_event_name === 'Notification')).toMatchObject({ notification_type: 'permission_prompt' });
   });
 
   it('subagent: spawns a subagent through the Agent tool with SubagentStart/SubagentStop and its own transcript', async () => {

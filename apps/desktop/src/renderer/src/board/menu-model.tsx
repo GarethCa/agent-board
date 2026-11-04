@@ -17,7 +17,6 @@ import {
   FolderGit2,
   FolderPlus,
   FoldVertical,
-  Gauge,
   GitBranch,
   Hash,
   LayoutGrid,
@@ -47,7 +46,6 @@ import {
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
   ZONE_FILL_OPACITY,
-  ZONE_PRIORITIES,
   type Agent,
   type ArrangeSpacing,
   type ExternalSession,
@@ -56,7 +54,6 @@ import {
   type Shell,
   type Zone,
   type ZoneBinding,
-  type ZonePriority,
 } from '@agent-board/daemon/protocol';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
@@ -69,7 +66,6 @@ import type { ClickOpens } from './click-opens';
 import { folderLabel } from './folders';
 import { pauseControl } from './paused';
 import type { TileActions } from './tile';
-import { PRIORITY_LABELS, zoneHold, zonePriority } from './zone-priority';
 
 /** A row of a model menu, with the id the menu bar and tests know it by. Headings and separators carry none. */
 export type ModelEntry =
@@ -296,27 +292,6 @@ export function tidyMenu(zone: Zone, newZones: ArrangeSpacing | undefined, actio
   ];
 }
 
-/** What a zone's priority menu does: pick its priority, or lift its hold for usage. */
-export interface ZonePriorityActions {
-  setPriority(zone: Zone, priority: ZonePriority): void;
-  releaseHold(zone: Zone): void;
-}
-
-/** The zone's priorities to pick from, its own checked, and while it is held for usage, why, with Override. */
-export function priorityEntries(zone: Zone, actions: ZonePriorityActions): ModelEntry[] {
-  const hold = zoneHold(zone);
-  return [
-    ...ZONE_PRIORITIES.map((priority) => ({ id: `priority-${priority}`, label: PRIORITY_LABELS[priority], checked: zonePriority(zone) === priority, onSelect: () => actions.setPriority(zone, priority) })),
-    ...(hold === null
-      ? []
-      : [
-          'separator' as const,
-          { heading: `Held: ${hold.reason}` },
-          { id: 'override', label: 'Override', hint: 'Lift the hold: its starts and hand-offs go on', onSelect: () => actions.releaseHold(zone) },
-        ]),
-  ];
-}
-
 /** A group's ways to be bound: to a repo, to a new project, or to a tracker. */
 export function bindEntries(zone: Zone, actions: { bind(zone: Zone, as: ZoneBinding): void; pickTracker(zone: Zone): void }): ModelEntry[] {
   return [
@@ -327,10 +302,10 @@ export function bindEntries(zone: Zone, actions: { bind(zone: Zone, as: ZoneBind
 }
 
 /** A chip on a zone's tab that can fold into its ⋯ menu. */
-export type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy' | 'priority';
+export type ZoneTabChip = 'default-repo' | 'cancel-clone' | 'tracker' | 'issue' | 'bind' | 'agent' | 'shell' | 'tidy';
 
 /** The handlers a zone's tab chips call. */
-export interface ZoneTabActions extends ZonePriorityActions {
+export interface ZoneTabActions {
   newAgent(zone: Zone): void;
   newShell(zone: Zone): void;
   pickTracker(zone: Zone): void;
@@ -370,7 +345,6 @@ export function zoneTabEntries(zone: Zone, noAgents: string | undefined, actions
     bind: zone.repoRoot === null && clone === null ? { id: 'tab-bind', label: 'Bind…', icon: <Link2 />, entries: bindEntries(zone, actions) } : undefined,
     agent: { id: 'tab-new-agent', label: 'New agent', icon: <Plus />, disabled: noAgents !== undefined, hint: noAgents, onSelect: () => actions.newAgent(zone) },
     shell: { id: 'tab-new-shell', label: 'New shell', icon: <Plus />, onSelect: () => actions.newShell(zone) },
-    priority: { id: 'tab-priority', label: 'Priority', icon: <Gauge />, entries: priorityEntries(zone, actions) },
     // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
     tidy: clone === null ? undefined : { id: 'tab-tidy', label: 'Tidy', icon: <LayoutGrid />, onSelect: () => actions.tidy(zone) },
   };
@@ -625,9 +599,8 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
       ...(zone.tracker === null ? [] : [addIssueRow(input)]),
     ],
   };
-  const priority: ModelEntry = { id: 'priority', label: 'Priority', icon: <Gauge />, entries: priorityEntries(zone, actions) };
   const folder: ModelEntry = { id: 'folder', label: 'Folder', icon: <FolderGit2 />, entries: folderEntries(input) };
-  if (zone.clone !== null) return [newAgentRow(input, 'New agent'), newShellRow(input, 'New terminal'), 'separator', tidyUpRow(input), priority, issues, folder];
+  if (zone.clone !== null) return [newAgentRow(input, 'New agent'), newShellRow(input, 'New terminal'), 'separator', tidyUpRow(input), issues, folder];
   return [
     newAgentRow(input, 'New agent'),
     newShellRow(input, 'New terminal'),
@@ -656,7 +629,6 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
         { id: 'new-zone-spacing', label: 'Default for new projects…', icon: <Rows3 />, detail: newZones === undefined ? 'Settings' : `${SPACING_LABELS[newZones]} · Settings`, onSelect: actions.openSettings },
       ],
     },
-    priority,
     issues,
     folder,
     { id: 'agents', label: 'Agents in this project', icon: <Network />, entries: agentSettingEntries(input) },

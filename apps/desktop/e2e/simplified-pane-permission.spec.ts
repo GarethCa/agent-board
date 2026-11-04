@@ -37,7 +37,7 @@ async function withApp(scenario: FakeScenario, body: (window: Page, app: Electro
 
 const openTerminal = (window: Page) => sessionWindow(window).getByRole('button', { name: 'Terminal' }).click();
 
-test('a command to run reads as a sentence, Allow once runs it, and the harness never asks in its terminal', async () => {
+test('a command to run reads as a sentence, and Allow once runs it', async () => {
   await withApp('long-permission', async (window) => {
     const agent = await spawn(window, 'pnpm test');
     await expect(tile(window)).toHaveAttribute('data-state', 'needs-permission');
@@ -48,6 +48,8 @@ test('a command to run reads as a sentence, Allow once runs it, and the harness 
     await expect(frame).toContainText(`${agent.name} wants to`);
     await expect(frame.getByTestId('permission-sentence')).toHaveText('Run a command: run it');
     await expect(frame.getByTestId('permission-detail')).toHaveText('pnpm test');
+    // Claude asks in its terminal while the board holds the request, so there is no hold to count down.
+    await expect(frame.getByTestId('permission-countdown')).toHaveText('Its terminal asks too');
     await expect(frame.getByRole('button')).toHaveText([/^Decide later/, 'Deny', 'Allow pnpm test for this session', 'Allow once']);
     // The card has the keyboard but answers nothing on its own: the agent still waits.
     await expect(frame).toBeFocused();
@@ -57,7 +59,6 @@ test('a command to run reads as a sentence, Allow once runs it, and the harness 
     await expect(frame).toHaveCount(0);
     await expect.poll(async () => (await latest(window, agent)).permissions).toHaveLength(0);
     await openTerminal(window);
-    await expect(sessionWindow(window).getByTestId('session-terminal')).not.toContainText('(y/n)');
     await expect(sessionWindow(window).getByTestId('session-terminal')).not.toContainText('for the session');
   });
 });
@@ -129,6 +130,7 @@ test('under Codex, Allow once and Deny reach the harness and there is no Allow f
     const frame = decision(window);
     await expect(frame.getByTestId('permission-sentence')).toHaveText('Run a command: run it');
     await expect(frame.getByRole('button')).toHaveText([/^Decide later/, 'Deny', 'Allow once']);
+    await expect(frame.getByTestId('permission-countdown')).toContainText('Then its terminal asks');
     await frame.getByRole('button', { name: 'Allow once' }).click();
     await expect.poll(async () => (await latest(window, allowed)).permissions).toHaveLength(0);
     await openTerminal(window);

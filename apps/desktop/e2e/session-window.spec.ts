@@ -238,8 +238,8 @@ test('⌘\\ belongs to the text while typing, in a terminal leaving the board me
 test("a permission prompt shows a Show prompt banner over the terminal, and answering it in the terminal puts it away", async () => {
   const { dir, repo, env } = scratch('permission');
   const dataDir = tempDataDir();
-  // The inbox's hold lapses at once, so the fake asks in its terminal.
-  const { app, window } = await launch(dataDir, { ...env, AGENT_BOARD_PERMISSION_HOLD_MS: '500' });
+  // Claude asks in its terminal while the inbox holds the request.
+  const { app, window } = await launch(dataDir, env);
   try {
     await pickFolderNext(app, repo);
     await browseForZone(window);
