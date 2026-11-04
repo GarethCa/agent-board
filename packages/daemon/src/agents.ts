@@ -5,7 +5,7 @@ import type { PullRequest } from '@agent-board/tracker';
 import { createAgentRecordStore, guessedDocOf, recordHandlers, type AgentRecordStore } from './agent-records.ts';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
-import { createAgentLifecycle } from './agent-lifecycle.ts';
+import { createAgentLifecycle, RELAUNCHED_NOTICE } from './agent-lifecycle.ts';
 import { systemClock, type Clock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
@@ -26,7 +26,7 @@ import {
 } from './params.ts';
 import type { AskHost } from './asks.ts';
 import type { DocumentHost } from './documents.ts';
-import { createPermissionHolds, stateWithPrompts, type HookReply } from './permissions.ts';
+import { ASKING_PERMISSION_HOLD_MS, createPermissionHolds, stateWithPrompts, type HookReply } from './permissions.ts';
 import {
   AGENT_ERROR,
   DEFAULT_REVIEW_CAP,
@@ -108,7 +108,7 @@ const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'Stop
  * Hooks of an agent's own turn, which only fire once a prompt was taken: one after something was typed at its prompt
  * says that it was, even when its `UserPromptSubmit` was lost.
  */
-const TURN_HOOKS: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop', 'StopFailure', 'Interrupt']);
+const TURN_HOOKS: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'Stop', 'StopFailure', 'Interrupt']);
 
 /** The hooks that end the agent's own turn: by its `Stop`, failed (a rate limit too), or interrupted (Codex's). */
 const TURN_ENDS: ReadonlySet<unknown> = new Set(['Stop', 'StopFailure', 'Interrupt']);
@@ -157,7 +157,10 @@ export interface AgentHostOptions {
   hookUrl(): string;
   /** The board MCP's URL, on the hook ingress (ADR-0010). */
   boardMcpUrl(): string;
-  /** How long a PermissionRequest hook is held for an inbox answer before the harness's own prompt takes over. */
+  /**
+   * How long a PermissionRequest hook is held for an inbox answer before the harness's own prompt takes over, where its
+   * terminal waits on the hook. One its terminal asks at the same time is held for `ASKING_PERMISSION_HOLD_MS`.
+   */
   permissionHoldMs: number;
   /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
   startStepTimeoutMs?: number;
@@ -184,8 +187,6 @@ export interface AgentHostOptions {
   onTurnBoundary?(sessionId: string): void;
   /** An agent's branch changed in its worktree: the pull requests of the new one are wanted. */
   onBranchChanged?(sessionId: string): void;
-  /** Hears an agent paused for usage started again: what was held for its pause can go now. */
-  onWoken?(sessionId: string): void;
   /** Hears an agent about to be deleted, so what goes with it can say so first: its flow edges. */
   onRemoving(sessionId: string): void;
   /** The questions and plans agents wait on the user for: while one does, it is `waiting`. */
@@ -349,7 +350,7 @@ export interface AgentHost {
    * says who asked, for the log. Refuses one mid-turn, waiting on you, with the user typing or a message never sent
    * at its prompt, or with a message being typed or sent to it.
    */
-  pause(sessionId: string, by: string | null, why: string, reason?: string): Promise<Agent>;
+  pause(sessionId: string, by: string | null, why: string): Promise<Agent>;
   /**
    * Starts an ended agent (stopped by restart, or exited) again in its worktree, carrying on its conversation with no
    * new prompt: Claude with `--resume`, Codex with `codex resume` (or afresh if it can't). Ends the shell its pane
@@ -489,6 +490,8 @@ export interface AgentRow extends PositionColumns {
   ended_at: string | null;
   exit_code: number | null;
   stopped_by_restart: number;
+  /** 1 once its daemon went away under it at work, until it is started again (migration 0069). */
+  turn_cut_off: number;
   review_of: string | null;
   /** When its own turn last ended with a final message (migration 0049). */
   finished_at: string | null;
@@ -514,7 +517,6 @@ export interface AgentRow extends PositionColumns {
   /** When it was paused, and the session id of the orchestrator that paused it (null for the user): `Agent.hibernated`. */
   hibernated_at: string | null;
   hibernated_by: string | null;
-  hibernated_reason: string | null;
   /** When it said its work is finished (`Agent.workFinishedAt`), or null. */
   work_finished_at: string | null;
   /** The scope the user let it orchestrate in by hand, or null to follow its zone's switch. */
@@ -576,6 +578,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectZones = db.prepare(`SELECT ${zoneColumns} FROM zones`);
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
+  const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
+  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
@@ -613,6 +617,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const selectFinalMessage = db.prepare('SELECT final_message FROM agents WHERE session_id = ?');
   const permissions = createPermissionHolds({
     holdMs: options.permissionHoldMs,
+    askingHoldMs: Math.max(options.permissionHoldMs, ASKING_PERMISSION_HOLD_MS),
     onChange(sessionId) {
       const agent = get(sessionId);
       if (agent !== undefined) options.broadcast({ type: 'agent.updated', agent });
@@ -1154,12 +1159,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   });
   const lifecycle = createAgentLifecycle({
     ...options,
-    // What was held for its pause goes once its session is up: typed before, a hand-off is only busy.
-    onWoken: (sessionId) =>
-      void deliveries.untilUp(sessionId).then(
-        () => options.onWoken?.(sessionId),
-        (error: Error) => options.log(`could not hand ${sessionId} what was held for its pause: ${error.message}`),
-      ),
     getRow: (sessionId) => getRow(sessionId),
     get: (sessionId) => get(sessionId),
     requireAgent: (sessionId) => requireAgent(sessionId),
@@ -1275,8 +1274,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // and tell you again that it waits when it came back.
       state: shownState,
       notice: row.notice,
+      cutOffMidTurn: row.turn_cut_off === 1,
       hibernated: isHibernated(row)
-        ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by), ...(row.hibernated_reason === null ? {} : { reason: row.hibernated_reason }) }
+        ? { at: row.hibernated_at!, ...pausedBy(row.hibernated_by) }
         : null,
       earlierConversations: (selectConversations.all(row.session_id) as unknown as ConversationRow[]).map((each) => ({
         conversationId: each.harness_session_id,
@@ -1408,6 +1408,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     subagents.set(row.session_id, next);
     // A new state is a new ask, or work: either way what was seen is over.
     if (state !== row.state) updateSeen.run(0, row.session_id);
+    // Its next turn has begun: what it says about being relaunched after a restart is over, and so is a cut-off turn,
+    // carried on or not (the continue line, or any other message, began it).
+    if (AT_WORK.has(state) && row.notice === RELAUNCHED_NOTICE) updateNotice.run(null, row.session_id);
+    if (AT_WORK.has(state) && row.turn_cut_off === 1) updateCutOff.run(row.session_id);
     update.run(state, row.session_id);
     options.broadcast({ type: 'agent.updated', agent: get(row.session_id)! });
   };
@@ -1689,7 +1693,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     stop: lifecycle.stop,
 
-    pause(sessionId, by, why, reason) {
+    pause(sessionId, by, why) {
       const agent = requireAgent(sessionId);
       const row = getRow(sessionId)!;
       // One not up yet with no first prompt and nothing queued loses nothing: its wait for its session is all it holds.
@@ -1702,7 +1706,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         (holdsNothing ? undefined : (notUp ?? (deliveries.busy(sessionId) ? 'a message is being sent to it: wait for its turn' : undefined))) ??
         hookStates.whyNotReady(row, true);
       if (refusal !== undefined) throw invalidParams(`${agent.name} can't be paused: ${refusal}`);
-      return lifecycle.hibernate(sessionId, by, why, reason);
+      return lifecycle.hibernate(sessionId, by, why);
     },
 
     resume: lifecycle.resume,
@@ -1891,7 +1895,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // Its own turn started or ran, so what was typed at its prompt has been taken; never a stale hook of a turn interrupted.
       if (payload.agent_id === undefined && TURN_HOOKS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
         if (payload.hook_event_name === 'UserPromptSubmit') deliveries.promptSubmitted(sessionId, payload.prompt);
-        deliveries.turnSeen(sessionId, payload.hook_event_name === 'Interrupt');
+        deliveries.turnSeen(sessionId, TURN_ENDS.has(payload.hook_event_name));
       }
       // Its own turn ended: what was queued in it is due to start a turn of its own.
       if (payload.agent_id === undefined && TURN_ENDS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
@@ -1963,8 +1967,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       announceCrew(session.id);
       // Always tell clients: the agent has ended even if its state already said so. Stopped by the user is not a failure.
       const state = lifecycle.isStopping(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
+      // Relaunched after a restart, it ended before a turn began: that is over, and why it ended shows instead.
+      if (row.notice === RELAUNCHED_NOTICE) updateNotice.run(null, session.id);
       save(row, state, subagentsAfterExit(subagents.of(session.id), state, new Date()), true);
-      lifecycle.exited(session.id, session.stoppedByRestart);
+      lifecycle.exited(session.id, session.stoppedByRestart, row.state);
     },
 
     repoZoneId(sessionId) {

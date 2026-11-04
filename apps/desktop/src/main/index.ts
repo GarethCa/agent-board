@@ -12,6 +12,7 @@ import { APP_NAME } from '../shared/brand';
 import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
 import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
 import { registerAgentIpc, registerAgentOpening } from './agents';
+import { traceNotificationClick } from './click-trace';
 import { registerAppearance } from './appearance';
 import { registerDesign } from './design';
 import { registerTechnical } from './technical';
@@ -48,6 +49,14 @@ app.setName(APP_NAME);
 enterBackgroundMode();
 // Tests point the whole app (daemon state and Electron profile) at a temp dir.
 if (process.env.AGENT_BOARD_DATA_DIR) app.setPath('userData', process.env.AGENT_BOARD_DATA_DIR);
+
+// One app per data dir. A second launch (a notification clicked once the first has gone, a double-click on the icon)
+// must not open a second board: it hands over to the first, which brings its board forward, and exits.
+if (!app.requestSingleInstanceLock()) {
+  // Before `ready` this ends the process during module evaluation: nothing below runs in the losing instance.
+  console.error(`agent-board is already running on ${app.getPath('userData')}; bringing it forward`);
+  app.exit(0);
+}
 
 // The icon is for Windows and Linux: macOS's About panel shows the app's own icon (the dock's, while it runs).
 app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: describeBuild(BUILD), version: '', iconPath: aboutIcon });
@@ -162,8 +171,23 @@ function openWindow(
 /** The board's window, while it is open. Popped-out session windows are not boards. */
 let board: BrowserWindow | undefined;
 
-/** Opens the board, with `showing`'s window shown on it, and returns its window. */
+/** The board's window, if it is open and not on its way out. */
+function liveBoard(): BrowserWindow | undefined {
+  return board !== undefined && !board.isDestroyed() ? board : undefined;
+}
+
+/** Brings the board's window forward, shown, restored and focused, opening it first if none is open. */
+function showBoard(): BrowserWindow {
+  const window = openBoard();
+  revealWindow(window);
+  return window;
+}
+
+/** Opens the board, with `showing`'s window shown on it, and returns its window. With a board already open, returns that and ignores `showing`. */
 function openBoard(showing?: WindowTarget): BrowserWindow {
+  // The app has one board. Whatever asks while it is open gets it back, never a second window.
+  const open = liveBoard();
+  if (open !== undefined) return open;
   // Benchmarks fill the board with placeholder tiles and sticky notes (see e2e/board-perf.spec.ts). Never in a packaged build.
   const placeholders = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_TILES;
   const stickies = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_STICKIES;
@@ -217,7 +241,7 @@ registerUnsavedPlanEditIpc();
 let keptWebLogins: boolean | undefined;
 const settingsWindow = registerSettingsWindow({
   open: openWindow,
-  board: () => board,
+  board: liveBoard,
   // A headless test can't use a real full screen, which shows the window and takes a Space (background.ts), so it sets
   // this variable in the main process to have the board count as full screen. Never in a packaged build.
   isFullScreen: (window) => window.isFullScreen() || (!app.isPackaged && process.env.AGENT_BOARD_TEST_FULL_SCREEN === '1'),
@@ -263,7 +287,7 @@ registerViewIpc(view);
 const poppedWindows = registerWindowIpc({
   open: openWindow,
   view,
-  board: () => board,
+  board: liveBoard,
   openBoard,
 });
 // Pictures of zones for orchestrators, each in a hidden board window framed on its zone.
@@ -272,22 +296,30 @@ registerCaptures({
   served: () => view.remeasure(),
   openBoard: (frame) => openWindow({ [CAPTURE_QUERY]: JSON.stringify(frame), onboarding: 'off' }, { ...captureSize(frame), hidden: true }),
 });
-if (demo) registerDemoCapture(() => board);
-registerTabDragIpc({ board: () => board, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });
-const openAgent = registerAgentOpening(() => board ?? openBoard());
+if (demo) registerDemoCapture(liveBoard);
+registerTabDragIpc({ board: liveBoard, openBoard: () => openBoard(), poppedOwner: poppedWindows.poppedOwner });
+const openAgent = registerAgentOpening(() => openBoard());
 
 let stopNotifications: (() => void) | undefined;
 
+app.on('second-instance', () => {
+  if (app.isReady()) showBoard();
+});
+
 void app.whenReady().then(() => {
   registerImageProtocol(dataDir);
-  stopNotifications = registerNotifications(daemon, notify, openAgent, () => revealWindow(board ?? openBoard()), isSimplified);
-  setAppMenu(() => board ?? openBoard(), () => settingsWindow.show(), { design, technical });
+  const openFromNotification = (sessionId: string) => {
+    traceNotificationClick(daemonPaths(dataDir).log, sessionId, liveBoard(), BrowserWindow.getAllWindows().length);
+    openAgent(sessionId);
+  };
+  stopNotifications = registerNotifications(daemon, notify, openFromNotification, showBoard, isSimplified);
+  setAppMenu(() => openBoard(), () => settingsWindow.show(), { design, technical });
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
   openBoard();
   // A popped-out session window may still be open: the board comes back whenever it is missing.
   app.on('activate', () => {
-    if (board === undefined) openBoard();
+    openBoard();
   });
 });
 

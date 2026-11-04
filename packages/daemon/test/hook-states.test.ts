@@ -28,7 +28,7 @@ function setup(start: HookStateRow, firstPromptDue = false, onCommand = false) {
   const finished: [string, string][] = [];
   const order: string[] = [];
   const logged: string[] = [];
-  holds = createPermissionHolds({ holdMs: 60_000, onChange: () => {} });
+  holds = createPermissionHolds({ holdMs: 60_000, askingHoldMs: 600_000, onChange: () => {} });
   const states = createHookStates<HookStateRow>({
     permissions: holds,
     subagents: createSubagentStore(),
@@ -352,6 +352,20 @@ describe('hook states', () => {
     expect(hook({ hook_event_name: 'Notification', notification_type: 'permission_prompt' })).toBeUndefined();
     expect(now().state).toBe('thinking');
     expect(saved).toHaveLength(before);
+  });
+
+  it("holds Claude's own request for the long hold, as its terminal asks too, and a subagent's or Codex's for the short one", () => {
+    const tool = { tool_name: 'Bash', tool_input: { command: 'ls' } };
+    const asks = (start: HookStateRow, fields: Record<string, unknown> = {}) => {
+      const { hook } = setup(start);
+      void hook({ hook_event_name: 'PermissionRequest', ...tool, ...fields });
+      const asked = holds!.prompts(start.session_id)[0]!.asksInTerminal;
+      holds!.close();
+      return asked;
+    };
+    expect(asks(row('a', { state: 'running' }))).toBe(true);
+    expect(asks(row('b', { state: 'running' }), { agent_id: 'sub', agent_type: 'Explore' })).toBe(false);
+    expect(asks(row('c', { state: 'running', harness: 'codex' }))).toBe(false);
   });
 
   it("ignores an interrupted turn's work still landing, until the next prompt", () => {

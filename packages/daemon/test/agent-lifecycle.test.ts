@@ -2,12 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createAgentLifecycle } from '../src/agent-lifecycle.ts';
+import { CONTINUE_LINE, createAgentLifecycle, markTurnsCutOff } from '../src/agent-lifecycle.ts';
 import { CODEX_BYPASS_FLAG, type LaunchSpec } from '../src/agent-spawns.ts';
 import type { AgentRow, ZoneRow } from '../src/agents.ts';
 import { migrate } from '../src/migrate.ts';
 import { invalidParams } from '../src/params.ts';
-import { AGENT_ERROR, type Agent, type DaemonEvent, type Harness, type SessionInfo } from '../src/protocol.ts';
+import { AGENT_ERROR, type Agent, type DaemonEvent, type Harness, type SessionInfo, type SessionState } from '../src/protocol.ts';
 import { RpcMethodError } from '../src/rpc.ts';
 import type { SavedScreen, SessionHost } from '../src/sessions.ts';
 import { RESET_MODES } from '../src/shells.ts';
@@ -252,7 +252,7 @@ describe('relaunching an ended agent', () => {
   it('ends the shell its pane dropped into first', async () => {
     const { lifecycle, addAgent, events } = setup();
     const row = addAgent('a');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     events.length = 0;
     lifecycle.relaunch(row, 'run', 'for a run');
@@ -390,7 +390,7 @@ describe("a Codex agent that couldn't resume its conversation", () => {
   it('is started afresh in its worktree once it exits before its SessionStart, saying why', async () => {
     const { lifecycle, addAgent, launches, getRow, events } = setup();
     lifecycle.relaunch(addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     expect(launches.map((spec) => spec.resume)).toEqual([
       { codexSessionId: 'conv', claudeConversation: true },
@@ -404,15 +404,15 @@ describe("a Codex agent that couldn't resume its conversation", () => {
     const started = setup();
     started.lifecycle.relaunch(started.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
     started.lifecycle.started('a');
-    started.lifecycle.exited('a', false);
+    started.lifecycle.exited('a', false, 'failed');
     await flush();
     expect(started.launches).toHaveLength(1);
     expect(started.shells).toHaveLength(1);
 
     const restarted = setup();
     restarted.lifecycle.relaunch(restarted.addAgent('a', { harness: 'codex', harnessSessionId: 'conv' }), undefined, 'to restart it');
-    restarted.lifecycle.exited('a', true);
-    restarted.lifecycle.exited('a', false);
+    restarted.lifecycle.exited('a', true, 'failed');
+    restarted.lifecycle.exited('a', false, 'failed');
     await flush();
     expect(restarted.launches).toHaveLength(1);
 
@@ -423,7 +423,7 @@ describe("a Codex agent that couldn't resume its conversation", () => {
     const stopping = stopped.lifecycle.stop('a', 'a test');
     expect(stopped.lifecycle.isStopping('a')).toBe(true);
     stopped.db.prepare("UPDATE sessions SET ended_at = '2026-10-15T11:00:00Z'").run();
-    stopped.lifecycle.exited('a', false);
+    stopped.lifecycle.exited('a', false, 'failed');
     release();
     await stopping;
     await flush();
@@ -438,7 +438,7 @@ describe("an ended agent's fallback shell", () => {
     const { lifecycle, addAgent, shells, savedScreens, events } = setup();
     const row = addAgent('a');
     savedScreens.set('a', { data: 'last output', cols: 90, rows: 30 });
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     expect(shells).toEqual([]);
     await flush();
     expect(events).toEqual(['kill a', 'killed a', 'createShell shell-1', 'announce a']);
@@ -451,7 +451,7 @@ describe("an ended agent's fallback shell", () => {
   it('opens at the relaunch size with nothing above it when no screen was saved', async () => {
     const { lifecycle, addAgent, shells } = setup();
     addAgent('a');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     expect(shells[0]!.params).toMatchObject({ cols: 120, rows: 40, restore: '' });
   });
@@ -463,16 +463,16 @@ describe("an ended agent's fallback shell", () => {
     addAgent('gone', { cwd: '/no/such/folder' });
     addAgent('twice');
     addAgent('closing');
-    lifecycle.exited('live', false);
-    lifecycle.exited('reviewer', false);
-    lifecycle.exited('gone', false);
-    lifecycle.exited('twice', false);
-    lifecycle.exited('twice', false);
+    lifecycle.exited('live', false, 'failed');
+    lifecycle.exited('reviewer', false, 'failed');
+    lifecycle.exited('gone', false, 'failed');
+    lifecycle.exited('twice', false, 'failed');
+    lifecycle.exited('twice', false, 'failed');
     await flush();
     expect(shells.map((shell) => shell.params.cwd)).toEqual([expect.any(String)]);
     expect(lifecycle.fallbackOwner('shell-1')).toBe('twice');
     lifecycle.close();
-    lifecycle.exited('closing', false);
+    lifecycle.exited('closing', false, 'failed');
     await flush();
     expect(shells).toHaveLength(1);
   });
@@ -480,7 +480,7 @@ describe("an ended agent's fallback shell", () => {
   it("shows its agent's own ended session again once it exits, forgotten after its exit finishes", async () => {
     const { lifecycle, addAgent, events } = setup();
     addAgent('a');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     events.length = 0;
     expect(lifecycle.shellExited('a')).toBe(false);
@@ -495,7 +495,7 @@ describe("an ended agent's fallback shell", () => {
   it("tells clients of its agent when what runs in it changes, and names its agent's harness while it runs there", async () => {
     const { lifecycle, addAgent, events, shellHarnesses, getRow } = setup();
     addAgent('a');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     events.length = 0;
     lifecycle.onShellChanged('shell-1');
@@ -525,7 +525,7 @@ describe('resuming an agent', () => {
   async function withShell(options: Parameters<typeof setup>[0] = {}, fields: AgentFields = {}) {
     const lifecycleSetup = setup(options);
     lifecycleSetup.addAgent('a', { transcriptPath: lifecycleSetup.transcript(), ...fields });
-    lifecycleSetup.lifecycle.exited('a', false);
+    lifecycleSetup.lifecycle.exited('a', false, 'failed');
     await flush();
     lifecycleSetup.events.length = 0;
     return lifecycleSetup;
@@ -555,6 +555,91 @@ describe('resuming an agent', () => {
     const { lifecycle, logs } = await withShell({}, { stoppedByRestart: true });
     await lifecycle.resume('a', 'a test', false);
     expect(logs.at(-1)).toBe('relaunched claude agent a to resume it after a restart, for a test');
+  });
+
+  it.each([
+    ['running', true],
+    ['thinking', true],
+    ['needs-permission', true],
+    ['waiting', false],
+    ['idle', false],
+    ['done', false],
+  ])('tells one its daemon stopped while %s to carry on: %s', async (state, told) => {
+    const { lifecycle, addAgent, launches, getRow, transcript } = setup();
+    // Its exit is saved first, as the host does it: a shutdown's exit reads as a failed turn.
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('a', true, state as SessionState);
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches[0]!.task).toBe(told ? CONTINUE_LINE : undefined);
+    expect(launches[0]!.resume).toMatchObject({ claudeConversation: true });
+    expect(getRow('a')!.notice).toBe('Relaunched after a restart');
+  });
+
+  it('never tells one the user stopped, or that exited on its own, to carry on', async () => {
+    const { lifecycle, addAgent, launches, transcript } = setup();
+    addAgent('a', { state: 'failed', transcriptPath: transcript() });
+    lifecycle.exited('a', false, 'running');
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches[0]!.task).toBeUndefined();
+    expect(launches[0]!.resume).toMatchObject({ claudeConversation: true });
+  });
+
+  it('keeps the cut-off turn until a turn begins: a restart before its line is typed tells it again', async () => {
+    const { lifecycle, addAgent, launches, getRow, transcript } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('a', true, 'running');
+    await lifecycle.resume('a', 'a test', false);
+    expect(getRow('a')!.turn_cut_off).toBe(1);
+    // Stopped again while still loading, at idle: its line never went.
+    lifecycle.exited('a', true, 'idle');
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches.map((spec) => spec.task)).toEqual([CONTINUE_LINE, CONTINUE_LINE]);
+  });
+
+  it('forgets the cut-off turn once its session ends any other way', async () => {
+    const { lifecycle, addAgent, getRow, transcript } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: transcript() });
+    lifecycle.exited('a', true, 'running');
+    lifecycle.exited('a', false, 'idle');
+    expect(getRow('a')!.turn_cut_off).toBe(0);
+  });
+
+  it('never tells a Claude agent the user interrupted with Esc to carry on, which still reads as at work', async () => {
+    const { lifecycle, addAgent, launches, home } = setup();
+    const path = join(home, 'interrupted.jsonl');
+    const user = (content: unknown) => JSON.stringify({ type: 'user', message: { role: 'user', content } });
+    writeFileSync(path, [user('Run the tests'), user([{ type: 'text', text: '[Request interrupted by user]' }])].join('\n') + '\n');
+    addAgent('a', { state: 'failed', stoppedByRestart: true, transcriptPath: path });
+    lifecycle.exited('a', true, 'running');
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches[0]!.task).toBeUndefined();
+  });
+
+  it('marks the agents a dead daemon left at work as cut off, as it starts', () => {
+    const { db, addAgent, getRow, transcript } = setup();
+    addAgent('working', { ended: false, state: 'running', transcriptPath: transcript() });
+    addAgent('asking', { ended: false, state: 'needs-permission', harness: 'codex' });
+    addAgent('idle', { ended: false, state: 'idle' });
+    addAgent('ended', { state: 'running' });
+    markTurnsCutOff(db);
+    expect(['working', 'asking', 'idle', 'ended'].map((id) => getRow(id)!.turn_cut_off)).toEqual([1, 1, 0, 0]);
+  });
+
+  it('carries a Codex agent on in its own conversation when it tells it to', async () => {
+    const { lifecycle, addAgent, launches } = setup();
+    addAgent('a', { harness: 'codex', state: 'failed', stoppedByRestart: true, harnessSessionId: 'codex-thread' });
+    lifecycle.exited('a', true, 'running');
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches[0]).toMatchObject({ task: CONTINUE_LINE, resume: { codexSessionId: 'codex-thread' } });
+  });
+
+  it('starts one with no conversation to carry on fresh on its task, not the continue line', async () => {
+    const { lifecycle, addAgent, launches, getRow } = setup();
+    addAgent('a', { state: 'failed', stoppedByRestart: true, description: 'Run the tests' });
+    lifecycle.exited('a', true, 'running');
+    await lifecycle.resume('a', 'a test', false);
+    expect(launches[0]).toMatchObject({ task: 'Run the tests', resume: { claudeConversation: false } });
+    expect(getRow('a')!.notice).toBe('No earlier conversation: started fresh');
   });
 
   it('refuses while its shell runs something, unless forced', async () => {
@@ -640,7 +725,7 @@ describe('deleting an agent', () => {
     const deleted = lifecycle.delete('a', 'a test', false);
     await flush();
     db.prepare("UPDATE sessions SET ended_at = '2026-10-15T11:00:00Z'").run();
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     release();
     await deleted;
     await flush();
@@ -661,7 +746,7 @@ describe('deleting an agent', () => {
   it('ends the shell an ended agent dropped into, and opens none as it goes', async () => {
     const { lifecycle, addAgent, events, shells } = setup();
     addAgent('a');
-    lifecycle.exited('a', false);
+    lifecycle.exited('a', false, 'failed');
     await flush();
     events.length = 0;
     await lifecycle.delete('a', 'a test', false);

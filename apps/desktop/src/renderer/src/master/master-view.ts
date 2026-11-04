@@ -5,7 +5,8 @@ import { isOrchestratorRole, type Agent, type BoardItem, type NeedsYouKind, type
 import { tileNodeId } from '../board/tiles';
 import { agentNoteData } from '../board/items/agent-note';
 import { TETHER_EDGE_TYPE } from '../board/items/agent-note-tethers';
-import { zoneHold } from '../board/zone-priority';
+import { composerBlock } from '../session/composer-block';
+import { canRestart } from '../session/RestartAgent';
 
 const RAIL_EDGE_PREFIX = 'master-rail:';
 /** Under the nodes, as a tether is: it leads to a tile, never across one. */
@@ -13,6 +14,19 @@ const RAIL_Z_INDEX = 0;
 
 /** The board's master, live or ended; undefined until the user starts one. */
 export const boardMaster = (agents: readonly Agent[]): Agent | undefined => agents.find((agent) => agent.master);
+
+/** How an ended Captain comes back: `resume` after a restart stopped it, `wake` when it was paused, `restart` when it exited. */
+export type CaptainRevival = 'resume' | 'wake' | 'restart';
+
+/** What the Captain's panel offers a Captain that is not running, or undefined while it runs or cannot be started in place. */
+export function captainRevival(master: Agent): CaptainRevival | undefined {
+  if (master.endedAt === null) return undefined;
+  if (master.state === 'hibernated') return 'wake';
+  // The same rules as the composer's block, so Resume and Restart read alike wherever they are offered.
+  const action = composerBlock(master)?.action;
+  if (action === 'resume') return 'resume';
+  return action === 'restart' && canRestart(master) ? 'restart' : undefined;
+}
 
 /**
  * The zones' leads the master watches: every live agent in a zone with the orchestrator role, and every live agent the
@@ -111,32 +125,4 @@ export function askLine(agent: Agent, kind: NeedsYouKind): string {
     case 'turn':
       return 'Its turn ended';
   }
-}
-
-/** A budget hold the user can Override: a zone held for usage, or an agent paused for it. */
-export interface UsageHoldEntry {
-  kind: 'zone' | 'agent';
-  /** The zone's id, or the agent's session id. */
-  id: string;
-  name: string;
-  /** What it is: `new starts and hand-offs held`, `paused`. */
-  what: string;
-  /** Why, as the hold says it: `5h at 86%, zone low priority`. */
-  reason: string;
-  /** The zone it is in, for an agent; null for a zone and a loose agent. */
-  zone: string | null;
-}
-
-/** The budget holds on the board, zones first, each with why: what the panel's For you lists with Override. */
-export function usageHolds(zones: readonly Zone[], agents: readonly Agent[]): UsageHoldEntry[] {
-  const zoneName = (id: string | null) => zones.find((zone) => zone.id === id)?.name ?? null;
-  return [
-    ...zones.flatMap((zone): UsageHoldEntry[] => {
-      const hold = zoneHold(zone);
-      return hold === null ? [] : [{ kind: 'zone', id: zone.id, name: zone.name, what: 'new starts and hand-offs held', reason: hold.reason, zone: null }];
-    }),
-    ...agents.flatMap((agent): UsageHoldEntry[] =>
-      agent.hibernated?.reason === undefined ? [] : [{ kind: 'agent', id: agent.sessionId, name: agent.name, what: 'paused', reason: agent.hibernated.reason, zone: zoneName(agent.zoneId) }],
-    ),
-  ];
 }

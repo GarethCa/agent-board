@@ -168,6 +168,14 @@ export async function connectedDaemonPid(window: Page): Promise<number> {
   return Number(await status.getAttribute('data-pid'));
 }
 
+/** Kills the app and its daemon at once, with no chance to tidy up, as a power cut or a crash would. */
+export async function killHard(app: ElectronApplication, daemonPid: number): Promise<void> {
+  const appPid = app.process().pid!;
+  process.kill(daemonPid, 'SIGKILL');
+  process.kill(appPid, 'SIGKILL');
+  for (let waited = 0; (isProcessAlive(daemonPid) || isProcessAlive(appPid)) && waited < 5_000; waited += 50) await sleep(50);
+}
+
 /**
  * Stops the daemon the app left running in `dataDir` (it outlives the app by design) and waits for it to exit.
  * Returns its pid, or undefined if none was answering. The pid comes from the daemon itself over its socket, never

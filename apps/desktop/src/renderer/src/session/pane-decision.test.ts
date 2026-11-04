@@ -32,6 +32,7 @@ const prompt = (id: string, heldUntil: string | null = '2026-10-31T09:00:20Z'): 
   subagent: null,
   requestedAt: '2026-10-31T09:00:00Z',
   heldUntil,
+  asksInTerminal: false,
   sessionGrant: null,
 });
 

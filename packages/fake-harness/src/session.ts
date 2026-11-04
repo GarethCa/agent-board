@@ -155,6 +155,7 @@ export type Invocation =
 const MATCH_FIELD: Record<string, string> = {
   PreToolUse: 'tool_name',
   PostToolUse: 'tool_name',
+  PostToolUseFailure: 'tool_name',
   PermissionRequest: 'tool_name',
   Notification: 'notification_type',
   SessionStart: 'source',
@@ -425,7 +426,7 @@ export class FakeSession {
     await this.fire('PreToolUse', { ...inside, tool_name: name, tool_input: input, tool_use_id: id });
     if (process.env.FAKE_HARNESS_HANG_TOOL === '1' && this.dialect.harness === 'claude') {
       this.drawPromptBox();
-      await this.untilInterrupted(new Promise<never>(() => {}));
+      await this.holdTurn();
     }
 
     if (needsPermission && !(await this.askPermission(name, input, inside))) {
@@ -436,6 +437,14 @@ export class FakeSession {
     }
 
     await this.pause();
+    // `FAKE_HARNESS_TOOL_FAILS=1`: the call errors, which Claude reports with `PostToolUseFailure`, not `PostToolUse`.
+    if (process.env.FAKE_HARNESS_TOOL_FAILS === '1' && harness === 'claude') {
+      const error = `${name} failed`;
+      if (!inside) this.dialect.transcript.toolResult(id, error, true);
+      this.print(`  ⎿ Error: ${error}\n`);
+      await this.fire('PostToolUseFailure', { ...inside, tool_name: name, tool_input: input, tool_use_id: id, error, is_interrupt: false });
+      return false;
+    }
     if (this.dialect.demo) this.printLines(demo.toolResult(harness, name, input, response, cwd));
     if (!inside) this.dialect.transcript.toolResult(id, response, false);
     await this.fire('PostToolUse', { ...inside, tool_name: name, tool_input: input, tool_response: response, tool_use_id: id });
@@ -646,6 +655,21 @@ export class FakeSession {
     // Claude draws its status line again as the turn ends; what it prints isn't drawn here.
     const { statusLine } = this.dialect;
     if (statusLine !== undefined) await runStatusLine(statusLine.command, { session_id: this.dialect.sessionId, ...statusLine.input }, this.dialect.hookOptions);
+  }
+
+  /**
+   * Holds the turn open, whatever hooks run meanwhile, until the user interrupts it: a turn no timing can end first.
+   * With `stopInFlight`, the `Stop` the turn had already begun to fire reaches the daemon after the interrupt did, as
+   * one in flight when Ctrl-C arrives does. Only inside a turn: outside one nothing could interrupt it.
+   */
+  async holdTurn(stopInFlight = false): Promise<never> {
+    if (!this.inTurn) throw new Error('holdTurn needs a turn under way');
+    try {
+      return await this.untilInterrupted(new Promise<never>(() => {}));
+    } catch (error) {
+      if (stopInFlight) await this.fire('Stop', { stop_hook_active: false, last_assistant_message: this.lastAssistantMessage }, false);
+      throw error;
+    }
   }
 
   /**
@@ -934,14 +958,29 @@ export class FakeSession {
           ? [{ type: 'addRules', rules: [typeof input.command === 'string' ? { toolName: name, ruleContent: input.command } : { toolName: name }], behavior: 'allow', destination: 'localSettings' }]
           : [];
     }
-    const outputs = await this.fire('PermissionRequest', fields);
-    const decision = permissionDecision(outputs);
-    if (decision === 'allow' && permissionUpdates(outputs).some((update) => update.destination === 'session')) {
-      this.allowedForSession.add(name);
-      this.print(`  ⎿ Allowed ${name} for the session\n`);
+    // Claude asks the agent's own question in its terminal while the hook runs, and whichever answers first decides: the
+    // hook's later answer is dropped, and it is left running, as Claude leaves it. Codex, and Claude for a subagent, ask
+    // only once the hook has said nothing.
+    const alongside = this.dialect.harness === 'claude' && inside === undefined;
+    const hook = alongside ? this.fireBeside('PermissionRequest', fields) : this.fire('PermissionRequest', fields);
+    if (alongside) await this.showPermissionPrompt(name, input);
+    const first = alongside ? await this.hookOrLine(hook) : { outputs: await hook };
+    if ('outputs' in first) {
+      const decision = permissionDecision(first.outputs);
+      if (decision === 'allow' && permissionUpdates(first.outputs).some((update) => update.destination === 'session')) {
+        this.allowedForSession.add(name);
+        this.print(`  ⎿ Allowed ${name} for the session\n`);
+      }
+      if (decision) return decision === 'allow';
+      if (!alongside) await this.showPermissionPrompt(name, input);
     }
-    if (decision) return decision === 'allow';
+    const answer = 'line' in first ? first.line : await this.readLine();
+    if (answer === undefined) return false;
+    return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+  }
 
+  /** Draws the harness's own permission prompt, and tells its hooks so (Claude's `permission_prompt`). */
+  private async showPermissionPrompt(name: string, input: Record<string, unknown>): Promise<void> {
     if (this.dialect.demo) this.printLines(demo.permissionPrompt(this.dialect.harness, input, this.dialect.cwd));
     else this.print(`Do you want to allow ${name}? (y/n) `);
     if (this.dialect.notificationEvents) {
@@ -951,9 +990,17 @@ export class FakeSession {
         notification_type: 'permission_prompt',
       });
     }
-    const answer = await this.readLine();
-    if (answer === undefined) return false;
-    return this.dialect.demo ? demo.allowsInDemo(this.dialect.harness, answer) : /^y(es)?$/i.test(answer.trim());
+  }
+
+  /**
+   * The hook's answer or a line typed at the prompt, whichever comes first. A hook that says nothing leaves the prompt
+   * to the line. A line not yet read when the hook answers stays for the next reader.
+   */
+  private async hookOrLine(hook: Promise<HookOutput[]>): Promise<{ outputs: HookOutput[] } | { line: string | undefined }> {
+    const said = hook.then((outputs) => (permissionDecision(outputs) ? { outputs } : new Promise<never>(() => {})));
+    this.nextLine ??= this.lines.next();
+    const first = await this.untilInterrupted(Promise.race([said, this.nextLine.then(() => 'line' as const)]));
+    return first === 'line' ? { line: await this.readLine() } : first;
   }
 
   /**
@@ -966,7 +1013,7 @@ export class FakeSession {
     this.printLines(box === 'spinner' ? [SPINNER_LINE, '', ...drawPromptBox()] : drawPromptBox());
   }
 
-  private async fire(event: string, fields: Record<string, unknown>): Promise<HookOutput[]> {
+  private async fire(event: string, fields: Record<string, unknown>, interruptible = true): Promise<HookOutput[]> {
     const payload: Record<string, unknown> = {
       session_id: this.dialect.sessionId,
       transcript_path: this.dialect.transcript.path,
@@ -981,7 +1028,13 @@ export class FakeSession {
     Object.assign(payload, fields);
     const field = MATCH_FIELD[event];
     const matchValue = field === undefined ? undefined : String(payload[field]);
-    return this.untilInterrupted(runHooks(this.dialect.hooks, event, matchValue, payload, this.dialect.hookOptions));
+    const running = runHooks(this.dialect.hooks, event, matchValue, payload, this.dialect.hookOptions);
+    return interruptible ? this.untilInterrupted(running) : running;
+  }
+
+  /** Fires `event`'s hooks without waiting on them, as Claude runs a PermissionRequest hook beside its own prompt. */
+  private fireBeside(event: string, fields: Record<string, unknown>): Promise<HookOutput[]> {
+    return this.fire(event, fields, false).catch(() => []);
   }
 
   private print(text: string): void {

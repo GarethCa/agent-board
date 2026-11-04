@@ -5,12 +5,10 @@ import {
   ARRANGE_SPACINGS,
   COMPACT_WINDOW_RANGE,
   DEFAULT_ARRANGE_SPACING,
-  DEFAULT_USAGE_THRESHOLDS,
   HELD_PAYLOAD_STORAGE,
   NEEDS_YOU_SHOWS,
   type DaemonMethods,
   type DaemonSettings,
-  type UsageThresholds,
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 
@@ -28,12 +26,10 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   notifyInFront: false,
   arrangeSpacing: DEFAULT_ARRANGE_SPACING,
   keepWebLogins: true,
-  usagePacing: false,
-  usageThresholds: DEFAULT_USAGE_THRESHOLDS,
 };
 
 /** The settings that are switches. */
-const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront', 'keepWebLogins', 'usagePacing'] as const;
+const SWITCHES = ['clickableLinks', 'notifications', 'notifyInFront', 'keepWebLogins'] as const;
 
 export interface SettingsHost {
   get(): DaemonSettings;
@@ -56,7 +52,6 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       if ((key === 'claudePath' || key === 'codexPath') && typeof JSON.parse(value) === 'string') settings[key] = JSON.parse(value);
       if (key === 'needsYouShows' && NEEDS_YOU_SHOWS.includes(JSON.parse(value))) settings.needsYouShows = JSON.parse(value);
       if (key === 'arrangeSpacing' && ARRANGE_SPACINGS.includes(JSON.parse(value))) settings.arrangeSpacing = JSON.parse(value);
-      if (key === 'usageThresholds' && isUsageThresholds(JSON.parse(value))) settings.usageThresholds = JSON.parse(value);
       for (const name of SWITCHES) if (key === name && typeof JSON.parse(value) === 'boolean') settings[name] = JSON.parse(value);
     }
     return settings;
@@ -76,7 +71,6 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
         if (fields.compactWindow !== undefined) upsert.run('compactWindow', JSON.stringify(compactWindowParam(fields)));
         if (fields.needsYouShows !== undefined) upsert.run('needsYouShows', JSON.stringify(oneOf(fields, 'needsYouShows', NEEDS_YOU_SHOWS)));
         if (fields.arrangeSpacing !== undefined) upsert.run('arrangeSpacing', JSON.stringify(oneOf(fields, 'arrangeSpacing', ARRANGE_SPACINGS)));
-        if (fields.usageThresholds !== undefined) upsert.run('usageThresholds', JSON.stringify(usageThresholdsParam(fields, was.usageThresholds)));
         for (const name of SWITCHES) {
           const on = optionalBooleanParam(fields, name);
           if (on !== undefined) upsert.run(name, JSON.stringify(on));
@@ -107,27 +101,4 @@ function compactWindowParam(fields: Record<string, unknown>): number {
     throw invalidParams(`compactWindow must be 0 (off), or a whole number from ${COMPACT_WINDOW_RANGE.min} to ${COMPACT_WINDOW_RANGE.max}`);
   }
   return value;
-}
-
-const THRESHOLD_KEYS = ['fiveHourOnlyHigh', 'fiveHourPauseLow', 'sevenDayOnlyHigh'] as const;
-
-function isThreshold(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 100;
-}
-
-function isUsageThresholds(value: unknown): value is UsageThresholds {
-  return typeof value === 'object' && value !== null && THRESHOLD_KEYS.every((key) => isThreshold((value as Record<string, unknown>)[key]));
-}
-
-/** Usage thresholds from Settings: any of them, each a whole percentage from 1 to 100, over the ones there were. */
-function usageThresholdsParam(fields: Record<string, unknown>, was: UsageThresholds): UsageThresholds {
-  const given = fields.usageThresholds;
-  if (typeof given !== 'object' || given === null || Array.isArray(given)) throw invalidParams('usageThresholds must be an object');
-  const thresholds = { ...was };
-  for (const [key, value] of Object.entries(given)) {
-    if (!(THRESHOLD_KEYS as readonly string[]).includes(key)) throw invalidParams(`usageThresholds has no ${key}: give ${THRESHOLD_KEYS.join(', ')}`);
-    if (!isThreshold(value)) throw invalidParams(`usageThresholds.${key} must be a whole percentage from 1 to 100`);
-    thresholds[key as keyof UsageThresholds] = value;
-  }
-  return thresholds;
 }

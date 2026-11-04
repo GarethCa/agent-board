@@ -74,8 +74,8 @@ interface SessionBodyProps {
   /** Set to what ⌥⌘T does, with the switch in the header, for the header's menu to do too. */
   terminalToggle?: RefObject<(() => void) | null>;
   /**
-   * Whether an agent's details are the inspector, at the trailing edge and hidden while collapsed, rather than the
-   * details strip on the left: in an agent's session window under the Simplified design, or Classic's Simple sidebar.
+   * Whether an agent's details are the inspector, on the left and hidden while collapsed, rather than the
+   * details strip: in an agent's session window under the Simplified design, or Classic's Simple sidebar.
    */
   inspector?: boolean;
 }
@@ -152,7 +152,7 @@ export function SessionBody({
     else panes.open(surface);
   };
   // The agent the inspector is of, when its details are the inspector.
-  const trailing = inspector ? agent : undefined;
+  const inspectorAgent = inspector ? agent : undefined;
   // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
   // The Timeline is the chat drawn as its rail, in the Simplified design's window, whose header has the switch and which
   // opens on the view its settings name: the terminal, or the conversation as it is shown. Anywhere else (Classic, an
@@ -317,6 +317,20 @@ export function SessionBody({
       />
       )}
       {content.kind !== 'tabs' && !inspector && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
+      {inspectorAgent && !detailsCollapsed && (
+        <>
+          <SimplifiedInspector
+            agent={inspectorAgent}
+            onProblem={setProblem}
+            onOpenLink={openLink}
+            onOpenPullRequest={openPullRequest}
+            onOpenSurface={panes && ((surface) => panes.open(surface))}
+            onOpenWeb={panes?.openWeb ?? openLink}
+            controls={simplified ? undefined : { live, onSplit: panes?.splitFromDetails }}
+          />
+          <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
+        </>
+      )}
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
           {panes ? (
@@ -373,20 +387,6 @@ export function SessionBody({
         {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} onShowTerminal={onShowTerminal} />}
         {agent && chat && <Composer agent={agent} />}
       </div>
-      {trailing && !detailsCollapsed && (
-        <>
-          <DetailsHandle side="end" collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
-          <SimplifiedInspector
-            agent={trailing}
-            onProblem={setProblem}
-            onOpenLink={openLink}
-            onOpenPullRequest={openPullRequest}
-            onOpenSurface={panes && ((surface) => panes.open(surface))}
-            onOpenWeb={panes?.openWeb ?? openLink}
-            controls={simplified ? undefined : { live, onSplit: panes?.splitFromDetails }}
-          />
-        </>
-      )}
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
       {headerViewSwitch}
     </div>

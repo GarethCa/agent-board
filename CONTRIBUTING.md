@@ -80,7 +80,7 @@ AGENT_BOARD_HEADED=1 pnpm --filter @agent-board/desktop exec playwright test e2e
 
 ### Visual baselines
 
-`e2e/visual.spec.ts` compares screenshots with PNGs committed in `e2e/visual.spec.ts-snapshots/`, for macOS (`-darwin`). The spec never skips: a missing baseline for the platform it runs on is a failure. A UI change that moves pixels fails it until you regenerate the baselines:
+The specs in `e2e/visual/` (one file per surface, so they run on several workers) compare screenshots with PNGs committed in `e2e/visual.spec.ts-snapshots/`, for macOS (`-darwin`). A spec never skips: a missing baseline for the platform it runs on is a failure. A UI change that moves pixels fails it until you regenerate the baselines:
 
 ```sh
 pnpm build

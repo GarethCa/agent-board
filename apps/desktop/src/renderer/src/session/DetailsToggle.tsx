@@ -1,4 +1,4 @@
-import { PanelRight } from 'lucide-react';
+import { PanelLeft } from 'lucide-react';
 import { keyText } from '../keys/registry';
 import { IconButton } from '../ui';
 
@@ -6,7 +6,7 @@ import { IconButton } from '../ui';
 export function DetailsToggle({ open, onOpen }: { open: boolean; onOpen(open: boolean): void }) {
   return (
     <IconButton
-      icon={<PanelRight />}
+      icon={<PanelLeft />}
       size="sm"
       aria-label={open ? 'Hide details' : 'Show details'}
       aria-pressed={open}

@@ -1,8 +1,8 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen, sessionWindow, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
@@ -24,14 +24,14 @@ async function spawn(page: Page, prompt: string): Promise<Agent> {
 /** The agent as the daemon has it now. */
 const latest = (page: Page, agent: Agent) => page.evaluate((sessionId) => window.agentBoard.agents.list().then((all) => all.find((each) => each.sessionId === sessionId)!), agent.sessionId);
 
-async function withApp(body: (window: Page) => Promise<void>): Promise<void> {
+async function withApp(body: (window: Page, app: ElectronApplication) => Promise<void>): Promise<void> {
   const setup = scratch('ask-plan');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, setup.env);
   try {
     await pickFolderNext(app, setup.repo);
     await browseForZone(window);
-    await body(window);
+    await body(window, app);
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -150,6 +150,43 @@ test('esc leaves Edit with nothing written, and an HTML document is view-only wi
     await sessionWindow(window).getByRole('tab', { name: tabText('claude'), exact: true }).click();
     await expect(screen(window)).toContainText('The user commented on bench.html (v1):', { timeout: TURN_MS });
     await expect(screen(window)).toContainText('Was this with WAL on?', { timeout: TURN_MS });
+  });
+});
+
+test('Markdown in an expanded tile selects with a mouse drag and copies, and only the Edit button opens the editor', async () => {
+  await withApp(async (window, app) => {
+    const agent = await spawn(window, 'Doc on the board: docs/release-plan.md');
+    await setClickOpens(window, 'Expand in place');
+    await agentTile(window, agent).dblclick();
+    const expanded = window.getByTestId('expanded-tile');
+    await expect(expanded).toBeVisible();
+    // The document's card opens its tab in the tile already expanded.
+    await window.getByTestId('doc-card').dispatchEvent('dblclick');
+    const view = expanded.getByTestId('document-view');
+    const body = view.getByTestId('doc-body');
+    await expect(body.getByRole('heading', { name: 'Order' })).toBeVisible();
+
+    // A real drag over a paragraph selects its text, and does not move the tile.
+    const paragraph = body.getByText('Merge the flake fix first');
+    const tileBefore = await settledBox(expanded);
+    const box = (await paragraph.boundingBox())!;
+    await drag(window, { x: box.x + 1, y: box.y + box.height / 2 }, { x: box.x + box.width - 1, y: box.y + box.height / 2 });
+    const selected = await window.evaluate(() => globalThis.getSelection()?.toString() ?? '');
+    expect(selected).toContain('Merge the flake fix first');
+    expect(await expanded.boundingBox()).toEqual(tileBefore);
+    await expect(view).toHaveAttribute('data-mode', 'read');
+
+    // ⌘C puts it on the clipboard.
+    await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel'));
+    await window.keyboard.press('ControlOrMeta+c');
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(selected);
+
+    // A double-click or a click and hold on the text opens nothing; the Edit button does.
+    await body.getByText('Merge the flake fix first').dblclick({ position: { x: 4, y: 4 } });
+    await body.click({ delay: 800 });
+    await expect(view).toHaveAttribute('data-mode', 'read');
+    await view.getByRole('button', { name: 'Edit' }).click();
+    await expect(view).toHaveAttribute('data-mode', 'edit');
   });
 });
 

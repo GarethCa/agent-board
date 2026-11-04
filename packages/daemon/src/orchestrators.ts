@@ -56,7 +56,7 @@ import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
 type OrchestratorMethods = Omit<
   Pick<DaemonMethods, Extract<keyof DaemonMethods, `orchestrator.${string}`>>,
-  keyof LayoutMethods | 'orchestrator.hold' | 'orchestrator.release' | 'orchestrator.usagePause' | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole' | 'orchestrator.addClock' | 'orchestrator.removeClock'
+  keyof LayoutMethods | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole' | 'orchestrator.addClock' | 'orchestrator.removeClock'
 >;
 
 /** The terminal an orchestrator's agent starts in, before any client attaches and resizes it. */
@@ -512,19 +512,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     }
   };
 
-  /**
-   * Throws unless `actor` may start `agent` again while it is paused for usage (`Agent.hibernated.reason`): the Captain
-   * that paused it, or the user's side (their Override). No other agent's wake, restart or message lifts it.
-   */
-  const checkNotUsagePaused = (actor: Agent | null, agent: Agent) => {
-    const reason = agent.hibernated?.reason;
-    if (reason === undefined || actor === null || actor.master) return;
-    throw new RpcMethodError(
-      BOARD_ERROR.notAllowed,
-      `${agent.name} is paused for usage (${reason}): only the Captain or the user's Override starts it again`,
-    );
-  };
-
   /** The agent `sessionId` names, which `me` may look at. */
   const target = (me: Orchestrator, sessionId: string): Agent => {
     const agent = agentNamed(sessionId);
@@ -723,13 +710,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
               throw outOfScope(`you are ${MAX_CREW_DEPTH} agents deep in a crew, as deep as a crew goes: ask the agent that started you to start it`);
             }
             if (!SCOPES[me.orchestrate].zone(me, zone)) throw outOfScope(`${zone.name} is outside your scope (${scopeText(me)})`);
-            // A budget hold holds every agent's starts there; the user's own side starts what it likes.
-            if (me.agent !== null && zone.usageHold !== null) {
-              throw new RpcMethodError(
-                BOARD_ERROR.notAllowed,
-                `${zone.name} is held for usage (${zone.usageHold.reason}): no agent starts there until the hold is lifted. The user can Override it`,
-              );
-            }
             // The Captain's lead in a zone whose switch is off could start no one: the user hears of it instead (ADR-0019).
             if (me.agent?.master === true && !zone.agentsOrchestrate && isOrchestratorRole(optionalStringParam(p, 'role') ?? null)) {
               throw invalidParams(
@@ -797,7 +777,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (toCaptain && !maySteer(me!.agent!, to) && to.state === 'hibernated') {
               throw outOfScope(`${to.name} is paused: only the user, or an orchestrator that may steer it, wakes it`);
             }
-            checkNotUsagePaused(me === undefined ? (agents.get(reply!.sessionId) ?? null) : me.agent, to);
             if (clear) return { ...agents.clearUnsent(to.sessionId, false), delivery: 'cleared' };
             if (submit) return submitUnsent(me!, to);
             checkText(text);
@@ -1032,7 +1011,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             const agent = agentNamed(stringParam(p, 'sessionId'));
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
-            checkNotUsagePaused(me.agent, agent);
             const fresh = optionalBooleanParam(p, 'fresh') === true;
             const prompt = optionalStringParam(p, 'prompt');
             if (prompt !== undefined && !fresh) throw invalidParams('a prompt needs fresh: a restart that carries on its conversation takes none');
@@ -1066,7 +1044,6 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
             if (agent.state !== 'hibernated') throw invalidParams(`${agent.name} is not paused`);
-            checkNotUsagePaused(me.agent, agent);
             // Never forced: a paused agent's pane drops into no shell.
             return agents.resume(agent.sessionId, actedBy(me, 'wake'), false);
           });

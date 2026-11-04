@@ -52,8 +52,16 @@ describe('installing the external hooks', () => {
     const path = settingsFile();
     installExternalHooks(path, 'claude', SHIM);
     const { hooks } = read(path);
-    expect(Object.keys(hooks!).sort()).toEqual([...CLAUDE_HOOK_EVENTS].sort());
+    expect(Object.keys(hooks!).sort()).toEqual(CLAUDE_HOOK_EVENTS.filter((event) => event !== 'PostToolUseFailure').sort());
     expect(hooks!.Stop).toEqual([{ hooks: [{ type: 'command', command: externalHookCommand(SHIM, 'claude'), timeout: 5 }] }]);
+    expect(externalHooksInstalled(path, 'claude', SHIM)).toBe(true);
+  });
+
+  it('leaves out PostToolUseFailure, which only an agent needs, so an install from before it was sent still reads as installed', () => {
+    const path = settingsFile();
+    installExternalHooks(path, 'claude', SHIM);
+    const { hooks } = read(path);
+    expect(hooks).not.toHaveProperty('PostToolUseFailure');
     expect(externalHooksInstalled(path, 'claude', SHIM)).toBe(true);
   });
 

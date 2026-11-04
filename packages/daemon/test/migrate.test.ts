@@ -507,3 +507,32 @@ describe('the clocks migration', () => {
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });
+
+describe('the drop-pacing migration', () => {
+  it('drops pacing by usage: zone priorities and holds, why an agent was paused, and its settings; the reading and everything else stay', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const drop = MIGRATIONS.findIndex((m) => m.name === 'drop_usage_pacing');
+    expect(drop).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, drop));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height, priority, usage_hold_reason, usage_hold_at)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 900, 400, 'low', '5h at 86%', '2026-10-28T10:00:00Z');
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd) VALUES ('a', 'claude', 'ha', '/a');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, x, y, hibernated_at, hibernated_reason)
+        VALUES ('a', 'z', '/code/app', 1, 'Ada', 'Do it', 'ada', '/a', 'idle', 400, 40, '2026-10-28T10:00:00Z', '5h at 96%');
+      INSERT INTO usage_reading (id, five_hour_used, read_at) VALUES (1, 72, '2026-10-28T10:00:00Z');
+      INSERT INTO settings (key, value) VALUES ('usagePacing', 'true'), ('usageThresholds', '{}'), ('arrangeSpacing', '"compact"');`);
+
+    migrate(db);
+
+    const columns = (table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((column) => column.name);
+    expect(columns('zones')).not.toContain('priority');
+    expect(columns('zones')).not.toContain('usage_hold_reason');
+    expect(columns('zones')).not.toContain('usage_hold_at');
+    expect(columns('agents')).not.toContain('hibernated_reason');
+    expect(db.prepare('SELECT name FROM zones').all()).toEqual([{ name: 'app' }]);
+    expect(db.prepare('SELECT state, hibernated_at FROM agents').all()).toEqual([{ state: 'idle', hibernated_at: '2026-10-28T10:00:00Z' }]);
+    expect(db.prepare('SELECT five_hour_used FROM usage_reading').all()).toEqual([{ five_hour_used: 72 }]);
+    expect(db.prepare('SELECT key FROM settings').all()).toEqual([{ key: 'arrangeSpacing' }]);
+  });
+});

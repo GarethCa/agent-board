@@ -191,8 +191,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    */
   const queued = new Map<string, { what: string; lines: number; text: string; count: number }>();
   /**
-   * Agents whose unsent message is one queued in a turn the user interrupted: Codex's own `Interrupt` hook, landing
-   * after, is no news that it was taken.
+   * Agents whose unsent message is one queued in a turn the user interrupted: Codex's own `Interrupt` hook, and a `Stop`
+   * the harness had fired before the interrupt reached it, landing after, are no news that it was taken. Held until
+   * the next prompt (`turnSeen`), so a prompt whose hook is lost leaves the guard up, as it does `TURN_WORK_HOOKS`.
    */
   const interruptedWith = new Set<string>();
   /**
@@ -522,12 +523,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
 
     /**
      * The agent's own turn started or ran (a hook of it: `UserPromptSubmit`, a tool call, `Stop`…): whatever was typed
-     * at its prompt has been taken. Its `Interrupt` hook (Codex's) is no news of a message queued in the turn the user
-     * interrupted.
+     * at its prompt has been taken. A hook that only ends a turn (`endsTurn`: Codex's `Interrupt`, or a `Stop` of the
+     * turn the user interrupted, already in flight) is no news of a message queued in that turn.
      */
-    turnSeen(sessionId: string, interrupt = false) {
+    turnSeen(sessionId: string, endsTurn = false) {
       submitting.get(sessionId)?.();
-      if (interrupt && interruptedWith.has(sessionId)) return;
+      if (endsTurn && interruptedWith.has(sessionId)) return;
       if (!sending.has(sessionId)) setUnsent(sessionId, undefined);
     },
 

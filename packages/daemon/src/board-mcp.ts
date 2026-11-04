@@ -11,10 +11,6 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
-  holdZone,
-  releaseZone,
-  usagePauseAgent,
-  usagePrioritiesView,
   usageView,
   presentPlan,
   readPlanSource,
@@ -161,13 +157,8 @@ export const BOARD_MCP_TOOLS: Tool[] = [
     name: 'usage',
     description:
       "The plan's 5-hour and weekly usage (used, left, when each resets, when it was read, and whether it is stale), " +
-      "read from Claude agents' status lines, so no tokens are spent. With priorities: the user's zone priorities and " +
-      'usage thresholds, and whether they let the Captain pace work by usage. As `agent-board usage [priorities]`.',
-    inputSchema: {
-      type: 'object',
-      properties: { priorities: { type: 'boolean', description: "The user's priorities and thresholds instead of the reading." } },
-      additionalProperties: false,
-    },
+      "read from Claude agents' status lines, so no tokens are spent. As `agent-board usage`.",
+    inputSchema: NO_INPUT,
   },
   {
     name: 'connections',
@@ -558,26 +549,6 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
   {
     name: 'wake',
     description: 'Wake a paused agent, carrying on its conversation. As `agent-board wake`.',
-    inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
-  },
-  {
-    name: 'usage_hold',
-    description:
-      "The Captain's budget hold: no agent starts in the zone, and hand-offs to its agents wait, until it is released. " +
-      'Refused unless the user turned on pacing by usage, the reading is fresh, and the zone is past their threshold ' +
-      'for its priority (see usage with priorities). The user can Override it. As `agent-board usage hold`.',
-    inputSchema: { type: 'object', properties: { zone: { type: 'string', description: 'A zone ref.' } }, required: ['zone'], additionalProperties: false },
-  },
-  {
-    name: 'usage_release',
-    description: "Lift a zone's budget hold: what waited on it goes on. As `agent-board usage release`.",
-    inputSchema: { type: 'object', properties: { zone: { type: 'string', description: 'A zone ref.' } }, required: ['zone'], additionalProperties: false },
-  },
-  {
-    name: 'usage_pause',
-    description:
-      'Pause an idle agent for usage, as pause does, its tile saying why: only in a low-priority zone past the ' +
-      "user's pause threshold, under the same rules as usage_hold. Never mid-turn. As `agent-board usage pause`.",
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
   },
   {
@@ -1020,7 +991,7 @@ export interface BoardMcpContext {
 const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, unknown>, cwd: string) => Promise<ToolAnswer>> = {
   whoami: async (session) => identifyView(new BoardRefs(await readBoard(session.client)), session.caller, session.socketPath).text,
   board: async (session) => treeView(new BoardRefs(await readBoard(session.client)), session.caller).text,
-  usage: async (session, args) => (await (args.priorities === true ? usagePrioritiesView(session) : usageView(session))).text,
+  usage: async (session) => (await usageView(session)).text,
   connections: async (session) => connectionsView(new BoardRefs(await readBoard(session.client)), session.caller).text,
   open_pr: async (session) => (await openOwnPullRequest(session)).text,
   record_pr: async (session, args, cwd) => {
@@ -1113,9 +1084,6 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   pause: async (session, args) => (await pauseAgent(session, stringArg(args, 'agent'))).text,
   wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,
-  usage_hold: async (session, args) => (await holdZone(session, stringArg(args, 'zone'))).text,
-  usage_release: async (session, args) => (await releaseZone(session, stringArg(args, 'zone'))).text,
-  usage_pause: async (session, args) => (await usagePauseAgent(session, stringArg(args, 'agent'))).text,
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
   handoff: async (session, args) =>
     (

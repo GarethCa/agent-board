@@ -6,7 +6,7 @@ const PERF = /board-perf\.spec\.ts/;
 /** The rendering benchmark, run only by hand: `pnpm bench:render`. */
 const BENCH = /render-bench\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
-const VISUAL = /visual\.spec\.ts/;
+const VISUAL = /(^|\/)e2e\/visual\/[^/]+\.spec\.ts$/;
 const README = /readme-screenshots\.spec\.ts/;
 /** The board recordings for the promo: the capture spike and one spec per storyboard shot. */
 const PROMO = /(^|\/)e2e\/capture\/[^/]+\.spec\.ts$/;
@@ -31,7 +31,9 @@ export default defineConfig({
   projects: [
     { name: 'app', testIgnore: [PERF, BENCH, PACKAGED, VISUAL, README, PROMO] },
     // Screenshots against per-platform baselines, run by `pnpm test:visual` and the visual steps of `pnpm check:local`.
-    { name: 'visual', testMatch: VISUAL },
+    // One spec file per surface in e2e/visual/, so the shots run on several workers; the baselines stay in
+    // e2e/visual.spec.ts-snapshots/, named as they were before the split. The shots launch Electron apps like the app project does.
+    { name: 'visual', testMatch: VISUAL, snapshotPathTemplate: '{testDir}/visual.spec.ts-snapshots/{arg}{-projectName}{-snapshotSuffix}{ext}' },
     // The README's screenshots, written to docs/assets/screenshots by `pnpm readme:screenshots`; no test run takes them.
     { name: 'readme', testMatch: README },
     // Recordings of the board for the promo video, made by `pnpm promo:capture` (and the spike's by `promo:spike`); no gate runs them.

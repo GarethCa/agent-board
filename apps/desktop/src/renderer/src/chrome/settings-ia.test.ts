@@ -31,8 +31,6 @@ describe('the Settings window’s groups', () => {
       'chatStyle',
       'usageReading',
       'usageOnBoard',
-      'usageThresholds',
-      'usagePacing',
       'extendedShortcuts',
       'cliInstall',
       'simplifiedDesign',

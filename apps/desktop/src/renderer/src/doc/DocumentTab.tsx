@@ -179,7 +179,7 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
       ) : text === null ? (
         <p className="review-meta doc-reading">{content === undefined && problem === undefined ? 'Reading it…' : ''}</p>
       ) : markdown ? (
-        <div className="doc-render doc-markdown" data-testid="doc-body" data-current={current || undefined} onDoubleClick={startEdit}>
+        <div className="doc-render doc-markdown" data-testid="doc-body" data-current={current || undefined}>
           <Markdown text={text} onOpenLink={openLink} />
         </div>
       ) : (

@@ -143,7 +143,9 @@ export const SeveralSelectedContext = createContext(false);
 
 /** Whether an item's own bar and resize handles show: it is selected, and on its own. */
 export function useOnlySelected(selected: boolean | undefined): boolean {
-  return selected === true && !useContext(SeveralSelectedContext);
+  // Read first: a `&&` before it would skip the hook whenever nothing is selected, changing the hooks a node calls as it is picked.
+  const several = useContext(SeveralSelectedContext);
+  return selected === true && !several;
 }
 
 export const ItemActionsContext = createContext<ItemActions>({

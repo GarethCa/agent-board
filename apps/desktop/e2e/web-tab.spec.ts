@@ -262,7 +262,9 @@ test("a web tab from + Web… shows a local dev server's page, locked down: no f
     // Every permission is denied: notifications, geolocation, the camera.
     expect(await page.evaluate(() => Notification.requestPermission())).toBe('denied');
     expect(await page.evaluate(() => new Promise<number>((resolve) => navigator.geolocation.getCurrentPosition(() => resolve(0), (error) => resolve(error.code))))).toBe(1);
-    expect(await page.evaluate(() => navigator.mediaDevices.getUserMedia({ video: true }).then(() => 'granted', (error: Error) => error.name))).toBe('NotAllowedError');
+    // With a camera the request is refused; with none (a closed lid) Chromium answers NotFoundError before asking.
+    const hasCamera = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).some((device) => device.kind === 'videoinput'));
+    expect(await page.evaluate(() => navigator.mediaDevices.getUserMedia({ video: true }).then(() => 'granted', (error: Error) => error.name))).toBe(hasCamera ? 'NotAllowedError' : 'NotFoundError');
 
     // A download is cancelled, and devtools never open.
     const devToolsOpened = await app.evaluate(({ BrowserWindow }) => {

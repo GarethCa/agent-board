@@ -81,12 +81,32 @@ state: the new board read fields the old daemon never sent, threw while renderin
 to restart the daemon with it. So the board and every popped-out window first ask `daemon.health`, and on another build
 show only that offer, until the restart. `agent-board restart-daemon --data-dir <dir>` restarts the daemon as its own
 build for the app's updater: it stops the old daemon with force, so its sessions are stopped by restart, starts its
-own, and resumes each agent and shell pane that stop ended (not those stopped earlier), as Resume all would, typing
-nothing. Running it is the user asking for the resume, as pressing Resume all is. It says what it restarted and resumed,
-and names the agents it cut off mid-turn, whose turn is lost. It resumes nothing when another build's daemon answers in
+own, and resumes each agent and shell pane that stop ended (not those stopped earlier), as Resume all would. Running it is the user asking for the resume, as pressing Resume all is. It says what it restarted and resumed,
+and names the agents it cut off mid-turn, which that resume tells to carry on. It resumes nothing when another build's daemon answers in
 its place. It starts the daemon from the home folder, with the caller's environment less every `AGENT_BOARD_*`, pnpm's script
 variables, the Claude Code session it may run in, and `node_modules/.bin` on PATH, which a daemon would otherwise hand
 all its sessions. It refuses to run inside a session of the daemon it restarts (that daemon an ancestor of it), as
 stopping the daemon would end it first, and when it can't tell (no `ps`, or Windows). `pnpm update:app` runs
 it between installing the app and opening it, unless told `--no-restart`, or run inside such a session (or unsure of it), where it leaves
 the daemon running and the app offers the restart.
+
+**Resuming a cut-off turn**: sessions still end with their daemon. An agent whose daemon went away while
+it was at work (running, thinking, or on a permission prompt) has its turn cut off; the daemon records that
+(`agents.turn_cut_off`) as its session ends at a shutdown, or at the next start for a daemon that died, where the
+agent's last state is still the one it had. A Claude agent whose transcript ends in Claude's own "Request interrupted by
+user" was stopped by the user with Esc, which Claude fires no hook for, so it is not cut off. Any resume in its
+conversation (`agent.resume`: Resume, Resume all, `restart-daemon`; and an orchestrator's restart or wake of its crew)
+carries on its conversation with the harness's own resume and types one fixed line as its next message, "The app
+restarted; carry on from where you were." Each was asked for, by the user or an orchestrator they set going, so it is
+that ask relayed, not the app acting on its own. The record stays until a turn begins, so a restart before the line
+could be typed tells it again; it goes once its session ends any other way, or it starts on a new conversation. An agent
+that was idle, or had ended its turn on a question, is told nothing. With no conversation to carry on it starts afresh
+on its task, as before. `Agent.cutOffMidTurn` says it is still to be told, which is how `restart-daemon` names the
+agents it told, rather than guessing from their states before the stop. Every agent resumed after a restart says "Relaunched after a restart" on its tile until its next turn
+begins, or its session ends first.
+
+Keeping the agents themselves alive across a daemon restart was considered and left for later. A PTY is owned by the
+process that opened it, so it would take a holder process per agent and a protocol to reattach to it; and each agent
+is launched with the daemon's hook and board MCP URLs, on a port the daemon picks afresh at each start, so a surviving
+agent would report to nothing until that port were kept too. A restart for an upgrade, the common case, also has to
+replace the code that would hold them.

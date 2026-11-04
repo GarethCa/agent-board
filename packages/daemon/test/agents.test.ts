@@ -23,7 +23,7 @@ import {
   type SessionExitedEvent,
 } from '../src/protocol.ts';
 import type { Clock } from '../src/clock.ts';
-import { QUIET_TURN_MS } from '../src/quiet-turns.ts';
+import { QUIET_TURN_MS, readTranscriptTail, turnEndedInTranscript } from '../src/quiet-turns.ts';
 import { createFakeClock } from './fake-clock.ts';
 import { connectTestClient, git, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
@@ -69,6 +69,8 @@ async function agentDaemon(
     promptBox?: boolean | 'spinner';
     /** Its fake Claude's first tool call never returns. */
     hangTool?: boolean;
+    /** Its fake Claude's tool calls fail when they run (`PostToolUseFailure`). */
+    toolFails?: boolean;
   } = {},
 ) {
   const home = options.home ?? tempDataDir();
@@ -96,6 +98,7 @@ async function agentDaemon(
       sessionEndExitMs: options.sessionEndExitMs,
       promptBox: options.promptBox,
       hangTool: options.hangTool,
+      toolFails: options.toolFails,
     }),
     permissionHoldMs: options.permissionHoldMs,
     clock: options.clock,
@@ -710,13 +713,20 @@ describe('Claude agents', () => {
       const netSaid = (said: RegExp) =>
         vi.waitFor(() => expect(logged).toContainEqual(expect.stringMatching(new RegExp(`^agent ${agent.sessionId} ${said.source}`))), { timeout: 10_000 });
       const stateNow = async () => (await daemon.client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!.state;
-      return { ...daemon, clock, logged, agent, netSaid, stateNow };
+      // The fake prints a reply before it writes it to its transcript: the clock moves on only once the turn's end is in it, or the net reads a turn under way.
+      const turnWritten = async () => {
+        const start = await daemon.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart');
+        const path = String(start.payload.transcript_path);
+        await vi.waitFor(async () => expect(turnEndedInTranscript(await readTranscriptTail(path))).toBe(true), { timeout: 10_000 });
+      };
+      return { ...daemon, clock, logged, agent, netSaid, stateNow, turnWritten };
     };
 
     it('moves to idle when word of another session left it waiting, its turn over, and then takes a message', async () => {
-      const { clock, client, recorder, agent, netSaid } = await quietAgent('output', { loseStopHooks: 1, promptBox: true, idleNeedsInputMs: 100 });
+      const { clock, client, recorder, agent, netSaid, turnWritten } = await quietAgent('output', { loseStopHooks: 1, promptBox: true, idleNeedsInputMs: 100 });
       await untilState(recorder, agent.sessionId, 'waiting');
       await vi.waitFor(() => expect(recorder.screenText(agent.sessionId)).toContain('❯'));
+      await turnWritten();
 
       clock.advance(QUIET_TURN_MS);
       await untilState(recorder, agent.sessionId, 'idle');
@@ -753,8 +763,9 @@ describe('Claude agents', () => {
     });
 
     it("moves to idle once it has sat quiet at Claude's prompt, its transcript ended, and the log says why", async () => {
-      const { clock, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1, promptBox: true });
+      const { clock, recorder, agent, netSaid, stateNow, turnWritten } = await quietAgent('output', { loseStopHooks: 1, promptBox: true });
       await vi.waitFor(() => expect(recorder.screenText(agent.sessionId)).toContain('❯'));
+      await turnWritten();
       expect(await stateNow()).toBe('thinking');
 
       clock.advance(QUIET_TURN_MS);
@@ -763,11 +774,12 @@ describe('Claude agents', () => {
     });
 
     it('moves to idle when a permission denied on the board was the last its turn showed: that state is timed too', async () => {
-      const { clock, client, recorder, agent, netSaid } = await quietAgent('permission', { loseStopHooks: 1, promptBox: true });
+      const { clock, client, recorder, agent, netSaid, turnWritten } = await quietAgent('permission', { loseStopHooks: 1, promptBox: true });
       const { permissions } = await untilState(recorder, agent.sessionId, 'needs-permission');
       await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: permissions[0]!.id, behavior: 'deny', message: 'Keep dist' });
       await untilState(recorder, agent.sessionId, 'running');
       await recorder.waitForText(agent.sessionId, '❯');
+      await turnWritten();
 
       clock.advance(QUIET_TURN_MS);
       await untilState(recorder, agent.sessionId, 'idle');
@@ -785,8 +797,9 @@ describe('Claude agents', () => {
     });
 
     it("stays at work while Claude's spinner line is still drawn over its prompt box, its transcript ended", async () => {
-      const { clock, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1, promptBox: 'spinner' });
+      const { clock, recorder, agent, netSaid, stateNow, turnWritten } = await quietAgent('output', { loseStopHooks: 1, promptBox: 'spinner' });
       await recorder.waitForText(agent.sessionId, '❯');
+      await turnWritten();
 
       clock.advance(QUIET_TURN_MS);
       await netSaid(/was thinking with no hook or output for 5 min, but its screen shows no prompt of Claude's between turns: left at work$/);
@@ -794,13 +807,14 @@ describe('Claude agents', () => {
     });
 
     it("stays at work when Claude's screen shows no prompt, and is looked at again a spell later", async () => {
-      const { clock, logged, recorder, agent, netSaid, stateNow } = await quietAgent('output', { loseStopHooks: 1 });
+      const { clock, logged, recorder, agent, netSaid, stateNow, turnWritten } = await quietAgent('output', { loseStopHooks: 1 });
       await recorder.waitForText(agent.sessionId, 'All tests pass.');
+      await turnWritten();
 
       clock.advance(QUIET_TURN_MS);
       await netSaid(/.*but its screen shows no prompt of Claude's between turns: left at work$/);
       clock.advance(QUIET_TURN_MS);
-      await vi.waitFor(() => expect(logged.filter((line) => line.includes('left at work'))).toHaveLength(2));
+      await vi.waitFor(() => expect(logged.filter((line) => line.includes('left at work'))).toHaveLength(2), { timeout: 10_000 });
       expect(await stateNow()).toBe('thinking');
     });
   });
@@ -1352,6 +1366,106 @@ describe('Claude agents', () => {
       });
     });
 
+    it('tells a Claude agent its daemon stopped mid-turn to carry on once resumed, and says it was relaunched until that turn begins', async () => {
+      const dataDir = tempDataDir();
+      // Its turn's tool call never returns: it is still at work when the daemon shuts down.
+      const first = await agentDaemon('output', { dataDir, hangTool: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Run the tests', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'running');
+      await first.daemon.stop();
+      const second = await agentDaemon('output', { dataDir, home: first.home });
+
+      const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      expect(resumed.notice).toBe('Relaunched after a restart');
+      const told = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit',
+      );
+      expect(told.payload.prompt).toBe('The app restarted; carry on from where you were.');
+      await vi.waitFor(async () => expect((await second.client.call('agent.list'))[0]).toMatchObject({ state: 'idle', notice: null }));
+      await second.daemon.stop();
+
+      // Told once: resumed again after a restart that found it idle, it stays idle.
+      const third = await agentDaemon('output', { dataDir, home: first.home });
+      await third.client.call('agent.resume', { sessionId: agent.sessionId });
+      // At its prompt for its idle spell: anything typed at it would have come before.
+      await third.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Notification' && e.payload.notification_type === 'idle_prompt',
+      );
+      expect(third.recorder.events.some((e) => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit')).toBe(false);
+      expect((await third.client.call('agent.list'))[0]).toMatchObject({ notice: 'Relaunched after a restart' });
+    });
+
+    it('tells it again, once, when the daemon restarts before its line could be typed', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir, hangTool: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Run the tests', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'running');
+      await first.daemon.stop();
+      // Its session never says it is up, as a long conversation still loading: the line waits, and the daemon stops.
+      const loading = await agentDaemon('output', { dataDir, home: first.home, noSessionStart: true });
+      await loading.client.call('agent.resume', { sessionId: agent.sessionId });
+      await loading.daemon.stop();
+      const third = await agentDaemon('output', { dataDir, home: first.home });
+
+      expect(await third.client.call('agent.resume', { sessionId: agent.sessionId })).toMatchObject({ cutOffMidTurn: true });
+
+      const submitted = (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit';
+      expect((await third.recorder.waitFor(submitted)).payload.prompt).toBe('The app restarted; carry on from where you were.');
+      await vi.waitFor(async () => expect((await third.client.call('agent.list'))[0]).toMatchObject({ state: 'idle', cutOffMidTurn: false }));
+      expect(loading.recorder.events.filter(submitted)).toEqual([]);
+      expect(third.recorder.events.filter(submitted)).toHaveLength(1);
+    });
+
+    it('tells a Codex agent cut off mid-turn to carry on in its own conversation', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('waiting', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, harness: 'codex', prompt: 'Pick a database', ...SIZE });
+      const stop = await first.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+      const thread = stop.payload.session_id;
+      await first.daemon.stop();
+      // As a daemon killed hard mid-turn leaves it: the session still live, the agent at work.
+      const db = new DatabaseSync(daemonPaths(dataDir).database);
+      db.prepare('UPDATE sessions SET ended_at = NULL, exit_code = NULL, stopped_by_restart = 0 WHERE id = ?').run(agent.sessionId);
+      db.prepare("UPDATE agents SET state = 'running' WHERE session_id = ?").run(agent.sessionId);
+      db.close();
+      const second = await agentDaemon('waiting', { dataDir, home: first.home });
+
+      await second.client.call('agent.resume', { sessionId: agent.sessionId });
+      await second.client.call('session.attach', { sessionId: agent.sessionId });
+
+      const told = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit',
+      );
+      expect(told.payload).toMatchObject({ prompt: 'The app restarted; carry on from where you were.', session_id: thread });
+      expect(await commandLine(second.client, agent.sessionId)).toContain(`resume ${thread}`);
+    });
+
+    it('tells a Claude agent a crashed daemon left mid-turn to carry on once resumed', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Run the tests', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'idle');
+      await first.daemon.stop();
+      // As a daemon killed hard mid-turn leaves it: the session still live, the agent at work.
+      const db = new DatabaseSync(daemonPaths(dataDir).database);
+      db.prepare('UPDATE sessions SET ended_at = NULL, exit_code = NULL, stopped_by_restart = 0 WHERE id = ?').run(agent.sessionId);
+      db.prepare("UPDATE agents SET state = 'running' WHERE session_id = ?").run(agent.sessionId);
+      db.close();
+      const second = await agentDaemon('output', { dataDir, home: first.home });
+
+      await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      const told = await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit',
+      );
+      expect(told.payload.prompt).toBe('The app restarted; carry on from where you were.');
+    });
+
     it('holds a message to a Claude agent resumed with no new prompt until its session is up, then sends it', async () => {
       const dataDir = tempDataDir();
       const first = await agentDaemon('waiting', { dataDir });
@@ -1478,7 +1592,8 @@ describe('Claude agents', () => {
 
       await second.client.call('agent.resume', { sessionId: agent.sessionId });
 
-      const live = await untilAgent(second.recorder, agent.sessionId, (a) => a.endedAt === null && a.notice !== null);
+      // Said once it has started afresh: until then, that it was relaunched after a restart.
+      const live = await untilAgent(second.recorder, agent.sessionId, (a) => a.endedAt === null && a.notice !== null && a.notice !== 'Relaunched after a restart');
       expect(live.notice).toContain('started a new conversation');
       expect(live.state).not.toBe('failed');
       await carryOn(second, agent.sessionId);
@@ -1811,7 +1926,8 @@ describe('the needs-you inbox', () => {
     const zone = await addZone(client, tempRepo());
     const agent = await spawnAttached(client, zone.id, 'Clean up');
 
-    const asking = await untilState(recorder, agent.sessionId, 'needs-permission');
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    expect(asking.state).toBe('needs-permission');
     expect(asking.permissions).toEqual([
       {
         id: expect.any(String),
@@ -1820,18 +1936,23 @@ describe('the needs-you inbox', () => {
         subagent: null,
         requestedAt: expect.any(String),
         heldUntil: expect.any(String),
+        asksInTerminal: true,
         sessionGrant: null,
       },
     ]);
+    // Claude asks in its terminal too while the hook is held, and says so with its permission_prompt notification:
+    // the decision is marked once that notification's own update has landed.
+    await recorder.waitForText(agent.sessionId, '(y/n)');
+    const notified = await recorder.waitFor(
+      (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.payload.notification_type === 'permission_prompt',
+    );
+    await untilAgent(recorder, agent.sessionId, () => true, recorder.events.indexOf(notified) + 1);
     const decided = recorder.events.length;
     const requestId = asking.permissions[0]!.id;
     await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId, behavior: 'allow' });
 
     await recorder.waitForText(agent.sessionId, 'Removed dist.');
     await untilState(recorder, agent.sessionId, 'idle', decided);
-    // Settled by the hook: the terminal never asked.
-    expect(recorder.screenText(agent.sessionId)).not.toContain('(y/n)');
-    expect(recorder.events.some((e) => e.type === 'hook' && e.payload.notification_type === 'permission_prompt')).toBe(false);
     const after = recorder.events.slice(decided).filter(isAgentUpdate);
     expect(after[0]!.agent).toMatchObject({ state: 'running', permissions: [] });
     expect(after.every((e) => e.agent.permissions.length === 0)).toBe(true);
@@ -1841,13 +1962,12 @@ describe('the needs-you inbox', () => {
     const { client, recorder } = await agentDaemon('permission');
     const zone = await addZone(client, tempRepo());
     const agent = await spawnAttached(client, zone.id, 'Clean up');
-    const { permissions } = await untilState(recorder, agent.sessionId, 'needs-permission');
+    const { permissions } = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
 
     const decision = { sessionId: agent.sessionId, requestId: permissions[0]!.id };
     await client.call('agent.decidePermission', { ...decision, behavior: 'deny', message: 'Keep dist' });
 
     await recorder.waitForText(agent.sessionId, 'Okay, I left dist alone.');
-    expect(recorder.screenText(agent.sessionId)).not.toContain('(y/n)');
     await expect(client.call('agent.decidePermission', { ...decision, behavior: 'allow' })).rejects.toMatchObject({
       code: AGENT_ERROR.permissionGone,
     });
@@ -1856,24 +1976,54 @@ describe('the needs-you inbox', () => {
     ).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
   });
 
-  it('leaves the prompt to the terminal once the hold lapses, and clears it when answered there', async () => {
+  it("keeps the agent's own prompt answerable from the inbox past the short hold, as its terminal asks too", async () => {
     const { client, recorder } = await agentDaemon('permission', { permissionHoldMs: 300 });
     const zone = await addZone(client, tempRepo());
     const agent = await spawnAttached(client, zone.id, 'Clean up');
-    const [prompt] = (await untilState(recorder, agent.sessionId, 'needs-permission')).permissions;
-
+    const [prompt] = (await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0)).permissions;
     await recorder.waitForText(agent.sessionId, '(y/n)');
-    const lapsed = await untilAgent(recorder, agent.sessionId, (a) => a.permissions[0]?.heldUntil === null);
-    expect(lapsed).toMatchObject({ state: 'needs-permission', permissions: [{ id: prompt!.id, toolName: 'Bash' }] });
-    await expect(
-      client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: prompt!.id, behavior: 'allow' }),
-    ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const now = (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId);
+    expect(now).toMatchObject({ state: 'needs-permission', permissions: [{ id: prompt!.id, heldUntil: expect.any(String) }] });
+
+    await client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: prompt!.id, behavior: 'allow' });
+    await recorder.waitForText(agent.sessionId, 'Removed dist.');
+    await untilAgent(recorder, agent.sessionId, (a) => a.state !== 'needs-permission' && a.permissions.length === 0);
+  });
+
+  it("clears the agent's own held prompt once it is answered in its terminal instead", async () => {
+    const { client, recorder } = await agentDaemon('permission');
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Clean up');
+    const [prompt] = (await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0)).permissions;
+    await recorder.waitForText(agent.sessionId, '(y/n)');
 
     const typed = recorder.events.length;
     await client.call('session.write', { sessionId: agent.sessionId, data: 'y\r' });
     await recorder.waitForText(agent.sessionId, 'Removed dist.');
     const moved = await untilAgent(recorder, agent.sessionId, (a) => a.state !== 'needs-permission', typed);
     expect(moved.permissions).toEqual([]);
+    await expect(
+      client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: prompt!.id, behavior: 'allow' }),
+    ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+  });
+
+  it("clears the agent's own held prompt once a call allowed in its terminal fails", async () => {
+    const { client, recorder } = await agentDaemon('permission', { toolFails: true });
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Clean up');
+    const [prompt] = (await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0)).permissions;
+    await recorder.waitForText(agent.sessionId, '(y/n)');
+
+    const typed = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: 'y\r' });
+    await recorder.waitForText(agent.sessionId, 'Error: Bash failed');
+    const moved = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0, typed);
+    expect(moved.state).not.toBe('needs-permission');
+    await expect(
+      client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: prompt!.id, behavior: 'deny' }),
+    ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
   });
 
   describe('with two subagents asking at once', () => {

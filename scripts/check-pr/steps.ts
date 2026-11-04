@@ -21,6 +21,20 @@ const PLAYWRIGHT_ARGS = ['--retries', '2', '--reporter', 'list,json', '--update-
 /** The release's leak check on this branch (no pnpm install, no gate): a bare ticket ID in a changed file would stop the next release. */
 export const leakCheckStep: Step = { name: 'release-leaks', argv: ['pnpm', 'release:public', '0.0.0', '--dry-run', '--skip-verify', '--ref', 'HEAD'] };
 
+/**
+ * The stages `check:pr` runs the steps in, as in check-local.sh: the heavy runs never overlap, because the unit tests
+ * (5-second timeouts) and the e2e fail when starved. A step in none of them would never run.
+ */
+export const STAGES: string[][] = [
+  ['build', 'lint', 'typecheck', 'markdownlint', 'knip', 'release-leaks'],
+  ['unit'],
+  // Related tests of the processes project, after a whole-unit run; the unit step's timeouts need the machine to themselves.
+  ['processes'],
+  // The Electron runs hold the e2e lock; the native visual run goes first, then the e2e.
+  ['visual'],
+  ['e2e'],
+];
+
 export interface StepContext {
   /** Whether a changed file names a ticket ID, so the release leak check runs. */
   leakCheck: boolean;
@@ -36,20 +50,27 @@ export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDis
     { name: 'lint', argv: ['pnpm', 'lint'] },
     { name: 'typecheck', argv: ['pnpm', 'typecheck'] },
     { name: 'markdownlint', argv: ['pnpm', 'dlx', 'markdownlint-cli2@0.23.2'] },
+    // Unused files, exports and dependencies (about 5 s); check-local.sh runs it too, so a PR that leaves one fails here, not on main.
+    { name: 'knip', argv: ['pnpm', 'knip'] },
   ];
   if (leakCheck) steps.push(leakCheckStep);
   const related = plan.unit.filter(exists);
-  if (related.length > 0) {
+  if (plan.unitAll) {
+    steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'run', '--project', 'unit'] });
+    // The whole unit project covers the related tests that live in it; the processes project (scanners, scripts) still gets its own.
+    const processesRelated = (plan.processes ?? []).filter(exists);
+    if (processesRelated.length > 0) steps.push({ name: 'processes', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', '--project', 'processes', ...processesRelated] });
+  } else if (related.length > 0) {
     steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...related] });
   }
-  if (plan.e2e.length > 0 || plan.visual) steps.unshift({ name: 'build', argv: ['pnpm', 'build'] });
-  if (plan.e2e.length > 0) {
+  if (plan.e2e.length > 0 || plan.e2eAll || plan.visual) steps.unshift({ name: 'build', argv: ['pnpm', 'build'] });
+  if (plan.e2e.length > 0 || plan.e2eAll) {
     const specs = plan.e2e.map((spec) => `e2e/${spec}`);
     steps.push({
       name: 'e2e',
       needsBuild: true,
       playwright: true,
-      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'exec', 'playwright', 'test', '--project=app', ...PLAYWRIGHT_ARGS, ...specs],
+      argv: [...headless, 'pnpm', '--filter', '@agent-board/desktop', 'exec', 'playwright', 'test', '--project=app', ...(plan.perf ? ['--project=perf'] : []), ...PLAYWRIGHT_ARGS, ...specs],
     });
   }
   if (plan.visual) {

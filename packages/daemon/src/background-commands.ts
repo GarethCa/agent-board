@@ -20,7 +20,7 @@ const MAX_RECORDED = 20;
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh']);
 
 /** The hooks of a turn under way or ending. */
-const TURN_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Interrupt']);
+const TURN_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PreCompact', 'PostCompact', 'Stop', 'StopFailure', 'Interrupt']);
 
 /** The tools that stop a background command, and the fields of their input naming it. */
 const STOP_TOOLS = new Set(['KillShell', 'KillBash', 'TaskStop']);

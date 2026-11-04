@@ -150,10 +150,6 @@ export interface Zone {
   tracker: ZoneTracker | null;
   /** How far apart a Tidy, and an orchestrator's arrange, put what is in it (`SPACING_GAPS`). */
   spacing: ArrangeSpacing;
-  /** The user's priority for it, which the usage thresholds speak in (`UsageThresholds`). Normal until set. */
-  priority: ZonePriority;
-  /** The budget hold on it, while there is one (`orchestrator.hold`); null otherwise. */
-  usageHold: UsageHold | null;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
   /**
@@ -185,12 +181,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'priority'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, priority } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, priority };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder };
 }
 
 /**
@@ -342,20 +338,6 @@ export interface ZoneSettings {
   agentsOrchestrate: boolean;
   gateCommand: string | null;
   spacing: ArrangeSpacing;
-  priority: ZonePriority;
-}
-
-/** A zone's priority, set by the user: the usage thresholds hold back normal and low zones first. */
-export const ZONE_PRIORITIES = ['high', 'normal', 'low'] as const;
-export type ZonePriority = (typeof ZONE_PRIORITIES)[number];
-
-/**
- * A budget hold on a zone: while it lasts, no agent starts an agent in the zone, and hand-offs to its agents wait.
- * `reason` says what the reading and the zone's priority were when it was placed ("5h at 86%, zone low priority").
- */
-export interface UsageHold {
-  reason: string;
-  since: string;
 }
 
 /** One window of plan usage, from a reading: how much of it is used, in percent, and when it resets. */
@@ -382,54 +364,6 @@ export interface UsageReading {
 
 /** How old a usage reading may be before it is stale. */
 export const USAGE_STALE_MS = 15 * 60_000;
-
-/** The user's usage thresholds, each a used percentage, 1 to 100. */
-export interface UsageThresholds {
-  /** At this much of the 5-hour window, only high-priority zones start new agents. */
-  fiveHourOnlyHigh: number;
-  /** At this much of the 5-hour window, low-priority zones' idle agents may be paused. */
-  fiveHourPauseLow: number;
-  /** At this much of the weekly window, only high-priority zones start new agents. */
-  sevenDayOnlyHigh: number;
-}
-
-export const DEFAULT_USAGE_THRESHOLDS: UsageThresholds = { fiveHourOnlyHigh: 80, fiveHourPauseLow: 95, sevenDayOnlyHigh: 90 };
-
-/** What the thresholds allow in a zone now: why its starts may be held, and why its idle agents may be paused, or null. */
-export interface UsagePace {
-  holdStarts: string | null;
-  pauseIdle: string | null;
-}
-
-/**
- * What the thresholds allow in a zone of `priority`, by `reading`: nothing with a stale reading. Starts may be held in
- * a zone that isn't high once either window reaches its only-high threshold; idle agents may be paused in a low zone
- * once the 5-hour window reaches its pause threshold.
- */
-export function usagePace(reading: UsageReading, priority: ZonePriority, thresholds: UsageThresholds): UsagePace {
-  if (reading.stale) return { holdStarts: null, pauseIdle: null };
-  const zone = `zone ${priority} priority`;
-  const five = reading.fiveHour?.usedPercent;
-  const seven = reading.sevenDay?.usedPercent;
-  const holdStarts =
-    priority === 'high'
-      ? null
-      : five !== undefined && five >= thresholds.fiveHourOnlyHigh
-        ? `5h at ${Math.round(five)}%, ${zone}`
-        : seven !== undefined && seven >= thresholds.sevenDayOnlyHigh
-          ? `7d at ${Math.round(seven)}%, ${zone}`
-          : null;
-  const pauseIdle = priority === 'low' && five !== undefined && five >= thresholds.fiveHourPauseLow ? `5h at ${Math.round(five)}%, ${zone}` : null;
-  return { holdStarts, pauseIdle };
-}
-
-/** The user's usage priorities (`usage.priorities`): the switch, the thresholds, and each zone's priority, hold and pace. */
-export interface UsagePriorities {
-  /** Whether the user lets the Captain pace work by usage (`DaemonSettings.usagePacing`). */
-  pacing: boolean;
-  thresholds: UsageThresholds;
-  zones: { id: string; name: string; priority: ZonePriority; hold: UsageHold | null; pace: UsagePace }[];
-}
 
 /**
  * How far apart a zone's Tidy and an orchestrator's arrange in it put things: compact, normal (the gaps arrange always
@@ -1448,12 +1382,6 @@ export interface DaemonSettings {
    * in memory, forgotten as it closes.
    */
   keepWebLogins: boolean;
-  /**
-   * Whether the Captain may pace work by usage: hold starts and hand-offs in a zone, and pause its idle agents, within
-   * `usageThresholds`. Off by default; the daemon refuses every budget hold while it is off.
-   */
-  usagePacing: boolean;
-  usageThresholds: UsageThresholds;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1723,11 +1651,16 @@ export interface Agent {
   /** What the user should know about how it ran, e.g. why agent-board stopped it; null when there is nothing. */
   notice: string | null;
   /**
+   * Its daemon went away under it mid-turn, and no turn has begun since: resuming it in its conversation types the
+   * continue line. Absent from an older daemon.
+   */
+  cutOffMidTurn?: boolean;
+  /**
    * When it was paused (`agent.pause`, `orchestrator.pause`) and by whom: the orchestrator's name as it is now and its
-   * session id, or both null for the user, and with `reason` when it was paused for usage (`orchestrator.usagePause`).
+   * session id, or both null for the user.
    * Set while it is `hibernated`; null once it wakes or is closed, and for an agent never paused.
    */
-  hibernated: { at: string; by: string | null; byId: string | null; reason?: string } | null;
+  hibernated: { at: string; by: string | null; byId: string | null } | null;
   /** The conversations it had before a fresh restart started a new one in its tile, oldest first; their transcripts stay on disk. */
   earlierConversations: EarlierConversation[];
   /** The tracker issue it works on, or null. */
@@ -2145,6 +2078,11 @@ export interface PermissionPrompt {
   requestedAt: string;
   /** While the daemon holds the hook, when the hold lapses to the terminal; null once only the terminal can answer. */
   heldUntil: string | null;
+  /**
+   * Whether the harness asks in its own terminal while the hook is held (Claude, for the agent itself), so either can
+   * answer, rather than waiting on the hold to lapse first (Codex, a Claude subagent).
+   */
+  asksInTerminal: boolean;
   /**
    * What an allow for the session would grant, in words ("npm run:*", "all edits"): the rule the harness suggested with
    * the request (Claude does). Null where it suggested none, or none that can be worded; then it can't be offered.
@@ -2710,8 +2648,8 @@ export interface EarlierConversation {
  * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
  * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
  * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
- * the role's name their detail. `hold` and `release` place and lift a zone's budget hold, the zone their target; a pause
- * for usage is a `pause` whose detail says why.
+ * the role's name their detail. `hold` and `release` (placing and lifting a zone's budget hold) are kept so activity logged
+ * before pacing by usage was removed still reads.
  */
 export const ORCHESTRATOR_ACTIONS = [
   'spawn',
@@ -3991,16 +3929,6 @@ export interface DaemonMethods {
   /** Wakes a paused agent, carrying on its conversation (`agent.resume`). Fails with `invalidParams` for one not paused. */
   'orchestrator.wake': { params: { token?: string; sessionId: string }; result: Agent };
   /**
-   * Places a budget hold on the zone (`Zone.usageHold`), with why. Only the Captain, or the user's side, and only while
-   * the user lets the Captain pace work by usage, the reading is fresh and the zone's priority is past a threshold
-   * (`usagePace`); refused with why otherwise.
-   */
-  'orchestrator.hold': { params: { token?: string; zoneId: string }; result: Zone };
-  /** Lifts the zone's budget hold: what waited on it goes on. The Captain's, or the user's (their Override). */
-  'orchestrator.release': { params: { token?: string; zoneId: string }; result: Zone };
-  /** Pauses an idle agent for usage, as `orchestrator.pause` does, with why: under the same rules as `orchestrator.hold`. */
-  'orchestrator.usagePause': { params: { token?: string; sessionId: string }; result: Agent };
-  /**
    * Makes a flow edge between two agents in its scope, or itself, marked as made by it (`FlowEdge.madeBy`),
    * as `flowEdge.create` makes one. Its `from` end must be one it may look at, and its `to` end one it may steer (an
    * edge into another orchestrator would steer it). A gate or script condition runs nothing until the user approves it
@@ -4358,8 +4286,6 @@ export interface DaemonMethods {
   'settings.set': { params: Partial<DaemonSettings>; result: DaemonSettings };
   /** The newest plan usage reading. */
   'usage.get': { params: { token?: string } | undefined; result: UsageReading };
-  /** The user's usage priorities, as the Captain reads them. */
-  'usage.priorities': { params: { token?: string } | undefined; result: UsagePriorities };
   /** Every implementer's review rounds, by implementer and round. */
   'review.list': { params: undefined; result: ReviewRound[] };
   /**
@@ -4563,7 +4489,6 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.openPullRequest',
   'orchestrator.activity',
   'usage.get',
-  'usage.priorities',
 ]);
 
 /**
@@ -4581,9 +4506,6 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.restart',
   'orchestrator.pause',
   'orchestrator.wake',
-  'orchestrator.hold',
-  'orchestrator.release',
-  'orchestrator.usagePause',
   'orchestrator.close',
   'orchestrator.addEdge',
   'orchestrator.removeEdge',

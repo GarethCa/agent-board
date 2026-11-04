@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
 import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
 import { bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, type BufferRow } from './terminal-links';
@@ -153,7 +154,11 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       const look = terminalLook(element.isConnected ? element : document.documentElement);
       return { ...look, fontSize: Math.round(chosenFontSize() ?? look.fontSize!) };
     };
-    const terminal = new Terminal({ ...look(), cursorBlink: true, scrollback: SCROLLBACK_LINES });
+    const terminal = new Terminal({ ...look(), cursorBlink: true, scrollback: SCROLLBACK_LINES, allowProposedApi: true });
+    // Claude Code and Codex draw every emoji grapheme (also ❤️, a skin tone, a ZWJ family) two cells wide; xterm's own
+    // tables count it as one or more, shifting the text and the link hit areas after it. Loading the addon makes its
+    // grapheme widths the active ones.
+    terminal.loadAddon(new UnicodeGraphemesAddon());
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     // A theme or design change (data-theme, data-design on <html>) restyles the terminal, which doesn't see CSS. The

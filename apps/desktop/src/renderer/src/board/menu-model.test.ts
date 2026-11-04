@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
-import { agentMenu, bindEntries, externalMenu, menuIds, priorityEntries, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput, type ZonePriorityActions } from './menu-model';
+import { agentMenu, bindEntries, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput } from './menu-model';
 import { galleryAgent } from './TileGallery';
 
 const AT = '2026-10-22T12:00:00.000Z';
@@ -135,8 +135,6 @@ const repoZone: Zone = {
   gateCommand: null,
   tracker: null,
   spacing: 'normal',
-  priority: 'normal',
-  usageHold: null,
   clone: null,
   managedClone: false,
   defaultRepo: null,
@@ -214,14 +212,14 @@ describe("a zone's tab chips, folded into ⋯", () => {
       .filter(([, entry]) => entry !== undefined)
       .map(([chip]) => chip);
 
-  it("offers a repo zone's tracker, new agent and shell, and priority, with Tidy left to ⋯", () => {
-    expect(ids(repoZone)).toEqual(['tracker', 'agent', 'shell', 'priority']);
+  it("offers a repo zone's tracker, new agent and shell, with Tidy left to ⋯", () => {
+    expect(ids(repoZone)).toEqual(['tracker', 'agent', 'shell']);
   });
 
   it("offers a group's binding and default repo, a tracker's issues, and a clone's Cancel and Tidy", () => {
-    expect(ids({ ...group, defaultRepo: '/code/web' })).toEqual(['default-repo', 'tracker', 'bind', 'agent', 'shell', 'priority']);
+    expect(ids({ ...group, defaultRepo: '/code/web' })).toEqual(['default-repo', 'tracker', 'bind', 'agent', 'shell']);
     expect(ids({ ...repoZone, tracker: { provider: 'github', scope: 'acme/web' } as Zone['tracker'] })).toContain('issue');
-    expect(ids({ ...repoZone, clone: {} as Zone['clone'] })).toEqual(['cancel-clone', 'tracker', 'agent', 'shell', 'priority', 'tidy']);
+    expect(ids({ ...repoZone, clone: {} as Zone['clone'] })).toEqual(['cancel-clone', 'tracker', 'agent', 'shell', 'tidy']);
   });
 
   it("says why a zone can't start agents", () => {
@@ -233,22 +231,6 @@ describe("a zone's tab menus", () => {
   it('lists Tidy ▾: Tidy now, its spacings, and the spacing for new zones', () => {
     expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
     expect(row(tidyMenu(repoZone, 'roomy', spies()), 'new-zone-spacing')).toMatchObject({ detail: 'Roomy · Settings' });
-  });
-
-  it('lists its priorities, and Override while it is held', () => {
-    expect(menuIds(priorityEntries(repoZone, spies()))).toEqual(['priority-high', 'priority-normal', 'priority-low']);
-    expect(menuIds(priorityEntries({ ...repoZone, usageHold: { reason: 'over budget', since: AT } }, spies()))).toEqual(['priority-high', 'priority-normal', 'priority-low', 'override']);
-  });
-
-  it('sets its priority and lifts its hold through the handlers it was given', () => {
-    const actions = spies<ZonePriorityActions>();
-    const held = { ...repoZone, usageHold: { reason: 'over budget', since: AT } };
-    const entries = priorityEntries(held, actions);
-    for (const id of ['priority-high', 'override']) (row(entries, id) as { onSelect(): void }).onSelect();
-    expect(actions.calls).toEqual([
-      ['setPriority', [held, 'high']],
-      ['releaseHold', [held]],
-    ]);
   });
 
   it("lists a group's ways to be bound, in the tab's Bind… and its folded row alike", () => {
@@ -285,7 +267,7 @@ function fields(entries: readonly ModelEntry[]): unknown[] {
 /** The zone's ⋯ with every chip of its tab folded into it, the most needed first, as the tab folds them. */
 function foldedZoneMenu(zone: Zone): ModelEntry[] {
   const tab = zoneTabEntries(zone, undefined, spies());
-  const order = ['cancel-clone', 'agent', 'shell', 'default-repo', 'bind', 'tracker', 'priority', 'issue', 'tidy'] as const;
+  const order = ['cancel-clone', 'agent', 'shell', 'default-repo', 'bind', 'tracker', 'issue', 'tidy'] as const;
   return zoneMenu(zoneInput(zone, { folded: order.flatMap((chip) => (tab[chip] === undefined ? [] : [tab[chip]])) }));
 }
 
@@ -582,27 +564,6 @@ describe("every row's fields", () => {
           "label": "Issues from acme/web…",
         },
         {
-          "entries": [
-            {
-              "checked": false,
-              "id": "priority-high",
-              "label": "High",
-            },
-            {
-              "checked": true,
-              "id": "priority-normal",
-              "label": "Normal",
-            },
-            {
-              "checked": false,
-              "id": "priority-low",
-              "label": "Low",
-            },
-          ],
-          "id": "tab-priority",
-          "label": "Priority",
-        },
-        {
           "id": "tab-add-issue",
           "label": "Add issue…",
         },
@@ -741,27 +702,6 @@ describe("every row's fields", () => {
           "id": "tab-tracker",
           "label": "Pick where issues come from…",
         },
-        {
-          "entries": [
-            {
-              "checked": false,
-              "id": "priority-high",
-              "label": "High",
-            },
-            {
-              "checked": true,
-              "id": "priority-normal",
-              "label": "Normal",
-            },
-            {
-              "checked": false,
-              "id": "priority-low",
-              "label": "Low",
-            },
-          ],
-          "id": "tab-priority",
-          "label": "Priority",
-        },
         "separator",
         {
           "hint": "Its tiles in rows, in reading order",
@@ -880,27 +820,6 @@ describe("every row's fields", () => {
           "label": "Pick where issues come from…",
         },
         {
-          "entries": [
-            {
-              "checked": false,
-              "id": "priority-high",
-              "label": "High",
-            },
-            {
-              "checked": true,
-              "id": "priority-normal",
-              "label": "Normal",
-            },
-            {
-              "checked": false,
-              "id": "priority-low",
-              "label": "Low",
-            },
-          ],
-          "id": "tab-priority",
-          "label": "Priority",
-        },
-        {
           "id": "tab-tidy",
           "label": "Tidy",
         },
@@ -908,7 +827,7 @@ describe("every row's fields", () => {
     `);
   });
 
-  it("pins the tab's Tidy ▾, a held zone's priorities, and Bind…", () => {
+  it("pins the tab's Tidy ▾, a zone's tab menus, and Bind…", () => {
     expect(fields(tidyMenu(repoZone, 'roomy', spies()))).toMatchInlineSnapshot(`
       [
         {
@@ -942,34 +861,6 @@ describe("every row's fields", () => {
           "detail": "Roomy · Settings",
           "id": "new-zone-spacing",
           "label": "Default for new zones…",
-        },
-      ]
-    `);
-    expect(fields(priorityEntries({ ...repoZone, priority: 'high', usageHold: { reason: 'over budget', since: AT } }, spies()))).toMatchInlineSnapshot(`
-      [
-        {
-          "checked": true,
-          "id": "priority-high",
-          "label": "High",
-        },
-        {
-          "checked": false,
-          "id": "priority-normal",
-          "label": "Normal",
-        },
-        {
-          "checked": false,
-          "id": "priority-low",
-          "label": "Low",
-        },
-        "separator",
-        {
-          "heading": "Held: over budget",
-        },
-        {
-          "hint": "Lift the hold: its starts and hand-offs go on",
-          "id": "override",
-          "label": "Override",
         },
       ]
     `);
@@ -1173,9 +1064,6 @@ describe("every row's handler", () => {
         "tab-add-issue → addIssue(#z1)",
         "tab-new-agent → newAgent(#z1)",
         "tab-new-shell → newShell(#z1)",
-        "tab-priority/priority-high → setPriority(#z1, "high")",
-        "tab-priority/priority-normal → setPriority(#z1, "normal")",
-        "tab-priority/priority-low → setPriority(#z1, "low")",
         "tab-default-repo → pickDefaultRepo(#g1)",
         "tab-tracker → pickTracker(#g1)",
         "tab-bind/repo → bind(#g1, "repo")",
@@ -1183,16 +1071,10 @@ describe("every row's handler", () => {
         "tab-bind/tracker → pickTracker(#g1)",
         "tab-new-agent → newAgent(#g1)",
         "tab-new-shell → newShell(#g1)",
-        "tab-priority/priority-high → setPriority(#g1, "high")",
-        "tab-priority/priority-normal → setPriority(#g1, "normal")",
-        "tab-priority/priority-low → setPriority(#g1, "low")",
         "tab-cancel-clone → cancelClone(#c1)",
         "tab-tracker → pickTracker(#c1)",
         "tab-new-agent → newAgent(#c1)",
         "tab-new-shell → newShell(#c1)",
-        "tab-priority/priority-high → setPriority(#c1, "high")",
-        "tab-priority/priority-normal → setPriority(#c1, "normal")",
-        "tab-priority/priority-low → setPriority(#c1, "low")",
         "tab-tidy → tidy(#c1)",
         "tidy → tidy(#z1)",
         "spacing-compact → setSpacing(#z1, "compact")",
@@ -1229,7 +1111,7 @@ function recording() {
 function classicDoings(zone: Zone): Map<string, Set<string>> {
   const { actions, rename } = recording();
   const tab = zoneTabEntries(zone, undefined, actions);
-  const order = ['cancel-clone', 'agent', 'shell', 'default-repo', 'bind', 'tracker', 'priority', 'issue', 'tidy'] as const;
+  const order = ['cancel-clone', 'agent', 'shell', 'default-repo', 'bind', 'tracker', 'issue', 'tidy'] as const;
   const folded = order.flatMap((chip) => (tab[chip] === undefined ? [] : [tab[chip]]));
   return doings([...zoneMenu({ zone, folded, themeFill: 8, rename, actions }), ...(zone.clone === null ? tidyMenu(zone, undefined, actions) : [])], actions.calls);
 }
@@ -1248,7 +1130,6 @@ function lost(classic: Map<string, Set<string>>, project: Map<string, Set<string
 const projects: [string, Zone][] = [
   ['a repo', { ...repoZone, tracker: { provider: 'github', scope: 'acme/web' } as Zone['tracker'], gateCommand: 'pnpm check', trustsFolder: true }],
   ['a group with a default repo, outside git', { ...group, defaultRepo: '/code/web', userFolder: true, fillOpacity: 30 }],
-  ['a held project', { ...repoZone, priority: 'high', usageHold: { reason: 'over budget', since: AT } }],
   ['a cloning project', { ...repoZone, clone: {} as Zone['clone'] }],
 ];
 
@@ -1285,9 +1166,6 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
-        "options/priority/priority-high → setPriority(#z1, "high")",
-        "options/priority/priority-normal → setPriority(#z1, "normal")",
-        "options/priority/priority-low → setPriority(#z1, "low")",
         "options/issues/tracker → pickTracker(#z1)",
         "options/issues/add-issue → addIssue(#z1)",
         "options/folder/trust-folder → setTrustsFolder(#z1, false)",
@@ -1315,9 +1193,6 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
-        "options/priority/priority-high → setPriority(#z1, "high")",
-        "options/priority/priority-normal → setPriority(#z1, "normal")",
-        "options/priority/priority-low → setPriority(#z1, "low")",
         "options/issues/tracker → pickTracker(#z1)",
         "options/folder/repo → bind(#z1, "repo")",
         "options/folder/project → bind(#z1, "project")",
@@ -1330,45 +1205,12 @@ describe("a project's menus, under the Simplified design", () => {
         "options/agents/role-templates → editRoleTemplates(#z1)",
         "options/delete → deleteZone(#z1)",
         "delete → deleteZone(#z1)",
-        "— a held project",
-        "new-agent → newAgent(#z1)",
-        "new-shell → newShell(#z1)",
-        "new-note → newNote()",
-        "rename → rename()",
-        "tidy → tidy(#z1)",
-        "colour-menu/colour → recolor(#z1, "picked")",
-        "options/new-agent → newAgent(#z1)",
-        "options/new-shell → newShell(#z1)",
-        "options/rename → rename()",
-        "options/colour → recolor(#z1, "picked")",
-        "options/fill-opacity → setFill(#z1, 12)",
-        "options/tidy → tidy(#z1)",
-        "options/spacing/spacing-compact → setSpacing(#z1, "compact")",
-        "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
-        "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
-        "options/spacing/new-zone-spacing → openSettings()",
-        "options/priority/priority-high → setPriority(#z1, "high")",
-        "options/priority/priority-normal → setPriority(#z1, "normal")",
-        "options/priority/priority-low → setPriority(#z1, "low")",
-        "options/priority/override → releaseHold(#z1)",
-        "options/issues/tracker → pickTracker(#z1)",
-        "options/folder/trust-folder → setTrustsFolder(#z1, true)",
-        "options/folder/unbind → unbind(#z1)",
-        "options/agents/board-mcp → setBoardMcp(#z1, false)",
-        "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
-        "options/agents/gate-command → editGateCommand(#z1)",
-        "options/agents/role-templates → editRoleTemplates(#z1)",
-        "options/delete → deleteZone(#z1)",
-        "delete → deleteZone(#z1)",
         "— a cloning project",
         "new-shell → newShell(#z1)",
         "new-note → newNote()",
         "options/new-agent → newAgent(#z1)",
         "options/new-shell → newShell(#z1)",
         "options/tidy → tidy(#z1)",
-        "options/priority/priority-high → setPriority(#z1, "high")",
-        "options/priority/priority-normal → setPriority(#z1, "normal")",
-        "options/priority/priority-low → setPriority(#z1, "low")",
         "options/issues/tracker → pickTracker(#z1)",
         "options/folder/cancel-clone → cancelClone(#z1)",
       ]
@@ -1388,10 +1230,6 @@ describe("a project's menus, under the Simplified design", () => {
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
       'spacing/new-zone-spacing',
-      'priority',
-      'priority/priority-high',
-      'priority/priority-normal',
-      'priority/priority-low',
       'issues',
       'issues/tracker',
       'issues/add-issue',
@@ -1410,7 +1248,7 @@ describe("a project's menus, under the Simplified design", () => {
   it("gives a project with no folder the ways to get one, and a cloning one only Cancel clone", () => {
     const folder = (zone: Zone) => menuIds(projectMenu(projectInput(zone))).filter((id) => id.startsWith('folder/'));
     expect(folder(projects[1]![1])).toEqual(['folder/repo', 'folder/project', 'folder/tracker', 'folder/default-repo', 'folder/init-repo']);
-    expect(folder(projects[3]![1])).toEqual(['folder/cancel-clone']);
+    expect(folder(projects[2]![1])).toEqual(['folder/cancel-clone']);
   });
 
   it('lists the right-click menu: making things first, then the everyday actions, then ⋯ as Project options', () => {

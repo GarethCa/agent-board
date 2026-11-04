@@ -53,8 +53,6 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     name: 'Usage',
     sections: [
       { id: 'plan', name: 'Plan usage' },
-      { id: 'thresholds', name: 'Thresholds' },
-      { id: 'pacing', name: 'Pacing' },
     ],
   },
   { id: 'accounts', name: 'Accounts', sections: [{ id: 'terminals', name: 'Other terminals' }] },
@@ -112,8 +110,6 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'mutedAgents', label: 'A tile muted from its ⋯ menu never notifies', home: 'alerts.notifications', also: 'mute silence' },
   { id: 'usageReading', label: 'Used so far', home: 'usage.plan', also: 'limits plan' },
   { id: 'usageOnBoard', label: 'Show usage on the board', home: 'usage.plan' },
-  { id: 'usageThresholds', label: 'Only High zones start new agents at', home: 'usage.thresholds', also: 'limit high zones' },
-  { id: 'usagePacing', label: 'Let the Captain pace work by usage', home: 'usage.pacing', also: 'captain pace' },
   { id: 'otherTerminals', label: 'Other terminals', home: 'accounts.terminals', also: 'hooks external sessions' },
   { id: 'claudePath', label: 'Claude path', home: 'advanced.programs', also: 'binary executable' },
   { id: 'codexPath', label: 'Codex path', home: 'advanced.programs', also: 'binary executable' },

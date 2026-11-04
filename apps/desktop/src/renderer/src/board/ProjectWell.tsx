@@ -9,7 +9,6 @@ import { CrewFramesContext } from './crew-view';
 import { projectContextMenu, projectMenu, type ProjectMenuInput } from './menu-model';
 import { ProjectSummaryContext } from './project-summary';
 import { StatusGlyph } from './StatusMark';
-import { zoneHold } from './zone-priority';
 import {
   AddIssueContext,
   BindZoneContext,
@@ -17,7 +16,6 @@ import {
   DropTargetContext,
   NewAgentContext,
   NewShellContext,
-  priorityActions,
   SaveZoneLayoutContext,
   whyNoAgents,
   ZoneBindingContext,
@@ -55,17 +53,13 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected
   const summary = useContext(ProjectSummaryContext).get(zone.id);
   const technical = useTechnicalDetails();
   const renaming = useRenaming(zone.name, (name) => binding.rename(zone, name));
-  // With its priority chip gone, why a change of it didn't go through shows in the heading.
-  const [failed, setFailed] = useState<string>();
   // The spacing new projects take, read as a menu opens: its row names it.
   const [newZones, setNewZones] = useState<ArrangeSpacing>();
   const [menuAt, setMenuAt] = useState<{ x: number; y: number }>();
   // Its ⋯ rows are built only while ⋯ is open: a well re-renders whenever its agents change.
   const [optionsOpen, setOptionsOpen] = useState(false);
   const { clone } = zone;
-  const hold = zoneHold(zone);
   const readOnOpen = () => {
-    setFailed(undefined);
     window.agentBoard.flowEdges.settings().then((settings) => setNewZones(settings.arrangeSpacing), () => {});
   };
   const input: ProjectMenuInput = {
@@ -76,10 +70,9 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected
     // A well with no fill of its own is drawn untinted, so its slider starts from none.
     themeFill: 0,
     rename: renaming.startSoon,
-    actions: { ...binding, newAgent, newShell, pickTracker, bind, cancelClone, addIssue, ...priorityActions(setFailed) },
+    actions: { ...binding, newAgent, newShell, pickTracker, bind, cancelClone, addIssue },
   };
   const folder = zone.repoRoot === null ? (zone.userFolder ? zone.groupFolder : null) : zone.folder === '' ? zone.repoRoot : `${zone.repoRoot}/${zone.folder}`;
-  const note = failed ?? (hold === null ? undefined : `Held: ${hold.reason}`);
   const onContextMenu = (event: MouseEvent) => {
     // A right-click in one of its menus reaches here too, through the portal: it is the menu's, not a new one.
     if (!event.currentTarget.contains(event.target as Node)) return;
@@ -143,7 +136,6 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected
         ) : (
           summary !== undefined && summary.line !== '' && <span className="project-summary">{summary.needsYou > 0 ? `· ${summary.line}` : summary.line}</span>
         )}
-        {note !== undefined && <span className="project-note">{note}</span>}
         {/* Takes the room left, so the folder Show technical details adds moves nothing else. */}
         <span className="project-heading-gap" />
         {folder !== null && (

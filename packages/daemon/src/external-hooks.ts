@@ -34,9 +34,18 @@ function isExternalHook(handler: unknown, harness: Harness): boolean {
   return typeof command === 'string' && new RegExp(`agent-board-hook['"]? external ${harness}$`).test(command);
 }
 
+/**
+ * Claude events an agent's hooks send that the global hooks leave out. `PostToolUseFailure` settles a held permission
+ * prompt, and an external session's prompts are never held; installs made before it was sent must still read as
+ * installed.
+ */
+const AGENT_ONLY_CLAUDE_HOOK_EVENTS: ReadonlySet<string> = new Set(['PostToolUseFailure']);
+
 /** Each event the harness's external hooks listen to, with its timeout in seconds. */
 function externalHookEvents(harness: Harness): [string, number][] {
-  if (harness === 'claude') return CLAUDE_HOOK_EVENTS.map((event) => [event, EXTERNAL_HOOK_TIMEOUT]);
+  if (harness === 'claude') {
+    return CLAUDE_HOOK_EVENTS.filter((event) => !AGENT_ONLY_CLAUDE_HOOK_EVENTS.has(event)).map((event) => [event, EXTERNAL_HOOK_TIMEOUT]);
+  }
   return Object.entries(CODEX_HOOK_TIMEOUTS).map(([event, timeout]) => [event, Math.min(timeout, EXTERNAL_HOOK_TIMEOUT)]);
 }
 

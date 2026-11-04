@@ -72,7 +72,7 @@ done
 
 # Each stage's wall-clock limit in minutes, about three times a usual run on a loaded machine. The unit tests get more:
 # on a busy machine they took about 10 minutes when measured, longer if the process limit cuts the processes
-# project's workers (scripts/vitest-workers), and a stuck test is caught within a minute or so by the watchdog anyway. The visual suite gets 20: it runs over 100 shots, about 8–10 minutes when the machine is quiet. The visual and e2e limits start once the e2e lock is held.
+# project's workers (scripts/vitest-workers), and a stuck test is caught within a minute or so by the watchdog anyway. The visual suite gets 20: it runs over 100 shots, about 6–7 minutes on 3 workers when the machine is quiet. The visual and e2e limits start once the e2e lock is held.
 # CHECK_LIMIT_MIN sets them all (the gate's own test does: scripts/deadline/check-local.test.ts).
 checks_min=${CHECK_LIMIT_MIN:-10}
 test_min=${CHECK_LIMIT_MIN:-45}
@@ -120,8 +120,10 @@ wait
 if [ -n "$quick" ]; then
   :
 elif [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
-  # Stage 3: the Electron runs. The native visual run goes first, alone (about ten seconds): its screenshots differ when
-  # other apps are launching beside it. Then the e2e.
+  # Stage 3: the Electron runs. The native visual run goes first, alone of the Electron runs: its screenshots differ when
+  # the e2e's apps are launching beside it. Its own spec files share its workers (3, or 2 when the load is high); five
+  # clean runs in a row (166 shots, 6 to 7 minutes each, no retries, load 6 to 15) showed that is stable, and the gate's two
+  # retries absorb the rare load flake. Then the e2e.
   start visual env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/visual.json" node scripts/e2e-lock/main.ts visual -- $deadline visual "$visual_min" -- sh -c "$visual"
   wait
   start e2e env PLAYWRIGHT_JSON_OUTPUT_FILE="$log_dir/e2e.json" node scripts/e2e-lock/main.ts e2e -- $deadline e2e "$e2e_min" -- sh -c "$e2e"

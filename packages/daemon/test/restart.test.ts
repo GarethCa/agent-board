@@ -1,5 +1,6 @@
 import { fakeHarnessEnv, type FakeScenario } from '@agent-board/fake-harness';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { connectDaemon } from '../src/client.ts';
 import { detachedDaemonLaunch, RESTART_FROM_INSIDE, runAgentBoardCli } from '../src/cli.ts';
@@ -88,6 +89,28 @@ describe('restartDaemon', () => {
     const result = await restartDaemon(dataDir, { start: () => void startTestDaemon(daemonOptions(dataDir, home, 'waiting')) });
 
     expect(result).toMatchObject({ status: 'restarted', agents: ['Build it'], midTurn: ['Build it'] });
+  });
+
+  it('names none it cut off mid-turn when the daemon it stopped kept no note of that turn, as an older build does', async () => {
+    const [dataDir, home] = [tempDataDir(), tempDataDir()];
+    const old = await startTestDaemon(daemonOptions(dataDir, home, 'output'));
+    const client = await connectTestClient(old);
+    const recorder = recordEvents(client);
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Build it', name: 'Build it', ...SIZE });
+    await untilState(recorder, agent.sessionId, 'running');
+
+    const result = await restartDaemon(dataDir, {
+      start: () => {
+        // Between the stop and the start: as an older build's daemon leaves it, with no cut-off turn noted.
+        const db = new DatabaseSync(daemonPaths(dataDir).database);
+        db.prepare('UPDATE agents SET turn_cut_off = 0').run();
+        db.close();
+        void startTestDaemon(daemonOptions(dataDir, home, 'waiting'));
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'restarted', agents: ['Build it'], midTurn: [] });
   });
 });
 

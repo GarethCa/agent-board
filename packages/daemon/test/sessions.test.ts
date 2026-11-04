@@ -124,6 +124,25 @@ describe('shell sessions', () => {
     expect(await client.call('session.list')).toMatchObject([{ cols: 101, rows: 33 }]);
   });
 
+  it('lays out an emoji as two cells in its snapshot, as the TUIs draw it', async () => {
+    const { daemon, client, recorder } = await daemonWithClient();
+    const session = await client.call('session.createShell', SIZE);
+    await client.call('session.attach', { sessionId: session.id });
+    // Each emoji at the start of its own row, then a letter written at column 3: right after it if it takes two cells,
+    // with a gap between if the model counted one.
+    const emoji = ['❤️', '⚠️', '👍🏽', '👨‍👩‍👧', '🚀'];
+    const draw = emoji.map((glyph, i) => `\\033[${i + 1};1H${glyph}\\033[${i + 1};3Hy`).join('');
+    await client.call('session.write', { sessionId: session.id, data: `printf '\\033[2J${draw}END-%s' $((6 * 7))\r` });
+    await recorder.waitForText(session.id, 'END-42');
+    client.close();
+    await client.closed;
+    const later = await connectTestClient(daemon);
+    const laterRecorder = recordEvents(later);
+    await later.call('session.attach', { sessionId: session.id });
+    const snapshot = await laterRecorder.waitFor(isSnapshot);
+    expect(snapshot.data).toContain(emoji.map((glyph) => `${glyph}y`).join('\r\n'));
+  });
+
   it('keeps running when its client goes away, and a new client attaching sees what it printed', async () => {
     const { daemon, client, recorder } = await daemonWithClient();
     const session = await client.call('session.createShell', SIZE);

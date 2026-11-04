@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, BoardItem, Zone } from '@agent-board/daemon/protocol';
 import { tileNodeId } from '../board/tiles';
-import { askLine, boardMaster, latestDigest, masterRails, watchedOrchestrators, usageHolds, watchRows } from './master-view';
+import { askLine, boardMaster, captainRevival, latestDigest, masterRails, watchedOrchestrators, watchRows } from './master-view';
 
 const agent = (sessionId: string, fields: Partial<Agent> = {}): Agent =>
   ({
@@ -87,24 +87,20 @@ describe('the Captain', () => {
   });
 });
 
-describe('the budget holds the panel lists', () => {
-  it('lists nothing for zones and agents from a daemon that keeps no holds', () => {
-    expect(usageHolds([zone('z1', 'docs')], [agent('a1', { zoneId: 'z1', hibernated: { at: '2026-10-28T10:00:00Z', by: null, byId: null } })])).toEqual([]);
+describe('bringing the Captain back', () => {
+  const ended = (fields: Partial<Agent>) => agent('m', { master: true, endedAt: '2026-11-02T10:00:00.000Z', ...fields });
+
+  it('offers nothing while it runs', () => {
+    expect(captainRevival(master)).toBeUndefined();
   });
 
-  it('lists the zones held for usage, then the agents paused for it, each with why; a plain pause is not one', () => {
-    const held = { ...zone('z1', 'docs'), usageHold: { reason: '5h at 86%, zone low priority', since: '2026-10-28T10:00:00Z' } };
-    const free = { ...zone('z2', 'web'), usageHold: null };
-    const at = '2026-10-28T10:00:00Z';
-    const agents = [
-      agent('a1', { name: 'tuner', zoneId: 'z1', hibernated: { at, by: 'Captain', byId: 'm', reason: '5h at 96%, zone low priority' } }),
-      agent('a2', { name: 'other', zoneId: 'z2', hibernated: { at, by: null, byId: null } }),
-      agent('a3', { name: 'busy', zoneId: 'z2', hibernated: null }),
-    ];
+  it('resumes one a restart stopped, wakes a paused one, and restarts one that exited', () => {
+    expect(captainRevival(ended({ state: 'stopped-by-restart' }))).toBe('resume');
+    expect(captainRevival(ended({ state: 'hibernated' }))).toBe('wake');
+    expect(captainRevival(ended({ state: 'done', shellHarness: null, reviewOf: null }))).toBe('restart');
+  });
 
-    expect(usageHolds([held, free], agents)).toEqual([
-      { kind: 'zone', id: 'z1', name: 'docs', what: 'new starts and hand-offs held', reason: '5h at 86%, zone low priority', zone: null },
-      { kind: 'agent', id: 'a1', name: 'tuner', what: 'paused', reason: '5h at 96%, zone low priority', zone: 'docs' },
-    ]);
+  it('offers nothing for one whose harness runs in its shell', () => {
+    expect(captainRevival(ended({ state: 'done', shellHarness: 'claude', reviewOf: null }))).toBeUndefined();
   });
 });

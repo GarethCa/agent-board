@@ -85,7 +85,7 @@ export function humanStatus(agent: HumanStatusFacts, shows: NeedsYouShows, imple
   if (kind !== null) return needsYou(kind === 'flagged' ? (agent.flag?.reason ?? null) : NEEDS_YOU_DETAILS[kind]);
   const { state } = agent;
   if (state === 'stopped-by-restart') return needsYou('Stopped when the app restarted');
-  if (state === 'hibernated') return { status: 'paused', detail: agent.hibernated?.reason === undefined ? null : 'Paused for usage' };
+  if (state === 'hibernated') return { status: 'paused', detail: null };
   if (state === 'failed' && agent.endedAt !== null) {
     return { status: 'problem', detail: agent.exitCode === null || agent.exitCode === 0 ? null : `Ended · exit ${agent.exitCode}` };
   }

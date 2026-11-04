@@ -10,7 +10,6 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
   forwardEvents(daemon, ['orchestrator.activity'], ORCHESTRATOR_IPC.logged);
   forwardEvents(daemon, ['usage.updated'], ORCHESTRATOR_IPC.usageChanged);
   passthrough(daemon, ORCHESTRATOR_IPC.usage, 'usage.get');
-  passthrough(daemon, ORCHESTRATOR_IPC.release, 'orchestrator.release', (zoneId: string) => ({ zoneId }));
 
   ipcMain.handle(ORCHESTRATOR_IPC.activity, (_event, orchestratorId: string, before?: number) =>
     daemon.call('orchestrator.activity', { orchestratorId, limit: DEFAULT_ACTIVITY_LIMIT, ...(before === undefined ? {} : { before }) }),

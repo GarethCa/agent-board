@@ -42,7 +42,7 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
     harness: 'claude',
     name: 'Clean the build',
     muted: true,
-    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, sessionGrant: null }],
+    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
   },
   idle: {
     harness: 'codex',

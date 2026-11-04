@@ -8,6 +8,7 @@ export const CLAUDE_HOOK_EVENTS = [
   'PreToolUse',
   'PermissionRequest',
   'PostToolUse',
+  'PostToolUseFailure',
   'Notification',
   'SubagentStart',
   'SubagentStop',
@@ -30,6 +31,7 @@ export function claudeStateAfterHook(current: SessionState, payload: Record<stri
     // Between a prompt or a tool result and the next tool call: a cosmetic guess, allowed to be wrong.
     case 'UserPromptSubmit':
     case 'PostToolUse':
+    case 'PostToolUseFailure':
       return 'thinking';
     case 'PermissionRequest':
       return 'needs-permission';

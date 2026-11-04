@@ -1,4 +1,4 @@
-// Which sidebar an agent's window shows: the full details strip, or the simple inspector at its trailing edge. The
+// Which sidebar an agent's window shows: the full details strip, or the simple inspector on the left. The
 // Simplified design always has the inspector; under Classic it is a choice, Settings › Agents › Sidebar, kept in the
 // shared view state (board/view-settings.ts) so every window follows a pick at once.
 

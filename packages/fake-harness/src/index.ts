@@ -94,6 +94,8 @@ export interface FakeHarnessEnvOptions {
    * a long silent command under reduced motion, where Claude stops redrawing. Defaults to false.
    */
   hangTool?: boolean;
+  /** Its Claude tool calls fail when they run, firing `PostToolUseFailure` in place of `PostToolUse`. Defaults to false. */
+  toolFails?: boolean;
   /**
    * Take keys as they come rather than a line at a time, as the real TUIs do, so a line longer than a terminal's 1 KiB
    * line arrives; Claude then keeps only the bytes after the last whole KiB of a long line typed with no paste around it,
@@ -161,6 +163,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_DIALOG_CLOSE_MS: String(options.dialogCloseMs ?? 0),
     FAKE_HARNESS_PROMPT_BOX: options.promptBox === 'spinner' ? 'spinner' : options.promptBox ? '1' : '0',
     FAKE_HARNESS_HANG_TOOL: options.hangTool ? '1' : '0',
+    FAKE_HARNESS_TOOL_FAILS: options.toolFails ? '1' : '0',
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),

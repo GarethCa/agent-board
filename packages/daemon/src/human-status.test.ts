@@ -133,7 +133,6 @@ describe("an agent's status, one of six", () => {
       ['a permission prompt', { state: 'needs-permission', permissions: [permission] }, 'explicit', { status: 'needs-you', detail: 'Wants your permission' }],
       ['a flag to the user', { state: 'idle', flag }, 'explicit', { status: 'needs-you', detail: 'Ready for review' }],
       ['a restart that stopped it', { state: 'stopped-by-restart', endedAt: '1' }, 'explicit', { status: 'needs-you', detail: 'Stopped when the app restarted' }],
-      ['a pause for usage', { state: 'hibernated', endedAt: '1', hibernated: { at: '', by: null, byId: null, reason: 'usage' } }, 'turns', { status: 'paused', detail: 'Paused for usage' }],
       ['having failed', { state: 'failed', endedAt: '1', exitCode: 1 }, 'turns', { status: 'problem', detail: 'Ended · exit 1' }],
       ['working on a turn', { state: 'running' }, 'turns', { status: 'working', detail: null }],
       ['its usage limit', { state: 'rate-limited' }, 'turns', { status: 'paused', detail: 'Usage limit' }],

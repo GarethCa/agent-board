@@ -55,7 +55,7 @@ export async function startHookRecorder(respond: HookResponder = () => undefined
 
 /** Every hook event Claude Code fires that the board cares about. */
 export const CLAUDE_HOOK_EVENTS = [
-  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'Notification',
+  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'Notification',
   'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'SessionEnd',
 ] as const;
 

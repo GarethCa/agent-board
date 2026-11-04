@@ -1,7 +1,9 @@
 // The safety net under a Claude agent's turn ending: its Stop hook lost, it would show working at its prompt for good.
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { open, type FileHandle } from 'node:fs/promises';
 import type { Clock } from './clock.ts';
 import { readStartupScreen } from './startup-screen.ts';
+import { CLAUDE_INTERRUPTED } from './transcript-adapters.ts';
 
 /**
  * How long a Claude agent's turn may go with no hook and no output before its screen is read for its prompt. A turn at
@@ -47,6 +49,24 @@ export async function readTranscriptTail(path: string, maxBytes = TRANSCRIPT_TAI
   }
 }
 
+/** `readTranscriptTail`, read at once: for a daemon shutting down, which has no turn of its event loop to wait on. */
+export function readTranscriptTailSync(path: string, maxBytes = TRANSCRIPT_TAIL_BYTES): string[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const { size } = fstatSync(fd);
+    const start = Math.max(0, size - maxBytes);
+    const buffer = Buffer.alloc(size - start);
+    const read = readSync(fd, buffer, 0, buffer.length, start);
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    return (start > 0 ? lines.slice(1) : lines).filter((line) => line !== '');
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** An entry of a Claude transcript, as far as a turn's end is read from it. */
 interface TranscriptEntry {
   type?: unknown;
@@ -85,6 +105,28 @@ export function turnEndedInTranscript(lines: readonly string[]): boolean | undef
     if (reply === null) return true;
   }
   return reply === undefined ? undefined : true;
+}
+
+/**
+ * Whether the last `lines` of a Claude transcript say the user interrupted its turn (Esc): its last entry of the
+ * conversation is Claude's `[Request interrupted by user]`. Claude fires no hook for it, so its agent reads at work
+ * until its idle prompt fires.
+ */
+export function turnInterruptedInTranscript(lines: readonly string[]): boolean {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(lines[index]!) as TranscriptEntry;
+    } catch {
+      continue;
+    }
+    if (entry === null || typeof entry !== 'object' || !ofConversation(entry)) continue;
+    if (entry.type !== 'user') return false;
+    const { content } = entry.message ?? {};
+    const parts = typeof content === 'string' ? [content] : Array.isArray(content) ? content.map((part: { text?: unknown }) => part?.text) : [];
+    return parts.some((text) => typeof text === 'string' && CLAUDE_INTERRUPTED.test(text.trim()));
+  }
+  return false;
 }
 
 interface QuietTurnOptions {

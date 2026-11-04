@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { CODEX_BYPASS_FLAG, reviewFile, type LaunchSpec } from './agent-spawns.ts';
 import type { AgentHost, AgentHostOptions, AgentRow, BranchReviewRow, ZoneRow } from './agents.ts';
 import { hasClaudeTranscript } from './claude-transcript.ts';
@@ -10,7 +11,8 @@ import { isRunningSomething as defaultIsRunningSomething } from './foreground.ts
 import type { createHookStates } from './hook-states.ts';
 import { invalidParams } from './params.ts';
 import type { PermissionHolds } from './permissions.ts';
-import { AGENT_ERROR, type Agent, type Harness, type SessionState, type TerminalSize } from './protocol.ts';
+import { AGENT_ERROR, INTERRUPTIBLE_STATES, type Agent, type Harness, type SessionState, type TerminalSize } from './protocol.ts';
+import { readTranscriptTailSync, turnInterruptedInTranscript } from './quiet-turns.ts';
 import { RpcMethodError } from './rpc.ts';
 import type { RunStart } from './schedules.ts';
 import type { SessionHost } from './sessions.ts';
@@ -21,6 +23,41 @@ import { removeWorktree, unsavedWork } from './worktrees.ts';
 
 /** The tile's notice for an agent relaunched without a conversation to carry on. */
 const NO_CONVERSATION_NOTICE = 'No earlier conversation: started fresh';
+
+/** The tile's notice for an agent resumed after its daemon went away under it, until its next turn begins. */
+export const RELAUNCHED_NOTICE = 'Relaunched after a restart';
+
+/**
+ * What a resumed agent whose turn its daemon cut off is told, as its next message, by any resume in its conversation
+ * (the user's Resume, `restart-daemon`, an orchestrator's restart or wake). One that was idle, or had ended its turn on a
+ * question, is told nothing.
+ */
+export const CONTINUE_LINE = 'The app restarted; carry on from where you were.';
+
+/**
+ * Whether an agent its daemon went away under in `state` had its turn cut off: it was mid-turn (`INTERRUPTIBLE_STATES`,
+ * a permission prompt's too), and, for Claude, its transcript doesn't say the user interrupted that turn, which Claude
+ * fires no hook for.
+ */
+function cutOff(state: SessionState, harness: Harness | null, transcriptPath: string | null): boolean {
+  if (!INTERRUPTIBLE_STATES.has(state)) return false;
+  return harness !== 'claude' || transcriptPath === null || !turnInterruptedInTranscript(readTranscriptTailSync(transcriptPath));
+}
+
+/**
+ * Marks the agents a daemon that died left at work as cut off mid-turn. Run at daemon start, before their sessions are
+ * marked ended: their last state is still the one they had when it died.
+ */
+export function markTurnsCutOff(db: DatabaseSync): void {
+  const live = db
+    .prepare(
+      `SELECT a.session_id, a.state, a.transcript_path, s.harness FROM agents a JOIN sessions s ON s.id = a.session_id
+        WHERE s.ended_at IS NULL`,
+    )
+    .all() as { session_id: string; state: SessionState; transcript_path: string | null; harness: Harness | null }[];
+  const mark = db.prepare('UPDATE agents SET turn_cut_off = 1 WHERE session_id = ?');
+  for (const row of live) if (cutOff(row.state, row.harness, row.transcript_path)) mark.run(row.session_id);
+}
 
 /** The terminal a relaunched agent starts in, until a client attaches and sizes it. */
 const RELAUNCH_SIZE: TerminalSize = { cols: 120, rows: 40 };
@@ -36,7 +73,6 @@ interface AgentLifecycleOptions
     | 'env'
     | 'onRemoving'
     | 'endTabs'
-    | 'onWoken'
     | 'isRunningSomething'
     | 'broadcast'
     | 'log'
@@ -78,7 +114,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
    * Ends the live agent's session as `stop` does, marked paused (`hibernated`) by `by` (null for the user), so its
    * pane keeps its last screen and drops into no shell. Its caller checks it may be paused.
    */
-  hibernate(sessionId: string, by: string | null, why: string, reason?: string): Promise<Agent>;
+  hibernate(sessionId: string, by: string | null, why: string): Promise<Agent>;
   /**
    * While the agent is being paused, what resolves once its session has ended (or failed to): what is sent to it
    * meanwhile then wakes it instead of being typed into a terminal that is going. Undefined while it isn't.
@@ -114,9 +150,11 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   isStopping(sessionId: string): boolean;
   /**
    * After the agent's exit is saved: starts a Codex agent `codex resume` couldn't carry on afresh, or else drops its
-   * pane into a login shell. Neither once its daemon went away under it.
+   * pane into a login shell. Neither once its daemon went away under it: then, if it was at work as it went
+   * (`lastState`, its state before its exit was saved), its turn was cut off, and resuming it tells it to carry on.
+   * Any other exit ends what was cut off.
    */
-  exited(sessionId: string, stoppedByRestart: boolean): void;
+  exited(sessionId: string, stoppedByRestart: boolean, lastState: SessionState): void;
   /** Opens no more shells: the daemon is closing. */
   close(): void;
 } {
@@ -125,13 +163,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const selectReviewBy = db.prepare('SELECT * FROM branch_reviews WHERE session_id = ?');
   const keepBranchReview = db.prepare('UPDATE branch_reviews SET review_path = ?, session_id = NULL WHERE id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
+  const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = ? WHERE session_id = ?');
   const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
   const forgetParent = db.prepare('UPDATE agents SET spawned_by = NULL WHERE spawned_by = ?');
   const keepConversation = db.prepare('INSERT INTO agent_conversations (session_id, harness_session_id, transcript_path) VALUES (?, ?, ?)');
   const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL WHERE session_id = ?');
   const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ? WHERE session_id = ?');
   const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
-  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ?, hibernated_reason = ? WHERE session_id = ?');
+  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ? WHERE session_id = ?');
   /** Live Codex agents running with the bypass flag, watched for project config appearing. */
   const guards = new Map<string, CodexConfigGuard>();
   const remove = db.prepare('DELETE FROM agents WHERE session_id = ?');
@@ -186,6 +225,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     why: string,
     codexSessionId = prompt === undefined ? row.harness_session_id : null,
     fresh = false,
+    carryOn = false,
   ): RunStart => {
     const sessionId = row.session_id;
     const refusal = launchRefusal(row);
@@ -211,7 +251,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     const conversationId = claudeConversationId(row);
     const noConversation =
       row.harness === 'claude' ? !hasClaudeTranscript(row.transcript_path, conversationId, row.cwd, options.env) : row.harness_session_id === null && prompt === undefined;
-    const task = prompt ?? (noConversation && row.description !== '' ? row.description : undefined);
+    // One cut off mid-turn carries on in its conversation, told to; with none to carry on, it starts on its task.
+    const task = prompt ?? (noConversation ? (row.description !== '' ? row.description : undefined) : carryOn ? CONTINUE_LINE : undefined);
     let bypassed: boolean;
     try {
       bypassed = options.launch({
@@ -241,9 +282,13 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     subagents.set(sessionId, []);
     hookStates.relaunched(sessionId);
     // Whatever started it, it is awake now.
-    updateHibernated.run(null, null, null, sessionId);
-    if (row.hibernated_reason !== null) options.onWoken?.(sessionId);
-    updateNotice.run(noConversation && prompt === undefined && !fresh ? NO_CONVERSATION_NOTICE : null, sessionId);
+    updateHibernated.run(null, null, sessionId);
+    // Its daemon went away under it: it says so until its next turn begins (`agents.ts`'s `save`).
+    const afterRestart = row.ended_at !== null && row.stopped_by_restart === 1;
+    updateNotice.run(noConversation && prompt === undefined && !fresh ? NO_CONVERSATION_NOTICE : afterRestart ? RELAUNCHED_NOTICE : null, sessionId);
+    // A cut-off turn is kept until a turn begins (`agents.ts`'s `save`), so a restart before the line is typed tells it
+    // again; one started on a new conversation, or afresh on its task, has none to carry on.
+    if (noConversation || fresh) updateCutOff.run(0, sessionId);
     options.setState(sessionId, 'idle');
     options.unsee(sessionId);
     watchLaunched(sessionId, row.harness, row.cwd, row.worktree, bypassed, codexSessionId);
@@ -383,9 +428,15 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
 
     isStopping: (sessionId) => stopping.has(sessionId),
 
-    exited(sessionId, stoppedByRestart) {
-      if (stoppedByRestart) codexResuming.delete(sessionId);
-      else if (codexResuming.delete(sessionId) && !stopping.has(sessionId)) startAfresh(sessionId);
+    exited(sessionId, stoppedByRestart, lastState) {
+      if (stoppedByRestart) {
+        codexResuming.delete(sessionId);
+        const row = getRow(sessionId);
+        if (row !== undefined && cutOff(lastState, row.harness, row.transcript_path)) updateCutOff.run(1, sessionId);
+        return;
+      }
+      updateCutOff.run(0, sessionId);
+      if (codexResuming.delete(sessionId) && !stopping.has(sessionId)) startAfresh(sessionId);
       else startFallbackShell(sessionId);
     },
 
@@ -430,7 +481,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     async stop(sessionId, why) {
       // A paused agent is closed as it is, never woken: a plain closed agent then, with its last screen and no shell.
       if (requireAgent(sessionId).state === 'hibernated') {
-        updateHibernated.run(null, null, null, sessionId);
+        updateHibernated.run(null, null, sessionId);
         options.log(`closed paused agent ${sessionId} for ${why}`);
         announce(sessionId);
         return get(sessionId)!;
@@ -438,10 +489,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       return stop(sessionId, why);
     },
 
-    hibernate(sessionId, by, why, reason) {
-      updateHibernated.run(new Date().toISOString(), by, reason ?? null, sessionId);
+    hibernate(sessionId, by, why) {
+      updateHibernated.run(new Date().toISOString(), by, sessionId);
       const pause = stop(sessionId, why).catch((error: unknown) => {
-        updateHibernated.run(null, null, null, sessionId);
+        updateHibernated.run(null, null, sessionId);
         throw error;
       });
       const settled = pause.then(
@@ -493,7 +544,9 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
               ? 'to wake it'
               : 'to restart it';
       const why = `${how}, for ${asked}`;
-      const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined);
+      // Told to carry on only by a resume in its own conversation, and only once.
+      const carryOn = fresh === undefined && row.turn_cut_off === 1;
+      const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined, carryOn);
       if (fresh !== undefined) {
         if (!resumed.started) restoreConversation.run(previous.conversation, previous.transcript, sessionId);
         else {

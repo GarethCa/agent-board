@@ -652,7 +652,6 @@ export const ORCHESTRATOR_IPC = {
   usage: 'orchestrator:usage',
   /** main → renderer: `(UsageUpdatedEvent)` for each newer usage reading, and when it goes stale. */
   usageChanged: 'orchestrator:usage-changed',
-  release: 'orchestrator:release',
 } as const;
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
@@ -665,8 +664,6 @@ export interface OrchestratorsApi {
   usage(): Promise<UsageReading>;
   /** Calls `listener` with each newer usage reading, and when it goes stale. Returns the unsubscribe function. */
   onUsage(listener: (event: UsageUpdatedEvent) => void): () => void;
-  /** The user's Override of a zone's budget hold: lifts it. */
-  release(zoneId: string): Promise<Zone>;
 }
 
 /** The board item IPC channels between the preload and main. */

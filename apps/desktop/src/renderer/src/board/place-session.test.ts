@@ -60,8 +60,6 @@ const zoneOf = (id: string, fields: Partial<Zone> = {}): Zone => ({
   agentsOrchestrate: false,
   gateCommand: null,
   spacing: 'normal',
-  priority: 'normal',
-  usageHold: null,
   tracker: null,
   clone: null,
   managedClone: false,

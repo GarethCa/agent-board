@@ -231,7 +231,6 @@ const api: AgentBoardApi = {
     onLogged: (listener) => subscribe(ORCHESTRATOR_IPC.logged, listener),
     usage: () => invoke(ORCHESTRATOR_IPC.usage),
     onUsage: (listener) => subscribe(ORCHESTRATOR_IPC.usageChanged, listener),
-    release: (zoneId) => invoke(ORCHESTRATOR_IPC.release, zoneId),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),

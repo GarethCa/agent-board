@@ -8,6 +8,7 @@ import { claudeSettings, codexLaunch, createAgentSpawns, defaultName, FORCED_HYP
 import { projectCodexConfig } from '../src/codex-config-guard.ts';
 import { CODEX_HOOK_TIMEOUTS, HOOK_TOKEN_ENV, HOOK_URL_ENV } from '../src/hook-forwarder.ts';
 import { migrate } from '../src/migrate.ts';
+import { ASKING_PERMISSION_HOLD_MS } from '../src/permissions.ts';
 import { AGENT_ERROR, type SessionInfo } from '../src/protocol.ts';
 import type { SessionSpec } from '../src/sessions.ts';
 import { hashToken } from '../src/tokens.ts';
@@ -104,7 +105,7 @@ describe("launching an agent's harness", () => {
       '--session-id',
       'a',
       '--settings',
-      JSON.stringify(claudeSettings(HOOK_URL, 60_000)),
+      JSON.stringify(claudeSettings(HOOK_URL, ASKING_PERMISSION_HOLD_MS)),
       '--mcp-config',
       // Over HTTP to the daemon, with the board token Claude fills in from its own env: no process of its own.
       JSON.stringify({ mcpServers: { 'agent-board': { type: 'http', url: MCP_URL, headers: { Authorization: 'Bearer ${AGENT_BOARD_IDENTITY}' } } } }),
@@ -211,7 +212,7 @@ describe("launching an agent's harness", () => {
     const { spawns, started } = setup({ board_mcp: 0 });
     spawns.launch(spec({ model: null, task: undefined, resume: { codexSessionId: null } }));
     spawns.launch(spec({ model: null, task: undefined, resume: { codexSessionId: null, claudeConversation: false } }));
-    expect(started.map((session) => session.args.filter((arg) => arg !== JSON.stringify(claudeSettings(HOOK_URL, 60_000))))).toEqual([
+    expect(started.map((session) => session.args.filter((arg) => arg !== JSON.stringify(claudeSettings(HOOK_URL, ASKING_PERMISSION_HOLD_MS))))).toEqual([
       ['--resume', 'a', '--settings'],
       ['--session-id', 'a', '--settings'],
     ]);
