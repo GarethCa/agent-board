@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,13 +96,36 @@ export function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 }
 
+/**
+ * The shell test daemons run: /bin/sh on macOS, where that is bash in POSIX mode. Linux's is often dash, which reports no
+ * command status, so there it is bash run under the name `sh`, which behaves the same and reads no rc files.
+ */
+function testShell(): string {
+  if (process.platform === 'darwin') return '/bin/sh';
+  const shell = join(tempDataDir(), 'sh');
+  symlinkSync('/bin/bash', shell);
+  return shell;
+}
+
+/** The login shell the platform's users have by default, and the rc file only its interactive shells read. */
+export const LOGIN_SHELL = process.platform === 'darwin' ? { path: '/bin/zsh', rc: '.zshrc' } : { path: '/bin/bash', rc: '.bashrc' };
+
+/** Writes the login shell's rc file in `home`, set up as a new user's: on Linux `.profile` sources it, and it only runs in an interactive shell. */
+export function writeShellRc(home: string, text: string): void {
+  if (LOGIN_SHELL.rc === '.bashrc') {
+    writeFileSync(join(home, '.profile'), '. "$HOME/.bashrc"\n');
+    text = `case $- in *i*) ;; *) return ;; esac\n${text}`;
+  }
+  writeFileSync(join(home, LOGIN_SHELL.rc), text);
+}
+
 /** Starts a daemon in `dataDir` (a fresh temp dir by default), with credentials in memory, and stops it when the test ends. */
 export async function startTestDaemon(options: Partial<DaemonOptions> = {}): Promise<Daemon> {
   const daemon = await startDaemon({
     dataDir: options.dataDir ?? tempDataDir(),
     log: () => {},
     // Never the user's own shell and its rc files, nor their keychain.
-    shell: '/bin/sh',
+    shell: testShell(),
     shellArgs: [],
     // Never the user's home directory, where a shell with no folder starts.
     homeDir: tempDataDir(),

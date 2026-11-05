@@ -49,7 +49,7 @@ describe('shell sessions', () => {
     await client.call('session.write', { sessionId: session.id, data: 'pwd -P\r' });
 
     expect(session.cwd).toBe(cwd);
-    await recorder.waitForText(session.id, `\n${realpathSync(cwd)}`);
+    await recorder.waitForText(session.id, `${realpathSync(cwd)}\r\n`);
   });
 
   it('refuses a working directory that does not exist', async () => {
