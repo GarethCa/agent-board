@@ -5,18 +5,22 @@ import { paneIds } from '@agent-board/daemon/pane-layout';
 import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { pressed } from '../keys/registry';
 import { DetailsHandle } from '../session/DetailsHandle';
+import { DetailsToggle } from '../session/DetailsToggle';
 import { GateControls } from '../gate/GateControls';
 import { gated } from '../gate/gate-view';
+import { showsShelves } from '../session/agent-sidebar';
 import { SessionBody, type WindowContent } from '../session/SessionBody';
 import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
+import { useAgentSidebar } from '../session/use-agent-sidebar';
+import { useSidebarCollapsed } from '../session/use-sidebar-collapsed';
 import { panesLabel } from '../session/panes';
 import { humanStatus } from '@agent-board/daemon/human-status';
 import { useSimplified } from '../design';
 import { agentPill, STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
-import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, resizeAllowed, type ExpandedParent } from './expanded';
+import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, NARROW_TILE_WIDTH, resizeAllowed, type ExpandedParent } from './expanded';
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './HybridTile';
@@ -35,13 +39,12 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
 /**
  * A session tile expanded in place: still a node of the board, so it pans, zooms
  * and drags (by its header) with it. A one-line header with the session's name, state, branch, issue and pull
- * requests, and Maximise, Pop out, Delete and Collapse; under it the session window's body, with the details strip on the
- * LEFT and the live terminal (or a shell's panes) taking input. An external session has no terminal here, only its
- * details. Its corners and edges resize it, what it would cover moving as it goes.
+ * requests, and Maximise, Pop out, Delete and Collapse; under it the session window's body, with the sidebar (an agent's
+ * shelves, else the details strip) on the LEFT and the live terminal (or a shell's panes) taking input. An external
+ * session has no terminal here, only its details. Its corners and edges resize it, what it would cover moving as it goes.
  */
 export function ExpandedTile({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
   const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
   /** Where its top-left was as the resize under way began, relative to its parent. */
@@ -52,6 +55,16 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
     : shell
       ? { kind: 'shell', shellId: shell.id, shell }
       : undefined;
+  // An agent's sidebar is its shelves while the Agent sidebar setting says so (always, under Simplified), as in its window,
+  // and then open or on the rail as it last was in any window or tile (⌘I). A shell or external session keeps the strip.
+  const sidebar = useAgentSidebar();
+  const shelves = content !== undefined && showsShelves(sidebar, content);
+  const root = useRef<HTMLElement>(null);
+  // A tile too narrow for the shelves beside a terminal opens them on the rail, for itself alone: the choice every window
+  // and tile shares is not changed by it.
+  const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => (root.current?.offsetWidth ?? NARROW_TILE_WIDTH) < NARROW_TILE_WIDTH);
+  // Where in the header the shelves' window controls go: the state button and ⋯, which the strip holds otherwise.
+  const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
   const popOut = agent ? () => popOutAgent(agent) : shell ? () => popOutShell(shell) : undefined;
   // As its tile's ⋯ menu deletes it, asking the same first. An external session is only taken off the board.
   const remove = agent
@@ -73,6 +86,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
   const name = agent?.name ?? shell?.name ?? external?.name ?? tile.label;
   return (
     <section
+      ref={root}
       className="expanded-tile"
       data-testid="expanded-tile"
       data-harness={harness}
@@ -92,8 +106,12 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
         {agent && (simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />)}
         {external && <StatusPill state={external.state} label={STATE_LABELS[external.state]} />}
-        <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />
+        {/* Its shelves hold the branch, issue and pull requests, as in its window: the header says them only while they are on the rail. */}
+        {!(shelves && !detailsCollapsed) && <HeadFacts simplified={simplified} agent={agent} shell={shell} external={external} openLink={openLink} openPullRequest={openPullRequest} />}
         <span className="session-window-head-fill" />
+        {shelves && <span className="session-window-shelf-controls nodrag" ref={setControlsSlot} />}
+        {/* The Simplified header's toggle, as its window's: Classic's rail brings the shelves back by itself. */}
+        {shelves && simplified && <DetailsToggle open={!detailsCollapsed} onOpen={(open) => setDetailsCollapsed(!open)} hideLabel="Hide the shelves" />}
         {/* Its merge gate, as in its session window; not a drag handle. */}
         {agent && gated(agent) && (
           <span className="nodrag">
@@ -112,7 +130,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
             terminal hidden
           </div>
         ) : content ? (
-          <SessionBody content={content} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} autoFocus={false} />
+          <SessionBody content={content} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} autoFocus={false} shelves={shelves} controlsSlot={controlsSlot} compactControls />
         ) : external ? (
           <ExternalBody session={external} detailsCollapsed={detailsCollapsed} onDetailsCollapsed={setDetailsCollapsed} />
         ) : null}

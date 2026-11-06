@@ -109,6 +109,40 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
   }
 });
 
+test('a control mounts its tooltip when the pointer or the focus first comes, on the same button, and keeps its label', async () => {
+  const { dir, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    const button = window.getByRole('button', { name: 'Board menu' });
+    const tooltip = window.locator('.ui-tooltip');
+    await expect(button).toBeVisible();
+    // Marks the button's element, to tell afterwards that waking its tooltip did not replace it.
+    await button.evaluate((element: HTMLElement) => Object.assign(element, { wokenFrom: 'first' }));
+    await expect(tooltip).toHaveCount(0);
+
+    // The focus coming to it (as Tab does) shows the hint at once, and the focus stays on the same button.
+    await button.evaluate((element: HTMLElement) => element.focus());
+    await expect(tooltip).toHaveText(/Zones, agents and settings/);
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute('aria-describedby', /.+/);
+    await button.evaluate((element: HTMLElement) => element.blur());
+    await expect(tooltip).toHaveCount(0);
+
+    // The pointer resting on a button that was never focused or hovered shows it too.
+    await window.mouse.move(700, 500);
+    await button.hover();
+    await expect(tooltip).toHaveText(/Zones, agents and settings/);
+
+    await expect(button).toHaveAccessibleName('Board menu');
+    expect(await button.evaluate((element: HTMLElement) => (element as HTMLElement & { wokenFrom?: string }).wokenFrom)).toBe('first');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Esc closes the board menu with the focus back on its button, whose tooltip stays shut over its open menu", async () => {
   const { dir, env } = scratch('output');
   const dataDir = tempDataDir();

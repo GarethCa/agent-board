@@ -182,15 +182,25 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await expect(tile(window)).toHaveCount(0);
     const branch = await branchOf(window);
     await expect(expandedTile(window).getByRole('heading', { name: 'Pick a database' })).toBeVisible();
-    await expect(expandedTile(window).locator('.session-window-head')).toContainText(branch);
-    // Opens collapsed to its icon rail; the rail's Show details opens it.
-    await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
-    await showDetails(expandedTile(window));
-    const details = expandedTile(window).getByRole('complementary', { name: 'Session details' });
-    await expect(details).toContainText('Worktree and branch');
-    await expect(details).toContainText('PR and checks');
-    await expect(details.getByTestId('details-last-message')).toContainText('Which database should I use');
-    await expect(expandedTile(window).getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
+    // Its shelves say the branch (under Simplified, once technical details show), so its header does only without them.
+    if (!simplified) await expect(expandedTile(window).locator('.session-window-head')).toContainText(branch);
+    if (simplified) {
+      // Its sidebar is its shelves, as in its window: open on its page, with its state button and ⋯ in the tile's header.
+      await expect(expandedTile(window).getByTestId('agent-shelves')).toBeVisible();
+      await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
+      await expandedTile(window).locator('.expanded-tile-head').getByTestId('shelf-controls').getByRole('button', { name: 'More controls' }).click();
+      await expect(window.getByRole('menuitem', { name: /^Stop/ })).toBeEnabled();
+      await window.keyboard.press('Escape');
+    } else {
+      // Opens collapsed to its icon rail; the rail's Show details opens it.
+      await expect(expandedTile(window).getByRole('complementary', { name: 'Session details' })).toHaveCount(0);
+      await showDetails(expandedTile(window));
+      const details = expandedTile(window).getByRole('complementary', { name: 'Session details' });
+      await expect(details).toContainText('Worktree and branch');
+      await expect(details).toContainText('PR and checks');
+      await expect(details.getByTestId('details-last-message')).toContainText('Which database should I use');
+      await expect(expandedTile(window).getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
+    }
     await expect(expandedScreen(window)).toContainText('Which database should I use');
     // It waits for a click before taking the keyboard, so Esc still reaches the board.
     expect(await window.evaluate(() => document.activeElement?.closest('.xterm') === null)).toBe(true);

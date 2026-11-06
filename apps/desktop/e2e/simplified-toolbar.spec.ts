@@ -95,25 +95,24 @@ test('the Simplified toolbar: Select, Box select and Hand sit together, Draw rea
     await expect(grid).toBeChecked({ checked: !snapped });
     await window.keyboard.press('Escape');
 
-    // Top right: Needs you, the Captain in the pirate hat, and the sliders that open Settings.
+    // Top right: Needs you, the Captain as plain text, and the sliders that open Settings.
     const topRight = window.locator('.island-top-right');
     await expect(topRight.getByRole('button')).toHaveCount(3);
     await expect(window.getByTestId('inbox-count')).toHaveText('Needs you');
-    await expect(window.getByTestId('master-button').getByTestId('captain')).toBeVisible();
+    await expect(window.getByTestId('master-button')).toHaveText('Captain');
+    await expect(window.getByTestId('master-button').getByTestId('captain')).toHaveCount(0);
     await expect(topRight.getByRole('button', { name: 'Settings' })).toBeVisible();
 
-    // A narrower window keeps the Captain and its word while the islands have room, as a laptop's does: the toolbar is
-    // narrower than Classic's, so it gives way later. Never under the creation toolbar.
+    // A narrower window keeps the Captain's word while the islands have room, as a laptop's does, and drops the whole
+    // button below 960 px (⌘⇧M still opens it). Never under the creation toolbar.
     const captain = window.getByTestId('master-button');
-    const label = captain.locator('.master-button-label');
     /** The room between the creation toolbar and the top-right island, px. */
     const room = () =>
       window.evaluate(() => document.querySelector('.island-top-right')!.getBoundingClientRect().left - document.querySelector('.island-top-centre')!.getBoundingClientRect().right);
     // Each breakpoint's edges, so a wider toolbar or island fails here before the two touch.
-    for (const [width, word] of [[1050, true], [960, true], [959, false], [840, false]] as const) {
+    for (const [width, shown] of [[1050, true], [960, true], [959, false], [840, false]] as const) {
       await window.setViewportSize({ width, height: 800 });
-      await expect(captain).toBeVisible();
-      await expect(label).toBeVisible({ visible: word });
+      await expect(captain).toBeVisible({ visible: shown });
       expect(await room(), `the islands' room at ${width}px`).toBeGreaterThanOrEqual(8);
     }
   } finally {

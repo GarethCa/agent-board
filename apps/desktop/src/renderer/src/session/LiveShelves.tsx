@@ -89,7 +89,7 @@ export function LiveShelves({ agent, collapsed, onCollapsed, onProblem, onOpenLi
  * else Interrupt while it is mid-turn, else Pause) and ⋯ for the rest, Stop and splitting the tab. The header keeps its
  * Run gate and Delete; the Simplified header has its own state action and ⋯.
  */
-export function ShelfControls({ agent, live, onSplit, onProblem }: { agent: Agent; live: boolean; onSplit?(direction: SplitDirection): void; onProblem(problem: string | undefined): void }) {
+export function ShelfControls({ agent, live, compact = false, onSplit, onProblem }: { agent: Agent; live: boolean; compact?: boolean; onSplit?(direction: SplitDirection): void; onProblem(problem: string | undefined): void }) {
   const { busy, error, run } = useAction();
   useEffect(() => onProblem(error), [error, onProblem]);
   const controls = sessionControls({ agent, live });
@@ -109,11 +109,14 @@ export function ShelfControls({ agent, live, onSplit, onProblem }: { agent: Agen
   ];
   return (
     <span className="shelf-controls" data-testid="shelf-controls">
-      {lead && (
-        <Button size="sm" icon={CONTROL_ICONS[lead.id]} variant={lead.id === 'wake' ? 'primary' : 'secondary'} disabled={!lead.enabled || busy} tooltip={lead.hint} onClick={() => act(lead.id)}>
-          {lead.label}
-        </Button>
-      )}
+      {lead &&
+        (compact ? (
+          <IconButton icon={CONTROL_ICONS[lead.id]} size="sm" aria-label={lead.label} tooltip={`${lead.label}: ${lead.hint}`} disabled={!lead.enabled || busy} onClick={() => act(lead.id)} />
+        ) : (
+          <Button size="sm" icon={CONTROL_ICONS[lead.id]} variant={lead.id === 'wake' ? 'primary' : 'secondary'} disabled={!lead.enabled || busy} tooltip={lead.hint} onClick={() => act(lead.id)}>
+            {lead.label}
+          </Button>
+        ))}
       <Menu align="end" entries={entries}>
         <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More controls" tooltip="More: Stop, Split" />
       </Menu>

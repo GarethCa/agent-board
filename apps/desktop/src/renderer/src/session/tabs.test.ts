@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PaneLayout } from '@agent-board/daemon/pane-layout';
 import type { Agent, Shell } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
+import { liveShellCount, localServersOf, OWN_TAB, pullRequestChoices, sessionChoices, shellsChipLabel, surfaceAgentIds, tabAtDigit, tabKey, tabLiveShells, windowShells, windowSurfaces, windowTabs, wordedTabLabel, type TabOwner } from './tabs';
 
 const agent = { sessionId: 'agent-1', harness: 'claude' } as Agent;
 const byAgent: TabOwner = { kind: 'agent', agent };
@@ -270,5 +270,21 @@ describe('worded tab labels', () => {
     const codex = { sessionId: 'agent-1', harness: 'codex' } as Agent;
     const [first] = windowSurfaces({ kind: 'agent', agent: codex }, [], [], { agents: [], tiles: [] });
     expect(wordedTabLabel(first!, codex)).toBe('Chat');
+  });
+});
+
+describe('the agents a window renders every change of', () => {
+  it('are its own and those its tabs show, sorted and once each', () => {
+    const owner: TabOwner = { kind: 'agent', agent: { sessionId: 'own', harness: 'claude' } };
+    const shown: Surface[] = [
+      { kind: 'own' },
+      { kind: 'session', target: { kind: 'agent', id: 'b' } },
+      { kind: 'session', target: { kind: 'shell', id: 'tile' } },
+      { kind: 'gate', sessionId: 'a' },
+      { kind: 'doc', sessionId: 'b', path: '/x.md' },
+      { kind: 'web', id: 'w', url: 'https://example.com' },
+    ];
+    expect(surfaceAgentIds(owner, shown)).toEqual(['a', 'b', 'own']);
+    expect(surfaceAgentIds(undefined, [])).toEqual([]);
   });
 });

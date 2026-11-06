@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Circle, CircleDot, Link, ListChecks, ListTodo, MessageSquareText, Send, ToggleRight, ArrowUpDown } from 'lucide-react';
 import type { Step, StepAnswer, StepsData } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, Kbd } from '../../ui';
+import { fromStepLink, stepLinkUrl } from './step-link';
 import { sendsWithWords, stepRows, stepsView, type StepRow, type StepsLookup, type StepsView, type StepView, type ZoomLook } from './steps-view';
 
 /**
@@ -130,6 +131,7 @@ function NowLine({ view, actions }: { view: StepsView; actions: StepsCardActions
       <span className="steps-now-text">
         <b>{matter.step.text}</b>
         <span>{matter.note}</span>
+        {matter.step.link !== null && <StepLink link={matter.step.link} />}
       </span>
       {yours && matter.step.kind === 'todo' && (
         <Button size="sm" variant="primary" className="steps-go nodrag" onClick={() => actions.tick(matter.step.id, true)}>
@@ -147,6 +149,36 @@ function NowLine({ view, actions }: { view: StepsView; actions: StepsCardActions
 
 /** The order a put-in-order question shows: its answer's, else as offered. */
 const orderOf = (step: Step) => (step.answer !== null && 'order' in step.answer.value ? step.answer.value.order : step.choices.map((_, at) => at));
+
+/** A to-do's link: a button that opens it in the browser when it is a web link, else just said. Never ticks or steps past its step. */
+export function StepLink({ link }: { link: string }) {
+  const url = stepLinkUrl(link);
+  const [failed, setFailed] = useState(false);
+  if (url === null) {
+    return (
+      <span className="steps-link" title={link}>
+        <Link /> {link}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="steps-link steps-link-open nodrag"
+      data-testid="steps-link"
+      title={`Open ${link}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        setFailed(false);
+        void window.agentBoard.trackers.openLink(url).catch(() => setFailed(true));
+      }}
+    >
+      <Link /> {failed ? 'Couldn’t open the link' : link}
+    </button>
+  );
+}
 
 /** The controls of the open step, for the kind of step it is, with the keys they take. */
 function Controls({ view, actions, onNext, keys, sends }: { view: StepView; actions: StepsCardActions; onNext(): void; keys: boolean; sends(stepId: string, words: string): boolean }) {
@@ -168,11 +200,7 @@ function Controls({ view, actions, onNext, keys, sends }: { view: StepView; acti
   if (step.kind === 'todo') {
     return (
       <div className="steps-actions">
-        {step.link !== null && (
-          <span className="steps-link" title={step.link}>
-            <Link /> {step.link}
-          </span>
-        )}
+        {step.link !== null && <StepLink link={step.link} />}
         <span className="steps-spacer" />
         {view.yours && (
           <Button size="sm" variant={step.done === null ? 'primary' : 'secondary'} className="steps-go nodrag" onClick={() => actions.tick(step.id, step.done === null)}>
@@ -455,7 +483,7 @@ export function StepsCard({ data, lookup, look, selected, steppedIn, writing, ac
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!steppedIn || (event.target as HTMLElement).tagName === 'TEXTAREA') return;
+    if (!steppedIn || (event.target as HTMLElement).tagName === 'TEXTAREA' || fromStepLink(event.target as HTMLElement)) return;
     const current = all.find((each) => each.step.id === at);
     const handled = (() => {
       if (event.key === 'Escape') return (actions.leave(), true);
@@ -572,7 +600,7 @@ export function StepsStepper({
   // A required question is named once the user is on it or past it; before then, how far along they are.
   const blocked = view.send.kind === 'blocked' && open.place >= view.send.place ? view.send.place : undefined;
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || (event.target as HTMLElement).tagName === 'TEXTAREA') return;
+    if (event.defaultPrevented || (event.target as HTMLElement).tagName === 'TEXTAREA' || fromStepLink(event.target as HTMLElement)) return;
     const handled = (() => {
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) return view.send.kind === 'ready' && !busy && (actions.send(), true);
       // ↵ on the stepper itself: a focused Back or choice keeps its own ↵, as in the quick ask.

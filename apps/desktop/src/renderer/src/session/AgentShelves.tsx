@@ -11,6 +11,7 @@ import {
   Bot,
   CalendarClock,
   Check,
+  ChevronDown,
   CircleAlert,
   CircleDot,
   ClipboardList,
@@ -48,7 +49,8 @@ import { keyText } from '../keys/registry';
 import { IconButton, Kbd, Tooltip } from '../ui';
 import { shortWhen } from '../when';
 import { PAGE_ICON_COMPONENTS } from './page-icons';
-import { clockMeta, crewNeedingYou, crewStatus, folderMeta, gateWords, ICON_TABS_BELOW, pageProgress, planMeta, pullRequestsToWatch, sentenceCase, startedBy, statusLine, shortFolder, subagentStatus, nowCard, shelfShown, shelfTabs, type ShelfId, type ShelfTab } from './shelves';
+import { useShelfFold, type ShelfGroupId } from './shelf-folds';
+import { clockMeta, crewNeedingYou, crewStatus, foldCue, type FoldCue, folderMeta, gateWords, ICON_TABS_BELOW, pageProgress, planMeta, pullRequestsToWatch, sentenceCase, startedBy, statusLine, shortFolder, subagentStatus, nowCard, shelfShown, shelfTabs, type ShelfId, type ShelfTab } from './shelves';
 import { tildify } from './live-folder';
 import { pinOpener, recordedWhen, RecordList, type RecordDeletes } from './RecordList';
 import { crewSection, docSection, documentSection, isDocFile, pinSection, pullRequestSection, subagentSection, type PullRequestRow, type SidebarRow } from './sidebar-records';
@@ -569,12 +571,25 @@ function face(Icon: LucideIcon, tone?: string) {
   );
 }
 
-/** A labelled group of a shelf's rows. */
-function Group({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
+/**
+ * A labelled group of a shelf's rows, which folds to its heading: as the user left it, in every window and tile. Folded, the
+ * heading says how many rows it holds, and wears a dot when what it holds needs the user or has failed, so folding hides
+ * nothing urgent in silence. The rows stay mounted, so a deleted one's Undo outlives the fold.
+ */
+function Group({ id, label, count, cue, children }: { id: ShelfGroupId; label: string; count?: number; cue?: FoldCue; children: ReactNode }) {
+  const [folded, setFolded] = useShelfFold(id);
+  const body = `${useId()}-${id}`;
   return (
-    <section className="agent-shelves-group" aria-label={label} data-testid={testId}>
-      <p className="agent-shelves-group-label">{label}</p>
-      {children}
+    <section className="agent-shelves-group" aria-label={label} data-testid={id} data-folded={folded || undefined}>
+      <button type="button" className="agent-shelves-group-head" aria-expanded={!folded} aria-controls={body} onClick={() => setFolded(!folded)}>
+        <ChevronDown className="agent-shelves-group-chevron" aria-hidden />
+        <span className="agent-shelves-group-label">{label}</span>
+        {folded && count !== undefined && count > 0 && <span className="agent-shelves-group-count">{count}</span>}
+        {folded && cue && <span className="agent-shelves-dot agent-shelves-dot-inline" data-tone={cue} role="img" aria-label={cue === 'failing' ? 'Failed' : 'Needs you'} title={cue === 'failing' ? 'Failed' : 'Needs you'} />}
+      </button>
+      <div id={body} className="agent-shelves-group-body" hidden={folded}>
+        {children}
+      </div>
     </section>
   );
 }
@@ -626,7 +641,8 @@ const prTone = (pr: PullRequest | undefined) => (pr === undefined ? undefined : 
  * Made: its pull requests (the newest open one as a card with its checks, gate and linked issue), what it showed you
  * (its plan and documents) and its hand-off docs, each row saying which it is.
  */
-function MadeShelf({ agent, technical, records, actions, gate }: ShelvesData) {
+function MadeShelf({ agent, agents, shows, technical, records, actions, gate }: ShelvesData) {
+  const cues = { agent, agents, shows, gate: technical ? gate : null };
   const pulls = pullRequestSection(agent, records.fading);
   const docs = docSection(agent, records.fading);
   const documents = documentSection(agent);
@@ -651,7 +667,7 @@ function MadeShelf({ agent, technical, records, actions, gate }: ShelvesData) {
         />
       )}
       {documents.length > 0 && (
-        <Group label="Shown to you" testId="made-shown">
+        <Group id="made-shown" label="Shown to you" count={documents.length} cue={foldCue('made-shown', cues)}>
           <ul className="agent-shelves-rows">
             {documents.map((row) => (
               <li key={row.key} data-testid="details-document">
@@ -669,7 +685,7 @@ function MadeShelf({ agent, technical, records, actions, gate }: ShelvesData) {
         </Group>
       )}
       {(docs.rows.length > 0 || docs.hidden.length > 0) && (
-        <Group label="Hand-off" testId="made-handoff">
+        <Group id="made-handoff" label="Hand-off" count={docs.rows.length}>
           <RecordList
             section={docs}
               records={records}
@@ -736,13 +752,14 @@ function PullRequestCard({ row, agent, gate, records, actions }: { row: SidebarR
 
 /** Crew: the agents it started, each opening in a tab here, and its subagents, from hooks. */
 function CrewShelf({ agent, agents, shows, records, actions, narrow }: ShelvesData & { narrow: boolean }) {
+  const cues = { agent, agents, shows, gate: null };
   const crew = crewSection(agent, agents, records.fading);
   const subagents = subagentSection(agent);
   const byId = new Map(agents.map((each) => [each.sessionId, each]));
   return (
     <>
       {(crew.rows.length > 0 || crew.hidden.length > 0) && (
-        <Group label="Agents it started" testId="crew-agents">
+        <Group id="crew-agents" label="Agents it started" count={crew.rows.length} cue={foldCue('crew-agents', cues)}>
           <RecordList
             section={crew}
             records={records}
@@ -763,7 +780,7 @@ function CrewShelf({ agent, agents, shows, records, actions, narrow }: ShelvesDa
         </Group>
       )}
       {subagents.rows.length > 0 && (
-        <Group label="Subagents" testId="crew-subagents">
+        <Group id="crew-subagents" label="Subagents" count={subagents.rows.length} cue={foldCue('crew-subagents', cues)}>
           <RecordList
             section={subagents}
             records={records}
@@ -787,13 +804,14 @@ function CrewShelf({ agent, agents, shows, records, actions, narrow }: ShelvesDa
  * Setup: where it works (its folder now, its branch, its AI, model and role) and what is around it (its issue, clock and
  * gate). Under the Simplified design, where it works and its gate wait for Show technical details.
  */
-function SetupShelf({ agent, technical, folder, home, gate, now, actions, narrow }: ShelvesData & { narrow: boolean }) {
+function SetupShelf({ agent, agents, shows, technical, folder, home, gate, now, actions, narrow }: ShelvesData & { narrow: boolean }) {
+  const cues = { agent, agents, shows, gate: technical ? gate : null };
   const { issue, schedule } = agent;
   const badge = schedule && clockBadge(schedule, agent.endedAt !== null, now);
   return (
     <>
       {technical && (
-        <Group label="Where it works" testId="setup-where">
+        <Group id="setup-where" label="Where it works">
           <ul className="agent-shelves-rows">
             <li>
               <ShelfRow
@@ -821,7 +839,7 @@ function SetupShelf({ agent, technical, folder, home, gate, now, actions, narrow
         </Group>
       )}
       {(issue !== null || badge || (technical && gate !== null)) && (
-        <Group label="Around it" testId="setup-around">
+        <Group id="setup-around" label="Around it" cue={foldCue('setup-around', cues)}>
           <ul className="agent-shelves-rows">
             {issue !== null && (
               <li>

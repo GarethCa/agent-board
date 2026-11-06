@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.17 (2026-11-06)
+
+- Steps, Memory and Queue in the toolbar's add menu, Classic and Simplified
+- Sections of the agent sidebar fold, and stay as they were left
+- The details strip listens only to its own crew, not every agent
+- An agent expanded on the board shows its shelves, as its window does
+- Simplified look: a fainter zone tint, no dots on the desk, the Captain as plain text, the Needs-you pill without orange
+- A steps card's -> link opens from the card, Needs you and the agent's window
+- Tooltips and hover cards mount on first hover or focus, not with every tile
+
 ## v0.6.16 (2026-11-06)
 
 - Profile the slowest test files; tempRepo copies a template, and test runs share a Node compile cache

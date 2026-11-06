@@ -1,10 +1,11 @@
 // What an agent's shelves hold: which shelves have a tab, what each tab says, what the
 // page's "From the board" adds, and the board's Now until the agent writes a page. The rows of each shelf are the
 // sidebar's records (sidebar-records.ts). Pure, so it is unit-tested; AgentShelves.tsx draws it.
-import type { Agent, GateRun, NeedsYouShows, PageIcon, PlanSummary, SessionState } from '@agent-board/daemon/protocol';
+import { planPending, type Agent, type GateRun, type NeedsYouShows, type PageIcon, type PlanSummary, type SessionState } from '@agent-board/daemon/protocol';
 import { gateBadge } from '@agent-board/daemon/gate-rules';
 import { HUMAN_STATUS_BY_STATE, humanStatus, type HumanStatus } from '@agent-board/daemon/human-status';
 import { insideWorktree } from './live-folder';
+import type { ShelfGroupId } from './shelf-folds';
 import { crewSection, docSection, documentSection, pullRequestSection, subagentSection, type Fading, type SidebarRow } from './sidebar-records';
 
 /** The shelves, in their tabs' order: the agent's page, what it made, its crew, and its setup. */
@@ -140,6 +141,31 @@ export const shortFolder = (folder: string): string => folder.replace(/^.*\/\.ag
 /** What the plan's row says under its name: its decision, or when it was shown, and when. */
 export function planMeta(plan: Pick<PlanSummary, 'decision' | 'presentedAt'>, when: (at: string) => string): string {
   return plan.decision === null ? `shown ${when(plan.presentedAt)}` : `${plan.decision.outcome.replace('-', ' ')} · ${when(plan.decision.decidedAt)}`;
+}
+
+/** Why a folded section still says something on its heading: what needs the user, or has failed. */
+export type FoldCue = 'needs-you' | 'failing';
+
+/**
+ * What a folded section holds that must not go unseen: Crew's agents that need you (and its subagents that do), a plan
+ * Made showed that waits for your decision, and Setup's failed gate. Nothing else is urgent, so nothing else is cued.
+ */
+export function foldCue(
+  group: ShelfGroupId,
+  { agent, agents, shows, gate }: { agent: Agent; agents: readonly Agent[]; shows: NeedsYouShows; gate: GateRun | undefined | null },
+): FoldCue | undefined {
+  switch (group) {
+    case 'crew-agents':
+      return crewNeedingYou(agent, agents, shows).length > 0 ? 'needs-you' : undefined;
+    case 'crew-subagents':
+      return subagentSection(agent).rows.some((row) => subagentStatus(row.item.state) === 'needs-you') ? 'needs-you' : undefined;
+    case 'made-shown':
+      return planPending(agent) ? 'needs-you' : undefined;
+    case 'setup-around':
+      return gate?.status === 'failed' ? 'failing' : undefined;
+    default:
+      return undefined;
+  }
 }
 
 /** Who started it, as the page's status line says: "you", "the Captain", the orchestrator's name, or "an agent" not listed. */

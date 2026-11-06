@@ -114,6 +114,11 @@ kbd {
   background-image: radial-gradient(ellipse at center, transparent 45%, var(--desk-vignette) 100%);
 }
 
+/* The Simplified design's desk has no dots, whatever the pattern picked: only the lines (and the vignette) draw. */
+:root[data-design='simplified'] .board-backdrop:is([data-board-background='standard'], [data-board-background='fine-dots'], [data-board-background='large-dots'], [data-board-background='isometric']) {
+  background-image: none;
+}
+
 /* One choice in Settings' Board background: the pattern at half scale on the desk colour. */
 .board-backdrop-swatch[data-board-background] {
   /* More specific than the rules above, so it wins whatever their order: half scale, its dots at full size. */
@@ -12526,6 +12531,57 @@ button.agent-shelves-row:hover {
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
 }
+/* A group folds to its heading: a button, with a chevron, what it holds when folded, and a dot if that needs you. */
+.agent-shelves-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-0-5) 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.agent-shelves-group-head:hover .agent-shelves-group-label,
+.agent-shelves-group-head:hover .agent-shelves-group-chevron {
+  color: var(--text);
+}
+.agent-shelves-group-head:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.agent-shelves-group-chevron {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  color: var(--muted);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+.agent-shelves-group[data-folded] .agent-shelves-group-chevron {
+  transform: rotate(-90deg);
+}
+.agent-shelves-group-count {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.agent-shelves-group-head .agent-shelves-dot {
+  margin-inline-start: auto;
+}
+.agent-shelves-group-body {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.agent-shelves-group-body > * {
+  min-width: 0;
+}
+.agent-shelves-group-body[hidden] {
+  display: none;
+}
 .agent-shelves-row-actions {
   display: inline-flex;
   gap: var(--space-0-5);
@@ -13675,6 +13731,25 @@ button.agent-shelves-row:hover {
   font-size: var(--font-size-2xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+button.steps-link-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-2xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+button.steps-link-open:hover {
+  color: var(--accent);
+}
+
+button.steps-link-open:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .steps-link svg {

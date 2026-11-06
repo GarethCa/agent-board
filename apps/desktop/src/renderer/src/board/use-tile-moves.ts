@@ -163,9 +163,10 @@ export function useTileMoves({
     const onKeyDown = (event: KeyboardEvent) => {
       const direction = ARROWS[event.key];
       if (direction === undefined || event.metaKey || event.ctrlKey || event.altKey || isTyping(event)) return;
-      // Only with the board (or nothing) focused: a menu, dialog or the sidebar has its own use for arrows.
+      // Only with the board (or nothing) focused: a menu, dialog or the sidebar has its own use for arrows. An expanded
+      // tile's body is on the board but not the board's: its sidebar's handle and tabs take arrows, as in its window.
       const active = document.activeElement;
-      if (active !== null && active !== document.body && active.closest('.react-flow') === null) return;
+      if (active !== null && active !== document.body && (active.closest('.react-flow') === null || active.closest('.expanded-tile-body') !== null)) return;
       const focused = active?.closest('.react-flow__node')?.getAttribute('data-id');
       const tiles = nudgedTiles(shownRef.current, focused);
       const items = shownRef.current.filter((node) => isItemNode(node) && (node.selected === true || node.id === focused)) as ItemNodeType[];
