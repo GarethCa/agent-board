@@ -78,18 +78,18 @@ export const THEMES = [
   { theme: 'dark', suffix: '-dark' },
 ] as const;
 
-/** Launches on the gallery (`#gallery`) in `theme`, a theme of `scheme`'s mode, and in `options`' design. */
-export async function launchGallery(dataDir: string, theme: string, scheme: 'light' | 'dark' = theme === 'dark' ? 'dark' : 'light', options: LaunchOptions = {}) {
+/** Launches on the gallery (`#gallery`, or the page `hash`) in `theme`, a theme of `scheme`'s mode, and in `options`' design. */
+export async function launchGallery(dataDir: string, theme: string, scheme: 'light' | 'dark' = theme === 'dark' ? 'dark' : 'light', options: LaunchOptions = {}, hash = '#gallery') {
   const launched = await launch(dataDir, { ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme }, RENDER_ARGS, options);
   await listFinishedTurns(launched.window);
   const { window } = launched;
   await window.setViewportSize(VIEWPORT);
   // Playwright pins the page to light; the setting has the window in its mode, as macOS would.
   await window.emulateMedia({ colorScheme: scheme });
-  await window.evaluate(() => {
-    location.hash = '#gallery';
+  await window.evaluate((page) => {
+    location.hash = page;
     location.reload();
-  });
+  }, hash);
   await expect(window.locator('html')).toHaveAttribute('data-theme', theme);
   return launched;
 }

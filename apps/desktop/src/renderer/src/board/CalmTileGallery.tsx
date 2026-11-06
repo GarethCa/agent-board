@@ -29,6 +29,7 @@ const TILES: Record<string, Agent> = {
     ...galleryAgent('done'),
     name: 'Write onboarding docs',
     model: 'opus',
+    effort: 'high',
     branch: 'docs/onboarding',
     endedAt: AT,
     exitCode: 0,

@@ -1,5 +1,5 @@
 // The board's view settings: what a double-click on a tile opens, how a crew and agent notes look, which connections
-// are drawn, and which sidebar an agent's window shows. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
+// are drawn, which sidebar an agent's window shows, and whether terminals draw with the GPU. Kept in the daemon's view state, and held here once per window, so the board and the Settings window read
 // and set the same values. Main tells every window of a change, so each follows live.
 import { useSyncExternalStore } from 'react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
@@ -8,6 +8,7 @@ import { connectionsViewFrom, type ConnectionsView } from './connections-view';
 import { crewLookFrom, lightCrew, type CrewLook } from './crew-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
+import { gpuTerminalsFrom } from '../session/terminal-gpu';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
@@ -15,6 +16,7 @@ export interface ViewSettings {
   connections: ConnectionsView;
   agentNoteLook: AgentNoteLook;
   agentSidebar: AgentSidebar;
+  gpuTerminals: boolean;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -23,6 +25,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   connections: connectionsViewFrom(undefined),
   agentNoteLook: agentNoteLookFrom(undefined),
   agentSidebar: agentSidebarFrom(undefined),
+  gpuTerminals: gpuTerminalsFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -32,9 +35,12 @@ const SETTINGS = {
   connections: { key: VIEW_KEYS.connections, from: connectionsViewFrom },
   agentNoteLook: { key: VIEW_KEYS.agentNoteLook, from: agentNoteLookFrom },
   agentSidebar: { key: VIEW_KEYS.agentSidebar, from: agentSidebarFrom },
+  gpuTerminals: { key: VIEW_KEYS.gpuTerminals, from: gpuTerminalsFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
+/** Whether the saved settings have been read, for what must not act on a default the user changed. */
+let loaded = false;
 const listeners = new Set<() => void>();
 
 /** Holds `next`, and tells the subscribers if any setting differs: `current` is a new object only then. */
@@ -77,7 +83,10 @@ export function followViewSettings(): () => void {
   ).then(
     (read) => restoreViewSettings(Object.fromEntries(read)),
     () => {},
-  );
+  ).finally(() => {
+    loaded = true;
+    for (const listener of listeners) listener();
+  });
   return window.agentBoard.view.onChanged((key, value) => {
     const name = (Object.keys(SETTINGS) as (keyof ViewSettings)[]).find((each) => SETTINGS[each].key === key);
     if (name !== undefined) restoreViewSettings({ [name]: value });
@@ -87,6 +96,16 @@ export function followViewSettings(): () => void {
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Whether the saved settings have been read (or failed to be), for what must not act on a default. */
+export function viewSettingsLoaded(): boolean {
+  return loaded;
+}
+
+/** Whether the saved settings have been read, for a component that must not act on a default. */
+export function useViewSettingsLoaded(): boolean {
+  return useSyncExternalStore(subscribe, viewSettingsLoaded);
 }
 
 /** The settings, for a component that shows them. */

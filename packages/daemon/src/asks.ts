@@ -12,6 +12,7 @@ import {
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
   MAX_ASK_OPTIONS,
+  MAX_ASK_QUESTIONS,
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
   CREW_PLAN_PATH,
@@ -21,10 +22,14 @@ import {
   MAX_PLAN_TITLE_LENGTH,
   MAX_QUESTION_LENGTH,
   MAX_REPLY_LENGTH,
+  MAX_STEP_ANSWER,
   PLAN_FORMATS,
   PLAN_OUTCOMES,
   type Agent,
   type AgentAsk,
+  type AskQuestion,
+  type BoardItem,
+  type StepsAskEnd,
   type SentToOrchestrator,
   type AskAnswer,
   type AskResult,
@@ -46,14 +51,22 @@ import { lineDiff } from './text-diff.ts';
 import { isInside, realPath, whyNotWritable, writeWhole } from './user-files.ts';
 import type { AgentHost } from './agents.ts';
 
-type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.place' | 'plan.list' | 'plan.decide' | 'plan.edit'>;
+type AskMethods = Pick<DaemonMethods, 'board.ask' | 'board.presentPlan' | 'ask.answer' | 'ask.send' | 'ask.toCard' | 'plan.list' | 'plan.decide' | 'plan.edit'>;
 
 /** A question as an agent asks it. */
-export interface AskSpec {
+export interface QuestionSpec {
   question: string;
   options?: string[];
   freeText?: boolean;
-  /** Shows a question card on the board, beside the agent's tile, besides the inbox item. */
+}
+
+/** What an agent asks: one question, or several (`questions`, 1 to `MAX_ASK_QUESTIONS`) stepped through. */
+export interface AskSpec {
+  question?: string;
+  options?: string[];
+  freeText?: boolean;
+  questions?: QuestionSpec[];
+  /** Puts it on the board at once, as a steps card beside the agent's tile that it waits on. */
   onBoard?: boolean;
   timeoutMs?: number;
 }
@@ -85,6 +98,13 @@ export interface AskHostOptions {
   wrote?(sessionId: string, path: string): void;
   /** Types `text` at the agent's prompt once it is ready for its next message: the decision on a plan it left. */
   told?(sessionId: string, text: string): void;
+  /**
+   * Makes a steps card beside the agent's tile from its ask, holding the answers so far: while the ask's call waits, the
+   * card's Send answers it (`sendFromCard`). With `ended`, the call already stopped waiting, and the card says so.
+   */
+  toCard?(sessionId: string, ask: AgentAsk, ended: { at: string; how: StepsAskEnd } | null): Promise<BoardItem>;
+  /** The ask on the steps card `cardId` stopped waiting, unanswered: the card says so, and a later Send is typed instead. */
+  cardEnded?(cardId: string, ended: { at: string; how: StepsAskEnd }): void;
   log?(message: string): void;
   clock?: Clock;
 }
@@ -106,10 +126,34 @@ export interface AskHost {
   latestPlan(sessionId: string): PlanSummary | null;
   /** The agent's plans, oldest first, with their bodies. */
   plans(sessionId: string): Plan[];
-  /** The user answers the agent's question `askId`. Throws `invalidParams` once it no longer asks it, or for an answer it can't take. */
-  answer(sessionId: string, askId: string, answer: AskAnswer): void;
-  /** The user moves the card of the agent's question `askId` to `at`. Throws `invalidParams` as `answer` does, or for a question with no card. */
-  place(sessionId: string, askId: string, at: { x: number; y: number }): void;
+  /**
+   * The user answers the agent's question `askId`: its question `index` (0 by default), which ends the wait for a single
+   * question or a skip, and is kept until `send` for several. Throws `invalidParams` once it no longer asks it, once it
+   * is on the board, or for an answer it can't take.
+   */
+  answer(sessionId: string, askId: string, answer: AskAnswer, index?: number): void;
+  /** The user sends the answers so far of the agent's ask `askId`, ending its wait. Throws `invalidParams` as `answer` does. */
+  send(sessionId: string, askId: string): void;
+  /**
+   * The answers of the steps card `cardId`, made from the agent's ask `askId`, one per question, answer its call: true if
+   * it still waited on that card, false if not (the card's Send then types them instead).
+   */
+  sendFromCard(sessionId: string, askId: string, cardId: string, answers: (AskAnswer | null)[]): boolean;
+  /** Whether the agent's ask `askId` still waits, on the steps card `cardId`. */
+  waitsOnCard(sessionId: string, askId: string, cardId: string): boolean;
+  /**
+   * The steps card `cardId`, made from the agent's ask `askId` and not yet stamped, is on the board (again, as an undo
+   * puts back one taken off): true if the ask still waits and takes it back as its card; false if the card answers
+   * nothing now, and should say so.
+   */
+  cardBack(cardId: string, sessionId: string, askId: string): boolean;
+  /** The user puts the agent's ask `askId` on the board as a steps card, its call still waiting. Throws as `answer` does. */
+  toCard(sessionId: string, askId: string): Promise<BoardItem>;
+  /**
+   * The steps card `cardId` was taken off the board: an ask on it that still waits is back on its agent's tile, with the
+   * answers it had as it was put there.
+   */
+  cardGone(cardId: string): void;
   /** The user decides the agent's plan `planId`. Throws `invalidParams` once it no longer waits on it. */
   decide(sessionId: string, planId: string, outcome: PlanOutcome, comments: string): PlanSummary;
   /**
@@ -162,7 +206,7 @@ interface Waiting {
   ask: AgentAsk | null;
   planId: string | null;
   /** Ends the wait with what the user did, or with nothing (null) once the agent stopped waiting. */
-  settle(outcome: { answer: AskAnswer } | { decision: PlanOutcome; comments: string } | 'timed-out' | 'superseded' | null): void;
+  settle(outcome: { answer: AskAnswer } | { answers: (AskAnswer | null)[] } | { decision: PlanOutcome; comments: string } | 'timed-out' | 'superseded' | null): void;
 }
 
 /** Why a wait ended with no answer to give. */
@@ -201,6 +245,53 @@ function whyChanged(path: string, body: string): string | undefined {
 
 /** How long a wait lasts: as asked, else `fallback`, never longer than `MAX_ASK_WAIT_MS`. */
 const waitMs = (asked: number | undefined, fallback: number) => Math.min(asked ?? fallback, MAX_ASK_WAIT_MS);
+
+/** Why an ask is refused for being more than an ask: a steps card holds it. */
+const STEPS_CARD_INSTEAD = `That's a steps card: use steps_new (agent-board steps new). An ask holds 1 to ${MAX_ASK_QUESTIONS} questions, and no to-dos`;
+
+/** The questions `spec` asks, checked: `question` alone, or `questions`, 1 to `MAX_ASK_QUESTIONS` of them. */
+function askedQuestions(spec: AskSpec): AskQuestion[] {
+  if ((spec.question === undefined) === (spec.questions === undefined)) throw invalidParams('ask exactly one of question or questions');
+  const specs: QuestionSpec[] = spec.questions ?? [{ question: spec.question!, ...(spec.options === undefined ? {} : { options: spec.options }), ...(spec.freeText === undefined ? {} : { freeText: spec.freeText }) }];
+  if (specs.length === 0) throw invalidParams('questions must hold at least one question');
+  if (specs.length > MAX_ASK_QUESTIONS) throw invalidParams(STEPS_CARD_INSTEAD);
+  return specs.map((each, at) => {
+    const name = specs.length === 1 ? 'question' : `question ${at + 1}`;
+    const question = text(each.question, name, MAX_QUESTION_LENGTH);
+    const choices = each.options ?? [];
+    if (choices.length > MAX_ASK_OPTIONS) throw invalidParams(`a question has at most ${MAX_ASK_OPTIONS} options`);
+    const options = choices.map((option, index) => text(option, `${specs.length === 1 ? '' : `${name}'s `}option ${index + 1}`, MAX_OPTION_LENGTH));
+    return { question, options, freeText: options.length === 0 || each.freeText === true };
+  });
+}
+
+/** The answer in words, as the agent hears it; null for a skip. */
+const answerText = (question: AskQuestion, answer: AskAnswer | null): string | null =>
+  answer === null || 'skip' in answer ? null : 'option' in answer ? question.options[answer.option]! : answer.text.trim();
+
+/** Throws `invalidParams` unless `question` takes `answer`, in words of at most `most` characters. */
+function checkAnswer(question: AskQuestion, answer: AskAnswer, most = MAX_REPLY_LENGTH): void {
+  if ('option' in answer) {
+    if (!Number.isInteger(answer.option) || answer.option < 0 || answer.option >= question.options.length) {
+      throw invalidParams(`the question has no option ${Number(answer.option) + 1}`);
+    }
+  } else if ('text' in answer) {
+    if (!question.freeText) throw invalidParams('the question takes only its options');
+    text(answer.text, 'the answer', most);
+  }
+}
+
+/** What the call answers for `answers`, one per question of `ask`, sent. */
+function sentResult(ask: AgentAsk, answers: (AskAnswer | null)[], card?: string): AskResult {
+  const words = ask.questions.map((question, at) => answerText(question, answers[at] ?? null));
+  const answered = words.some((each) => each !== null);
+  return {
+    outcome: answered ? 'answered' : 'skipped',
+    answer: words[0] ?? null,
+    ...(ask.questions.length > 1 ? { answers: ask.questions.map((question, at) => ({ question: question.question, answer: words[at] ?? null })) } : {}),
+    ...(card === undefined ? {} : { card }),
+  };
+}
 
 export function createAskHost(options: AskHostOptions): AskHost {
   const { db, changed, touched } = options;
@@ -255,7 +346,7 @@ export function createAskHost(options: AskHostOptions): AskHost {
     slot: Map<string, Waiting>,
     ms: number | null,
     signal: AbortSignal,
-    finish: (how: Parameters<Waiting['settle']>[0], wait: Waiting) => T,
+    finish: (how: Parameters<Waiting['settle']>[0], wait: Waiting) => T | Promise<T>,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const done: Waiting = {
@@ -327,6 +418,16 @@ export function createAskHost(options: AskHostOptions): AskHost {
 
   const now = () => new Date(clock.now()).toISOString();
 
+  /** The asks being put on the board now, by id: answered nowhere until their card is made. */
+  const carding = new Map<string, Promise<BoardItem>>();
+  /** The agents whose session is ending: their asks are kept on no new card. */
+  const ending = new Set<string>();
+  /** Throws unless `ask` is answered on its agent's tile: not on a card, nor while one is made. */
+  const onTile = (ask: AgentAsk) => {
+    if (carding.has(ask.id)) throw invalidParams('it is being put on the board: answer it on its card');
+    if (ask.card !== null) throw invalidParams(`it is on the board now: answer it on its card (item:${ask.card})`);
+  };
+
   /** The agent's wait on its question `askId`, while it still asks it. */
   const asking = (sessionId: string, askId: string): { entry: Waiting; ask: AgentAsk } => {
     const entry = waiting.get(sessionId);
@@ -367,29 +468,51 @@ export function createAskHost(options: AskHostOptions): AskHost {
   const host: AskHost = {
     ask(sessionId, spec, signal) {
       checkFree(sessionId);
-      const question = text(spec.question, 'question', MAX_QUESTION_LENGTH);
-      const choices = spec.options ?? [];
-      if (choices.length > MAX_ASK_OPTIONS) throw invalidParams(`a question has at most ${MAX_ASK_OPTIONS} options`);
-      const offered = choices.map((option, index) => text(option, `option ${index + 1}`, MAX_OPTION_LENGTH));
+      const questions = askedQuestions(spec);
+      const first = questions[0]!;
       const ms = waitMs(spec.timeoutMs, DEFAULT_ASK_WAIT_MS);
       const ask: AgentAsk = {
         id: randomUUID(),
-        question,
-        options: offered,
-        freeText: offered.length === 0 || spec.freeText === true,
+        question: first.question,
+        options: first.options,
+        freeText: first.freeText,
         askedAt: now(),
         expiresAt: new Date(clock.now() + ms).toISOString(),
         onBoard: spec.onBoard === true,
-        at: null,
+        questions,
+        answers: questions.map(() => null),
+        card: null,
       };
-      return hold(sessionId, { ask, planId: null }, waiting, ms, signal, (how): AskResult => {
-        if (how === null) throw stoppedWaiting();
-        if (how === 'timed-out') return { outcome: 'timed-out', answer: null };
-        if (how === 'superseded' || !('answer' in how)) throw new Error('a plan decision answered a question');
-        const { answer } = how;
-        if ('skip' in answer) return { outcome: 'skipped', answer: null };
-        return { outcome: 'answered', answer: 'option' in answer ? offered[answer.option]! : answer.text.trim() };
+      const held = hold(sessionId, { ask, planId: null }, waiting, ms, signal, (how, wait): AskResult | Promise<AskResult> => {
+        const asked = wait.ask!;
+        if (how === 'superseded' || (how !== null && how !== 'timed-out' && 'decision' in how)) throw new Error('a plan decision answered a question');
+        if (how !== null && how !== 'timed-out') {
+          // Skipped, its card is no longer waited on; sent from its card, the card stamped itself.
+          if (asked.card !== null && 'answer' in how) options.cardEnded?.(asked.card, { at: now(), how: 'stopped' });
+          return sentResult(asked, 'answer' in how ? [how.answer] : how.answers, asked.card ?? undefined);
+        }
+        // It stopped waiting: a card it was put on says so; answers made so far are kept on one.
+        const ended = { at: now(), how: how === 'timed-out' ? ('timed-out' as const) : ('stopped' as const) };
+        const kept =
+          asked.card !== null
+            ? (options.cardEnded?.(asked.card, ended), Promise.resolve(asked.card))
+            : asked.answers.some((answer) => answer !== null) && options.toCard !== undefined && !ending.has(sessionId)
+              ? options.toCard(sessionId, asked, ended).then((item) => item.id)
+              : Promise.resolve(undefined);
+        if (how === null) {
+          kept.catch((error: unknown) => options.log?.(`could not keep ${sessionId}'s answers on a card: ${(error as Error).message}`));
+          throw stoppedWaiting();
+        }
+        return kept.then(
+          (card): AskResult => ({ outcome: 'timed-out', answer: null, ...(card === undefined ? {} : { card }) }),
+          (): AskResult => ({ outcome: 'timed-out', answer: null }),
+        );
       });
+      // Asked with `onBoard`, it goes on the board at once, as a steps card its call waits on.
+      if (ask.onBoard && options.toCard !== undefined) {
+        host.toCard(sessionId, ask.id).catch((error: unknown) => options.log?.(`could not put ${sessionId}'s ask on the board: ${(error as Error).message}`));
+      }
+      return held;
     },
 
     presentPlan: (sessionId, spec, signal) => present(sessionId, spec, signal, false),
@@ -415,25 +538,87 @@ export function createAskHost(options: AskHostOptions): AskHost {
 
     plans: (sessionId) => (selectPlans.all(sessionId) as unknown as PlanRow[]).map((row) => ({ ...toSummary(row, isLeft(row)), body: row.body })),
 
-    answer(sessionId, askId, answer) {
+    answer(sessionId, askId, answer, index = 0) {
       const { entry, ask } = asking(sessionId, askId);
-      if ('option' in answer) {
-        if (!Number.isInteger(answer.option) || answer.option < 0 || answer.option >= ask.options.length) {
-          throw invalidParams(`the question has no option ${Number(answer.option) + 1}`);
-        }
-      } else if ('text' in answer) {
-        if (!ask.freeText) throw invalidParams('the question takes only its options');
-        text(answer.text, 'the answer', MAX_REPLY_LENGTH);
-      }
-      entry.settle({ answer });
+      // A skip ends the wait wherever it is answered, its card's too.
+      if ('skip' in answer) return entry.settle({ answer });
+      onTile(ask);
+      const question = ask.questions[index];
+      if (!Number.isInteger(index) || question === undefined) throw invalidParams(`there is no question ${Number(index) + 1}: it asks ${ask.questions.length}`);
+      // Kept to go on with, an answer may go onto a steps card: in words no longer than a step's answer.
+      checkAnswer(question, answer, ask.questions.length === 1 ? MAX_REPLY_LENGTH : MAX_STEP_ANSWER);
+      if (ask.questions.length === 1) return entry.settle({ answer });
+      entry.ask = { ...ask, answers: ask.answers.map((each, at) => (at === index ? answer : each)) };
+      touched(sessionId);
     },
 
-    place(sessionId, askId, at) {
+    send(sessionId, askId) {
       const { entry, ask } = asking(sessionId, askId);
-      if (!ask.onBoard) throw invalidParams('that question is not on the board: it is answered in the inbox');
-      if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) throw invalidParams('at must be a point: finite x and y');
-      entry.ask = { ...ask, at: { x: at.x, y: at.y } };
+      onTile(ask);
+      entry.settle({ answers: ask.answers });
+    },
+
+    sendFromCard(sessionId, askId, cardId, answers) {
+      if (!host.waitsOnCard(sessionId, askId, cardId)) return false;
+      waiting.get(sessionId)!.settle({ answers });
+      return true;
+    },
+
+    waitsOnCard: (sessionId, askId, cardId) => {
+      const ask = waiting.get(sessionId)?.ask;
+      return ask?.id === askId && ask.card === cardId;
+    },
+
+    cardBack(cardId, sessionId, askId) {
+      const entry = waiting.get(sessionId);
+      if (entry?.ask?.id !== askId) return false;
+      // The card being made for it now: `toCard` takes it as it is made.
+      if (carding.has(askId)) return true;
+      if (entry.ask.card !== null) return entry.ask.card === cardId;
+      entry.ask = { ...entry.ask, card: cardId };
       touched(sessionId);
+      return true;
+    },
+
+    cardGone(cardId) {
+      for (const [sessionId, entry] of waiting) {
+        if (entry.ask?.card !== cardId) continue;
+        entry.ask = { ...entry.ask, card: null };
+        touched(sessionId);
+      }
+    },
+
+    toCard(sessionId, askId) {
+      // Asked again while its card is being made (a double click): the same card.
+      const making = carding.get(askId);
+      if (making !== undefined) return making;
+      let ask: AgentAsk;
+      try {
+        ask = asking(sessionId, askId).ask;
+        if (ask.card !== null) throw invalidParams(`it is on the board already (item:${ask.card})`);
+        if (options.toCard === undefined) throw invalidParams('asks are not put on the board here');
+      } catch (error) {
+        return Promise.reject(error as Error);
+      }
+      const make = options.toCard;
+      const made = (async () => {
+        try {
+          const item = await make(sessionId, ask, null);
+          // It may have ended while the card was made: the card then says so.
+          const entry = waiting.get(sessionId);
+          if (entry?.ask?.id !== askId) {
+            options.cardEnded?.(item.id, { at: now(), how: 'stopped' });
+            return item;
+          }
+          entry.ask = { ...entry.ask, card: item.id };
+          touched(sessionId);
+          return item;
+        } finally {
+          carding.delete(askId);
+        }
+      })();
+      carding.set(askId, made);
+      return made;
     },
 
     decide(sessionId, planId, outcome, comments) {
@@ -461,8 +646,14 @@ export function createAskHost(options: AskHostOptions): AskHost {
     drop: (sessionId) => waiting.get(sessionId)?.settle(null),
 
     end(sessionId) {
-      waiting.get(sessionId)?.settle(null);
-      leftPlans.get(sessionId)?.settle(null);
+      // Its session over (deleted, stopped, the daemon going): answers so far are not kept on a new card for it.
+      ending.add(sessionId);
+      try {
+        waiting.get(sessionId)?.settle(null);
+        leftPlans.get(sessionId)?.settle(null);
+      } finally {
+        ending.delete(sessionId);
+      }
     },
 
     forget(sessionId) {
@@ -516,28 +707,37 @@ export function createAskHost(options: AskHostOptions): AskHost {
         'board.ask': (params, connection) => {
           const p = paramsObject(params);
           const sessionId = asker(p, connection);
-          const options = p.options;
-          if (options !== undefined && (!Array.isArray(options) || !options.every((option) => typeof option === 'string'))) {
-            throw invalidParams('options must be a list of strings');
-          }
+          const strings = (value: unknown, name: string) => {
+            if (value !== undefined && (!Array.isArray(value) || !value.every((option) => typeof option === 'string'))) throw invalidParams(`${name} must be a list of strings`);
+            return value as string[] | undefined;
+          };
+          const list = p.questions;
+          if (list !== undefined && !Array.isArray(list)) throw invalidParams('questions must be a list of { question, options?, freeText? }');
           const spec: AskSpec = {
-            question: stringParam(p, 'question'),
-            options: options as string[] | undefined,
-            freeText: optionalBooleanParam(p, 'freeText'),
+            ...(list === undefined
+              ? { question: stringParam(p, 'question'), options: strings(p.options, 'options'), freeText: optionalBooleanParam(p, 'freeText') }
+              : {
+                  questions: list.map((each: unknown, at) => {
+                    const q = paramsObject(each);
+                    return { question: stringParam(q, 'question'), options: strings(q.options, `question ${at + 1}'s options`), freeText: optionalBooleanParam(q, 'freeText') };
+                  }),
+                }),
             onBoard: optionalBooleanParam(p, 'onBoard'),
             timeoutMs: timeout(p),
           };
+          if (list !== undefined && (p.question !== undefined || p.options !== undefined || p.freeText !== undefined)) throw invalidParams('ask exactly one of question or questions');
           const lead = leadOf(sessionId);
           if (lead === undefined) return host.ask(sessionId, spec, closed(connection));
-          const offered = (spec.options ?? []).map((option, index) => text(option, `option ${index + 1}`, MAX_OPTION_LENGTH));
-          const question = text(spec.question, 'question', MAX_QUESTION_LENGTH);
-          const line = oneLine(`asks: ${question}${offered.length === 0 ? '' : ` (${offered.join(' · ')})`}`);
+          const questions = askedQuestions(spec);
+          const asked = (question: AskQuestion) => `${question.question}${question.options.length === 0 ? '' : ` (${question.options.join(' · ')})`}`;
+          const line = oneLine(`asks: ${questions.map(asked).join(' / ')}`);
           if (line.length <= MAX_FLAG_LENGTH) return sendToLead(sessionId, lead, line);
-          // Too long for a flag: the question and every option go in full to a file, which the flag points to.
+          // Too long for a flag: every question and option goes in full to a file, which the flag points to.
           if (!sources.agents.get(sessionId)!.ownsWorktree) return host.ask(sessionId, spec, closed(connection));
-          writeForLead(sessionId, CREW_QUESTION_PATH, crewQuestionText(question, offered));
-          const head = `asks (in full, with ${offered.length === 0 ? 'no options' : `its ${offered.length} options`}, in ${CREW_QUESTION_PATH}): `;
-          return sendToLead(sessionId, lead, `${head}${cutText(oneLine(question), MAX_FLAG_LENGTH - head.length)}`);
+          writeForLead(sessionId, CREW_QUESTION_PATH, questions.map((question) => crewQuestionText(question.question, question.options)).join('\n'));
+          const what = questions.length === 1 ? (questions[0]!.options.length === 0 ? 'no options' : `its ${questions[0]!.options.length} options`) : `${questions.length} questions`;
+          const head = `asks (in full, with ${what}, in ${CREW_QUESTION_PATH}): `;
+          return sendToLead(sessionId, lead, `${head}${cutText(oneLine(questions[0]!.question), MAX_FLAG_LENGTH - head.length)}`);
         },
         'board.presentPlan': (params, connection) => {
           const p = paramsObject(params);
@@ -570,14 +770,18 @@ export function createAskHost(options: AskHostOptions): AskHost {
         'ask.answer': (params) => {
           const p = paramsObject(params);
           const sessionId = sessionOf(p);
-          host.answer(sessionId, stringParam(p, 'askId'), askAnswer(p.answer));
+          const index = p.index === undefined ? undefined : finiteNumberParam(p, 'index');
+          host.answer(sessionId, stringParam(p, 'askId'), askAnswer(p.answer), index);
           return null;
         },
-        'ask.place': (params) => {
+        'ask.send': (params) => {
           const p = paramsObject(params);
-          const at = paramsObject(p.at);
-          host.place(sessionOf(p), stringParam(p, 'askId'), { x: finiteNumberParam(at, 'x'), y: finiteNumberParam(at, 'y') });
+          host.send(sessionOf(p), stringParam(p, 'askId'));
           return null;
+        },
+        'ask.toCard': (params) => {
+          const p = paramsObject(params);
+          return host.toCard(sessionOf(p), stringParam(p, 'askId'));
         },
         'plan.list': (params) => host.plans(sessionOf(paramsObject(params))),
         'plan.decide': (params) => {

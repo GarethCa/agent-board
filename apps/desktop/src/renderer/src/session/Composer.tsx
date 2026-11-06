@@ -3,11 +3,11 @@ import type { Agent } from '@agent-board/daemon/protocol';
 import { ArrowUp, Plus } from 'lucide-react';
 import { Button, ErrorText, IconButton, Kbd, Menu, Textarea } from '../ui';
 import { useSimplified } from '../design';
-import { errorMessage } from '../../../shared/errors';
+import { ipcErrorMessage } from '../../../shared/errors';
 import { agentAtWork } from './chat';
 import { composerBlock, composerPlaceholder } from './composer-block';
 import { composerExtras } from './composer-extras';
-import { composerKey, droppedPath, insertAt } from './composer-input';
+import { composerKey, insertAt, keepPastedImages, pastedImages } from './composer-input';
 import { keyText } from '../keys/registry';
 import { sentMessages } from './sent-messages';
 
@@ -17,6 +17,8 @@ interface ComposerProps {
   placeholder?: string;
   /** Puts the caret in the field each time it changes to a number above 0. */
   focusRequest?: number;
+  /** The chat colours the composer is drawn in, where they are the user's choice (an agent's window), not the app's. */
+  chatTheme?: string;
 }
 
 /**
@@ -27,7 +29,7 @@ interface ComposerProps {
  * pastes a dropped file. Under the Simplified design (docs/adr/0022-simplified-design.md) a "+" menu at the field's start
  * holds the extras: attaching an image, and the commands worth naming, which it types for the user to send.
  */
-export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
+export function Composer({ agent, placeholder, focusRequest, chatTheme }: ComposerProps) {
   const [text, setText] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [pasting, setPasting] = useState(false);
@@ -62,7 +64,7 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
   const keepImages = (files: File[]) => {
     setPasting(true);
     setPasteError(undefined);
-    void Promise.all(files.map(async (file) => droppedPath(await window.agentBoard.agents.pasteImage(await file.arrayBuffer()))))
+    void keepPastedImages(files)
       .then((paths) => {
         // Where the caret is now: the user may have typed on while the image was kept.
         const box = field.current;
@@ -72,11 +74,11 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
         setImages((current) => [...current, ...paths]);
         requestAnimationFrame(() => field.current?.setSelectionRange(placed.caret, placed.caret));
       })
-      .catch((problem: unknown) => setPasteError(`could not paste the image: ${errorMessage(problem)}`))
+      .catch((problem: unknown) => setPasteError(`could not paste the image: ${ipcErrorMessage(problem)}`))
       .finally(() => setPasting(false));
   };
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...event.clipboardData.files].filter((file) => file.type.startsWith('image/'));
+    const files = pastedImages(event.clipboardData);
     if (files.length === 0) return;
     event.preventDefault();
     keepImages(files);
@@ -96,6 +98,7 @@ export function Composer({ agent, placeholder, focusRequest }: ComposerProps) {
   return (
     <form
       className="composer"
+      data-chat-theme={chatTheme}
       onSubmit={(event) => {
         event.preventDefault();
         send();

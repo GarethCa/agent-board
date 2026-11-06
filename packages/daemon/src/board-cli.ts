@@ -13,6 +13,16 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
+  exportPrefab,
+  importPrefab,
+  prefabsView,
+  prefabView,
+  removePrefab,
+  crewsView,
+  stopCrew,
+  crewRound,
+  waitForCrew,
+  startPrefab,
   usageView,
   edgesView,
   handOff,
@@ -34,6 +44,7 @@ import {
   setOwnStatus,
   recordEntry,
   pinEntry,
+  setOwnPage,
   unpinEntry,
   flagLine,
   flagOwn,
@@ -53,12 +64,15 @@ import {
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import { addSchedule, checkSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
+import { listSteps, newSteps, readStepsCard, updateSteps } from './steps-ops.ts';
+import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type QueueUpdate } from './memory-ops.ts';
 import {
   addDiagram,
   addGroup,
   addNote,
   addShape,
   arrangeZone,
+  setZoneLayout,
   changeGroup,
   checkArrange,
   checkConnector,
@@ -97,8 +111,16 @@ import {
   ORCHESTRATE_SETTING,
   MAX_ORCHESTRATOR_WAIT_MS,
   MAX_FLAG_LENGTH,
+  MAX_FIGURE_VALUE,
+  MAX_PAGE_BLOCKS,
+  MAX_PAGE_FIGURES,
+  MAX_PAGE_ITEMS,
+  MAX_PAGE_NAME,
+  MAX_PAGE_TEXT,
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
+  PAGE_ICONS,
+  PAGE_TONES,
   MAX_STATUS_LENGTH,
   ORCHESTRATE_SCOPES,
   ORCHESTRATOR_METHODS,
@@ -107,6 +129,7 @@ import {
   WAIT_STATES,
   type CrewEventKind,
   type OrchestrateScope,
+  type PageParams,
   type RecordParams,
   type WaitState,
 } from './protocol.ts';
@@ -162,12 +185,27 @@ COMMANDS
                         Show the user a Markdown or HTML file of yours as a document: a Doc
                         tab in your window (agents only). With --plan it is a plan for them
                         to decide, and the command returns at once. See \`doc --help\`.
+  steps new [--title <text>] [--file <path>|-] [--] <line>...
+                        Put a steps card beside your tile (agents only): questions for the
+                        user to step through, answered together on Send and typed at your
+                        prompt, and to-dos ticked by whoever each names. \`steps ls|read|done|
+                        wait|add|answer|close\` work with cards. See \`steps --help\`.
+  memory ls|read|add|edit|rm|history|restore|new ...
+                        Shared context: keyed values, notes and whole files that agents in
+                        scope read and write, and people on the board. See \`memory --help\`.
+  queue ls|read|add|take|drop|done|edit|rm|history|restore|new ...
+                        Jobs to take one at a time, and notes, for agents or for the user.
+                        A job you take goes back if your session ends. See \`queue --help\`.
   record pr <url> | record doc <path> [--for orchestrator]
                         Put a pull request you opened, or a hand-off doc you wrote, on your
                         sidebar (agents only). See \`record --help\`.
   pin <path|url> [--label <text>] | pin --note <text> --label <text>
                         Pin a file, a link or a note you want the user to see on your
                         sidebar (agents only); \`unpin\` takes it off. See \`pin --help\`.
+  page --file <path|-> [--name <text>] [--icon <icon>] | page --clear
+                        Write your page, the shelf your sidebar opens on, from blocks:
+                        a heading, figures, a checklist, a callout, links, a note (agents
+                        only). See \`page --help\`.
   handoff [--to <ref>] [--message <text>] [--handover <path>] [--data <json>]
                         Hand your finished work to the next agent over your own outgoing
                         edges, once it is ready, and say it is finished. See \`handoff --help\`.
@@ -240,6 +278,9 @@ ORCHESTRATING
                         layout; --boxes draws it in characters.
   zone screenshot [<zone ref>] [--out <file>] [--style board|lofi]
                         A PNG of your zone as the app draws it, terminals hidden.
+  zone layout free|shelves|clusters [<zone ref>]
+                        How your zone draws what it holds: free (as placed), shelves
+                        (To do, Doing, Waiting, Done) or clusters. Moves no tile.
   zone add --group --name <name> [--color <c>] [--at <x>,<y>] [--size <w>,<h>]
                         Make a group beside your zone. \`zone rename|resize|remove\` change
                         the groups you, or an agent you started, made.
@@ -270,6 +311,21 @@ ORCHESTRATING
   roles [list]          Each default role and its template's first line.
   roles set <name> [--file <path>] [--] <template>
                         Add or replace one. \`roles remove <name>\` removes one.
+
+  Crew prefabs, a saved crew shape, from one library for every board:
+  new --prefab <name> [--zone <ref>] [--issue <id>] [--] <prompt>
+                        Start a crew: its builder (or its lead) gets <prompt>.
+  prefab [ls]           Each prefab, built-ins first: its members and what it is for.
+  prefab show <name>    One prefab: its members in words, then its .crew.json file.
+  prefab export <name> [--out <path>]
+                        Write its .crew.json file, to share.
+  prefab import <file> [--add [--replace]]
+                        Show a .crew.json file whole; with --add, add it to the library.
+                        \`prefab remove <name>\` removes one you added.
+  crew [ls]             The running crews: each one's round, whose turn it is, and its reviews.
+  crew show|stop|round <crew>
+                        One crew; stop its loop; or one more round (or a failed start again).
+  wait <crew>           Until the crew stops: ready to merge, at its limit, or stopped.
 
 FOR THE USER
   orchestrate on|off <ref> [--scope zone|repo|board]
@@ -455,6 +511,65 @@ or a note by its label. It is gone at once; the user gets no Undo for it.
   --for orchestrator    Take it off the orchestrator's sidebar, where you pinned it for it.
   --json                Print the pin it was as JSON.`,
   },
+  page: {
+    usage: 'agent-board page --file <path|-> [--name <text>] [--icon <icon>] | agent-board page --clear',
+    text: `Writes your page: the shelf your sidebar opens on, beside your terminal in your session
+window. It is yours to fill. You name its tab, pick its icon, and give it blocks; each block may
+have a title, an icon and a tone. Under your blocks, the board adds only what needs the user or
+is failing. Until you write a page, the shelf shows the board's Now: what you are doing and your
+last message.
+
+Writing it again replaces the whole page, so give every block each time, and keep it current as
+your work moves on. \`agent-board page --clear\` takes it off.
+
+--file holds the page as JSON (- reads it from stdin): an object of name, icon and blocks, or
+the list of blocks alone, with --name and --icon. --name and --icon win over the file's.
+
+  {
+    "name": "Export",
+    "icon": "route",
+    "blocks": [
+      { "kind": "heading", "title": "Where I'm up to", "text": "Writing the CSV export.", "progress": 60 },
+      { "kind": "figures", "figures": [
+        { "value": "214", "label": "tests passing", "icon": "flask-conical", "tone": "green" },
+        { "value": "18k", "label": "rows a second", "icon": "gauge" } ] },
+      { "kind": "checklist", "items": [ { "text": "Columns", "state": "done" },
+        { "text": "Tests", "state": "doing" }, { "text": "Docs" } ] },
+      { "kind": "callout", "icon": "lightbulb", "tone": "violet",
+        "text": "Invoices from before 2024 have no tax column; the export leaves it blank." },
+      { "kind": "links", "title": "Try it", "links": [
+        { "url": "http://localhost:5173/exports", "label": "Preview" }, { "path": "sample.csv" } ] },
+      { "kind": "note", "title": "Test logins", "text": "ann, bob and cy · password: demo" }
+    ]
+  }
+
+BLOCKS (at most ${MAX_PAGE_BLOCKS}; each may have "title", "icon" and "tone")
+  heading     "title" (required), "text" (a line or two), "progress" (0-100, a bar).
+  figures     "figures": 1 or ${MAX_PAGE_FIGURES} of { "value" (at most ${MAX_FIGURE_VALUE} characters, drawn large),
+              "label", "icon", "tone" }.
+  checklist   "items": at most ${MAX_PAGE_ITEMS} of { "text", "state" }: todo (unless you say), doing
+              (the one you are on now, at most one) or done.
+  callout     "text": a thing to notice, set apart.
+  links       "links": at most ${MAX_PAGE_ITEMS} of { "url" (http or https, opened in a web tab) or "path" (a
+              file; relative to your working directory, or absolute), and "label" }.
+  note        "title" (required) and "text", such as test logins.
+
+A name is at most ${MAX_PAGE_NAME} characters, and a block's text at most ${MAX_PAGE_TEXT}. A field a block
+doesn't take is refused, so a misspelt one never goes missing quietly.
+
+ICONS (lucide's names)
+${wrapWords(PAGE_ICONS.join(', '), '  ')}
+
+TONES
+  ${PAGE_TONES.join(', ')}; neutral unless you pick one.
+  Orange and red are the board's alone: they mean the user is needed, or something failed.
+
+  --file <path|->       The page, or its blocks, as JSON.
+  --name <text>         The tab's name.
+  --icon <icon>         The tab's icon.
+  --clear               Take your page off.
+  --json                Print the page as JSON.`,
+  },
   'needs-you': {
     usage: "agent-board needs-you [--via <ref>] [--] <reason> | agent-board needs-you --clear",
     text: `Asks for a look, without a question: nothing waits, and your turn goes on. A turn ending tells
@@ -478,9 +593,9 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
   mcp: {
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
-show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin and unpin, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
+show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
 interrupt, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
-add_note, edit_note, remove_note, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
+zone_layout, add_note, edit_note, remove_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
   claude mcp add agent-board -- agent-board mcp`,
@@ -521,6 +636,10 @@ As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board send impl -- 'Fix the review points: ...'
   agent-board close review --remove
 
+A crew prefab starts a saved crew shape in one command, its builder (or its lead) with your
+prompt, as the prefab says: \`agent-board new --prefab 'Implementer + reviewer' -- 'Fix the flaky
+login test'\`. \`agent-board prefab ls\` lists them.
+
 A send says "Sent" once the agent's turn has started on it. If it fails because the message was
 typed at its prompt but no turn started, \`agent-board send impl --submit\` presses Enter on it, and
 \`agent-board send impl --clear\` clears it, so the next send can go.
@@ -553,11 +672,13 @@ reviewer by itself (\`agent-board handoff\`, or as its turn ends), once the gate
     --condition 'gate:pnpm check:local'
 A gate or script condition runs nothing until the user approves it in the edge's rules.
 
-A reviewer you start from an agent's branch (--base agent:impl, or --base <its branch>) is joined to that
-agent by itself, both ways, as manual edges: findings back, and the next round. Wire them to hand off
-by themselves with edge add, reviewer to impl (findings back) and impl to reviewer (next round), but
-keep one of the two manual: two auto edges in a loop re-trigger each other, and a loop of them is
-refused. Never join them to your own tile: lines from you to every agent you start only clutter the board.
+A reviewer you start from an agent's branch (--base agent:impl, or --base <its branch>) is joined to
+nothing: the reviewer and its implementer talk through agent-board send, findings back and the next
+round, and the user never presses a Send button. If you do want a line between them, ask for it with
+new --edges auto (the reviewer hands its findings back by itself; the way back is manual) or --edges
+manual (one each way, left for the user to send), or wire them later with edge add, but keep one of the
+two manual: two auto edges in a loop re-trigger each other, and a loop of them is refused. Never join
+them to your own tile: lines from you to every agent you start only clutter the board.
 
 Keep the crew tidy as it grows: arrange lays out your zone, you, the shells and the clocks you
 or your crew made on the top row (the user's clocks stay put), then a lane per issue (or unit
@@ -590,8 +711,9 @@ works in its own worktree and branch, as any agent does.
   },
   new: {
     usage:
-      'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--role <role>] ' +
-      '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--issue <id>] [--file <path>] [--] <prompt>',
+      'agent-board new [--zone <ref>] [--name <name>] [--harness claude|codex] [--model <model>] [--effort <level>] [--role <role>] ' +
+      '[--repo <path>] [--branch <branch>] [--base <branch or agent ref>] [--edges auto|manual] [--issue <id>] [--file <path>] [--] <prompt> | ' +
+      'new --prefab <name> [--zone <ref>] [--repo <path>] [--issue <id>] [--file <path>] [--] <prompt>',
     text: `Starts an agent with <prompt> (or the text of --file) as its first message, in a new worktree and
 branch of its zone's repo, as the user starts one. In a group (a zone with no repo), give it one
 with --repo, else it works in the group's default repo; with neither, in the group's own folder,
@@ -603,6 +725,9 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
   --harness <h>      claude (the default) or codex.
   --model <model>    The harness's model (opus, sonnet, haiku; gpt-5-codex, gpt-5); its default
                      without.
+  --effort <level>   Its reasoning effort: low, medium, high, xhigh or max (Codex takes no max).
+                     Without, the Settings default for its role, else for new agents, else the
+                     harness's own.
   --role <role>      implementer, reviewer, follow-up-reviewer, custom, or any other name
                      (designer, 'release prep': 24 characters at most) for a custom role of
                      that name, which its tile shows. It starts with its zone's template for
@@ -615,6 +740,9 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
   --no-template      Start it without its role's template: its first message is exactly <prompt>
                      (and the issue, if --issue). For when you write the whole prompt.
   --branch <name>    Its new branch; made from its name without. Not for a reviewer.
+  --edges auto|manual  Join a reviewer started on an agent's branch to that agent, both ways. None
+                     without: they talk through agent-board send. auto hands the reviewer's findings
+                     back by itself (the way back is manual); manual leaves both for the user to send.
   --base <b>         The branch to cut it from, or an agent's ref (agent:9c1e, agent:impl) for
                      that agent's branch, as for a reviewer of its work; the repo's HEAD without.
                      In a group, an agent's ref takes its repo too, unless --repo names one.
@@ -622,7 +750,68 @@ agent-board: see \`agent-board help orchestrate\`. It prints the new agent's ref
                      from HEAD's.
   --issue <id>       An issue in the zone's tracker: it comes first in the prompt.
   --file <path>      Read the prompt from a file.
+  --prefab <name>    Start a crew from a crew prefab (\`agent-board prefab ls\`) in place of one
+                     agent: its member that starts on the prompt, its builder or its lead, gets
+                     <prompt>, as the prefab says to start it (role, harness, model, effort).
+                     Its reviewers start on the builder's branch each time the builder hands
+                     off, a fresh one each round, and their reviews go back to it, until each
+                     approves or the round limit: see \`agent-board crew\`. A lead starts its
+                     own crew, whose members count toward crew depth. Takes --zone, --repo,
+                     --issue and --file; the prefab sets the rest.
   --json             Print the agent as JSON.`,
+  },
+  prefab: {
+    usage:
+      'agent-board prefab [ls] [--json] | prefab show <name> [--json] | prefab export <name> [--out <path>] | ' +
+      'prefab import <file> [--add [--replace]] | prefab remove <name>',
+    text: `The app's crew prefabs: saved crew shapes, each its members (a role, harness, model and
+reasoning each), when each starts, and a round limit. One library for every board: the
+built-ins (Solo agent, Implementer + reviewer, Implementer + code + design reviewers, Spike +
+reviewer, Lead and crew), then those added. \`agent-board new --prefab <name> -- <prompt>\`
+starts a crew from one.
+
+\`prefab\` (or \`prefab ls\`) lists them, and \`prefab show\` prints one: its members in words, then
+its .crew.json file. \`prefab export\` writes that file, to share; \`prefab import\` reads one and shows it whole,
+and adds it to the library only with --add. A file holds no prompt, issue, repo, branch, key or
+token, and a field it doesn't know is refused. Only a named role's member carries a template of
+its own, checked as a prompt is. \`prefab remove\` removes one that was added; a built-in stays.
+
+Adding and removing reach every board, so they are for the user (in a shell or terminal) or an
+orchestrator of the whole board, and are logged (\`agent-board activity\`).
+
+  --out <path>    Where \`export\` writes the file: <name>.crew.json here without. Never over a file.
+  --add           Add the imported prefab to the library.
+  --replace       With --add, replace a prefab added before under the same name.
+  --json          Print it as JSON.`,
+  },
+  crew: {
+    usage: 'agent-board crew [ls] [--json] | crew show <crew> [--json] | crew stop <crew> | crew round <crew>',
+    text: `A running crew, started with \`agent-board new --prefab\` from a prefab with reviewers that
+start at its builder's hand-off. The board runs its loop:
+
+  1. The builder hands off (\`agent-board handoff\`, or ends its turn with its handover written).
+  2. The prefab's reviewers start, fresh, on detached checkouts of its branch: the next round's
+     are given the last review. Each writes .agent-board/review.md.
+  3. Once each has: if every one approves with no blocker open, the crew stops ready to merge.
+     If not, the reviews go back to the builder, as a hand-off from a reviewer that asked for
+     changes, and the round's reviewers close (the crew keeps their reviews). The builder's next
+     hand-off starts the next round.
+  4. At its round limit (the prefab's) it stops instead. \`crew round\` gives it one more round.
+     A round whose reviewers failed to start (a harness not set up) is flagged: \`crew round\`
+     starts the ones it lacks.
+
+While its builder waits on you (a permission prompt, a question or a plan), the round doesn't
+start; a reviewer paused, or stopped by a restart, is waited for. A stop flags its builder, so it reaches you, or the orchestrator that started the
+crew, in Needs you. It passes on only what its agents wrote, and approves, merges and draws
+nothing: merging is yours. Once its builder's pull request is merged, the crew closes its
+agents and their worktrees, unless you stopped it to take it over. Its builder's crew events
+(\`watch\`, \`wait --crew\`) include \`round\` and \`crew-stopped\`.
+
+\`crew\` (or \`crew ls\`) lists the crews you reach, and \`crew show\` prints one: its round, whose turn it
+is, and each round's reviewers with their verdicts. \`crew stop\` stops its loop and leaves its
+agents as they are; \`agent-board wait <crew>\` waits until it stops.
+
+  --json          Print it as JSON.`,
   },
   send: {
     usage: 'agent-board send <ref> [--file <path>] [--] <message> | send <ref> --submit | --clear',
@@ -681,6 +870,8 @@ Exits 0 when they are there, and 3 (not 0) when it gave up first: wait again. So
   --crew             Your crew too: the agents you started, and theirs. With no refs, it is.
   --until <states>   Wait for these instead, by comma: ${WAIT_STATES.join(', ')}.
   --any              Until one of them is there, not all.
+  <crew>             A crew's ref (crew:<id>) waits until it stops instead: ready to merge, at
+                     its round limit, or stopped (\`agent-board crew\`). Alone, with --timeout.
   --timeout <d>      Give up after this long: seconds, or with s, m or h (90s, 30m). ${DEFAULT_ORCHESTRATOR_WAIT_MS / 1000}s by
                      default, at most ${MAX_ORCHESTRATOR_WAIT_MS / 1000}s.
                      Your shell tool may stop a command sooner (Claude's Bash, after 2 minutes).
@@ -976,7 +1167,8 @@ and what moves keeps clear of them. It is never run by itself. It takes no --by,
     usage:
       'agent-board zone add --group --name <name> [--color <#rrggbb>] [--at <x>,<y>] [--size <w>,<h>] | ' +
       'zone rename <ref> <name> [--color <c>] | zone resize <ref> --size <w>,<h> [--at <x>,<y>] | zone remove <ref> | ' +
-      'zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi]',
+      'zone map [<ref>] [--boxes] [--sections] | zone screenshot [<ref>] [--out <file.png>] [--style board|lofi] | ' +
+      'zone layout free|shelves|clusters [<ref>]',
     text: `Groups (zones bound to no repo) for an orchestrator to sort its crew into
 (\`agent-board help orchestrate\`). \`agent-board zones\` lists every zone.
 
@@ -1013,6 +1205,15 @@ view, and fails when the app isn't open. A zone over ${MAX_CAPTURE_SIDE} px a si
 to fit. --style lofi draws the zone plainly instead, from what the board knows: each tile and
 note as a labelled box, and its edges and connectors as straight lines. Check with \`zone map\`
 first: a picture costs a model far more to read.
+
+\`zone layout\` sets how your zone (or <ref>, in your scope) draws what it holds, as the zone's
+Layout menu does in the app. free: each tile where it was put (every zone starts free).
+shelves: its work as one stack per ticket on To do, Doing, Waiting and Done shelves, under a
+head row of the zone's leads and shells; a click on a stack fans its tiles out below the shelves.
+clusters: each ticket's tiles drawn together under its label, what needs the user first, under
+the same head row. No tile's own place changes, so going back to free shows the zone as it was.
+A zone is never laid out so by itself: choose shelves when its work is easier to follow by
+status, clusters when by ticket.
 
   --group          Make a group (an orchestrator makes no other zone).
   --name <name>    Its name.
@@ -1145,6 +1346,127 @@ outside agent-board, any connector. \`connector edit\` changes only what it is g
 options of \`connect\` (an empty label clears it). \`connector remove\` deletes it. \`agent-board show
 <ref>\` prints its ends, relation and labels.`,
   },
+  steps: {
+    usage:
+      'agent-board steps new [--title <text>] [--file <path>|-] [--] <line>... | steps ls [--mine] | steps read <card> | ' +
+      'steps done <card> <n>... [--undo] | steps wait <card> <n> | steps add <card> [--file <path>|-] [--] <line>... | ' +
+      'steps answer <card> [<n> <answer>] [--send] | steps close <card>',
+    text: `A steps card is an ordered list on the board: questions for the user to step through, and
+to-dos, each ticked by whoever it names. Put one up when you have more to ask than one question,
+or a list of things to get done in order; one quick question is the MCP tool \`ask\`.
+
+Write it one step a line, as people type them too:
+  # Title                                 The card's name (or --title).
+  ## Section                              Starts a section of the steps that follow.
+  - [ ] Merge the fix @impl -> <link>     A to-do, for the agent named (@user for the user;
+                                          you, without one), with a link. [x] is done.
+  ? Which database? [Postgres | SQLite]   Pick one.
+  ? Which checks? [any: lint | unit]      Pick any.
+  ? Ship on Friday? [yes/no]              Yes or no.
+  ? Rank the risks [order: loss | cost]   Put in order.
+  ? Anything else?                        In their own words.
+Add (required) to a step the set can't be sent, or the list finished, without. " -> " in a to-do
+starts its link, so keep it out of the text, and "|" and "]" out of choices. A card holds at most
+50 steps and 12 questions; a question offers 2 to 9 choices (6 to put in order).
+
+Nothing waits: \`steps new\` returns at once. End your turn. Once the user has answered and pressed
+Send, the answers are typed at your prompt, led by [agent-board]; if they change an answer and
+send again, you are told what changed. If an orchestrator started you, it answers your questions
+instead, and is told. Naming an agent on a to-do sends it nothing: it finds its to-dos with
+\`steps ls --mine\`.
+
+  steps ls [--mine]         The cards you can read: in your zone, in zones your orchestrator
+                            scope reaches, loose ones, and any you are part of. --mine: those
+                            with a to-do of yours not yet done.
+  steps read <card>         One card in full, each step numbered, with its answer or tick.
+  steps done <card> <n>...  Tick your to-dos (--undo unticks them).
+  steps wait <card> <n>     Be told at your prompt once someone else ticks to-do <n>, or the
+                            card is closed.
+  steps add <card> ...      Add steps to the end of a card you made.
+  steps answer <card> <n> <answer> [--send]
+                            For an orchestrator, answer a crew member's question: a choice by
+                            its number or text, several split by commas, yes or no, or words.
+                            --send sends the answers, as the user's Send does.
+  steps close <card>        You are done with a card you made: nothing on it changes now.
+
+  --json                    Print the card as JSON.`,
+  },
+  memory: {
+    usage:
+      'agent-board memory ls | memory read <memory> [<entry>] [--search <text>] | memory add <memory> [--key <key>|--no-key] [--file <path>] [--] <text>... | ' +
+      'memory edit <memory> <entry> [--key <key>|--no-key] [--pin|--unpin] [--] [<text>...] | memory rm <memory> <entry> | ' +
+      'memory history <memory> <entry> | memory restore <memory> <entry> <version> | memory new <title>...',
+    text: `A memory is shared context on the board: what agents and people want kept, read and changed
+by anyone in its scope. In a zone, its scope is that zone's agents (and orchestrators whose scope
+reaches it); loose on the board, every agent's; set to No agents, only the user's. Read the
+memories you can at the start of work, and keep what the next agent needs in one.
+
+It holds three kinds of entry:
+  key: value       A value under a key (one word). Setting a key again replaces its value.
+  a note           Text with no key, kept as written.
+  a file           A whole file (up to 1 MB), kept under its name, with its first lines shown.
+
+  memory ls                     The memories you can read.
+  memory read <memory>          Every entry, pinned first, then newest first; --search <text>
+                                only those holding it. With <entry> (a key, or its #id), that
+                                one in full: a file whole.
+  memory add <memory> <text>    Remember something: "key: value", or a note. --key <key> names it
+                                (spaces and all), --no-key keeps "a: b" as a note, --file <path>
+                                keeps that file under its name (or --key).
+  memory edit <memory> <entry> [<text>]
+                                Change its text, key (--key, or --no-key), or pin (--pin keeps
+                                it in the top rows, --unpin).
+  memory rm <memory> <entry>    Remove it.
+  memory history <memory> <entry>
+                                Its versions, newest first: every change anyone made, removes too.
+  memory restore <memory> <entry> <version>
+                                Put a version back, undoing the changes after it.
+  memory new <title>            Put a new memory beside your tile.
+
+<memory> is its ref (item:3f2a) or its title. An entry left 30 days reads as old. Anyone in scope
+may change any entry, the user's too: history takes a change back. At most 500 entries and 8 MB a
+memory, and 4,000 characters a value (keep longer text as a file).
+
+  --json                        Print it as JSON.`,
+  },
+  queue: {
+    usage:
+      'agent-board queue ls | queue read <queue> | queue add <queue> [--kind job|note] [--front] [--link <url>] [--file <path>|-] [--] <line>... | ' +
+      'queue take <queue> [<job>] | queue drop <queue> <job> | queue done <queue> <job> | queue edit <queue> <job> [--link <url>] [--] [<text>...] | ' +
+      'queue move <queue> <job> <before>|top|last | queue drain <queue> on|off [--most 1-3] | queue rm <queue> <job> | queue history <queue> <job> | queue restore <queue> <job> <version> | queue new [--for-user] <title>...',
+    text: `A queue holds jobs in order, for agents to take one at a time, and plain notes. Its scope is
+a memory's: where it sits. What goes in and comes out is for agents in scope and the user to
+decide. A queue for the user (--for-user) holds what is ready for them to look at: agents add to
+it, and only the user takes from it.
+
+  queue ls                      The queues you can read.
+  queue read <queue>            Its jobs and notes in order (the next job first), then those done.
+  queue add <queue> <line>...   Queue a job a line, at the end (--front: at the front, in the
+                                order given). " -> <link>" at a line's end is its link (or
+                                --link for one). --kind note adds notes instead.
+  queue take <queue> [<job>]    Take the next job, or that one: it is yours until you finish or
+                                drop it. If your session ends first, it goes back to the front.
+  queue done <queue> <job>      It is done.
+  queue drop <queue> <job>      Put it back at the front, for someone else. Each drop is counted.
+  queue edit <queue> <job> [<text>]
+                                Change its text, or --link ("" clears it).
+  queue move <queue> <job> <before>|top|last
+                                Put it just before another open job, at the top, or last:
+                                the next \`take\` takes them in this order.
+  queue rm <queue> <job>        Remove a job or note.
+  queue history <queue> <job>   Its versions, newest first.
+  queue restore <queue> <job> <version>
+                                Put a version's text and link back (or the job, once removed).
+  queue drain <queue> on|off    For a queue you made: the board starts a fresh agent (your
+                                harness) for each waiting job, its job taken for it and closed
+                                once it is done, at most --most (1 to 3, 2 at first) at once.
+  queue new <title>             Put a new queue beside your tile; --for-user, one for the user.
+
+<queue> is its ref or its title; <job> is its #id (the start of it will do). A job another agent
+holds is its, or the user's, to change. At most 200 open jobs a queue.
+
+  --json                        Print it as JSON.`,
+  },
   schedule: {
     usage:
       "agent-board schedule add '<cron>' (--to <ref> | --fresh [--zone <ref>] [--harness claude|codex] [--model <m>] [--role <r>] [--keep] " +
@@ -1213,6 +1535,34 @@ export const BOARD_COMMANDS = new Set([...Object.keys(COMMAND_HELP), 'ls', 'help
 /** An exit code with a message for stderr. */
 class UsageError extends Error {}
 
+/** `words`, a comma-separated list, wrapped to lines of at most 96 characters, each starting with `indent`. */
+function wrapWords(words: string, indent: string): string {
+  const lines: string[] = [];
+  for (const word of words.split(' ')) {
+    const last = lines.length - 1;
+    if (last >= 0 && lines[last]!.length + word.length + 1 <= 96) lines[last] += ` ${word}`;
+    else lines.push(`${indent}${word}`);
+  }
+  return lines.join('\n');
+}
+
+/** `page --file`'s JSON as `board.setPage`'s page: an object of name, icon and blocks, or the blocks alone; `name` and `icon` win. */
+function pageOfJson(json: string, name: string | undefined, icon: string | undefined): PageParams {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (error) {
+    throw new UsageError(`the page is not JSON: ${(error as Error).message}`);
+  }
+  const fields: Record<string, unknown> = Array.isArray(parsed) ? { blocks: parsed } : typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const named = name ?? fields.name;
+  const iconed = icon ?? fields.icon;
+  if (typeof named !== 'string') throw new UsageError('give the page a name, with --name or "name" in the file');
+  if (typeof iconed !== 'string') throw new UsageError('give the page an icon, with --icon or "icon" in the file');
+  if (!Array.isArray(fields.blocks)) throw new UsageError('give the page "blocks", a list of blocks, or the list alone');
+  return { name: named, icon: iconed, blocks: fields.blocks };
+}
+
 /**
  * Runs a board command (`BOARD_COMMANDS`) and resolves to its exit code: 0 when it worked, 1 when it failed (no daemon,
  * a bad ref, a refused call), 2 for bad arguments, 3 when `wait` or `watch` gave up first. `out` and `err` take what it prints.
@@ -1279,11 +1629,13 @@ const OPTIONS = {
   name: { type: 'string' },
   harness: { type: 'string' },
   model: { type: 'string' },
+  effort: { type: 'string' },
   role: { type: 'string' },
   'no-template': { type: 'boolean' },
   repo: { type: 'string' },
   branch: { type: 'string' },
   base: { type: 'string' },
+  edges: { type: 'string' },
   issue: { type: 'string' },
   file: { type: 'string' },
   until: { type: 'string' },
@@ -1336,8 +1688,24 @@ const OPTIONS = {
   style: { type: 'string' },
   out: { type: 'string' },
   label: { type: 'string' },
+  icon: { type: 'string' },
   'from-label': { type: 'string' },
   'to-label': { type: 'string' },
+  mine: { type: 'boolean' },
+  undo: { type: 'boolean' },
+  send: { type: 'boolean' },
+  key: { type: 'string' },
+  'no-key': { type: 'boolean' },
+  search: { type: 'string' },
+  pin: { type: 'boolean' },
+  unpin: { type: 'boolean' },
+  link: { type: 'string' },
+  front: { type: 'boolean' },
+  'for-user': { type: 'boolean' },
+  most: { type: 'string' },
+  prefab: { type: 'string' },
+  add: { type: 'boolean' },
+  replace: { type: 'boolean' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -1348,10 +1716,13 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   record: ['title', 'for'],
   pin: ['note', 'label', 'for'],
   unpin: ['label', 'for'],
+  page: ['file', 'name', 'icon', 'clear'],
   'needs-you': ['via', 'clear'],
   doc: ['title', 'board', 'plan'],
-  new: ['zone', 'name', 'harness', 'model', 'role', 'no-template', 'repo', 'branch', 'base', 'issue', 'file'],
+  new: ['zone', 'name', 'harness', 'model', 'effort', 'role', 'no-template', 'repo', 'branch', 'base', 'edges', 'issue', 'file', 'prefab'],
   roles: ['file', 'zone'],
+  prefab: ['out', 'add', 'replace'],
+  crew: [],
   send: ['file', 'submit', 'clear'],
   wait: ['until', 'any', 'timeout', 'crew'],
   watch: ['crew', 'only', 'since', 'count', 'timeout'],
@@ -1370,6 +1741,9 @@ export const COMMAND_OPTIONS: Record<string, readonly Option[]> = {
   connector: ['relation', 'style', 'label', 'from-label', 'to-label'],
   diagram: ['file', 'to', 'at', 'near', 'side'],
   schedule: ['to', 'fresh', 'zone', 'harness', 'model', 'role', 'keep', 'result', 'handoff-to', 'file'],
+  steps: ['title', 'file', 'mine', 'undo', 'send'],
+  memory: ['key', 'no-key', 'file', 'search', 'pin', 'unpin'],
+  queue: ['kind', 'front', 'link', 'file', 'for-user', 'most'],
 };
 
 /** A command's result: what it prints, and its exit code (0 for a bare string). */
@@ -1393,6 +1767,10 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     }
   }
   const string = (option: Option) => values[option] as string | undefined;
+  const edgesOption = (value: string | undefined): 'auto' | 'manual' | undefined => {
+    if (value !== undefined && value !== 'auto' && value !== 'manual') throw new UsageError('--edges is auto or manual');
+    return value;
+  };
   const print = (view: BoardView) => (values.json ? JSON.stringify(view.json, null, 2) : view.text);
   const noPositionals = () => {
     if (positionals.length > 0) throw new UsageError(`unexpected ${positionals.join(' ')}`);
@@ -1526,6 +1904,16 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return `status set: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ' (finished)'}`;
       };
     }
+    case 'page': {
+      noPositionals();
+      if (values.clear === true) {
+        if (string('file') !== undefined || string('name') !== undefined || string('icon') !== undefined) throw new UsageError('--clear takes no --file, --name or --icon');
+        return async (session) => print(await setOwnPage(session, null, process.cwd()));
+      }
+      if (string('file') === undefined) throw new UsageError('give the page with --file <path|->, or --clear');
+      const page = pageOfJson(string('file') === '-' ? readFileSync(0, 'utf8') : text(0), string('name'), string('icon'));
+      return async (session) => print(await setOwnPage(session, page, process.cwd()));
+    }
     case 'needs-you': {
       const reason = positionals.join(' ');
       if (values.clear === true) {
@@ -1539,6 +1927,21 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'new': {
       const prompt = text(0);
       const repo = string('repo');
+      const prefab = string('prefab');
+      if (prefab !== undefined) {
+        const set = (['name', 'harness', 'model', 'effort', 'role', 'no-template', 'branch', 'base', 'edges'] as const).find((option) => values[option] !== undefined);
+        if (set !== undefined) throw new UsageError(`--${set} is the prefab's to set: --prefab takes --zone, --repo, --issue and --file`);
+        return async (session) =>
+          print(
+            await startPrefab(session, {
+              name: prefab,
+              prompt,
+              zone: string('zone'),
+              repo: repo === undefined ? undefined : resolve(process.cwd(), repo),
+              issue: string('issue'),
+            }),
+          );
+      }
       return async (session) =>
         print(
           await newAgent(session, {
@@ -1547,11 +1950,13 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
             name: string('name'),
             harness: string('harness'),
             model: string('model'),
+            effort: string('effort'),
             role: string('role'),
             noTemplate: values['no-template'] === true,
             repo: repo === undefined ? undefined : resolve(process.cwd(), repo),
             branch: string('branch'),
             base: string('base'),
+            edges: edgesOption(string('edges')),
             issue: string('issue'),
           }),
         );
@@ -1574,6 +1979,15 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       const unknown = until?.find((state) => !isWaitState(state));
       if (unknown !== undefined) throw new UsageError(`${unknown} is not a state: ${WAIT_STATES.join(', ')}`);
       const seconds = duration('timeout', MAX_ORCHESTRATOR_WAIT_MS / 1000);
+      if (positionals.some((ref) => ref.startsWith('crew:'))) {
+        if (positionals.length !== 1 || until !== undefined || values.any === true || values.crew === true) {
+          throw new UsageError('wait <crew> takes the one crew alone, with --timeout: it waits until the crew stops');
+        }
+        return async (session) => {
+          const view = await waitForCrew(session, positionals[0]!, (seconds ?? DEFAULT_ORCHESTRATOR_WAIT_MS / 1000) * 1000);
+          return { text: print(view), code: view.timedOut ? WAIT_TIMED_OUT : 0 };
+        };
+      }
       return async (session) => {
         const view = await waitForAgents(session, positionals, {
           until,
@@ -1766,7 +2180,14 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         const out = string('out');
         return async (session) => print(await writeZoneScreenshot(session, ref, { style: string('style'), out: out === undefined ? undefined : resolve(process.cwd(), out) }));
       }
-      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove`, `zone map` and `zone screenshot`');
+      if (sub === 'layout') {
+        only([]);
+        // `zone layout <mode> [<zone ref>]`: the mode comes first.
+        const [mode, zoneRef, ...more] = positionals.slice(1);
+        if (mode === undefined || more.length > 0) throw new UsageError('give the layout (free, shelves or clusters), and at most one zone ref');
+        return async (session) => print(await setZoneLayout(session, mode, zoneRef));
+      }
+      throw new UsageError('the zone commands are `zone add --group`, `zone rename`, `zone resize`, `zone remove`, `zone map`, `zone screenshot` and `zone layout`');
     }
     case 'note': {
       const [sub, ...rest] = positionals;
@@ -1903,6 +2324,231 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
       }
       throw new UsageError('the schedule commands are `schedule add`, `schedule list` and `schedule remove`');
     }
+    case 'steps': {
+      const [sub, ...rest] = positionals;
+      const only = (option: Option, subs: string) => {
+        if (values[option] !== undefined) throw new UsageError(`--${option} is only for ${subs}`);
+      };
+      /** The lines from `from` on, one a positional (or several to one, by line breaks), or the text of --file (- for stdin). */
+      const lines = (from: number): string => {
+        if (string('file') === '-') {
+          if (rest.length > from) throw new UsageError('give the lines or --file, not both');
+          return readFileSync(0, 'utf8').replace(/\r\n?/g, '\n');
+        }
+        return string('file') === undefined ? rest.slice(from).join('\n') : text(from + 1);
+      };
+      const place = (word: string | undefined) => {
+        if (word === undefined || !/^\d+$/.test(word)) throw new UsageError(`give the step's number, from 1${word === undefined ? '' : `, not ${word}`}`);
+        return Number(word);
+      };
+      if (sub !== 'new') only('title', '`steps new`');
+      if (sub !== 'new' && sub !== 'add') only('file', '`steps new` and `steps add`');
+      if (sub !== 'ls') only('mine', '`steps ls`');
+      if (sub !== 'done' && sub !== 'tick') only('undo', '`steps done`');
+      if (sub !== 'answer') only('send', '`steps answer`');
+      const [card, ...after] = rest;
+      const needCard = () => {
+        if (card === undefined) throw new UsageError('give the steps card’s ref: `agent-board steps ls` lists them');
+        return card;
+      };
+      switch (sub) {
+        case 'new': {
+          const body = lines(0);
+          if (body.trim() === '') throw new UsageError('give the steps, one a line, after --, or --file');
+          return async (session) => print(await newSteps(session, { title: string('title'), text: body }));
+        }
+        case 'ls':
+          if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+          return async (session) => print(await listSteps(session, { mine: values.mine === true }));
+        case 'read':
+          if (rest.length !== 1) throw new UsageError('give one steps card’s ref');
+          return async (session) => print(await readStepsCard(session, rest[0]!));
+        case 'done':
+        case 'tick': {
+          const steps = after.map(place);
+          if (steps.length === 0) throw new UsageError('give the number of each step to tick');
+          return async (session) => print(await updateSteps(session, needCard(), { action: 'done', steps, undo: values.undo === true }));
+        }
+        case 'wait': {
+          if (after.length !== 1) throw new UsageError('give the card and one step number');
+          const step = place(after[0]);
+          return async (session) => print(await updateSteps(session, needCard(), { action: 'wait', step }));
+        }
+        case 'add': {
+          const body = lines(1);
+          if (body.trim() === '') throw new UsageError('give the steps to add, one a line, after --, or --file');
+          return async (session) => print(await updateSteps(session, needCard(), { action: 'add', text: body }));
+        }
+        case 'answer': {
+          const [step, ...answer] = after;
+          const update = step === undefined ? { action: 'answer' as const } : { action: 'answer' as const, step: place(step), answer: answer.join(' ') };
+          return async (session) => print(await updateSteps(session, needCard(), { ...update, send: values.send === true }));
+        }
+        case 'close':
+          if (rest.length !== 1) throw new UsageError('give one steps card’s ref');
+          return async (session) => print(await updateSteps(session, rest[0]!, { action: 'close' }));
+        default:
+          throw new UsageError('the steps commands are `steps new`, `ls`, `read`, `done`, `wait`, `add`, `answer` and `close`');
+      }
+    }
+    case 'memory': {
+      const [sub, ref, ...after] = positionals;
+      const allowed: Record<string, readonly Option[]> = { read: ['search'], add: ['key', 'no-key', 'file'], edit: ['key', 'no-key', 'pin', 'unpin'] };
+      for (const option of ['key', 'no-key', 'file', 'search', 'pin', 'unpin'] as const) {
+        if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`memory ${sub ?? ''}\``);
+      }
+      if (values.key !== undefined && values['no-key'] === true) throw new UsageError('give --key or --no-key, not both');
+      if (values.pin === true && values.unpin === true) throw new UsageError('give --pin or --unpin, not both');
+      const needRef = () => {
+        if (ref === undefined) throw new UsageError('give the memory: its ref or title (`agent-board memory ls` lists them)');
+        return ref;
+      };
+      const needEntry = () => {
+        if (after[0] === undefined) throw new UsageError('give the entry: its key, or its #id');
+        return after[0];
+      };
+      const versionAt = (word: string | undefined) => {
+        const version = /^v?(\d+)$/.exec(word ?? '')?.[1];
+        if (version === undefined) throw new UsageError('give the version to put back, as `memory history` lists it');
+        return Number(version);
+      };
+      const cwd = process.cwd();
+      switch (sub) {
+        case 'ls':
+          if (positionals.length > 1) throw new UsageError(`unexpected ${positionals.slice(1).join(' ')}`);
+          return async (session) => print(await listMemories(session));
+        case 'read': {
+          if (after.length > 1) throw new UsageError('give the memory, and at most one entry');
+          const memory = needRef();
+          return async (session) => print(await readMemory(session, memory, { ...(after[0] === undefined ? {} : { entry: after[0] }), ...(string('search') === undefined ? {} : { search: string('search') }) }));
+        }
+        case 'add': {
+          const memory = needRef();
+          const path = string('file');
+          const body = after.join(' ');
+          if (path === undefined && body.trim() === '') throw new UsageError('give the text to remember, after the memory, or --file');
+          const update = { action: 'add' as const, ...(path === undefined ? { text: body } : { path, ...(body.trim() === '' ? {} : { text: body }) }), ...(string('key') === undefined ? {} : { key: string('key') }), note: values['no-key'] === true };
+          return async (session) => print(await updateMemory(session, memory, update, cwd));
+        }
+        case 'edit': {
+          const memory = needRef();
+          const entry = needEntry();
+          const body = after.slice(1).join(' ');
+          const pinned = values.pin === true ? true : values.unpin === true ? false : undefined;
+          const update = { action: 'edit' as const, entry, ...(body === '' ? {} : { text: body }), ...(string('key') === undefined ? {} : { key: string('key') }), note: values['no-key'] === true, ...(pinned === undefined ? {} : { pinned }) };
+          return async (session) => print(await updateMemory(session, memory, update, cwd));
+        }
+        case 'rm':
+        case 'remove': {
+          if (after.length !== 1) throw new UsageError('give the memory and one entry');
+          const memory = needRef();
+          return async (session) => print(await updateMemory(session, memory, { action: 'remove', entry: needEntry() }, cwd));
+        }
+        case 'history': {
+          if (after.length !== 1) throw new UsageError('give the memory and one entry');
+          const memory = needRef();
+          return async (session) => print(await memoryHistory(session, memory, needEntry()));
+        }
+        case 'restore': {
+          if (after.length !== 2) throw new UsageError('give the memory, the entry and the version to put back');
+          const memory = needRef();
+          const version = versionAt(after[1]);
+          return async (session) => print(await updateMemory(session, memory, { action: 'restore', entry: needEntry(), version }, cwd));
+        }
+        case 'new': {
+          const title = positionals.slice(1).join(' ');
+          if (title.trim() === '') throw new UsageError('give the memory a title');
+          return async (session) => print(await newMemory(session, title));
+        }
+        default:
+          throw new UsageError('the memory commands are `memory ls`, `read`, `add`, `edit`, `rm`, `history`, `restore` and `new`');
+      }
+    }
+    case 'queue': {
+      const [sub, ref, ...after] = positionals;
+      const allowed: Record<string, readonly Option[]> = { add: ['kind', 'front', 'link', 'file'], edit: ['link'], new: ['for-user'], drain: ['most'] };
+      for (const option of ['kind', 'front', 'link', 'file', 'for-user', 'most'] as const) {
+        if (values[option] !== undefined && !(allowed[sub ?? ''] ?? []).includes(option)) throw new UsageError(`--${option} is not for \`queue ${sub ?? ''}\``);
+      }
+      const needRef = () => {
+        if (ref === undefined) throw new UsageError('give the queue: its ref or title (`agent-board queue ls` lists them)');
+        return ref;
+      };
+      const oneJob = (verb: string) => {
+        if (after.length !== 1) throw new UsageError(`give the queue and the job to ${verb}: its #id`);
+        return after[0]!;
+      };
+      const run = (update: QueueUpdate) => {
+        const queue = needRef();
+        return async (session: BoardSession) => print(await updateQueue(session, queue, update));
+      };
+      switch (sub) {
+        case 'ls':
+          if (positionals.length > 1) throw new UsageError(`unexpected ${positionals.slice(1).join(' ')}`);
+          return async (session) => print(await listQueues(session));
+        case 'read': {
+          if (after.length > 0) throw new UsageError('give one queue');
+          const queue = needRef();
+          return async (session) => print(await readQueue(session, queue));
+        }
+        case 'add': {
+          const kind = string('kind') ?? 'job';
+          if (kind !== 'job' && kind !== 'note') throw new UsageError('--kind is job or note');
+          let body: string;
+          if (string('file') === '-') {
+            if (after.length > 0) throw new UsageError('give the lines or --file, not both');
+            body = readFileSync(0, 'utf8').replace(/\r\n?/g, '\n');
+          } else body = string('file') === undefined ? after.join('\n') : text(2);
+          if (body.trim() === '') throw new UsageError('give the jobs to queue, one a line, after the queue, or --file');
+          return run({ action: 'add', text: body, kind, front: values.front === true, ...(string('link') === undefined ? {} : { link: string('link') }) });
+        }
+        case 'take':
+          if (after.length > 1) throw new UsageError('give the queue, and at most one job');
+          return run({ action: 'take', ...(after[0] === undefined ? {} : { job: after[0] }) });
+        case 'drop':
+          return run({ action: 'drop', job: oneJob('drop') });
+        case 'done':
+          return run({ action: 'done', job: oneJob('finish') });
+        case 'rm':
+        case 'remove':
+          return run({ action: 'remove', job: oneJob('remove') });
+        case 'edit': {
+          const [job, ...words] = after;
+          if (job === undefined) throw new UsageError('give the queue and the job to change: its #id');
+          const body = words.join(' ');
+          if (body === '' && string('link') === undefined) throw new UsageError('give the new text, or --link');
+          return run({ action: 'edit', job, ...(body === '' ? {} : { text: body }), ...(string('link') === undefined ? {} : { link: string('link') }) });
+        }
+        case 'history': {
+          const queue = needRef();
+          const job = oneJob('read the history of');
+          return async (session) => print(await queueHistory(session, queue, job));
+        }
+        case 'drain': {
+          if (after.length !== 1 || (after[0] !== 'on' && after[0] !== 'off')) throw new UsageError('give the queue, then on or off');
+          const most = string('most');
+          if (most !== undefined && !/^[1-3]$/.test(most)) throw new UsageError('--most is 1, 2 or 3');
+          return run({ action: 'drain', on: after[0] === 'on', ...(most === undefined ? {} : { most: Number(most) }) });
+        }
+        case 'move': {
+          if (after.length !== 2) throw new UsageError('give the queue, the job, and where: the #id of the job to put it before, top or last');
+          return run({ action: 'move', job: after[0]!, to: after[1]! });
+        }
+        case 'restore': {
+          if (after.length !== 2) throw new UsageError('give the queue, the job and the version to put back');
+          const version = /^v?(\d+)$/.exec(after[1]!)?.[1];
+          if (version === undefined) throw new UsageError('give the version to put back, as `queue history` lists it');
+          return run({ action: 'restore', job: after[0]!, version: Number(version) });
+        }
+        case 'new': {
+          const title = positionals.slice(1).join(' ');
+          if (title.trim() === '') throw new UsageError('give the queue a title');
+          return async (session) => print(await newQueue(session, title, values['for-user'] === true));
+        }
+        default:
+          throw new UsageError('the queue commands are `queue ls`, `read`, `add`, `take`, `drop`, `done`, `edit`, `move`, `rm`, `history`, `restore`, `drain` and `new`');
+      }
+    }
     case 'usage': {
       if (positionals.length > 0) throw new UsageError(`unexpected ${positionals.join(' ')}`);
       return async (session) => print(await usageView(session));
@@ -1926,6 +2572,52 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
         return async (session) => print(await removeDefaultRole(session, rest[0]!, string('zone')));
       }
       throw new UsageError('the roles commands are `roles list`, `roles set` and `roles remove`');
+    }
+    case 'prefab': {
+      const [sub = 'ls', ...rest] = positionals;
+      if (sub !== 'export' && string('out') !== undefined) throw new UsageError('--out is only for `prefab export`');
+      if (sub !== 'import' && (values.add !== undefined || values.replace !== undefined)) throw new UsageError('--add and --replace are only for `prefab import`');
+      const one = (what: string) => {
+        if (rest.length === 0) throw new UsageError(`give ${what}`);
+        return rest.join(' ');
+      };
+      if (sub === 'ls' || sub === 'list') {
+        if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+        return async (session) => print(await prefabsView(session));
+      }
+      if (sub === 'show') {
+        const name = one('a prefab name');
+        return async (session) => print(await prefabView(session, name));
+      }
+      if (sub === 'export') {
+        const name = one('a prefab name');
+        const out = string('out');
+        return async (session) => print(await exportPrefab(session, name, out === undefined ? undefined : resolve(process.cwd(), out)));
+      }
+      if (sub === 'import') {
+        if (rest.length !== 1) throw new UsageError('give one .crew.json file');
+        if (values.replace === true && values.add !== true) throw new UsageError('--replace goes with --add');
+        const path = resolve(process.cwd(), rest[0]!);
+        return async (session) => print(await importPrefab(session, path, { add: values.add === true, replace: values.replace === true }));
+      }
+      if (sub === 'remove') {
+        const name = one('a prefab name');
+        return async (session) => print(await removePrefab(session, name));
+      }
+      throw new UsageError('the prefab commands are `prefab ls`, `prefab show`, `prefab export`, `prefab import` and `prefab remove`');
+    }
+    case 'crew': {
+      const [sub = 'ls', ...rest] = positionals;
+      if (sub === 'ls' || sub === 'list') {
+        if (rest.length > 0) throw new UsageError(`unexpected ${rest.join(' ')}`);
+        return async (session) => print(await crewsView(session));
+      }
+      if (rest.length !== 1) throw new UsageError('give one crew (crew:<id>): agent-board crew lists them');
+      const crew = rest[0]!;
+      if (sub === 'show') return async (session) => print(await crewsView(session, crew));
+      if (sub === 'stop') return async (session) => print(await stopCrew(session, crew));
+      if (sub === 'round') return async (session) => print(await crewRound(session, crew));
+      throw new UsageError('the crew commands are `crew ls`, `crew show`, `crew stop` and `crew round`');
     }
     case 'activity': {
       noPositionals();

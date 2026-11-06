@@ -82,3 +82,19 @@ export function mergedText(number: number, base: string, merged: GateMerged, nam
   });
   return `Merged #${number} into ${base}${steps.length === 0 ? '.' : `. ${steps.join(', ').replace(/^./, (first) => first.toUpperCase())}.`}`;
 }
+
+/**
+ * What merging with `cleanup` will do, said before it runs: each clean-up step it takes, the issue comment only where
+ * there is an issue, or that it keeps everything.
+ */
+export function mergePlanText(cleanup: GateCleanup, names: { agent: string; branch: string; issue: string | undefined }): string {
+  const steps = [
+    ...(cleanup.close ? [`closes ${names.agent}`] : []),
+    ...(cleanup.worktree ? ['removes its worktree'] : []),
+    ...(cleanup.branch ? [`deletes ${names.branch}`] : []),
+    ...(cleanup.comment && names.issue !== undefined ? [`comments on ${names.issue}`] : []),
+  ];
+  if (steps.length === 0) return 'Squash-merges it, and keeps the agent, its worktree and its branch.';
+  const listed = steps.length === 1 ? steps[0] : `${steps.slice(0, -1).join(', ')} and ${steps.at(-1)}`;
+  return `Squash-merges it, then ${listed}.`;
+}

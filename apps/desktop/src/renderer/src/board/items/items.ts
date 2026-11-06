@@ -7,6 +7,7 @@ import type {
 } from '@agent-board/daemon/protocol';
 import type { ItemChange } from '../../../../preload/api';
 import { centreOf, contains, rotatedBounds, type Rect } from '../../geometry';
+import { completeShapeData } from './text-style';
 
 export const ITEM_NODE_PREFIX = 'item:';
 
@@ -153,3 +154,15 @@ export const ItemActionsContext = createContext<ItemActions>({
   remove: () => {},
   openLink: () => {},
 });
+
+/**
+ * The data an undo or redo puts back for `item`, as it was: a shape's in full, and an agent note with its size mark
+ * cleared unless it was set. A steps card's answers, ticks, steps and Send are the daemon's, changed only through its
+ * steps methods, so an undo puts back its fold alone, never a copy of what it said before.
+ */
+export function restoredData(item: BoardItem): Record<string, unknown> {
+  if (item.kind === 'shape') return completeShapeData(item.data);
+  if (item.kind === 'agent-note') return { userSized: false, ...item.data };
+  if (item.kind === 'steps') return { collapsed: item.data.collapsed === true };
+  return item.data;
+}

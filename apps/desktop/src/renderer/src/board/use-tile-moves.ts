@@ -4,9 +4,22 @@ import type { TileMove } from '@agent-board/daemon/protocol';
 import { isItemNode, type ItemNodeType } from './items/items';
 import type { TileData, TileNodeType } from './tile';
 import { isSessionTile, savedMove, subjectOf, type BoardNode } from './tiles';
+import { laidOutTile } from './shelves';
 
 /** How far a pointer must move before a press on a node drags it, rather than clicks it, px. */
 export const DRAG_THRESHOLD = 4;
+/**
+ * The tiles an arrow key nudges among `shown` (the nodes before any zone is laid out): those selected, or `focused`, that
+ * may be dragged; never one a zone on shelves or in clusters draws away from its saved place, which a nudge would move
+ * out of sight.
+ */
+export function nudgedTiles(shown: readonly BoardNode[], focused: string | null | undefined): TileNodeType[] {
+  return shown.filter(
+    (node): node is TileNodeType =>
+      isSessionTile(node) && node.draggable !== false && (node.selected === true || node.id === focused) && !laidOutTile(node, shown),
+  );
+}
+
 /** How far an arrow key nudges a tile, and with Shift, px. */
 const NUDGE = { step: 1, shifted: 10 };
 /** How long nudging pauses before the tile's place is saved, ms. */
@@ -20,10 +33,13 @@ const ARROWS: Record<string, { x: number; y: number }> = {
   ArrowRight: { x: 1, y: 0 },
 };
 
-/** Whether a key press or paste is typing into a field, rather than a board shortcut. */
+/**
+ * Whether a key press or paste is typing into a field, rather than a board shortcut: a field, or inside something that
+ * has taken the keyboard for its own keys (`data-keys-own`, a steps card stepped into).
+ */
 export function isTyping(event: Pick<Event, 'target'>): boolean {
   const target = event.target as HTMLElement | null;
-  return target !== null && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+  return target !== null && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.closest?.('[data-keys-own]') != null);
 }
 
 interface TileMovesOptions {
@@ -151,10 +167,7 @@ export function useTileMoves({
       const active = document.activeElement;
       if (active !== null && active !== document.body && active.closest('.react-flow') === null) return;
       const focused = active?.closest('.react-flow__node')?.getAttribute('data-id');
-      const tiles = shownRef.current.filter(
-        (node): node is TileNodeType =>
-          isSessionTile(node) && node.draggable !== false && (node.selected === true || node.id === focused),
-      );
+      const tiles = nudgedTiles(shownRef.current, focused);
       const items = shownRef.current.filter((node) => isItemNode(node) && (node.selected === true || node.id === focused)) as ItemNodeType[];
       if (tiles.length === 0 && items.length === 0) return;
       event.preventDefault();

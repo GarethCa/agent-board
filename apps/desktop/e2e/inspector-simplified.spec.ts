@@ -5,14 +5,15 @@ import { browseForZone, classicOnly, pickFolderNext, removeDataDir, tempDataDir,
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 
-// An agent's inspector: under the Simplified design hidden until shown, at the window's leading edge, a short list
-// resized on the handle after it, with its technical details only while Show technical details is on; under Classic,
-// in place of the details strip while the Agent sidebar setting is Simple.
+// An agent's sidebar, its shelves: under the Simplified design hidden until shown, at the window's leading edge, opening
+// on the agent's page (the board's Now until it writes one) with Made, Crew and Setup a tab away, resized on the handle
+// after it, with its technical details only while Show technical details is on; under Classic, in place of the details
+// strip while the Agent sidebar setting is Simple.
 
-const inspector = (window: Page) => sessionWindow(window).getByTestId('inspector');
+const inspector = (window: Page) => sessionWindow(window).getByTestId('agent-shelves');
+const tabs = (window: Page) => inspector(window).getByRole('tablist', { name: 'Shelves' });
 const handle = (window: Page) => sessionWindow(window).getByTestId('details-handle');
 const toggle = (window: Page) => sessionWindow(window).locator('.session-window-head').getByRole('button', { name: /^(Show|Hide) details$/ });
-const fold = (window: Page) => inspector(window).getByRole('region', { name: 'More details' });
 const width = async (window: Page) => Math.round((await inspector(window).boundingBox())!.width);
 
 /** Turns Show technical details on or off, as its Settings switch does. */
@@ -48,18 +49,19 @@ test("an agent's inspector opens from the header at the window's leading edge, r
     await expect(handle(window)).toHaveCount(0);
     await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
 
-    // Shown from the header, at the leading edge: its status, who started it, and the Work group.
+    // Shown from the header, at the leading edge, open on the board's Now: who started it, and what the page is for.
     await toggle(window).click();
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'true');
     await expect(inspector(window)).toBeVisible();
-    const body = (await sessionWindow(window).locator('.session-window-body').boundingBox())!;
-    const box = (await inspector(window).boundingBox())!;
-    expect(Math.round(box.x)).toBe(Math.round(body.x));
+    const offset = async () => (await inspector(window).boundingBox())!.x - (await sessionWindow(window).locator('.session-window-body').boundingBox())!.x;
+    await expect.poll(async () => Math.abs(await offset()) < 0.5).toBe(true);
+    // Its status line says who started it and, once its turn has ended, what the header's status word leaves out.
     await expect(inspector(window).getByTestId('inspector-status-line')).toContainText('started by you');
-    await expect(inspector(window).getByRole('region', { name: 'Work' })).toContainText('Pull request');
-    // Its technical details wait for the switch, and its fold for something to hold.
-    await expect(inspector(window).getByRole('region', { name: 'Technical details' })).toHaveCount(0);
-    await expect(inspector(window).getByRole('region', { name: 'More details' })).toHaveCount(0);
+    await expect(inspector(window).getByTestId('inspector-status-line')).toContainText('Asks you', { timeout: TURN_MS });
+    await expect(inspector(window).getByTestId('page-invite')).toBeVisible();
+    // It has made nothing and started no one, and its Setup waits for the technical switch: with the page the one
+    // shelf, there is no tab row.
+    await expect(tabs(window)).toHaveCount(0);
     await expect.poll(() => width(window)).toBe(316);
 
     // Dragged right it widens, and the right arrow widens it too: the handle is on its trailing edge.
@@ -100,31 +102,10 @@ test("an agent's inspector opens from the header at the window's leading edge, r
     await tile(window).dblclick();
     await expect(inspector(window)).toBeVisible();
 
-    // Show technical details adds a fold of its branch, folder and AI, and nothing moves above it.
-    // Once its turn has ended, so its status line holds still.
-    await expect(inspector(window).getByTestId('inspector-status-line')).toContainText('Asks you', { timeout: TURN_MS });
-    // Measured from the inspector's top once two reads agree: while the window eases in, its scale shrinks the offset too.
-    const workTop = async () => {
-      const read = async () => (await inspector(window).getByRole('region', { name: 'Work' }).boundingBox())!.y - (await inspector(window).boundingBox())!.y;
-      let last = await read();
-      await expect.poll(async () => {
-        const now = await read();
-        const still = Math.abs(now - last) < 0.01;
-        last = now;
-        return still;
-      }).toBe(true);
-      return last;
-    };
-    const work = await workTop();
+    // Show technical details gives Setup its tab, and with it a tab row: where it works, its branch, folder and AI, open.
     await setTechnical(window, true);
-    const technical = inspector(window).getByRole('region', { name: 'Technical details' });
-    await expect(technical).toBeVisible();
-    expect(Math.round(await workTop())).toBe(Math.round(work));
-    // Closed at first, it opens on its heading.
-    const technicalHead = technical.getByRole('button', { name: 'Technical details' });
-    await expect(technicalHead).toHaveAttribute('aria-expanded', 'false');
-    await expect(technical).not.toContainText('Claude · default model');
-    await technicalHead.click();
+    await tabs(window).getByRole('tab', { name: 'Setup' }).click();
+    const technical = inspector(window).getByRole('region', { name: 'Where it works' });
     await expect(technical).toContainText('Claude · default model');
 
     // Its folder row copies the folder's path.
@@ -139,7 +120,7 @@ test("an agent's inspector opens from the header at the window's leading edge, r
   }
 });
 
-test("an agent's inspector folds what it showed and pinned under More details, opens and keeps the fold open, and each row opens where it belongs", async () => {
+test("an agent's Made shelf holds what it showed and pinned, counted on its tab, and each row opens where it belongs", async () => {
   const { dir, repo, env } = scratch('ask-plan');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
@@ -151,27 +132,20 @@ test("an agent's inspector folds what it showed and pinned under More details, o
     await tile(window).dblclick();
     await toggle(window).click();
 
-    // Closed, it names what it holds.
-    await expect(fold(window).getByRole('button', { name: /^More details/ })).toHaveAttribute('aria-expanded', 'false');
-    await expect(fold(window)).toContainText('More details: 1 document, 4 pins');
-    await expect(fold(window).getByTestId('inspector-pin')).toHaveCount(0);
-
-    // Opened, it lists them; and it is still open in the next window.
-    await fold(window).getByRole('button', { name: /^More details/ }).click();
-    await expect(fold(window).getByTestId('inspector-document')).toContainText('Release 1.4 plan');
-    const pins = fold(window).getByTestId('inspector-pin');
+    // Made has a tab with its count: one document and four pins.
+    const made = tabs(window).getByRole('tab', { name: /^Made/ });
+    await expect(made).toHaveAttribute('aria-label', 'Made, 5');
+    await made.click();
+    await expect(inspector(window).getByTestId('inspector-document')).toContainText('Release 1.4 plan');
+    const pins = inspector(window).getByTestId('inspector-pin');
     await expect(pins).toHaveCount(4);
-    await sessionWindow(window).getByRole('button', { name: /^Done, close / }).click();
-    await expect(sessionWindow(window)).toHaveCount(0);
-    await tile(window).dblclick();
-    await expect(fold(window).getByRole('button', { name: /^More details/ })).toHaveAttribute('aria-expanded', 'true');
 
     // A pinned Markdown file opens in a Doc tab, a link in a web tab, and the document in its Document tab.
     await pins.nth(0).getByRole('button').click();
     await expect(sessionWindow(window).getByTestId('doc-view').getByTestId('doc-body')).toContainText('Merge the flake fix first');
     await pins.nth(2).getByRole('button').click();
     await expect(sessionWindow(window).getByRole('tab', { name: 'localhost:9' })).toBeVisible();
-    await fold(window).getByTestId('inspector-document').getByRole('button').click();
+    await inspector(window).getByTestId('inspector-document').getByRole('button').click();
     await expect(sessionWindow(window).getByTestId('document-view')).toBeVisible();
   } finally {
     await app.close();
@@ -180,7 +154,7 @@ test("an agent's inspector folds what it showed and pinned under More details, o
   }
 });
 
-test("Classic's Simple sidebar puts the inspector in place of the details strip, resizes it on its handle, is kept across a restart, and Full brings the strip back", async () => {
+test("Classic's Simple sidebar puts the shelves in place of the details strip, resizes it on its handle, is kept across a restart, and Full brings the strip back", async () => {
   classicOnly();
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
@@ -196,18 +170,18 @@ test("Classic's Simple sidebar puts the inspector in place of the details strip,
     await expect(inspector(window)).toHaveCount(0);
     await expect(toggle(window)).toHaveCount(0);
 
-    // Simple, picked in Settings while the window is open: the inspector replaces the strip at once, shown, with its
-    // controls folded.
+    // Simple, picked in Settings while the window is open: the shelves replace the strip at once, shown, with the window's
+    // controls and technical details in Setup.
     const settings = await openSettings(window, 'agents.sidebar');
     const choice = settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' });
     await choice.getByRole('button', { name: 'Simple' }).click();
     await expect(inspector(window)).toBeVisible();
     await expect(sessionWindow(window).locator('.session-details')).toHaveCount(0);
     await expect(toggle(window)).toHaveAttribute('aria-pressed', 'true');
-    await expect(inspector(window).getByRole('region', { name: 'Work' })).toContainText('Pull request');
-    await fold(window).getByRole('button', { name: /^More details/ }).click();
-    await expect(fold(window).getByRole('list', { name: 'Controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
-    await expect(inspector(window).getByRole('region', { name: 'Technical details' })).toBeVisible();
+    await expect(inspector(window).getByTestId('page-now')).toBeVisible();
+    await tabs(window).getByRole('tab', { name: 'Setup' }).click();
+    await expect(inspector(window).getByRole('list', { name: 'Controls' }).getByRole('button', { name: 'Stop' })).toBeEnabled();
+    await expect(inspector(window).getByRole('region', { name: 'Where it works' })).toBeVisible();
 
     // It resizes on its handle as the Simplified design's does, and the header's toggle hides and shows it.
     await expect.poll(() => width(window)).toBe(316);

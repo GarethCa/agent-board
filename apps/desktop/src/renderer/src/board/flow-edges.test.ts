@@ -17,6 +17,7 @@ import {
   liveHandoffs,
   panClear,
   rulesSummary,
+  sendOutcome,
   withFlowEdgeChange,
   withChanges,
   withChangesUndone,
@@ -291,5 +292,26 @@ describe('rulesSummary', () => {
     const held = { ...manual, payload: 'json' as const, path: 'out.json', held: { since: 't', reason: 'checks running', name: 'out.json', copy: true } };
     held.checks = [{ at: 't', passed: false, detail: '2 of 3 running' }];
     expect(rulesSummary(held, names)).toMatchObject({ what: 'Sends out.json as JSON from its worktree', onlyIf: 'Held until CI green' });
+  });
+});
+
+describe('sendOutcome', () => {
+  const at = '2026-11-03T10:00:00.000Z';
+  it('says a delivery went', () => {
+    expect(sendOutcome({ lastDelivery: { at, delivered: true, reason: null }, queued: null, unsent: false })).toEqual({ sent: true, message: 'Sent.' });
+  });
+  it('says one queued behind the agent’s turn', () => {
+    expect(sendOutcome({ lastDelivery: null, queued: { since: at, name: 'Final message', copy: false }, unsent: false })).toEqual({ sent: true, message: 'Queued: it goes as soon as the agent’s turn ends.' });
+  });
+  it('says why nothing was sent', () => {
+    expect(sendOutcome({ lastDelivery: { at, delivered: false, reason: 'impl is working' }, queued: null, unsent: false })).toEqual({ sent: false, message: 'impl is working' });
+  });
+  it('still says something when there is no reason', () => {
+    expect(sendOutcome({ lastDelivery: null, queued: null, unsent: false }).sent).toBe(false);
+  });
+  it('does not say Sent. for a hand-off only typed at the prompt', () => {
+    const outcome = sendOutcome({ lastDelivery: { at, delivered: true, reason: null }, queued: null, unsent: true });
+    expect(outcome.sent).toBe(false);
+    expect(outcome.message).toContain('typed at the agent');
   });
 });

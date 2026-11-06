@@ -56,12 +56,12 @@ test('the Agent tool starts an agent loose on the board, in a repo picked for it
     await expect(window.getByText('An empty board')).toHaveCount(0);
     await browseRepo(app, window, repo);
     await picker(window).getByRole('textbox', { name: 'New branch' }).fill('agent/first-loose');
-    // The harness, model and role chips, on the defaults until picked.
-    const chips = picker(window).getByRole('group', { name: 'Harness, model and role' });
-    await expect(chips).toHaveText(/Claude\s*Default\s*No role/);
+    // The harness, model, reasoning and role chips, on the defaults until picked.
+    const chips = picker(window).getByRole('group', { name: 'Harness, model, reasoning and role' });
+    await expect(chips).toHaveText(/Claude\s*Default\s*Reasoning\s*No role/);
     await pickInChip(picker(window), 'Model', 'Haiku');
     await pickInChip(picker(window), 'Role', 'Implementer');
-    await expect(chips).toHaveText(/Claude\s*Haiku\s*Implementer/);
+    await expect(chips).toHaveText(/Claude\s*Haiku\s*Reasoning\s*Implementer/);
     await expect(picker(window)).toContainText("Uses the repo's Implementer template.");
     await picker(window).getByRole('button', { name: /^Start/ }).click();
 

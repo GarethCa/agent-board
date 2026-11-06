@@ -18,6 +18,8 @@ const KIND_WORDS: Record<NeedsYouKind, string> = {
   permission: 'Permission',
   asks: 'Question',
   plan: 'Plan to review',
+  steps: 'Steps to answer',
+  todo: 'Your to-do',
   flagged: 'Needs you',
   turn: 'Finished',
 };

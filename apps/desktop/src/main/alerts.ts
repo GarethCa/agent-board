@@ -1,5 +1,5 @@
-import { needsYouKind, planPending, type Agent, type DaemonSettings, type NeedsYouKind } from '@agent-board/daemon/protocol';
-import { toolSummary } from '../shared/needs-you';
+import { needsYouKind, permissionPrompt, planPending, questionPrompt, type Agent, type DaemonSettings, type NeedsYouKind } from '@agent-board/daemon/protocol';
+import { askAnsweredElsewhere, stepsLeftWords, stepsWaitKey, toolSummary } from '../shared/needs-you';
 import { appStateOf, type AppStatus } from './app-state';
 
 /** An OS notification about one agent. Clicking it opens that agent. */
@@ -63,10 +63,15 @@ export interface AgentAlerts {
 function requestsOf(agent: Agent, settings: AlertSettings): { kind: NeedsYouKind; key: string }[] {
   if (agent.endedAt !== null) return [];
   const requests: { kind: NeedsYouKind; key: string }[] = [];
-  if (agent.state === 'needs-permission' || agent.permissions.length > 0) requests.push({ kind: 'permission', key: 'permission' });
+  if (agent.state === 'needs-permission' || permissionPrompt(agent) !== undefined) requests.push({ kind: 'permission', key: 'permission' });
   if (agent.ask !== null) requests.push({ kind: 'asks', key: `asks:${agent.ask.id}` });
+  // Claude's question tool asks in its own dialog: a request of its own, which the banner never answers.
+  const questions = questionPrompt(agent);
+  if (questions !== undefined) requests.push({ kind: 'asks', key: `questions:${questions.id}` });
   // By its wait, which a version the user edits keeps: their own edit is no new request.
   if (planPending(agent)) requests.push({ kind: 'plan', key: `plan:${agent.plan.expiresAt ?? agent.plan.id}` });
+  // A steps card it waits on: by the step that matters, so a new one is news and an answer to the last isn't.
+  if (agent.stepsWait !== null) requests.push({ kind: agent.stepsWait.kind, key: stepsWaitKey(agent.stepsWait) });
   if (agent.flag?.to === 'user') requests.push({ kind: 'flagged', key: `flagged:${agent.flag.id}` });
   if (requests.length === 0 && needsYouKind(agent, settings.needsYouShows) === 'turn') requests.push({ kind: 'turn', key: 'turn' });
   return requests;
@@ -78,17 +83,31 @@ function notificationFor(agent: Agent, kind: NeedsYouKind): AgentNotification {
     case 'turn':
       return { sessionId, kind, name, title: `${name} is waiting for you`, body: agent.lastMessage ?? 'It is waiting for your answer.' };
     case 'asks': {
-      const { id, question, options } = agent.ask!;
+      if (agent.ask === null) {
+        const prompt = questionPrompt(agent);
+        return { sessionId, kind, name, title: `${name} asks you`, body: prompt === undefined ? 'Open it to answer.' : toolSummary(prompt) };
+      }
+      const asked = agent.ask;
+      const { id, question, options } = asked;
+      // Put on the board, or of several questions, its banner only says so: its options don't answer it.
+      const elsewhere = askAnsweredElsewhere(asked);
+      if (elsewhere !== undefined) return { sessionId, kind, name, title: `${name} asks you`, body: `${question}\n${elsewhere}` };
       return { sessionId, kind, name, title: `${name} asks you`, body: options.length === 0 ? question : `${question} (${options.join(' · ')})`, ask: { askId: id, question, options } };
     }
     case 'plan':
       return { sessionId, kind, name, title: `${name} has a plan to review`, body: `${agent.plan!.title} · v${agent.plan!.version}` };
+    case 'steps': {
+      const wait = agent.stepsWait!;
+      return { sessionId, kind, name, title: `${name} asks you`, body: `${wait.title}: ${stepsLeftWords(wait)}` };
+    }
+    case 'todo':
+      return { sessionId, kind, name, title: `${name} waits on your to-do`, body: `${agent.stepsWait!.text} (${agent.stepsWait!.title})` };
     case 'flagged': {
       const { reason, via } = agent.flag!;
       return { sessionId, kind, name, title: `${name} needs you`, body: via === null ? reason : `${reason} (via ${via})` };
     }
     case 'permission': {
-      const [prompt] = agent.permissions;
+      const prompt = permissionPrompt(agent);
       if (prompt === undefined) return { sessionId, kind, name, title: `${name} needs your permission`, body: 'It is asking in its terminal.' };
       const summary = toolSummary(prompt);
       const asked = summary === '' ? prompt.toolName : `${prompt.toolName}: ${summary}`;

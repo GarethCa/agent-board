@@ -100,8 +100,8 @@ export function registerZoneIpc(daemon: DaemonLink): void {
     daemon.call('zone.update', { id, ...layout }),
   );
   ipcMain.handle(ZONE_IPC.configure, (_event, id: string, settings: Partial<ZoneSettings>) => {
-    const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing } = settings;
-    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing });
+    const { codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode } = settings;
+    return daemon.call('zone.configure', { id, codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing, layoutMode });
   });
   ipcMain.handle(ZONE_IPC.setTracker, (_event, id: string, tracker: ZoneTracker | null) =>
     daemon.call('zone.setTracker', { id, tracker }),

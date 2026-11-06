@@ -5,8 +5,6 @@
 import { useEffect } from 'react';
 import { useNodesInitialized, type Edge, type Node, type Viewport } from '@xyflow/react';
 import { captureFrameFrom, type CaptureFrame } from '../../../shared/capture';
-import { QUESTION_CARD_TYPE } from './question-cards';
-import { tileNodeId } from './tiles';
 
 /** This window's frame, if it is a capture window. Read once: a capture window draws one zone and closes. */
 export const CAPTURE_FRAME: CaptureFrame | undefined = typeof location === 'undefined' ? undefined : captureFrameFrom(location.search);
@@ -14,14 +12,10 @@ export const CAPTURE_FRAME: CaptureFrame | undefined = typeof location === 'unde
 /** The viewport that puts the frame's top-left at the window's, at its scale. */
 export const captureViewport = (frame: CaptureFrame): Viewport => ({ x: -frame.x * frame.scale, y: -frame.y * frame.scale, zoom: frame.scale });
 
-/**
- * Of `nodes`, the zone `zoneId`, what is in it and the question cards of its agents (loose on the board, beside their
- * tiles), none selected: what a picture of that zone shows.
- */
+/** Of `nodes`, the zone `zoneId` and what is in it, none selected: what a picture of that zone shows. */
 export function nodesInZone<N extends Node>(nodes: readonly N[], zoneId: string): N[] {
   const inZone = new Set(nodes.filter((node) => node.id === zoneId || node.parentId === zoneId).map((node) => node.id));
-  const askedOf = (node: N) => node.type === QUESTION_CARD_TYPE && inZone.has(tileNodeId('agent', (node.data as { sessionId: string }).sessionId));
-  return nodes.filter((node) => inZone.has(node.id) || askedOf(node)).map((node) => (node.selected === true ? { ...node, selected: false } : node));
+  return nodes.filter((node) => inZone.has(node.id)).map((node) => (node.selected === true ? { ...node, selected: false } : node));
 }
 
 /** Of `edges`, those both of whose ends are among `nodes`. */

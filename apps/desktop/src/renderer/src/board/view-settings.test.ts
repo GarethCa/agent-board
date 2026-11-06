@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_VIEW_SETTINGS, followViewSettings, restoreViewSettings, setCrewLook, setViewSetting, viewSettings } from './view-settings';
+import { DEFAULT_VIEW_SETTINGS, followViewSettings, restoreViewSettings, setCrewLook, setViewSetting, viewSettings, viewSettingsLoaded } from './view-settings';
 
 /** A window whose view state holds `saved` by key, and whose change listener the test can fire. */
 function stubView(saved: Record<string, unknown> = {}) {
@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'full' });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'full', gpuTerminals: true });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
@@ -53,9 +53,12 @@ describe('the board view settings', () => {
   });
 
   it('are read as a window follows them, and a change another window makes is heard', async () => {
-    const { change } = stubView({ crewLook: 'off' });
+    const { change } = stubView({ crewLook: 'off', gpuTerminals: false });
     followViewSettings();
     await vi.waitFor(() => expect(viewSettings().crewLook).toBe('off'));
+    // Read, so what must not act on a default (a terminal taking the GPU) can go ahead.
+    await vi.waitFor(() => expect(viewSettingsLoaded()).toBe(true));
+    expect(viewSettings().gpuTerminals).toBe(false);
     change('clickOpens', 'expand');
     expect(viewSettings().clickOpens).toBe('expand');
     change('agentSidebar', 'simple');

@@ -1,5 +1,5 @@
 import { expect } from '@playwright/test';
-import { launch } from './agent-helpers.ts';
+import { launch, unfoldMenuSection } from './agent-helpers.ts';
 import { test, tempDataDir, removeDataDir } from './launch.ts';
 import { openSettings } from './settings-helpers.ts';
 
@@ -15,7 +15,8 @@ test('each quick setting shows and changes the value its Settings row shows, and
     // The menu closes when the Settings window takes the focus, so it is opened again whenever it is wanted.
     const reopen = async () => {
       await window.bringToFront();
-      if (!(await quick.isVisible())) await window.getByRole('button', { name: 'Board menu' }).click();
+      if (!(await menu.isVisible())) await window.getByRole('button', { name: 'Board menu' }).click();
+      await unfoldMenuSection(window, 'Quick settings');
       await expect(quick).toBeVisible();
     };
     await reopen();

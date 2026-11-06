@@ -1,4 +1,4 @@
-import { planPending, type Agent, type AgentAsk, type ChatEntry, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
+import { permissionPrompt, planPending, questionPrompt, type Agent, type AgentAsk, type ChatEntry, type PermissionPrompt, type PlanSummary } from '@agent-board/daemon/protocol';
 import { agentAtWork, msBetween, toolKind, type ChatItem, type ToolCall } from './chat';
 
 /**
@@ -28,7 +28,8 @@ export type LiveFacts = Pick<Agent, 'state' | 'endedAt' | 'permissions' | 'ask' 
  */
 export function liveState(agent: LiveFacts, items: readonly ChatItem[], entries: readonly ChatEntry[]): LiveState | undefined {
   const pending = pendingCalls(items);
-  const prompt = agent.permissions[0];
+  // A permission comes before questions: it is what Needs you lists the agent for.
+  const prompt = permissionPrompt(agent) ?? questionPrompt(agent);
   // A prompt's call is the latest one waiting with its tool; a subagent's call isn't in this transcript.
   if (prompt !== undefined) return { kind: 'permission', prompt, ...callOf(prompt.subagent === null ? pending.findLast((call) => call.name === prompt.toolName) : undefined) };
   if (agent.ask !== null) return { kind: 'ask', ask: agent.ask, ...callOf(pending.findLast((call) => toolKind(call.name) === 'ask')) };

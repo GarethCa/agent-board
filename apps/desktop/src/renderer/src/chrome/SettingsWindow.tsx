@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizontal, UserRound, Wrench } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
 import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
+import { GpuTerminalsSetting } from './GpuTerminalsSetting';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { daemonStatusText, useDaemonStatus } from '../DaemonStatus';
 import { useSimplified } from '../design';
@@ -10,12 +11,16 @@ import { Hint, useToast } from '../ui';
 import { useLiveLists } from '../windows/use-live-lists';
 import { AgentSidebarSetting } from './AgentSidebarSetting';
 import { AppearanceSetting } from './AppearanceSetting';
+import { BoardBackgroundSetting } from './BoardBackgroundSetting';
 import { ArrangeSpacingSetting } from './ArrangeSpacingSetting';
+import { DockSetting } from './DockSetting';
 import { AgentNoteLookSetting, ClickOpensSetting, ConnectionsSetting, CrewLookSetting } from './BoardViewSettings';
 import { ChatStyleSetting } from './ChatStyleSetting';
+import { ChatThemeSetting } from './ChatThemeSetting';
 import { ClickableLinksSetting } from './ClickableLinksSetting';
 import { CliInstallSetting } from './CliInstallSetting';
 import { CompactWindowSetting } from './CompactWindowSetting';
+import { EffortSetting } from './EffortSetting';
 import { HarnessPathSettings } from './HarnessPathSettings';
 import { KeyboardSetting } from './KeyboardSetting';
 import { NotificationsSetting } from './NotificationsSetting';
@@ -59,6 +64,7 @@ function AgentsChatSettings() {
       {simplified && <OpensOnSetting />}
       {simplified && <ConversationAsSetting />}
       <ChatStyleSetting />
+      <ChatThemeSetting />
     </>
   );
 }
@@ -73,11 +79,21 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
     case 'general.design':
       return <SimplifiedDesignSetting onError={onError} />;
     case 'general.appearance':
-      return <AppearanceSetting onError={onError} />;
+      return (
+        <>
+          <AppearanceSetting onError={onError} />
+          <BoardBackgroundSetting />
+        </>
+      );
     case 'general.keyboard':
       return <KeyboardSetting />;
     case 'board.opening':
-      return <ClickOpensSetting />;
+      return (
+        <>
+          <ClickOpensSetting />
+          <DockSetting onError={onError} />
+        </>
+      );
     case 'board.connections':
       return <ConnectionsSetting />;
     case 'board.crews':
@@ -90,6 +106,8 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <AgentsChatSettings />;
     case 'agents.sidebar':
       return <AgentSidebarSetting />;
+    case 'agents.reasoning':
+      return <EffortSetting onError={onError} />;
     case 'agents.context':
       return <CompactWindowSetting onError={onError} />;
     case 'agents.links':
@@ -108,6 +126,8 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
       return <CliInstallSetting onError={onError} />;
     case 'advanced.webTabs':
       return <WebTabsSetting onError={onError} />;
+    case 'advanced.terminals':
+      return <GpuTerminalsSetting />;
     case 'advanced.service':
       return <DaemonStatusSetting />;
     default:

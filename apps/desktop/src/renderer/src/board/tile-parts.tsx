@@ -2,10 +2,11 @@
 // the user's click (unsent, undelivered, trust, untyped), and its last message for the hover card.
 import { useState, type MouseEvent } from 'react';
 import { FolderCheck, MoreHorizontal, SendHorizontal } from 'lucide-react';
-import { planPending, type Agent, type UndeliveredMessage } from '@agent-board/daemon/protocol';
-import { toolSummary } from '../../../shared/needs-you';
+import { permissionPrompt, planPending, questionPrompt, type Agent, type UndeliveredMessage } from '@agent-board/daemon/protocol';
+import { stepsWaitLine, toolSummary } from '../../../shared/needs-you';
 import { Button, IconButton, Menu, type IconButtonProps, type MenuEntry } from '../ui';
 import { cx } from '../ui/cx';
+import { askTitle } from './quick-ask';
 
 /**
  * The agent's last message for the card that shows below its tile, with the time its turn ended in the card's label:
@@ -20,15 +21,24 @@ export function lastMessageCard(agent: Agent): { text: string; label: string } |
 
 /**
  * What a tile waiting for you asks, in place of its task: the tool it wants to use, the question it asks through the
- * board with its options, or the plan it waits on. A question on its card beside the tile isn't repeated:
- * the tile points at it, the question in its tooltip. Its last message is on its hover card instead.
+ * board with its options, or the plan it waits on. An ask on its steps card isn't repeated: the tile points
+ * at it, the question in its tooltip. Its last message is on its hover card instead.
  */
 export function askOf(agent: Agent): { tool?: string; text: string; title?: string; question?: true } | undefined {
-  const prompt = agent.permissions[0];
+  // A permission comes before questions: it is what Needs you lists the agent for.
+  const prompt = permissionPrompt(agent) ?? questionPrompt(agent);
+  // Claude's question tool's call shows as its questions with their options, as a question through the board does.
+  if (prompt?.questions != null) {
+    const text = prompt.questions.map(({ question, options }) => (options.length === 0 ? question : `${question}\n${options.map((option) => option.label).join(' · ')}`)).join('\n');
+    return { text, title: `${text}\n\nOpen the agent to answer.`, question: true };
+  }
   if (prompt !== undefined) return { tool: prompt.toolName, text: toolSummary(prompt) };
-  if (agent.ask?.onBoard === true) return { text: 'Asking you ↗', title: agent.ask.question, question: true };
+  if (agent.ask !== null && agent.ask.card !== null) return { text: 'Asking you on a steps card', title: agent.ask.question, question: true };
+  if (agent.ask !== null && agent.ask.questions.length > 1) return { text: agent.ask.question, title: askTitle(agent.name, agent.ask), question: true };
   if (agent.ask !== null) return { text: agent.ask.options.length === 0 ? agent.ask.question : `${agent.ask.question}\n${agent.ask.options.join(' · ')}`, question: true };
   if (planPending(agent)) return { text: `Waiting for you to decide on its plan: ${agent.plan.title}` };
+  // Loose: a record from an older daemon has no steps wait at all.
+  if (agent.stepsWait != null) return { text: stepsWaitLine(agent.stepsWait) };
   return undefined;
 }
 

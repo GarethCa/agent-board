@@ -259,6 +259,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
         id: sessionId,
         harness: row.harness,
         model: row.model,
+        effort: row.effort,
         bypassHookTrust: bypassHookTrust === 1,
         zoneId: row.zone_id,
         cwd: row.cwd,

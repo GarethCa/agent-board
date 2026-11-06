@@ -36,10 +36,9 @@ export function tetherPath(ends: LineEnds, route?: readonly RoutePoint[]): strin
 }
 
 /**
- * The dashed tether from an agent note, or a question card, to its agent's tile: from the middle of the source's side
+ * The dashed tether from an agent note to its agent's tile: from the middle of the source's side
  * that faces the tile to the middle of the tile's side that faces it, straight, or, when that would cross another
- * object, square round them as an arrow does (`useRoute`). `data.tab` false: a source with no tab, as a question card
- * has; `data.look` `clock`, a clock's, to the agent it runs; `master`, the Captain's rail to a lead it watches.
+ * object, square round them as an arrow does (`useRoute`). `data.tab` false: a source with no tab; `data.look` `clock`, a clock's, to the agent it runs; `master`, the Captain's rail to a lead it watches.
  */
 export const TetherEdge = memo(function TetherEdge({ id, source, target, data }: EdgeProps) {
   const sourceRect = rectOf(useInternalNode(source));

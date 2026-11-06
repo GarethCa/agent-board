@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { ipcMain, net, protocol } from 'electron';
 import { pathToFileURL } from 'node:url';
 import type { DaemonLink } from '@agent-board/daemon/client';
-import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type UpdateItemParams } from '@agent-board/daemon/protocol';
+import { IMAGE_EXTENSIONS, type ClockData, type ClockPlace, type CreateItemParams, type MemoryChange, type QueueChange, type UpdateItemParams } from '@agent-board/daemon/protocol';
 import { ITEM_IPC } from '../preload/api';
 import { IMAGE_SCHEME } from '../shared/image-url';
 import { forwardEvents } from './broadcast';
@@ -21,6 +21,14 @@ export function registerItemIpc(daemon: DaemonLink, dataDir: string): void {
   passthroughVoid(daemon, ITEM_IPC.delete, 'item.delete', (id: string) => ({ id }));
   passthrough(daemon, ITEM_IPC.clocks, 'clock.list');
   passthrough(daemon, ITEM_IPC.addClock, 'clock.add', (data: Partial<ClockData>, place: ClockPlace) => ({ data, place }));
+  passthrough(daemon, ITEM_IPC.readMemory, 'memory.read', (id: string, search?: string) => (search === undefined ? { id } : { id, search }));
+  passthrough(daemon, ITEM_IPC.changeMemory, 'memory.change', (id: string, change: MemoryChange) => ({ id, change }));
+  passthrough(daemon, ITEM_IPC.memoryHistory, 'memory.history', (id: string, entry: string) => ({ id, entry }));
+  passthrough(daemon, ITEM_IPC.readQueue, 'queue.read', (id: string) => ({ id }));
+  passthrough(daemon, ITEM_IPC.changeQueue, 'queue.change', (id: string, change: QueueChange) => ({ id, change }));
+  passthrough(daemon, ITEM_IPC.queueHistory, 'queue.history', (id: string, job: string) => ({ id, job }));
+  passthrough(daemon, ITEM_IPC.handJob, 'queue.hand', (id: string, job: string, sessionId: string, text: string) => ({ id, job, sessionId, text }));
+  passthrough(daemon, ITEM_IPC.takenJobs, 'queue.taken');
 }
 
 const IMAGE_FILE = new RegExp(`^[0-9a-f]{64}\\.(${IMAGE_EXTENSIONS.join('|')})$`);

@@ -207,7 +207,7 @@ export function createDocumentHost(options: DocumentHostOptions): DocumentHost {
           if (left.length === 0) pending.delete(sessionId);
           else pending.set(sessionId, left);
         },
-        (error: unknown) => options.log(`could not tell ${agent.name} about its documents: ${(error as Error).message}`),
+        (error: unknown) => options.log(`could not tell ${agent.name} what waits for it at its prompt: ${(error as Error).message}`),
       )
       .finally(() => typing.delete(sessionId));
   };

@@ -68,7 +68,7 @@ export function useBoardShortcuts({
   arrangeBoard,
   typeInShape,
 }: BoardShortcutsOptions) {
-  // N adds a note at the pointer, or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
+  // N adds a note at the pointer (K a steps card, M a memory, Q a queue), or in the middle of the board when the pointer is off it. T, S, Z, A and ` arm the
   // text, shape, zone, agent and shell tools; Escape puts the armed one down. V selects and moves, B box-selects, H pans.
   // / puts any tool down and opens the shape palette at the pointer. ? opens the cheat sheet. ⇧L arranges the board.
   useEffect(() => {
@@ -88,7 +88,10 @@ export function useBoardShortcuts({
       // F2 has asked a tile to open its name field, which is yet to take the keys: they are the name's, not a shortcut.
       if (renameRequest !== undefined) return;
       event.preventDefault();
-      if (shortcut.kind === 'note') createItem('sticky', pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
+      if (shortcut.kind === 'note' || shortcut.kind === 'steps' || shortcut.kind === 'memory' || shortcut.kind === 'queue') {
+        const kind = shortcut.kind === 'note' ? 'sticky' : shortcut.kind;
+        createItem(kind, pointer.current === undefined ? boardCentre() : screenToFlowPosition(pointer.current));
+      }
       else if (shortcut.kind === 'tool') setTool((current) => (current === shortcut.tool ? undefined : shortcut.tool));
       else if (shortcut.kind === 'connections') cycleConnections();
       else if (shortcut.kind === 'crews') cycleCrewLook();
@@ -129,7 +132,8 @@ export function useBoardShortcuts({
       if (target.closest(CONTROLS) !== null || document.querySelector('[role="dialog"]') !== null) return;
       if (target !== document.body && target.closest('.react-flow') === null) return;
       const [node, ...rest] = selection().nodes;
-      if (node !== undefined && rest.length === 0 && isItemNode(node) && node.data.item.kind === 'shape') {
+      // A shape takes typing; a steps card takes its own keys, for its answers.
+      if (node !== undefined && rest.length === 0 && isItemNode(node) && (node.data.item.kind === 'shape' || node.data.item.kind === 'steps')) {
         event.preventDefault();
         return typeInShape(node.id);
       }

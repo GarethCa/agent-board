@@ -27,7 +27,7 @@ const CAPTURED = 'captured';
 /** The room kept round the selection in the window while it is drawn, CSS px. */
 const CAPTURE_MARGIN = 16;
 
-const SETUP: AgentSetup = { harness: 'claude', model: '', role: 'architect' };
+const SETUP: AgentSetup = { harness: 'claude', model: '', effort: '', role: 'architect' };
 
 /** Where the answer goes: a note beside the selection, with or without suggested edits drawn on the diagram. */
 type AnswerGoes = 'note' | 'edits';

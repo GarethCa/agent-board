@@ -113,10 +113,11 @@ export interface FlowEdgeHost {
   /** Makes an edge, as `flowEdge.create` does, marked as made by `madeBy` (an orchestrator) if given. */
   create(params: unknown, madeBy?: string): FlowEdge;
   /**
-   * Joins `from` to `to` with a manual edge carrying `from`'s final message, marked as made by `madeBy`, unless an edge
-   * already joins them that way, whoever made it. Returns the edge made, or undefined when there was one.
+   * Joins `from` to `to` with an edge (`manual` unless `trigger` says `auto`) carrying `from`'s final message, marked as
+   * made by `madeBy`, unless an edge already joins them that way, whoever made it. Returns the edge made, or undefined
+   * when there was one.
    */
-  link(from: string, to: string, madeBy?: string): FlowEdge | undefined;
+  link(from: string, to: string, madeBy?: string, trigger?: 'auto' | 'manual'): FlowEdge | undefined;
   /** The edge, if there is one. */
   get(id: string): FlowEdge | undefined;
   /** Deletes the edge, telling every client. Throws `invalidParams` for an unknown edge. */
@@ -466,12 +467,12 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     row: FlowEdgeRow,
     payload: Payload,
     copy = keepsCopy(row),
-  ): Promise<{ edge: FlowEdge; outcome: Outcome } | undefined> => {
+  ): Promise<{ edge: FlowEdge; outcome: Outcome; unsent: boolean } | undefined> => {
     const result = await attempt(row, payload);
     if (!result.started && result.busy === true && find(row.id)?.deliver_as === 'queue') {
       if (updateQueue.run(payload.name, copy ? payload.text : null, row.id).changes === 0) return undefined;
       record(row.id, 'queued', result.reason);
-      return { edge: announce(get(row.id)), outcome: { outcome: 'queued', name: payload.name, reason: result.reason } };
+      return { edge: announce(get(row.id)), outcome: { outcome: 'queued', name: payload.name, reason: result.reason }, unsent: false };
     }
     if (!result.started) options.log(`flow edge ${row.id} skipped delivering to ${row.to_session_id}: ${result.reason}`);
     // Either agent may have gone meanwhile, and the edge with it.
@@ -480,7 +481,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
     const outcome: Outcome = result.started
       ? { outcome: 'delivered', name: payload.name, reason: null }
       : { outcome: 'skipped', name: payload.name, reason: result.reason };
-    return { edge: announce(get(row.id)), outcome };
+    return { edge: announce(get(row.id)), outcome, unsent: result.started && result.unsent === true };
   };
 
   /** Checks the edge's conditions, keeping how each did: the first that failed, or undefined when all passed. */
@@ -853,9 +854,9 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
 
     create,
 
-    link: (from, to, madeBy) => {
+    link: (from, to, madeBy, trigger = 'manual') => {
       if (selectPair.get(from, to) !== undefined) return undefined;
-      return create({ from, to, trigger: 'manual' }, madeBy);
+      return create({ from, to, trigger }, madeBy);
     },
 
     get: (id) => {
@@ -979,7 +980,7 @@ export function createFlowEdgeHost(options: FlowEdgeHostOptions): FlowEdgeHost {
         clearQueue.run(id, row.queued_since);
         const sent = await deliverAlong(row, payload, keepsCopy(row));
         if (sent === undefined) throw invalidParams(`flow edge ${id} went while it was being sent`);
-        return sent.edge;
+        return { ...sent.edge, unsent: sent.unsent };
       },
       'flowEdge.preview': async (params) => {
         const id = stringParam(paramsObject(params), 'id');

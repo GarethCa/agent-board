@@ -41,8 +41,8 @@ export function CalmShellTile({ id, shell, selected }: { id: string; shell: Shel
       data-drop-over={dropOver === drop || undefined}
       data-status={face.status ?? undefined}
       data-state={shell.stoppedPanes.length > 0 ? 'stopped-by-restart' : face.status === 'done' ? 'done' : 'idle'}
-      title={clickOpens === 'window' ? 'Double-click to open its terminal window' : 'Double-click to expand it here'}
-      onDoubleClick={() => (clickOpens === 'window' ? openShell(shell) : expand(id))}
+      title={clickOpens !== 'expand' ? 'Double-click to open its terminal window' : 'Double-click to expand it here'}
+      onDoubleClick={() => (clickOpens !== 'expand' ? openShell(shell) : expand(id))}
     >
       <div className="hybrid-tile-head calm-tile-head">
         <EditableName className={nameClass(shell.name)} value={shell.name} title={shell.name} renaming={renaming} clicks={nameClicks} label="Shell name" />

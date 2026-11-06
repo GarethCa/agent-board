@@ -20,6 +20,10 @@ export interface BaseThemes {
 
 /** How much less than its text on its panel a pack's agent note tab text may read (tokens.test.ts holds the same bar). */
 export const NOTE_TAB_ROOM = 0.5;
+/** The least contrast a light note's paper fill keeps against its theme's desk, so a loose note doesn't sink into the board. */
+const NOTE_DESK_RATIO = 1.05;
+/** ... and the least it keeps against a tile, so a note is told apart from an agent at a glance (Classic and Simplified reach 1.18). */
+export const NOTE_TILE_RATIO = 1.15;
 
 const WHITE = '#ffffff';
 const BLACK = '#000000';
@@ -114,9 +118,42 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
   const muted = readable(p.muted, [hover, p.desk, p.tile]);
   const share = (name: string) => Number.parseFloat(base.light.get(name) ?? '') / 100;
   const [tabMix, inkMix] = [share('--agent-note-tab-mix'), share('--agent-note-tab-ink-mix')];
-  const noteBar = Math.min(contrast(text, p.panel) - NOTE_TAB_ROOM, 4.5);
-  const noteTabReads = [...ZONE_COLORS, muted].every((zone) => contrast(mix(zone, text, inkMix), mix(zone, p.panel, tabMix)) >= noteBar);
-  if (!noteTabReads) {
+  // The card's paper fill, the border colour over the panel, and the inks drawn on it. A light pack takes the share nearest
+  // the app's that keeps the card apart from a tile, then clear of its desk, and its tab readable, giving those up in turn
+  // when they can't be had. Its text, muted text and links, where the fill leaves them under AA, are the same colours made
+  // readable on it (`--agent-note-ink`, `-muted` and `-link`). A dark pack's fill is its panel and its inks are its own.
+  const tabReadsOn = (fill: string, ink: string) => {
+    const bar = Math.min(contrast(ink, fill) - NOTE_TAB_ROOM, 4.5);
+    return [...ZONE_COLORS, muted].every((zone) => contrast(mix(zone, ink, inkMix), mix(zone, fill, tabMix)) >= bar);
+  };
+  const fillAt = (at: number) => mix(p.border, p.panel, at);
+  const chipShare = share('--agent-note-code-mix');
+  // The inks on a fill: the text on the card and its chip (the chip is a share of that text, so settle it in two passes).
+  const inksOn = (fill: string) => {
+    let ink = text;
+    for (let pass = 0; pass < 2; pass += 1) ink = readable(text, [fill, mix(ink, fill, chipShare)]);
+    return { ink, muted: readable(muted, [fill]), link: readable(accentInk, [fill]) };
+  };
+  const appShare = share('--agent-note-fill-mix');
+  const grid = Array.from({ length: 21 }, (_, at) => at / 20).sort((x, y) => Math.abs(x - appShare) - Math.abs(y - appShare));
+  const pick = (ok: (fill: string, ink: string) => boolean) => grid.find((at) => ok(fillAt(at), inksOn(fillAt(at)).ink));
+  const apart = (fill: string) => contrast(fill, p.tile) >= NOTE_TILE_RATIO;
+  const clear = (fill: string) => contrast(fill, p.desk) >= NOTE_DESK_RATIO;
+  const fillShare = dark
+    ? 0
+    : (pick((fill, ink) => apart(fill) && clear(fill) && tabReadsOn(fill, ink)) ??
+      pick((fill) => apart(fill) && clear(fill)) ??
+      pick(apart) ??
+      appShare);
+  const fill = fillAt(fillShare);
+  if (!dark && fillShare !== appShare) set('--agent-note-fill-mix', `${Math.round(fillShare * 100)}%`);
+  const inks = inksOn(fill);
+  if (!dark) {
+    if (inks.ink !== text) set('--agent-note-ink', inks.ink);
+    if (inks.muted !== muted) set('--agent-note-ink-muted', inks.muted);
+    if (inks.link !== accentInk) set('--agent-note-ink-link', inks.link);
+  }
+  if (!tabReadsOn(fill, inks.ink)) {
     set('--agent-note-tab-mix', '0%');
     set('--agent-note-tab-ink-mix', '0%');
   }
@@ -277,35 +314,11 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
 
 /**
  * The Simplified design over a pack theme: every token the design's own blocks set in the theme's mode, so it outranks
- * both those blocks and the pack's (whichever comes later). Its shapes, type, shadows and aliases stay the design's;
- * each colour is the pack's own (`classic`, the pack's tokens), but for the two the design draws its own way: its rails
- * are the palette's muted text faded into the desk, as its greys are, and its waiting orange is the one that reads as
- * text, as the design writes it.
+ * both those blocks and the pack's (whichever comes later). Those are its shapes, type and shadows; it sets no colour of
+ * the palette, so the pack's own colours show as under Classic.
  */
-function simplifiedPackTokens(theme: PackTheme, classic: ReadonlyMap<string, string>, base: BaseThemes): Map<string, string> {
-  const p = theme.palette;
-  const own = new Map([...base.simplified.light, ...(theme.scheme === 'dark' ? base.simplified.dark : [])]);
-  // The pack's own value: what its block sets, or for a light pack what it leaves to the light theme (an alias, such
-  // as a sticky's ink, that then reads the pack's colours).
-  const pack = (name: string) => {
-    const value = classic.get(name) ?? (theme.scheme === 'light' ? base.light.get(name) : undefined);
-    if (value === undefined) throw new Error(`${theme.id}: no Simplified value for ${name}`);
-    return value;
-  };
-  const drawn: Record<string, string> = {
-    '--rail': mix(p.muted, p.desk, 0.47),
-    '--rail-cap': mix(p.muted, p.desk, 0.7),
-    '--state-waiting': pack('--state-waiting-ink'),
-  };
-  const tokens = new Map<string, string>();
-  for (const [name, value] of own) {
-    if (!HEX.test(value)) {
-      tokens.set(name, value);
-      continue;
-    }
-    tokens.set(name, drawn[name] ?? pack(name));
-  }
-  return tokens;
+function simplifiedPackTokens(theme: PackTheme, base: BaseThemes): Map<string, string> {
+  return new Map([...base.simplified.light, ...(theme.scheme === 'dark' ? base.simplified.dark : [])]);
 }
 
 const block = (selector: string, declarations: ReadonlyMap<string, string>, head: string[] = []) =>
@@ -320,8 +333,8 @@ export function themePacksCss(base: BaseThemes, required: readonly string[]): st
   const classic = themes.map(({ credit, theme, tokens }) =>
     [`/* ${theme.name}: ${credit} */`, block(`:root[data-theme='${theme.id}']`, tokens, [`  color-scheme: ${theme.scheme};`])].join('\n'),
   );
-  const simplified = themes.map(({ theme, tokens }) =>
-    [`/* ${theme.name} */`, block(`:root[data-design='simplified'][data-theme='${theme.id}']`, simplifiedPackTokens(theme, tokens, base))].join('\n'),
+  const simplified = themes.map(({ theme }) =>
+    [`/* ${theme.name} */`, block(`:root[data-design='simplified'][data-theme='${theme.id}']`, simplifiedPackTokens(theme, base))].join('\n'),
   );
   return [
     '/*',
@@ -330,8 +343,8 @@ export function themePacksCss(base: BaseThemes, required: readonly string[]): st
     ' */',
     ...classic,
     '/*',
-    ' * The Simplified design over each pack (docs/adr/0022-simplified-design.md): its shapes, type and shadows, in the',
-    " * pack's colours.",
+    ' * The Simplified design over each pack (docs/adr/0022-simplified-design.md): its shapes, type and shadows, over the',
+    " * pack's own colours.",
     ' */',
     ...simplified,
     '',

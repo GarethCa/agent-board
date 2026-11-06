@@ -18,6 +18,19 @@ export interface SavedFrame {
   maximised: boolean;
 }
 
+/**
+ * The frame to keep when a window opens on the board under the Maximised setting, or undefined to leave it: the window
+ * shown now is not the one shown before (`previousId`, undefined for none), it was not stepped to from another
+ * session's window (`steppedTo`), and a kept frame says it is restored. Opening one from the dock, or from a tile with
+ * another window shown, counts; stepping with ‹ › does not, nor does a window brought back at launch (the caller
+ * passes it as the previous one).
+ */
+export function openedMaximised(opens: { previousId: string | undefined; shownId: string | undefined; steppedTo: string | undefined; maximisedSetting: boolean; kept: SavedFrame | null }): SavedFrame | undefined {
+  const { previousId, shownId, steppedTo, maximisedSetting, kept } = opens;
+  if (!maximisedSetting || kept === null || kept.maximised || shownId === undefined || shownId === previousId || shownId === steppedTo) return undefined;
+  return { ...kept, maximised: true };
+}
+
 /** An edge or a corner of the window, by compass point. */
 export type Edge = 'n' | 'e' | 's' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 

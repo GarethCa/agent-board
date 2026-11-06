@@ -21,14 +21,26 @@ describe('calmFace', () => {
   it('asks for permission in the tool’s own words, with one filled Review & allow', () => {
     const agent = working({
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
     });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });
 
   it('shows the question it asks, with a filled Answer', () => {
-    const agent = working({ state: 'waiting', ask: { id: 'q', question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: true, askedAt: AT, expiresAt: AT, onBoard: false, at: { x: 0, y: 0 } } });
+    const agent = working({ state: 'waiting', ask: { id: 'q', question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: true, askedAt: AT, expiresAt: AT, onBoard: false, questions: [{ question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: true }], answers: [null], card: null } });
     expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Postgres or SQLite?', action: { kind: 'open', label: 'Answer', prominent: true } });
+  });
+
+  it("shows Claude's question tool's questions, with a filled Answer rather than an allow", () => {
+    const agent = working({ state: 'waiting', permissions: [{ id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }] }] });
+    expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Which cache? (Redis · In memory)', action: { kind: 'open', label: 'Answer', prominent: true } });
+  });
+
+  it('shows the permission, not the questions, when a subagent asks one beside its question tool', () => {
+    const questions = { id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: [{ question: 'Which cache?', header: '', options: [], multiSelect: false }] };
+    const bash = { id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: { id: 'a1', type: 'general-purpose' }, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null };
+    const agent = working({ state: 'needs-permission', permissions: [questions, bash] });
+    expect(calmFace(agent, 'explicit')).toEqual({ status: 'needs-you', line: 'Bash: rm -rf dist', action: { kind: 'open', label: 'Review & allow', prominent: true } });
   });
 
   it('points at a plan waiting for a decision, with a filled Read the plan', () => {
@@ -128,6 +140,12 @@ describe('technicalLine', () => {
       ],
     });
     expect(technicalLine(agent)).toBe('Codex · default model · ⑂ fix-it · PR #7 ✗ · PR #8 … · running');
+  });
+
+  it('names its reasoning effort after its model, and when it takes a new one', () => {
+    expect(technicalLine(working({ model: 'opus', effort: 'max', branch: 'b' }))).toBe('Claude · Opus · Max reasoning · ⑂ b · running');
+    expect(technicalLine(working({ effort: 'low', effortPending: 'after-turn', branch: 'b' }))).toBe('Claude · default model · Low reasoning after this turn · ⑂ b · running');
+    expect(technicalLine(working({ harness: 'codex', effort: 'high', effortPending: 'restart', branch: 'b' }))).toBe('Codex · default model · High reasoning on restart · ⑂ b · running');
   });
 
   it('says when it shares a folder rather than having a worktree of its own', () => {

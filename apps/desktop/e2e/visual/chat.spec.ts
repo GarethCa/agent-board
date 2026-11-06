@@ -131,8 +131,8 @@ async function handOff(page: Page, from: string, to: string, text: string): Prom
   await page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [from, text]);
 }
 
-/** Starts two agents, hands the first's final message to the second, and shows the second's chat in `style`. */
-async function showAgentMessage(app: ElectronApplication, window: Page, repo: string, style: string): Promise<void> {
+/** Starts two agents, hands the first's final message to the second, and opens the second's chat. */
+async function showAgentMessage(app: ElectronApplication, window: Page, repo: string): Promise<void> {
   await pickFolderNext(app, repo);
   await browseForZone(window);
   await spawnAgent(window, 'monorepo', 'Write the code');
@@ -148,20 +148,24 @@ async function showAgentMessage(app: ElectronApplication, window: Page, repo: st
     .toContain('⟨hand-off from Write the code');
   await reviewer.dblclick();
   await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
-  await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: style }).click();
   const chat = sessionWindow(window).getByTestId('chat-frame');
-  await expect(chat.getByTestId('chat-agent-message')).toHaveCount(1);
   await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'done', { timeout: TURN_MS });
 }
 
-for (const { style, theme, narrow } of [
-  ...(['Cards', 'Timeline', 'Status line'] as const).flatMap((style) => (['light', 'dark'] as const).map((theme) => ({ style, theme, narrow: false }))),
-  // Past four lines it folds, shown in a chat narrow enough for the message to wrap that far.
-  { style: 'Cards', theme: 'dark', narrow: true },
-] as const) {
-  test(`an agent's message in the chat as ${style.toLowerCase()} in the ${theme} theme${narrow ? ', in a narrow chat, folded' : ''}`, async () => {
-    const shot = `${theme === 'light' ? '' : 'dark-'}chat-agent-message-${style.toLowerCase().replace(' ', '-')}${narrow ? '-folded' : ''}`;
-    needsBaselines(shot);
+/** The chat styles shot, in the order they are shown. Cards is also shot narrow, folded, last, in the dark theme. */
+const AGENT_MESSAGE_STYLES = ['Cards', 'Timeline', 'Status line'] as const;
+
+// One scene per theme (the theme is set at launch) shows all of its shots: the two agents and the hand-off are set up once, then the chat style is switched.
+for (const theme of ['light', 'dark'] as const) {
+  test(`an agent's message in the chat as cards, timeline and status line in the ${theme} theme${theme === 'dark' ? ', and folded in a narrow chat' : ''}`, async () => {
+    const shotOf = (style: string, narrow: boolean) =>
+      `${theme === 'light' ? '' : 'dark-'}chat-agent-message-${style.toLowerCase().replace(' ', '-')}${narrow ? '-folded' : ''}`;
+    // Past four lines it folds, shown in a chat narrow enough for the message to wrap that far.
+    const shots = [
+      ...AGENT_MESSAGE_STYLES.map((style) => ({ style, narrow: false })),
+      ...(theme === 'dark' ? [{ style: 'Cards', narrow: true }] : []),
+    ];
+    needsBaselines(...shots.map(({ style, narrow }) => shotOf(style, narrow)));
     const { dir, repo, env } = scratch('output');
     const dataDir = tempDataDir();
     const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, AGENT_BOARD_APPEARANCE: theme, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
@@ -170,14 +174,18 @@ for (const { style, theme, narrow } of [
       await window.setViewportSize(VIEWPORT);
       await window.emulateMedia({ colorScheme: theme });
       await pinFonts(window);
-      await showAgentMessage(app, window, repo, style);
-      if (narrow) await window.addStyleTag({ content: '.session-chat-view .chat-view { max-width: 440px; }' });
-      await pinRandomText(window);
-      await pinChatTimes(window);
-      const restorePointer = await ignorePointer(window);
-      await settle(window);
-      await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shot}.png`, SHOT);
-      await restorePointer();
+      await showAgentMessage(app, window, repo);
+      for (const { style, narrow } of shots) {
+        await sessionWindow(window).getByRole('group', { name: 'Chat style' }).getByRole('button', { name: style }).click();
+        await expect(sessionWindow(window).getByTestId('chat-frame').getByTestId('chat-agent-message')).toHaveCount(1);
+        if (narrow) await window.addStyleTag({ content: '.session-chat-view .chat-view { max-width: 440px; }' });
+        await pinRandomText(window);
+        await pinChatTimes(window);
+        const restorePointer = await ignorePointer(window);
+        await settle(window);
+        await expect.soft(sessionWindow(window)).toHaveScreenshot(`${shotOf(style, narrow)}.png`, SHOT);
+        await restorePointer();
+      }
     } finally {
       await app.close();
       await removeDataDir(dataDir);

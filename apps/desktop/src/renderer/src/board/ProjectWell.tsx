@@ -1,11 +1,13 @@
 import { createContext, useContext, useState, type CSSProperties, type MouseEvent } from 'react';
 import { NodeResizer, type NodeProps } from '@xyflow/react';
+import { ClustersView, ShelvesView } from './ShelvesView';
 import { Ellipsis } from 'lucide-react';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { MIN_ZONE_SIZE, type ArrangeSpacing } from '@agent-board/daemon/protocol';
 import { Chip, ContextMenu, EditableName, Menu, useRenaming } from '../ui';
 import { useTechnicalDetails } from '../technical';
 import { CrewFramesContext } from './crew-view';
+import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { projectContextMenu, projectMenu, type ProjectMenuInput } from './menu-model';
 import { ProjectSummaryContext } from './project-summary';
 import { StatusGlyph } from './StatusMark';
@@ -32,7 +34,7 @@ export const NewNoteContext = createContext<(at: { x: number; y: number }) => vo
  * many of its agents need the user and a count of the rest. Every control of the Classic zone's tab is in its ⋯ and its
  * right-click menu, from the menu model; a double-click on the name still renames it.
  */
-export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
+export function ProjectWell({ data: { zone, tileCount = 0, resizeMin, shelves, clusters }, selected, positionAbsoluteX, positionAbsoluteY, width, height }: NodeProps<ZoneNodeType>) {
   const saveLayout = useContext(SaveZoneLayoutContext);
   const resize = useContext(ZoneResizeContext);
   const rows = leastZoneSize(tileCount, { width: width ?? 0, height: height ?? 0 }, zoneGrid(zone.spacing));
@@ -49,7 +51,7 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected
   const cancelClone = useContext(CancelCloneContext);
   const addIssue = useContext(AddIssueContext);
   const dropTarget = useContext(DropTargetContext) === zone.id;
-  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id);
+  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id && shelves === undefined && clusters === undefined);
   const summary = useContext(ProjectSummaryContext).get(zone.id);
   const technical = useTechnicalDetails();
   const renaming = useRenaming(zone.name, (name) => binding.rename(zone, name));
@@ -97,20 +99,11 @@ export function ProjectWell({ data: { zone, tileCount = 0, resizeMin }, selected
       style={{ '--zone-color': zone.color, '--zone-fill-pct': zone.fillOpacity ?? undefined } as CSSProperties}
       onContextMenu={onContextMenu}
     >
-      {crews.map((frame) => (
-        <div
-          key={frame.orchestratorId}
-          className="crew-frame"
-          data-testid="crew-frame"
-          data-orchestrator={frame.orchestratorId}
-          data-members={frame.members.join(' ')}
-          style={{ left: frame.x, top: frame.y, width: frame.width, height: frame.height }}
-        >
-          <span className="crew-frame-label">{frame.name}&apos;s crew</span>
-        </div>
-      ))}
+      <CrewFrameBoxes frames={crews} />
+      {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
+      {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
       <NodeResizer
-        isVisible={selected}
+        isVisible={selected && shelves === undefined && clusters === undefined}
         color={zone.color}
         minWidth={Math.max(MIN_ZONE_SIZE.width, least.width)}
         minHeight={Math.max(MIN_ZONE_SIZE.height, least.height)}

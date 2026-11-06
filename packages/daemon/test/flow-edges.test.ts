@@ -821,7 +821,7 @@ describe('held payloads', () => {
 
   it('keeps a copy by default, and delivers the plan as it was when A handed off', async () => {
     const { client, recorder, a, b, edge, held } = await heldPlan();
-    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', keepWebLogins: true });
+    expect(await client.call('settings.get')).toEqual({ heldPayloads: 'copy', claudePath: '', codexPath: '', compactWindow: 0, clickableLinks: true, needsYouShows: 'explicit', notifications: true, notifyInFront: false, arrangeSpacing: 'roomy', keepWebLogins: true, defaultEffort: null, roleEfforts: {} });
     expect(held.held).toMatchObject({ name: 'plan.md', copy: true });
     const before = recorder.events.length;
     writeFileSync(join(a.worktree, 'plan.md'), 'Second plan\n');

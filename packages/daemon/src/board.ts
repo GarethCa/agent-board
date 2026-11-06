@@ -1,3 +1,4 @@
+import { pageFor } from './agent-page.ts';
 import { pinRefParams, recordFor, recordParams, unpinFor } from './agent-records.ts';
 import type { AgentHost } from './agents.ts';
 import { checkPayloadPath } from './flow-payloads.ts';
@@ -20,8 +21,17 @@ import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import type { SessionHost } from './sessions.ts';
 import type { ShellHost } from './shells.ts';
 
-/** The `board.*` methods here; a question and a plan wait on the user, so `asks.ts` has them, and `gate-actions.ts` opening a pull request. */
-type BoardMethods = Pick<DaemonMethods, Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest'>>;
+/** The memories' and queues' methods, `memory-queue.ts`'s. */
+type MemoryQueueMethod = `board.${'new' | 'list' | 'read' | 'change'}${'Memory' | 'Memories' | 'Queue' | 'Queues'}` | 'board.memoryHistory' | 'board.queueHistory' | 'board.drainQueue';
+
+/**
+ * The `board.*` methods here; a question and a plan wait on the user, so `asks.ts` has them, `gate-actions.ts` opening a
+ * pull request, `steps.ts` the steps cards, and `memory-queue.ts` the memories and queues.
+ */
+type BoardMethods = Pick<
+  DaemonMethods,
+  Exclude<Extract<keyof DaemonMethods, `board.${string}`>, 'board.ask' | 'board.presentPlan' | 'board.showDoc' | 'board.openPullRequest' | 'board.newSteps' | 'board.readSteps' | 'board.updateSteps' | MemoryQueueMethod>
+>;
 
 /**
  * A connection, as the board methods see it: the session whose board token it presented, if it has, and a signal
@@ -161,7 +171,7 @@ export type ActivityLogger = (
  */
 export function boardHandlers<Context extends BoardConnection>(
   options: BoardCallerSources & {
-    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get' | 'flag' | 'clearFlag' | 'records' | 'announce'>;
+    agents: Pick<AgentHost, 'setStatus' | 'markFinished' | 'get' | 'flag' | 'clearFlag' | 'records' | 'pages' | 'announce'>;
     flowEdges: Pick<FlowEdgeHost, 'handOffExplicitly'>;
     logActivity: ActivityLogger;
     /** Throws unless the agent may name `to` in a hand-off with no edge to it (`OrchestratorHost.checkHandoffTarget`). */
@@ -234,6 +244,21 @@ export function boardHandlers<Context extends BoardConnection>(
       if (removed === undefined) throw invalidParams(`no pin ${ref.label ?? ref.url ?? ref.path} on ${on === me.sessionId ? 'your sidebar' : "your orchestrator's sidebar that you pinned there"}`);
       agents.announce(on);
       return removed;
+    },
+    'board.setPage': (params, connection) => {
+      const p = paramsObject(params);
+      const who = caller(p, connection);
+      const me = who.kind === 'agent' ? agents.get(who.tileId) : undefined;
+      if (me === undefined) throw invalidParams('only an agent has a page; this is a shell tile');
+      if (p.page === undefined) throw invalidParams('give a page, or null to clear it');
+      if (p.page === null) {
+        if (!agents.pages.clear(me.sessionId)) throw invalidParams('you have no page to clear');
+        agents.announce(me.sessionId);
+        return null;
+      }
+      const page = agents.pages.put(me.sessionId, pageFor(me.cwd, p.page));
+      agents.announce(me.sessionId);
+      return page;
     },
     'board.needsYou': (params, connection) => {
       const p = paramsObject(params);

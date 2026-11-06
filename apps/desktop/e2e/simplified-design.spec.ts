@@ -17,8 +17,8 @@ const terminalFont = (page: Page) => page.getByTestId('session-terminal').first(
 const mark = (page: Page) => page.evaluate(() => Object.assign(globalThis, { simplifiedDesignMark: true }));
 const marked = (page: Page) => page.evaluate(() => 'simplifiedDesignMark' in globalThis);
 
-const CLASSIC_DESK = 'rgb(246, 244, 239)';
-const SIMPLIFIED_DESK = 'rgb(243, 243, 245)';
+/** The light theme's desk, the same under either design: the design changes shapes and type, never the palette. */
+const DESK = 'rgb(246, 244, 239)';
 
 test('turning on the Simplified design in Settings switches the board and a popped-out window at once, and turning it off brings Classic back', async () => {
   const dataDir = tempDataDir();
@@ -32,7 +32,7 @@ test('turning on the Simplified design in Settings switches the board and a popp
     // Classic leaves no mark on either window.
     expect(await design(window)).toBeNull();
     expect(await design(popped)).toBeNull();
-    expect(await desk(window)).toBe(CLASSIC_DESK);
+    expect(await desk(window)).toBe(DESK);
     expect(await terminalFont(popped)).toContain('JetBrains Mono');
     await mark(window);
     await mark(popped);
@@ -45,7 +45,7 @@ test('turning on the Simplified design in Settings switches the board and a popp
     await expect(toggle).toBeChecked();
     await expect.poll(() => design(window)).toBe('simplified');
     await expect.poll(() => design(popped)).toBe('simplified');
-    expect(await desk(window)).toBe(SIMPLIFIED_DESK);
+    expect(await desk(window)).toBe(DESK);
     // The open terminal follows too, under the app's own theme, where data-theme stays as it was.
     await expect.poll(() => terminalFont(popped)).toContain('SF Mono');
 
@@ -53,7 +53,7 @@ test('turning on the Simplified design in Settings switches the board and a popp
     await expect(toggle).not.toBeChecked();
     await expect.poll(() => design(window)).toBeNull();
     await expect.poll(() => design(popped)).toBeNull();
-    expect(await desk(window)).toBe(CLASSIC_DESK);
+    expect(await desk(window)).toBe(DESK);
     await expect.poll(() => terminalFont(popped)).toContain('JetBrains Mono');
     expect(await marked(window)).toBe(true);
     expect(await marked(popped)).toBe(true);
@@ -70,7 +70,7 @@ test('opened in the Simplified design, a theme pack shows on its own desk, and p
     expect(await theme(window)).toBe('catppuccin-latte');
     expect(await surface(window)).toBe('#e6e9ef');
     expect(await desk(window)).toBe('rgb(230, 233, 239)');
-    // The window opened on the pack's desk too, so it never flashed the Simplified design's own.
+    // The window opened on the pack's desk too, so it never flashed another.
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBackgroundColor())).toBe('#E6E9EF');
     // The Simplified design's own type still shows over the pack.
     expect(await window.evaluate(() => getComputedStyle(document.body).fontFamily)).toContain('-apple-system');

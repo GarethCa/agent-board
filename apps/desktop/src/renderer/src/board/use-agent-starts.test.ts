@@ -9,6 +9,7 @@ const start = (sessionId: string, fields: Partial<AgentStart> = {}): AgentStart 
   name: sessionId,
   harness: 'claude',
   model: null,
+  effort: null,
   spawnedBy: null,
   steps: [{ kind: 'worktree', state: 'now', detail: null }],
   error: null,

@@ -225,6 +225,28 @@ describe('fake claude', () => {
     await done;
   });
 
+  it('ask-questions: asks with its question tool beside its PermissionRequest hook, and the typed answer comes back in PostToolUse', async () => {
+    await recorder.close();
+    recorder = await startHookRecorder((event) => (event.hook_event_name === 'PermissionRequest' ? new Promise(() => {}) : undefined));
+    const { child, done } = startFake('claude', { scenario: 'ask-questions', args: ['--settings', settings(), 'set up the build'] });
+    const shown = untilStdout(child, '3. Other');
+    await untilEvents(recorder, 'PermissionRequest');
+    await shown;
+
+    const said = untilStdout(child, 'Going with Redis.');
+    child.stdin.write('1\n');
+    await said;
+    await untilEvents(recorder, 'Stop');
+    const questions = [{ question: 'Which cache should the build use?', header: 'Cache', options: [{ label: 'Redis', description: 'Shared across machines' }, { label: 'In memory', description: 'One per process' }], multiSelect: false }];
+    expect(recorder.events.find((event) => event.hook_event_name === 'PermissionRequest')).toMatchObject({ tool_name: 'AskUserQuestion', tool_input: { questions } });
+    expect(recorder.events.find((event) => event.hook_event_name === 'PostToolUse')).toMatchObject({
+      tool_name: 'AskUserQuestion',
+      tool_input: { questions, answers: { 'Which cache should the build use?': 'Redis' } },
+    });
+    child.stdin.end();
+    await done;
+  });
+
   it('permission: an allow carrying a session-scoped rule is remembered, and a plain allow is not', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
@@ -484,6 +506,19 @@ describe('fake claude', () => {
     expect(recorder.events.at(-1)).toMatchObject({ hook_event_name: 'SessionEnd', reason: 'prompt_input_exit' });
   });
 
+  it('sets its reasoning effort with /effort at its prompt, as the real TUI does, starting no turn and firing no hook', async () => {
+    const { child, done } = startFake('claude', { scenario: 'output', args: ['--settings', settings(), '--effort', 'low', 'fix the tests'] });
+    await untilEvents(recorder, 'Stop');
+
+    child.stdin.write('/effort max\n');
+    await untilStdout(child, 'Set effort level to max');
+    await sleep(200);
+    child.stdin.end();
+    await done;
+
+    expect(recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit')).toHaveLength(1);
+  });
+
   it('interactive with FAKE_HARNESS_REPEAT: replays the scenario for each new stdin line', async () => {
     await recorder.close();
     recorder = await startHookRecorder((event) =>
@@ -551,6 +586,44 @@ describe('fake claude', () => {
     const stops = recorder.events.filter((event) => event.hook_event_name === 'Stop');
     expect(stops).toHaveLength(1);
     expect(stops[0]).toMatchObject({ last_assistant_message: 'Done: try again.' });
+  });
+
+  it('busy: a prompt to keep busy streams a turn that never ends, redrawing its spinner and running a tool call a second with its hooks, until Ctrl-C; any other prompt is answered and left at the prompt', async () => {
+    const { child, done } = startFake('claude', {
+      scenario: 'busy',
+      args: ['--settings', settings(), 'Keep busy: refactor the store'],
+      env: { FAKE_HARNESS_STEP_DELAY_MS: '20' },
+    });
+
+    await untilEvents(recorder, 'PostToolUse', 2);
+    expect(recorder.events.map((event) => event.hook_event_name)).not.toContain('Stop');
+    child.kill('SIGINT');
+    await untilStdout(child, 'Interrupted');
+
+    child.stdin.write('how is it going\n');
+    await untilEvents(recorder, 'Stop');
+    child.stdin.end();
+    const result = await done;
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.split('\r\x1b[2K✻ Working').length - 1).toBeGreaterThan(5);
+    const stops = recorder.events.filter((event) => event.hook_event_name === 'Stop');
+    expect(stops).toEqual([expect.objectContaining({ last_assistant_message: 'Done: how is it going.' })]);
+
+    const other = await runFake('claude', { scenario: 'busy', args: ['look around'] });
+    expect(other.code).toBe(0);
+    expect(other.stdout).toContain('Ready.');
+    expect(other.stdout).not.toContain('Working');
+  });
+
+  it('busy: with FAKE_HARNESS_BACKLOG_LINES, prints that many lines of an earlier conversation before its answer', async () => {
+    const result = await runFake('claude', { scenario: 'busy', args: ['look around'], env: { FAKE_HARNESS_BACKLOG_LINES: '50' } });
+
+    expect(result.code).toBe(0);
+    const lines = result.stdout.split('\n');
+    const backlog = lines.filter((line) => line.includes('Read src/session/store-'));
+    expect(backlog).toHaveLength(50);
+    expect(lines.indexOf(backlog.at(-1)!)).toBeLessThan(lines.findIndex((line) => line.includes('Ready.')));
   });
 
   it('SIGINT interrupts a turn waiting on a y/n permission answer', async () => {

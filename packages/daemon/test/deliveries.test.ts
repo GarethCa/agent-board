@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { drawRateLimitMenu, rateLimitMenuRows } from '@agent-board/fake-harness';
 import { createDeliveries, type DeliveryRow, type PromptNow } from '../src/deliveries.ts';
 import { invalidParams } from '../src/params.ts';
-import type { AgentState } from '../src/protocol.ts';
+import type { AgentState, PermissionPrompt } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
 import { createFakeClock } from './fake-clock.ts';
 
@@ -40,7 +40,7 @@ function setup(rows: Row[], notReady?: string) {
   const clock = createFakeClock(new Date('2026-10-22T10:00:00Z'));
   const prompt: { now: PromptNow } = { now: 'at-prompt' };
   /** The state the agents show, and what they last said. */
-  const shown: { state: AgentState; lastMessage?: string } = { state: 'idle' };
+  const shown: { state: AgentState; lastMessage?: string; permissions?: PermissionPrompt[] } = { state: 'idle' };
   /** Why the agents can't take a run now, if they can't. */
   const ready: { why: string | undefined } = { why: notReady };
   /** What writing to an agent's terminal throws, if it fails. */
@@ -54,7 +54,7 @@ function setup(rows: Row[], notReady?: string) {
     requireAgent(sessionId) {
       const found = byId.get(sessionId);
       if (found === undefined) throw invalidParams(`no agent ${sessionId}`);
-      return { name: found.name, endedAt: found.ended_at, state: shown.state, lastMessage: shown.lastMessage ?? null };
+      return { name: found.name, endedAt: found.ended_at, state: shown.state, lastMessage: shown.lastMessage ?? null, permissions: shown.permissions ?? [] };
     },
     whyNotReady: () => ready.why,
     pausing: () => undefined,
@@ -93,6 +93,27 @@ function setup(rows: Row[], notReady?: string) {
 }
 
 describe('deliveries', () => {
+  it('types a command the harness runs itself only at a free prompt, and keeps it as unsent should the user type meanwhile', async () => {
+    const { deliveries, writes, prompt, advance, notSent } = setup([row('a')]);
+    prompt.now = 'working';
+    expect(await deliveries.typeCommand('a', '/effort high')).toBe('it is not at its prompt');
+    expect(writes).toEqual([]);
+
+    prompt.now = 'at-prompt';
+    const typed = deliveries.typeCommand('a', '/effort high');
+    await advance(10);
+    // The user starts typing in its terminal before Enter is pressed: what is at the prompt is theirs to send or clear.
+    prompt.now = 'typing';
+    await advance(2_000);
+    expect(await typed).toBe('you are typing at its prompt');
+    expect(writes).toEqual([['a', '/effort high']]);
+    expect(deliveries.unsent('a')).toBe('Reasoning (/effort high)');
+    expect(notSent.at(-1)).toEqual(['a', 'Reasoning (/effort high)', 'you typed at its prompt meanwhile', true]);
+    // Nothing more is typed onto it.
+    prompt.now = 'at-prompt';
+    expect(await deliveries.typeCommand('a', '/effort high')).toBe('a message typed at its prompt was never sent');
+  });
+
   it("types an agent's first prompt only once its session is up, then the messages and runs sent to it before then, in order", async () => {
     const { deliveries, writes, land, advance, prompt } = setup([row('a'), row('from', { name: 'planner' })]);
     const { promise: up, resolve: comeUp } = Promise.withResolvers<boolean>();
@@ -589,6 +610,16 @@ describe('an answer that waited its turn', () => {
     await delivered;
     await refused;
     expect(writes).toHaveLength(2);
+  });
+
+  it("types nothing at an agent whose question tool's dialog is up, where its keys would pick an answer", async () => {
+    const { deliveries, writes, shown } = setup([row('a')]);
+    shown.state = 'waiting';
+    const questions = [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }], multiSelect: false }];
+    shown.permissions = [{ id: 'q', toolName: 'AskUserQuestion', toolInput: { questions }, subagent: null, requestedAt: '2026-10-09T10:00:00.000Z', heldUntil: null, asksInTerminal: true, sessionGrant: null, questions }];
+
+    await expect(deliveries.answer('a', 'Redis')).rejects.toMatchObject({ message: 'a is asking you questions: answer them in its terminal' });
+    expect(writes).toEqual([]);
   });
 
   it('is typed as before while the agent works through the turn it waited behind: its Enter queues it', async () => {

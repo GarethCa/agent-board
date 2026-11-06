@@ -1,6 +1,6 @@
 import { createContext } from 'react';
 import type { Node } from '@xyflow/react';
-import type { Agent, DocumentSummary, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
+import type { Agent, DocumentSummary, Effort, ExternalSession, Harness, PullRequest, RecentFolder, Shell } from '@agent-board/daemon/protocol';
 import type { ClickOpens } from './click-opens';
 import { renameDirect, type RenameTarget } from './rename';
 import type { ShownStart } from './use-agent-starts';
@@ -93,6 +93,8 @@ export interface TileActions {
   scheduleAgent(agent: Agent): void;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): void;
+  /** Sets the agent's reasoning effort: typed at its prompt between turns, or kept for its next restart, as it can. */
+  setEffort(sessionId: string, effort: Effort | null): void;
   /**
    * Renames an agent's or shell's tile, or labels a shell's pane (a blank name takes a pane's label off). Rejects if
    * it could not (after saying why), so the field can stay as it was. Undoable on the board.
@@ -179,6 +181,7 @@ export const TileActionsContext = createContext<TileActions>({
   linkIssue: () => {},
   scheduleAgent: () => {},
   setMuted: () => {},
+  setEffort: () => {},
   // Outside the board (a popped-out window) there is no history to record in.
   rename: async (target, name) => void (await renameDirect(target, name)),
   openLink: () => {},

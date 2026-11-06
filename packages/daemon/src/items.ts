@@ -12,6 +12,7 @@ import {
   COLOR_SLOTS,
   FILL_SLOTS,
   HARNESSES,
+  isFreshAgent,
   IMAGE_EXTENSIONS,
   issueCardProblem,
   MAX_ITEM_DATA_BYTES,
@@ -38,6 +39,8 @@ import {
 } from './protocol.ts';
 
 import type { RpcHandlers, RpcMethodError } from './rpc.ts';
+import { checkMemoryData, checkQueueData } from './memory-queue.ts';
+import { checkStepsData } from './steps.ts';
 import { zoneIdParam } from './tile-position.ts';
 
 type ItemMethods = Pick<DaemonMethods, Extract<keyof DaemonMethods, `item.${string}` | `image.${string}`>>;
@@ -140,6 +143,9 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     checkOneOf('a document card', data, 'format', PLAN_FORMATS);
     checkBoolean('a document card', data, 'collapsed');
   },
+  steps: (data) => checkStepsData(data),
+  memory: (data) => checkMemoryData(data),
+  queue: (data) => checkQueueData(data),
   plan: (data) => {
     const agent = data.agent as Record<string, unknown> | undefined;
     if (!isObject(agent) || typeof agent.sessionId !== 'string' || typeof agent.name !== 'string' || !isOneOf(HARNESSES, agent.harness)) {
@@ -207,14 +213,7 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
     for (const key of ['agent', 'handoffTo']) {
       if (data[key] !== null && typeof data[key] !== 'string') throw invalidParams(`a clock's ${key} must be a session id or null`);
     }
-    const fresh = data.fresh;
-    const ok =
-      isObject(fresh) &&
-      isOneOf(HARNESSES, fresh.harness) &&
-      (fresh.model === null || typeof fresh.model === 'string') &&
-      (fresh.role === null || typeof fresh.role === 'string') &&
-      typeof fresh.closeWhenDone === 'boolean';
-    if (!ok) throw invalidParams("a clock's fresh must be { harness, model, role, closeWhenDone }");
+    if (!isFreshAgent(data.fresh)) throw invalidParams("a clock's fresh must be { harness, model, role, closeWhenDone }");
   },
   shape: (data) => {
     const owner = 'a shape';

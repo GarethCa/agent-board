@@ -27,9 +27,22 @@ The needs-you inbox listed every live agent `waiting` or needing permission. Hoo
 - **A crew member's question or plan is a flag too.** While its orchestrator is live, `board.ask` and `board.presentPlan` hold nothing: they set the crew member's flag (`asks: <question> (<options>)`, or `plan to review, in <path>: <title>`). Nothing is cut silently: a question and options too long for a flag are written in full to `CREW_QUESTION_PATH` in the crew member's worktree, and the flag names the file and how many options it has, with the question's start and answer at once with `SentToOrchestrator`, telling the agent to end its turn, as the orchestrator's answer comes as its next message (`send` takes only an agent between turns). A plan's body is written to `CREW_PLAN_PATH` in the crew member's worktree, where `agent-board read` reaches it; not for an agent resumed in a folder of the user's (`ownsWorktree` false), whose plan waits for the user as any other. Crew members start in worktrees agent-board made, so that is rare. Once its orchestrator has ended, its question or plan waits for the user as any agent's does.
 - **Typed as a hand-off is.** The message goes through the deliveries' queue, after any line still being typed, and only while the orchestrator is ready for its next message by the rule hand-offs and scheduled runs use (`whyNotReady`): at its prompt with nothing pending, not in Claude's own question or dialog (a `waiting` its idle prompt didn't make), and not while the user has a half-typed line there. Refused, it stays pending and is tried again at the orchestrator's next update.
 
+## A steps card an agent waits on is a request
+
+A steps card (ADR-0014) holds nothing: its agent ends its turn and waits for the message. So that it isn't lost behind the board, an agent waiting on one is in the list, by two kinds after a plan in `needsYouKind`'s order (permission, question, plan, steps, to-do, flag, turn):
+
+- **Steps**: a set the agent made, of questions the user answers (not its orchestrator, while that is live), not closed, whose answers have not been sent. A set its held ask waits on is that ask's row. Sent, it goes.
+- **To-do**: a to-do of the user's on a card an agent made, which the agent waits on (`steps wait`), until it is ticked. A list the user made never shows here.
+
+The daemon works this out from the cards it keeps, and gives each live agent the card it waits on (`Agent.stepsWait`: the card, its title, the step that matters, how many questions are open), its own set before a to-do, so every client reads it with `needsYouKind` as the other kinds. Another card, or another to-do waited on, is a new request: `seen` clears and it is notified once. The user's answers moving a set on are not. An agent ending takes its waits with it, and an orchestrator ending makes its crew's sets the user's. A resumed agent's waits come back, as its cards still hold them, unread as they were never answered; a resumed orchestrator answers its crew's sets again.
+
 ## Notifications follow the list
 
 `createAgentAlerts` raises one OS notification per new request in the inbox, with its reason. It keeps, per agent, every request standing as it was last heard (its permission prompts as one, each question id, plan version and flag id), not only the most pressing: a request is told of once while it stands, so a flag that outlasts a permission prompt isn't told of again, and one raised behind a question still is. One that goes is forgotten, so its return is news. A turn ending, a failure and an end raise none. `notifications` turns them off, and `notifyInFront` (off by default) whether they come while one of the app's windows is in front and drawn. A muted agent still raises none.
+
+## The Simplified design's list adds what isn't a request
+
+Under the Simplified design the list has two sections after the requests: changes ready to accept and problems (ADR-0022). They are what the agent's tile already says needs a look, not requests, so `needsYouKind` doesn't count them. The pill, the dock badge and notifications don't count them either, and they aren't listed in Classic's popover.
 
 ## Considered options
 

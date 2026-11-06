@@ -13,6 +13,8 @@ Board state (zones, tiles, sessions, edges, schedules, runs, tracker links) live
 
 **Update**: `migrate()` runs migrations with foreign keys off, and turns them back on afterwards if they were on. SQLite can't drop a `NOT NULL`, so making `zones.repo_root` nullable rebuilds the `zones` table (create, copy, drop, rename). With foreign keys on, dropping a table that `agents` and `shells` reference fails. Before each migration commits, `migrate()` runs `PRAGMA foreign_key_check`. A broken reference fails the migration and rolls it back, so turning foreign keys off never lets a migration leave a dangling reference. This is SQLite's documented procedure for changing a table's schema.
 
+**Update**: with foreign keys off, no `ON DELETE` action fires during a migration either: deleting a row leaves the rows that point at it pointing at nothing, and `foreign_key_check` then fails the migration on a user's data. So a migration that deletes rows (with `DELETE`, or `REPLACE` on a conflict) must first delete or update the rows that point at them. `migrate.test.ts` scans every shipped migration for a delete that comes before any write to a table referencing it. It checks the order and that the write is there, not that its `WHERE` matches: a test with child rows over the migration does that.
+
 **Update**: board items live in their own `board_items` table, with kind-specific fields in a JSON `data`
 column so a new kind needs no migration. The daemon checks `data` against the item's kind on every write, and caps it
 at 64 KiB. One rule lives in the schema rather than the daemon: a `BEFORE DELETE ON zones` trigger moves a removed
@@ -20,6 +22,31 @@ zone's items out onto the board at the same absolute place, so no code path that
 pointing at it. `zone.remove` then announces the moved items as `item.updated`. A migration that rebuilds `zones`
 (drop and recreate) drops this trigger with it, and must create it again; `migrate.test.ts` checks the trigger
 exists after every shipped migration.
+
+**Steps cards**: a steps card is a board item of kind `steps` whose `data` holds the whole set: its
+title, who made it and who answers it, every step with its tick or answer, the answers as last sent, and who waits on
+which step. No table of its own: the item is the set, so there is nothing to keep in step with it, it survives a
+restart, it goes only when the user takes it off the board, and `item.updated` tells the app of each change. Its limits
+(50 steps, 12 questions, 9 choices, 500 characters a text, 2,000 an answer) keep an everyday card far inside the 64 KiB
+cap, but a card at every limit at once would pass it. So the answers as last sent are kept only as short fingerprints,
+and each change is measured before it is saved: one that would take the card past the cap is refused, saying to shorten
+its longest answers or steps, and tells no one. Its own methods (`steps.ts`) change it, each change to a card in turn.
+
+**Memories and queues**: a memory or a queue is a board item (kind `memory`, `queue`) whose `data` holds only its
+title, maker, scope switch (`noAgents`), audience (a queue's) and a count for the card, as its contents would soon pass
+the 64 KiB cap: up to 500 entries and 8 MB a memory, files up to 1 MB, and 200 open jobs a queue. Its entries and jobs
+are rows of `memory_entries` and `queue_jobs`, and every change to one is a row of `board_history` holding the row as
+the change left it (the last 20 a row, 5 for a file), which is what `history` lists and `restore` puts back. A memory's
+or queue's history holds at most 8 MB of values besides: past that the oldest versions go, those of rows removed since
+first, so adding and removing files in a loop can't grow the database without end. A removed row keeps its remove. File
+entries are text kept in their row, not on disk as images are, so a file's versions and its restore go through the same
+table with nothing to sweep. Neither table has a foreign key to `board_items`: undoing an item's delete makes it again
+with the same id, and finds its rows still there. The daemon sweeps rows whose item is gone as it starts. A change runs in
+one transaction, and then updates the card's count, so `item.updated` tells the app of every change.
+
+Removing a zone still moves its items loose, but `board_items_leave_removed_zone` now also sets a memory's or queue's
+`noAgents`: loose, it would otherwise widen from its zone's agents to every agent on the board. The user chooses its
+scope again from there. The trigger was dropped and made again for this, as the rule above asks.
 
 **Update**: image bytes are not in SQLite. The daemon keeps them as files under `<data dir>/images/`,
 content-addressed as `<sha256>.<ext>`, so the same bytes pasted twice are stored once. An image item's `data` holds only
@@ -66,6 +93,20 @@ own tabs with it, re-owned to the same owner, so a tab's owner is still always a
 tab among its owner's (NULL for older rows, which sort first by rowid), so one moved in lands last and an undone move goes
 back where it was. A pane leaving a split is a new row (`shell.movePane`), and `shell.returnPane` puts the source's layout
 back verbatim for undo. Connectors on a tile that becomes a tab stay in the table and are drawn again if it comes back.
+
+**Crew prefabs**: the crew prefab library is one table for the whole app, `crew_prefabs`, keyed by name in
+any case, as `default_roles` is: not one per board, so every board has the same library. A row's body is the prefab's
+`.crew.json` text, read with the file's own strict parser on every write and read, so the table and a shared file can
+never mean different things, and a field the parser drops can't survive in a row. The built-ins are not rows: they live
+in the code, so a new release can change them, and no row may take a built-in's name.
+
+**Running crews**: a crew started from a prefab with reviewers at the hand-off is a row of `crews` (migration
+`0076_crews`): the prefab's `.crew.json` text as it was started, so editing or removing the prefab later changes no
+running crew; its zone, its starter (null for the user), its builder's session, the prompt, its round and round limit,
+whose turn it is (`phase`, since `phase_at`), and why it stopped. Each reviewer it started is a row of `crew_reviewers`,
+with its round and, once read, its review's verdict, text and open blockers. Neither table points at `agents` with a
+key: a crew keeps its history when the user deletes one of its agents. The loop reads what happened while the daemon
+was down from the agents' files on its next start.
 
 **Update**: a session window's panes are kept in a table of their own, `window_layouts` (migration
 `0039_window_layouts`), one row per owner (`owner_kind`, `owner_id`, as a tab's), holding `WindowLayout` JSON: a split

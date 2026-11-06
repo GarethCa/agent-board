@@ -1,6 +1,6 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
-import { needsYouNow, planPending, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, drawnSections, searchable } from './settings-search';
@@ -51,6 +51,8 @@ export interface SpotlightSources {
   canStartAgent?: boolean;
   /** Whether the Simplified design is on, so the settings it alone draws are found; Classic's if unset. */
   simplified?: boolean;
+  /** Whether the Windows group is listed: always under the Simplified design (the default), and under Classic with the windows the dock leaves out. */
+  windowsListed?: boolean;
 }
 
 /** How many sessions Recent lists before anything is typed: the rest are a few letters away. */
@@ -85,15 +87,15 @@ const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; al
  * matches once something is typed, and a session with a window is listed there only; and once something is typed an
  * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has neither.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, simplified = false }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, simplified = false, windowsListed = simplified }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
   const wanted = query.trim();
   // Under the Simplified design a session with a window on the board is listed once, under Windows, whatever it asks.
-  const listed = simplified ? windowSessions(windows) : new Set<string>();
+  const listed = windowsListed ? windowSessions(windows) : new Set<string>();
   const windowRows = (match: (name: string) => readonly number[] | undefined): { id: string; row: SpotlightRow }[] => {
-    if (!simplified) return [];
+    if (!windowsListed) return [];
     const found: { score: number; id: string; row: SpotlightRow }[] = [];
     for (const entry of windows) {
       const agent = entry.kind === 'session' ? agents.find((each) => each.sessionId === entry.id) : undefined;
@@ -239,7 +241,9 @@ function zoneRow(zone: Zone, agents: readonly Agent[], shells: readonly Shell[],
 
 /** What an agent that needs you asks: a permission, its question, a plan to review, or what it last said, on one line. */
 function askOf(agent: Agent): string {
-  const [prompt] = agent.permissions;
+  // A permission comes before questions: it is what Needs you lists the agent for.
+  const prompt = permissionPrompt(agent) ?? questionPrompt(agent);
+  if (prompt?.questions != null) return `asks: ${prompt.questions[0]?.question ?? 'questions'}`;
   if (prompt !== undefined) return `permission: ${prompt.toolName}`;
   if (agent.ask !== null) return `asks: ${agent.ask.question}`;
   if (planPending(agent)) return 'plan to review';

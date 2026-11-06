@@ -21,7 +21,7 @@ const agent = (patch: Partial<Agent>): Agent =>
     ...patch,
   }) as Agent;
 
-const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, at: null };
+const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Which cache?', options: [], freeText: true }], answers: [null], card: null };
 const plan = { id: 'p1', version: 1, title: 'Plan', format: 'markdown' as const, presentedAt: '', expiresAt: '', decision: null, left: false, author: 'agent' as const, path: null };
 const flag = { id: 1, reason: 'Ready for review', at: '', to: 'user' as const, via: null };
 const permission = { id: 'p', tool: 'Bash', input: {}, at: '' } as unknown as Agent['permissions'][number];

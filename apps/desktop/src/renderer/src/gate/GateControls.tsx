@@ -26,7 +26,7 @@ import { useGateRun } from './GatesProvider';
 import { useGateStatus } from './use-gate-status';
 
 /** The clean-up a zone's merges last used, kept in this browser; every step until one is cleared. */
-function keptCleanup(zoneId: string | null): GateCleanup {
+export function keptCleanup(zoneId: string | null): GateCleanup {
   try {
     const kept = JSON.parse(localStorage.getItem(`gate-cleanup:${zoneId ?? ''}`) ?? 'null') as Partial<GateCleanup> | null;
     return kept === null ? ALL_CLEANUP : { ...ALL_CLEANUP, ...kept };

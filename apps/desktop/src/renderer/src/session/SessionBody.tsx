@@ -14,9 +14,13 @@ import { SimplifiedInspector } from './SimplifiedInspector';
 import { ChatView } from './ChatView';
 import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
+import { watchPastePane } from './paste-pane';
 import { PaneDecisions } from './PaneDecision';
-import { paneDecision, useDeferredDecisions } from './pane-decision';
+import { StepsWaitBody } from '../inbox/StepsWaitBody';
+import { stepsWaitKey } from '../../../shared/needs-you';
+import { paneDecision, showsStepsStrip, useDeferredDecisions } from './pane-decision';
 import type { RunsChoice, RunsMode } from './chat';
+import { useChatTheme } from './chat-theme';
 import { ChatAgentsSwitch } from './ChatAgentsFilter';
 import { ChatStyleSwitch } from './ChatStyleSwitch';
 import { ShellPanes } from './ShellPanes';
@@ -168,6 +172,9 @@ export function SessionBody({
   const chatPicked = pickedView !== 'terminal' && agent !== undefined;
   const onShowTerminal = () => switchView('terminal');
   const chat = chatPicked && (panes === undefined || panes.showing(OWN_SURFACE));
+  // A chat can be light; a terminal is dark whatever it says.
+  const chatTheme = useChatTheme();
+  useEffect(watchPastePane, []);
   // Expand all and Collapse all, kept while the window is open, through switches to the terminal and back.
   const [runs, setRuns] = useState<RunsChoice>({ mode: 'auto', at: 0 });
   const pressRuns = (mode: RunsMode) => setRuns((current) => ({ mode, at: current.at + 1 }));
@@ -230,7 +237,7 @@ export function SessionBody({
         />
       </div>
       {agent && (
-        <div className="session-chat-view" hidden={!chatPicked}>
+        <div className="session-chat-view" hidden={!chatPicked} data-chat-theme={chatTheme}>
           <ChatView
             key={agent.sessionId}
             agent={agent}
@@ -384,8 +391,15 @@ export function SessionBody({
             <p className="session-window-pending">Loading panes…</p>
           )}
         </div>
-        {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} onShowTerminal={onShowTerminal} />}
-        {agent && chat && <Composer agent={agent} />}
+        {agent && chat && simplified && <PaneDecisions key={agent.sessionId} agent={agent} onReadPlan={panes && (() => panes.open(planSurfaceOf(agent.sessionId)))} onShowTerminal={onShowTerminal} chatTheme={chatTheme} />}
+        {/* A steps card it waits on: its questions or its to-do, above the composer (or the terminal's foot); under the
+            Simplified pane, after any decision it shows. */}
+        {agent && agent.stepsWait !== null && showsStepsStrip(agent, { simplified, chat }, deferredIds) && (
+          <div className="steps-strip" data-testid="steps-strip">
+            <StepsWaitBody key={stepsWaitKey(agent.stepsWait)} wait={agent.stepsWait} agents={[agent]} open />
+          </div>
+        )}
+        {agent && chat && <Composer agent={agent} chatTheme={chatTheme} />}
       </div>
       {panes?.closing && <CloseTabDialog surface={panes.closing} onAnswer={panes.confirmClose} />}
       {headerViewSwitch}

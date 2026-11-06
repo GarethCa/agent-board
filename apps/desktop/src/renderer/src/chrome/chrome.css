@@ -433,6 +433,55 @@
   outline-offset: var(--focus-ring-offset);
 }
 
+/* Settings' Board background: a swatch over a name, a card each, in a grid that wraps. */
+.backdrop-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--size-backdrop-choice), 1fr));
+  gap: var(--space-1-5);
+}
+
+.backdrop-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.backdrop-choice .board-backdrop-swatch {
+  width: auto;
+}
+
+.backdrop-choice:hover {
+  border-color: var(--check-edge);
+}
+
+.backdrop-choice[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-faint);
+  box-shadow: var(--shadow-picked);
+}
+
+.backdrop-choice:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.backdrop-choice-name {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .theme-card-previews {
   display: flex;
   gap: var(--space-1);
@@ -1531,8 +1580,8 @@
   min-height: 160px;
   flex-direction: column;
   overflow: hidden;
-  background: var(--window-bg);
-  color: var(--window-ink);
+  background: var(--raised);
+  color: var(--text);
 }
 
 /* A code block or table wraps in the panel instead of scrolling sideways as it does in a session window. */
@@ -1605,7 +1654,7 @@
 }
 
 :root[data-design='simplified'] .needs-you-pill.ui-button[data-attention='true'] > svg {
-  color: var(--state-waiting);
+  color: var(--state-waiting-ink);
 }
 
 .needs-you-count {

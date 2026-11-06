@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { ArrowUp, ClipboardList, MessageCircleQuestion, ShieldQuestion } from 'lucide-react';
-import type { Agent, AgentAsk, PermissionDecision, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
+import type { Agent, AgentAsk, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
 import { Button, ErrorText, IconButton, Input, Kbd } from '../ui';
 import { useAskAnswer } from '../inbox/use-ask-answer';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { keyText, pressed } from '../keys/registry';
 import { useNow } from '../inbox/use-now';
-import { useAction } from '../use-action';
-import { secondsLeft } from '../../../shared/needs-you';
+import { PermissionButtons, lowerFirst, usePermissionDecision } from '../inbox/permission-decision';
+import { askAnsweredElsewhere, permissionWaitLine } from '../../../shared/needs-you';
 import { permissionSentence } from '../../../shared/permission-sentence';
+import { QuickAsk, type QuickAskDrafts } from '../board/QuickAsk';
+import { firstOpen } from '../board/quick-ask';
+import { useQuickAskActions } from '../board/TileQuickAsk';
 import { decisionId, deferDecision, deferredDecision, paneDecision, useDeferredDecisions } from './pane-decision';
 
 interface PaneDecisionsProps {
@@ -17,6 +20,8 @@ interface PaneDecisionsProps {
   onReadPlan?(): void;
   /** Shows the agent's terminal, where the harness asks itself; absent where there is none. */
   onShowTerminal?(): void;
+  /** The chat colours the cards are drawn in, as the composer under them is. */
+  chatTheme?: string;
 }
 
 /**
@@ -26,24 +31,24 @@ interface PaneDecisionsProps {
  * (Esc) puts it off: it stays pending, in Needs you and on its tile, and a line above the composer brings it back. It
  * stays put off while the app runs, whether the window closes or its view changes.
  */
-export function PaneDecisions({ agent, onReadPlan, onShowTerminal }: PaneDecisionsProps) {
+export function PaneDecisions({ agent, onReadPlan, onShowTerminal, chatTheme }: PaneDecisionsProps) {
   const deferred = useDeferredDecisions();
   const decision = paneDecision(agent, deferred);
   const putOff = deferredDecision(agent, deferred);
   if (decision !== undefined) {
     const onDefer = () => deferDecision(decisionId(decision));
     if (decision.kind === 'permission') {
-      return <PermissionCard key={decision.prompt.id} agent={agent} prompt={decision.prompt} onDefer={onDefer} onShowTerminal={onShowTerminal} />;
+      return <PermissionCard key={decision.prompt.id} agent={agent} prompt={decision.prompt} onDefer={onDefer} onShowTerminal={onShowTerminal} chatTheme={chatTheme} />;
     }
     return decision.kind === 'ask' ? (
-      <AskDecision key={decision.ask.id} agent={agent} ask={decision.ask} onDefer={onDefer} />
+      <AskDecision key={decision.ask.id} agent={agent} ask={decision.ask} onDefer={onDefer} chatTheme={chatTheme} />
     ) : (
-      <PlanDecision key={decision.plan.id} agent={agent} plan={decision.plan} onDefer={onDefer} onReadPlan={onReadPlan} />
+      <PlanDecision key={decision.plan.id} agent={agent} plan={decision.plan} onDefer={onDefer} onReadPlan={onReadPlan} chatTheme={chatTheme} />
     );
   }
   if (putOff === undefined) return null;
   return (
-    <div className="pane-decision-later" data-testid="pane-decision-later" role="status">
+    <div className="pane-decision-later" data-chat-theme={chatTheme} data-testid="pane-decision-later" role="status">
       {putOff.kind === 'permission' ? <ShieldQuestion aria-hidden /> : putOff.kind === 'ask' ? <MessageCircleQuestion aria-hidden /> : <ClipboardList aria-hidden />}
       <span className="pane-decision-later-text">
         {putOff.kind === 'permission' ? `${agent.name} asked to ${lowerFirst(permissionSentence(putOff.prompt).sentence)}` : putOff.kind === 'ask' ? `${agent.name} asked you a question` : `Plan v${putOff.plan.version} waits for your decision`}
@@ -91,8 +96,40 @@ function DecideLater({ onDefer }: { onDefer(): void }) {
 }
 
 /** A question: who asks and what, then a numbered row per choice, the card taking the keyboard as it shows. */
-function AskDecision({ agent, ask, onDefer }: { agent: Agent; ask: AgentAsk; onDefer(): void }) {
+function AskDecision({ agent, ask, onDefer, chatTheme }: { agent: Agent; ask: AgentAsk; onDefer(): void; chatTheme?: string }) {
+  // Several questions are stepped through here as on its tile; one on the board is answered on its card.
+  if (ask.card === null && ask.questions.length > 1) return <QuickAskDecision agent={agent} ask={ask} onDefer={onDefer} chatTheme={chatTheme} />;
+  return <OneAskDecision agent={agent} ask={ask} onDefer={onDefer} chatTheme={chatTheme} />;
+}
+
+/** An ask of several questions: the quick ask itself, one question at a time, then the answers and Send. */
+function QuickAskDecision({ agent, ask, onDefer, chatTheme }: { agent: Agent; ask: AgentAsk; onDefer(): void; chatTheme?: string }) {
+  const [at, setAt] = useState(() => firstOpen(ask));
+  const { actions, error, busy } = useQuickAskActions(agent.sessionId, ask.id);
+  const decideLater = useDecideLater(onDefer);
+  // Keyed by its ask, the pane is new for each: what is typed but not given lasts as long as it does.
+  const [drafts] = useState<QuickAskDrafts>(() => new Map());
+  return (
+    <section
+      className="pane-decision"
+      data-chat-theme={chatTheme}
+      data-testid="pane-decision"
+      data-kind="ask"
+      aria-label={`${agent.name}'s questions`}
+      onKeyDown={decideLater}
+    >
+      <QuickAsk name={agent.name} ask={ask} at={Math.min(at, ask.questions.length)} onAt={setAt} actions={actions} busy={busy} drafts={drafts} />
+      <footer className="pane-decision-foot">
+        <DecideLater onDefer={onDefer} />
+      </footer>
+      {error && <ErrorText>{error}</ErrorText>}
+    </section>
+  );
+}
+
+function OneAskDecision({ agent, ask, onDefer, chatTheme }: { agent: Agent; ask: AgentAsk; onDefer(): void; chatTheme?: string }) {
   const { text, setText, busy, error, answer, submit, pick } = useAskAnswer(agent.sessionId, ask);
+  const elsewhere = askAnsweredElsewhere(ask);
   const frame = useRef<HTMLElement>(null);
   const decideLater = useDecideLater(onDefer);
   useTakeFocus(frame);
@@ -101,17 +138,19 @@ function AskDecision({ agent, ask, onDefer }: { agent: Agent; ask: AgentAsk; onD
       ref={frame}
       tabIndex={-1}
       className="pane-decision"
+      data-chat-theme={chatTheme}
       data-testid="pane-decision"
       data-kind="ask"
       aria-label={`${agent.name}'s question`}
       onKeyDown={(event) => {
         decideLater(event);
-        pick(event);
+        if (elsewhere === undefined) pick(event);
       }}
     >
       <p className="pane-decision-from">{agent.name} asks</p>
       <p className="pane-decision-question">{ask.question}</p>
-      {ask.options.length > 0 && (
+      {elsewhere !== undefined && <p className="pane-decision-from">{elsewhere}</p>}
+      {elsewhere === undefined && ask.options.length > 0 && (
         <div className="pane-decision-choices" role="group" aria-label={`Answers for ${agent.name}`}>
           {ask.options.map((option, index) => (
             <button
@@ -132,7 +171,7 @@ function AskDecision({ agent, ask, onDefer }: { agent: Agent; ask: AgentAsk; onD
           ))}
         </div>
       )}
-      {ask.freeText && (
+      {elsewhere === undefined && ask.freeText && (
         <form className="pane-decision-reply" onSubmit={submit}>
           <Input
             size="sm"
@@ -153,12 +192,12 @@ function AskDecision({ agent, ask, onDefer }: { agent: Agent; ask: AgentAsk; onD
 }
 
 /** A plan: its version and title, Read the plan, then the decision bar with Reject kept and Approve trailing. */
-function PlanDecision({ agent, plan, onDefer, onReadPlan }: { agent: Agent; plan: PlanSummary; onDefer(): void; onReadPlan?(): void }) {
+function PlanDecision({ agent, plan, onDefer, onReadPlan, chatTheme }: { agent: Agent; plan: PlanSummary; onDefer(): void; onReadPlan?(): void; chatTheme?: string }) {
   const decideLater = useDecideLater(onDefer);
   const frame = useRef<HTMLElement>(null);
   useTakeFocus(frame, '.plan-decision-comments');
   return (
-    <section ref={frame} tabIndex={-1} className="pane-decision" data-testid="pane-decision" data-kind="plan" aria-label={`${agent.name}'s plan`} onKeyDown={decideLater}>
+    <section ref={frame} tabIndex={-1} className="pane-decision" data-chat-theme={chatTheme} data-testid="pane-decision" data-kind="plan" aria-label={`${agent.name}'s plan`} onKeyDown={decideLater}>
       <div className="pane-decision-head">
         <span className="pane-decision-kind">
           <ClipboardList aria-hidden />
@@ -179,39 +218,26 @@ function PlanDecision({ agent, plan, onDefer, onReadPlan }: { agent: Agent; plan
   );
 }
 
-/** `text` with its first letter lower-cased, to carry on a sentence; the rest, a tool's name or a path, is as it is. */
-const lowerFirst = (text: string): string => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
-
-/** How long a card that has just shown ignores clicks, so a second click meant for the last one can't answer it unread. */
-const ARM_AFTER_MS = 400;
-
 /**
  * A permission prompt the board holds the harness's hook for: what the call does in a plain sentence, what it does it to,
- * and the buttons its TUI menu has: Deny, Allow for this session (only where the harness suggested a rule to allow) and
- * Allow once at the trailing edge. A destructive command (`permissionSentence`) has Deny and Review… only, no Allow and
- * no default: Review… shows the terminal, where the harness asks as its own menu does once the hold lapses (the countdown
- * says when). The card only relays a click; it never answers on its own, and Esc only puts it off.
+ * and the buttons its TUI menu has (`PermissionButtons`, shared with the Needs-you list). A destructive command
+ * (`permissionSentence`) has Deny and Review… only, no Allow and no default: Review… shows the terminal, where the
+ * harness asks as its own menu does once the hold lapses (the countdown says when). The card only relays a click; it
+ * never answers on its own, and Esc only puts it off.
  */
-function PermissionCard({ agent, prompt, onDefer, onShowTerminal }: { agent: Agent; prompt: PermissionPrompt; onDefer(): void; onShowTerminal?(): void }) {
-  const { busy, error, run } = useAction();
+function PermissionCard({ agent, prompt, onDefer, onShowTerminal, chatTheme }: { agent: Agent; prompt: PermissionPrompt; onDefer(): void; onShowTerminal?(): void; chatTheme?: string }) {
+  const state = usePermissionDecision(agent, prompt);
   const now = useNow(true);
   const frame = useRef<HTMLElement>(null);
   const decideLater = useDecideLater(onDefer);
   useTakeFocus(frame);
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setArmed(true), ARM_AFTER_MS);
-    return () => clearTimeout(timer);
-  }, []);
-  const call = permissionSentence(prompt);
-  const decide = (decision: PermissionDecision) => run(() => window.agentBoard.agents.decidePermission(agent.sessionId, prompt.id, decision));
-  // Review… lets the harness ask now rather than when the hold lapses, then shows where it asks.
-  const review = () => run(() => window.agentBoard.agents.releasePermission(agent.sessionId, prompt.id), onShowTerminal);
+  const { call, error } = state;
   return (
     <section
       ref={frame}
       tabIndex={-1}
       className="pane-decision"
+      data-chat-theme={chatTheme}
       data-testid="pane-decision"
       data-kind="permission"
       data-destructive={call.destructive || undefined}
@@ -229,31 +255,11 @@ function PermissionCard({ agent, prompt, onDefer, onShowTerminal }: { agent: Age
       )}
       <p className="pane-decision-countdown" data-testid="permission-countdown">
         {call.destructive ? 'This can’t be undone. ' : ''}
-        {prompt.asksInTerminal ? 'Its terminal asks too' : `Then its terminal asks · ${secondsLeft(prompt, now)} s`}
+        {permissionWaitLine(prompt, agent.name, now)}
       </p>
       <footer className="pane-decision-foot pane-decision-actions">
         <DecideLater onDefer={onDefer} />
-        <Button size="sm" variant="danger" disabled={busy || !armed} aria-label={`Deny ${prompt.toolName} for ${agent.name}`} onClick={() => decide({ behavior: 'deny' })}>
-          Deny
-        </Button>
-        {call.destructive ? (
-          onShowTerminal && (
-            <Button size="sm" variant="primary" disabled={busy || !armed} onClick={review}>
-              Review…
-            </Button>
-          )
-        ) : (
-          <>
-            {prompt.sessionGrant !== null && (
-              <Button size="sm" className="pane-decision-grant" disabled={busy || !armed} title={`Allow ${prompt.sessionGrant} for this session`} onClick={() => decide({ behavior: 'allow', scope: 'session' })}>
-                Allow {prompt.sessionGrant} for this session
-              </Button>
-            )}
-            <Button size="sm" variant="primary" disabled={busy || !armed} onClick={() => decide({ behavior: 'allow' })}>
-              Allow once
-            </Button>
-          </>
-        )}
+        <PermissionButtons agent={agent} prompt={prompt} state={state} onReview={onShowTerminal} />
       </footer>
       {error && <ErrorText>{error}</ErrorText>}
     </section>

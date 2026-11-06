@@ -54,6 +54,7 @@ export function claudeInvocation(argv: string[], env: NodeJS.ProcessEnv, cwd: st
       sessionId,
       cwd,
       model,
+      effort: stringFlag(args, '--effort'),
       permissionMode: stringFlag(args, '--permission-mode') ?? 'default',
       startSource: resumeId ? 'resume' : 'startup',
       hooks,

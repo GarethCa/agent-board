@@ -1,5 +1,9 @@
 import type {
   Agent,
+  CrewPrefab,
+  LibraryPrefab,
+  Effort,
+  EffortApplies,
   AgentRecordKind,
   AgentRemovedEvent,
   AgentStart,
@@ -8,10 +12,19 @@ import type {
   AgentTranscriptChangedEvent,
   AgentUpdatedEvent,
   BoardItem,
+  StepAnswer,
   BuildInfo,
   ClockData,
   ClockPlace,
   ClockStatus,
+  HistoryVersion,
+  MemoryChange,
+  MemoryEntry,
+  MemoryView,
+  QueueChange,
+  QueueJob,
+  QueueView,
+  TakenJob,
   ClockUpdatedEvent,
   Connector,
   ConnectorRemovedEvent,
@@ -24,6 +37,7 @@ import type {
   UsageUpdatedEvent,
   FlowCommandApproval,
   FlowEdge,
+  FlowEdgeSent,
   FlowEdgeRemovedEvent,
   FlowEdgeUpdatedEvent,
   FlowDeliveredPayload,
@@ -110,6 +124,7 @@ import type {
 import type { Placement, Surface, WindowLayout } from '@agent-board/daemon/window-layout';
 import type { Appearance } from '../shared/appearance';
 import type { Design } from '../shared/design';
+import type { DockMode } from '../shared/dock';
 
 /** The app lost its connection to the daemon for this attachment; the session itself may still be running. */
 export interface SessionDetachedEvent {
@@ -386,7 +401,7 @@ export interface FlowEdgesApi {
   /** Calls `listener` whenever a daemon setting changes, from any window. Returns the unsubscribe function. */
   onSettingsChanged(listener: (change: SettingsUpdatedEvent) => void): () => void;
   /** Delivers the edge's payload now; resolves with the edge and how its delivery went. */
-  send(id: string): Promise<FlowEdge>;
+  send(id: string): Promise<FlowEdgeSent>;
   delete(id: string): Promise<void>;
   /**
    * Calls `listener` whenever a flow edge is created, changed or deleted by any window, or delivers. One that goes with
@@ -491,7 +506,8 @@ export interface GatesApi {
 /** The IPC channels for agents' questions and plans. */
 export const ASK_IPC = {
   answer: 'ask:answer',
-  place: 'ask:place',
+  sendAsk: 'ask:send',
+  askToCard: 'ask:toCard',
   plans: 'plan:list',
   decide: 'plan:decide',
   editPlan: 'plan:edit',
@@ -501,14 +517,22 @@ export const ASK_IPC = {
   readDoc: 'doc:read',
   saveDoc: 'doc:save',
   commentDoc: 'doc:comment',
+  answerStep: 'steps:answer',
+  tickStep: 'steps:tick',
+  sendSteps: 'steps:send',
 } as const;
 
 /** What the user does with the questions and plans agents wait on. Only their clicks answer them. */
 export interface AsksApi {
-  /** Answers the agent's question `askId`: an option, their own words, or a skip. */
-  answer(sessionId: string, askId: string, answer: AskAnswer): Promise<void>;
-  /** Moves the card of the agent's question `askId` on the board to `at`, where it stays until the question goes. */
-  place(sessionId: string, askId: string, at: { x: number; y: number }): Promise<void>;
+  /**
+   * Answers the agent's question `askId`: an option, their own words, or a skip. For an ask of several questions, answers
+   * its question `index` (0 by default) and keeps it until `sendAsk`; a skip skips the whole ask.
+   */
+  answer(sessionId: string, askId: string, answer: AskAnswer, index?: number): Promise<void>;
+  /** Sends the answers so far of the agent's ask `askId` of several questions, one left unanswered as skipped. */
+  sendAsk(sessionId: string, askId: string): Promise<void>;
+  /** Puts the agent's ask `askId` on the board as a steps card beside its tile; the agent still waits, on the card's Send. */
+  askToCard(sessionId: string, askId: string): Promise<BoardItem>;
   /** The agent's plans, oldest first, with their bodies. */
   plans(sessionId: string): Promise<Plan[]>;
   /** Decides the agent's plan `planId` while it waits on it. */
@@ -517,6 +541,12 @@ export interface AsksApi {
   editPlan(sessionId: string, planId: string, body: string): Promise<PlanSummary>;
   /** Says whether this window's Plan tab has a changed, unsaved draft of the agent's plan `planId`, for every window to hold it. */
   markUnsavedEdit(sessionId: string, planId: string, changed: boolean): Promise<void>;
+  /** Answers the question `stepId` of the steps card `id`, or with null takes the answer back. */
+  answerStep(id: string, stepId: string, answer: StepAnswer | null): Promise<BoardItem>;
+  /** Ticks (or unticks) the user's to-do `stepId` of the steps card `id`. */
+  tickStep(id: string, stepId: string, done: boolean): Promise<BoardItem>;
+  /** Sends the steps card's answers to the agent that made it, typed at its prompt. */
+  sendSteps(id: string): Promise<BoardItem>;
   /** The plans with an unsaved edit in any window, as `planEditKey`s. */
   unsavedEdits(): Promise<string[]>;
   /** Calls `listener` with every plan held whenever that changes. Returns the unsubscribe function. */
@@ -652,6 +682,10 @@ export const ORCHESTRATOR_IPC = {
   usage: 'orchestrator:usage',
   /** main → renderer: `(UsageUpdatedEvent)` for each newer usage reading, and when it goes stale. */
   usageChanged: 'orchestrator:usage-changed',
+  prefabs: 'orchestrator:prefabs',
+  savePrefab: 'orchestrator:save-prefab',
+  removePrefab: 'orchestrator:remove-prefab',
+  checkPrefab: 'orchestrator:check-prefab',
 } as const;
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
@@ -664,6 +698,17 @@ export interface OrchestratorsApi {
   usage(): Promise<UsageReading>;
   /** Calls `listener` with each newer usage reading, and when it goes stale. Returns the unsubscribe function. */
   onUsage(listener: (event: UsageUpdatedEvent) => void): () => void;
+  /** The app's crew prefab library: the built-ins, then those saved, and any saved one this release can't read. */
+  prefabs(): Promise<{ prefabs: LibraryPrefab[]; unreadable: { name: string; reason: string }[] }>;
+  /**
+   * Saves `prefab` to the library, written as its `.crew.json` file and read back as the daemon reads any: replacing
+   * the saved one named `replaces` (its old name, when renamed) if given. Fails, saying why, for a prefab it refuses.
+   */
+  savePrefab(prefab: CrewPrefab, replaces?: string): Promise<LibraryPrefab>;
+  /** Removes a saved prefab; a built-in can't be. */
+  removePrefab(name: string): Promise<void>;
+  /** Why the library would refuse `prefab`, read by its own parser, or null if it would take it. */
+  checkPrefab(prefab: CrewPrefab): Promise<string | null>;
 }
 
 /** The board item IPC channels between the preload and main. */
@@ -675,6 +720,14 @@ export const ITEM_IPC = {
   importImage: 'item:import-image',
   clocks: 'item:clocks',
   addClock: 'item:add-clock',
+  readMemory: 'item:read-memory',
+  changeMemory: 'item:change-memory',
+  memoryHistory: 'item:memory-history',
+  readQueue: 'item:read-queue',
+  changeQueue: 'item:change-queue',
+  queueHistory: 'item:queue-history',
+  handJob: 'item:hand-job',
+  takenJobs: 'item:taken-jobs',
   /** main → renderer: `(ItemChange)` for every board item change. */
   changed: 'item:changed',
   /** main → renderer: `(ClockUpdatedEvent)` whenever a clock is planned again, fires or a run of it ends. */
@@ -702,6 +755,22 @@ export interface ItemsApi {
   addClock(data: Partial<ClockData>, place: ClockPlace): Promise<BoardItem>;
   /** Calls `listener` with a clock's status whenever it changes. Returns the unsubscribe function. */
   onClockChanged(listener: (event: ClockUpdatedEvent) => void): () => void;
+  /** A memory with its entries, those matching `search` if given. */
+  readMemory(id: string, search?: string): Promise<MemoryView>;
+  /** Adds, edits, removes or restores one of a memory's entries, as the user. */
+  changeMemory(id: string, change: MemoryChange): Promise<{ item: BoardItem; entry: MemoryEntry | null }>;
+  /** An entry's past versions, newest first. */
+  memoryHistory(id: string, entry: string): Promise<HistoryVersion<MemoryEntry>[]>;
+  /** A queue with its jobs and notes: open ones in order, then those done. */
+  readQueue(id: string): Promise<QueueView>;
+  /** Adds, edits, moves, finishes, drops back, removes or restores one of a queue's jobs or notes, as the user. */
+  changeQueue(id: string, change: QueueChange): Promise<{ item: BoardItem; job: QueueJob | null }>;
+  /** A job's past versions, newest first. */
+  queueHistory(id: string, job: string): Promise<HistoryVersion<QueueJob>[]>;
+  /** Hands a waiting job to an idle agent: taken for it, and `text`, as the user wrote it, typed at its prompt. */
+  handJob(id: string, job: string, sessionId: string, text: string): Promise<{ item: BoardItem; job: QueueJob }>;
+  /** Every job agents hold, with its queue: for their tiles. */
+  takenJobs(): Promise<TakenJob[]>;
 }
 
 /** The outcome of deleting an agent. */
@@ -769,6 +838,7 @@ export const AGENT_IPC = {
   setSchedule: 'agent:setSchedule',
   markSeen: 'agent:markSeen',
   setMuted: 'agent:setMuted',
+  setEffort: 'agent:setEffort',
   setRecordDeleted: 'agent:setRecordDeleted',
   readDoc: 'agent:readDoc',
   setName: 'agent:setName',
@@ -872,6 +942,8 @@ export interface AgentsApi {
   markSeen(sessionId: string): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Promise<Agent>;
+  /** Sets the agent's reasoning effort, and says when it takes it: now, after its turn, or on its next restart. */
+  setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
   /** Deletes one of the agent's records from its sidebar, or with `deleted` false brings it back. */
   setRecordDeleted(sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean): Promise<Agent>;
   /** Reads one of the agent's hand-off docs, for its Doc tab. */
@@ -1131,6 +1203,7 @@ export const WINDOW_QUERY = {
   appearance: 'appearance',
   design: 'design',
   technical: 'technical',
+  dock: 'dock',
   demo: 'demo',
 } as const;
 
@@ -1298,6 +1371,8 @@ export interface WindowsApi {
   onBoardRequested(listener: (request: BoardRequest) => void): () => void;
   /** How this window is framed. */
   chrome: WindowChrome;
+  /** How long Accept changes waits for Undo before it merges, in ms: 10 s, shorter only where a test sets `AGENT_BOARD_ACCEPT_AFTER_MS`. */
+  acceptAfterMs: number;
   /** Whether this window is in full screen, where macOS hides its traffic lights. */
   isFullScreen(): Promise<boolean>;
   /** Calls `listener` when this window enters or leaves full screen. Returns the unsubscribe function. */
@@ -1379,6 +1454,37 @@ export interface TechnicalApi {
   onChanged(listener: (technical: boolean) => void): () => void;
 }
 
+export const DOCK_IPC = {
+  get: 'dock:get',
+  set: 'dock:set',
+  /** main → renderer: `(DockMode)` whenever any window picks one. */
+  changed: 'dock:changed',
+} as const;
+
+/** The Dock setting: what the dock holds. Every window follows it at once. */
+export interface DockApi {
+  /** The setting as this window opened (`WINDOW_QUERY.dock`), so its first paint shows the right dock. */
+  initial: DockMode;
+  get(): Promise<DockMode>;
+  set(dock: DockMode): Promise<void>;
+  /** Calls `listener` whenever any window picks a mode. Returns the unsubscribe function. */
+  onChanged(listener: (dock: DockMode) => void): () => void;
+}
+
+/** The windows minimised to the dock, as the Window menu lists them. */
+export const MINIMISED_IPC = {
+  /** renderer → main: `(MinimisedWindow[])`, the board's minimised windows, whenever they change. */
+  report: 'minimised:report',
+  /** main → renderer: `(id)`, the Window menu's pick: restore that window (with no board open, main opens one showing it instead). */
+  restore: 'minimised:restore',
+} as const;
+
+export interface MinimisedWindow {
+  kind: WindowTarget['kind'];
+  id: string;
+  title: string;
+}
+
 export const SETUP_IPC = {
   check: 'setup:check',
   testNotification: 'setup:testNotification',
@@ -1452,6 +1558,13 @@ export interface AgentBoardApi {
   appearance: AppearanceApi;
   design: DesignApi;
   technical: TechnicalApi;
+  dock: DockApi;
+  minimised: {
+    /** Tells the Window menu which windows are minimised. */
+    report(windows: readonly MinimisedWindow[]): void;
+    /** Calls `listener` with the id of the window the Window menu picked. Returns the unsubscribe function. */
+    onRestore(listener: (id: string) => void): () => void;
+  };
   setup: SetupApi;
   capture: CaptureApi;
 }
@@ -1473,6 +1586,11 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   ZONE_IPC.list,
   ITEM_IPC.list,
   ITEM_IPC.clocks,
+  ITEM_IPC.readMemory,
+  ITEM_IPC.memoryHistory,
+  ITEM_IPC.readQueue,
+  ITEM_IPC.queueHistory,
+  ITEM_IPC.takenJobs,
   CONNECTOR_IPC.list,
   FLOW_EDGE_IPC.list,
   FLOW_EDGE_IPC.settings,
@@ -1483,6 +1601,7 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   ASK_IPC.unsavedEdits,
   ORCHESTRATOR_IPC.activity,
   ORCHESTRATOR_IPC.usage,
+  ORCHESTRATOR_IPC.prefabs,
   AGENT_IPC.list,
   AGENT_IPC.starts,
   SHELL_IPC.list,
@@ -1495,6 +1614,7 @@ export const CAPTURE_READS: ReadonlySet<string> = new Set([
   APPEARANCE_IPC.get,
   DESIGN_IPC.get,
   TECHNICAL_IPC.get,
+  DOCK_IPC.get,
 ]);
 
 export interface CaptureApi {

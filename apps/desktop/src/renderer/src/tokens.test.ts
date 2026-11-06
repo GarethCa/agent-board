@@ -7,8 +7,7 @@ import { RAIL_TOKEN_ROOM } from '@agent-board/daemon/board-layout';
 import { COLOR_SLOTS, FILL_SLOTS, STICKY_COLORS, ZONE_COLORS } from '@agent-board/daemon/protocol';
 import { boardPaint } from './board-colors';
 import { contrast, mix } from '../../shared/colour';
-import { NOTE_TAB_ROOM, themePacksCss } from '../../shared/theme-pack-tokens';
-import { deskFor } from '../../shared/design';
+import { NOTE_TAB_ROOM, NOTE_TILE_RATIO, themePacksCss } from '../../shared/theme-pack-tokens';
 import { THEMES } from '../../shared/themes';
 
 /*
@@ -166,6 +165,17 @@ const readsIn = (source: string) =>
  * those a library sets on its own elements, such as how much room Radix leaves a popover.
  */
 const LOCAL = [
+  // A board background's pattern: the board sets where it is and how big on a moving one, and the rules derive the rest.
+  '--backdrop-x',
+  '--backdrop-y',
+  '--backdrop-zoom',
+  '--backdrop-gap',
+  '--backdrop-dot',
+  '--backdrop-dot-zoom',
+  '--backdrop-ink',
+  '--backdrop-radius',
+  '--backdrop-cell',
+  '--backdrop-row',
   // The dock sets how much room it leaves each side from script (`useDockScroll`).
   '--dock-left',
   '--dock-right',
@@ -176,6 +186,7 @@ const LOCAL = [
   '--for-you-height',
   '--dock-room',
   '--radix-popover-content-available-height',
+  '--radix-dropdown-menu-content-available-height',
   '--pane-top',
   '--pane-height',
   '--pane-strip',
@@ -260,6 +271,25 @@ describe('theme tokens', () => {
     const used = new Set([...sourceFiles(), ...TOKEN_FILES].flatMap((file) => readsIn(read(file))));
     expect([...defined].filter((name) => !used.has(name))).toEqual([]);
   });
+
+  // A status's fill (`--state-waiting`) is tuned to be a dot or an outline; its ink (`--state-waiting-ink`) is the one
+  // held to AA as text. Glyphs that are only a status's dot may keep the fill.
+  it("draws a status's colour as text in its ink, not its fill", () => {
+    const GLYPHS_ONLY = new Set(['.web-server::before', ".shelf-member[data-status='needs-you'] .shelf-member-glyph", ".shelf-member[data-status='problem'] .shelf-member-glyph"]);
+    const fillWithInk = (name: string) => name.startsWith('--state-') && defined.has(`${name}-ink`);
+    const offences = sourceFiles()
+      .filter((file) => file.endsWith('.css'))
+      .flatMap((file) => {
+        const found: string[] = [];
+        postcss.parse(read(file)).walkDecls('color', (decl) => {
+          const token = /^var\((--[a-z0-9-]+)\)$/.exec(decl.value)?.[1];
+          const selector = decl.parent?.type === 'rule' ? (decl.parent as postcss.Rule).selector : '';
+          if (token !== undefined && fillWithInk(token) && !GLYPHS_ONLY.has(selector)) found.push(`${file}:${decl.source?.start?.line} ${selector} reads ${token}`);
+        });
+        return found;
+      });
+    expect(offences).toEqual([]);
+  });
 });
 
 /** The sticky notes' colours by name (`--sticky-yellow`...), which every theme sets. */
@@ -290,6 +320,7 @@ const WINDOW_PALETTE = new Set([
  * Captain's hat and its emblem or the rest of the session window's own palette, which is dark in every theme.
  */
 const SAME_IN_EVERY_THEME = new Set([
+  '--desk-vignette',
   '--on-accent',
   '--on-primary',
   '--on-zone',
@@ -331,9 +362,11 @@ const SAME_IN_EVERY_THEME = new Set([
 /** Each scope's token declarations: `:root`, and each rule that re-points tokens for a part of the app. */
 const scopes = new Map<string, Map<string, string>>();
 postcss.parse(tokens).walkRules((rule) => {
-  const decls = scopes.get(rule.selector) ?? new Map<string, string>();
-  rule.walkDecls((decl) => void (decl.prop.startsWith('--') && decls.set(decl.prop, decl.value)));
-  scopes.set(rule.selector, decls);
+  for (const selector of rule.selectors) {
+    const decls = scopes.get(selector) ?? new Map<string, string>();
+    rule.walkDecls((decl) => void (decl.prop.startsWith('--') && decls.set(decl.prop, decl.value)));
+    scopes.set(selector, decls);
+  }
 });
 
 const WINDOW = "[data-surface='window']";
@@ -365,8 +398,6 @@ const SIMPLIFIED_PACK_SCOPES = THEME_SCOPES.filter(({ family }) => family !== un
   const scope = `:root[data-design='simplified'][data-theme='${theme.id}']`;
   return { ...theme, id: `simplified-${theme.id}`, theme, scope, stack: [scope, theme.scope, SIMPLIFIED] };
 });
-/** The Simplified design's zone tokens, which outrank a pack's own. */
-const SIMPLIFIED_ZONES = ":root[data-design='simplified'][data-theme]";
 /** Every look the app can show: each theme, and the Simplified design in each mode and over each theme pack. */
 const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES];
 
@@ -376,10 +407,42 @@ const LOOKS = [...THEME_SCOPES, ...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]
  */
 function hexOf(name: string, scope: string | string[] = ':root'): string {
   const stack = typeof scope === 'string' ? [scope] : scope;
-  const value = [...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((found) => found !== undefined);
-  if (value === undefined) throw new Error(`${name} is not defined`);
+  return resolve(name, [...stack, ':root'], 0);
+}
+
+/** Scopes on the root element are one element: a var() there resolves against all of them together. */
+const onRoot = (selector: string) => selector.startsWith(':root');
+
+/**
+ * `name` as the first scope from `from` outwards sets it. An alias resolves where it is declared, as CSS has it: its
+ * target is looked up again from that element's own scopes, not from the nearest scope of the stack, so a scope on a child
+ * element doesn't re-point an alias declared above it.
+ */
+function resolve(name: string, stack: string[], from: number): string {
+  const at = stack.findIndex((each, index) => index >= from && scopes.get(each)?.get(name) !== undefined);
+  if (at < 0) throw new Error(`${name} is not defined`);
+  const value = scopes.get(stack[at]!)!.get(name)!;
   const alias = /^var\((--[a-z0-9-]+)\)$/.exec(value.trim());
-  if (alias) return hexOf(alias[1]!, stack);
+  if (alias) {
+    let start = at;
+    while (start > from && onRoot(stack[start - 1]!) && onRoot(stack[at]!)) start--;
+    return resolve(alias[1]!, stack, start);
+  }
+  // color-mix(in srgb, A n%, B): each side a var() resolved where the mix is declared, or a hex.
+  const mix = /^color-mix\(in srgb, (var\(--[a-z0-9-]+\)|#[0-9a-f]{6}) (\d+)%, (var\(--[a-z0-9-]+\)|#[0-9a-f]{6})\)$/i.exec(value.trim());
+  if (mix) {
+    const side = (part: string) => {
+      const ref = /^var\((--[a-z0-9-]+)\)$/.exec(part);
+      if (!ref) return part;
+      let start = at;
+      while (start > from && onRoot(stack[start - 1]!) && onRoot(stack[at]!)) start--;
+      return resolve(ref[1]!, stack, start);
+    };
+    const [a, b] = [side(mix[1]!), side(mix[3]!)];
+    const share = Number(mix[2]) / 100;
+    const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+    return `#${[0, 1, 2].map((i) => Math.round(channel(a, i) * share + channel(b, i) * (1 - share)).toString(16).padStart(2, '0')).join('')}`;
+  }
   const hex = /^#[0-9a-f]{6}$/i.exec(value.trim());
   if (!hex) throw new Error(`${name} is ${value}, not a six-digit hex colour or an alias of one`);
   return hex[0];
@@ -539,16 +602,90 @@ describe('the Simplified design', () => {
     expect(written.filter((name) => !simplifiedDark.has(name))).toEqual([]);
   });
 
-  it.each(SIMPLIFIED_SCOPES)('opens a window in $id on its desk', ({ scheme, stack }) => {
+  it.each(SIMPLIFIED_SCOPES)("opens a window in $id on the theme's own desk", ({ scheme, stack }) => {
     const theme = THEMES.find((each) => each.id === scheme)!;
-    expect(hexOf('--surface', stack)).toBe(deskFor('simplified', theme));
+    expect(hexOf('--surface', stack)).toBe(theme.desk);
+  });
+
+  /**
+   * Classic's palette, as each Simplified look draws it: every token Classic writes a colour in, but the elevation the
+   * design draws its own way (its hairline, soft shadow and lighter dim) and the dots it leaves off the desk.
+   */
+  const palette = () =>
+    [...scopes.get(':root')!]
+      .filter(([name, value]) => colourIn(value) !== undefined && !/^--(shadow-|sticky-shadow$|scrim$|surface-dot$)/.test(name))
+      .map(([name]) => name);
+  /** A token as a look draws it: its value as written, through any plain var() alias. */
+  const drawnIn = (name: string, stack: string[]): string => {
+    const written = [...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((found) => found !== undefined);
+    if (written === undefined) throw new Error(`${name} is not defined`);
+    const alias = /^var\((--[a-z0-9-]+)\)$/.exec(written.trim());
+    return alias ? drawnIn(alias[1]!, stack) : written.trim();
+  };
+  const CLASSIC_OF = [
+    ...SIMPLIFIED_SCOPES.map(({ id, scheme, stack }) => ({ id, stack, classic: scheme === 'dark' ? [DARK] : [] })),
+    ...SIMPLIFIED_PACK_SCOPES.map(({ id, stack, theme }) => ({ id, stack, classic: [theme.scope] })),
+  ];
+
+  it.each(CLASSIC_OF)("draws every colour of Classic's palette as Classic does, in $id", ({ stack, classic }) => {
+    const differ = palette().filter((name) => drawnIn(name, stack) !== drawnIn(name, classic));
+    expect(differ.map((name) => `${name}: ${drawnIn(name, stack)} (Classic ${drawnIn(name, classic)})`)).toEqual([]);
+  });
+
+  /**
+   * All the design may set, in any look: its shapes, type, rail width and token face, shadows, the dim behind a sheet and
+   * the desk's dots. A colour, an alias of one, a mix or a zone's tint would fork Classic's palette, so none is here.
+   */
+  const MAY_SET = new Set([
+    '--surface-dot',
+    '--rail-width',
+    '--rail-token-font',
+    '--shadow-tile',
+    '--sticky-shadow',
+    '--shadow-expanded',
+    '--shadow-control',
+    '--shadow-primary',
+    '--shadow-input',
+    '--shadow-overlay',
+    '--shadow-island',
+    '--scrim',
+    '--radius-lg',
+    '--radius-item',
+    '--radius-window',
+    '--radius-2xl',
+    '--font-sans',
+    '--font-mono',
+    '--font-wordmark',
+    '--font-size-xs',
+    '--font-size-2xl',
+  ]);
+  const OWN_SCOPES = new Set([SIMPLIFIED, SIMPLIFIED_DARK, ...SIMPLIFIED_PACK_SCOPES.map(({ scope }) => scope)]);
+
+  it('sets tokens in its own blocks only, and in them only its shapes, type and shadows', () => {
+    const flagged = [...scopes.keys()].filter((selector) => selector.includes("[data-design='simplified']"));
+    expect(flagged.filter((selector) => !OWN_SCOPES.has(selector))).toEqual([]);
+    for (const selector of flagged) expect([...scopes.get(selector)!.keys()].filter((name) => !MAY_SET.has(name)), selector).toEqual([]);
+  });
+
+  it("sets no token in a component's rules", () => {
+    const set = sourceFiles()
+      .filter((file) => file.endsWith('.css'))
+      .flatMap((file) => {
+        const found: string[] = [];
+        postcss.parse(read(file)).walkRules((rule) => {
+          if (!rule.selector.includes("data-design='simplified'")) return;
+          rule.walkDecls((decl) => void (decl.prop.startsWith('--') && found.push(`${file}: ${rule.selector} ${decl.prop}`)));
+        });
+        return found;
+      });
+    expect(set).toEqual([]);
   });
 
   it('draws the desk plain, with no dots', () => {
     for (const { stack } of [...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
   });
 
-  describe.each(SIMPLIFIED_PACK_SCOPES)('over $name', ({ scope, scheme, theme }) => {
+  describe.each(SIMPLIFIED_PACK_SCOPES)('over $name', ({ scope, scheme, theme, stack }) => {
     const block = () => scopes.get(scope)!;
     /** What the Simplified design's own blocks set in the pack's mode: its light block, and its dark one over it. */
     const own = () => new Map([...simplified, ...(scheme === 'dark' ? simplifiedDark : [])]);
@@ -564,14 +701,8 @@ describe('the Simplified design', () => {
       for (const [name, value] of kept) expect(block().get(name), name).toBe(value);
     });
 
-    it("draws its surfaces, text and accent in the pack's own colours", () => {
-      for (const name of ['--surface', '--raised', '--border', '--text', '--muted', '--accent']) {
-        expect(hexOf(name, scope), name).toBe(hexOf(name, theme.scope));
-      }
-    });
-
     it("opens a window on the pack's desk", () => {
-      expect(hexOf('--surface', scope)).toBe(deskFor('simplified', theme));
+      expect(hexOf('--surface', stack)).toBe(theme.desk);
     });
   });
 });
@@ -599,7 +730,7 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
     if (fg !== undefined && bg !== undefined) expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(WINDOW_PAIRS)('in the session window, %s on %s meets WCAG AA', (text, background) => {
+  it.each([...WINDOW_PAIRS, ...CARD_PAIRS])('in the session window, %s on %s meets WCAG AA', (text, background) => {
     expect(contrast(hexOf(text, [WINDOW, ...stack]), hexOf(background, [WINDOW, ...stack]))).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -635,24 +766,48 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
 
   // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
   // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
+  // The fill the CSS declares is the border over the panel; this suite computes it the same way, so the two can't drift.
+  const noteMix = () => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get('--agent-note-fill-mix')).find((v) => v !== undefined)!) / 100;
+  const noteFill = () => {
+    expect(scopes.get(':root')!.get('--agent-note-fill')).toBe('color-mix(in srgb, var(--border) var(--agent-note-fill-mix), var(--panel))');
+    return mix(hexOf('--border', stack), hexOf('--panel', stack), noteMix());
+  };
+  const declared = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
+
+  // The card's text, muted text and links are the theme's own, or the same colours made readable on a pack's paper fill.
+  it.each(['--agent-note-ink', '--agent-note-ink-muted', '--agent-note-ink-link'])("an agent note's card keeps %s at WCAG AA on its fill", (ink) => {
+    expect(contrast(hexOf(ink, stack), noteFill())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("an agent note's `code` chip and rules stay visible on the card, and its code text at AA on the chip", () => {
+    if (noteMix() === 0) return; // a dark look's chip and rules are the hover and separator colours, as they were
+    const [fill, ink] = [noteFill(), hexOf('--agent-note-ink', stack)];
+    const chip = mix(ink, fill, declared('--agent-note-code-mix'));
+    expect(contrast(chip, fill)).toBeGreaterThanOrEqual(1.1);
+    expect(contrast(mix(ink, fill, declared('--agent-note-rule-mix')), fill)).toBeGreaterThanOrEqual(1.1);
+    expect(contrast(ink, chip)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('a light look keeps its note fill apart from its tile', () => {
+    if (noteMix() === 0) return; // a dark look's note is the panel, darker than its tile
+    expect(contrast(noteFill(), hexOf('--raised', stack))).toBeGreaterThanOrEqual(NOTE_TILE_RATIO - 0.001);
+  });
+
   it.each([...ZONE_COLORS, 'loose'])("an agent note's tab text meets WCAG AA on a %s tab, or nearly as well as the theme's text on its panel", (zone) => {
     const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
-    const [panel, text] = [hexOf('--panel', stack), hexOf('--text', stack)];
+    const [panel, text] = [hexOf('--panel', stack), hexOf('--agent-note-ink', stack)];
     const tint = zone === 'loose' ? hexOf('--agent-note-loose', stack) : zone;
-    const tab = mix(tint, panel, share('--agent-note-tab-mix'));
+    const fill = mix(hexOf('--border', stack), panel, share('--agent-note-fill-mix'));
+    const tab = mix(tint, fill, share('--agent-note-tab-mix'));
     const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
-    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, panel) - NOTE_TAB_ROOM, 4.5));
+    expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, fill) - NOTE_TAB_ROOM, 4.5));
   });
 });
 
 // A project's well under the Simplified design: its fill and edge come from its zone's colour, and its heading, on a
 // backing of the desk, stays readable at the default fill and at the slider's greatest (40%), whatever the colour.
 describe.each([...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES])("a project well in the $id look", ({ stack }) => {
-  // The cascade: the Simplified zone block comes after the app's own Simplified blocks, and a pack's own Simplified block
-  // (the same specificity, later in theme-packs.css) after it.
-  const own = stack[0]!.includes('[data-theme=') && !stack[0]!.includes("'dark'");
-  const look = own ? [stack[0]!, SIMPLIFIED_ZONES, ...stack.slice(1)] : [SIMPLIFIED_ZONES, ...stack];
-  const share = (name: string) => Number.parseFloat([...look, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
+  const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
   const [surface, text] = [hexOf('--surface', stack), hexOf('--text', stack)];
   const well = (zone: string, fill: number) => mix(zone, surface, fill);
 
@@ -660,6 +815,21 @@ describe.each([...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES])("a project well
     for (const fill of [share('--zone-fill-mix'), 0.4]) {
       const heading = mix(surface, well(zone, fill), share('--project-heading-backing'));
       expect(contrast(text, heading)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // The "need you" count is the status's ink, as Classic draws that status as text. The app's own looks keep it at AA
+  // on the desk and on any well; a pack's ink is the pack's (tuned to its tiles), so gets the room an agent note's tab does.
+  const needYouBar = SIMPLIFIED_SCOPES.some((look) => look.stack === stack) ? 4.5 : 4.5 - NOTE_TAB_ROOM;
+
+  it('keeps its "need you" count readable on the desk', () => {
+    expect(contrast(hexOf('--state-waiting-ink', stack), surface)).toBeGreaterThanOrEqual(needYouBar);
+  });
+
+  it.each(ZONE_COLORS)('keeps its "need you" count readable on a %s well, at the default fill and at 40%', (zone) => {
+    const ink = hexOf('--state-waiting-ink', stack);
+    for (const fill of [share('--zone-fill-mix'), 0.4]) {
+      expect(contrast(ink, mix(surface, well(zone, fill), share('--project-heading-backing')))).toBeGreaterThanOrEqual(needYouBar);
     }
   });
 
@@ -676,6 +846,109 @@ describe.each([...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES])("a project well
 describe.each(OVERRIDES)("the $id theme's terminal palette", ({ scope }) => {
   it.each(ANSI_COLOURS.filter((name) => name !== '--ansi-black'))('%s meets WCAG AA on the well', (name) => {
     expect(contrast(hexOf(name, [WINDOW, scope]), hexOf('--window-bg', [WINDOW, scope]))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// What the chat draws beyond the window's controls: thinking, limits, removed lines and notices.
+const CHAT_PAIRS = [
+  ['--window-think', '--window-bg'],
+  ['--window-limit', '--window-bg'],
+  ['--window-removed', '--window-bg'],
+  ['--window-ink', '--window-limit-soft'],
+  ['--window-chat-you-ink', '--window-chat-you'],
+  ['--window-ink', '--window-composer'],
+  ['--window-ink', '--window-field'],
+  ['--window-ink-soft', '--window-field'],
+  ['--text', '--pressed'],
+];
+
+/** The Simplified decision card, in an agent's window only: its kind label and put-off line, on the composer's well. */
+const CARD_PAIRS = [
+  ['--window-ink-soft', '--window-composer'],
+  ['--window-warning', '--window-composer'],
+  ['--window-ink', '--window-composer'],
+];
+
+/** The aliases :root works out from the window's literals, which a scope that re-points the literals must work out again. */
+const WINDOW_ALIASES = ['--window-divider-hover', '--window-pressed', '--window-think', '--window-limit', '--window-limit-soft', '--window-removed'];
+
+// A chat the user chose light: the window's controls, the chat and its code read as well on the pale page.
+describe('the light chat view', () => {
+  it('paints its own page from the window background, as the dark window behind it is not light', () => {
+    const painted = new Set<string>();
+    postcss.parse(read('app.css')).walkRules((rule) => {
+      rule.walkDecls('background', (decl) => {
+        if (decl.value === 'var(--window-bg)') for (const each of rule.selectors) painted.add(each);
+      });
+    });
+    expect(painted.has(".session-chat-view[data-chat-theme='light']")).toBe(true);
+    expect(painted.has(".session-chat-view[data-chat-theme='match']")).toBe(true);
+  });
+
+  const LIGHT_CHAT = "[data-chat-theme='light']";
+  const stack = [LIGHT_CHAT, WINDOW, ':root'];
+
+  it.each([...WINDOW_PAIRS, ...CHAT_PAIRS, ...CARD_PAIRS])('%s on %s meets WCAG AA', (text, background) => {
+    expect(contrast(hexOf(text, stack), hexOf(background, stack))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(CODE_COLOURS.flatMap((name) => ['--window-bg', '--window-chrome'].map((background) => [name, background])))(
+    'in a code block, %s on %s meets WCAG AA',
+    (text, background) => {
+      expect(contrast(hexOf(text, stack), hexOf(background, stack))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it('works out the window aliases again from its own literals', () => {
+    for (const name of WINDOW_ALIASES) expect(scopes.get(LIGHT_CHAT)?.has(name), name).toBe(true);
+    expect(hexOf('--window-pressed', stack)).toBe(hexOf('--window-edge', stack));
+  });
+});
+
+// The Captain's chat takes the app theme's roles, in every look the app can show.
+describe.each(LOOKS)("the Captain's chat in the $id look", ({ stack: look }) => {
+  const stack = ['.master-panel-chat', ...look];
+
+  it.each([...WINDOW_PAIRS, ...CHAT_PAIRS].filter(([text, background]) => !['--text', '--text-soft', '--muted', '--placeholder', '--on-primary', '--danger'].includes(text!) || background!.startsWith('--window')))(
+    '%s on %s meets WCAG AA',
+    (text, background) => {
+      expect(contrast(hexOf(text!, stack), hexOf(background!, stack))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it.each(CODE_COLOURS.flatMap((name) => ['--window-bg', '--window-chrome'].map((background) => [name, background])))(
+    'in a code block, %s on %s meets WCAG AA',
+    (text, background) => {
+      expect(contrast(hexOf(text!, stack), hexOf(background!, stack))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it('works out the window aliases again from its own literals', () => {
+    for (const name of WINDOW_ALIASES) expect(scopes.get('.master-panel-chat')?.has(name), name).toBe(true);
+  });
+});
+
+// A chat that matches the app sits inside the dark window but reads the app theme's roles, in every look.
+describe.each(LOOKS)('the matching chat in the $id look', ({ stack: look }) => {
+  const stack = ["[data-chat-theme='match']", WINDOW, ...look];
+
+  // The app's own roles (a muted label on its hover fill) are the app's to hold; the chat's own are held here.
+  const OWN = [...WINDOW_PAIRS, ...CHAT_PAIRS, ...CARD_PAIRS].filter(([text, background]) => !['--text', '--text-soft', '--muted', '--placeholder', '--on-primary', '--danger'].includes(text!) || background!.startsWith('--window'));
+
+  it.each(OWN)('%s on %s meets WCAG AA', (text, background) => {
+    expect(contrast(hexOf(text!, stack), hexOf(background!, stack))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(CODE_COLOURS.flatMap((name) => ['--window-bg', '--window-chrome'].map((background) => [name, background])))(
+    'in a code block, %s on %s meets WCAG AA',
+    (text, background) => {
+      expect(contrast(hexOf(text!, stack), hexOf(background!, stack))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  it("is the app theme's own page, not the window's", () => {
+    expect(hexOf('--window-bg', stack)).toBe(hexOf('--raised', look));
+    expect(hexOf('--text', stack)).toBe(hexOf('--text', look));
   });
 });
 

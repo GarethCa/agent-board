@@ -234,6 +234,7 @@ describe('relaunching an ended agent', () => {
         id: 'a',
         harness: 'claude',
         model: null,
+        effort: null,
         bypassHookTrust: false,
         zoneId: null,
         cwd: row.cwd,

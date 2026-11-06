@@ -56,12 +56,12 @@ type Step = { kind: 'form' } | { kind: 'bypass-notice' };
  */
 export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId, name: initialName = '', position, onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
   const [setup, setSetup] = useState<AgentSetup>(DEFAULT_SETUP);
-  const { harness, model, role } = setup;
-  // Under the Simplified design the model and role chips go with Show technical details: switching it off puts both back
-  // to their defaults, so nothing they set stays on the dialog with no chip to change it.
+  const { harness, model, effort, role } = setup;
+  // Under the Simplified design the model, reasoning and role chips go with Show technical details: switching it off puts
+  // them back to their defaults, so nothing they set stays on the dialog with no chip to change it.
   const technicalShown = useTechnicalDetails();
   useEffect(() => {
-    if (!technicalShown) setSetup((current) => ({ ...current, model: '', role: null }));
+    if (!technicalShown) setSetup((current) => ({ ...current, model: '', effort: '', role: null }));
   }, [technicalShown]);
   const candidates = reviewable(zone, agents);
   /** The agent whose branch a reviewer reviews, by session id: '' for the zone's repo's checked-out branch. */
@@ -148,6 +148,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         zoneId: zone?.id ?? null,
         harness,
         model: model || undefined,
+        effort: effort || undefined,
         role: role ?? undefined,
         ...(group
           ? {
@@ -223,7 +224,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
       }
       onClose={onCancel}
       onSubmit={submit}
-      footerStart={<AgentSetupChips setup={setup} onChange={setSetup} technical />}
+      footerStart={<AgentSetupChips setup={setup} onChange={setSetup} technical reasoning />}
       footer={
         <>
           <Button variant="ghost" onClick={onCancel}>

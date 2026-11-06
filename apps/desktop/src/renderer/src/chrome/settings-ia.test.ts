@@ -15,13 +15,18 @@ describe('the Settings window’s groups', () => {
       'codexPath',
       'compactWindow',
       'clickableLinks',
+      // Added since: a new agent's reasoning effort, for all and per role.
+      'defaultEffort',
+      'roleEfforts',
       'mode',
       'theme',
+      'boardBackground',
       'keepWebLogins',
       'clearBrowsingData',
       'clickOpens',
       'connections',
       'arrangeSpacing',
+      'dock',
       'agentNoteLook',
       'crewLook',
       'needsYouShows',
@@ -42,6 +47,8 @@ describe('the Settings window’s groups', () => {
       'conversationAs',
       // Added since, under Classic only: the Simplified design always has the simple sidebar.
       'agentSidebar',
+      // Added since: whether terminals draw with the GPU.
+      'gpuTerminals',
     ];
     const ids = SETTINGS_CONTROLS.map((control) => control.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -57,6 +64,7 @@ describe('the Settings window’s groups', () => {
     expect(home('needsYouShows')).toBe('alerts.notifications');
     expect(home('cliInstall')).toBe('advanced.cli');
     expect(home('keepWebLogins')).toBe('advanced.webTabs');
+    expect(home('gpuTerminals')).toBe('advanced.terminals');
     expect(home('daemonStatus')).toBe('advanced.service');
     expect(home('simplifiedDesign')).toBe('general.design');
     expect(home('technicalDetails')).toBe('general.design');

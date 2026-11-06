@@ -37,6 +37,9 @@ import { gatedOwner, mergeGateBlocked } from './gate-rules.ts';
 import { createGateHost } from './gates.ts';
 import { createAskHost } from './asks.ts';
 import { createDocumentHost } from './documents.ts';
+import { createStepsHost } from './steps.ts';
+import type { ReachesZone } from './item-scope.ts';
+import { createMemoryQueueHost, type MemoryQueueHost } from './memory-queue.ts';
 import { createCrewFlags } from './crew-flags.ts';
 import { runGit } from './git.ts';
 import { itemHandlers, itemsLeavingZone } from './items.ts';
@@ -61,6 +64,7 @@ import {
   type DaemonMethods,
   type DocumentCardData,
   type PlanCardData,
+  type StepsData,
   type DocumentSummary,
   type Harness,
   type SessionInfo,
@@ -76,13 +80,16 @@ import { createSafeFetch } from './safe-fetch.ts';
 import { createImageStore } from './image-store.ts';
 import { createImageSweeper } from './image-sweeper.ts';
 import { createLinkCards } from './link-cards.ts';
+import { createCrewLoop } from './crew-loop.ts';
+import { unsavedWork } from './worktrees.ts';
+import { createPrefabLibrary } from './prefab-library.ts';
 import { createRoleTemplates } from './role-templates.ts';
 import { createReviewHost } from './reviews.ts';
 import { createSelectionAsks } from './selection-asks.ts';
 import { createBoardMaster } from './master.ts';
 import { handleRpcLine, type RpcHandlers } from './rpc.ts';
 import { createClockHost } from './clocks.ts';
-import { createSettings } from './settings.ts';
+import { createSettings, defaultEffort } from './settings.ts';
 import { createUsageHost } from './usage.ts';
 import { createShellHost } from './shells.ts';
 import { followSystemTimeZone } from './time-zone.ts';
@@ -153,6 +160,8 @@ export interface DaemonOptions {
   backgroundPollMs?: number;
   /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
   startStepTimeoutMs?: number;
+  /** How long an agent's session gets to say it is up before its first prompt is offered by hand: a minute by default. */
+  startLimitMs?: number;
   /**
    * How to run this app's `agent-board` CLI, which Codex agents' hooks run as the forwarder. When set, the daemon
    * (re)writes the shim at `hookShimPath` to run it, at start and before each Codex spawn; without it, the shim is
@@ -358,11 +367,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         agents.onExit(session);
         // After the agent reads as ended, so what it is told of a plan it left waits for it to be resumed.
         asks.end(session.id);
-        reviews.onExit(session.id, session.stoppedByRestart || (agents.get(session.id)?.hibernated ?? null) !== null);
+        const keepsWork = session.stoppedByRestart || (agents.get(session.id)?.hibernated ?? null) !== null;
+        reviews.onExit(session.id, keepsWork);
+        // The jobs it took go back on their queues, unless it is coming back.
+        void late.memoryQueue?.sessionEnded(session.id, keepsWork).catch((error: unknown) => log(`could not put back the jobs ${session.id} held: ${(error as Error).message}`));
         shells.onSessionExit(session);
       },
     });
 
+    // Late-bound: made once the daemon's methods are, and told of sessions ending from then on.
+    const late: { memoryQueue?: MemoryQueueHost } = {};
     // Late-bound: the agent host is made after, with the shells' `deleteOwned`.
     const shells = createShellHost({ db, sessions, homeDir, shell, agentDeleting: (agentId) => agents.isDeleting(agentId), broadcast, log });
     const isAgentSession = db.prepare('SELECT 1 FROM agents WHERE session_id = ?1 OR harness_session_id = ?1 UNION SELECT 1 FROM agent_conversations WHERE harness_session_id = ?1');
@@ -530,6 +544,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     // Schedules fire on local time, which follows the system's.
     const stopFollowingTimeZone = followSystemTimeZone({ log });
     const roleTemplates = createRoleTemplates(db);
+    const prefabs = createPrefabLibrary(db);
     // An agent's questions and plans: it is `waiting` while one waits on the user.
     const asks = createAskHost({
       db,
@@ -540,6 +555,11 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       wrote: (sessionId, path) => documents.userWrote(sessionId, path),
       // The decision on a plan left with the command line is typed at the agent's prompt as a document's edit is.
       told: (sessionId, text) => documents.tell(sessionId, text),
+      // Put on the board, or ended half-answered: an ask becomes a steps card, which its Send answers while it waits.
+      toCard: (sessionId, ask, ended) => steps.fromAsk(sessionId, ask, ended),
+      cardEnded: (cardId, ended) => {
+        steps.askEnded(cardId, ended).catch((error: unknown) => log(`could not mark card ${cardId} as no longer waited on: ${(error as Error).message}`));
+      },
       log,
     });
     // The documents agents show the user: a file each, read live, the user's edits told to the agent at its prompt.
@@ -567,6 +587,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ensureHookShim,
       boardCliPath: cli === undefined ? undefined : cliPath,
       compactWindow: () => settings.get().compactWindow,
+      defaultEffort: (harness, role) => defaultEffort(settings.get(), harness, role),
       clickableLinks: () => settings.get().clickableLinks,
       env: options.agentEnv ?? process.env,
       shell,
@@ -576,6 +597,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       permissionHoldMs: options.permissionHoldMs ?? DEFAULT_PERMISSION_HOLD_MS,
       backgroundPollMs: options.backgroundPollMs,
       startStepTimeoutMs: options.startStepTimeoutMs,
+      startLimitMs: options.startLimitMs ?? (Number(process.env.AGENT_BOARD_START_LIMIT_MS) || undefined),
       submitConfirmMs: options.submitConfirmMs ?? (Number(process.env.AGENT_BOARD_SUBMIT_CONFIRM_MS) || undefined),
       trackers,
       pullRequests: (sessionId) => pullRequests.get(sessionId),
@@ -588,6 +610,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const finalMessage = agents.finalMessage(sessionId);
         if (finalMessage !== undefined) void selectionAsks.finished(sessionId, finalMessage);
         clocks.turnEnded(sessionId);
+        late.memoryQueue?.turnEnded(sessionId);
       },
       endTabs: (sessionId) => shells.deleteOwned(sessionId),
       onBranchChanged: (sessionId) => void pullRequests.refresh(sessionId),
@@ -606,6 +629,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         clocks.agentRemoved(sessionId);
       },
       asks,
+      stepsWait: (sessionId) => steps.waitOf(sessionId),
       documents,
       broadcast,
       log,
@@ -722,7 +746,33 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
     listeners.push((event) => orchestrators.onEvent(event));
     listeners.push((event) => clocks.onEvent(event));
+    // A reasoning effort set mid-turn is typed at the agent's prompt once that turn ends.
+    listeners.push((event) => event.type === 'agent.updated' && event.agent.effortPending === 'after-turn' && agents.applyEffort(event.agent.sessionId));
     clocks.resumeRuns();
+    // A crew started from a prefab: the board starts its reviewers at each hand-off and hands their reviews back.
+    const crews = createCrewLoop(db, {
+      agent: (sessionId) => agents.get(sessionId),
+      spawn: (params, spawnedBy, used) => agents.spawn(params, spawnedBy, undefined, used),
+      deliver: (from, to, name, text) => agents.deliver(from, to, name, text),
+      flag: (sessionId, reason) => void agents.flag(sessionId, reason, null),
+      clearFlag: (sessionId) => void agents.clearFlag(sessionId),
+      // As `agent.delete`, its reviewers first, checked for unsaved work as it is, but for the board's own files (a
+      // review, a handover), which a reviewer's checkout and a merged builder's worktree hold. Any other change, or a
+      // commit no branch or remote has, keeps it, and the crew says so.
+      close: async (sessionId, why) => {
+        const agent = agents.get(sessionId);
+        if (agent?.ownsWorktree === true) {
+          const reason = await unsavedWork(agent.repoRoot, agent.worktree, agent.ownedBranch, { ignoreBoardFiles: true });
+          if (reason !== undefined) throw new Error(reason);
+        }
+        await reviews.deleteAgent(sessionId, why, () => agents.delete(sessionId, why, agent?.ownsWorktree === true).then(() => null));
+      },
+      news: (sessionId, kind, detail) => orchestrators.crewNews(sessionId, kind, detail),
+      dir: join(paths.dataDir, 'crews'),
+      log,
+    });
+    listeners.push((event) => event.type === 'agent.updated' && crews.observe(event.agent));
+    crews.resume();
     // A crew member's flag goes to its orchestrator, typed at its prompt.
     const crewFlags = createCrewFlags({
       agent: (sessionId) => agents.get(sessionId),
@@ -747,8 +797,51 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       void pullRequests.refresh(sessionId);
     });
     const orchestratorHandlers = orchestrators.handlers<SessionSubscriber & BoardConnection>();
+    // Whether an agent's orchestrator scope reaches a zone: what a steps card, a memory or a queue there asks of it.
+    const reachesZone: ReachesZone = (agent, zoneId) => {
+      const zone = zoneTable.list().find((each) => each.id === zoneId);
+      if (agent.orchestrate === null || zone === undefined) return false;
+      return orchestrators.access.reachesZone({ sessionId: agent.sessionId, name: agent.name, zoneId: agent.zoneId, repoRoot: agent.repoRoot, orchestrate: agent.orchestrate, agent }, zone);
+    };
+    // Steps cards: answers sent, and to-dos waited on, are typed at the agent's prompt as a document's edit is.
+    const steps = createStepsHost({
+      sessions,
+      agents,
+      shells,
+      call: (method, params) => call(method, params),
+      place: (sessionId, size) => spotBesideAgent(call, sessionId, size),
+      reachesZone,
+      tell: (sessionId, text) => documents.tell(sessionId, text),
+      answerAsk: (sessionId, askId, cardId, answers) => asks.sendFromCard(sessionId, askId, cardId, answers),
+      // A new step waited on is news: the agent's row in Needs you is unread until its session is opened.
+      waitChanged: (sessionId, began) => (began ? agents.waitChanged(sessionId, true) : agents.announce(sessionId)),
+      askWaits: (sessionId, askId, cardId) => asks.waitsOnCard(sessionId, askId, cardId),
+    });
+    // Memories and queues: their contents in their own tables, their scope as a steps card's.
+    const memoryQueue = createMemoryQueueHost({ sessions, agents, shells, db, log, call: (method, params) => call(method, params), place: (sessionId, size) => spotBesideAgent(call, sessionId, size), reachesZone });
+    late.memoryQueue = memoryQueue;
     const captures = createCaptureHost({ ...(options.captureTimeoutMs === undefined ? {} : { timeoutMs: options.captureTimeoutMs }) });
     const measures = createLayoutMeasures({ mayReport: captures.serves, ...(options.measureWaitMs === undefined ? {} : { waitMs: options.measureWaitMs }) });
+    // A steps card an ask was put on, taken off the board, gives the ask back to its agent's tile.
+    const items = itemHandlers(
+      db,
+      (event) => {
+        broadcast(event);
+        if (event.type === 'item.removed') asks.cardGone(event.id);
+        // What agents wait on the user for on a steps card follows its cards.
+        if (event.type === 'item.removed') steps.itemChanged({ id: event.id, removed: true });
+        if (event.type === 'item.updated') steps.itemChanged(event.item);
+        // A steps card made from an ask, not yet stamped, on the board (made, or put back by an undo): its ask takes it
+        // back if it still waits, else the card says it stopped.
+        if (event.type === 'item.updated' && event.item.kind === 'steps') {
+          const data = event.item.data as unknown as StepsData;
+          if (data.fromAsk?.ended === null && data.madeBy.kind === 'agent' && !asks.cardBack(event.item.id, data.madeBy.sessionId, data.fromAsk.askId)) {
+            steps.askEnded(event.item.id, { at: new Date().toISOString(), how: 'stopped' }).catch((error: unknown) => log(`could not mark card ${event.item.id} as no longer waited on: ${(error as Error).message}`));
+          }
+        }
+      },
+      { images, sweeper, linkCards, log },
+    );
     const handlers: RpcHandlers<DaemonMethods, SessionSubscriber & BoardConnection> = {
       'daemon.health': (): DaemonHealth => ({
         version: DAEMON_VERSION,
@@ -802,7 +895,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...sources.handlers<SessionSubscriber>(),
       ...connectorHandlers(db, broadcast),
       ...flowEdges.handlers<SessionSubscriber>(),
-      ...itemHandlers(db, broadcast, { images, sweeper, linkCards, log }),
+      ...items,
+      // An agent lists only the steps cards in its scope, as the steps methods read them.
+      'item.list': async (params, context) => memoryQueue.visible(steps.visible(await items['item.list'](params, context), context), context),
+      // A memory's or queue's count is its rows': an undo that sends a card's whole data back may carry an older one.
+      'item.create': async (params, context) => memoryQueue.recounted(await items['item.create'](params, context), true),
+      // A queue an agent holds a job from stays the agents': the user's takes none.
+      'item.update': async (params, context) => {
+        memoryQueue.checkUpdate(params);
+        // The agents a queue's drain started are the daemon's to keep: the user's drain sheet, or an undo, sends an old list.
+        memoryQueue.keepStarted(params);
+        const data = (params as { data?: Record<string, unknown> } | null)?.data;
+        return memoryQueue.recounted(await items['item.update'](params, context), data !== undefined && ('count' in data || 'drain' in data));
+      },
       ...viewStateHandlers<SessionSubscriber>(db),
       ...settings.handlers<SessionSubscriber>(),
       ...roleTemplates.handlers<SessionSubscriber>(),
@@ -832,12 +937,23 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       ...captures.handlers,
       ...measures.handlers,
       ...roleTemplates.defaultRoleHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
+      // A crew starts from a prefab as an orchestrator's agent does, through `orchestrator.spawn`.
+      ...prefabs.handlers<SessionSubscriber & BoardConnection>({
+        access: orchestrators.access,
+        spawn: async (params, connection) => orchestratorHandlers['orchestrator.spawn'](params as never, connection),
+        depth: (sessionId) => agents.orchestrateFacts(sessionId).depth,
+        zones: () => zoneTable.list(),
+        startCrew: (prefab, builder, startedBy, prompt) => crews.start(prefab, builder, startedBy, prompt)?.id ?? null,
+      }),
+      ...crews.handlers<SessionSubscriber & BoardConnection>(orchestrators.access),
       ...asks.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...documents.handlers<SessionSubscriber & BoardConnection>({ sessions, agents, shells }),
       ...selectionAsks.handlers<SessionSubscriber & BoardConnection>(),
       ...boardMaster.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.handlers<SessionSubscriber & BoardConnection>(),
       ...clocks.orchestratorHandlers<SessionSubscriber & BoardConnection>(orchestrators.access, () => zoneTable.list()),
+      ...steps.handlers<SessionSubscriber & BoardConnection>(),
+      ...memoryQueue.handlers<SessionSubscriber & BoardConnection>(),
       ...usage.handlers<SessionSubscriber & BoardConnection>(),
       // Its reviewers go first, and the rounds it reviewed say it has gone, each told to every client.
       'agent.delete': (params, context) => {
@@ -915,6 +1031,19 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     };
 
     const call: DaemonCall = async (method, params) => handlers[method](params as never, DAEMON_ITSELF) as never;
+    // A deleted agent's jobs go back: one paused or stopped by a restart kept them, and has no exit to come.
+    listeners.push((event) => {
+      if (event.type === 'agent.removed') void memoryQueue.releaseGone(event.sessionId).catch((error: unknown) => log(`could not put back the jobs ${event.sessionId} held: ${(error as Error).message}`));
+    });
+    void memoryQueue.releaseGone().catch((error: unknown) => log(`could not put back the jobs of agents gone: ${(error as Error).message}`));
+    // No ask's call outlives the daemon: a card still marked as waited on says its ask stopped.
+    void steps.endStaleAsks().catch((error: unknown) => log(`could not mark steps cards as no longer waited on: ${(error as Error).message}`));
+    void steps.load().catch((error: unknown) => log(`could not read the steps cards agents wait on: ${(error as Error).message}`));
+    // An agent ending, going or coming back (resumed): its waits follow, and so does whether its crew's sets are the user's.
+    listeners.push((event) => {
+      if (event.type === 'agent.removed') steps.agentGone(event.sessionId);
+      if (event.type === 'agent.updated') steps.agentChanged(event.agent.sessionId, event.agent.endedAt === null);
+    });
     /** The document cards on the board, of `sessionId`'s documents or of the one document. */
     const documentCards = async (match: (data: DocumentCardData) => boolean) =>
       (await call('item.list', undefined)).filter((item) => item.kind === 'document' && match(item.data as unknown as DocumentCardData));
@@ -1011,6 +1140,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         removeExternalHookFile(externalHookFile, externalToken);
         externalSessions.stop();
         orchestrators.close();
+        // Its agents stop as the daemon does, which no crew should take for news.
+        crews.close();
         pullRequests.stop();
         flowEdges.stop();
         conditionShell.stop();

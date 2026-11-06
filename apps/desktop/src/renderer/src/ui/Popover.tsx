@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactElement, ReactNode, RefObject } from 'react';
 import * as RadixPopover from '@radix-ui/react-popover';
 import { cx } from './cx';
 
@@ -67,9 +67,17 @@ export function PopoverPreview({ children, className, ...rest }: { children: Rea
   );
 }
 
+/** Something on the page to point at that is not an element of the popover's own: its box, measured as it opens. */
+export interface Measured {
+  getBoundingClientRect(): DOMRect;
+}
+
 interface AnchoredPopoverProps {
-  /** What it points at, such as an outline drawn on the board: one element that takes a ref. */
-  anchor: ReactElement;
+  /**
+   * What it points at: one element that takes a ref, such as an outline drawn on the board, or `{ measured }`, a box
+   * read as it opens and as it follows, such as the frame of the tile a control sits in.
+   */
+  anchor: ReactElement | { measured: RefObject<Measured | null> };
   /** What it shows. */
   children: ReactNode;
   'aria-label': string;
@@ -84,6 +92,10 @@ interface AnchoredPopoverProps {
   onPointerDownOutside?(event: Event): void;
   /** As it closes and gives focus back: `preventDefault()` keeps focus where it went instead. */
   onCloseAutoFocus?(event: Event): void;
+  /** Hears Esc, which closes it, before it closes: `preventDefault()` keeps it open, for a field that takes Esc itself. */
+  onEscapeKeyDown?(event: KeyboardEvent): void;
+  /** As it opens and focuses its first control: `preventDefault()` leaves focus to what it shows. */
+  onOpenAutoFocus?(event: Event): void;
 }
 
 /**
@@ -102,11 +114,17 @@ export function AnchoredPopover({
   className,
   onPointerDownOutside,
   onCloseAutoFocus,
+  onEscapeKeyDown,
+  onOpenAutoFocus,
   ...rest
 }: AnchoredPopoverProps) {
   return (
     <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
-      <RadixPopover.Anchor asChild>{anchor}</RadixPopover.Anchor>
+      {'measured' in anchor ? (
+        <RadixPopover.Anchor virtualRef={anchor.measured as RefObject<Measured>} />
+      ) : (
+        <RadixPopover.Anchor asChild>{anchor}</RadixPopover.Anchor>
+      )}
       <RadixPopover.Portal>
         <RadixPopover.Content
           className={cx('ui-card ui-popover', className)}
@@ -119,6 +137,8 @@ export function AnchoredPopover({
           onKeyDown={(event) => event.stopPropagation()}
           onPointerDownOutside={onPointerDownOutside}
           onCloseAutoFocus={onCloseAutoFocus}
+          onEscapeKeyDown={onEscapeKeyDown}
+          onOpenAutoFocus={onOpenAutoFocus}
         >
           {children}
         </RadixPopover.Content>

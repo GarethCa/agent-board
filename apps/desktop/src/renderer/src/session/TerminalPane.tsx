@@ -1,7 +1,8 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, type ClipboardEvent, type RefObject } from 'react';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { SCROLLBACK_LINES, type Harness, type SessionInfo } from '@agent-board/daemon/protocol';
 import { bufferLinks, hyperlinkAddress, hyperlinkHint, linkHint, linkTarget, type BufferRow } from './terminal-links';
@@ -10,9 +11,13 @@ import { keyText } from '../keys/registry';
 import { token, tokenNumber } from '../theme';
 import { chosenFontSize, FONT_STEP, onFontSize, PINCH_RATE, setFontSize, terminalSizeKey } from './terminal-size';
 import { macLineEditKey, newlineKey } from './newline-keys';
+import { keepPastedImages, pastedImages } from './composer-input';
+import { ipcErrorMessage } from '../../../shared/errors';
 import { throttled } from './throttle';
 import { compensateForScale } from './zoomed-mouse';
 import { useWebLinkOpener } from './web-links';
+import { gpuPool, type GpuPool, type GpuSeat } from './terminal-gpu';
+import { useViewSettings, useViewSettingsLoaded } from '../board/view-settings';
 
 /** The click that opens a local address in the output in a web tab, as the platform writes it. */
 
@@ -29,6 +34,22 @@ const REFIT_INTERVAL_MS = 80;
 const KEEP_TERMINALS = typeof location !== 'undefined' && new URLSearchParams(location.search).get('terminalCache') === '1';
 const KEPT_LIMIT = 24;
 
+/** Set by main from `AGENT_BOARD_TERMINAL_RENDERER=dom` for tests, never in a packaged build: no terminal uses the GPU. */
+const DOM_ONLY = typeof location !== 'undefined' && new URLSearchParams(location.search).get('terminalRenderer') === 'dom';
+
+/** The page's WebGL contexts for its terminals, made with its first terminal. */
+let pool: GpuPool | undefined;
+
+function gpu(): GpuPool {
+  if (pool !== undefined) return pool;
+  // Off until the window has read the saved setting: a terminal never takes WebGL the user turned off.
+  const made = gpuPool({ createAddon: () => new WebglAddon(), enabled: false });
+  // The glyph atlas keeps the glyphs as first drawn: a font that loads later (the bundled mono, a theme's) redraws them.
+  document.fonts.addEventListener('loadingdone', () => made.clearAtlases());
+  pool = made;
+  return made;
+}
+
 /** What a kept terminal reports to and reads from: the pane showing it now. */
 interface PaneBinding {
   report: RefObject<(status: PaneStatus) => void>;
@@ -40,6 +61,7 @@ interface KeptTerminal {
   host: HTMLDivElement;
   terminal: Terminal;
   fit: FitAddon;
+  seat: GpuSeat;
   binding: PaneBinding;
   last: { status?: PaneStatus };
   shown: boolean;
@@ -53,6 +75,8 @@ const kept = new Map<string, KeptTerminal>();
 function park(sessionId: string, entry: KeptTerminal): void {
   entry.host.remove();
   entry.shown = false;
+  // Out of every pane, it gives its WebGL context back until it shows again.
+  entry.seat.setShown(false);
   kept.delete(sessionId);
   kept.set(sessionId, entry);
   letGoOfUnseen();
@@ -115,18 +139,26 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
   const webOpener = useWebLinkOpener();
   const openWeb = useRef(webOpener);
   openWeb.current = webOpener;
+  const { gpuTerminals } = useViewSettings();
+  const settingsLoaded = useViewSettingsLoaded();
+
+  // Settings › Advanced › Terminals, followed live: turned off, every terminal goes back to the DOM renderer at once.
+  useEffect(() => gpu().setEnabled(!DOM_ONLY && settingsLoaded && gpuTerminals), [settingsLoaded, gpuTerminals]);
 
   useEffect(() => {
     const mountedAt = performance.now();
-    timing('terminal.mount', mountedAt, sessionId);
     const pane = container.current!;
     const binding: PaneBinding = { report, harness: harnessRef, openWeb };
     const reusable = KEEP_TERMINALS ? kept.get(sessionId) : undefined;
+    // Whether it takes a kept terminal over, which parses no snapshot.
+    timing('terminal.mount', mountedAt, { sessionId, kept: reusable !== undefined && !reusable.shown });
     if (reusable !== undefined && !reusable.shown) {
       Object.assign(reusable.binding, binding);
       reusable.shown = true;
       pane.appendChild(reusable.host);
       terminalRef.current = reusable.terminal;
+      // Back in view: its renderer first, so it fits once for it.
+      reusable.seat.setShown(true);
       reusable.fit.fit();
       timing('terminal.open', mountedAt, sessionId);
       if (reusable.last.status !== undefined) report.current(reusable.last.status);
@@ -244,27 +276,71 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     terminal.open(element);
     // The board's zoom scales the terminal, which xterm's mouse mapping doesn't know.
     compensateForScale(terminal);
-    fit.fit();
-    timing('terminal.open', mountedAt, sessionId);
-
     let disposed = false;
-    let exited = false;
-    let detach: (() => void) | undefined;
+    // WebGL while it shows, within the page's budget; else, or once WebGL fails, xterm's DOM renderer. Its element
+    // says which, for tests and a look in DevTools. The two size cells differently (the DOM renderer to the glyph's
+    // fractional width, WebGL to whole device pixels), so a change of renderer refits the terminal, which resizes the
+    // session to the columns that now fit: only while it shows, so a pane out of view never resizes its session (each
+    // resize redraws the agent's screen). It refits as it comes back into view, if its renderer changed meanwhile.
+    const xterm = terminal.element!;
+    xterm.dataset.renderer = 'dom';
+    // Making a WebGL renderer (its context, shaders and atlas) is timed, for the benchmark.
+    const gpuTerminal = {
+      loadAddon(addon: Parameters<Terminal['loadAddon']>[0]) {
+        const startedAt = performance.now();
+        terminal.loadAddon(addon);
+        timing('terminal.gpu', startedAt, sessionId);
+      },
+    };
+    let shown = false;
+    const seat = gpu().seat(gpuTerminal, (renderer) => {
+      xterm.dataset.renderer = renderer;
+      if (shown && !disposed && element.isConnected) fit.fit();
+    });
+    const show = (now: boolean) => {
+      shown = now;
+      seat.setShown(now);
+      // Fits only if its cells changed while it was out of view: the same size resizes nothing.
+      if (now && !disposed && element.isConnected) fit.fit();
+    };
     // Size the session to this pane before attaching, so the snapshot arrives laid out for it: only a pane laid out
     // on the screen. One hidden (a tab not showing) has no size of its own, and would shrink the session to
     // xterm's 80×24 under whichever window shows it; it sizes the session once it shows, as it refits.
     const laidOut = element.getClientRects().length > 0;
+    // Shown at once if laid out, so it fits once, for the renderer it draws with; the observer follows from here.
+    show(laidOut);
+    fit.fit();
+    const visibility = new IntersectionObserver((entries) => show(entries.at(-1)!.isIntersecting));
+    visibility.observe(element);
+    const focusIn = () => seat.setFocused(true);
+    const focusOut = () => seat.setFocused(false);
+    // The addon waits seconds for a lost context to come back, drawing nothing; the canvas's own event goes back to the
+    // DOM renderer at once. It doesn't bubble, so it is caught on the way down.
+    const contextLost = () => seat.contextLost();
+    element.addEventListener('focusin', focusIn);
+    element.addEventListener('focusout', focusOut);
+    element.addEventListener('webglcontextlost', contextLost, true);
+    timing('terminal.open', mountedAt, sessionId);
+
+    let exited = false;
+    let detach: (() => void) | undefined;
     void (laidOut ? api.resize(sessionId, { cols: terminal.cols, rows: terminal.rows }).catch(() => {}) : Promise.resolve())
       .then(() => {
         if (disposed) return;
         const attaching = performance.now();
         detach = api.attach(sessionId, (event) => {
           switch (event.type) {
-            case 'session.snapshot':
+            case 'session.snapshot': {
               terminal.reset();
-              terminal.write(event.data, () => timing('terminal.snapshot', attaching, { sessionId, bytes: event.data.length }));
+              // How long it fills in, from the snapshot arriving to its last byte parsed: each frame between shows it part drawn.
+              const arrived = performance.now();
+              terminal.write(event.data, () => {
+                timing('terminal.snapshot', attaching, { sessionId, bytes: event.data.length });
+                timing('terminal.fill', arrived, { sessionId, renderer: terminal.element?.dataset.renderer });
+              });
               status({ state: 'attached' });
               break;
+            }
             case 'session.output':
               terminal.write(event.data);
               break;
@@ -294,7 +370,11 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       }
       return false;
     });
-    const resize = terminal.onResize((size) => void api.resize(sessionId, size).catch(() => {}));
+    const resize = terminal.onResize((size) => {
+      // Each resize redraws the agent's screen: counted, for the benchmark.
+      timing('terminal.resize', performance.now(), { sessionId, ...size });
+      void api.resize(sessionId, size).catch(() => {});
+    });
     // Throttled: dragging a window's edge resizes the element every frame, and each new size resizes the session.
     // A kept terminal out of every pane has no size: it keeps the session's until it shows again.
     const refit = throttled(() => element.isConnected && fit.fit(), REFIT_INTERVAL_MS);
@@ -308,6 +388,11 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       resized();
       element.removeEventListener('keydown', keyDown, true);
       element.removeEventListener('wheel', wheel);
+      element.removeEventListener('focusin', focusIn);
+      element.removeEventListener('focusout', focusOut);
+      element.removeEventListener('webglcontextlost', contextLost, true);
+      visibility.disconnect();
+      seat.dispose();
       terminalRef.current = null;
       observer.disconnect();
       refit.cancel();
@@ -319,7 +404,7 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
       if (keep) element.remove();
     };
     if (!keep) return dispose;
-    const entry: KeptTerminal = { host: element as HTMLDivElement, terminal, fit, binding, last, shown: true, dispose };
+    const entry: KeptTerminal = { host: element as HTMLDivElement, terminal, fit, seat, binding, last, shown: true, dispose };
     kept.set(sessionId, entry);
     return () => {
       terminalRef.current = null;
@@ -332,12 +417,35 @@ export function TerminalPane({ sessionId, onStatus, focused = true, autoFocus = 
     mounted.current = true;
   }, [focused]);
 
-  return <div ref={container} className="terminal-pane nowheel" data-testid="session-terminal" />;
+  /**
+   * An image on the clipboard goes to the agent as a file path, as a dropped file does: it is kept where the agent can
+   * read it and its path typed at the prompt, one paste per image (a harness attaches only a lone path). Caught before
+   * xterm, which pastes only text. A paste with text is left to xterm.
+   */
+  const pasteImage = (event: ClipboardEvent<HTMLDivElement>) => {
+    const files = pastedImages(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const terminal = terminalRef.current;
+    // The pane clears its ref as it unmounts or parks the terminal.
+    const alive = () => terminal !== null && terminalRef.current === terminal;
+    void keepPastedImages(files)
+      .then((paths) => {
+        if (alive()) for (const path of paths) terminal!.paste(`${path} `);
+      })
+      .catch((problem: unknown) => {
+        if (alive()) terminal!.write(`\r\n[could not paste the image: ${ipcErrorMessage(problem)}]\r\n`);
+      });
+  };
+
+  return <div ref={container} className="terminal-pane nowheel" data-testid="session-terminal" onPasteCapture={pasteImage} />;
 }
 
 /**
  * A User Timing measure from `start` to now, for profiles and the rendering benchmark (e2e/render-bench.spec.ts): a
- * terminal's mount, its open and fit, and its snapshot from attaching to parsed. Cleared as soon as it is written, so the
+ * terminal's mount, its open and fit, its snapshot from attaching to parsed, and its fill from the snapshot arriving to
+ * parsed. Cleared as soon as it is written, so the
  * page's timeline never fills with them; a `PerformanceObserver` still hears each one.
  */
 function timing(name: string, start: number, detail: unknown): void {

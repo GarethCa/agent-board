@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PlanSummary } from '@agent-board/daemon/protocol';
+import { planPending, waitsOnUser, type Agent, type AgentAsk, type AgentFlag, type NeedsYouKind, type PlanSummary, type Zone } from '@agent-board/daemon/protocol';
+import { InboxQuickAsk } from './InboxQuickAsk';
+import { StepsWaitBody } from './StepsWaitBody';
 import { ClipboardList, FolderCheck, SendHorizontal, SquareArrowOutUpRight, Timer } from 'lucide-react';
 import { Button, EmptyState, ErrorText, Input, Kbd } from '../ui';
 import { useAction } from '../use-action';
@@ -7,16 +9,20 @@ import { PermissionRow } from './PermissionRow';
 import { KIND_TAGS } from './kind-tags';
 import { HarnessMark } from '../board/HarnessMark';
 import { HARNESSES } from '../harness';
-import { heldPrompts, needsYouEntries, secondsLeft, sinceText, waitLeft } from '../../../shared/needs-you';
+import { askAnsweredElsewhere, heldPrompts, needsYouEntries, secondsLeft, sinceText, stepsWaitKey, waitLeft } from '../../../shared/needs-you';
 import { PlanDecisionBar } from '../plan/PlanTab';
 import { planSurfaceOf } from '../session/tabs';
 import { requestTab } from '../session/tab-request';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { useNow } from './use-now';
 import { useAskAnswer } from './use-ask-answer';
+import { useSimplified } from '../design';
+import { GroupedInbox } from './GroupedInbox';
 
 interface InboxProps {
   agents: readonly Agent[];
+  /** The board's zones, which the Simplified design groups the list by. */
+  zones?: readonly Zone[];
   /** Opens the agent's session window. */
   onOpen(agent: Agent): void;
   /** Opens the settings, where what it lists is picked. */
@@ -30,9 +36,14 @@ interface InboxProps {
  * with its reason) and, if the settings say so, every agent whose turn ended, each row tagged with its kind and
  * answerable without opening its shell. It follows the agents live, so an item goes as soon as the agent moves on,
  * however it was answered. An item whose session was opened since it began asking is read: it stays while the agent
- * waits, but no longer counts. A flag goes once its session is opened.
+ * waits, but no longer counts. A flag goes once its session is opened. The Simplified design groups it by zone instead
+ * (`GroupedInbox`), with the same items.
  */
-export function Inbox({ agents, onOpen, onSettings, heading = true }: InboxProps) {
+export function Inbox({ zones = [], ...props }: InboxProps) {
+  return useSimplified() ? <GroupedInbox zones={zones} {...props} /> : <ClassicInbox {...props} />;
+}
+
+function ClassicInbox({ agents, onOpen, onSettings, heading = true }: Omit<InboxProps, 'zones'>) {
   const shows = useNeedsYouShows();
   const entries = needsYouEntries(agents, shows);
   const items = entries.map((entry) => entry.agent);
@@ -102,13 +113,17 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
       {kind === 'flagged' ? null : asking ? (
         agent.permissions.map((prompt) => (
           // Keyed by request, so a new request never inherits an old one's error.
-          <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} />
+          <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} onOpen={() => onOpen(agent)} />
         ))
       ) : agent.state === 'needs-permission' ? (
         <p className="inbox-item-note">Asking for permission in its terminal.</p>
       ) : agent.ask !== null ? (
         // Keyed by question, so a new one never inherits an old one's reply or error.
-        <AskRow key={agent.ask.id} agent={agent} ask={agent.ask} now={now} />
+        agent.ask.questions.length > 1 && agent.ask.card === null ? (
+          <InboxQuickAsk key={agent.ask.id} agent={agent} ask={agent.ask} />
+        ) : (
+          <AskRow key={agent.ask.id} agent={agent} ask={agent.ask} now={now} />
+        )
       ) : planPending(agent) ? (
         <PlanRow
           key={agent.plan.id}
@@ -120,6 +135,9 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
             onOpen(agent);
           }}
         />
+      ) : agent.stepsWait !== null ? (
+        // Keyed by its card (and a to-do's step), so a new one starts closed, and an answer keeps the stepper open.
+        <StepsWaitBody key={stepsWaitKey(agent.stepsWait)} wait={agent.stepsWait} agents={[agent]} />
       ) : (
         <Answer agent={agent} />
       )}
@@ -134,10 +152,12 @@ function InboxItem({ agent, kind, lead, now, onOpen }: { agent: Agent; kind: Nee
  */
 function AskRow({ agent, ask, now }: { agent: Agent; ask: AgentAsk; now: number }) {
   const { text, setText, busy, error, answer, submit, pick } = useAskAnswer(agent.sessionId, ask);
+  const elsewhere = askAnsweredElsewhere(ask);
   return (
-    <form className="inbox-ask" data-testid="inbox-ask" onSubmit={submit} onKeyDown={pick}>
+    <form className="inbox-ask" data-testid="inbox-ask" onSubmit={submit} onKeyDown={elsewhere === undefined ? pick : undefined}>
       <p className="inbox-ask-question">{ask.question}</p>
-      {ask.options.length > 0 && (
+      {elsewhere !== undefined && <p className="inbox-ask-timer">{elsewhere}</p>}
+      {elsewhere === undefined && ask.options.length > 0 && (
         <div className="inbox-ask-options" role="group" aria-label={`Answers for ${agent.name}`}>
           {ask.options.map((option, index) => (
             <Button key={index} size="sm" className="inbox-ask-option" disabled={busy} aria-keyshortcuts={index < 9 ? String(index + 1) : undefined} onClick={() => answer({ option: index })}>

@@ -14,6 +14,7 @@ import {
   RELATIONS,
   SHAPE_TYPES,
   TILE_SIDES,
+  ZONE_LAYOUT_MODES,
   type BoardCaller,
   type BoardItem,
   type CaptureStyle,
@@ -26,6 +27,7 @@ import {
   type ShapeData,
   type ShapeType,
   type TileSide,
+  type ZoneLayoutMode,
   type ZoneMap,
   type ZoneScreenshot,
   MAX_AGENT_NOTE_SIZE,
@@ -324,6 +326,25 @@ export async function changeGroup(session: BoardSession, ref: string, options: G
   const refs = new BoardRefs(await readBoard(session.client));
   const zone = await session.client.call('orchestrator.changeZone', { token: session.token, id: zoneId(refs, ref, session.caller), ...groupFields(options) });
   return { text: `Changed ${zoneLine(refs, zone)}: ${where(zone.x, zone.y)}, ${zone.width}×${zone.height}.`, json: zone };
+}
+
+/** What each zone layout draws, as `zone layout` says it. */
+const LAYOUT_WORDS: Record<ZoneLayoutMode, string> = {
+  free: 'each tile where it was put',
+  shelves: 'its work as stacks on To do, Doing, Waiting and Done shelves, under a head row of its leads and shells',
+  clusters: "each unit of work's tiles drawn together, what needs the user first, under a head row of its leads and shells",
+};
+
+/** `zone layout`: sets how a zone (the caller's by default) lays out what it holds. No tile's saved place changes. */
+export async function setZoneLayout(session: BoardSession, mode: string, zone: string | undefined): Promise<BoardView> {
+  if (!(ZONE_LAYOUT_MODES as readonly string[]).includes(mode)) throw new BoardError(`the layout must be ${ZONE_LAYOUT_MODES.join(', ')}`);
+  const refs = new BoardRefs(await readBoard(session.client));
+  const changed = await session.client.call('orchestrator.zoneLayout', {
+    token: session.token,
+    mode: mode as ZoneLayoutMode,
+    ...(zone === undefined ? {} : { zoneId: zoneId(refs, zone, session.caller) }),
+  });
+  return { text: `${refs.of('zone', changed.id)} ${changed.name} is laid out as ${changed.layoutMode}: ${LAYOUT_WORDS[changed.layoutMode]}. No tile's place changed.`, json: changed };
 }
 
 /** `zone remove`: deletes a group the caller (or its crew) made, leaving its tiles and notes loose. */

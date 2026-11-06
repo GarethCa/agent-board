@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, TURN_MS, windowKey } from '../agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, spawnAgent, tile, TURN_MS, unfoldMenuSection, windowKey } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, type LaunchOptions } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -257,8 +257,8 @@ for (const { theme, suffix } of THEMES) {
   });
 }
 
-// An agent's inspector in the Simplified design: its status line, then its work; with Show technical details on, the
-// Technical details fold too, opened.
+// An agent's sidebar in the Simplified design, open on the board's Now as it waits; with Show technical details on, its
+// Setup shelf, where it works.
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
   for (const technical of [false, true]) {
@@ -279,12 +279,11 @@ for (const { theme, suffix } of THEMES) {
         await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
         await tile(window).dblclick();
         await sessionWindow(window).locator('.session-window-head').getByRole('button', { name: 'Show details' }).click();
-        const inspector = sessionWindow(window).getByTestId('inspector');
-        await expect(inspector).toBeVisible();
+        const inspector = sessionWindow(window).getByTestId('agent-shelves');
+        await expect(inspector.getByTestId('page-now')).toContainText('Postgres or SQLite');
         if (technical) {
-          const fold = inspector.getByRole('region', { name: 'Technical details' });
-          await fold.getByRole('button', { name: 'Technical details' }).click();
-          await expect(fold).toContainText('Claude · default model');
+          await inspector.getByRole('tab', { name: 'Setup' }).click();
+          await expect(inspector.getByRole('region', { name: 'Where it works' })).toContainText('Claude · default model');
         }
         await pinRandomText(window);
         const restorePointer = await ignorePointer(window);
@@ -300,7 +299,7 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
-// Classic's Simple agent sidebar: the inspector in Classic's tokens, in place of the details strip, its folds closed.
+// Classic's Simple agent sidebar: the shelves in Classic's tokens, in place of the details strip, open on the board's Now.
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
   const shot = `inspector-simple-classic${suffix}`;
@@ -322,9 +321,9 @@ for (const { theme, suffix } of THEMES) {
       await settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' }).getByRole('button', { name: 'Simple' }).click();
       await settings.close();
       await tile(window).dblclick();
-      const inspector = sessionWindow(window).getByTestId('inspector');
-      await expect(inspector).toBeVisible();
-      await expect(inspector.getByRole('region', { name: 'More details' })).toBeVisible();
+      const inspector = sessionWindow(window).getByTestId('agent-shelves');
+      await expect(inspector.getByTestId('page-now')).toContainText('Postgres or SQLite');
+      await expect(inspector.getByRole('tab', { name: 'Setup' })).toBeVisible();
       await pinRandomText(window);
       const restorePointer = await ignorePointer(window);
       await settle(window);
@@ -510,6 +509,7 @@ for (const { theme, suffix } of [
       // The board menu with Simplified on, so its Quick settings include Show technical details.
       await window.bringToFront();
       await window.getByRole('button', { name: 'Board menu' }).click();
+      await unfoldMenuSection(window, 'Quick settings');
       await expect(window.getByRole('dialog', { name: 'Board menu' }).getByRole('switch', { name: 'Show technical details' })).toBeVisible();
       await pinRandomText(window);
       restorePointer = await ignorePointer(window);

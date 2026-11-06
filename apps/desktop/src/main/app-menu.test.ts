@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import { appMenu, menuTemplate } from './app-menu';
+import { appMenu, menuTemplate, windowMenu } from './app-menu';
 
 const actions = () => ({ about: vi.fn(), settings: vi.fn(), checkForUpdates: vi.fn(), gettingStarted: vi.fn() });
 const technical = () => ({ simplified: true, on: false, set: vi.fn() });
@@ -51,5 +51,28 @@ describe('the app menu', () => {
       (items(a).find((item) => item.label === label)!.click as () => void)();
     }
     expect([a.about, a.settings, a.checkForUpdates].map((fn) => fn.mock.calls.length)).toEqual([1, 1, 1]);
+  });
+});
+
+describe('the Window menu', () => {
+  const labels = (list: MenuItemConstructorOptions[]) => list.map((item) => item.label ?? item.role ?? item.type);
+
+  it('is the standard one while nothing is minimised', () => {
+    expect(labels(windowMenu(true, []).submenu as MenuItemConstructorOptions[])).toEqual(['minimize', 'zoom', 'separator', 'front']);
+  });
+
+  it('lists the minimised windows under a Minimised heading, and restores the one picked', () => {
+    const restore = vi.fn();
+    const list = windowMenu(true, [{ title: 'API', restore }, { title: 'Docs', restore: vi.fn() }]).submenu as MenuItemConstructorOptions[];
+    expect(labels(list).slice(-4)).toEqual(['separator', 'Minimised', 'API', 'Docs']);
+    expect(list.find((item) => item.label === 'Minimised')?.enabled).toBe(false);
+    (list.find((item) => item.label === 'API')!.click as () => void)();
+    expect(restore).toHaveBeenCalledOnce();
+  });
+
+  it('is in the menu bar with the minimised windows', () => {
+    const template = menuTemplate({ mac: true, packaged: false, name: 'agent-board' }, actions(), technical(), [{ title: 'API', restore: vi.fn() }]);
+    const windowItem = template.find((item) => item.role === 'windowMenu')!;
+    expect((windowItem.submenu as MenuItemConstructorOptions[]).some((item) => item.label === 'API')).toBe(true);
   });
 });

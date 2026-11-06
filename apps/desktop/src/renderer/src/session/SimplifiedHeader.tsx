@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, CircleStop, MoreHorizontal, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
+import { ChevronDown, CircleStop, Maximize2, Minimize2, MoreHorizontal, Play, Power, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Square, X } from 'lucide-react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import { agentMenu, type ModelEntry } from '../board/menu-model';
@@ -36,6 +36,8 @@ interface SimplifiedHeaderProps {
   onClose(): void;
   onPopOut?(): void;
   onPopIn?(): void;
+  /** On the board, Maximise or Restore for the window's size (undefined where the window has none). */
+  maximise?: { maximised: boolean; toggle(): void };
 }
 
 /**
@@ -45,7 +47,7 @@ interface SimplifiedHeaderProps {
  * menu, as its tile's, with this window's rows and End agent… added; the window's Minimise, Pop out and Delete live
  * there or go with it.
  */
-export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav, onViewSlot, terminalToggle, detailsOpen, onDetailsOpen, onClose, onPopOut, onPopIn }: SimplifiedHeaderProps) {
+export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav, onViewSlot, terminalToggle, detailsOpen, onDetailsOpen, onClose, onPopOut, onPopIn, maximise }: SimplifiedHeaderProps) {
   const shows = useNeedsYouShows();
   const [ending, setEnding] = useState(false);
   const status = agent && humanStatus(agent, shows).status;
@@ -66,7 +68,7 @@ export function SimplifiedHeader({ sessionId, agent, name, title, placement, nav
         {agent && <StateAction agent={agent} placement={placement} />}
         <span className="session-window-view-slot" ref={onViewSlot} />
         <DetailsToggle open={detailsOpen} onOpen={onDetailsOpen} />
-        <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, onClose, onEnd: () => setEnding(true), board })}>
+        <Menu align="end" entries={windowMenu({ agent, placement, terminalToggle, onPopOut, onPopIn, maximise, onClose, onEnd: () => setEnding(true), board })}>
           <IconButton icon={<MoreHorizontal />} size="sm" aria-label="More" tooltip="More actions" />
         </Menu>
         <Button size="sm" onClick={onClose} aria-label={`Done, close ${name}`} tooltip={placement === 'board' ? 'Back to the board; it keeps running' : 'Close this window; it keeps running'}>
@@ -105,6 +107,7 @@ export function windowMenu({
   terminalToggle,
   onPopOut,
   onPopIn,
+  maximise,
   onClose,
   onEnd,
   board,
@@ -114,11 +117,15 @@ export function windowMenu({
   terminalToggle: RefObject<(() => void) | null>;
   onPopOut?(): void;
   onPopIn?(): void;
+  maximise?: { maximised: boolean; toggle(): void };
   onClose(): void;
   onEnd(): void;
   board: readonly ModelEntry[];
 }): MenuEntry[] {
   const own: MenuEntry[] = [
+    ...(maximise
+      ? [maximise.maximised ? { label: 'Restore', icon: <Minimize2 />, hint: 'Back to the size it had', onSelect: maximise.toggle } : { label: 'Maximise', icon: <Maximize2 />, hint: 'Fill the board', onSelect: maximise.toggle }]
+      : []),
     ...(onPopOut ? [{ label: 'Open in its own window', icon: <SquareArrowOutUpRight />, onSelect: onPopOut }] : []),
     ...(onPopIn ? [{ label: 'Back to board', icon: <SquareArrowDownLeft />, onSelect: onPopIn }] : []),
     ...(agent ? [{ label: 'Show terminal, or back', icon: <SquareTerminal />, shortcut: keyText('window.terminalView'), onSelect: () => terminalToggle.current?.() }] : []),

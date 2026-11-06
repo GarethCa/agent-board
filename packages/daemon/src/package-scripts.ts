@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PackageScripts } from './protocol.ts';
+import { shellQuote } from './shell-words.ts';
 
 /** Each package manager by the lockfile that gives it away, the first found winning; npm without one. */
 const LOCKFILES: [string, PackageScripts['runner']][] = [
@@ -26,7 +27,3 @@ export function packageScripts(folder: string): PackageScripts {
 /** The command line that runs the script, as typed at a shell's prompt. */
 export const scriptCommand = (runner: PackageScripts['runner'], script: string): string => `${runner} run ${shellQuote(script)}`;
 
-/** A script's name as one shell word: bare when it is plain, else single-quoted. */
-function shellQuote(word: string): string {
-  return /^[\w:.@/-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
-}

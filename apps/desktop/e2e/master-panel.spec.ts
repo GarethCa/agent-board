@@ -87,8 +87,15 @@ test('the Captain’s panel resizes on its edge and the line under For you, fold
     await window.setViewportSize({ width: 1280, height: 1000 });
     await expect.poll(async () => (await panelOf(window).boundingBox())!.height).toBeGreaterThan(shorter);
     const forYou = window.getByRole('region', { name: 'For you' });
-    const before = Math.round((await forYou.boundingBox())!.height);
-    await drag(window, window.getByTestId('master-for-you-handle'), 0, 60);
+    // A drag starts from the height the handle reports (aria-valuenow), which follows the list a frame after the resize: wait for the two to agree.
+    const forYouHandle = window.getByTestId('master-for-you-handle');
+    const settled = async () => ({ list: Math.round((await forYou.boundingBox())!.height), handle: Number(await forYouHandle.getAttribute('aria-valuenow')) });
+    await expect.poll(async () => {
+      const { list, handle } = await settled();
+      return list - handle;
+    }).toBe(0);
+    const before = (await settled()).list;
+    await drag(window, forYouHandle, 0, 60);
     await expect.poll(async () => Math.round((await forYou.boundingBox())!.height)).toBe(before + 60);
     const taller = before + 60;
 

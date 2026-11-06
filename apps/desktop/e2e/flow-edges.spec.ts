@@ -134,6 +134,8 @@ test("a hand-off drawn from one agent's handle to another opens its Edge rules, 
     await rules.getByRole('button', { name: 'Send now' }).click();
     await expect.poll(async () => (await flowEdges(window))[0]!.lastDelivery?.at).not.toBe(sent!.lastDelivery!.at);
     expect((await flowEdges(window))[0]!.lastDelivery).toMatchObject({ delivered: true });
+    // Send says it went, instead of doing nothing visible.
+    await expect(window.getByText('Sent.', { exact: true })).toBeVisible();
 
     // Closing the panel leaves the edge; clicked again, the same panel opens on it, without "new".
     await rules.getByRole('button', { name: 'Close edge rules' }).click();

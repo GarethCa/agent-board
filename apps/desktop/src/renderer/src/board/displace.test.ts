@@ -1058,6 +1058,46 @@ describe('displaced, with a crew in the way', () => {
     for (const id of [a('w2'), a('w3')]) expect(clear(boardRect(shown, shown.find((node) => node.id === id)!), open), id).toBe(true);
   });
 
+  describe('a crew laid out in lanes far from its lead', () => {
+    /** The crew blocks the board pushes as one: each part of each crew frame, where the tiles are saved. */
+    const blocksOf = (nodes: BoardNode[]) => crewFrames(nodes.filter(isSessionTile) as TileNodeType[]).map((frame) => frame.members.map(a));
+    const lanes = (extra: Agent[]) => {
+      const agents = [
+        agent('boss', 'z', at(20, 44)),
+        agent('w-beside', 'z', at(316, 44), 'boss'),
+        agent('w-wide', 'z', at(2000, 900), 'boss'),
+        agent('w-lane1', 'z', at(20, 1400), 'boss'),
+        agent('w-lane2', 'z', at(20, 3000), 'boss'),
+        ...extra,
+      ];
+      return (expanded: ReturnType<typeof expandTile>) => withTiles([zone('z', 0, 0, 5000, 5000)], agents, [], [], new Map(), expanded);
+    };
+    const far = [a('w-wide'), a('w-lane1'), a('w-lane2')];
+
+    it('leaves the lanes where they are when a stranger between them is expanded', () => {
+      const expanded = expandTile([], a('stranger'));
+      const nodes = lanes([agent('stranger', 'z', at(700, 2000))])(expanded);
+      const shown = displaced(nodes, expanded, new Map(), new Map(), blocksOf(nodes));
+      for (const id of far) expect(shift(nodes, shown, id), id).toEqual({ dx: 0, dy: 0 });
+    });
+
+    it('leaves a member far along a row where it is when a stranger is expanded over only the gap before it', () => {
+      const agents = [agent('boss', 'z', at(20, 44)), agent('c1', 'z', at(300, 800), 'boss'), agent('c2', 'z', at(3000, 800), 'boss'), agent('stranger', 'z', at(700, 500))];
+      const expanded = expandTile([], a('stranger'));
+      const nodes = withTiles([zone('z', 0, 0, 5000, 5000)], agents, [], [], new Map(), expanded);
+      const shown = displaced(nodes, expanded, new Map(), new Map(), blocksOf(nodes));
+      expect(shift(nodes, shown, a('c2'))).toEqual({ dx: 0, dy: 0 });
+    });
+
+    it('moves only the crew beside its lead when the lead is expanded, not lanes clear of it', () => {
+      const expanded = expandTile([], a('boss'));
+      const nodes = lanes([])(expanded);
+      const shown = displaced(nodes, expanded, new Map(), new Map(), blocksOf(nodes));
+      expect(shift(nodes, shown, a('w-beside'))).not.toEqual({ dx: 0, dy: 0 });
+      for (const id of [a('w-lane1'), a('w-lane2')]) expect(shift(nodes, shown, id), id).toEqual({ dx: 0, dy: 0 });
+    });
+  });
+
   it('pushes a group zone clear of a loose expanded tile as one block, its tiles with it', () => {
     const shells = [shell('loose', null, at(0, 0)), shell('in', 'g', at(ZONE_PADDING, ZONE_PADDING + PERCH_ROOM))];
     const expanded = expandTile([], tileNodeId('shell', 'loose'));

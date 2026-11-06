@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { Agent, AgentState } from '@agent-board/daemon/protocol';
-import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, Minus, MoreHorizontal, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, FileCheck, GitBranch, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, SquareArrowDownLeft, SquareArrowOutUpRight, SquareTerminal, Trash2, X } from 'lucide-react';
 import { HarnessMark } from '../board/HarnessMark';
 import { keyText, pressed, type KeyId } from '../keys/registry';
 import { agentPill, STATE_LABELS } from '../states';
@@ -59,6 +59,10 @@ interface SessionWindowProps {
   onDelete?(): void;
   /** Minimises it to the board's dock. */
   onMinimise?(): void;
+  /** Whether it is pinned to the dock, and a toggle for that: given only while the Dock setting is Only what I pin. */
+  pin?: { pinned: boolean; onToggle(): void };
+  /** What the Minimise button's tooltip says: it goes to the dock unless the Dock setting leaves the window out of it. */
+  minimiseTip?: string;
   /** Pops it out into its own OS window. */
   onPopOut?(): void;
   /** Pops it back in, onto the board. */
@@ -81,7 +85,7 @@ interface SessionWindowProps {
  * has an Activity tab, with what it did and tried. An agent's
  * strip has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
  */
-export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
+export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, pin, minimiseTip = 'Minimise to the dock; it keeps running', onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
@@ -211,6 +215,7 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
             onClose={onClose}
             onPopOut={onPopOut}
             onPopIn={onPopIn}
+            maximise={frame && { maximised: placed.maximised, toggle: placed.toggleMaximised }}
           />
         ) : (
           <>
@@ -230,8 +235,18 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         {agent && gated(agent) && <GateControls agent={agent} visible />}
         {/* The inspector has no rail of its own to bring it back: this shows and hides it, as the Simplified header's does. */}
         {inspector && <DetailsToggle open={!detailsCollapsed} onOpen={(open) => setDetailsCollapsed(!open)} />}
+        {pin && (
+          <IconButton
+            icon={<Pin />}
+            size="sm"
+            aria-pressed={pin.pinned}
+            aria-label={pin.pinned ? 'Unpin from the dock' : 'Pin to the dock'}
+            tooltip={pin.pinned ? 'Pinned to the dock: minimised, it stays there' : 'Pin to the dock, to keep it there once minimised'}
+            onClick={pin.onToggle}
+          />
+        )}
         {onMinimise && (
-          <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip="Minimise to the dock; it keeps running">
+          <Button variant="ghost" size="sm" icon={<Minus />} onClick={onMinimise} aria-label="Minimise session window" tooltip={minimiseTip}>
             <span className="session-window-folding-label">Minimise</span>
           </Button>
         )}

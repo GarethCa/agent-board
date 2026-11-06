@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   closeWindow,
+  inDock,
+  minimisedWindows,
+  outOfDock,
+  pinWindow,
   minimiseWindow,
   popInWindow,
   popOutWindow,
@@ -192,5 +196,58 @@ describe('switchPoppedWindow', () => {
 
   it('adds the target as out when the board never had the window that switched', () => {
     expect(placements(switchPoppedWindow([], 'a', session('c', 'C')))).toEqual(['c:popped']);
+  });
+});
+
+describe('pinning to the dock', () => {
+  // a and b minimised, c shown.
+  const three = () => showWindow(showWindow(showWindow([], session('a', 'A')), session('b', 'B')), session('c', 'C'));
+
+  it('pins and unpins a window, and leaves the others and unknown ids alone', () => {
+    const pinned = pinWindow(three(), 'b', true);
+    expect(pinned.map((entry) => entry.pinned)).toEqual([undefined, true, undefined]);
+    expect(pinWindow(pinned, 'b', false).map((entry) => 'pinned' in entry)).toEqual([false, false, false]);
+    expect(pinWindow(pinned, 'nope', true)).toBe(pinned);
+  });
+
+  it('holds every minimised and popped-out window with Show everything, and never the shown one', () => {
+    const windows = popOutWindow(three(), session('a', 'A'));
+    expect(windows.map((entry) => inDock(entry, 'all'))).toEqual([true, true, false]);
+  });
+
+  it('holds only pinned ones with Only what I pin, and none when off', () => {
+    const windows = pinWindow(three(), 'b', true);
+    expect(windows.filter((entry) => inDock(entry, 'pinned')).map((entry) => entry.id)).toEqual(['b']);
+    expect(windows.some((entry) => inDock(entry, 'off'))).toBe(false);
+  });
+
+  it('leaves out of the dock what ⌘K must list: nothing with Show everything, the rest otherwise', () => {
+    const windows = pinWindow(three(), 'b', true);
+    expect(outOfDock(windows, 'all')).toEqual([]);
+    expect(outOfDock(windows, 'pinned').map((entry) => entry.id)).toEqual(['a', 'c']);
+    expect(outOfDock(windows, 'off').map((entry) => entry.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('lists the minimised windows for the Window menu, pinned or not', () => {
+    expect(minimisedWindows(pinWindow(three(), 'b', true)).map((entry) => entry.id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps a pin across a restore, and across the board opening the same window meanwhile', () => {
+    const saved = JSON.parse(JSON.stringify(pinWindow(three(), 'b', true)));
+    expect(restoreWindows(saved, []).map((entry) => entry.pinned)).toEqual([undefined, true, undefined]);
+    const meanwhile = restoreWindows(saved, [{ ...session('b', 'B'), placement: 'docked' }]);
+    expect(meanwhile.find((entry) => entry.id === 'b')?.pinned).toBe(true);
+    expect(restoreWindows([{ kind: 'session', id: 'x', title: 'X', placement: 'docked', pinned: 'yes' }], [])[0]).not.toHaveProperty('pinned');
+  });
+
+  it('keeps a pin when the window is switched to, on the board or in an OS window', () => {
+    // a pinned and minimised, b shown.
+    const base = pinWindow(showWindow(showWindow([], session('a', 'A')), session('b', 'B')), 'a', true);
+    const switched = switchWindow(base, 'b', session('a', 'A'));
+    expect(switched.find((entry) => entry.id === 'a')).toMatchObject({ placement: 'shown', pinned: true });
+    expect(minimiseWindow(switched, 'a').filter((entry) => inDock(entry, 'pinned')).map((entry) => entry.id)).toEqual(['a']);
+    const out = switchPoppedWindow(pinWindow(popOutWindow(showWindow([], session('a', 'A')), session('b', 'B')), 'a', true), 'b', session('a', 'A'));
+    expect(out.find((entry) => entry.id === 'a')).toMatchObject({ placement: 'popped', pinned: true });
+    expect(out.filter((entry) => entry.id === 'a')).toHaveLength(1);
   });
 });

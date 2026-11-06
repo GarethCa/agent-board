@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FakeNotification } from '../src/main/notifications.ts';
-import { launch, LINEAR_API_KEY } from './agent-helpers.ts';
+import { launch, LINEAR_API_KEY, unfoldMenuSection } from './agent-helpers.ts';
 import { test, classicOnly, pickFolderNext, tempDataDir, newShell } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -227,6 +227,7 @@ test('onboarding can be skipped, stays closed on later launches, and Getting sta
 
     // The board menu's Help › Getting started brings it back; Esc skips it again.
     await window.getByRole('button', { name: 'Board menu' }).click();
+    await unfoldMenuSection(window, 'Help');
     await window.getByRole('button', { name: 'Getting started' }).click();
     await expect(window.getByRole('dialog', { name: 'Welcome to agent-board' })).toBeVisible();
     // Tab never leaves it for the board under it, either way round.

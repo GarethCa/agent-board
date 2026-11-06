@@ -2,7 +2,7 @@
 // Harness-agnostic: Claude and Codex both read `hookSpecificOutput.decision.behavior` from the hook's reply.
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { SessionState, PermissionDecision, PermissionPrompt } from './protocol.ts';
+import { QUESTION_TOOL, type SessionState, type PermissionDecision, type PermissionPrompt, type PromptQuestion } from './protocol.ts';
 
 /** What a hook call is answered with: a JSON body, or nothing. */
 export type HookReply = Record<string, unknown> | undefined;
@@ -82,10 +82,40 @@ const OVER_PERMISSIONS = new Set<SessionState>(['done', 'failed', 'rate-limited'
  * a parallel call's hook says it runs. Once a hook has `settled` its last one, an agent its hooks left at
  * `needs-permission` carries on `running`.
  */
-export function stateWithPrompts(state: SessionState, prompts: { pending: number; settled: boolean }): SessionState {
+export function stateWithPrompts(state: SessionState, prompts: { pending: number; questions?: number; settled: boolean }): SessionState {
   if (prompts.pending > 0) return OVER_PERMISSIONS.has(state) ? state : 'needs-permission';
+  // Questions up in the harness's own dialog: the agent waits on the user's answer, which no permission is.
+  if ((prompts.questions ?? 0) > 0) return OVER_PERMISSIONS.has(state) ? state : 'waiting';
   return prompts.settled && state === 'needs-permission' ? 'running' : state;
 }
+
+/** How many of `prompts` ask for a permission (`pending`) and how many ask questions, for `stateWithPrompts`. */
+export function promptCounts(prompts: readonly PermissionPrompt[]): { pending: number; questions: number } {
+  const questions = prompts.filter((prompt) => prompt.questions !== null).length;
+  return { pending: prompts.length - questions, questions };
+}
+
+/**
+ * The questions of a question-tool call (`QUESTION_TOOL`), from its `tool_input`, or null for any other call. Claude's
+ * dialog asks them; malformed ones are dropped, and a call with none left is still a question call, with none to show.
+ */
+export function questionsOf(payload: Record<string, unknown>): PromptQuestion[] | null {
+  if (payload.tool_name !== QUESTION_TOOL) return null;
+  const input = payload.tool_input;
+  const raw = typeof input === 'object' && input !== null && 'questions' in input && Array.isArray(input.questions) ? (input.questions as unknown[]) : [];
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+  return raw.flatMap((each): PromptQuestion[] => {
+    if (typeof each !== 'object' || each === null) return [];
+    const { question, header, options, multiSelect } = each as Record<string, unknown>;
+    if (typeof question !== 'string' || question === '') return [];
+    const picks = (Array.isArray(options) ? options : []).flatMap((option: unknown) => {
+      const { label, description } = (typeof option === 'object' && option !== null ? option : {}) as Record<string, unknown>;
+      return typeof label === 'string' && label !== '' ? [{ label, description: text(description) }] : [];
+    });
+    return [{ question, header: text(header), options: picks, multiSelect: multiSelect === true }];
+  });
+}
+
 
 /**
  * The PermissionRequest hook reply that carries `decision`. Allowing for the session sends the harness's own
@@ -165,7 +195,9 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
         const now = Date.now();
         const holdMs = asksInTerminal ? options.askingHoldMs : options.holdMs;
         const subagent = subagentOf(payload);
-        const suggestions = suggestionsOf(payload);
+        const questions = questionsOf(payload);
+        // A question call is never held: Claude's dialog takes the answers, and an allow from here would answer none.
+        const suggestions = questions === null ? suggestionsOf(payload) : [];
         const entry: Held = {
           suggestions,
           prompt: {
@@ -180,6 +212,7 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
             heldUntil: new Date(now + holdMs).toISOString(),
             asksInTerminal,
             sessionGrant: sessionGrantOf(suggestions),
+            questions,
           },
           reply: (reply) => {
             clearTimeout(timer);
@@ -195,7 +228,8 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
         };
         const timer = setTimeout(lapse, holdMs);
         sessions.set(sessionId, [...(sessions.get(sessionId) ?? []), entry]);
-        if (signal.aborted) lapse();
+        if (questions !== null) answer(entry, undefined);
+        else if (signal.aborted) lapse();
         else signal.addEventListener('abort', lapse, { once: true });
       });
     },
@@ -225,12 +259,10 @@ export function createPermissionHolds(options: PermissionHoldsOptions): Permissi
       return settle(sessionId, ({ prompt }) => {
         if ((prompt.subagent?.id ?? null) !== from) return false;
         if (typeof event === 'string' && TURN_BOUNDARIES.has(event)) return true;
-        // The call ran: it succeeded (`PostToolUse`) or failed (Claude's `PostToolUseFailure`).
-        return (
-          (event === 'PostToolUse' || event === 'PostToolUseFailure') &&
-          payload.tool_name === prompt.toolName &&
-          isDeepStrictEqual(payload.tool_input, prompt.toolInput)
-        );
+        // The call ran: it succeeded (`PostToolUse`) or failed (Claude's `PostToolUseFailure`). A question call's input
+        // comes back with its answers added, and its asker has one dialog up at a time, so its tool alone tells it.
+        if ((event !== 'PostToolUse' && event !== 'PostToolUseFailure') || payload.tool_name !== prompt.toolName) return false;
+        return prompt.questions !== null || isDeepStrictEqual(payload.tool_input, prompt.toolInput);
       });
     },
 

@@ -45,7 +45,9 @@ test("an agent note is a card under a tab that flies to its agent, long markdown
     await expect(card).toHaveCSS('border-left-style', 'dashed');
     const [left, top] = await card.evaluate((element) => [getComputedStyle(element).borderLeftWidth, getComputedStyle(element).borderTopWidth]);
     expect(left).toBe(top);
-    await expect(note.locator('.agent-note-tab')).toHaveText(new RegExp(`^Note.*${agent!.name}`));
+    // The robot stands for the word Note on a named tab.
+    await expect(note.locator('.agent-note-tab').getByRole('img', { name: 'Note' })).toHaveCount(1);
+    await expect(note.locator('.agent-note-tab')).toHaveText(new RegExp(`^${agent!.name}`));
     await expect(note.locator('.agent-note-byline, .agent-note-head')).toHaveCount(0);
     // A note with no known author has a tab that reads just Note.
     const nameless = notes.nth(2);

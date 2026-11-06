@@ -1,4 +1,4 @@
-import { createContext, use, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, use, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { needsYouNow, type Agent, type Shell, type WindowOwner, type Zone } from '@agent-board/daemon/protocol';
 import { windowPanes } from '@agent-board/daemon/window-layout';
 import { tabWindowTitle } from '../session/tabs';
@@ -9,7 +9,8 @@ import { agentPill } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { tokenNumber } from '../theme';
 import { HeldPromptsNotice } from '../inbox/Inbox';
-import { SquareArrowOutUpRight, X } from 'lucide-react';
+import { Pin, SquareArrowOutUpRight, X } from 'lucide-react';
+import { useDock } from '../dock';
 import { HarnessMark } from '../board/HarnessMark';
 import { TileActionsContext } from '../board/tile';
 import { Button, IconButton, Island, StatusPill, useSidewaysScroll, useToast } from '../ui';
@@ -17,7 +18,10 @@ import { SessionWindow, type WindowNav } from '../session/SessionWindow';
 import type { WindowContent } from '../session/SessionBody';
 import {
   closeWindow,
+  inDock,
   minimiseWindow,
+  minimisedWindows,
+  pinWindow,
   popInWindow,
   popOutWindow,
   poppedOut,
@@ -30,7 +34,7 @@ import {
   type SessionWindows as Windows,
 } from './session-windows';
 import { sessionNav, type NavSession } from './session-nav';
-import { frameFrom, type SavedFrame } from './window-frame';
+import { frameFrom, openedMaximised, type SavedFrame } from './window-frame';
 
 interface SessionWindowsValue {
   windows: Windows;
@@ -39,6 +43,8 @@ interface SessionWindowsValue {
   /** Shows the target's window, opening it; a popped-out one is brought forward instead. */
   show(target: WindowTarget): void;
   minimise(id: string): void;
+  /** Pins the window to the dock, or takes it off (Dock: Only what I pin). */
+  pin(id: string, pinned: boolean): void;
   close(id: string): void;
   /** Pops the target's window out into an OS window of its own: at `at` on the screen, if given (a tab dragged out there). */
   popOut(target: WindowTarget, at?: ScreenPoint): void;
@@ -144,6 +150,12 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
   );
   // A popped-out window's ⌘K switcher showed another session in it.
   useEffect(() => window.agentBoard.windows.onSwitched((from, to) => setWindows((current) => switchPoppedWindow(current, from.id, to))), []);
+  // The Window menu lists the minimised windows, and a pick of one restores it.
+  // Reported only when the minimised ones change: main rebuilds the menu bar on each report, which closes a menu that is open.
+  const minimised = JSON.stringify(minimisedWindows(windows).map(({ kind, id, title }) => ({ kind, id, title })));
+  useEffect(() => {
+    if (restored) window.agentBoard.minimised.report(JSON.parse(minimised));
+  }, [restored, minimised]);
   // Stable, so what opens windows (every tile) doesn't re-render each time one moves.
   const actions = useMemo<Omit<SessionWindowsValue, 'windows' | 'restored'>>(
     () => ({
@@ -155,6 +167,7 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
         else setWindows((current) => showWindow(current, target));
       },
       minimise: (id) => setWindows((current) => minimiseWindow(current, id)),
+      pin: (id, pinned) => setWindows((current) => pinWindow(current, id, pinned)),
       close(id) {
         // A popped-out one closes its OS window, and hears back that it went.
         const popped = windowsRef.current.some((entry) => entry.id === id && entry.placement === 'popped');
@@ -181,6 +194,15 @@ export function SessionWindowsProvider({ children }: { children: ReactNode }) {
       },
     }),
     [],
+  );
+  // The Window menu's pick of a minimised window.
+  useEffect(
+    () =>
+      window.agentBoard.minimised.onRestore((id) => {
+        const entry = windowsRef.current.find((known) => known.id === id);
+        if (entry !== undefined) actions.show(entry);
+      }),
+    [actions],
   );
   const value = useMemo(() => ({ windows, restored, ...actions }), [windows, restored, actions]);
   return <SessionWindowsContext value={value}>{children}</SessionWindowsContext>;
@@ -299,16 +321,20 @@ export function SessionWindowsLayer({
   notice,
   sessions,
   zones,
+  opensMaximised = false,
 }: {
   agents: readonly Agent[];
   shells: readonly Shell[] | undefined;
   loaded: boolean;
   sessions: readonly NavSession[];
   zones: readonly Zone[];
+  /** The double-click setting is Maximised session window: a window that opens fills the board, whatever size it was left at. */
+  opensMaximised?: boolean;
   /** Shown at the top of the window shown on the board, such as the restart banner. */
   notice?: ReactNode;
 }) {
-  const { windows, restored, show, minimise, close, popOut, switchTo } = useSessionWindows();
+  const { windows, restored, show, minimise, pin, close, popOut, switchTo } = useSessionWindows();
+  const dock = useDock();
   const shows = useNeedsYouShows();
   const toasts = useToast();
   const { deleteAgent, deleteShell } = useContext(TileActionsContext);
@@ -322,7 +348,27 @@ export function SessionWindowsLayer({
     );
   }, []);
   const shown = shownWindow(windows);
-  const docked = windows.filter((entry) => entry.placement !== 'shown');
+  // Under the Maximised setting, a window that opens on the board fills it, even when another was shown (from the dock
+  // or a tile). Stepping with ‹ › and the windows brought back at launch keep the size they had. In a layout effect,
+  // so the change lands before the window is first painted.
+  const shownBefore = useRef<{ id: string | undefined } | undefined>(undefined);
+  const steppedTo = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    // The saved frame and the windows of the last run are still being read.
+    if (frame === undefined || !restored) return;
+    const previous = shownBefore.current ?? { id: shown?.id };
+    shownBefore.current = { id: shown?.id };
+    const next = openedMaximised({ previousId: previous.id, shownId: shown?.id, steppedTo: steppedTo.current, maximisedSetting: opensMaximised, kept: frame });
+    steppedTo.current = undefined;
+    if (next === undefined) return;
+    setFrame(next);
+    saveFrame({ ...next.frame, maximised: true });
+  }, [shown, restored, opensMaximised, frame, saveFrame]);
+  const step = (fromId: string, target: WindowTarget) => {
+    steppedTo.current = target.id;
+    switchTo(fromId, target);
+  };
+  const docked = windows.filter((entry) => inDock(entry, dock));
   const dockTrack = useDockScroll(docked.map((entry) => entry.id));
   const contentOf = ({ kind, id }: WindowTarget): WindowContent | undefined =>
     kind === 'shell'
@@ -349,11 +395,28 @@ export function SessionWindowsLayer({
           <span className="session-dock-name">{name}</span>
         </Button>
         {agent && <StatusPill {...agentPill(agent, shows)} />}
+        {dock === 'pinned' && (
+          <IconButton icon={<Pin />} size="xs" className="session-dock-pin" aria-label={`Unpin ${name}`} tooltip="Unpin from the dock" onClick={() => pin(entry.id, false)} />
+        )}
         {entry.placement === 'docked' && (
           <IconButton icon={<X />} size="xs" aria-label={`Close ${name}`} tooltip="Close; the session keeps running" onClick={() => close(entry.id)} />
         )}
       </span>
     );
+  };
+  // A window the dock leaves out goes from the board with nothing to show where: the first time, a toast says.
+  const goesToDock = shown === undefined || inDock({ ...shown, placement: 'docked' }, dock);
+  const toldWhere = useRef(false);
+  const minimiseShown = () => {
+    if (shown === undefined) return;
+    minimise(shown.id);
+    if (goesToDock || toldWhere.current) return;
+    toldWhere.current = true;
+    toasts.show({
+      id: 'minimised-away',
+      message: 'Minimised: ⌘K or Window › Minimised brings it back',
+      action: dock === 'pinned' ? { label: 'Pin to dock', onClick: () => pin(shown.id, true) } : undefined,
+    });
   };
   const content = shown && contentOf(shown);
   const shownAgent = content?.kind === 'session' ? content.agent : undefined;
@@ -377,11 +440,11 @@ export function SessionWindowsLayer({
       members: where.group.map((target) => {
         const subject = contentOf(target);
         const agent = subject?.kind === 'session' ? subject.agent : undefined;
-        return { id: target.id, ...side(target), agent, onShow: () => target.id !== from.id && switchTo(from.id, target) };
+        return { id: target.id, ...side(target), agent, onShow: () => target.id !== from.id && step(from.id, target) };
       }),
       onStep(direction) {
         const to = direction === 1 ? where.next : where.previous;
-        switchTo(from.id, to.target);
+        step(from.id, to.target);
         if (to.wrapped) toasts.show({ id: 'session-nav-wrapped', message: direction === 1 ? 'Back to the first' : 'Back to the last' });
       },
     };
@@ -411,7 +474,9 @@ export function SessionWindowsLayer({
             placement="board"
             onClose={() => close(shown.id)}
             onDelete={() => (content.kind === 'session' ? deleteAgent(content.sessionId) : content.kind === 'shell' ? deleteShell(content.shellId) : undefined)}
-            onMinimise={() => minimise(shown.id)}
+            onMinimise={minimiseShown}
+            minimiseTip={goesToDock ? undefined : 'Minimise; it keeps running. Find it in ⌘K or Window › Minimised'}
+            pin={dock === 'pinned' ? { pinned: shown.pinned === true, onToggle: () => pin(shown.id, shown.pinned !== true) } : undefined}
             onPopOut={() => popOut(shown)}
             nav={nav}
             frame={{

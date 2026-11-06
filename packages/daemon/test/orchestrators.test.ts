@@ -1115,13 +1115,13 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'map', 'zone_screenshot', 'add_note',
-      'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'roles', 'set_role', 'remove_role', 'close',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+      'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
     expect((await plainMcp.initialize()).instructions).toBe(BOARD_MCP_INSTRUCTIONS);
-    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin']);
+    expect(await plainMcp.listTools()).toEqual(['whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page']);
   });
 
   it('joins two of its agents with an edge, and removes it, over the tools', async () => {
@@ -1717,13 +1717,27 @@ describe('a reviewer started from a branch an agent owns', () => {
   const pair = (edges: { from: string; to: string; trigger: string; madeBy: string | null }[], a: string, b: string) =>
     edges.filter((edge) => [a, b].includes(edge.from) && [a, b].includes(edge.to));
 
-  it('is joined to that agent both ways by manual edges, named by its branch or as agent:<ref>, and never to the orchestrator', async () => {
+  it('is joined to nothing by default: it and its implementer talk through send, so no Send button appears', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch });
+      await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review' });
+      expect(await setup.client.call('flowEdge.list')).toEqual([]);
+    } finally {
+      session.close();
+    }
+  });
+
+  it('with --edges manual, is joined to that agent both ways by manual edges, named by its branch or as agent:<ref>, and never to the orchestrator', async () => {
     const setup = await orchestrateDaemon();
     const { agent: me, token } = await agentSide(setup, setup.zone.id, 'zone');
     const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
     const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
     try {
-      const byBranch = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch });
+      const byBranch = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch, edges: 'manual' });
       const reviewer = (byBranch.json as { id: string }).id;
       let edges = await setup.client.call('flowEdge.list');
       expect(pair(edges, implementer.sessionId, reviewer).map(({ from, to, trigger }) => `${from === reviewer ? 'reviewer' : 'impl'}->${to === reviewer ? 'reviewer' : 'impl'} ${trigger}`).sort()).toEqual([
@@ -1734,10 +1748,28 @@ describe('a reviewer started from a branch an agent owns', () => {
       expect(edges.some((edge) => edge.from === me.sessionId || edge.to === me.sessionId)).toBe(false);
 
       // Named as `agent:<ref>`, the same; a follow-up reviewer is joined to the implementer too, one edge each way.
-      const followUp = await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review' });
+      const followUp = await newAgent(session, { prompt: 'Check the fixes', name: 'recheck', role: 'follow-up-reviewer', base: 'agent:review', edges: 'manual' });
       edges = await setup.client.call('flowEdge.list');
       expect(pair(edges, implementer.sessionId, (followUp.json as { id: string }).id)).toHaveLength(2);
       expect(edges).toHaveLength(4);
+    } finally {
+      session.close();
+    }
+  });
+
+  it('with --edges auto, hands its findings back by itself and leaves the way back manual', async () => {
+    const setup = await orchestrateDaemon();
+    const { token } = await agentSide(setup, setup.zone.id, 'zone');
+    const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
+    const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
+    try {
+      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch, edges: 'auto' });
+      const reviewer = (started.json as { id: string }).id;
+      const edges = await setup.client.call('flowEdge.list');
+      expect(edges.map(({ from, to, trigger }) => `${from === reviewer ? 'reviewer' : 'impl'}->${to === reviewer ? 'reviewer' : 'impl'} ${trigger}`).sort()).toEqual([
+        'impl->reviewer manual',
+        'reviewer->impl auto',
+      ]);
     } finally {
       session.close();
     }
@@ -1749,7 +1781,7 @@ describe('a reviewer started from a branch an agent owns', () => {
     const implementer = await userAgent(setup.client, setup.zone.id, 'impl');
     const session = await openBoardSession({ [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: token });
     try {
-      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch });
+      const started = await newAgent(session, { prompt: 'Review it', name: 'review', role: 'reviewer', base: implementer.branch, edges: 'manual' });
       expect(await setup.client.call('flowEdge.list')).toHaveLength(2);
       await connection.call('orchestrator.close', { token, sessionId: (started.json as { id: string }).id, remove: true });
       expect(await setup.client.call('flowEdge.list')).toEqual([]);
@@ -2281,7 +2313,7 @@ describe('agents recording their own sidebar', () => {
     const report = realpathSync(join(agent.worktree, 'report.html'));
     const read = () => setup.client.call('agent.readDoc', { sessionId: agent.sessionId, path: report });
 
-    await expect(read()).rejects.toMatchObject({ message: expect.stringMatching(/is not one of .*docs or pins/) });
+    await expect(read()).rejects.toMatchObject({ message: expect.stringMatching(/is not one of .*docs, pins or page's links/) });
     await connection.call('board.record', { token, kind: 'pin', path: 'report.html' });
     expect(await read()).toEqual({ path: report, text: '<h1>Report</h1>' });
     const remove = (deleted: boolean) => setup.client.call('agent.setRecordDeleted', { sessionId: agent.sessionId, kind: 'pin', key: report, deleted });

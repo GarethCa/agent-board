@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv } from '@agent-board/fake-harness';
 import { readFileSync } from 'node:fs';
-import { BOARD_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type Harness, type PlanCardData } from '../src/protocol.ts';
+import { BOARD_ERROR, type Agent, type AgentUpdatedEvent, type DaemonEvent, type Harness, type PlanCardData, type StepsData } from '../src/protocol.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -185,24 +185,23 @@ describe('an agent asking the user through the board MCP', () => {
     expect(readFileSync(file, 'utf8')).toBe(edited);
   });
 
-  it.each<Harness>(['claude', 'codex'])('lets a %s agent ask for a question card on the board, which only the user moves', async (harness) => {
+  it.each<Harness>(['claude', 'codex'])('lets a %s agent ask on the board: a steps card it waits on, which only the user answers and sends', async (harness) => {
     const { daemon, client, recorder, start, until } = await askDaemon();
     const agent = await start('Identify, then ask on the board: Which cache? | Redis | CDN only', harness);
-    const { ask } = await until(agent.sessionId, (seen) => seen.ask?.onBoard === true);
-    expect(ask).toMatchObject({ question: 'Which cache?', options: ['Redis', 'CDN only'], at: null });
+    const { ask } = await until(agent.sessionId, (seen) => seen.ask?.card != null);
+    expect(ask).toMatchObject({ question: 'Which cache?', options: ['Redis', 'CDN only'], onBoard: true });
+    const card = (await client.call('item.list')).find((item) => item.id === ask!.card)!;
+    expect(card).toMatchObject({ kind: 'steps', zoneId: agent.zoneId, data: { fromAsk: { askId: ask!.id, ended: null } } });
 
     const token = /identity:(.*):end\r\n/.exec(recorder.screenText(agent.sessionId))![1]!;
     const asAgent = await connectTestClient(daemon);
     await asAgent.call('board.identify', { token });
-    await expect(asAgent.call('ask.place', { sessionId: agent.sessionId, askId: ask!.id, at: { x: 0, y: 0 } })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await expect(asAgent.call('ask.send', { sessionId: agent.sessionId, askId: ask!.id })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
+    await expect(asAgent.call('ask.toCard', { sessionId: agent.sessionId, askId: ask!.id })).rejects.toMatchObject({ code: BOARD_ERROR.notAllowed });
 
-    await client.call('agent.markSeen', { sessionId: agent.sessionId });
-    await client.call('ask.place', { sessionId: agent.sessionId, askId: ask!.id, at: { x: 640, y: 120 } });
-    const moved = await until(agent.sessionId, (seen) => seen.ask?.at?.x === 640);
-    expect(moved.ask).toMatchObject({ id: ask!.id, at: { x: 640, y: 120 } });
-    expect(moved.seen).toBe(true);
-
-    await client.call('ask.answer', { sessionId: agent.sessionId, askId: ask!.id, answer: { option: 0 } });
+    const [step] = (card.data as unknown as StepsData).steps;
+    await client.call('steps.answer', { id: card.id, stepId: step!.id, answer: { one: 0 } });
+    await client.call('steps.send', { id: card.id });
     await recorder.waitForText(agent.sessionId, 'The user answered: Redis');
   });
 

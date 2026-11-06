@@ -111,6 +111,29 @@ function placedAt<T extends { zoneId: string | null; position: TilePosition | nu
   return { ...subject, zoneId: move.zoneId, position: { x: move.x, y: move.y, z } };
 }
 
+/**
+ * `next`, or the tile's data as it was when nothing in it changed: the same object keeps the tile's memo, so a change to
+ * one agent (several a second on a busy board) redraws its tile alone, not every tile's buttons. Fields are compared
+ * as they are, and an array or plain object in one (a crew member's `from`, an agent's `tabs`) by its own fields.
+ */
+function sameData(before: TileData | undefined, next: TileData): TileData {
+  if (before === undefined) return next;
+  const keys = Object.keys(next) as (keyof TileData)[];
+  if (keys.length !== Object.keys(before).length) return next;
+  return keys.every((key) => sameField(before[key], next[key])) ? before : next;
+}
+
+function sameField(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((each, index) => Object.is(each, b[index]));
+  if (!isPlainObject(a) || !isPlainObject(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.is(a[key], b[key]));
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+
 interface Placed {
   id: string;
   /** The zone it is in, if any. */
@@ -297,7 +320,7 @@ export function withTiles(
           ? { width: before.width ?? open.width, height: before.height ?? open.height }
           : { width: open.width, height: open.height }),
       draggable: entry.draggable,
-      data: open === undefined ? entry.data : { ...entry.data, expanded: true as const },
+      data: sameData(before?.data, open === undefined ? entry.data : { ...entry.data, expanded: true as const }),
       zIndex: rank !== undefined ? EXPANDED_Z_INDEX + rank : before?.dragging === true ? DRAGGED_TILE_Z_INDEX : TILE_Z_INDEX,
     };
     // Out of every zone, it must lose the one it had; collapsed, its drag handle.

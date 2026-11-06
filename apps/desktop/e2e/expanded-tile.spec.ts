@@ -1277,7 +1277,7 @@ interface Box {
  * Where the zone, its crew frame and each tile (by node id) are drawn on the board, whatever the view, with which agents
  * the frame holds. The view is fitted first: a tile out of view isn't drawn.
  */
-async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members: string[]; tiles: Record<string, Box> }> {
+async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members: string[]; parts: { box: Box; members: string[] }[]; tiles: Record<string, Box> }> {
   await page.getByRole('button', { name: 'Fit View' }).click();
   await viewSettled(page);
   // Done moving and growing: no node, nor the frame, easing anywhere.
@@ -1296,6 +1296,7 @@ async function crewLayout(page: Page): Promise<{ zone: Box; frame: Box; members:
       zone: box(document.querySelector('.react-flow__node-zone')!),
       frame: box(frame),
       members: frame.getAttribute('data-members')!.split(' '),
+      parts: [...document.querySelectorAll('[data-testid="crew-frame"]')].map((part) => ({ box: box(part), members: part.getAttribute('data-members')!.split(' ') })),
       tiles: Object.fromEntries([...document.querySelectorAll('.react-flow__node-tile')].map((node) => [node.getAttribute('data-id')!, box(node)])),
     };
   });
@@ -1372,6 +1373,64 @@ test('an expanded tile reshapes its zone round a crew frame: the frame keeps its
       const [, shell] = Object.entries(layout.tiles).find(([id]) => id.startsWith('shell:'))!;
       expect(apart(layout.frame, shell), 'the frame clear of the shell').toBe(true);
     });
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a crew frame holds its whole crew in its zone, wherever it is moved, in parts round a tile among them, and round a member expanded far from its lead', async () => {
+  const { dir, repo, env } = scratch('orchestrate');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Lead two: Fix the flaky test');
+    if (await sessionWindow(window).isVisible()) await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(tile(window)).toHaveCount(3, { timeout: 2 * TURN_MS });
+    await newShell(window);
+    await expect(sessionWindow(window)).toBeVisible();
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    const lead = (await agents(window)).find((agent) => agent.spawnedBy === null)!;
+    const crew = (await agents(window)).filter((agent) => agent.spawnedBy === lead.sessionId).toSorted((a, b) => a.name.localeCompare(b.name));
+    const crewIds = crew.map((agent) => `agent:${agent.sessionId}`);
+    const [zone] = await zones(window);
+    // As an arrange lays out a long crew: one many lanes below its lead, the other far to its right, and a shell, no
+    // part of the crew, between them.
+    await window.evaluate(
+      async ({ zoneId, lead, crew }) => {
+        const { agents, shells } = globalThis.window.agentBoard;
+        await agents.move(lead, { zoneId, x: 40, y: 64 });
+        await agents.move(crew[0]!, { zoneId, x: 336, y: 4200 });
+        await agents.move(crew[1]!, { zoneId, x: 1800, y: 1200 });
+        const [shell] = await shells.list();
+        await shells.move(shell!.id, { zoneId, x: 900, y: 2600 });
+      },
+      { zoneId: zone!.id, lead: lead.sessionId, crew: crew.map((agent) => agent.sessionId) },
+    );
+    await expect(window.getByTestId('crew-frame')).toHaveCount(2);
+    await expect(window.getByTestId('from-chip')).toHaveCount(0);
+    // Labelled once, on its first part.
+    await expect(window.locator('.crew-frame-label')).toHaveCount(1);
+
+    /** Every crew member in a part of its frame, and every other tile (its lead, the shell) clear of every part. */
+    const expectFramedExactly = (layout: Awaited<ReturnType<typeof crewLayout>>, when: string) => {
+      expect(layout.parts.flatMap((part) => part.members).toSorted(), `the crew, ${when}`).toEqual(crew.map((agent) => agent.sessionId).toSorted());
+      for (const part of layout.parts) {
+        for (const id of part.members) expect(inside(layout.tiles[`agent:${id}`]!, part.box), `agent:${id} inside its part, ${when}`).toBe(true);
+        for (const [id, box] of Object.entries(layout.tiles)) if (!crewIds.includes(id)) expect(apart(box, part.box), `${id} outside every part, ${when}`).toBe(true);
+      }
+    };
+    expectFramedExactly(await crewLayout(window), 'at rest');
+
+    // The far one expanded: its part round it at its expanded size, the shell still outside.
+    await tileAction(tile(window).filter({ has: window.getByTitle(crew[0]!.name, { exact: true }) }), 'Expand in place');
+    await expect(expandedTile(window)).toHaveCount(1);
+    const opened = await crewLayout(window);
+    expect(opened.tiles[crewIds[0]!]!.width, 'drawn at its expanded size').toBeGreaterThan(256);
+    expectFramedExactly(opened, 'one expanded');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

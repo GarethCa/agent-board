@@ -805,6 +805,9 @@
 .ui-menu {
   z-index: var(--layer-popover);
   min-width: var(--size-menu);
+  /* A menu taller than the window (a zone's ⋯ in a short one) scrolls inside it, every row still reachable. */
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
   padding: var(--space-1-25);
   animation: ui-fade var(--motion-fast) var(--ease-out);
 }

@@ -100,6 +100,11 @@ async function receiver(setup: Setup, name: string, harness: Harness = 'claude')
     await setup.recorder.waitFor(
       (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
     );
+  } else {
+    // Codex fires no hook before a first prompt: its session is up once its composer is drawn and has stayed quiet for
+    // the daemon's watch to read it (300 ms); a hand-off sent before is refused as busy.
+    await setup.recorder.waitForText(agent.sessionId, 'default · ');
+    await new Promise((resolve) => setTimeout(resolve, 600));
   }
   return agent;
 }

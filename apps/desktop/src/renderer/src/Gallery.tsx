@@ -1,12 +1,21 @@
 import { CalmTileGallery } from './board/CalmTileGallery';
 import { CharacterGallery } from './board/CharacterGallery';
+import { MemoryGallery } from './board/items/MemoryGallery';
+import { QueueGallery } from './board/items/QueueGallery';
+import { PrefabGallery } from './crews/PrefabGallery';
 import { StatusMarkGallery } from './board/StatusMarkGallery';
 import { TileGallery } from './board/TileGallery';
+import { StepsGallery } from './board/items/StepsGallery';
+import { QuickAskGallery } from './board/QuickAskGallery';
 import { useSimplified } from './design';
 import { ComponentGallery } from './ui/ComponentGallery';
 
-/** The dev gallery at `#gallery`: every primitive in every state, every tile state and every character pose, and
- * under the Simplified design every status mark and an agent's calm tile in each status. */
+/**
+ * The dev gallery at `#gallery`: every primitive in every state, every tile state, every character pose, under the
+ * Simplified design every status mark and an agent's calm tile in each status, every look of a steps card, a memory's
+ * looks and a queue's, the quick ask on a tile, and last (so it moves nothing above) a crew prefab's flow editor. A
+ * queue handed on has its own page.
+ */
 export function Gallery() {
   const simplified = useSimplified();
   return (
@@ -16,6 +25,11 @@ export function Gallery() {
       <CharacterGallery captain={simplified} />
       {simplified && <StatusMarkGallery />}
       {simplified && <CalmTileGallery />}
+      <StepsGallery />
+      <MemoryGallery />
+      <QueueGallery />
+      <QuickAskGallery />
+      <PrefabGallery />
     </div>
   );
 }

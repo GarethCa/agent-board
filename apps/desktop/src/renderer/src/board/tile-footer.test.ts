@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, AgentSchedule, LinkedIssue, PullRequest } from '@agent-board/daemon/protocol';
+import type { Agent, AgentSchedule, LinkedIssue, PullRequest, TakenJob } from '@agent-board/daemon/protocol';
 import { badgeLine, foldCount, foldRanking, tileFooter, type FooterItem } from './tile-footer';
 
 const issue = { provider: 'linear', id: 'ACME-58', title: 'Movable sessions', url: 'https://linear.app/x' } as LinkedIssue;
@@ -7,11 +7,21 @@ const pr = (number: number, state: PullRequest['state'] = 'open', checks: PullRe
   ({ number, title: `PR ${number}`, url: `https://github.com/o/r/pull/${number}`, state, checks }) as PullRequest;
 const schedule = { cron: '0 9 * * 2', prompt: 'Go', enabled: true, nextRunAt: null, lastRun: null } as AgentSchedule;
 const agent = (fields: Partial<Agent> = {}) =>
-  ({ model: null, role: null, roleName: null, issue: null, pullRequests: [], pushedPullRequests: [], schedule: null, muted: false, seen: false, notice: null, workFinishedAt: null, startup: null, ...fields }) as Agent;
+  ({ model: null, effort: null, effortPending: null, role: null, roleName: null, issue: null, pullRequests: [], pushedPullRequests: [], schedule: null, muted: false, seen: false, notice: null, workFinishedAt: null, startup: null, ...fields }) as Agent;
 
 describe('a tile’s footer', () => {
   it('is empty for an agent with nothing to show', () => {
     expect(tileFooter(agent())).toEqual({ shown: [], folded: [] });
+  });
+
+  it('shows the first job it holds as a ticket, after its issue, and folds any more into the +N', () => {
+    const taken = { sessionId: 's', queueId: 'q', queueTitle: 'api jobs', job: { id: 'j', text: 'Fix the login' } } as TakenJob;
+    const more = { ...taken, job: { id: 'k', text: 'Write the docs' } } as TakenJob;
+    const footer = tileFooter(agent({ issue }), 0, [taken, more]);
+    expect(footer.shown).toEqual([{ kind: 'issue', issue }, { kind: 'job', taken }]);
+    expect(footer.folded).toEqual(['Its job from “api jobs”: Write the docs']);
+    expect(foldRanking(footer.shown)).toEqual([]);
+    expect(badgeLine({ kind: 'job', taken }, 0)).toBe('Its job from “api jobs”: Fix the login');
   });
 
   it('shows the issue, the pull requests and the schedule, in that order', () => {
@@ -45,6 +55,24 @@ describe('a tile’s footer', () => {
       { kind: 'issue', issue },
     ]);
     expect(tileFooter(agent({ role: 'implementer' })).shown).toEqual([{ kind: 'role', role: 'implementer', name: null }]);
+  });
+
+  it('shows the reasoning effort after the model, when it is not the harness’s own, and folds it before the model', () => {
+    const { shown } = tileFooter(agent({ model: 'opus', effort: 'high', role: 'reviewer' }));
+    expect(shown).toEqual([
+      { kind: 'model', model: 'opus' },
+      { kind: 'effort', effort: 'high', pending: null },
+      { kind: 'role', role: 'reviewer', name: null },
+    ]);
+    expect(badgeLine({ kind: 'effort', effort: 'xhigh', pending: null }, 0)).toBe('Reasoning: Extra high');
+    expect(badgeLine({ kind: 'effort', effort: 'max', pending: 'after-turn' }, 0)).toBe('Reasoning: Max, after this turn');
+    expect(foldRanking(shown).map((index) => shown[index]!.kind)).toEqual(['role', 'effort', 'model']);
+    expect(tileFooter(agent()).shown).toEqual([]);
+  });
+
+  it('shows a level still to be taken, the harness’s own included, as pending', () => {
+    expect(tileFooter(agent({ effort: null, effortPending: 'restart' })).shown).toEqual([{ kind: 'effort', effort: null, pending: 'restart' }]);
+    expect(badgeLine({ kind: 'effort', effort: null, pending: 'restart' }, 0)).toBe('Reasoning: Default, on restart');
   });
 
   it('names a custom role by its own name, and an unnamed one Custom', () => {

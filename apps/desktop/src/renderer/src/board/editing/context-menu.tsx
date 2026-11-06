@@ -3,6 +3,8 @@ import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import { covers } from '../../board-colors';
 import {
   AlarmClock,
+  Brain,
+  Ticket,
   AlignCenterVertical,
   AlignEndHorizontal,
   AlignEndVertical,
@@ -21,7 +23,10 @@ import {
   Spline,
   LayoutDashboard,
   LayoutGrid,
+  ListTodo,
   Pencil,
+  Pin,
+  PinOff,
   RotateCcw,
   Sparkles,
   SquareDashedMousePointer,
@@ -64,6 +69,14 @@ export interface ContextActions {
   arrangeBoard(): void;
   /** Puts a new clock where the menu was opened, and opens its editor. */
   addClock(): void;
+  /** A new steps card where the menu was opened. */
+  addSteps(): void;
+  /** A new memory where the menu was opened, its add box focused. */
+  addMemory(): void;
+  /** A new queue for agents where the menu was opened, its add box focused. */
+  addQueue(): void;
+  /** With one lead tile selected in a shelved zone: whether it is pinned top-left, and how to free or pin it. */
+  leadPin?: { pinned: boolean; toggle(): void };
 }
 
 /**
@@ -72,7 +85,9 @@ export interface ContextActions {
  */
 export function selectionEntries(selection: SelectionSummary, selectedConnectors: number, actions: ContextActions): MenuEntry[] {
   const hasItems = selection.items.length > 0;
-  const movable = selection.nodes.length;
+  const movable = selection.movable.length;
+  // Some selected tiles sit where their zone's layout puts them, so align and distribute leave them be.
+  const laidOut = selection.movable.length < selection.nodes.length ? 'Tiles on shelves or in clusters keep their places there' : undefined;
   const alignTo = (label: string, how: Alignment, icon: ReactNode): MenuEntry => ({ label, icon, onSelect: () => actions.align(how) });
   const colours = [...selection.kinds].flatMap((kind): MenuEntry[] => {
     const colors = ITEM_KINDS[kind].colors;
@@ -103,6 +118,14 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
   return [
     ...ask,
     ...(selection.renamable ? [{ label: 'Rename', icon: <Pencil />, shortcut: keyText('tile.rename'), onSelect: actions.rename }, 'separator' as const] : []),
+    ...(actions.leadPin === undefined
+      ? []
+      : [
+          actions.leadPin.pinned
+            ? { label: 'Free from top-left', icon: <PinOff />, hint: 'It goes on the shelves as a stack of its own', onSelect: actions.leadPin.toggle }
+            : { label: 'Pin top-left', icon: <Pin />, hint: "Back in the zone's head row, above the shelves", onSelect: actions.leadPin.toggle },
+          'separator' as const,
+        ]),
     { label: 'Duplicate', icon: <CopyPlus />, shortcut: keyText('edit.duplicate'), disabled: !hasItems, onSelect: actions.duplicate },
     { label: 'Copy', icon: <Copy />, shortcut: keyText('edit.copy'), disabled: !hasItems, onSelect: actions.copy },
     ...(selection.kinds.has('shape') ? [{ label: 'Copy as Mermaid', icon: <Workflow />, hint: 'The shapes and their connectors, as diagram text', onSelect: actions.copyMermaid }] : []),
@@ -116,6 +139,7 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
       label: 'Align',
       icon: <AlignStartVertical />,
       disabled: movable < 2,
+      hint: laidOut,
       entries: [
         alignTo('Left edges', 'left', <AlignStartVertical />),
         alignTo('Centres', 'centre', <AlignCenterVertical />),
@@ -153,7 +177,10 @@ export function selectionEntries(selection: SelectionSummary, selectedConnectors
 /** The context menu on empty board: select everything, and snap to the grid. */
 export function boardEntries(actions: ContextActions): MenuEntry[] {
   return [
+    { label: 'New steps', icon: <ListTodo />, shortcut: keyText('make.steps'), hint: 'Questions and to-dos, in order', onSelect: actions.addSteps },
     { label: 'Add a clock', icon: <AlarmClock />, hint: 'A schedule that messages an agent, or starts one', onSelect: actions.addClock },
+    { label: 'Add a memory', icon: <Brain />, shortcut: keyText('make.memory'), hint: 'Notes and decisions you and agents keep for each other', onSelect: actions.addMemory },
+    { label: 'Add a queue', icon: <Ticket />, shortcut: keyText('make.queue'), hint: 'Jobs in order, for agents to take one at a time', onSelect: actions.addQueue },
     { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },

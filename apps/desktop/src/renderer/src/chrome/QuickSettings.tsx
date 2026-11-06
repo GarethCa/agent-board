@@ -1,6 +1,7 @@
 import { useSimplified } from '../design';
 import { useTechnicalDetails } from '../technical';
 import { Section, Segmented, Switch } from '../ui';
+import { useMenuSectionOpen } from './board-menu-fold';
 import { MODE_OPTIONS, useAppearance } from './appearance-mode';
 import { useUsageOnBoard } from './usage-on-board';
 
@@ -18,9 +19,10 @@ export function QuickSettings() {
   // `useTechnicalDetails()` is true under Classic, which has no switch: the switch is on only under the Simplified design.
   const shown = useTechnicalDetails();
   const [usageOnBoard, setUsageOnBoard] = useUsageOnBoard();
+  const [open, setOpen] = useMenuSectionOpen('quick-settings');
 
   return (
-    <Section label="Quick settings">
+    <Section label="Quick settings" open={open} onOpenChange={setOpen}>
       <div className="quick-settings" data-testid="quick-settings">
         <div className="quick-setting">
           <span className="quick-setting-label">Appearance</span>

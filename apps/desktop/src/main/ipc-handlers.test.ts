@@ -54,15 +54,15 @@ describe('the channels main handles', () => {
   beforeEach(() => handlers.clear());
 
   it.each([
-    ['agents', (d: DaemonLink) => registerAgentIpc(d, '/data'), ['agent:answer', 'agent:askSelection', 'agent:captureSelection', 'agent:clearUndelivered', 'agent:clearUnsent', 'agent:continueOnCredits', 'agent:decidePermission', 'agent:delete', 'agent:dismissStart', 'agent:interrupt', 'agent:link', 'agent:list', 'agent:markSeen', 'agent:move', 'agent:nextName', 'agent:pasteImage', 'agent:pause', 'agent:readDoc', 'agent:releasePermission', 'agent:resendUndelivered', 'agent:restart', 'agent:resume', 'agent:retryStart', 'agent:sendUnsent', 'agent:setMuted', 'agent:setName', 'agent:setRecordDeleted', 'agent:setSchedule', 'agent:spawn', 'agent:start', 'agent:startMaster', 'agent:starts', 'agent:stop', 'agent:subagentTranscript', 'agent:transcript', 'agent:trustFolder', 'agent:typeFirstPrompt', 'agent:updateStart']],
+    ['agents', (d: DaemonLink) => registerAgentIpc(d, '/data'), ['agent:answer', 'agent:askSelection', 'agent:captureSelection', 'agent:clearUndelivered', 'agent:clearUnsent', 'agent:continueOnCredits', 'agent:decidePermission', 'agent:delete', 'agent:dismissStart', 'agent:interrupt', 'agent:link', 'agent:list', 'agent:markSeen', 'agent:move', 'agent:nextName', 'agent:pasteImage', 'agent:pause', 'agent:readDoc', 'agent:releasePermission', 'agent:resendUndelivered', 'agent:restart', 'agent:resume', 'agent:retryStart', 'agent:sendUnsent', 'agent:setEffort', 'agent:setMuted', 'agent:setName', 'agent:setRecordDeleted', 'agent:setSchedule', 'agent:spawn', 'agent:start', 'agent:startMaster', 'agent:starts', 'agent:stop', 'agent:subagentTranscript', 'agent:transcript', 'agent:trustFolder', 'agent:typeFirstPrompt', 'agent:updateStart']],
     ['connectors', registerConnectorIpc, ['connector:create', 'connector:delete', 'connector:list', 'connector:update']],
     ['external', registerExternalIpc, ['external:dismiss', 'external:hooksStatus', 'external:list', 'external:move', 'external:resume', 'external:resumePlan', 'external:setHooksEnabled']],
     ['flow edges', registerFlowEdgeIpc, ['flow-edge:approve', 'flow-edge:commands', 'flow-edge:create', 'flow-edge:delete', 'flow-edge:drop', 'flow-edge:lastPayload', 'flow-edge:list', 'flow-edge:preview', 'flow-edge:send', 'flow-edge:setSettings', 'flow-edge:settings', 'flow-edge:update']],
-    ['asks', registerAskIpc, ['ask:answer', 'ask:place', 'doc:comment', 'doc:read', 'doc:save', 'plan:decide', 'plan:edit', 'plan:list']],
+    ['asks', registerAskIpc, ['ask:answer', 'ask:send', 'ask:toCard', 'doc:comment', 'doc:read', 'doc:save', 'plan:decide', 'plan:edit', 'plan:list', 'steps:answer', 'steps:send', 'steps:tick']],
     ['unsaved plan edits', registerUnsavedPlanEditIpc, ['plan:markUnsavedEdit', 'plan:unsavedEdits']],
     ['gates', registerGateIpc, ['gate:list', 'gate:log', 'gate:merge', 'gate:run', 'gate:sendFailure', 'gate:status', 'gate:stop']],
-    ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:clocks', 'item:create', 'item:delete', 'item:import-image', 'item:list', 'item:update']],
-    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:usage']],
+    ['items', (d: DaemonLink) => registerItemIpc(d, '/data'), ['item:add-clock', 'item:change-memory', 'item:change-queue', 'item:clocks', 'item:create', 'item:delete', 'item:hand-job', 'item:import-image', 'item:list', 'item:memory-history', 'item:queue-history', 'item:read-memory', 'item:read-queue', 'item:taken-jobs', 'item:update']],
+    ['orchestrators', registerOrchestratorIpc, ['orchestrator:activity', 'orchestrator:check-prefab', 'orchestrator:prefabs', 'orchestrator:remove-prefab', 'orchestrator:save-prefab', 'orchestrator:usage']],
     ['pull requests', registerPullRequestIpc, ['pull-request:approve', 'pull-request:details', 'pull-request:merge']],
     ['reviews', registerReviewIpc, ['review:dismiss', 'review:list', 'review:merge', 'review:send', 'review:set-cap', 'review:start']],
     ['shells', registerShellIpc, ['shell:closeOwnPanes', 'shell:closePane', 'shell:create', 'shell:createTab', 'shell:delete', 'shell:forgetWindow', 'shell:list', 'shell:move', 'shell:movePane', 'shell:moveSurface', 'shell:moveTab', 'shell:ownTab', 'shell:resizeSplit', 'shell:resumePane', 'shell:returnPane', 'shell:scripts', 'shell:setName', 'shell:setPaneName', 'shell:setWindowLayout', 'shell:split', 'shell:tabWindows', 'shell:unsplitTabs', 'shell:windowLayout']],
@@ -119,5 +119,74 @@ describe('what a pass-through sends the daemon', () => {
     registered(registerFlowEdgeIpc);
     expect(await invoke('flow-edge:settings')).toEqual({ method: 'settings.get', params: undefined });
     expect(await invoke('flow-edge:approve', 'e', 'cmd', 'fp', 'a')).toEqual({ method: 'flowEdge.approve', params: { id: 'e', command: 'cmd', fingerprint: 'fp', from: 'a' } });
+  });
+});
+
+describe("main's crew prefab calls", () => {
+  const prefab = {
+    name: 'Pair',
+    icon: 'crew',
+    purpose: '',
+    roundLimit: 3,
+    onBoard: 'card',
+    members: [{ id: 'impl', role: 'implementer', name: null, harness: 'claude', model: null, effort: null, template: null, starts: 'prompt', subagents: [] }],
+  };
+  /** A daemon that records each call, failing those `fails` names with its message. */
+  const recording = (fails: Record<string, string> = {}) => {
+    const calls: [string, Record<string, unknown>][] = [];
+    const daemon = {
+      call: async (method: string, params: Record<string, unknown>) => {
+        calls.push([method, params]);
+        if (fails[method] !== undefined) throw new Error(fails[method]);
+        return { saved: method };
+      },
+      onEvent: () => () => undefined,
+      onConnected: () => () => undefined,
+    } as unknown as DaemonLink;
+    handlers.clear();
+    registerOrchestratorIpc(daemon);
+    return calls;
+  };
+  const saved = (calls: [string, Record<string, unknown>][]) => calls.map(([method, params]) => [method, method === 'orchestrator.savePrefab' ? params.replace : params.name]);
+
+  it('saves a new prefab as its file, an edit by replacing it, and a rename as the new name before the old is removed', async () => {
+    let calls = recording();
+    await invoke('orchestrator:save-prefab', prefab);
+    expect(saved(calls)).toEqual([['orchestrator.savePrefab', false]]);
+    expect(JSON.parse(calls[0]![1].text as string)).toMatchObject({ agentBoardCrewPrefab: 1, name: 'Pair' });
+
+    calls = recording();
+    await invoke('orchestrator:save-prefab', prefab, 'pair');
+    expect(saved(calls)).toEqual([['orchestrator.savePrefab', true]]);
+
+    calls = recording();
+    await invoke('orchestrator:save-prefab', prefab, 'Old pair');
+    expect(saved(calls)).toEqual([
+      ['orchestrator.savePrefab', false],
+      ['orchestrator.removePrefab', 'Old pair'],
+    ]);
+
+    // The library matches names in ASCII case only, so É and é are two names: a rename.
+    calls = recording();
+    await invoke('orchestrator:save-prefab', { ...prefab, name: 'équipe' }, 'Équipe');
+    expect(saved(calls)).toEqual([
+      ['orchestrator.savePrefab', false],
+      ['orchestrator.removePrefab', 'Équipe'],
+    ]);
+  });
+
+  it('takes a rename whose old prefab is gone already as done, and keeps the old one when the new is refused', async () => {
+    recording({ 'orchestrator.removePrefab': 'the library has no crew prefab named Old pair' });
+    await expect(invoke('orchestrator:save-prefab', prefab, 'Old pair')).resolves.toEqual({ saved: 'orchestrator.savePrefab' });
+
+    const calls = recording({ 'orchestrator.savePrefab': 'Pair is a built-in prefab' });
+    await expect(invoke('orchestrator:save-prefab', prefab, 'Old pair')).rejects.toThrow('built-in');
+    expect(calls.map(([method]) => method)).toEqual(['orchestrator.savePrefab']);
+  });
+
+  it("says why the library's own parser would refuse a draft, else null", async () => {
+    recording();
+    expect(await invoke('orchestrator:check-prefab', prefab)).toBeNull();
+    expect(await invoke('orchestrator:check-prefab', { ...prefab, name: 'x'.repeat(49) })).toMatch(/at most 48 characters/);
   });
 });

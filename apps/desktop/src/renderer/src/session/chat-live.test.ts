@@ -50,7 +50,7 @@ const prompt = (toolName: string, subagent: PermissionPrompt['subagent'] = null)
   requestedAt: '2026-10-10T21:10:15.000Z',
   heldUntil: '2026-10-10T21:11:15.000Z',
   asksInTerminal: false,
-  sessionGrant: null,
+  sessionGrant: null, questions: null,
 });
 
 const plan = (fields: Partial<PlanSummary> = {}): PlanSummary => ({
@@ -106,7 +106,7 @@ describe('the live state at the end of the chat, from a recorded transcript and 
   });
 
   test('waiting on you comes first: a prompt, then a question, then a plan; a plan the agent left waits on nothing', () => {
-    const ask = { id: 'q1', question: 'Stack codes?', options: ['Yes', 'No'], freeText: true, askedAt: 't', expiresAt: 't', onBoard: false, at: null };
+    const ask = { id: 'q1', question: 'Stack codes?', options: ['Yes', 'No'], freeText: true, askedAt: 't', expiresAt: 't', onBoard: false, questions: [{ question: 'Stack codes?', options: ['Yes', 'No'], freeText: true }], answers: [null], card: null };
     const count = through('"pnpm lint"');
     expect(liveOf(facts({ state: 'waiting', ask, plan: plan(), permissions: [prompt('Bash')] }), count)?.kind).toBe('permission');
     expect(liveOf(facts({ state: 'waiting', ask, plan: plan() }), count)).toMatchObject({ kind: 'ask', ask: { id: 'q1' } });

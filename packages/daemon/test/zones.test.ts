@@ -156,6 +156,20 @@ describe('zones over the socket', () => {
     expect((await client.call('zone.list')).find((each) => each.id === zone.id)?.spacing).toBe('compact');
   });
 
+  it('keeps how a zone lays out what it holds: free until set, then shelves or clusters', async () => {
+    const client = await connectTestClient(await startTestDaemon());
+    const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
+    expect(zone.layoutMode).toBe('free');
+
+    const shelved = await client.call('zone.configure', { id: zone.id, layoutMode: 'shelves' });
+    expect(shelved).toEqual({ ...zone, layoutMode: 'shelves' });
+    expect((await client.call('zone.configure', { id: zone.id, layoutMode: 'clusters' })).layoutMode).toBe('clusters');
+    expect((await client.call('zone.configure', { id: zone.id, layoutMode: 'free' })).layoutMode).toBe('free');
+    await expect(client.call('zone.configure', { id: zone.id, layoutMode: 'grid' as never })).rejects.toThrow(/layoutMode must be one of free, shelves, clusters/);
+    // A new zone is never shelved by default.
+    expect((await client.call('zone.addUnbound', { name: 'Plans', x: 2000, y: 0 })).layoutMode).toBe('free');
+  });
+
   it('renames and recolours a zone, either alone', async () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
@@ -211,13 +225,13 @@ describe('zones over the socket', () => {
     const client = await connectTestClient(await startTestDaemon());
     const zone = await client.call('zone.addUnbound', { name: 'Ideas', ...at });
     await client.call('zone.setLook', { id: zone.id, color: '#12b886', fillOpacity: 12 });
-    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false, gateCommand: 'make check', spacing: 'compact' });
+    await client.call('zone.configure', { id: zone.id, boardMcp: false, agentsOrchestrate: false, codexBypassHookTrust: false, gateCommand: 'make check', spacing: 'compact', layoutMode: 'shelves' });
     const full = await client.call('zone.setDefaultRepo', { id: zone.id, path: tempRepo() });
     await client.call('zone.dissolve', { id: zone.id });
     expect(await client.call('zone.list')).toEqual([]);
 
-    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing } = full;
-    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing });
+    const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing, layoutMode } = full;
+    const restored = await client.call('zone.restore', { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, spacing, layoutMode });
 
     expect(restored).toEqual({ ...full, createdAt: restored.createdAt });
     expect(await client.call('zone.list')).toEqual([restored]);

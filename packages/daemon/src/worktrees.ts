@@ -5,26 +5,12 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runGit } from './git.ts';
+import { nameSlug } from './work-units.ts';
 
 /** `<worktreesDir>/<repo name>-<hash of its path>/<branch>`: repos with the same name never collide. */
 export function agentWorktreePath(worktreesDir: string, repoRoot: string, branch: string): string {
   const hash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
   return join(worktreesDir, `${basename(repoRoot)}-${hash}`, branch);
-}
-
-/** Longest slug of an agent's name in its branch name (ADR-0007). */
-const MAX_SLUG_LENGTH = 40;
-
-/** An agent's name as a slug, at most `MAX_SLUG_LENGTH`: for its branch and its scratch repo's folder. */
-export function nameSlug(name: string): string {
-  return (
-    name
-      .normalize('NFKD')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .slice(0, MAX_SLUG_LENGTH)
-      .replace(/^-+|-+$/g, '') || 'agent'
-  );
 }
 
 /** A new branch name for an agent called `name`: its name as a slug, plus a random suffix so names can repeat. */
@@ -168,13 +154,19 @@ export async function defaultBranchOf(repoRoot: string): Promise<string | null> 
 /**
  * Why removing the worktree and branch would lose work, or undefined if it wouldn't: uncommitted changes (untracked
  * files included) in the worktree, commits on its HEAD that no branch has (a detached HEAD after a rebase, bisect or
- * checkout of a commit), or commits on the branch that no other branch or remote-tracking branch has.
+ * checkout of a commit), or commits on the branch that no other branch or remote-tracking branch has. With
+ * `ignoreBoardFiles`, changes under `.agent-board/` (the board's own files: a handover, a review) lose nothing.
  */
-export async function unsavedWork(repoRoot: string, worktree: string, branch: string): Promise<string | undefined> {
+export async function unsavedWork(repoRoot: string, worktree: string, branch: string, options: { ignoreBoardFiles?: boolean } = {}): Promise<string | undefined> {
   if (existsSync(worktree)) {
-    const status = await runGit(worktree, ['status', '--porcelain']);
+    // Untracked files one by one only to tell the board's own apart: else a whole untracked folder is one line, as before.
+    const status = await runGit(worktree, ['status', '--porcelain', ...(options.ignoreBoardFiles === true ? ['--untracked-files=all'] : [])]);
     if (!status.ok) throw new Error(`could not check ${worktree} for changes: ${status.stderr}`);
-    if (status.stdout !== '') return 'its worktree has uncommitted changes';
+    const changes = status.stdout.split('\n').filter(Boolean);
+    // Each line is a status code and a path (`?? .agent-board/review.md`), however its leading space was trimmed.
+    const boardFile = (line: string) => /^"?\.agent-board\//.test(line.replace(/^\s*\S{1,2}\s+/, ''));
+    const kept = options.ignoreBoardFiles === true ? changes.filter((line) => !boardFile(line)) : changes;
+    if (kept.length > 0) return 'its worktree has uncommitted changes';
     const detached = await runGit(worktree, ['rev-list', '--count', 'HEAD', '--not', '--branches', '--remotes']);
     const count = detached.ok ? Number(detached.stdout) : 0;
     if (count > 0) return `its worktree's HEAD has ${commits(count)} that no branch has`;

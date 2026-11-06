@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { HARNESSES as HARNESS_IDS, type Agent, type AgentState, type ClockData, type ClockResult, type ClockRun, type ClockStatus } from '@agent-board/daemon/protocol';
+import { type Agent, type AgentState, type ClockData, type ClockResult, type ClockRun, type ClockStatus } from '@agent-board/daemon/protocol';
 import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Segmented, Select, StatusPill, Switch, Textarea } from '../ui';
-import { HARNESSES } from '../harness';
 import { useAction } from '../use-action';
+import { FreshAgentFields } from './FreshAgentFields';
 import { CLOCK_PRESETS, clockData, presetCron, type ClockPreset } from './clocks';
 import { previewCron, whenLabel } from './schedule';
 
@@ -146,17 +146,7 @@ export function ClockDialog({ editing, status, agents, onUpdate, onDelete, onClo
         />
       </Fieldset>
       {fresh ? (
-        <div className="clock-fresh">
-          <Select aria-label="Harness" value={clock.fresh.harness} onChange={(event) => change({ fresh: { ...clock.fresh, harness: event.target.value as ClockData['fresh']['harness'] } })}>
-            {HARNESS_IDS.map((harness) => (
-              <option key={harness} value={harness}>
-                {HARNESSES[harness].label}
-              </option>
-            ))}
-          </Select>
-          <Input aria-label="Role" placeholder="Role (default)" value={clock.fresh.role ?? ''} onChange={(event) => change({ fresh: { ...clock.fresh, role: event.target.value.trim() === '' ? null : event.target.value } })} />
-          <Input aria-label="Model" placeholder="Model (default)" value={clock.fresh.model ?? ''} onChange={(event) => change({ fresh: { ...clock.fresh, model: event.target.value.trim() === '' ? null : event.target.value } })} />
-        </div>
+        <FreshAgentFields fresh={clock.fresh} onChange={(fresh) => change({ fresh })} />
       ) : (
         <Field label="The agent it messages">{agentSelect(clock.agent, 'Agent', (agent) => change({ agent }))}</Field>
       )}

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import type { Agent, AgentAsk, AgentFlag, AgentState, PermissionPrompt } from '@agent-board/daemon/protocol';
-import { heldPrompts, needsYou, needsYouEntries, secondsLeft, toolSummary, unseenCount, waitLeft } from './needs-you';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Agent, AgentAsk, AgentFlag, AgentState, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
+import { heldPrompts, isProblem, stepsLeftWords, stepsWaitKey, stepsWaitLine, needsYou, needsYouEntries, needsYouSections, permissionWaitLine, problemKey, readyToAccept, stillReadyToAccept, secondsLeft, sinceText, sinceTextChangesIn, startSinceClock, toolSummary, unseenCount, waitLeft } from './needs-you';
 
 const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}): Agent => ({
   sessionId,
@@ -9,6 +9,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   position: null,
   harness: 'claude',
   model: null,
+  effort: null,
+  effortPending: null,
   role: null,
   roleName: null,
   reviews: null,
@@ -39,11 +41,13 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   records: [],
   recordedPullRequests: [],
   guessedDoc: null,
+  page: null,
   lastMessage: null,
   compactingSince: null,
   finishedAt: null,
   permissions: [],
   ask: null,
+  stepsWait: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -77,7 +81,7 @@ const prompt: PermissionPrompt = {
   requestedAt: '2026-10-09T10:00:00.000Z',
   heldUntil: '2026-10-09T10:00:20.000Z',
   asksInTerminal: false,
-  sessionGrant: null,
+  sessionGrant: null, questions: null,
 };
 const lapsed: PermissionPrompt = { ...prompt, id: 'p2', heldUntil: null };
 
@@ -89,7 +93,9 @@ const ask: AgentAsk = {
   askedAt: '2026-10-09T10:03:00.000Z',
   expiresAt: '2026-10-09T10:33:00.000Z',
   onBoard: false,
-  at: null,
+  questions: [{ question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], freeText: false }],
+  answers: [null],
+  card: null,
 };
 const flag = (to: AgentFlag['to'], at = '2026-10-09T10:02:00.000Z'): AgentFlag => ({ id: 1, reason: 'PR #241 is ready for review.', at, to, via: null });
 
@@ -198,6 +204,123 @@ describe('the needs-you inbox', () => {
   });
 });
 
+describe('the needs-you list in its sections', () => {
+  const at = (minute: number) => `2026-10-09T10:${String(minute).padStart(2, '0')}:00.000Z`;
+  const pr = { number: 35, title: 'Tidy the docs', url: 'https://github.com/acme/app/pull/35', state: 'open', checks: 'passing' } as const;
+  const asking = (sessionId: string, minute: number) => agent(sessionId, 'waiting', { ask: { ...ask, id: sessionId, askedAt: at(minute) } });
+  const permitting = (sessionId: string, minute: number) =>
+    agent(sessionId, 'needs-permission', { permissions: [{ ...prompt, id: sessionId, requestedAt: at(minute) }] });
+  const flagging = (sessionId: string, minute: number): Agent => agent(sessionId, 'running', { flag: flag('user', at(minute)) });
+  const plan: PlanSummary = { id: 'p', version: 1, title: 'Split the cart', format: 'markdown', presentedAt: at(0), expiresAt: null, left: true, decision: null, author: 'agent', path: null };
+  const changes = (sessionId: string, minute: number, fields: Partial<Agent> = {}) =>
+    agent(sessionId, 'idle', { pullRequests: [{ ...pr }], finishedAt: at(minute), workFinishedAt: at(minute), ...fields });
+  const ids = (agents: Agent[], shows: 'explicit' | 'turns' = 'explicit') =>
+    needsYouSections(agents, shows).map((section) => [section.title, section.rows.map((row) => `${row.agent.sessionId}:${row.kind}`)]);
+
+  it('lists a steps card an agent waits on: its set to answer with the questions, a to-do of yours with the work', () => {
+    const wait = (kind: 'steps' | 'todo', minute: number) => ({ kind, itemId: `card-${kind}`, title: 'Release 1.4', stepId: 's1', text: 'Which database?', open: kind === 'steps' ? 2 : 0, since: at(minute) });
+    expect(
+      ids([
+        agent('setting', 'waiting', { stepsWait: wait('steps', 6) }),
+        agent('keys', 'idle', { stepsWait: wait('todo', 1) }),
+        asking('db', 9),
+        // What it asks or plans comes before a card it waits on.
+        agent('planner', 'waiting', { plan: { ...plan, presentedAt: at(2) }, stepsWait: wait('steps', 0) }),
+      ]),
+    ).toEqual([
+      ['Continues the work', ['keys:todo', 'planner:plan']],
+      ['Reaching out to you', ['setting:steps', 'db:asks']],
+    ]);
+  });
+
+  it('puts what unblocks an agent first, then what reaches out, what is ready to accept and the problems, each oldest first', () => {
+    expect(
+      ids([
+        asking('db', 9),
+        changes('docs', 2),
+        agent('crashed', 'failed', { endedAt: at(4), exitCode: 1 }),
+        permitting('tests', 7),
+        flagging('stuck', 3),
+        agent('plan', 'waiting', { plan: { ...plan, presentedAt: at(5) } }),
+      ]),
+    ).toEqual([
+      ['Continues the work', ['plan:plan', 'tests:permission']],
+      ['Reaching out to you', ['stuck:flagged', 'db:asks']],
+      ['Ready for you to accept', ['docs:accept']],
+      ['Problems', ['crashed:problem']],
+    ]);
+  });
+
+  it("puts a finished turn, listed only when the setting says so, with what reaches out, and leaves out an empty section", () => {
+    const turn = agent('done-turn', 'waiting', { finishedAt: at(1) });
+    expect(ids([turn], 'turns')).toEqual([['Reaching out to you', ['done-turn:turn']]]);
+    expect(ids([turn])).toEqual([]);
+  });
+
+  it('counts as a problem an agent that failed, one a restart stopped and one at its usage limit, and nothing else', () => {
+    expect(isProblem(agent('a', 'failed', { endedAt: at(1) }))).toBe(true);
+    expect(isProblem(agent('a', 'stopped-by-restart', { endedAt: at(1) }))).toBe(true);
+    expect(isProblem(agent('a', 'rate-limited'))).toBe(true);
+    for (const state of ['running', 'idle', 'done', 'hibernated', 'scheduled'] as const) expect(isProblem(agent('a', state))).toBe(false);
+  });
+
+  it("leaves out a failure the user dismissed, but lists the same agent's next one, and never a stopped or stuck one's", () => {
+    const failed = agent('a', 'failed', { endedAt: at(1) });
+    const dismissed = new Set([problemKey(failed)!]);
+    expect(ids([failed])).toEqual([['Problems', ['a:problem']]]);
+    expect(needsYouSections([failed], 'explicit', dismissed)).toEqual([]);
+    expect(ids([{ ...failed, endedAt: at(9) }])).toEqual([['Problems', ['a:problem']]]);
+    expect(needsYouSections([{ ...failed, endedAt: at(9) }], 'explicit', dismissed)).toHaveLength(1);
+    expect(problemKey(agent('b', 'stopped-by-restart', { endedAt: at(1) }))).toBeUndefined();
+    expect(problemKey(agent('c', 'rate-limited'))).toBeUndefined();
+  });
+
+  it('is ready to accept with an open pull request of its own branch, at its prompt or ended, asking nothing', () => {
+    expect(readyToAccept(changes('a', 1), 'explicit')).toBe(true);
+    expect(readyToAccept(changes('a', 1, { state: 'done', endedAt: at(2) }), 'explicit')).toBe(true);
+    expect(readyToAccept(changes('a', 1, { pullRequests: [{ ...pr, state: 'draft' }] }), 'explicit')).toBe(true);
+    // Still at work, asking for something, led by an orchestrator that takes its changes, or with nothing open.
+    expect(readyToAccept(changes('a', 1, { state: 'running' }), 'explicit')).toBe(false);
+    expect(readyToAccept(changes('a', 1, { ask: { ...ask, askedAt: at(1) } }), 'explicit')).toBe(false);
+    expect(readyToAccept(changes('a', 1, { ledBy: 'lead' }), 'explicit')).toBe(false);
+    expect(readyToAccept(changes('a', 1, { pullRequests: [{ ...pr, state: 'merged' }] }), 'explicit')).toBe(false);
+    // Not a branch of its own to merge: a folder of the user's, or one outside git.
+    expect(readyToAccept(changes('a', 1, { ownsWorktree: false }), 'explicit')).toBe(false);
+    expect(readyToAccept(changes('a', 1, { plainFolder: true }), 'explicit')).toBe(false);
+  });
+
+  it('still accepts when the moment is up only if nothing changed: still ready, no new turn since the click', () => {
+    const clicked = changes('a', 1);
+    expect(stillReadyToAccept(clicked, changes('a', 1), 'explicit')).toBe(true);
+    // The user sent it more work: it is at it, or it has already finished that turn, or it ended, or it went.
+    expect(stillReadyToAccept(clicked, changes('a', 1, { state: 'running' }), 'explicit')).toBe(false);
+    expect(stillReadyToAccept(clicked, changes('a', 1, { finishedAt: at(3) }), 'explicit')).toBe(false);
+    expect(stillReadyToAccept(clicked, changes('a', 1, { ask: { ...ask, askedAt: at(2) } }), 'explicit')).toBe(false);
+    expect(stillReadyToAccept(clicked, undefined, 'explicit')).toBe(false);
+  });
+
+  it('lists an agent once, under what it asks for before its changes or its problem', () => {
+    expect(ids([changes('a', 1, { ask: { ...ask, askedAt: at(3) } })])).toEqual([['Reaching out to you', ['a:asks']]]);
+    expect(ids([agent('b', 'rate-limited', { pullRequests: [{ ...pr }] })])).toEqual([['Problems', ['b:problem']]]);
+  });
+});
+
+describe("a permission prompt's one timer line", () => {
+  const now = Date.parse('2026-10-09T10:00:00.000Z');
+  const heldFor = (ms: number): PermissionPrompt => ({ ...prompt, heldUntil: new Date(now + ms).toISOString() });
+
+  it('says how long the inbox has before the agent waits in its own window, in seconds, then in minutes', () => {
+    expect(permissionWaitLine(heldFor(14_200), 'Write docs', now)).toBe("If you don't answer within 15 seconds, it waits for you in Write docs.");
+    expect(permissionWaitLine(heldFor(1_000), 'Write docs', now)).toBe("If you don't answer within 1 second, it waits for you in Write docs.");
+    expect(permissionWaitLine(heldFor(90_000), 'Write docs', now)).toBe("If you don't answer within 2 minutes, it waits for you in Write docs.");
+  });
+
+  it('says it waits there once the hold is over, and that its terminal asks too where the harness asks at once', () => {
+    expect(permissionWaitLine(heldFor(-1), 'Write docs', now)).toBe('It waits for you in Write docs.');
+    expect(permissionWaitLine({ ...heldFor(14_000), asksInTerminal: true }, 'Write docs', now)).toBe('Its terminal asks too.');
+  });
+});
+
 describe('tool summaries', () => {
   it("shows a shell call's command, a file tool's path, and anything else as JSON", () => {
     expect(toolSummary({ ...prompt, toolInput: { command: 'rm -rf dist', description: 'Remove build output' } })).toBe(
@@ -217,6 +340,25 @@ describe('tool summaries', () => {
   });
 });
 
+describe("Claude's question tool in the inbox", () => {
+  const questions: PermissionPrompt = {
+    ...lapsed,
+    id: 'p3',
+    toolName: 'AskUserQuestion',
+    asksInTerminal: true,
+    questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }],
+  };
+
+  it('sums its call up as its questions and their options, not its input', () => {
+    expect(toolSummary(questions)).toBe('Which cache? (Redis · In memory)');
+  });
+
+  it('lists the agent as asking you, since its call came', () => {
+    const asking = agent('questions', 'waiting', { permissions: [questions] });
+    expect(needsYouEntries([asking], 'explicit').map(({ kind, since }) => [kind, since])).toEqual([['asks', questions.requestedAt]]);
+  });
+});
+
 describe('how long a question or plan still waits', () => {
   const at = Date.parse('2026-10-14T14:00:00.000Z');
   it('says it in minutes, then in seconds, then that it is over', () => {
@@ -225,5 +367,83 @@ describe('how long a question or plan still waits', () => {
     expect(waitLeft('2026-10-14T14:00:59.000Z', at)).toBe('59 more seconds');
     expect(waitLeft('2026-10-14T14:00:01.000Z', at)).toBe('1 more second');
     expect(waitLeft('2026-10-14T13:59:00.000Z', at)).toBe('no longer');
+  });
+});
+
+describe('how long ago, and when that next changes', () => {
+  const at = '2026-11-03T10:00:00.000Z';
+  const after = (ms: number) => Date.parse(at) + ms;
+
+  it('changes at each whole minute since, and never between them', () => {
+    expect(sinceTextChangesIn(at, after(0))).toBe(60_000);
+    expect(sinceTextChangesIn(at, after(59_000))).toBe(1_000);
+    expect(sinceTextChangesIn(at, after(60_000))).toBe(60_000);
+    expect(sinceTextChangesIn(at, after(185_500))).toBe(54_500);
+    for (const elapsed of [0, 30_000, 59_999, 60_000, 61_000, 3_599_000, 3_600_000, 90_061_000]) {
+      const next = sinceTextChangesIn(at, after(elapsed));
+      expect(sinceText(at, after(elapsed + next - 1))).toBe(sinceText(at, after(elapsed)));
+    }
+  });
+
+  it('waits for the moment itself first when it is still to come, as a clock behind the daemon sees it', () => {
+    expect(sinceTextChangesIn(at, after(-5_000))).toBe(65_000);
+  });
+
+  it('looks again in a minute when the moment does not parse, never at once', () => {
+    expect(sinceTextChangesIn('not a time', after(0))).toBe(60_000);
+  });
+});
+
+describe('the clock behind a "how long ago" line', () => {
+  const at = '2026-11-03T10:00:00.000Z';
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('ticks at once, then at each whole minute since the moment, and not on the seconds between', () => {
+    vi.useFakeTimers({ now: Date.parse(at) + 20_000 });
+    const ticks: number[] = [];
+    const stop = startSinceClock(at, (now) => ticks.push(now - Date.parse(at)));
+
+    expect(ticks).toEqual([20_000]);
+    vi.advanceTimersByTime(39_999);
+    expect(ticks).toEqual([20_000]);
+    vi.advanceTimersByTime(1);
+    expect(ticks).toEqual([20_000, 60_000]);
+    vi.advanceTimersByTime(120_000);
+    expect(ticks).toEqual([20_000, 60_000, 120_000, 180_000]);
+
+    stop();
+    vi.advanceTimersByTime(600_000);
+    expect(ticks).toHaveLength(4);
+  });
+
+  it('ticks once a minute for a moment that does not parse', () => {
+    vi.useFakeTimers({ now: Date.parse(at) });
+    let ticks = 0;
+    const stop = startSinceClock('not a time', () => ticks++);
+    vi.advanceTimersByTime(60_000 * 3);
+    stop();
+    expect(ticks).toBe(4);
+  });
+});
+
+
+describe('a steps wait in words', () => {
+  const wait = (kind: 'steps' | 'todo', open: number, stepId = 's1') => ({ kind, itemId: 'card-1', title: 'Release 1.4', stepId, text: 'Rotate the key', open, since: '' });
+
+  it('leads with how many questions are left, in the singular and plural, or the to-do waited on', () => {
+    expect(stepsWaitLine(wait('steps', 2))).toBe('2 questions for you · “Release 1.4”');
+    expect(stepsWaitLine(wait('steps', 1))).toBe('1 question for you · “Release 1.4”');
+    expect(stepsWaitLine(wait('steps', 0))).toBe('Every answer in, ready to send · “Release 1.4”');
+    expect(stepsWaitLine(wait('todo', 0))).toBe('Waits on your to-do: Rotate the key');
+    expect(stepsLeftWords({ open: 3 })).toBe('3 questions for you');
+  });
+
+  it("names a set by its card, whatever question it is on, and a to-do by its step", () => {
+    expect(stepsWaitKey(wait('steps', 2, 's1'))).toBe(stepsWaitKey(wait('steps', 1, 's2')));
+    expect(stepsWaitKey(wait('todo', 0, 's1'))).not.toBe(stepsWaitKey(wait('todo', 0, 's2')));
+    expect(stepsWaitKey(wait('steps', 2))).not.toBe(stepsWaitKey(wait('todo', 0)));
   });
 });

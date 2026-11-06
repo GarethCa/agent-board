@@ -10,8 +10,8 @@ export interface TileRef {
 export interface BoardCommands {
   /** Brings the tile the session belongs to into view and selects it. */
   focusSession(sessionId: string): void;
-  /** Brings the clock into view and selects it. */
-  showClock(clockId: string): void;
+  /** Brings the board item (a clock, a queue) into view and selects it. */
+  showItem(itemId: string): void;
   /** Opens the window of the tile the session belongs to; false if it belongs to none the board has. */
   openSession(sessionId: string): boolean;
   /**
@@ -45,7 +45,7 @@ export function useBoardCommands(): BoardCommands {
   return useMemo(
     () => ({
       focusSession: (sessionId) => commands.current?.focusSession(sessionId),
-      showClock: (clockId) => commands.current?.showClock(clockId),
+      showItem: (itemId) => commands.current?.showItem(itemId),
       openSession: (sessionId) => commands.current?.openSession(sessionId) ?? false,
       showTile: (tile) => commands.current?.showTile(tile) ?? false,
       openTile: (tile) => commands.current?.openTile(tile) ?? false,

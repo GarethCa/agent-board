@@ -148,6 +148,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'record_doc', command: 'record', positional: ['path'], renamed: { for_orchestrator: 'for' }, options: ['for'] },
     { tool: 'pin', command: 'pin', positional: ['path', 'url'], renamed: { for_orchestrator: 'for' } },
     { tool: 'unpin', command: 'unpin', positional: ['path', 'url'], renamed: { for_orchestrator: 'for' } },
+    // The CLI reads the blocks from a file, as JSON.
+    { tool: 'set_page', command: 'page', renamed: { blocks: 'file' } },
     { tool: 'new_agent', command: 'new', renamed: { prompt: 'file', template: 'no-template' } },
     { tool: 'send', command: 'send', positional: ['agent'], renamed: { text: 'file' } },
     // With since, the tool is one round of `watch`, so it takes watch's --since and --only too.
@@ -170,10 +172,11 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
     { tool: 'move', command: 'move', positional: ['tile'] },
     { tool: 'arrange', command: 'arrange', positional: ['zone'] },
-    // `zone map` and `zone screenshot` alone: the other zone commands change groups, the CLI's alone.
+    // `zone map`, `zone screenshot` and `zone layout` alone: the other zone commands change groups, the CLI's alone.
     { tool: 'map', command: 'zone', positional: ['zone'], options: ['boxes', 'sections'] },
     // The CLI writes the picture to a file (--out) as the tool hands it to the model.
     { tool: 'zone_screenshot', command: 'zone', positional: ['zone'], options: ['style'] },
+    { tool: 'zone_layout', command: 'zone', positional: ['layout', 'zone'], options: [] },
     { tool: 'add_note', command: 'note', options: ['text', 'kind', 'color', 'to', 'at', 'near', 'side'] },
     { tool: 'edit_note', command: 'note', positional: ['note'], options: ['text', 'color', 'size'] },
     { tool: 'remove_note', command: 'note', positional: ['note'], options: [] },
@@ -200,8 +203,24 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'add_schedule', command: 'schedule', positional: ['cron'], renamed: { prompt: 'file', handoff_to: 'handoff-to' } },
     { tool: 'list_schedules', command: 'schedule', options: [] },
     { tool: 'remove_schedule', command: 'schedule', positional: ['schedule'], options: [] },
+    { tool: 'steps_new', command: 'steps', renamed: { steps: 'file' }, options: ['title', 'file'] },
+    { tool: 'steps_read', command: 'steps', positional: ['card'], options: ['mine'] },
+    { tool: 'steps_update', command: 'steps', positional: ['card', 'action', 'step', 'answer'], renamed: { steps: 'file' }, options: ['file', 'undo', 'send'] },
+    { tool: 'memory_new', command: 'memory', positional: ['title'], options: [] },
+    { tool: 'memory_read', command: 'memory', positional: ['memory', 'entry', 'history'], options: ['search'] },
+    {
+      tool: 'memory_update',
+      command: 'memory',
+      positional: ['memory', 'action', 'entry', 'text', 'version'],
+      renamed: { no_key: 'no-key', pinned: 'pin' },
+      options: ['key', 'no-key', 'file', 'pin'],
+    },
+    { tool: 'queue_new', command: 'queue', positional: ['title'], renamed: { for_user: 'for-user' }, options: ['for-user'] },
+    { tool: 'queue_read', command: 'queue', positional: ['queue', 'job'], options: [] },
+    { tool: 'queue_update', command: 'queue', positional: ['queue', 'action', 'job', 'text', 'version', 'to', 'on'], options: ['kind', 'front', 'link', 'most'] },
     { tool: 'usage', command: 'usage', options: [] },
     { tool: 'roles', command: 'roles', options: [] },
+    { tool: 'prefabs', command: 'prefab', positional: ['name'], options: [] },
     { tool: 'set_role', command: 'roles', positional: ['name'], renamed: { template: 'file' } },
     { tool: 'remove_role', command: 'roles', positional: ['name'], options: ['zone'] },
   ];
@@ -209,7 +228,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
   // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
   const MCP_ONLY = ['connections', 'ask', 'present_plan'];
   // `watch` prints as things happen, as no tool call can: the wait tool with since is one round of it.
-  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'watch'];
+  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'watch', 'crew'];
 
   const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];
   const toolProperties = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema.properties as object | undefined) ?? {});

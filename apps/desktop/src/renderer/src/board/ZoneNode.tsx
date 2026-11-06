@@ -3,13 +3,16 @@ import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
 import { ChevronDown, CircleDot, Ellipsis, GitBranch, LayoutGrid, Link2, ListPlus, Plus, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming } from '../ui';
 import { folderLabel } from './folders';
-import { bindEntries, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
+import { bindEntries, tidyBlocked, tidyMenu, zoneMenu, zoneTabEntries, type ModelEntry, type ZoneBindingActions, type ZoneTabChip } from './menu-model';
 import { leastZoneSize, zoneGrid } from '@agent-board/daemon/board-layout';
 import { CrewFramesContext } from './crew-view';
+import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
 import { useSimplified } from '../design';
 import { ProjectWell } from './ProjectWell';
+import type { ClusterView, ShelfView } from './shelves';
+import { ClustersView, ShelvesView } from './ShelvesView';
 import {
   MIN_ZONE_SIZE,
   TRACKER_PROVIDERS,
@@ -43,6 +46,10 @@ export type ZoneNodeType = Node<
     resizeMin?: { width?: number; height?: number };
     /** Grown for now round an expanded tile and the tiles it pushed aside: no snap target meanwhile. */
     grown?: true;
+    /** A shelved zone's shelves, as drawn (`withShelves`): it is drawn at least big enough for them, and not resized by hand. */
+    shelves?: ShelfView;
+    /** A zone in clusters' outlines and labels, as drawn (`withShelves`). */
+    clusters?: ClusterView;
   },
   'zone'
 >;
@@ -101,6 +108,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   tidy: () => {},
   setSpacing: () => {},
   openSettings: () => {},
+  setLayoutMode: () => {},
   rename: () => Promise.resolve(),
   recolor: () => {},
   previewFill: () => {},
@@ -112,6 +120,7 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   setAgentsOrchestrate: () => {},
   editGateCommand: () => {},
   editRoleTemplates: () => {},
+  editCrewPrefabs: () => {},
 });
 
 /** The fill opacity the theme gives a zone that has none of its own, in percent. */
@@ -130,7 +139,15 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
   };
   return (
     <span className="zone-tab-split">
-      <Chip className="zone-tab-control nodrag" icon={<LayoutGrid />} aria-label="Tidy zone" title="Tidy: its tiles in rows, in reading order" onClick={() => binding.tidy(zone)} />
+      <Chip
+        className="zone-tab-control nodrag"
+        icon={<LayoutGrid />}
+        aria-label="Tidy zone"
+        // Not `disabled`, which would hide the tooltip saying why.
+        aria-disabled={zone.layoutMode !== 'free' || undefined}
+        title={tidyBlocked(zone).hint ?? 'Tidy: its tiles in rows, in reading order'}
+        onClick={() => zone.layoutMode === 'free' && binding.tidy(zone)}
+      />
       <Menu
         onOpenChange={readNewZones}
         entries={tidyMenu(zone, newZones, binding)}
@@ -168,7 +185,7 @@ export function zoneNode(zone: Zone): ZoneNodeType {
 
 /** A zone under Classic: a tinted region with a labelled tab. */
 function ClassicZone({
-  data: { zone, tileCount = 0, resizeMin },
+  data: { zone, tileCount = 0, resizeMin, shelves, clusters },
   selected,
   positionAbsoluteX,
   positionAbsoluteY,
@@ -191,7 +208,8 @@ function ClassicZone({
   const cancelClone = useContext(CancelCloneContext);
   const addIssue = useContext(AddIssueContext);
   const dropTarget = useContext(DropTargetContext) === zone.id;
-  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id);
+  // A shelved zone's crew is in its stacks: no frame round where their tiles are saved.
+  const crews = useContext(CrewFramesContext).filter((frame) => frame.zoneId === zone.id && shelves === undefined && clusters === undefined);
   const unbound = zone.repoRoot === null;
   const { clone } = zone;
   // A group starts agents too: in its default repo, or one picked for each. Only a clone holds them back.
@@ -360,21 +378,13 @@ function ClassicZone({
       style={{ '--zone-color': zone.color, '--zone-fill-pct': zone.fillOpacity ?? undefined } as CSSProperties}
     >
       {/* Under its tiles: each orchestrator's crew, framed beside it. */}
-      {crews.map((frame) => (
-        <div
-          key={frame.orchestratorId}
-          className="crew-frame"
-          data-testid="crew-frame"
-          data-orchestrator={frame.orchestratorId}
-          data-members={frame.members.join(' ')}
-          style={{ left: frame.x, top: frame.y, width: frame.width, height: frame.height }}
-        >
-          <span className="crew-frame-label">{frame.name}&apos;s crew</span>
-        </div>
-      ))}
+      <CrewFrameBoxes frames={crews} />
+      {shelves !== undefined && <ShelvesView zoneId={zone.id} view={shelves} />}
+      {clusters !== undefined && <ClustersView zoneId={zone.id} view={clusters} />}
       <NodeResizer
-        // Grown round an expanded tile, it resizes from the size it is drawn at, and saves the size it is let go at.
-        isVisible={selected}
+        // Grown round an expanded tile, it resizes from the size it is drawn at, and saves the size it is let go at. A
+        // shelved zone is as big as its shelves.
+        isVisible={selected && shelves === undefined && clusters === undefined}
         color={zone.color}
         minWidth={Math.max(MIN_ZONE_SIZE.width, least.width)}
         minHeight={Math.max(MIN_ZONE_SIZE.height, least.height)}

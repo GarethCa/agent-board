@@ -108,9 +108,9 @@ test("a message whose Enter the agent's harness keeps losing shows on its tile a
 });
 
 test("a Claude agent whose session never says it is up offers its task on its tile, untyped, and Send types it", async () => {
-  // Given up on a minute after it starts: past the default limit.
-  test.setTimeout(120_000);
   const { dir, repo, env } = scratch('waiting');
+  // Given up on after 10 s, not the default minute.
+  env.AGENT_BOARD_START_LIMIT_MS = '10000';
   // Its hooks never run, as with Claude Code's `disableAllHooks`.
   mkdirSync(join(env.HOME!, '.claude'), { recursive: true });
   writeFileSync(join(env.HOME!, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
@@ -121,7 +121,7 @@ test("a Claude agent whose session never says it is up offers its task on its ti
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Pick a database');
     const untyped = tile(window).getByTestId('tile-untyped');
-    await expect(untyped).toHaveText(/^Answer its terminal first: Pick a database/, { timeout: 80_000 });
+    await expect(untyped).toHaveText(/^Answer its terminal first: Pick a database/, { timeout: TURN_MS });
     // What to do shows whole, even with the row fitted to one line, never cut off by its clamp.
     const hintClipped = await untyped.locator('.hybrid-tile-text').evaluate((text) => {
       const hint = text.querySelector('strong')!.getBoundingClientRect();

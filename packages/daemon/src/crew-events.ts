@@ -5,7 +5,7 @@ import { CREW_CURSOR as CURSOR, MAX_CREW_EVENTS, planPending, waitsOnUser, type 
 import { oneLine } from './terminal-input.ts';
 
 /** States a turn is under way in: a turn ends when an agent goes from one of these to its prompt. */
-const TURN_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission', 'handing-off']);
+export const TURN_STATES: ReadonlySet<AgentState> = new Set<AgentState>(['running', 'thinking', 'needs-permission', 'handing-off']);
 
 /** States of an agent at its prompt, between turns. */
 const AT_PROMPT: ReadonlySet<AgentState> = new Set<AgentState>(['idle', 'waiting', 'scheduled', 'on-command']);
@@ -46,6 +46,8 @@ export interface CrewEventLog {
    * this run is news. What its first read finds was there before, so a restart announces nothing.
    */
   pullRequestsRead(sessionId: string, own: readonly PullRequest[], first: boolean): void;
+  /** A running crew's news (`round`, `crew-stopped`), as an event of its builder, the agent `sessionId`. */
+  crewNews(sessionId: string, kind: 'round' | 'crew-stopped', detail: string): void;
   /**
    * The events after `since` (a cursor, `now` or `all`), oldest first, at most `MAX_EVENTS_PER_ANSWER` of those `keep`
    * takes; the cursor to go on from; and whether some were lost: dropped already, or `since` is from another run.
@@ -170,6 +172,12 @@ export function createCrewEventLog(options: CrewEventLogOptions): CrewEventLog {
           log(agent, leadsOf.get(sessionId) ?? options.leads(agent), 'pr-opened', `#${pr.number} ${pr.url}`);
         }
       }
+    },
+
+    crewNews(sessionId, kind, detail) {
+      const agent = last.get(sessionId) ?? options.agent(sessionId);
+      if (agent === undefined) return;
+      log(agent, leadsOf.get(sessionId) ?? options.leads(agent), kind, detail);
     },
 
     forget(sessionId) {

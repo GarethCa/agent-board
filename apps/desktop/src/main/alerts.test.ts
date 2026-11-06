@@ -10,6 +10,8 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   position: null,
   harness: 'claude',
   model: null,
+  effort: null,
+  effortPending: null,
   role: null,
   roleName: null,
   reviews: null,
@@ -40,11 +42,13 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   records: [],
   recordedPullRequests: [],
   guessedDoc: null,
+  page: null,
   lastMessage: null,
   compactingSince: null,
   finishedAt: null,
   permissions: [],
   ask: null,
+  stepsWait: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -78,7 +82,7 @@ const prompt: PermissionPrompt = {
   requestedAt: '2026-10-10T10:00:00.000Z',
   heldUntil: '2026-10-10T10:00:20.000Z',
   asksInTerminal: false,
-  sessionGrant: null,
+  sessionGrant: null, questions: null,
 };
 
 /** As before explicit requests: Needs you lists every finished turn too. */
@@ -96,6 +100,65 @@ function recorded(settings: AlertSettings = TURNS, inFront = false, simplified =
 
 let flagIds = 0;
 const flag = (at: string, via: string | null = null, id = ++flagIds): AgentFlag => ({ id, reason: 'PR #241 is ready for review.', at, to: 'user', via });
+
+describe("Claude's question tool", () => {
+  const questions: PermissionPrompt = {
+    ...prompt,
+    id: 'q1',
+    toolName: 'AskUserQuestion',
+    heldUntil: null,
+    asksInTerminal: true,
+    questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }],
+  };
+
+  it('notifies once, as a question with its questions as the body and no answers to pick, never as a permission', () => {
+    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    alerts.reset([agent('a', 'running')]);
+
+    alerts.updated(agent('a', 'waiting', { permissions: [questions] }));
+    alerts.updated(agent('a', 'waiting', { permissions: [questions] }));
+
+    expect(notifications).toEqual([{ sessionId: 'a', kind: 'asks', name: 'Agent a', title: 'Agent a asks you', body: 'Which cache? (Redis · In memory)' }]);
+  });
+
+  it('lets a permission asked beside it notify as a permission, of that tool', () => {
+    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    alerts.reset([agent('a', 'running')]);
+
+    alerts.updated(agent('a', 'needs-permission', { permissions: [questions, prompt] }));
+
+    expect(notifications.map(({ kind, body }) => [kind, body])).toContainEqual(['permission', 'Bash: rm -rf dist']);
+  });
+});
+
+describe('agent notifications for a steps card an agent waits on', () => {
+  const wait = (kind: 'steps' | 'todo', fields: Partial<NonNullable<Agent['stepsWait']>> = {}): Agent['stepsWait'] => ({
+    kind,
+    itemId: 'card-1',
+    title: 'Release 1.4',
+    stepId: 's1',
+    text: kind === 'steps' ? 'Which database?' : 'Rotate the key',
+    open: kind === 'steps' ? 2 : 0,
+    since: '2026-10-10T10:00:00.000Z',
+    ...fields,
+  });
+
+  it('notifies once for a set to answer, not again as its answers come in, and once for each to-do waited on', () => {
+    const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
+    alerts.reset([agent('a', 'running'), agent('b', 'running')]);
+
+    alerts.updated(agent('a', 'idle', { stepsWait: wait('steps') }));
+    alerts.updated(agent('a', 'idle', { stepsWait: wait('steps', { stepId: 's2', open: 1 }) }));
+    alerts.updated(agent('b', 'idle', { stepsWait: wait('todo') }));
+    alerts.updated(agent('b', 'idle', { stepsWait: wait('todo', { stepId: 's3', text: 'Tag it' }) }));
+
+    expect(notifications.map(({ sessionId, kind, title, body }) => [sessionId, kind, title, body])).toEqual([
+      ['a', 'steps', 'Agent a asks you', 'Release 1.4: 2 questions for you'],
+      ['b', 'todo', 'Agent b waits on your to-do', 'Rotate the key (Release 1.4)'],
+      ['b', 'todo', 'Agent b waits on your to-do', 'Tag it (Release 1.4)'],
+    ]);
+  });
+});
 
 describe('agent notifications for explicit requests only, the default', () => {
   it('stays quiet as a turn ends, and notifies once per flag, with its reason', () => {
@@ -118,7 +181,7 @@ describe('agent notifications for explicit requests only, the default', () => {
     const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
     alerts.reset([agent('a', 'running')]);
     const standing = flag('2026-10-10T10:01:00.000Z');
-    const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, at: null };
+    const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Redis?', options: [], freeText: true }], answers: [null], card: null };
 
     alerts.updated(agent('a', 'running', { flag: standing }));
     alerts.updated(agent('a', 'needs-permission', { flag: standing, permissions: [prompt] }));
@@ -131,7 +194,7 @@ describe('agent notifications for explicit requests only, the default', () => {
 
   it('notifies of a flag raised while a question waits, and of the same reason raised again', () => {
     const { alerts, notifications } = recorded(DEFAULT_ALERT_SETTINGS);
-    const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, at: null };
+    const ask = { id: 'q1', question: 'Redis?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Redis?', options: [], freeText: true }], answers: [null], card: null };
     alerts.reset([agent('a', 'waiting', { ask })]);
     alerts.updated(agent('a', 'waiting', { ask, flag: flag('2026-10-10T10:01:00.000Z', null, 7) }));
     alerts.updated(agent('a', 'waiting', { ask }));
@@ -256,7 +319,7 @@ describe('agent notifications for every finished turn too', () => {
   it('notifies as an agent asks you something or has a plan to review, each a new ask', () => {
     const { alerts, notifications } = recorded();
     alerts.reset([agent('a', 'waiting', { lastMessage: 'Postgres or SQLite?' })]);
-    const ask = { id: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false, askedAt: '', expiresAt: '', onBoard: false, at: null };
+    const ask = { id: 'q1', question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Which cache should the product pages use?', options: ['Redis', 'CDN only'], freeText: false }], answers: [null], card: null };
     const plan = { id: 'p1', version: 2, title: 'Cache product pages in Redis', format: 'markdown' as const, presentedAt: '', expiresAt: '2026-10-23T19:00:00.000Z', decision: null, left: false, author: 'agent' as const, path: null };
 
     alerts.updated(agent('a', 'waiting', { ask }));

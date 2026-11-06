@@ -361,19 +361,18 @@ test('the README screenshots: a board in use, with a question, a document, a clo
         },
         { zoneId: zone.id, name, prompt, position: { x, y }, cols: 100, rows: 30 },
       );
-    const asking = await spawn('Pick a cache', 'Ask on the board: Which cache should the product pages use? | Redis | In-memory LRU | CDN only', 400, 40);
+    const asking = await spawn('Pick a cache', 'Ask: Which cache should the product pages use? | Redis | In-memory LRU | CDN only', 400, 40);
     const writing = await spawn('Write the release plan', 'Doc on the board: docs/release-plan.md', 1000, 40);
     const limited = await spawn('Migrate the orders table', 'Hit the rate limit', 40, 330);
     const scheduled = await spawn('Check the build', 'Check the build', 760, 330);
     const resting = await spawn('Tidy the changelog', 'Tidy the changelog', 1200, 330);
     const taskLines: Record<string, string> = {
-      'Ask on the board: Which cache should the product pages use? | Redis | In-memory LRU | CDN only': 'Decide the cache for the product pages',
+      'Ask: Which cache should the product pages use? | Redis | In-memory LRU | CDN only': 'Decide the cache for the product pages',
       'Doc on the board: docs/release-plan.md': 'Write docs/release-plan.md',
       'Hit the rate limit': 'Add the orders migration',
     };
 
-    const card = page.getByTestId('question-card');
-    await expect(card).toContainText('Which cache should the product pages use?', { timeout: 60_000 });
+    await expect(page.getByTestId('ask-chip')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('doc-card')).toContainText('Release 1.4 plan', { timeout: 60_000 });
     await expect(tile(page).filter({ has: page.getByText('Migrate the orders table', { exact: true }) })).toHaveAttribute('data-state', 'rate-limited', { timeout: 60_000 });
     await expect(page.getByTestId('continue-on-credits')).toBeVisible();

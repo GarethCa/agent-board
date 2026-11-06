@@ -7,7 +7,6 @@ import { describeBuild } from '@agent-board/daemon/protocol';
 import { spawnDetachedDaemon } from '@agent-board/daemon/spawn';
 import { stopDaemon } from '@agent-board/daemon/stop';
 import { appearanceFrom, appearanceQuery, themeFor } from '../shared/appearance';
-import { deskFor } from '../shared/design';
 import { APP_NAME } from '../shared/brand';
 import aboutIcon from '../../../../brand/png/app-icon/icon-512.png?asset';
 import { DAEMON_IPC, WINDOW_IPC, WINDOW_QUERY, type RestartDaemonResult, type WindowTarget } from '../preload/api';
@@ -16,6 +15,7 @@ import { traceNotificationClick } from './click-trace';
 import { registerAppearance } from './appearance';
 import { registerDesign } from './design';
 import { registerTechnical } from './technical';
+import { registerDock } from './dock';
 import { backgroundMode, enterBackgroundMode, headless, revealWindow } from './background';
 import { BUILD } from './build';
 import { chromeOptions, type ChromeFor } from './chrome';
@@ -120,8 +120,8 @@ function openWindow(
     ...(hidden ? { useContentSize: true, enableLargerThanScreen: true } : {}),
     // A recorded window may be bigger than the screen: it is never shown.
     ...(offscreenScale === undefined ? {} : { enableLargerThanScreen: true }),
-    // The desk of the theme and design it opens in, so it never flashes another before the page paints.
-    backgroundColor: deskFor(design.current(), themeFor(appearance.current(), nativeTheme.shouldUseDarkColors)),
+    // The desk of the theme it opens in (the same under either design), so it never flashes another before the page paints.
+    backgroundColor: themeFor(appearance.current(), nativeTheme.shouldUseDarkColors).desk,
     ...chromeOptions(process.platform, kind),
     ...(kind === 'settings' ? SETTINGS_MIN_SIZE : kind === 'pop-out' || hidden ? {} : BOARD_MIN_SIZE),
     // Background mode shows the window without focus once it has loaded; headless mode never shows it.
@@ -159,6 +159,10 @@ function openWindow(
     [WINDOW_QUERY.appearance]: appearanceQuery(appearance.current()),
     [WINDOW_QUERY.design]: design.current(),
     [WINDOW_QUERY.technical]: String(technical.current()),
+    [WINDOW_QUERY.dock]: dock.current(),
+    // Tests read a terminal's text from the DOM renderer's rows, so their windows keep to it unless a test asks for
+    // the GPU (session/terminal-gpu.ts). Never in a packaged build.
+    ...(!app.isPackaged && process.env.AGENT_BOARD_TERMINAL_RENDERER === 'dom' ? { terminalRenderer: 'dom' } : {}),
   };
   if (devServerUrl) {
     void window.loadURL(`${devServerUrl}?${new URLSearchParams(withAppearance)}`);
@@ -282,6 +286,7 @@ registerSetupIpc(daemon, notify);
 const appearance = registerAppearance(dataDir, appearanceFrom(process.env.AGENT_BOARD_APPEARANCE));
 const design = registerDesign(dataDir);
 const technical = registerTechnical(dataDir);
+const dock = registerDock(dataDir);
 const view = daemonViewState(daemon);
 registerViewIpc(view);
 const poppedWindows = registerWindowIpc({
@@ -313,7 +318,7 @@ void app.whenReady().then(() => {
     openAgent(sessionId);
   };
   stopNotifications = registerNotifications(daemon, notify, openFromNotification, showBoard, isSimplified);
-  setAppMenu(() => openBoard(), () => settingsWindow.show(), { design, technical });
+  setAppMenu(() => openBoard(), () => settingsWindow.show(), { design, technical }, { liveBoard, openBoard });
   // Start (or find) the daemon at launch, not when the window first asks.
   daemon.call('daemon.health').catch((error: unknown) => console.error('agent-board: could not reach the daemon:', error));
   openBoard();

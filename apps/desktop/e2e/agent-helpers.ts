@@ -144,7 +144,7 @@ export async function untilStarted(window: Page): Promise<void> {
  * Picks `choice` from one of a New agent form's footer chips: `Harness`, `Model` or `Role`. The chip's
  * name is "<chip>: <what it is now>".
  */
-export async function pickInChip(form: Locator, chip: 'Harness' | 'Model' | 'Role', choice: string): Promise<void> {
+export async function pickInChip(form: Locator, chip: 'Harness' | 'Model' | 'Reasoning' | 'Role', choice: string): Promise<void> {
   const button = form.getByRole('button', { name: new RegExp(`^${chip}:`) });
   await button.click();
   await form.page().getByRole('menuitem', { name: choice, exact: true }).click();
@@ -179,13 +179,19 @@ async function openBoardMenu(window: Page): Promise<Locator> {
  * Sets what a double-click on a tile opens, in the Settings window's Board › Opening tiles, and closes the window again
  * if it opened it, so the app is left with the windows it had.
  */
-export async function setClickOpens(window: Page, opens: 'Session window' | 'Expand in place'): Promise<void> {
+export async function setClickOpens(window: Page, opens: 'Session window' | 'Maximised session window' | 'Expand in place'): Promise<void> {
   const wasOpen = window.context().pages().some(isSettingsWindow);
   const settings = await openSettings(window, 'board.opening');
-  const choice = settings.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: opens });
+  const choice = settings.getByRole('radiogroup', { name: 'Double-clicking a tile opens' }).getByRole('radio', { name: new RegExp(`^${opens}`) });
   await choice.check();
   await expect(choice).toBeChecked();
   if (!wasOpen) await settings.close();
+}
+
+/** Opens the board menu's section headed `name` (Help, Quick settings…) if it is folded: only Zones starts open. */
+export async function unfoldMenuSection(window: Page, name: string | RegExp): Promise<void> {
+  const fold = window.getByRole('dialog', { name: 'Board menu' }).getByRole('button', { name });
+  if ((await fold.getAttribute('aria-expanded')) === 'false') await fold.click();
 }
 
 /** The board menu's running sessions, opening the menu first if it is closed, and its Agents and shells list if that is. */
