@@ -86,6 +86,11 @@
   --master-halo: color-mix(in srgb, var(--master) 16%, transparent);
   --crew-flag: var(--pr-merged); /* a crew member's flag to its orchestrator, and the orchestrator's count of them */
   --crew-flag-soft: var(--pr-merged-soft);
+  /* A crew prefab: its editor's loop back and words, in the pink no state uses, as the crew card is drawn */
+  --prefab: var(--paint-pink);
+  --prefab-soft: var(--shape-fill-pink);
+  --prefab-ink: var(--shape-ink-pink);
+  --prefab-wire: var(--control-edge); /* who gets whose work, in the editor's diagram */
 
   /* Inverse: a dark chip on the light desk, for tooltips and toasts */
   --inverse: var(--text);
@@ -226,19 +231,41 @@
   --agent-note-bar: var(--accent); /* the note on the minimap */
   --agent-note-tab-height: 21px;
   --agent-note-loose: var(--muted); /* the colour a note outside every zone takes in place of a zone's */
+  --agent-note-fill-mix: 50%; /* the border colour in the card and its tab, over the panel: a light note reads as paper beside a white tile; the dark theme sets 0 */
+  --agent-note-fill: color-mix(in srgb, var(--border) var(--agent-note-fill-mix), var(--panel));
   --agent-note-tab-mix: 12%; /* its zone's colour in the tab that reads NOTE and names the agent, over the card */
   --agent-note-tab-ink-mix: 20%; /* ... in the tab's text, over the text colour */
   --agent-note-edge-mix: 42%; /* ... in the card's dashed edge (and the tab's), over the border colour */
   --agent-note-edited: var(--warning-ink); /* "edited by you": the warning as text, readable on its soft fill */
   --agent-note-edited-soft: var(--warning-soft);
-  --agent-note-code: var(--hover); /* `code` in the document card */
+  --agent-note-ink: var(--text); /* the card's text, muted text and links: the theme's own, unless the paper fill leaves a pack's under AA */
+  --agent-note-ink-muted: var(--muted);
+  --agent-note-ink-link: var(--accent-ink);
+  --agent-note-code-mix: 14%; /* the card's text colour in the chip, over the fill */
+  --agent-note-rule-mix: 22%;
+  --agent-note-code: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-code-mix), var(--agent-note-fill)); /* `code` in the document card: a chip a shade deeper than the fill */
+  --agent-note-rule: color-mix(in srgb, var(--agent-note-ink) var(--agent-note-rule-mix), var(--agent-note-fill)); /* a rule or a chip's edge inside the card */
   --agent-note-term-strong: #ffffff; /* bold in the terminal card */
-  /* A question card: an agent's question as a speech bubble beside its tile, in the waiting orange */
-  --question-card-edge: var(--state-waiting);
-  --question-card-edge-width: 1.5px;
-  --question-card-head: var(--state-waiting-ink);
-  --question-card-tail: 14px; /* the tail's square, turned to point at the tile */
-  --question-card-tail-at: 34px; /* from the card's top (or left) edge to its tail */
+  /* Steps cards: pink, which carries no state; the user's step in the waiting orange; a finished list's tick green */
+  --steps: var(--paint-pink);
+  --steps-soft: var(--shape-fill-pink);
+  --steps-ink: var(--shape-ink-pink);
+  --steps-yours: var(--state-waiting);
+  --steps-yours-ink: var(--state-waiting-ink);
+  --steps-yours-soft: var(--state-waiting-soft);
+  --steps-done: var(--state-done);
+  --steps-track: var(--separator); /* the bar's unfilled part */
+  --steps-bar-full: color-mix(in srgb, var(--steps) 55%, var(--separator)); /* a finished section in the bar */
+  --steps-edge: 3px; /* the pink rule along the card's top */
+  --steps-icon-radius: 20px; /* the icon tile's rounded square */
+  --steps-icon-ring: 0 0 0 3px var(--surface), 0 0 0 5.5px var(--steps-yours); /* round the icon tile while a step is yours */
+  --steps-dot-ring: inset 0 0 0 3px var(--raised); /* the hollow in the dot of the step it is on */
+  --steps-open-mark: inset 3px 0 0 var(--steps); /* the open step's rule */
+  --steps-yours-mark: inset 3px 0 0 var(--steps-yours); /* the user's step's rule */
+  --quick-ask-open-ring: 0 0 0 3px var(--shadow-attention-ring); /* round an ask chip while its ask is open */
+  --quick-ask-dot-ring: 0 0 0 2px var(--shadow-attention-ring); /* round the dot of the question open */
+  --quick-ask-dot-radius: 50%; /* a question's dot */
+  --steps-strip-max: 40vh; /* the most of a session window the strip above its composer takes */
   --agent-note-term-code: var(--window-added);
   --agent-note-term-prompt: var(--harness-claude); /* the ❯ before each line */
   --agent-note-term-edited: #f0a36b;
@@ -257,6 +284,41 @@
   --clock-hand-minute-folded: 8px;
   --clock-hand-width: 2px;
   --clock-run: 8px; /* one run's square in a clock's strip */
+  --listcard-face: 30px; /* a memory's or queue's round face, at its card's head's left */
+  --listcard-face-big: 64px; /* one folded: its face alone */
+  --listcard-face-edge: 2px;
+  --listcard-face-ring: var(--clock-face-ring); /* the face's rim, as the clock's */
+  --listcard-glyph: 17px; /* the brain, ticket or inbox on a card's face */
+  --listcard-glyph-big: 34px; /* the glyph on a folded one's face */
+  --listcard-count-bg: var(--text-soft); /* the count on the face: never orange, which is Needs you's */
+  --listcard-count-ink: var(--raised);
+  --listcard-count-min: 16px;
+  --listcard-key-width: 30%; /* the most a row's first column takes (a key, a job's state): the value is what the card is for */
+  --listcard-zone-dot: 7px; /* the zone's colour in the scope chip */
+  --listcard-zone: var(--muted); /* the dot's colour: its zone's, set on the chip */
+  --listcard-lift: 1; /* a folded one's face scaled against the zoom, set on it when zoomed far out */
+  --listcard-who-mark: 7px; /* the mark before who wrote a row, in a memory's peek: a dot for an agent, a ring for you */
+  --listcard-who-ring: 1.5px;
+  --listcard-fresh: var(--hover); /* a row an agent just changed, as it flashes */
+  --listcard-peek-width: 400px;
+  --listcard-peek-rows: 320px; /* the peek's list before it scrolls */
+  --listcard-file-text: 180px; /* a file's first lines, opened in the peek */
+  --queue-state-dot: 8px; /* the shape before a job's state: a ring queued, filled taken, a square done, dashed back */
+  --queue-state-ring: 1.5px;
+  --queue-taken: var(--text);
+  --queue-back: var(--warning-ink); /* a job dropped back by its taker: worth a look */
+  --queue-done: var(--success);
+  --hand-on-width: 480px; /* Hand on: the agents to pick from and the message */
+  --hand-on-agents-height: 180px;
+  --queue-focus-width: 520px; /* the focus view's card: one thing to look at */
+  --queue-drop-halo: var(--accent); /* round an idle agent's tile a dragged job would be handed to */
+  --queue-drop-edge: 2px;
+  --ticket-width: 168px; /* a job an agent holds, on its tile: its first words */
+  --queue-corner-width: 88px; /* the most a row's corner (its taker, its link) takes: the job is what the card is for */
+  --queue-tab-width: 40px; /* the NEXT tab peeking out above a folded queue's face */
+  --queue-tab-height: 14px;
+  --queue-tab-rise: 8px; /* how far the tab stands above the face: within the icon's top padding, so a folded queue lines up with a folded memory */
+  --queue-tab-tilt: -4deg;
   --clock-run-ok: var(--success);
   --clock-run-fail: var(--state-failed);
   --clock-run-skip: var(--border);
@@ -694,7 +756,14 @@
   --size-gallery-shape-height: 112px;
   --size-quick-insert-list: 260px; /* its results' tallest, before they scroll */
   --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor */
+  --size-prefab-editor: 1080px; /* a crew prefab's flow editor: the diagram beside the picked member */
+  --size-prefab-inspector: 340px; /* its inspector column */
+  --size-prefab-bubble: 44px; /* a member's bubble in the diagram */
+  --size-prefab-bubble-small: 28px; /* the same, at the inspector's head */
+  --size-prefab-pill: 30px; /* your prompt, and where it ends */
+  --size-prefab-decision: 56px; /* the stop's diamond: a square this wide, turned */
   --size-agent-setup-model: 140px; /* the typed model id in place of the model chip */
+  --size-agent-setup-model-min: 104px; /* the least of the model chip: about ten characters of its id stay readable */
   --size-add-zone: 700px; /* the Add zone popover: wide enough for its foot, the name, eight colours and two buttons */
   --size-add-zone-list: 300px; /* its list's tallest, before it scrolls */
   --size-add-zone-teams: 190px; /* its Linear tab's teams column, beside the team's projects */
@@ -813,6 +882,20 @@
   --size-tour-dot-current: 18px;
   --desk-dot-gap: var(--space-6); /* between the desk's dots */
   --desk-dot-size: 1.5px;
+  /* The other board backgrounds (Settings › Appearance): cell sizes, then how much of the text colour each draws in. */
+  --desk-fine-gap: calc(var(--desk-dot-gap) / 2); /* the gaps of the square patterns are the snap grid's, halved or doubled, so a dragged tile lands on a line or dot */
+  --desk-large-gap: calc(var(--desk-dot-gap) * 2);
+  --desk-large-size: 3px;
+  --desk-line-gap: var(--desk-dot-gap);
+  --desk-line-width: 1px;
+  --desk-iso-gap: var(--space-7);
+  --desk-ink-dots: 24%;
+  --desk-ink-lines: 8%;
+  --desk-ink-large: 16%;
+  --desk-vignette: rgb(20 16 8 / 14%); /* the vignette's rim: dark in light and dark themes alike */
+  --size-backdrop-swatch-width: 72px; /* a board background's swatch in Settings */
+  --size-backdrop-swatch-height: 48px;
+  --size-backdrop-choice: 104px; /* its card, wide enough for the longest name */
 
   /* Motion. theme.ts reads durations in ms or s. */
   --motion-fast: 120ms; /* a control's hover and press, a menu or dialog appearing */
@@ -844,11 +927,44 @@
 }
 
 /*
+ * The app theme's own roles under another name, worked out here on the root so they keep the theme's values inside a
+ * session window, which points the roles themselves at its dark colours. A chat that matches the app reads these.
+ */
+:root {
+  --app-raised: var(--raised);
+  --app-surface: var(--surface);
+  --app-text: var(--text);
+  --app-muted: var(--muted);
+  --app-border: var(--border);
+  --app-control-edge: var(--control-edge);
+  --app-hover: var(--hover);
+  --app-state-running: var(--state-running);
+  --app-focus: var(--focus);
+  --app-primary: var(--primary);
+  --app-primary-hover: var(--primary-hover);
+  --app-danger: var(--danger);
+  --app-danger-soft: var(--danger-soft);
+  --app-disabled: var(--disabled);
+  --app-disabled-ink: var(--disabled-ink);
+  --app-warning-soft: var(--warning-soft);
+  --app-warning-ink: var(--warning-ink);
+  --app-accent: var(--accent);
+  --app-accent-ink: var(--accent-ink);
+  --app-pressed: var(--pressed);
+  --app-state-running-ink: var(--state-running-ink);
+  --app-state-waiting-ink: var(--state-waiting-ink);
+  --app-state-scheduled-ink: var(--state-scheduled-ink);
+  --app-state-hibernated-ink: var(--state-hibernated-ink);
+}
+
+/*
  * The session window is dark in every theme, as a terminal is. Its controls read the same role tokens as everywhere
  * else, pointed here at the window's own, so a button in it is the same Button. Aliases resolve where they are
  * declared, so each role a control reads is pointed again here, not only the literals.
  */
-[data-surface='window'] {
+[data-surface='window'],
+[data-chat-theme='light'],
+[data-chat-theme='match'] {
   color-scheme: dark;
   --surface: var(--window-chrome);
   --raised: var(--window-bg);
@@ -886,6 +1002,113 @@
 }
 
 /*
+ * A chat the user chose light: the chat view and the composer (never a terminal, which its own window column holds) take
+ * the window's colours turned light. It sits on the chat's own elements, inside the dark window, so the role block
+ * above lists it too, to resolve its roles again from these literals. Fixed colours, not the app theme pack's.
+ */
+[data-chat-theme='light'] {
+  color-scheme: light;
+  --window-bg: #ffffff;
+  --window-chrome: #f6f4ef;
+  --window-composer: #f6f4ef;
+  --window-field: #ffffff;
+  --window-ink: #2b2a27;
+  --window-ink-soft: #5f5a50;
+  --window-line: #e2ddd1;
+  --window-edge: #bdb7a8;
+  --window-raised: #ebe7dc;
+  --window-live: #2b8a3e;
+  --window-focus: #3b5bdb;
+  --window-selection: rgb(59 91 219 / 25%);
+  --window-accent: #3b5bdb;
+  --window-accent-hover: #3354c9;
+  --window-danger: #b42318;
+  --window-danger-soft: #fde8e6;
+  --window-disabled: #e6e3dc;
+  --window-disabled-ink: #6b675f;
+  --window-notice: #fbf0d6;
+  --window-warning: #8a4b08;
+  --window-chat-you: #dbe4ff;
+  --window-chat-you-ink: #1c2b66;
+  --window-added: #1e6b32;
+  --window-diff-added: #e3f4e6;
+  --window-diff-hunk: #e6eafa;
+  --window-chat-subagent: #e9edfa;
+  --window-code-keyword: #7a2fb5;
+  --window-code-string: #26702f;
+  --window-code-number: #9a4a06;
+  --window-code-comment: #6a6558;
+  --window-code-title: #2748b8;
+  --window-code-type: #7a5a00;
+  --window-code-attr: #0f6b6b;
+}
+
+/*
+ * The Captain's chat is part of the app's chrome, so it takes the app theme's roles (light in light mode) where a
+ * session window's chat takes the window's own. The chat rules read the --window-* names, so they are pointed at the
+ * roles here; the code colours borrow the state inks, which are held to the page's contrast in every theme.
+ */
+.master-panel-chat,
+[data-chat-theme='match'] {
+  --window-bg: var(--app-raised);
+  --window-chrome: var(--app-raised);
+  --window-composer: var(--app-surface);
+  --window-field: var(--app-raised);
+  --window-ink: var(--app-text);
+  --window-ink-soft: var(--app-muted);
+  --window-line: var(--app-border);
+  --window-edge: var(--app-control-edge);
+  --window-raised: var(--app-hover);
+  --window-live: var(--app-state-running);
+  --window-focus: var(--app-focus);
+  --window-selection: color-mix(in srgb, var(--app-accent) 25%, transparent);
+  --window-accent: var(--app-primary);
+  --window-accent-hover: var(--app-primary-hover);
+  --window-danger: var(--app-danger);
+  --window-danger-soft: var(--app-danger-soft);
+  --window-disabled: var(--app-disabled);
+  --window-disabled-ink: var(--app-disabled-ink);
+  --window-notice: var(--app-warning-soft);
+  --window-warning: var(--app-warning-ink);
+  --window-chat-you: color-mix(in srgb, var(--app-accent) 14%, var(--app-raised));
+  --window-chat-you-ink: var(--app-text);
+  --window-added: var(--app-state-running-ink);
+  --window-diff-added: color-mix(in srgb, var(--app-state-running) 5%, var(--app-raised));
+  --window-diff-hunk: color-mix(in srgb, var(--app-accent) 4%, var(--app-raised));
+  --window-chat-subagent: color-mix(in srgb, var(--app-accent) 8%, var(--app-raised));
+  --window-code-keyword: var(--app-accent-ink);
+  --window-code-string: var(--app-state-running-ink);
+  --window-code-number: var(--app-state-waiting-ink);
+  --window-code-comment: var(--app-muted);
+  --window-code-title: var(--app-state-scheduled-ink);
+  --window-code-type: var(--app-state-hibernated-ink);
+  --window-code-attr: var(--app-text);
+}
+
+/*
+ * Where the role block above has a chat view's hovered and pressed controls on the window's lines, a matching chat keeps
+ * the app's own; and its composer's well is the page's colour, so what sits in it (a decision card's labels) reads as it
+ * does on the page.
+ */
+[data-chat-theme='match'] {
+  --hover: var(--app-hover);
+  --pressed: var(--app-pressed);
+  --window-composer: var(--app-raised);
+}
+
+/* What the chat reads that :root worked out from the dark literals, worked out again from these. */
+[data-chat-theme='light'],
+[data-chat-theme='match'],
+.master-panel-chat {
+  --window-divider-hover: color-mix(in srgb, var(--window-focus) 50%, transparent);
+  --window-pressed: var(--window-edge);
+  --window-think: var(--window-code-title);
+  --window-limit: var(--window-code-type);
+  --window-limit-soft: color-mix(in srgb, var(--window-limit) 8%, var(--window-bg));
+  --window-removed: var(--window-danger);
+}
+
+/*
  * The dark theme, Warm graphite. Near-black warm greys, the light
  * theme's blue kept for fills, state colours muted. It sets every colour the light theme writes as a literal, bar the
  * few that are the same in both (tokens.test.ts lists them), and the aliases that would otherwise follow the wrong way:
@@ -904,6 +1127,9 @@
   --separator: #2c2a28;
   --hover: #2f2d2a;
   --panel: #201f1e;
+  --agent-note-fill-mix: 0%;
+  --agent-note-code: var(--hover);
+  --agent-note-rule: var(--separator);
   --pressed: #3a3733;
   --scrim: rgb(0 0 0 / 50%);
   --scrim-window: rgb(0 0 0 / 60%);
@@ -1106,73 +1332,22 @@
 
 /*
  * The Simplified design (docs/adr/0022-simplified-design.md): a flag over the same components, shown while the root
- * has data-design='simplified'. A native macOS look: SF Pro and SF Mono, system greys, a plain desk with no dots, the
- * accent on controls only, orange only for Needs you and red only for Problem, a hairline and one soft shadow. Bricolage
- * Grotesque stays for the wordmark alone. These two blocks are its look over the app's own light and dark themes; over a
- * theme pack, theme-packs.css gives it a block of its own per pack that sets every token these do, in the pack's
- * colours. Every colour the light block writes, the dark one writes too (tokens.test.ts).
+ * has data-design='simplified'. A native macOS look: SF Pro and SF Mono, a plain desk with no dots, a hairline and one
+ * soft shadow. Its colours are Classic's: the theme picked in Appearance gives the same desk, tiles, statuses, zones,
+ * accent and notes under either design, so these blocks set no colour of the palette (tokens.test.ts). Bricolage
+ * Grotesque stays for the wordmark alone. Over a theme pack, theme-packs.css gives it a block of its own per pack that
+ * sets every token these do, so a pack's own shadows don't outrank the design's.
  */
 :root[data-design='simplified'] {
-  /* Surfaces */
-  --surface: #f3f3f5;
   --surface-dot: var(--surface); /* no dots */
-  --raised: #ffffff;
-  --raised-edge: #d2d2d7;
-  --border: #dedee3;
-  --control-edge: #d2d2d7;
-  --separator: #e8e8ed;
-  --hover: #ececf0;
-  --panel: #f9f9fb;
-  --pressed: #e2e2e7;
-  --key-hint: #8e8e93;
-  --neutral-edge: #d2d2d7;
-  --check-edge: #c7c7cc;
 
-  /* Text */
-  --text: #1d1d1f;
-  --text-soft: #3c3c43;
-  --muted: #5e5e66;
-  --placeholder: #6e6e73;
-  --neutral-ink: #55555c;
-
-  /* Accent: the system's default blue, on controls only */
-  --accent: #2f5bd3;
-  --accent-strong: #2549b5;
-  --accent-soft: #eaf0fd;
-  --accent-faint: #f5f8fe;
-  --toggle-on-ink: #1f3f9e;
-  --focus-edge: #8aa5ea;
-
-  /* Disabled */
-  --disabled: #f2f2f4;
-  --disabled-edge: #e5e5ea;
-  --disabled-ink: #8e8e93;
-
-  /* Orange only for Needs you, red only for Problem */
-  --state-waiting: #c2410c;
-  --state-waiting-soft: #fff3ea;
-  --state-failed: #c4161c;
-  --state-failed-soft: #fdeeee;
-  --danger: #c4161c;
-  --danger-soft: #fdeeee;
-  --danger-edge: #fae0e0;
-
-  /* Connections: today's rails in neutral greys, their tokens plain chips; the accent stays on a selection */
-  --rail: #aeaeb2;
-  --rail-cap: #8e8e93;
+  /* Connections: today's rails, a little finer, their tokens worded in the system's face */
   --rail-width: 1.5px;
-  --rail-token-edge: var(--control-edge);
-  --rail-token-ink: var(--text-soft);
-  --rail-token-wait: var(--state-waiting);
-  --rail-token-held: var(--hover);
-  --rail-token-held-ink: var(--muted);
   --rail-token-font: var(--font-sans);
 
   /* A hairline and one soft shadow */
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
-  /* A sticky is the user's own: its ink, link and lift stay Classic's. */
-  --sticky-other-ink: #2b2a27;
-  --sticky-link: #3b5bdb;
+  /* A sticky is the user's own: its lift stays Classic's. */
   --sticky-shadow: 0 1px 0 rgb(40 32 16 / 12%), 0 3px 0 -1px rgb(40 32 16 / 7%), 0 6px 0 -3px rgb(40 32 16 / 4%);
   --shadow-expanded: var(--shadow-tile);
   --shadow-control: none;
@@ -1197,75 +1372,11 @@
 }
 
 :root[data-design='simplified'][data-theme='dark'] {
-  /* Surfaces */
-  --surface: #1b1b1e;
-  --raised: #2a2a2e;
-  --raised-edge: #48484e;
-  --border: #38383d;
-  --control-edge: #44444a;
-  --separator: #303034;
-  --hover: #333338;
-  --panel: #232327;
-  --pressed: #3d3d43;
-  --key-hint: #7c7c84;
-  --neutral-edge: #48484e;
-  --check-edge: #5c5c63;
-
-  /* Text */
-  --text: #f2f2f4;
-  --text-soft: #d6d6dc;
-  --muted: #a1a1a8;
-  --placeholder: #98989f;
-  --neutral-ink: #b4b4bb;
-
-  /* Accent: a fill under white text; as text it is lifted */
-  --accent: #2f5bd3;
-  --accent-strong: #b3c6ff;
-  --accent-soft: #23293d;
-  --accent-faint: #212330;
-  --accent-ink: #9fb6ff;
-  --toggle-on-ink: #9fb6ff;
-  --primary-edge: #4a73e8;
-  --primary-hover: #2549b5;
-  --focus-edge: #5f82e6;
-
-  /* Disabled */
-  --disabled: #2c2c30;
-  --disabled-edge: #38383d;
-  --disabled-ink: #6e6e75;
-
-  /* Orange only for Needs you, red only for Problem */
-  --state-waiting: #ff9f5a;
-  --state-waiting-soft: #3a2517;
-  --state-failed: #ff7b7b;
-  --state-failed-soft: #3a1c1d;
-  --danger: #ff7b7b;
-  --danger-soft: #3a1c1d;
-  --danger-edge: #5a2d30;
-
-  /* Connections */
-  --rail: #5c5c63;
-  --rail-cap: #7c7c84;
-
   /* A hairline and one soft shadow */
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
-  --sticky-other-ink: #2b2614;
-  --sticky-link: #1f3590;
   --sticky-shadow: 0 1px 0 rgb(0 0 0 / 45%), 0 3px 0 -1px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
   --shadow-overlay: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 8px 24px -8px rgb(0 0 0 / 60%);
   --scrim: rgb(0 0 0 / 45%);
-}
-
-/*
- * Zones under the Simplified design: a project well has no tab, so its colour is in its tint and edge, a little more
- * than a Classic zone's. Written with data-theme too, to outrank a pack's own zone tokens, in every look.
- */
-:root[data-design='simplified'][data-theme] {
-  --zone-fill-mix: 12%;
-  --zone-edge-mix: 55%;
-  --zone-fill-default: 12;
-  --zone-edge-base: 40%;
-  --zone-edge-slope: 1.25;
 }
 
 /*

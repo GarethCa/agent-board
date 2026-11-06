@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { addWorktree, agentWorktreePath, removeWorktree } from '../src/worktrees.ts';
+import { addWorktree, agentWorktreePath, removeWorktree, unsavedWork } from '../src/worktrees.ts';
 import { git, tempDataDir, tempRepo } from './helpers.ts';
 
 /** A repo and a worktree of it, in the folder an agent's would be in. */
@@ -84,5 +84,25 @@ describe('removeWorktree', () => {
     mkdirSync(stray);
     await expect(removeWorktree(repo, stray, 'busy')).rejects.toThrow(/not in this repo's worktrees folder/);
     expect(existsSync(stray)).toBe(true);
+  });
+});
+
+describe('unsavedWork with ignoreBoardFiles', () => {
+  it('leaves out the board\u2019s own files, and still finds any other change or a commit no other branch has', async () => {
+    const { repo, worktree } = await worktreeOf('crew-build');
+    const unsaved = (ignoreBoardFiles: boolean) => unsavedWork(repo, worktree, 'crew-build', { ignoreBoardFiles });
+    expect(await unsaved(true)).toBeUndefined();
+
+    mkdirSync(join(worktree, '.agent-board'), { recursive: true });
+    writeFileSync(join(worktree, '.agent-board', 'review.md'), 'Verdict: Approve\n');
+    expect(await unsaved(true)).toBeUndefined();
+    expect(await unsaved(false)).toBe('its worktree has uncommitted changes');
+
+    writeFileSync(join(worktree, 'notes.txt'), 'mine\n');
+    expect(await unsaved(true)).toBe('its worktree has uncommitted changes');
+
+    git(worktree, 'add', 'notes.txt');
+    git(worktree, 'commit', '-m', 'Local work');
+    expect(await unsaved(true)).toBe('its branch crew-build has 1 commit no other branch has');
   });
 });

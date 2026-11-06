@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { composerKey, droppedPath, insertAt } from './composer-input';
+import { composerKey, droppedPath, insertAt, pastedImages } from './composer-input';
 
 const key = (init: Partial<Pick<KeyboardEvent, 'key' | 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey' | 'isComposing'>>) =>
   composerKey({ key: 'Enter', shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, isComposing: false, ...init });
@@ -42,5 +42,20 @@ describe("a pasted image's path", () => {
     expect(droppedPath("/tmp/it's (1).png")).toBe("/tmp/it\\'s\\ \\(1\\).png");
     expect(droppedPath('/tmp/plain-name_2.png')).toBe('/tmp/plain-name_2.png');
     expect(droppedPath('/srv/josé/Ünïcode 日本/a.png')).toBe('/srv/josé/Ünïcode\\ 日本/a.png');
+  });
+});
+
+describe('pastedImages', () => {
+  const file = (type: string) => new File(['x'], 'a', { type });
+  const clipboard = (files: File[], text = '') => ({ files: files as unknown as FileList, getData: () => text });
+  test('keeps only the image files, in order', () => {
+    expect(pastedImages(clipboard([file('image/png'), file('text/plain'), file('image/jpeg')])).map((f) => f.type)).toEqual(['image/png', 'image/jpeg']);
+  });
+  test('none for a paste without data or files', () => {
+    expect(pastedImages(null)).toEqual([]);
+    expect(pastedImages(clipboard([]))).toEqual([]);
+  });
+  test('none when the clipboard also has text, as a spreadsheet copy does', () => {
+    expect(pastedImages(clipboard([file('image/png')], 'a\tb'))).toEqual([]);
   });
 });

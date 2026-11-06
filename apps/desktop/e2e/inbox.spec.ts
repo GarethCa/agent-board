@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { rmSync } from 'node:fs';
 import { launch, listFinishedTurns, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
-import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from './launch.ts';
+import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, runDesign } from './launch.ts';
 import { scratch, type Scratch } from './scratch.ts';
 
 const item = (window: Page, sessionId: string) => window.locator(`[data-testid="inbox-item"][data-session-id="${sessionId}"]`);
@@ -328,6 +328,45 @@ test("a Claude agent's permission prompt answered in its terminal instead leaves
     await expect(screen(window)).toContainText('Removed dist.');
     await expect(count(window)).toHaveAttribute('data-count', '0');
   });
+});
+
+test("Claude's question tool shows in Needs you and on its tile as its questions with no Allow, and Open the agent to answer leads to its dialog", async () => {
+  await withApp(
+    scratch('ask-questions'),
+    async (window) => {
+      const agent = await spawn(window, 'Set up the build');
+      const asking = item(window, agent.sessionId);
+      await expect(count(window)).toHaveAttribute('data-count', '1');
+      const onTile = tile(window).and(window.locator(`[data-session-id="${agent.sessionId}"]`));
+      await expect(onTile).toContainText('Which cache should the build use?');
+      await expect(onTile).toContainText('Redis · In memory');
+
+      await openInbox(window);
+      await expect(asking).toHaveAttribute('data-kind', 'asks');
+      const questions = asking.getByTestId('inbox-questions');
+      await expect(questions.getByTestId('inbox-question')).toContainText('Which cache should the build use?');
+      await expect(questions.getByTestId('inbox-question-option')).toHaveText(['Redis', 'In memory']);
+      await expect(questions).toContainText('Other');
+      await expect(asking.getByRole('button', { name: /Allow|Deny/ })).toHaveCount(0);
+
+      await asking.getByRole('button', { name: `Open ${agent.name} to answer its questions` }).click();
+      await expect(sessionWindow(window)).toBeVisible();
+      if (runDesign() === 'simplified') {
+        // Its window opens on the chat, whose composer is blocked: the dialog is in its terminal.
+        const banner = window.getByTestId('agent-blocked-banner');
+        await expect(banner).toContainText('Its questions wait in its terminal');
+        await banner.getByRole('button', { name: 'Show prompt' }).click();
+      }
+      await expect(screen(window)).toContainText('3. Other');
+      await window.getByTestId('session-terminal').click();
+      await window.keyboard.type('1');
+      await window.keyboard.press('Enter');
+      await expect(screen(window)).toContainText('Going with Redis.');
+      await expect(count(window)).toHaveAttribute('data-count', '0');
+    },
+    {},
+    true,
+  );
 });
 
 test("two subagents asking at once each get a row in the inbox, answered on their own, and the agent's terminal says why it waits", async () => {

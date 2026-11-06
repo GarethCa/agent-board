@@ -16,6 +16,12 @@ describe('composerBlock', () => {
     expect(composerBlock({ ...live, state: 'needs-permission' })).toEqual({ reason: 'Waiting on a permission prompt', action: 'show-prompt' });
   });
 
+  it("points at the terminal while Claude's question dialog is up, so nothing typed lands in it", () => {
+    const AT = '2026-10-11T10:00:00Z';
+    const permissions = [{ id: 'q', toolName: 'AskUserQuestion', toolInput: {}, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }] }];
+    expect(composerBlock({ ...live, state: 'waiting', permissions })).toEqual({ reason: 'Its questions wait in its terminal', action: 'show-prompt' });
+  });
+
   it('offers to resume an agent a restart stopped', () => {
     expect(composerBlock({ ...live, endedAt: '2026-10-11T10:00:00Z', state: 'stopped-by-restart' })).toEqual({
       reason: 'Stopped by a restart',

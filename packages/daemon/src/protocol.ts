@@ -150,6 +150,8 @@ export interface Zone {
   tracker: ZoneTracker | null;
   /** How far apart a Tidy, and an orchestrator's arrange, put what is in it (`SPACING_GAPS`). */
   spacing: ArrangeSpacing;
+  /** How it lays out what it holds (`ZONE_LAYOUT_MODES`). Free until set, for a new zone too. */
+  layoutMode: ZoneLayoutMode;
   /** The clone it waits for, while the daemon clones its repo; null once it is bound, and for every other zone. */
   clone: ZoneClone | null;
   /**
@@ -181,12 +183,12 @@ export type ZoneSnapshot = Pick<
   Zone,
   'id' | 'name' | 'color' | 'fillOpacity' | 'x' | 'y' | 'width' | 'height' | 'codexBypassHookTrust' | 'boardMcp' | 'agentsOrchestrate' | 'gateCommand' | 'tracker' | 'defaultRepo'
 > &
-  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder'>>;
+  Partial<Pick<Zone, 'repoRoot' | 'folder' | 'spacing' | 'groupFolder' | 'trustsFolder' | 'layoutMode'>>;
 
 /** What `zone.restore` needs to make `zone` again: the fields of a `ZoneSnapshot`, and no others. */
 export function zoneSnapshot(zone: ZoneSnapshot): ZoneSnapshot {
-  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder } = zone;
-  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder };
+  const { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode } = zone;
+  return { id, name, color, fillOpacity, x, y, width, height, codexBypassHookTrust, boardMcp, agentsOrchestrate, gateCommand, tracker, defaultRepo, repoRoot, folder, spacing, groupFolder, trustsFolder, layoutMode };
 }
 
 /**
@@ -338,7 +340,16 @@ export interface ZoneSettings {
   agentsOrchestrate: boolean;
   gateCommand: string | null;
   spacing: ArrangeSpacing;
+  layoutMode: ZoneLayoutMode;
 }
+
+/**
+ * How a zone lays out what it holds (`Zone.layoutMode`): `free`, each tile where it was put; `shelves`, its work drawn
+ * as stacks on To do, Doing, Waiting and Done shelves under a head row of its leads and shells; `clusters`, each unit of
+ * work's tiles drawn together, what needs the user first. Free until the user (or an agent) picks.
+ */
+export const ZONE_LAYOUT_MODES = ['free', 'shelves', 'clusters'] as const;
+export type ZoneLayoutMode = (typeof ZONE_LAYOUT_MODES)[number];
 
 /** One window of plan usage, from a reading: how much of it is used, in percent, and when it resets. */
 export interface UsageWindow {
@@ -445,7 +456,7 @@ export interface ZoneLayout {
  * The kinds of board item. Each is drawn by its own node type on the board. An `agent-note` is a note an agent wrote
  * never one of the user's stickies. A `clock` is a schedule (`ClockData`).
  */
-export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan'] as const;
+export const BOARD_ITEM_KINDS = ['sticky', 'text', 'shape', 'image', 'link', 'issue', 'agent-note', 'clock', 'document', 'plan', 'steps', 'memory', 'queue'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /**
@@ -1210,6 +1221,12 @@ export interface FlowEdgeEvent {
 export const FLOW_EDGE_DELIVERY_MODES = ['message', 'queue'] as const;
 export type FlowEdgeDeliveryMode = (typeof FLOW_EDGE_DELIVERY_MODES)[number];
 
+/**
+ * What the user's Send answers: the edge, and whether its payload was only typed at the agent's prompt, no turn having
+ * started on it (`Agent.unsent`): recorded as delivered, but not sent.
+ */
+export type FlowEdgeSent = FlowEdge & { unsent: boolean };
+
 /** How a flow edge's last delivery went: delivered to its `to` agent, or skipped, saying why. */
 export interface FlowDelivery {
   at: string;
@@ -1382,6 +1399,13 @@ export interface DaemonSettings {
    * in memory, forgotten as it closes.
    */
   keepWebLogins: boolean;
+  /** The reasoning effort a new agent starts at when it is not asked for one; null (the default) for its harness's own. */
+  defaultEffort: Effort | null;
+  /**
+   * A role's own default reasoning effort, by the role's name (`implementer`, `reviewer`, a custom role's `designer`),
+   * over `defaultEffort`. None by default.
+   */
+  roleEfforts: Record<string, Effort>;
 }
 
 /** What an edge would carry if its `from` agent handed off now: its name (`plan.md`) and text, or why it can't. */
@@ -1456,6 +1480,27 @@ export interface TileMove {
 export const HARNESSES = ['claude', 'codex'] as const;
 export type Harness = (typeof HARNESSES)[number];
 
+/**
+ * How hard an agent's model thinks before it answers: its reasoning effort, lowest first. Claude Code takes every
+ * level (`--effort`, and `/effort` at its prompt); Codex all but `max` (`model_reasoning_effort`).
+ */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** When an agent takes a reasoning effort it is set to (`agent.setEffort`): now, once its turn ends, or when next started. */
+export type EffortApplies = 'now' | 'after-turn' | 'restart';
+export type EffortPending = Exclude<EffortApplies, 'now'>;
+
+/** The reasoning efforts each harness takes. */
+export const HARNESS_EFFORTS: Record<Harness, readonly Effort[]> = { claude: EFFORTS, codex: ['low', 'medium', 'high', 'xhigh'] };
+
+/** Why the `harness` agent can't run at `effort`, or undefined when it can. */
+export function effortRefusal(harness: Harness, effort: unknown): string | undefined {
+  const takes = HARNESS_EFFORTS[harness];
+  if (takes.includes(effort as Effort)) return undefined;
+  return `${harness === 'claude' ? 'Claude' : 'Codex'} takes a reasoning effort of ${takes.slice(0, -1).join(', ')} or ${takes.at(-1)}`;
+}
+
 /** A session as clients see it. Shell sessions have no harness. */
 export interface SessionInfo {
   id: string;
@@ -1499,8 +1544,9 @@ export type SessionState = (typeof SESSION_STATES)[number];
  * What an agent is doing: its session's state, or `scheduled` for a live agent with an enabled schedule that sits at
  * its prompt waiting for its next run, not for you, or `stopped-by-restart` for an ended agent whose session ended
  * because its daemon went away (a crash, a shutdown, the machine restarting), until it is resumed (`agent.resume`).
- * An agent with an enabled schedule is never `stopped-by-restart`: its schedule relaunches it. `handing-off` is a
- * live agent delivering its payload along its flow edges, whatever its hooks say, until every delivery has landed.
+ * An agent with an enabled schedule is `stopped-by-restart` too: its clock may not fire for days, though it relaunches
+ * one still stopped when it does. `handing-off` is a live agent delivering its payload along its flow edges, whatever
+ * its hooks say, until every delivery has landed.
  * `starting` is a live agent started with a first prompt whose session has sent no hook yet: its turn has not begun, so
  * it is neither `idle` (it would take a message) nor mid-turn. `on-command` is a live agent at its prompt, asking
  * nothing, while a command it left running in the background still runs (`Agent.commands`): its work goes on, so it
@@ -1556,18 +1602,48 @@ export type NeedsYouShows = (typeof NEEDS_YOU_SHOWS)[number];
  * Why an agent is in the needs-you inbox, the first that holds: a permission prompt, a question, a plan to review, a
  * flag to the user (`Agent.flag`), or (with `turns`) its turn ended at its prompt.
  */
-export type NeedsYouKind = 'permission' | 'asks' | 'plan' | 'flagged' | 'turn';
+export type NeedsYouKind = 'permission' | 'asks' | 'plan' | 'steps' | 'todo' | 'flagged' | 'turn';
+
+/**
+ * A steps card an agent waits on the user for: `steps`, a set it made of questions the user answers, not yet sent; or
+ * `todo`, a to-do of the user's it waits on. Enough for a Needs-you row without reading the card.
+ */
+export interface AgentStepsWait {
+  kind: 'steps' | 'todo';
+  /** The steps card. */
+  itemId: string;
+  title: string;
+  /** The step that matters: its first unanswered question (else its first question), or the to-do. */
+  stepId: string;
+  text: string;
+  /** How many of its questions are still unanswered; 0 for a to-do. */
+  open: number;
+  /** When the card was put up: the row's age. */
+  since: string;
+}
+
+/**
+ * Whether an agent is free to be handed a job: live, its turn ended at its prompt, and asking the user nothing (no
+ * permission prompt, question or plan waiting). A working agent takes no hand-on.
+ */
+export function takesHandOn(agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan'>): boolean {
+  return agent.endedAt === null && (agent.state === 'idle' || agent.state === 'waiting') && agent.permissions.length === 0 && agent.ask === null && !planPending(agent);
+}
 
 /** The agent fields the needs-you rule reads. */
-export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'flag' | 'ledBy'>;
+export type NeedsYouFacts = Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'>;
 
 /** Why the agent is in the needs-you inbox under `shows` (an ended one only for its flag), or null if it isn't. */
 export function needsYouKind(agent: NeedsYouFacts, shows: NeedsYouShows): NeedsYouKind | null {
   // Only a flag that outlives its session (what was never delivered to it) keeps an ended agent here.
   if (agent.endedAt !== null) return agent.flag?.to === 'user' ? 'flagged' : null;
-  if (agent.state === 'needs-permission' || agent.permissions.length > 0) return 'permission';
-  if (agent.ask !== null) return 'asks';
+  // A question tool's prompt asks questions, not a permission: it is the agent asking.
+  if (agent.state === 'needs-permission' || permissionPrompt(agent) !== undefined) return 'permission';
+  if (agent.ask !== null || questionPrompt(agent) !== undefined) return 'asks';
   if (planPending(agent)) return 'plan';
+  // A steps card it waits on: its set to answer, or a to-do of the user's (none on a record that predates them).
+  const card = agent.stepsWait?.kind;
+  if (card !== undefined) return card;
   if (agent.flag?.to === 'user') return 'flagged';
   // A crew member's finished turn is its live orchestrator's to handle, not the user's.
   return shows === 'turns' && agent.state === 'waiting' && agent.ledBy === null ? 'turn' : null;
@@ -1615,6 +1691,16 @@ export interface Agent {
   harness: Harness;
   /** The model it was started with, or null for its harness's default. */
   model: string | null;
+  /**
+   * Its reasoning effort (`Effort`), or null for its harness's own: what it was started with, or last set to
+   * (`agent.setEffort`), which a restart starts it with.
+   */
+  effort: Effort | null;
+  /**
+   * When a live agent takes the `effort` it was last set to, if not yet: once its turn ends (`after-turn`, typed at its
+   * prompt then), or only when it is next started (`restart`: its harness can't change it live). Null once it has it.
+   */
+  effortPending: EffortPending | null;
   /** The role it was started in, or null for none. */
   role: AgentRole | null;
   /** A custom role's name, as `parseRole` read it: `designer`. Null for any other role, or a custom one unnamed. */
@@ -1748,6 +1834,11 @@ export interface Agent {
    */
   ask: AgentAsk | null;
   /**
+   * A steps card it waits on the user for, between turns (Needs you): its set of questions not yet sent, or a to-do of
+   * the user's it waits on (`steps wait`). Null while it waits on none, and always for an ended agent.
+   */
+  stepsWait: AgentStepsWait | null;
+  /**
    * Its latest plan (`board.presentPlan`): v1, v2… with its decision once the user has made one. While that is
    * still to make, it waits on it and is `waiting`. Null before its first; `plan.list` has them all, with their bodies.
    */
@@ -1794,6 +1885,8 @@ export interface Agent {
    * `deletedAt`, so what gh or hooks guess of the same entry stays hidden too.
    */
   records: AgentRecord[];
+  /** The page it wrote for its sidebar (`board.setPage`); null until it writes one, or once it clears it. */
+  page: AgentPage | null;
   /** Its worktree's `.agent-board/handover.md`, absolute, while that file is there: a hand-off doc guessed, not recorded; else null. */
   guessedDoc: string | null;
   /**
@@ -1890,6 +1983,7 @@ export interface AgentStart {
   name: string;
   harness: Harness;
   model: string | null;
+  effort: Effort | null;
   /** The orchestrator starting it, whose crew its tile sits in; null for the user's. */
   spawnedBy: string | null;
   steps: StartStep[];
@@ -2009,6 +2103,18 @@ export interface ClockFreshAgent {
   closeWhenDone: boolean;
 }
 
+/** Whether `fresh` is how a fresh agent starts: a clock's, or a queue's drain's. */
+export function isFreshAgent(fresh: unknown): fresh is ClockFreshAgent {
+  if (typeof fresh !== 'object' || fresh === null) return false;
+  const f = fresh as Record<string, unknown>;
+  return (
+    (HARNESSES as readonly unknown[]).includes(f.harness) &&
+    (f.model === null || typeof f.model === 'string') &&
+    (f.role === null || typeof f.role === 'string') &&
+    typeof f.closeWhenDone === 'boolean'
+  );
+}
+
 /**
  * A clock's `data`: a schedule on the board. It fires on `cron` while `enabled`, and either messages `agent` with
  * `prompt`, or starts a fresh agent in its own zone with `prompt` as its task, waits for its turn to end, routes its
@@ -2088,6 +2194,32 @@ export interface PermissionPrompt {
    * the request (Claude does). Null where it suggested none, or none that can be worded; then it can't be offered.
    */
   sessionGrant: string | null;
+  /**
+   * For a call of Claude's question tool (`QUESTION_TOOL`), its questions: the harness's own dialog asks them and takes
+   * the answers, so the prompt is never held and can't be allowed or denied from the board. Null for any other call.
+   */
+  questions: PromptQuestion[] | null;
+}
+
+/** Claude Code's tool that asks the user questions with options; its PermissionRequest is its dialog, not a permission. */
+export const QUESTION_TOOL = 'AskUserQuestion';
+
+/** One question of a question-tool call: its text, its short header, its options and whether several can be picked. */
+export interface PromptQuestion {
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
+}
+
+/** The agent's prompt that asks it questions (`PermissionPrompt.questions`), if one is up. */
+export function questionPrompt(agent: Pick<Agent, 'permissions'>): (PermissionPrompt & { questions: PromptQuestion[] }) | undefined {
+  return agent.permissions.find((prompt): prompt is PermissionPrompt & { questions: PromptQuestion[] } => prompt.questions !== null);
+}
+
+/** The agent's first prompt that asks for a permission, not questions, if one is up. */
+export function permissionPrompt(agent: Pick<Agent, 'permissions'>): PermissionPrompt | undefined {
+  return agent.permissions.find((prompt) => prompt.questions === null);
 }
 
 /**
@@ -2100,10 +2232,20 @@ export interface PermissionDecision {
   scope?: 'session';
 }
 
+/** One question of an ask: its words, the answers it offers, and whether the user may reply in their own words. */
+export interface AskQuestion {
+  question: string;
+  /** The answers it offers, each a button; at most `MAX_ASK_OPTIONS`. */
+  options: string[];
+  /** Whether the user may reply in their own words: always, for a question with no options. */
+  freeText: boolean;
+}
+
 /**
- * A question an agent asks the user through the board (`board.ask`), in the needs-you inbox until the user
- * answers or skips it, it times out, or the agent stops waiting (its call cancelled, its turn over). Only the user's
- * click answers it: a timeout tells the agent there was no answer.
+ * What an agent asks the user through the board (`board.ask`): one to `MAX_ASK_QUESTIONS` questions, in the
+ * needs-you inbox and on its tile until the user sends the answers or skips it, it times out, or the agent stops
+ * waiting (its call cancelled, its turn over). Only the user's click answers it: a timeout tells the agent there was no
+ * answer. `question`, `options` and `freeText` are its first question's.
  */
 export interface AgentAsk {
   /** Names this question, so an answer can't land on another one. */
@@ -2116,24 +2258,37 @@ export interface AgentAsk {
   askedAt: string;
   /** When it stops waiting, with no answer. */
   expiresAt: string;
-  /** Whether the agent asked for a question card on the board, beside its tile, as well as the inbox item. */
+  /** Whether the agent asked for it on the board (`on_board`): put there at once, as a steps card beside its tile (`card`). */
   onBoard: boolean;
-  /** Where the user moved its card to (its top-left on the board), or null while it sits beside the tile. */
-  at: { x: number; y: number } | null;
+  /** Every question it asks, the first being `question`; one for a single question. */
+  questions: AskQuestion[];
+  /** The user's answers so far, one per question (null while unanswered), kept until it is sent or goes. */
+  answers: (AskAnswer | null)[];
+  /** The steps card it was put on (Put on the board): answered there from then on, its Send answering the call. */
+  card: string | null;
 }
 
 /** The user's answer to an agent's question: one of its options (by index), their own words, or skipping it. */
 export type AskAnswer = { option: number } | { text: string } | { skip: true };
 
-/** What `board.ask` tells the agent: the answer, or that there was none. */
+/**
+ * What `board.ask` tells the agent: the answer, or that there was none. An ask of several questions has `answers`, one
+ * per question, and `answer` is its first; `outcome` is `answered` once any is.
+ */
 export interface AskResult {
   outcome: 'answered' | 'skipped' | 'timed-out';
   /** The option picked, or the user's words; null with no answer. */
   answer: string | null;
+  /** Each question and its answer (null for one left unanswered), for an ask of more than one question. */
+  answers?: { question: string; answer: string | null }[];
+  /** The steps card that holds its questions, if it was put on the board or kept there as it ended half-answered. */
+  card?: string;
 }
 
 /** Most options a question offers: one per key 1-9. */
 export const MAX_ASK_OPTIONS = 9;
+/** Most questions one ask holds, as Claude's own question tool asks at most: more, and it is a steps card. */
+export const MAX_ASK_QUESTIONS = 4;
 /** Longest question, and option, an agent may ask. */
 export const MAX_QUESTION_LENGTH = 2_000;
 export const MAX_OPTION_LENGTH = 200;
@@ -2296,6 +2451,299 @@ export interface PlanCardData {
   agent: AgentNoteAuthor;
   title: string;
 }
+
+/**
+ * The kinds of step on a steps card: a to-do, ticked by whoever it names, or a question: pick one, pick any, yes or no,
+ * put in order, or in the answerer's own words.
+ */
+export const STEP_KINDS = ['todo', 'one', 'any', 'yes-no', 'order', 'words'] as const;
+export type StepKind = (typeof STEP_KINDS)[number];
+
+/** A new steps card's size. */
+export const STEPS_CARD_SIZE = { width: 280, height: 104 };
+/** A steps card's size folded to its icon tile. */
+export const STEPS_ICON_SIZE = { width: 120, height: 120 };
+
+/** The most steps a steps card holds. */
+export const MAX_STEPS = 50;
+/** The most questions one set asks. */
+export const MAX_STEPS_QUESTIONS = 12;
+/** The most choices a pick-one or pick-any question offers. */
+export const MAX_STEP_CHOICES = 9;
+/** The most rows a put-in-order question ranks. */
+export const MAX_STEP_RANKED = 6;
+/** The longest answer in words. */
+export const MAX_STEP_ANSWER = 2_000;
+/** The longest a step's text, a choice, a section heading or a link is. */
+export const MAX_STEP_TEXT = 500;
+/** The least choices a pick-one, pick-any or put-in-order question offers. */
+export const MIN_STEP_CHOICES = 2;
+
+/** Who does a step, made a set or answers its questions: the user, or an agent, by its session and its name then. */
+export type StepsWho = { kind: 'user' } | { kind: 'agent'; sessionId: string; name: string };
+
+/**
+ * An answer to a question step, by its kind: `one` the index of the choice picked, `any` those picked (none is an
+ * answer), `yes`, `order` every choice's index in the order put, best first, and `words` the answer as written.
+ */
+export type StepAnswer = { one: number } | { any: number[] } | { yes: boolean } | { order: number[] } | { words: string };
+
+/** One step of a steps card. */
+export interface Step {
+  /** Stays as steps are added: what the app and the user's answers name it by. */
+  id: string;
+  kind: StepKind;
+  text: string;
+  /** The `## heading` it sits under, or null before the first one. */
+  section: string | null;
+  /** A question the set can't be sent without; a to-do the list isn't finished without. Off by default. */
+  required: boolean;
+  /** A question's choices, in the order offered; none for a to-do, yes or no, or words. */
+  choices: string[];
+  /** A to-do's: who ticks it. Null for a question, which the set's `answeredBy` answers. */
+  who: StepsWho | null;
+  /** A to-do's link (`-> link`): a URL, a path, or a board ref such as a job it stands for. */
+  link: string | null;
+  /** A to-do ticked: by whom and when. */
+  done: { by: StepsWho; at: string } | null;
+  /** A question answered: the answer, by whom and when. */
+  answer: { value: StepAnswer; by: StepsWho; at: string } | null;
+}
+
+/**
+ * A steps card's `data`: an ordered list of steps, each a question or a to-do, which the user or an agent made. Its
+ * questions are answered by `answeredBy`, and go to its maker as one message on Send. Its scope is where it sits: in a
+ * zone, that zone's agents' (and the orchestrators whose scope reaches it); loose, every agent's.
+ */
+export interface StepsData {
+  title: string;
+  madeBy: StepsWho;
+  /** Who answers its questions: the user, or, for a set a crew member made, its orchestrator. */
+  answeredBy: StepsWho;
+  steps: Step[];
+  /** When the answers were last sent, and a fingerprint of each in words, by step id: a later Send tells only what changed. */
+  sent: { at: string; answers: Record<string, string> } | null;
+  /** The agents told at their prompt once a step is done (`steps wait`), or the card closes, by step id. */
+  waits: { sessionId: string; stepId: string }[];
+  /** Its maker closed it: nothing is answered, ticked or added from then on. */
+  closedAt: string | null;
+  /** The user folded it to its icon tile. */
+  collapsed?: boolean;
+  /**
+   * The agent's ask it was made from (Put on the board, or an ask that ended half-answered): while `ended` is null the
+   * agent's call still waits, and Send answers it there instead of typing at its prompt.
+   */
+  fromAsk?: { askId: string; ended: { at: string; how: StepsAskEnd } | null };
+}
+
+/** How the ask a steps card was made from ended: its answers sent on the card, or the agent stopped waiting. */
+export const STEPS_ASK_ENDS = ['sent', 'timed-out', 'stopped'] as const;
+export type StepsAskEnd = (typeof STEPS_ASK_ENDS)[number];
+
+/** A step as an agent writes it (`steps new`, `steps add`): `who` null for its maker, `done` for one already ticked. */
+export interface StepDraft {
+  kind: StepKind;
+  text: string;
+  section: string | null;
+  required: boolean;
+  choices: string[];
+  who: { kind: 'user' } | { kind: 'agent'; sessionId: string } | null;
+  link: string | null;
+  done: boolean;
+}
+
+/** A change an agent makes to a steps card (`board.updateSteps`); `step` is a step's place, from 1. */
+export type StepsChange =
+  | { action: 'done'; step: number; undo?: boolean }
+  | { action: 'wait'; step: number }
+  | { action: 'add'; steps: StepDraft[] }
+  | { action: 'answer'; step: number; answer: StepAnswer }
+  | { action: 'send' }
+  | { action: 'close' };
+
+/** A new memory card's size. */
+export const MEMORY_CARD_SIZE = { width: 340, height: 220 };
+/** A memory or a queue folded to its icon: its glyph on a round face, with its name under it. */
+export const LIST_CARD_FOLDED_SIZE = { width: 128, height: 132 };
+/** A new queue card's size: its head, a line of counts, the first jobs and the add box. */
+export const QUEUE_CARD_SIZE = { width: 340, height: 244 };
+
+/** The most entries a memory holds. */
+export const MAX_MEMORY_ENTRIES = 500;
+/** The longest a memory's key is. */
+export const MAX_MEMORY_KEY = 120;
+/** The longest an entry's value or note is, in characters. */
+export const MAX_MEMORY_VALUE = 4_000;
+/** The biggest file a memory keeps whole, in bytes of UTF-8. */
+export const MAX_MEMORY_FILE_BYTES = 1024 * 1024;
+/** The most a memory holds in all, its entries' texts in bytes of UTF-8. */
+export const MAX_MEMORY_BYTES = 8 * 1024 * 1024;
+/** The most open jobs (and notes) a queue holds; done ones don't count. */
+export const MAX_QUEUE_OPEN = 200;
+/** The longest a job's brief, or a queue's note, is. */
+export const MAX_JOB_TEXT = 16_000;
+/** The longest a job's link is. */
+export const MAX_JOB_LINK = 500;
+/** How many of a row's past versions are kept: its value after each change, newest first. */
+export const MAX_HISTORY_VERSIONS = 20;
+/** Days an entry goes untouched before it reads as old. */
+export const MEMORY_OLD_DAYS = 30;
+
+/**
+ * Who a queue is for: agents, which take its jobs, or the user, who goes through it one at a time and whose jobs no agent
+ * takes.
+ */
+export const QUEUE_AUDIENCES = ['agents', 'user'] as const;
+export type QueueAudience = (typeof QUEUE_AUDIENCES)[number];
+
+/**
+ * A memory card's `data`: shared context that agents read and write with a tool, and people on the board. Its entries are
+ * in their own table (`MemoryEntry`). Its scope is where it sits, as a steps card's is, unless `noAgents`: then only the
+ * user reads it. `count` is how many entries it holds, kept for the card to show. `folded`, it is drawn as its icon alone.
+ */
+export interface MemoryData {
+  title: string;
+  madeBy: StepsWho;
+  noAgents: boolean;
+  count: number;
+  folded?: boolean;
+}
+
+/** How many times a job may be dropped back before a queue's drain leaves it for a person. */
+export const MAX_DRAIN_DROPS = 2;
+
+/** The most agents a queue's drain keeps working on its jobs at once. */
+export const MAX_DRAIN_AGENTS = 3;
+
+/**
+ * A queue's drain: while `on`, the board starts a fresh agent (as a clock does: its harness, model and role) for each
+ * waiting job, the job taken for it and its text its task, while fewer than `most` of the queue's jobs are taken, by
+ * anyone. Only in a zone, the agents starting there. `started` lists the agents it started, for `closeWhenDone`: one
+ * that ends a turn holding none of its jobs is closed.
+ */
+export interface QueueDrain extends ClockFreshAgent {
+  on: boolean;
+  most: number;
+  started: string[];
+}
+
+/**
+ * A queue card's `data`: jobs and notes in order, in their own table (`QueueJob`). `count` is how many are open. `folded`,
+ * it is drawn as its icon alone. `drain`, once set, says whether the board starts agents for its jobs.
+ */
+export interface QueueData {
+  title: string;
+  madeBy: StepsWho;
+  audience: QueueAudience;
+  noAgents: boolean;
+  count: number;
+  folded?: boolean;
+  drain?: QueueDrain;
+}
+
+/**
+ * One entry of a memory: a keyed value (setting a key again replaces it), a keyless note, or a file kept whole under its
+ * name as its key.
+ */
+export interface MemoryEntry {
+  id: string;
+  memoryId: string;
+  key: string | null;
+  file: boolean;
+  text: string;
+  pinned: boolean;
+  madeBy: StepsWho;
+  /** Who changed it last: anyone in scope may, and its history takes a change back. */
+  changedBy: StepsWho;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The kinds of row a queue holds: a job, which is taken and done, and a plain note, which is neither. */
+export const QUEUE_ROW_KINDS = ['job', 'note'] as const;
+export type QueueRowKind = (typeof QUEUE_ROW_KINDS)[number];
+
+/** Where a job is: waiting, taken by an agent (a lease its session holds), or done. A note is always queued. */
+export type QueueJobState = 'queued' | 'taken' | 'done';
+
+/** One job, or note, of a queue, in its order. */
+export interface QueueJob {
+  id: string;
+  queueId: string;
+  kind: QueueRowKind;
+  text: string;
+  link: string | null;
+  state: QueueJobState;
+  /** Its taker while taken. */
+  takenBy: StepsWho | null;
+  takenAt: string | null;
+  /** How many times it was dropped back: by its taker, or as its taker's session ended mid-job. */
+  drops: number;
+  doneBy: StepsWho | null;
+  doneAt: string | null;
+  madeBy: StepsWho;
+  /** Who changed it last, and how: from its history, so a card credits the change to whoever made it. */
+  changedBy: StepsWho;
+  lastChange: QueueJobChange;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A job an agent holds, with the queue it is from. */
+export interface TakenJob {
+  sessionId: string;
+  queueId: string;
+  queueTitle: string;
+  job: QueueJob;
+}
+
+/** What last happened to a job or note, as its history records it. */
+export type QueueJobChange = 'add' | 'edit' | 'take' | 'drop' | 'done' | 'restore';
+
+/** A memory, or a queue, with what it holds. */
+export interface MemoryView {
+  item: BoardItem;
+  entries: MemoryEntry[];
+}
+export interface QueueView {
+  item: BoardItem;
+  jobs: QueueJob[];
+}
+
+/** One version of an entry or a job: its value after a change (null once removed), by whom and when. */
+export interface HistoryVersion<Row> {
+  /** What a restore names it by; higher is newer. */
+  version: number;
+  action: string;
+  value: Row | null;
+  by: StepsWho;
+  at: string;
+}
+
+/**
+ * A change to a memory. `entry` names an entry by its key, or by its id or the start of it. `add` with a key that is
+ * there already replaces its value; `restore` puts back one of its versions, after a remove too.
+ */
+export type MemoryChange =
+  | { action: 'add'; key?: string | null; text: string; file?: boolean }
+  | { action: 'edit'; entry: string; text?: string; key?: string | null; pinned?: boolean }
+  | { action: 'remove'; entry: string }
+  | { action: 'restore'; entry: string; version: number };
+
+/**
+ * A change to a queue. `job` names a job or note by its id or the start of it. `take` without `job` takes the first
+ * queued job. `drop` puts a taken job back at the front, counting the drop; `restore` puts back a version's text and link.
+ * `move` puts an open job or note just before the open one `before`, or last for null.
+ */
+export type QueueChange =
+  | { action: 'add'; kind?: QueueRowKind; text: string; link?: string | null; front?: boolean }
+  | { action: 'edit'; job: string; text?: string; link?: string | null }
+  | { action: 'remove'; job: string }
+  | { action: 'take'; job?: string }
+  | { action: 'drop'; job: string }
+  | { action: 'done'; job: string }
+  | { action: 'restore'; job: string; version: number }
+  | { action: 'move'; job: string; before: string | null };
 
 /**
  * An agent spawned by an agent inside the same harness process (e.g. Claude's Agent tool), drawn as a character on
@@ -2526,6 +2974,105 @@ export const MAX_PIN_LABEL = 80;
 export const MAX_PIN_NOTE = 2000;
 export const MAX_PIN_URL = 2048;
 
+/**
+ * The icons an agent may pick for its page's tab, a block or a figure: lucide's names, a curated set of content
+ * icons. The board's own marks are left out (a pull request, a branch, the crew, the workspace, pins, a robot, a flag,
+ * a link's, a note's or a file's row, documents, interrupting, timers and schedules), so each of those keeps one meaning.
+ */
+export const PAGE_ICONS = [
+  'route', 'feather', 'rocket', 'target', 'milestone', 'list-checks', 'gem', 'circle-check', 'gauge', 'trending-up',
+  'chart-line', 'chart-bar', 'flask-conical', 'test-tube', 'microscope', 'telescope', 'bug', 'wrench', 'hammer', 'code',
+  'braces', 'terminal', 'database', 'server', 'cloud', 'link', 'library', 'scroll-text', 'notebook-pen', 'lightbulb',
+  'brain', 'search', 'eye', 'key-round', 'palette', 'image', 'sprout', 'puzzle', 'compass', 'star', 'trophy',
+] as const;
+export type PageIcon = (typeof PAGE_ICONS)[number];
+
+/** The tones an agent may give a block or a figure. Never orange or red: those mean Needs you and failing, the board's alone. */
+export const PAGE_TONES = ['neutral', 'blue', 'green', 'violet', 'teal'] as const;
+export type PageTone = (typeof PAGE_TONES)[number];
+
+/** The kinds of block a page is made of. */
+export const PAGE_BLOCK_KINDS = ['heading', 'figures', 'checklist', 'callout', 'links', 'note'] as const;
+
+/** The most characters of a page's name (its tab's label), and the most blocks on a page. */
+export const MAX_PAGE_NAME = 12;
+export const MAX_PAGE_BLOCKS = 12;
+/** The most characters of a block's title, of a block's text, and of an item's (a checklist line's, a link's label). */
+export const MAX_PAGE_TITLE = 80;
+export const MAX_PAGE_TEXT = 2000;
+export const MAX_PAGE_ITEM = 200;
+/** The most items in a checklist or a links block, and the most figures in a figures block. */
+export const MAX_PAGE_ITEMS = 12;
+export const MAX_PAGE_FIGURES = 2;
+/** The most characters of a figure's value ("214", "18k"), which is drawn large. */
+export const MAX_FIGURE_VALUE = 12;
+
+/** A figure in a figures block: a short value and what it counts, with its own icon and tone. */
+export interface PageFigure {
+  value: string;
+  label: string;
+  icon: PageIcon | null;
+  tone: PageTone;
+}
+
+/** Where a checklist's line is: still to do, the one being done now (at most one), or done. */
+export const PAGE_CHECK_STATES = ['todo', 'doing', 'done'] as const;
+export type PageCheckState = (typeof PAGE_CHECK_STATES)[number];
+
+/** A line of a checklist block. */
+export interface PageCheck {
+  text: string;
+  state: PageCheckState;
+}
+
+/** A row of a links block: a link a web tab opens, or a file by its real path; `label` names it, else the link or file does. */
+export interface PageLink {
+  target: { kind: 'link'; url: string } | { kind: 'file'; path: string };
+  label: string | null;
+}
+
+/**
+ * One block of an agent's page, drawn in order. Every block may have a title, an icon and a tone the agent picks;
+ * `tone` is `neutral` unless it picked one.
+ */
+export type PageBlock = { title: string | null; icon: PageIcon | null; tone: PageTone } & (
+  /** What it is up to, in a line or two, with a progress bar when it gives `progress` (0-100). Its title is required. */
+  | { kind: 'heading'; text: string | null; progress: number | null }
+  /** One or two key figures, side by side. */
+  | { kind: 'figures'; figures: PageFigure[] }
+  /** Its lines in order; at most one is `doing`, drawn as the current one. */
+  | { kind: 'checklist'; items: PageCheck[] }
+  /** A thing to notice, set apart. */
+  | { kind: 'callout'; text: string }
+  | { kind: 'links'; links: PageLink[] }
+  /** A titled piece of text, such as test logins. Its title is required. */
+  | { kind: 'note'; text: string }
+);
+
+/**
+ * The page an agent writes for the default shelf of its sidebar (`board.setPage`): the tab's name and icon, and its
+ * blocks. Written whole: a new page replaces the old one. `writtenAt` is when it was.
+ */
+export interface AgentPage {
+  name: string;
+  icon: PageIcon;
+  blocks: PageBlock[];
+  writtenAt: string;
+}
+
+/**
+ * What `board.setPage` takes besides the token, before it is checked: the page's `name` and `icon`, and its `blocks`.
+ * A block is `{ kind, title?, icon?, tone?, … }` with, by kind, `text` and `progress` (heading), `figures: [{ value,
+ * label, icon?, tone? }]`, `items: [{ text, state? }]` (checklist), `text` (callout, note), or `links: [{ url | path,
+ * label? }]`. A field a block doesn't take is refused. A link's relative `path` is from the session's working
+ * directory as it started; the CLI and the MCP tool send it absolute, from the caller's working directory.
+ */
+export interface PageParams {
+  name: string;
+  icon: string;
+  blocks: unknown[];
+}
+
 /** The most a hand-off doc may hold for its tab to show it, in bytes. */
 export const MAX_DOC_BYTES = 1024 * 1024;
 
@@ -2646,7 +3193,7 @@ export interface EarlierConversation {
  * What an orchestrator did, or tried: the control verbs, each logged (`OrchestratorActivity`). An edge it made or
  * removed is `add-edge` or `remove-edge`, its target the edge's `to` agent. A `handoff` is any agent's, an orchestrator's
  * or not: one line per edge it handed off along, its target that edge's `to` agent. The layout commands' lines
- * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a note's `add-note`, `edit-note` and
+ * (`move`, `arrange`, `arrange-board`, a group's `add-zone`, `change-zone` and `remove-zone`, a zone's `zone-layout`, a note's `add-note`, `edit-note` and
  * `remove-note`) name the tile, zone or note as their target. `set-role` and `remove-role` change the app's default roles,
  * the role's name their detail. `hold` and `release` (placing and lifting a zone's budget hold) are kept so activity logged
  * before pacing by usage was removed still reads.
@@ -2670,6 +3217,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'add-zone',
   'change-zone',
   'remove-zone',
+  'zone-layout',
   'add-note',
   'edit-note',
   'remove-note',
@@ -2684,6 +3232,10 @@ export const ORCHESTRATOR_ACTIONS = [
   'remove-clock',
   'set-role',
   'remove-role',
+  'save-prefab',
+  'remove-prefab',
+  'stop-crew',
+  'crew-round',
   'set-status',
   'hold',
   'release',
@@ -2716,15 +3268,25 @@ export interface OrchestratorSpawnParams {
   zoneId?: string;
   harness?: Harness;
   model?: string;
+  /** As `SpawnAgentParams.effort`. */
+  effort?: Effort;
   /** A built-in role, or a custom role's name, as `parseRole` reads it. */
   role?: string;
   /** Without its role's template: its first message is the issue and `prompt` alone. */
   noTemplate?: boolean;
+  /** A named role's template to start with in place of its zone's (a crew prefab member's own), checked as one is. */
+  template?: string;
   name?: string;
   /** In a group, the repo (an absolute path to it, or a folder in it) to cut its worktree from: the group's without. */
   repo?: string;
   branch?: string;
   baseBranch?: string;
+  /**
+   * Join a reviewer started on an agent's branch to that agent. None without, since agents talk through `send`: `manual`
+   * is an edge each way for the user to press Send on; `auto` hands the reviewer's findings back by itself, the way
+   * back manual.
+   */
+  edges?: 'auto' | 'manual';
   issueId?: string;
   prompt?: string;
 }
@@ -2996,8 +3558,10 @@ export function isWaitState(value: unknown): value is WaitState {
  * it flagged its orchestrator (`Agent.flag`), its turn failed, it was rate-limited, it was paused (by whom: no end,
  * as a message wakes it), its session ended, or a pull request was opened from its branch. Its idle prompt (Claude's
  * `idle_prompt`, idle to waiting a minute after a turn) is none, and a turn that ends finished is only `finished`.
+ * A running crew (`Crew`) adds two of its builder's: a review `round` started, and the crew stopped (`crew-stopped`,
+ * saying why).
  */
-export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened'] as const;
+export const CREW_EVENT_KINDS = ['turn-ended', 'finished', 'needs-you', 'not-sent', 'flagged', 'failed', 'rate-limited', 'paused', 'ended', 'pr-opened', 'round', 'crew-stopped'] as const;
 export type CrewEventKind = (typeof CREW_EVENT_KINDS)[number];
 
 export interface CrewEvent {
@@ -3255,6 +3819,156 @@ export interface DefaultRole {
   editedAt: string;
 }
 
+/**
+ * What a model name may be (`opus`, `claude-opus-5-5[1m]`, `gpt-5-codex`): never an option of the harness's own, nor
+ * whitespace, since it is passed as an argument.
+ */
+export const MODEL_NAME = /^[\w.:@/[\]][\w.:@/[\]-]*$/;
+
+/** How many rounds a crew prefab runs before it stops for the user, by default; from 1 to `MAX_REVIEW_CAP`. */
+export const DEFAULT_PREFAB_ROUND_LIMIT = 3;
+
+/** The most members a crew prefab has, and the most subagents one member fans out to. */
+export const MAX_PREFAB_MEMBERS = 8;
+export const MAX_PREFAB_SUBAGENTS = 5;
+
+/**
+ * When a crew prefab's member starts: on the crew's prompt (`prompt`, the builder or the lead), at the builder's first
+ * hand-off (`handoff`, its reviewers, on detached checkouts of its branch), or when the lead starts it (`lead`, one of
+ * the lead's crew, which the lead runs with its own `new`, `send` and `wait`).
+ */
+export const PREFAB_STARTS = ['prompt', 'handoff', 'lead'] as const;
+export type PrefabStart = (typeof PREFAB_STARTS)[number];
+
+/** Which model a member's subagent runs: its member's, or one of Claude's by name. */
+export const PREFAB_SUBAGENT_MODELS = ['member', 'haiku', 'sonnet', 'opus'] as const;
+export type PrefabSubagentModel = (typeof PREFAB_SUBAGENT_MODELS)[number];
+
+/** When a subagent runs: every round, the first round only, or only when the diff touches one of `paths`. */
+export type PrefabSubagentRuns = 'every-round' | 'first-round' | { paths: string[] };
+
+/**
+ * One check a crew prefab's member fans out to, inside its own session through its harness's subagent tool: no tile,
+ * worktree, branch or round of its own. The member folds what it found into its one review, tagged with `name`.
+ */
+export interface PrefabSubagent {
+  name: string;
+  /** What it checks, in a line. */
+  checks: string;
+  model: PrefabSubagentModel;
+  /** What it may do to the files: read them (the default), or change them too. */
+  access: 'read' | 'write';
+  runs: PrefabSubagentRuns;
+}
+
+/** One member of a crew prefab: the agent it starts, as `new` would start it, and when. */
+export interface PrefabMember {
+  /** Its key in the prefab (`impl`, `code-review`): lowercase letters, digits and dashes. */
+  id: string;
+  /** Its role as `parseRole` reads it (`implementer`, `reviewer`, or a named role such as `designer`); null for none. */
+  role: string | null;
+  /** Its tile's name; made from the prompt without. */
+  name: string | null;
+  harness: Harness;
+  /** Its model, or null for its harness's default. */
+  model: string | null;
+  /** Its reasoning effort, or null for its harness's own. */
+  effort: Effort | null;
+  /**
+   * The template it starts with in place of its role's, filled in as a role template is. A named role's only (a
+   * built-in role's template is each zone's), checked as an orchestrator's prompt is.
+   */
+  template: string | null;
+  starts: PrefabStart;
+  subagents: PrefabSubagent[];
+}
+
+
+/**
+ * A crew prefab: a saved crew shape, its members, how work passes between them (each member's `starts`), and when the
+ * crew stops. It never holds a prompt, issue, repo, branch, approval, edge, key or token. One library for the whole
+ * app: the built-ins, and those saved or imported, each by its name in any case.
+ */
+export interface CrewPrefab {
+  name: string;
+  /** Its icon's name (`crew`, `review`, `lead`). */
+  icon: string;
+  /** What it is for, in a line. */
+  purpose: string;
+  /** Review rounds before the crew stops and asks the user, 1 to `MAX_REVIEW_CAP`. */
+  roundLimit: number;
+  /** How a crew from it is drawn at first: one card, or a tile for each member. */
+  onBoard: 'card' | 'tiles';
+  members: PrefabMember[];
+}
+
+/** A prefab in the library: the prefab, whether it is one of the app's own, and when it was last saved (null for a built-in). */
+export interface LibraryPrefab extends CrewPrefab {
+  builtIn: boolean;
+  editedAt: string | null;
+}
+
+/** What starting a prefab did: the agents it started, and the members that start later, with when. */
+export interface PrefabStarted {
+  prefab: string;
+  started: (OrchestratorSpawned & { member: string })[];
+  /**
+   * The members that start later, each with the command that starts it as the prefab says: the crew starts those at
+   * the hand-off itself, and a lead starts its own.
+   */
+  later: { member: string; starts: Exclude<PrefabStart, 'prompt'>; command: string }[];
+  /** The running crew's id (`Crew.id`), when it has reviewers to start at the hand-off; else null. */
+  crew: string | null;
+}
+
+/**
+ * Why a running crew stopped: every reviewer of its round approved with no blocker open (`ready-to-merge`), its round
+ * limit was reached with changes still asked for (`round-limit`), the user or an orchestrator stopped it (`stopped`),
+ * its builder's pull request was merged, so its agents were closed (`merged`), or its builder is gone (`builder-gone`).
+ */
+export const CREW_STOPS = ['ready-to-merge', 'round-limit', 'stopped', 'merged', 'builder-gone'] as const;
+export type CrewStop = (typeof CREW_STOPS)[number];
+
+/** A reviewer a running crew started, in the round it reviews. */
+export interface CrewReviewer {
+  member: string;
+  sessionId: string;
+  /** Its name as it is, or as last known once it is gone. */
+  name: string;
+  round: number;
+  /** Its review's verdict once it left one, else null: a review that says neither asks for changes. */
+  verdict: 'approve' | 'changes-requested' | null;
+  /** The blockers its review left open, once it left one. */
+  blockers: number | null;
+}
+
+/**
+ * A crew started from a prefab with reviewers that start at its builder's hand-off. The board runs its loop: at each
+ * hand-off it starts that round's reviewers on the builder's branch, and once each has left a review it stops at ready
+ * to merge, or hands the reviews back to the builder for the next round, up to its round limit. It passes on only what
+ * its agents wrote, and approves, merges and draws nothing.
+ */
+export interface Crew {
+  /** Its id, which `crew:<id>` names. */
+  id: string;
+  prefab: string;
+  zoneId: string | null;
+  /** The orchestrator that started it, whose crew its reviewers join; null for the user. */
+  startedBy: string | null;
+  /** Its builder's session. */
+  builder: string;
+  round: number;
+  roundLimit: number;
+  /** Whose turn it is: the builder's, the round's reviewers', or no one's once it stopped. */
+  phase: 'building' | 'reviewing' | 'stopped';
+  /** One of its agents needs the user (a permission prompt, a question, a plan or a flag): the loop waits for them. */
+  needsYou: boolean;
+  stopped: CrewStop | null;
+  startedAt: string;
+  stoppedAt: string | null;
+  reviewers: CrewReviewer[];
+}
+
 /** The roles that review a branch: they start on a detached checkout of it, with no branch of their own. */
 export const REVIEWER_ROLES: readonly AgentRole[] = ['reviewer', 'follow-up-reviewer'];
 
@@ -3294,6 +4008,11 @@ export type SpawnAgentParams = TerminalSize & {
   /** The harness's model (`--model` for Claude, `-m` for Codex): its own default without. A name, never an option. */
   model?: string;
   /**
+   * Its reasoning effort (`--effort` for Claude, `model_reasoning_effort` for Codex, which takes no `max`). Without,
+   * the Settings default for its role, else for every new agent, else the harness's own.
+   */
+  effort?: Effort;
+  /**
    * Its role, none without: a built-in role, or any other name for a custom role of that name (`designer`), as
    * `parseRole` reads it. It starts with its zone's template for the role, filled in, before the issue and `prompt`.
    * A reviewer or follow-up reviewer starts on a detached checkout of `baseBranch` (the repo's checked-out branch
@@ -3308,6 +4027,11 @@ export type SpawnAgentParams = TerminalSize & {
   checkout?: 'main' | 'worktree';
   /** Start it without its role's template: its first message is the issue and `prompt` alone. */
   noTemplate?: boolean;
+  /**
+   * The template it starts with in place of its role's: a crew prefab member's own, for a named role only, filled in
+   * and checked as a named role's template is.
+   */
+  template?: string;
   /** Its first message. Empty or missing starts it at its prompt, named `new-agent-N`; no message is sent. */
   prompt?: string;
   /** Start a Codex agent even though its worktree has Codex config of its own (see `AGENT_ERROR.projectCodexConfig`). */
@@ -3825,6 +4549,16 @@ export interface DaemonMethods {
   /** Mutes the agent's OS notifications, or unmutes them. Fails with `invalidParams` for an unknown agent. */
   'agent.setMuted': { params: SessionRef & { muted: boolean }; result: Agent };
   /**
+   * Sets the agent's reasoning effort (`Agent.effort`), which it is started with from now on, and resolves with it and
+   * when it takes it (`applies`). A live Claude agent takes it as the user would give it: `/effort <level>` typed at its
+   * prompt between turns, now if it is at its prompt with nothing typed there, else once its turn ends and it is
+   * (`Agent.effortPending`); never typed into a turn, a question, a permission prompt or the user's own typing. A live
+   * Codex agent, which has no command for it, takes it when it is next started, as an ended agent does. Null goes back
+   * to the harness's own, which neither harness can be told live: any agent takes that when it is next started. Fails
+   * with `invalidParams` for an unknown agent, or a level its harness doesn't take.
+   */
+  'agent.setEffort': { params: SessionRef & { effort: Effort | null }; result: { agent: Agent; applies: EffortApplies } };
+  /**
    * Marks the agent's current ask seen, because its session was opened or focused: it stops needing the user until it
    * asks again. Does nothing unless the agent waits for the user. Fails with `invalidParams` for an unknown agent.
    */
@@ -3994,6 +4728,11 @@ export interface DaemonMethods {
   /** Deletes a group it (or its crew) made, as the board's Delete does (`zone.dissolve`): its tiles and notes stay, loose. */
   'orchestrator.removeZone': { params: { token?: string; id: string }; result: null };
   /**
+   * Sets how a zone in its scope (its own by default) lays out what it holds (`Zone.layoutMode`), as the zone's Layout
+   * menu does: the agent's way to opt a zone into shelves or clusters, or back to free. Moves no tile's saved place.
+   */
+  'orchestrator.zoneLayout': { params: { token?: string; zoneId?: string; mode: ZoneLayoutMode }; result: Zone };
+  /**
    * Puts a sticky note (or a text item) of `text` on the board, marked as made by it, at `place` (`LayoutPlace`; in its
    * own zone by default), clear of the tiles and items there, in a zone in its scope or one it made.
    */
@@ -4051,6 +4790,40 @@ export interface DaemonMethods {
    */
   'orchestrator.removeRole': { params: { token?: string; name: string; zoneId?: string }; result: null };
   /**
+   * The app's crew prefab library, for every board: the built-ins first, then those saved, by name; and any saved one
+   * this release can't read, by name with why, to remove or import again.
+   */
+  'orchestrator.prefabs': { params: { token?: string }; result: { prefabs: LibraryPrefab[]; unreadable: { name: string; reason: string }[] } };
+  /**
+   * Saves a crew prefab from its `.crew.json` file's text, checked as `parsePrefab` reads it, to the app's library.
+   * A name a prefab already has, in any case, is refused unless `replace`; a built-in's always (save a copy under a
+   * name of its own). The library reaches every board, so it is a board-scope orchestrator's (or the user's side's)
+   * alone: else `outOfScope`.
+   */
+  'orchestrator.savePrefab': { params: { token?: string; text: string; replace?: boolean }; result: LibraryPrefab };
+  /** Removes a saved crew prefab, scoped as `savePrefab`. A built-in can't be removed; one with no such name fails. */
+  'orchestrator.removePrefab': { params: { token?: string; name: string }; result: null };
+  /**
+   * Starts a crew from the prefab `name`: the member that starts on the prompt (its builder, or its lead) gets
+   * `prompt`, in `zoneId` (the caller's zone without), as `orchestrator.spawn` starts an agent, scope and logs
+   * included. A lead's first message lists its crew, for it to start. The members that start at the hand-off are
+   * listed in `later`, and the crew (`crew`) starts them at each of its builder's hand-offs. A prefab with a lead needs
+   * two free levels of crew depth.
+   */
+  'orchestrator.startPrefab': {
+    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string };
+    result: PrefabStarted;
+  };
+  /** The running crews the caller reaches (by their builders), newest first; the one `crewId` names alone if given. */
+  'orchestrator.crews': { params: { token?: string; crewId?: string }; result: Crew[] };
+  /** Stops a crew's loop: no more reviewers start and no reviews go back. Its agents are left as they are. */
+  'orchestrator.stopCrew': { params: { token?: string; crewId: string }; result: Crew };
+  /**
+   * One more round for a crew stopped at its round limit: its limit goes up by one and the round's reviews go back to
+   * its builder, as any other round's.
+   */
+  'orchestrator.crewRound': { params: { token?: string; crewId: string }; result: Crew };
+  /**
    * The orchestrators' activity log, newest first: `orchestratorId`'s alone if given, at most `limit`
    * (`DEFAULT_ACTIVITY_LIMIT`) lines, older than the line `before` (an id) if given, for the page after one read. Every
    * connection reads every line.
@@ -4086,6 +4859,13 @@ export interface DaemonMethods {
    */
   'board.unpin': { params: { token: string } & PinRef; result: AgentRecord };
   /**
+   * Writes the page of the agent holding `token` (`Agent.page`), replacing the one it had: only its own, never its
+   * orchestrator's. With `page` null, clears it. Its name is at most `MAX_PAGE_NAME` characters, its icons are from
+   * `PAGE_ICONS` and its tones from `PAGE_TONES`; it has 1 to `MAX_PAGE_BLOCKS` blocks. Fails with `invalidParams` for
+   * a shell's token, or a page past those, with a block of an unknown kind, or a link to no file or no web page.
+   */
+  'board.setPage': { params: { token: string; page: PageParams | null }; result: AgentPage | null };
+  /**
    * The agent holding `token` flags that it wants a look (`Agent.flag`): blocked, its work ready for review, or a
    * decision needed. `reason` is one line, at most `MAX_FLAG_LENGTH`; it replaces any flag it had. A crew member's flag
    * goes to its live orchestrator: typed at that one's prompt once it is there, and heard as a `flagged` crew event.
@@ -4106,14 +4886,24 @@ export interface DaemonMethods {
   'board.handoff': { params: { token: string; to?: string } & HandoffPayload; result: HandoffOutcome[] };
   /**
    * The live agent holding `token` asks the user `question`, with `options` as buttons and, with `freeText`
-   * (always with no options), a reply field, and with `onBoard` a question card beside its tile too. Resolves once the user answers or skips it, or after `timeoutMs`
+   * (always with no options), a reply field, and with `onBoard` put on the board at once, as a steps card beside its tile
+   * that it waits on (`ask.toCard`). Resolves once the user answers or skips it, or after `timeoutMs`
    * (`DEFAULT_ASK_WAIT_MS`, at most `MAX_ASK_WAIT_MS`) with no answer. It goes, unanswered, when the connection closes
    * (the harness cancelled the call) or the agent's turn ends. Fails with `invalidParams` for a shell's token, a caller
    * that already asks or waits on a plan, or a bad question. A crew member's question goes to its live orchestrator
    * instead (`SentToOrchestrator`), at once.
    */
   'board.ask': {
-    params: { token: string; question: string; options?: string[]; freeText?: boolean; onBoard?: boolean; timeoutMs?: number };
+    params: {
+      token: string;
+      question?: string;
+      options?: string[];
+      freeText?: boolean;
+      /** Several questions (1 to `MAX_ASK_QUESTIONS`), stepped through, instead of `question`; each with its own options. */
+      questions?: { question: string; options?: string[]; freeText?: boolean }[];
+      onBoard?: boolean;
+      timeoutMs?: number;
+    };
     result: AskResult | SentToOrchestrator;
   };
   /**
@@ -4132,15 +4922,23 @@ export interface DaemonMethods {
     result: PlanResult | PlanLeft | SentToOrchestrator;
   };
   /**
-   * Answers the agent's question `askId`. Fails with `invalidParams` once it no longer asks it (answered, timed out or
-   * gone), or for an answer it doesn't take: an option it doesn't have, or words to a question without `freeText`.
+   * Answers the agent's question `askId`, ending its wait. For an ask of several questions, answers its question `index`
+   * (0 by default) and keeps waiting for `ask.send`, but a skip, which skips the whole ask. Fails with `invalidParams`
+   * once it no longer asks it (answered, timed out or gone), once it is on the board (answered on its card), or for an
+   * answer it doesn't take: an option it doesn't have, or words to a question without `freeText`.
    */
-  'ask.answer': { params: SessionRef & { askId: string; answer: AskAnswer }; result: null };
+  'ask.answer': { params: SessionRef & { askId: string; answer: AskAnswer; index?: number }; result: null };
   /**
-   * Moves the card of the agent's question `askId` to `at` on the board, where it stays until the question goes. Fails
-   * with `invalidParams` once it no longer asks it, or for a question with no card.
+   * Sends the answers so far of the agent's ask `askId` of several questions, ending its wait: one left unanswered is
+   * sent as skipped. Fails with `invalidParams` once it no longer asks it, or once it is on the board.
    */
-  'ask.place': { params: SessionRef & { askId: string; at: { x: number; y: number } }; result: null };
+  'ask.send': { params: SessionRef & { askId: string }; result: null };
+  /**
+   * Puts the agent's ask `askId` on the board as a steps card beside its tile, holding the answers so far. The agent's
+   * call still waits, and the card's Send answers it. Resolves with the card. Fails with `invalidParams` once it no
+   * longer asks it, or once it is on the board already.
+   */
+  'ask.toCard': { params: SessionRef & { askId: string }; result: BoardItem };
   /** The agent's plans, oldest first, with their bodies and decisions. */
   'plan.list': { params: SessionRef; result: Plan[] };
   /**
@@ -4160,6 +4958,96 @@ export interface DaemonMethods {
    * again shows the same document, a card added if asked for and none is there. Returns at once: nothing waits.
    */
   'board.showDoc': { params: { token: string; path: string; title?: string; onBoard?: boolean }; result: DocumentSummary };
+  /**
+   * The live agent holding `token` puts a steps card beside its tile: `steps` in order, at most `MAX_STEPS`, of which at
+   * most `MAX_STEPS_QUESTIONS` are questions. Its questions are the user's to answer, or, for a crew member, its live
+   * orchestrator's, which is flagged. Returns at once: nothing waits, and the answers are typed at the agent's prompt once
+   * they are sent. Fails with `invalidParams` for a shell's token, an ended agent, or steps it can't take.
+   */
+  'board.newSteps': { params: { token: string; title: string; steps: StepDraft[] }; result: BoardItem };
+  /**
+   * The steps cards the agent holding `token` can read: in its zone, in a zone its orchestrator scope reaches, loose, or
+   * ones it made, answers or is named on; with `id`, only that one (failing with `outOfScope` if it can't read it), and
+   * with `mine` only those with a to-do of its not yet done.
+   */
+  'board.readSteps': { params: { token: string; id?: string; mine?: boolean }; result: BoardItem[] };
+  /**
+   * The agent holding `token` changes the steps card `id`: ticks (or with `undo` unticks) a to-do that names it, waits
+   * on a step to be told at its prompt once it is done, adds steps to a card it made, answers a question of a set it
+   * answers for (a crew member's), sends those answers, or closes a card it made. Fails with `outOfScope` for a card
+   * or a step that isn't its to change, and `invalidParams` for a closed card or a change it can't take.
+   */
+  'board.updateSteps': { params: { token: string; id: string; change: StepsChange }; result: BoardItem };
+  /**
+   * The user answers the question `stepId` of the steps card `id`, or with null takes their answer back. Fails with
+   * `invalidParams` for a set the user doesn't answer, a closed card, a to-do, or an answer the question can't take.
+   */
+  'steps.answer': { params: { id: string; stepId: string; answer: StepAnswer | null }; result: BoardItem };
+  /**
+   * The user ticks (or unticks) the to-do `stepId`, one that names the user. The agents waiting on it are told at their
+   * prompt. Fails with `invalidParams` for a to-do that names an agent, a question, or a closed card.
+   */
+  'steps.tick': { params: { id: string; stepId: string; done: boolean }; result: BoardItem };
+  /**
+   * The user sends the answers of the steps card `id` to its maker, typed at its prompt once it is ready: the first time
+   * every answer, then only what changed. Fails with `invalidParams` while a required question is unanswered, with nothing
+   * new to send, for a set the user doesn't answer, and for one the user made.
+   */
+  'steps.send': { params: { id: string }; result: BoardItem };
+  /** The live agent holding `token` puts a memory card beside its tile. Fails with `invalidParams` for a shell's token or an ended agent. */
+  'board.newMemory': { params: { token: string; title: string }; result: BoardItem };
+  /** The memories the agent holding `token` reads: in its zone, in zones its orchestrator scope reaches, and loose ones; none set to No agents. */
+  'board.listMemories': { params: { token: string }; result: BoardItem[] };
+  /**
+   * The memory `id` with its entries, pinned first, then newest first; with `search`, only those whose key or text holds it
+   * (any case); with `entry` (a key, or an id or its start), only that one. Fails with `outOfScope` for one the agent
+   * doesn't read.
+   */
+  'board.readMemory': { params: { token: string; id: string; search?: string; entry?: string }; result: MemoryView };
+  /** The agent holding `token` changes the memory `id`: any entry, whoever wrote it. Fails with `outOfScope` as `board.readMemory` does. */
+  'board.changeMemory': { params: { token: string; id: string; change: MemoryChange }; result: { item: BoardItem; entry: MemoryEntry | null } };
+  /** The versions of the memory's entry `entry` (a key, or an id or its start), newest first. */
+  'board.memoryHistory': { params: { token: string; id: string; entry: string }; result: HistoryVersion<MemoryEntry>[] };
+  /** The live agent holding `token` puts a queue card beside its tile, for agents to take from or, with `audience: 'user'`, for the user. */
+  'board.newQueue': { params: { token: string; title: string; audience?: QueueAudience }; result: BoardItem };
+  /** The queues the agent holding `token` reads, as `board.listMemories` has its memories. */
+  'board.listQueues': { params: { token: string }; result: BoardItem[] };
+  /** The queue `id` with its jobs and notes, in order: open ones, then done ones, newest done first. */
+  'board.readQueue': { params: { token: string; id: string }; result: QueueView };
+  /**
+   * The agent holding `token` changes the queue `id`: adds, edits or removes a job or note, takes a job (a lease its
+   * session holds until done, dropped, or its session ends), drops one it took, or marks one it took done. Fails with
+   * `outOfScope` for a queue it doesn't read, a job another agent holds, or taking from the user's queue.
+   */
+  'board.changeQueue': { params: { token: string; id: string; change: QueueChange }; result: { item: BoardItem; job: QueueJob | null } };
+  /**
+   * The orchestrator holding `token` turns the drain of a queue it made on or off: the board starts fresh agents (as an
+   * earlier drain of it was set, else its own harness; `most` at once) for its waiting jobs. Fails with `notAllowed` for
+   * an agent that doesn't orchestrate, and `outOfScope` for a queue another made.
+   */
+  'board.drainQueue': { params: { token: string; id: string; on: boolean; most?: number }; result: BoardItem };
+  /** The versions of the queue's job `job`, newest first. */
+  'board.queueHistory': { params: { token: string; id: string; job: string }; result: HistoryVersion<QueueJob>[] };
+  /** The memory `id` with its entries, for the user, as `board.readMemory` has them. */
+  'memory.read': { params: { id: string; search?: string; entry?: string }; result: MemoryView };
+  /** The user changes the memory `id`, as `board.changeMemory` does. */
+  'memory.change': { params: { id: string; change: MemoryChange }; result: { item: BoardItem; entry: MemoryEntry | null } };
+  /** The versions of an entry, for the user. */
+  'memory.history': { params: { id: string; entry: string }; result: HistoryVersion<MemoryEntry>[] };
+  /** The queue `id` with its jobs, for the user. */
+  'queue.read': { params: { id: string }; result: QueueView };
+  /** The user changes the queue `id`: as an agent does, except that the user takes nothing, and drops or finishes any job. */
+  'queue.change': { params: { id: string; change: QueueChange }; result: { item: BoardItem; job: QueueJob | null } };
+  /** The versions of a job, for the user. */
+  'queue.history': { params: { id: string; job: string }; result: HistoryVersion<QueueJob>[] };
+  /**
+   * The user hands the queue `id`'s waiting job `job` to the idle agent `sessionId` in its scope: the job is taken for
+   * that agent, and `text` (what the user chose to send, nothing added) is typed at its prompt as the user's message.
+   * If the message can't be sent, the job stays waiting.
+   */
+  'queue.hand': { params: { id: string; job: string; sessionId: string; text: string }; result: { item: BoardItem; job: QueueJob } };
+  /** Every job taken now, across the board's queues, with its queue: for the takers' tiles to show. */
+  'queue.taken': { params: undefined; result: TakenJob[] };
   /** The document with its text as the file holds it now, line breaks as `\n`. Fails with `invalidParams` for an unknown document. */
   'doc.read': { params: { documentId: string }; result: DocumentContent };
   /**
@@ -4265,7 +5153,7 @@ export interface DaemonMethods {
    * final message, from the turn it last finished, or its file as it is now. Resolves with the edge and how it went.
    * Fails with `invalidParams` for an unknown edge, or a payload it can't read (no final message, no such file).
    */
-  'flowEdge.send': { params: { id: string }; result: FlowEdge };
+  'flowEdge.send': { params: { id: string }; result: FlowEdgeSent };
   /** What the edge would carry now. Fails with `invalidParams` for an unknown edge. */
   'flowEdge.preview': { params: { id: string }; result: FlowPayloadPreview };
   /** What each gate's or script's command on the edge runs now, and whether you approved it. */
@@ -4481,11 +5369,25 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'board.setStatus',
   'board.record',
   'board.unpin',
+  'board.setPage',
   'board.needsYou',
   'board.handoff',
   'board.ask',
   'board.presentPlan',
   'board.showDoc',
+  'board.newSteps',
+  'board.readSteps',
+  'board.updateSteps',
+  'board.newMemory',
+  'board.listMemories',
+  'board.readMemory',
+  'board.changeMemory',
+  'board.memoryHistory',
+  'board.newQueue',
+  'board.listQueues',
+  'board.readQueue',
+  'board.changeQueue',
+  'board.queueHistory',
   'board.openPullRequest',
   'orchestrator.activity',
   'usage.get',
@@ -4496,6 +5398,8 @@ export const BOARD_CALLER_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
  * token's agent may orchestrate, checked at every call.
  */
 export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMethod>([
+  // A queue's drain starts agents: only an orchestrator turns on its own (ADR-0011), as the maintainer's answer 10 has it.
+  'board.drainQueue',
   'orchestrator.spawn',
   'orchestrator.send',
   'orchestrator.setStatus',
@@ -4517,6 +5421,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.addZone',
   'orchestrator.changeZone',
   'orchestrator.removeZone',
+  'orchestrator.zoneLayout',
   'orchestrator.addNote',
   'orchestrator.editNote',
   'orchestrator.removeNote',
@@ -4532,6 +5437,13 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.roles',
   'orchestrator.setRole',
   'orchestrator.removeRole',
+  'orchestrator.prefabs',
+  'orchestrator.savePrefab',
+  'orchestrator.removePrefab',
+  'orchestrator.startPrefab',
+  'orchestrator.crews',
+  'orchestrator.stopCrew',
+  'orchestrator.crewRound',
 ]);
 
 /**

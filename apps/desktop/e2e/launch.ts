@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import type { Design } from '../src/shared/design.ts';
+import type { DockMode } from '../src/shared/dock.ts';
 
 const appEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 /** `agent-board daemon`'s entry, which the app runs with its own executable as Node. */
@@ -112,6 +113,8 @@ export interface LaunchOptions {
   design?: Design;
   /** The Show technical details switch to open with, written as the design is. */
   technical?: boolean;
+  /** The Dock setting to open with, written as the design is. */
+  dock?: DockMode;
 }
 
 /**
@@ -138,10 +141,11 @@ export function classicOnly(): void {
  * Launches the built app on `dataDir`, so it never touches the real app-data dir, a real daemon or the real Codex hook
  * shim, and never raises a real OS notification. `args` are extra Electron/Chromium switches, placed before the app.
  */
-export function launchApp(dataDir: string, env: Record<string, string> = {}, args: string[] = [], { design = runDesign(), technical }: LaunchOptions = {}): Promise<ElectronApplication> {
+export function launchApp(dataDir: string, env: Record<string, string> = {}, args: string[] = [], { design = runDesign(), technical, dock }: LaunchOptions = {}): Promise<ElectronApplication> {
   track(dataDir);
   if (design !== undefined) writeFileSync(join(dataDir, 'design.json'), JSON.stringify({ design }));
   if (technical !== undefined) writeFileSync(join(dataDir, 'technical.json'), JSON.stringify({ technical }));
+  if (dock !== undefined) writeFileSync(join(dataDir, 'dock.json'), JSON.stringify({ dock }));
   const launched = electron.launch({
     args: [...args, appEntry],
     env: {
@@ -153,6 +157,9 @@ export function launchApp(dataDir: string, env: Record<string, string> = {}, arg
       AGENT_BOARD_FAKE_NOTIFICATIONS: '1',
       // Light unless a test picks otherwise: the developer's macOS may be in dark mode (main/appearance.ts).
       AGENT_BOARD_APPEARANCE: 'light',
+      // Specs read a terminal's text from the DOM renderer's rows, which the WebGL renderer doesn't draw: the GPU
+      // terminals spec and the benchmarks ask for it with `AGENT_BOARD_TERMINAL_RENDERER: 'auto'`.
+      AGENT_BOARD_TERMINAL_RENDERER: 'dom',
       ...BACKGROUND_ENV,
       ...env,
     },

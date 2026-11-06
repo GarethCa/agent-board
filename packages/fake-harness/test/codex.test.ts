@@ -221,6 +221,15 @@ describe('fake codex', () => {
     expect(readJsonl(log)[0]).toMatchObject({ source: 'startup' });
   });
 
+  it('shows the reasoning effort a model_reasoning_effort override starts it with in its status line, as the real TUI does', async () => {
+    const cwd = tempDir('fake-cwd-');
+    const { child, done } = startFake('codex', { scenario: 'output', args: [TRUST, '-m', 'gpt-5.5', '-c', 'model_reasoning_effort="xhigh"'], cwd });
+
+    await untilStdout(child, `gpt-5.5 xhigh · ${cwd}`);
+    child.stdin.end();
+    await done;
+  });
+
   it('keeps its composer and status line drawn under each prompt it takes, as the real TUI does through a turn', async () => {
     const cwd = tempDir('fake-cwd-');
     const result = await runFake('codex', { scenario: 'output', args: [TRUST], cwd, input: ['fix the tests', 'and the docs'] });

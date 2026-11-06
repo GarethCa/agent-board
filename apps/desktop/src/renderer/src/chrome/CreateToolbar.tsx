@@ -1,4 +1,4 @@
-import { ChevronDown, Hand, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
+import { ChevronDown, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Type } from 'lucide-react';
 import { useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
@@ -22,6 +22,8 @@ export interface CreateToolbarProps {
   tool: ArmedTool | undefined;
   onTool(tool: ArmedTool | undefined): void;
   onSticky(): void;
+  /** Puts a new steps card in the middle of the board, ready to type its steps into. */
+  onSteps(): void;
   /** The size on screen of the ghost tile the Agent and Shell tools carry, at the board's zoom. */
   ghostSize: { width: number; height: number };
   /** The Agent or Shell tool dragged straight off the toolbar and let go at `at`, on the screen. */
@@ -39,7 +41,7 @@ export type DraggedTool = 'agent' | 'shell';
  * Under the Simplified design it holds fewer buttons: Select, Box select and Hand as in Classic, a Draw menu with the
  * drawing tools, and New agent, whose menu adds the Shell tool as a new terminal. Every tool keeps its key.
  */
-export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize, onDropTool }: CreateToolbarProps) {
+export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, ghostSize, onDropTool }: CreateToolbarProps) {
   const drag = useToolDrag(onDropTool);
   const simplified = useSimplified();
   // A click arms the tool, for a click on the board; a drag off the button puts the tile where it is let go.
@@ -74,7 +76,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
       <Island className="create-toolbar island-top-centre" role="toolbar" aria-label="Create">
         {pointerTools}
         <IslandSeparator />
-        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} />
+        <DrawMenu tool={tool} onTool={onTool} onSticky={onSticky} onSteps={onSteps} />
         <IslandSeparator />
         <div className="create-toolbar-split">
           {newAgent}
@@ -121,14 +123,15 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, ghostSize,
 const DRAW_TOOLS: ReadonlySet<ArmedTool> = new Set(['text', 'shape', 'zone']);
 
 /**
- * The Simplified design's Draw menu: a sticky note, Text, Shape and Zone, each with its key. Picking
+ * The Simplified design's Draw menu: a sticky note, Steps, Text, Shape and Zone, each with its key. Picking
  * Shape, or pressing S, opens the shape picker under the button, as the Shape tool's own button does under Classic. A
  * pick arms its tool, even one already armed: a menu row is no toggle.
  */
-function DrawMenu({ tool, onTool, onSticky }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky'>) {
+function DrawMenu({ tool, onTool, onSticky, onSteps }: Pick<CreateToolbarProps, 'tool' | 'onTool' | 'onSticky' | 'onSteps'>) {
   const shapes = useShapePicker(tool === 'shape', onTool);
   const entries: MenuEntry[] = [
     { label: 'Sticky note', icon: <StickyNote />, shortcut: keyText('make.note'), onSelect: onSticky },
+    { label: 'Steps', icon: <ListTodo />, shortcut: keyText('make.steps'), onSelect: onSteps },
     { label: 'Text', icon: <Type />, shortcut: keyText('make.text'), onSelect: () => onTool('text') },
     { label: 'Shape', icon: <Shapes />, shortcut: keyText('make.shape'), onSelect: () => onTool('shape') },
     { label: 'Zone', icon: <SquareDashedMousePointer />, shortcut: keyText('make.zone'), onSelect: () => onTool('zone') },

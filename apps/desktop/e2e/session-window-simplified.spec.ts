@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { agents, launch, screen, sessionWindow, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, screen, sessionWindow, setClickOpens, spawnAgent, tile } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
 import { scratch } from './scratch.ts';
@@ -248,6 +248,53 @@ test("the header gives a long name the room, and shows its controls on hover or 
     }
     expect([...reached]).toEqual(expect.arrayContaining(['Chat', 'Timeline', 'Terminal', 'More']));
     expect(await opacity()).toBe('1');
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("under Maximised session window a window opens filling the board, ⋯ has Restore and Maximise, and a restored one stays restored while it is open", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env, [], { design: 'simplified' });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await tile(window).dblclick();
+    const menuItem = async (name: string) => {
+      await header(window).getByRole('button', { name: 'More' }).click();
+      await window.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click();
+      // The next ⋯ click must not land on a menu still closing, which it would shut.
+      await expect(window.getByRole('menu')).toBeHidden();
+    };
+
+    // The default: a window opens at the size it was left. Restore it from ⋯, and close it.
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'true');
+    await menuItem('Restore');
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'false');
+    await header(window).getByRole('button', { name: /^Done, close / }).click();
+    await expect(sessionWindow(window)).toBeHidden();
+    await tile(window).dblclick();
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'false');
+    await header(window).getByRole('button', { name: /^Done, close / }).click();
+
+    // Maximised: it opens full again, and Restore sticks while it stays open.
+    await setClickOpens(window, 'Maximised session window');
+    await tile(window).dblclick();
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'true');
+    await menuItem('Restore');
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'false');
+    await menuItem('Maximise');
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'true');
+    await menuItem('Restore');
+    await window.waitForTimeout(500);
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'false');
+    await header(window).getByRole('button', { name: /^Done, close / }).click();
+    await tile(window).dblclick();
+    await expect(sessionWindow(window)).toHaveAttribute('data-maximised', 'true');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

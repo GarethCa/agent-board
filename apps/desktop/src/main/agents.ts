@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { DaemonRpcError, type DaemonLink } from '@agent-board/daemon/client';
-import { AGENT_ERROR, type AgentRecordKind, type AskSelectionParams, type PermissionDecision, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
+import { AGENT_ERROR, type AgentRecordKind, type Effort, type AskSelectionParams, type PermissionDecision, type ScheduleSpec, type SpawnAgentParams, type StartMasterParams, type TileMove } from '@agent-board/daemon/protocol';
 import { revealWindow } from './background';
 import { AGENT_IPC, type AgentStartsResetEvent, type DeleteAgentResult, type RestartAgentResult, type SpawnAgentResult } from '../preload/api';
 import { forwardEvents, sendToAllWindows } from './broadcast';
@@ -77,6 +77,7 @@ export function registerAgentIpc(daemon: DaemonLink, dataDir: string): void {
   passthrough(daemon, AGENT_IPC.setName, 'agent.setName', (sessionId: string, name: string) => ({ sessionId, name }));
   passthrough(daemon, AGENT_IPC.markSeen, 'agent.markSeen', (sessionId: string) => ({ sessionId }));
   passthrough(daemon, AGENT_IPC.setMuted, 'agent.setMuted', (sessionId: string, muted: boolean) => ({ sessionId, muted }));
+  passthrough(daemon, AGENT_IPC.setEffort, 'agent.setEffort', (sessionId: string, effort: Effort | null) => ({ sessionId, effort }));
   passthrough(daemon, AGENT_IPC.setRecordDeleted, 'agent.setRecordDeleted', (sessionId: string, kind: AgentRecordKind, key: string, deleted: boolean) => ({
     sessionId,
     kind,

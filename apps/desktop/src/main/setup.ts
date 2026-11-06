@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { installCli } from '@agent-board/daemon/cli-install';
 import type { SetupTool } from '@agent-board/daemon/protocol';
-import { SETUP_IPC } from '../preload/api';
+import { MINIMISED_IPC, SETUP_IPC, type MinimisedWindow, type WindowTarget } from '../preload/api';
 import { revealWindow } from './background';
 import type { Notifier } from './notifications';
 import { menuTemplate, RELEASES_URL } from './app-menu';
@@ -42,7 +42,16 @@ export function setAppMenu(
   window: () => BrowserWindow,
   settings: () => void,
   { design, technical }: { design: FileSetting<Design>; technical: FileSetting<boolean> },
+  { liveBoard, openBoard }: { liveBoard: () => BrowserWindow | undefined; openBoard: (showing: WindowTarget) => BrowserWindow },
 ): void {
+  // The board's minimised windows, which the Window menu lists; the board reports them whenever they change.
+  let minimised: readonly MinimisedWindow[] = [];
+  ipcMain.on(MINIMISED_IPC.report, (_event, windows: unknown) => {
+    minimised = Array.isArray(windows)
+      ? windows.filter((entry): entry is MinimisedWindow => typeof entry?.id === 'string' && typeof entry?.title === 'string' && (entry.kind === 'session' || entry.kind === 'shell'))
+      : [];
+    build();
+  });
   const asks = (poke: string, take: string) => {
     let asked = false;
     ipcMain.handle(take, () => {
@@ -77,7 +86,19 @@ export function setAppMenu(
           build();
         }
       },
-    });
+    }, minimised.map((entry) => ({
+      title: entry.title,
+      restore: () => {
+        // With no board open it opens showing the window: a message would reach it before it listened.
+        const live = liveBoard();
+        if (live === undefined) {
+          revealWindow(openBoard(entry));
+          return;
+        }
+        revealWindow(live);
+        live.webContents.send(MINIMISED_IPC.restore, entry.id);
+      },
+    })));
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   };
   build();

@@ -77,6 +77,7 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
       sessionId,
       cwd,
       model,
+      effort: effortOverride(overrides),
       permissionMode: 'default',
       startSource: subcommand === 'resume' ? 'resume' : 'startup',
       hooks,
@@ -104,6 +105,12 @@ export function codexInvocation(argv: string[], env: NodeJS.ProcessEnv, processC
       sessionEndReason: 'other',
     },
   };
+}
+
+/** The reasoning effort a `model_reasoning_effort` override sets, the last one winning, as Codex reads them. */
+function effortOverride(overrides: [string, unknown][]): string | undefined {
+  const effort = overrides.findLast(([key]) => key === 'model_reasoning_effort')?.[1];
+  return typeof effort === 'string' ? effort : undefined;
 }
 
 /** `-c key=value` overrides as keys and values. Like Codex, a value that isn't TOML is taken as a plain string. */

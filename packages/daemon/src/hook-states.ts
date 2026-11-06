@@ -1,7 +1,7 @@
 import { systemClock, type Clock } from './clock.ts';
 import { compactingAfterHook, isOwnDialog, lastMessageAfterHook } from './claude-state.ts';
 import { stateAfterHook } from './harness-state.ts';
-import { stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
+import { promptCounts, stateWithPrompts, type HookReply, type PermissionHolds } from './permissions.ts';
 import type { AgentState, Harness, SessionState, Subagent } from './protocol.ts';
 import { subagentsAfterHook, type SubagentStore } from './subagents.ts';
 import type { PromptNow } from './deliveries.ts';
@@ -44,6 +44,8 @@ interface HookStateOptions<Row extends HookStateRow> {
   /** Marks the agent's state as not yet seen: a new ask. */
   unsee(sessionId: string): void;
   clock?: Clock;
+  /** How long a session may stay `starting` without a hook before it is given up on: `STARTING_MAX_MS` by default. */
+  startingMaxMs?: number;
   /** Whether a command the agent left running in the background still runs. */
   onCommand?(sessionId: string): boolean;
   /** Whether a first prompt waits to be typed at the agent once its session is up, not given on its command line. */
@@ -114,6 +116,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
    */
   const permissionSettled = new Set<string>();
   const clock = options.clock ?? systemClock;
+  const startingMaxMs = options.startingMaxMs ?? STARTING_MAX_MS;
   /**
    * Agents started with a first prompt, whose session has sent no hook yet: their first turn hasn't begun. Each leaves
    * on its first hook, or without one: on output once `STARTING_OUTPUT_GRACE_MS` have passed (the session is up and
@@ -140,7 +143,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     const entry = starting.get(sessionId);
     if (entry === undefined) return;
     entry.cancel();
-    starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS), up: true });
+    starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), startingMaxMs), up: true });
   };
 
   /** Whether the agent's last message asks the user something (`asksSomething`). */
@@ -172,7 +175,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
     promptQueued(sessionId: string) {
       stopStarting(sessionId);
       startFailed.delete(sessionId);
-      starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), STARTING_MAX_MS) });
+      starting.set(sessionId, { since: clock.now(), cancel: clock.setTimer(() => giveUpStarting(sessionId), startingMaxMs) });
     },
 
     /** The agent's session printed something: past the grace, an agent still `starting` with no hook at all stops. */
@@ -312,7 +315,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
       if (compactingSince === null) compacting.delete(sessionId);
       else compacting.set(sessionId, compactingSince);
       const next = subagentsAfterHook(subagents.of(sessionId), payload, new Date());
-      const pending = permissions.prompts(sessionId).length;
+      const counts = promptCounts(permissions.prompts(sessionId));
       // An agent started with no task, or resumed (woken, restarted) with no new prompt, has nothing to run yet: its
       // session starting leaves it idle for its next message. One whose first prompt is still to be typed sits idle at
       // its prompt for it. A prompt it was resumed with moves it on at its own hook.
@@ -320,7 +323,7 @@ export function createHookStates<Row extends HookStateRow>(options: HookStateOpt
         payload.hook_event_name === 'SessionStart' &&
         row.state === 'idle' &&
         (typingFirst || (!prompted && (row.description === '' || payload.source === 'resume')));
-      const hooked = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { pending, settled });
+      const hooked = stateWithPrompts(awaitingTask ? 'idle' : stateAfterHook(row.harness, row.state, payload), { ...counts, settled });
       // A notification at its prompt (its idle prompt, word of another session) while a command it left runs says nothing
       // of you: it stays idle, so the command's end, before the harness takes up its result, never shows it waiting.
       const state = row.state === 'idle' && hooked === 'waiting' && !ownDialog && options.onCommand?.(sessionId) === true ? 'idle' : hooked;

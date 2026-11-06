@@ -245,7 +245,7 @@ function scopeOf(
 }
 
 /** The file `path` names from `cwd`, by its real path; refused unless it is a file. */
-function realFile(cwd: string, path: string): string {
+export function realFile(cwd: string, path: string): string {
   const named = resolve(cwd, path.trim());
   if (path.trim() === '' || !isFile(named)) throw invalidParams(`${path} is not a file${isAbsolute(path) ? '' : ` in ${cwd}`}`);
   return realpathSync(named);
@@ -262,8 +262,8 @@ function pinTargetFor(cwd: string, params: Extract<RecordParams, { kind: 'pin' }
 }
 
 /** A link pin, as the URL parses: only one a web tab opens, and at most `MAX_PIN_URL` characters. */
-function linkTarget(url: string): PinTarget {
-  if (url.trim().length > MAX_PIN_URL) throw invalidParams(`a pinned link is at most ${MAX_PIN_URL} characters`);
+export function linkTarget(url: string): PinTarget {
+  if (url.trim().length > MAX_PIN_URL) throw invalidParams(`a link is at most ${MAX_PIN_URL} characters`);
   let href: string | undefined;
   try {
     href = new URL(url.trim()).href;
@@ -309,7 +309,7 @@ const isFile = (path: string): boolean => {
 const recordedPath = (record: AgentRecord): string | undefined =>
   record.kind === 'doc' ? record.path : record.kind === 'pin' && record.target.kind === 'file' ? record.target.path : undefined;
 
-/** The user's methods on an agent's records: deleting one (and Undo), and reading a hand-off doc or pinned file for its tab. */
+/** The user's methods on an agent's records: deleting one (and Undo), and reading a hand-off doc, pinned file or page's linked file for its tab. */
 export function recordHandlers<Context>(options: {
   records: Pick<AgentRecordStore, 'setDeleted'>;
   agents: { get(sessionId: string): Agent | undefined; announce(sessionId: string): void };
@@ -338,8 +338,11 @@ export function recordHandlers<Context>(options: {
       const p = paramsObject(params);
       const agent = agentOf(stringParam(p, 'sessionId'));
       const path = stringParam(p, 'path');
-      const known = agent.guessedDoc === path || agent.records.some((record) => record.deletedAt === null && recordedPath(record) === path);
-      if (!known) throw invalidParams(`${path} is not one of ${agent.name}'s hand-off docs or pins`);
+      const known =
+        agent.guessedDoc === path ||
+        agent.records.some((record) => record.deletedAt === null && recordedPath(record) === path) ||
+        (agent.page?.blocks ?? []).some((block) => block.kind === 'links' && block.links.some((link) => link.target.kind === 'file' && link.target.path === path));
+      if (!known) throw invalidParams(`${path} is not one of ${agent.name}'s hand-off docs, pins or page's links`);
       if (!isFile(path)) throw invalidParams(`${path} is gone`);
       // Kept by its real path: one made a link since leads elsewhere, which is not what was recorded.
       if (realpathSync(path) !== path) throw invalidParams(`${path} is a link now, not the file that was recorded`);

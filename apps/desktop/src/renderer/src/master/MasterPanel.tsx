@@ -18,6 +18,7 @@ import { Markdown } from '../session/Markdown';
 import { exitText, RestartAgent } from '../session/RestartAgent';
 import type { RunsChoice } from '../session/chat';
 import { clockTime } from '../board/items/agent-note';
+import { ToLookAtRows } from '../board/items/ToLookAtRows';
 import { askLine, boardMaster, captainRevival, latestDigest, watchRows } from './master-view';
 import { Captain } from '../board/Character';
 import { useSimplified } from '../design';
@@ -165,7 +166,8 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
       )}
       {listSide ? (
         <div className="master-panel-needs-you">
-          <Inbox agents={agents} onOpen={onOpenAgent} onSettings={onSettings} heading={false} />
+          <ToLookAtRows items={items} agents={agents} />
+          <Inbox agents={agents} zones={zones} onOpen={onOpenAgent} onSettings={onSettings} heading={false} />
           <SinceYouLooked agents={agents} onOpenAgent={onOpenAgent} />
         </div>
       ) : master === undefined ? (
@@ -174,8 +176,8 @@ export function MasterPanel({ agents, zones, items, side, focusRequest, onSettin
         <>
           {!simplified && <Watching agents={agents} zones={zones} onShowAgent={onShowAgent} onShowZone={onShowZone} />}
           {!simplified && <ForYou panel={panel} agents={agents} zones={zones} items={items} master={master} onOpenAgent={onOpenAgent} onOpenLink={onOpenLink} />}
-          {/* Dark in every theme, as a session window's chat is. */}
-          <section className="master-panel-chat" data-surface="window" aria-label="Chat with the Captain">
+          {/* The Captain's chat is part of the app's chrome, so it follows the app's theme (a session window's chat has its own). */}
+          <section className="master-panel-chat" aria-label="Chat with the Captain">
             <CaptainRevive master={master} />
             <div className="session-chat-view">
               <ChatView agent={master} active onShowTerminal={() => onOpenAgent(master)} runs={RUNS} onOpenLink={onOpenLink} onOpenPlan={() => onOpenPlan(master)} />
@@ -322,6 +324,7 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
       <FoldHeading section="for-you" title="For you">
         {entries.length === 0 ? 'nothing' : `${entries.length} in Needs you`}
       </FoldHeading>
+      {!folded && <ToLookAtRows items={items} agents={agents} />}
       {!folded && entries.length > 0 && (
         <ul className="master-for-you">
           {entries.map(({ agent, kind }) => {
@@ -337,8 +340,8 @@ function ForYou({ panel, agents, zones, items, master, onOpenAgent, onOpenLink }
                   <b title={agent.name}>{agent.name}</b>
                   {zone && <small title={zone.name}>{zone.name}</small>}
                 </div>
-                {kind === 'permission' && agent.permissions.length > 0 ? (
-                  agent.permissions.map((prompt) => <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} />)
+                {agent.permissions.length > 0 && (kind === 'permission' || kind === 'asks') ? (
+                  agent.permissions.map((prompt) => <PermissionRow key={prompt.id} agent={agent} prompt={prompt} now={now} onOpen={() => onOpenAgent(agent)} />)
                 ) : (
                   <p>{askLine(agent, kind)}</p>
                 )}

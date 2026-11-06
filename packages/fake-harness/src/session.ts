@@ -101,6 +101,8 @@ export interface Dialect {
   sessionId: string;
   cwd: string;
   model: string;
+  /** The reasoning effort it was started with (Claude's `--effort`, Codex's `model_reasoning_effort`), or set to since. */
+  effort?: string;
   permissionMode: string;
   startSource: string;
   hooks: HooksConfig;
@@ -266,6 +268,11 @@ export class FakeSession {
     return this.dialect.shellToolName;
   }
 
+  /** Which harness it plays. */
+  get harness(): HarnessName {
+    return this.dialect.harness;
+  }
+
   /** Whether it resumes a conversation (`--resume`, `codex resume`). */
   get resumed(): boolean {
     return this.dialect.startSource === 'resume';
@@ -327,7 +334,7 @@ export class FakeSession {
       this.printLines(codexStartScreen(screen, this.dialect.cwd));
       if ((await this.readTypedLine()) === undefined) return;
     }
-    this.printLines(codexComposer(this.dialect.model, this.dialect.cwd));
+    this.printLines(codexComposer(this.dialect.model, this.dialect.cwd, this.dialect.effort));
   }
 
   private async fireSessionStart(): Promise<void> {
@@ -344,7 +351,7 @@ export class FakeSession {
     if (this.dialect.demo) this.printLines(demo.userPrompt(this.dialect.harness, prompt));
     else this.print(`> ${prompt}\n`);
     // The Codex TUI keeps its composer and status line drawn through a turn, under what the turn prints.
-    if (this.dialect.harness === 'codex' && this.dialect.interactive && !this.dialect.demo) this.printLines(codexComposer(this.dialect.model, this.dialect.cwd));
+    if (this.dialect.harness === 'codex' && this.dialect.interactive && !this.dialect.demo) this.printLines(codexComposer(this.dialect.model, this.dialect.cwd, this.dialect.effort));
     this.dialect.transcript.userPrompt(prompt, this.turnId);
     const lost = this.promptTyped && this.promptHooksToLose > 0;
     this.promptTyped = false;
@@ -450,6 +457,39 @@ export class FakeSession {
     await this.fire('PostToolUse', { ...inside, tool_name: name, tool_input: input, tool_response: response, tool_use_id: id });
     if (!inside) await this.takeQueued();
     return true;
+  }
+
+  /**
+   * Asks the user questions with Claude's question tool (`AskUserQuestion`), as Claude does: its PermissionRequest hook
+   * runs beside its own dialog, which draws each question with its numbered options, and a line typed at it is the
+   * answer to them all (an option's number picks it; anything else is an "Other" answer in the user's words). The call
+   * then runs with the answers added to its input, as Claude's `PostToolUse` carries them. A hook that allows it first
+   * runs it with no answers. Returns the answers, by question, or undefined if the session's input ended.
+   */
+  async askQuestions(questions: { question: string; header: string; options: { label: string; description: string }[]; multiSelect: boolean }[]): Promise<Record<string, string> | undefined> {
+    const id = toolUseId();
+    const name = 'AskUserQuestion';
+    const input = { questions };
+    this.dialect.transcript.toolUse(id, name, input);
+    this.print(`● ${name}(${JSON.stringify(input)})\n`);
+    await this.fire('PreToolUse', { tool_name: name, tool_input: input, tool_use_id: id });
+    const hook = this.fireBeside('PermissionRequest', { tool_name: name, tool_input: input, ...(this.dialect.permissionSuggestions ? { permission_suggestions: [] } : {}) });
+    for (const { header, question, options } of questions) {
+      this.printLines([`${header === '' ? '' : `[${header}] `}${question}`, ...options.map((option, index) => `  ${index + 1}. ${option.label}`), `  ${options.length + 1}. Other`]);
+    }
+    this.print('Answer: ');
+    const first = await this.hookOrLine(hook);
+    let answers: Record<string, string> = {};
+    if ('line' in first) {
+      if (first.line === undefined) return undefined;
+      const typed = first.line.trim();
+      answers = Object.fromEntries(questions.map(({ question, options }) => [question, options[Number(typed) - 1]?.label ?? typed]));
+    }
+    const answered = { ...input, answers };
+    const response = { questions, answers };
+    this.dialect.transcript.toolResult(id, response, false);
+    await this.fire('PostToolUse', { tool_name: name, tool_input: answered, tool_response: response, tool_use_id: id });
+    return answers;
   }
 
   /**
@@ -612,6 +652,42 @@ export class FakeSession {
       await this.pause();
     }
     this.print('\r\x1b[2K');
+  }
+
+  /**
+   * Prints `count` coloured, numbered lines at once, as an earlier conversation's output fills a terminal's scrollback.
+   * Only the terminal sees them.
+   */
+  printBacklog(count: number): void {
+    const lines: string[] = [];
+    for (let line = 0; line < count; line++) {
+      lines.push(`\x1b[3${(line % 7) + 1}m${String(line).padStart(6, '0')}\x1b[0m \x1b[1mtool\x1b[0m Read src/session/store-${line % 97}.ts: the quick brown fox jumps over the lazy dog`);
+    }
+    if (count > 0) this.printLines(lines);
+  }
+
+  /**
+   * Streams as a TUI does through a long turn, until interrupted: its spinner line redrawn in place every step
+   * (`stepDelayMs`, 100 ms if none, so about 10 a second), and every tenth step (about a second) a `Bash` tool call, run
+   * as any other (`PreToolUse`, `PostToolUse` and the transcript, which move the agent between running and thinking on
+   * the board), its result printed as a block of coloured lines.
+   */
+  async keepBusy(): Promise<never> {
+    const step = this.dialect.stepDelayMs > 0 ? this.dialect.stepDelayMs : 100;
+    for (let frame = 0; ; frame++) {
+      if (frame % 10 === 0) {
+        const call = frame / 10;
+        const file = `src/store-${call % 97}.test.ts`;
+        this.print('\r\x1b[2K');
+        await this.runTool('Bash', { command: `pnpm exec vitest run ${file}` }, { stdout: `1 passed`, stderr: '', interrupted: false });
+        this.print(
+          `  ⎿  \x1b[32m✓\x1b[0m ${file} \x1b[2m(${(call % 9) + 3} tests)\x1b[0m \x1b[33m${(call % 50) + 10}ms\x1b[0m\n` +
+            `     \x1b[1mTest Files\x1b[0m  \x1b[32m1 passed\x1b[0m (1)\n`,
+        );
+      }
+      this.print(`\r\x1b[2K✻ Working… (${Math.floor((frame * step) / 1000)}s · esc to interrupt)`);
+      await this.sleep(step);
+    }
   }
 
   /** Updates its todo list with the harness's own tool: Claude's `TodoWrite`, Codex's `update_plan`. */
@@ -845,6 +921,21 @@ export class FakeSession {
   crash(message: string): never {
     process.stderr.write(`${this.dialect.harness}: ${message}\n`);
     process.exit(1);
+  }
+
+  /**
+   * Runs `line` if it is a command the harness runs itself, at its prompt, with no turn, and says whether it was:
+   * Claude's `/effort <level>`, which sets its reasoning effort and says so. It fires no hook, unless
+   * `FAKE_HARNESS_LOCAL_COMMAND_HOOK=1`, when it fires `UserPromptSubmit` with the command and still starts no turn: the
+   * other way the real CLI might go, which the board must survive.
+   */
+  async localCommand(line: string): Promise<boolean> {
+    const effort = /^\/effort (low|medium|high|xhigh|max)$/.exec(line.trim());
+    if (this.dialect.harness !== 'claude' || effort === null) return false;
+    if (process.env.FAKE_HARNESS_LOCAL_COMMAND_HOOK === '1') await this.fire('UserPromptSubmit', { prompt: line.trim() });
+    this.dialect.effort = effort[1];
+    this.print(`  ⎿ Set effort level to ${effort[1]}\n`);
+    return true;
   }
 
   /** The next prompt the user typed: like the real TUIs, Enter at an empty prompt submits nothing. */

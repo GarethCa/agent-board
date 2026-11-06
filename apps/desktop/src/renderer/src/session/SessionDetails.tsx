@@ -332,7 +332,7 @@ function AgentSections({
         <p className="details-mono details-branch" title={branchLine(agent)}>
           {branchLine(agent)}
         </p>
-        {(agent.model !== null || agent.role !== null) && <p className="details-soft">{agentSetupLine(agent)}</p>}
+        {(agent.model !== null || agent.effort !== null || agent.role !== null) && <p className="details-soft">{agentSetupLine(agent)}</p>}
         <p className="details-mono details-soft" title={agent.worktree}>
           {agent.worktree}
         </p>

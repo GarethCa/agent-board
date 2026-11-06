@@ -16,6 +16,9 @@ import './demo/demo.css';
 import { App } from './App';
 import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';
+import { NeedsYouStepsGallery } from './inbox/NeedsYouStepsGallery';
+import { QueueHandOnGallery } from './board/items/QueueGallery';
+import { ShelvesGallery } from './session/ShelvesGallery';
 import { WINDOW_QUERY, windowTargetFrom } from '../../preload/api';
 import { PopOutWindow } from './windows/PopOutWindow';
 import { SettingsWindow } from './chrome/SettingsWindow';
@@ -27,6 +30,7 @@ import { followTheme } from './themes';
 import { followViewSettings } from './board/view-settings';
 import { followDesign } from './design';
 import { followTechnical } from './technical';
+import { followDock } from './dock';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
 import { ToastProvider, TooltipProvider } from './ui';
 
@@ -53,6 +57,9 @@ followDesign();
 // Show technical details under the Simplified design (technical.ts): set before the first paint, and again whenever it
 // or the design changes.
 followTechnical();
+
+// The Dock setting (dock.ts): set before the first paint, and again whenever it is picked.
+followDock();
 
 // A capture window shows the board's canvas alone (board/capture-mode.ts, app.css).
 if (CAPTURE_FRAME !== undefined) document.documentElement.dataset.capture = '';
@@ -93,6 +100,21 @@ createRoot(root).render(
               </GatesProvider>
             </ReviewsProvider>
           </DaemonGate>
+        ) : location.hash === '#gallery-needs-you-steps' ? (
+          // A page of its own: the inbox's rows, the stepper and the strip, away from the gallery's sections.
+          <div className="gallery">
+            <NeedsYouStepsGallery />
+          </div>
+        ) : location.hash === '#gallery-queue-hand-on' ? (
+          // A page of its own: adding to the dev gallery moves its scrollbar, and so every shot that reaches the page's edge.
+          <div className="gallery">
+            <QueueHandOnGallery />
+          </div>
+        ) : location.hash === '#gallery-agent-sidebar' ? (
+          // A page of its own too, as its frames are many and tall.
+          <div className="gallery">
+            <ShelvesGallery />
+          </div>
         ) : location.hash === '#gallery' ? (
           // A dev gallery of every primitive, tile state and character pose, for checking how they look.
           <Gallery />

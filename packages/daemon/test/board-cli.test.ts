@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -310,6 +310,13 @@ describe('an agent that changes its branch', () => {
     expect(refused).toMatchObject({ code: 1, err: expect.stringContaining('detached HEAD') });
     expect((await run(env, 'show', 'fix-tests')).out).toContain('(detached, last on renamed-one)');
   });
+
+  it('takes `new --edges auto|manual`, refusing any other value, and refusing it without a --base to join to', async () => {
+    const { env, web } = await board();
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--edges', 'bogus', '--', 'Go')).toMatchObject({ code: 2, err: expect.stringContaining('--edges is auto or manual') });
+    const noBase = await run(env, 'new', '--zone', ref('zone', web.id), '--edges', 'auto', '--', 'Go');
+    expect(noBase).toMatchObject({ code: 1, err: expect.stringContaining('give --base') });
+  });
 });
 
 describe('orchestrating from the command line', () => {
@@ -337,6 +344,21 @@ describe('orchestrating from the command line', () => {
     expect(agent.spawnedBy).toBeNull();
     expect(await run(env, 'close', 'by-hand')).toMatchObject({ code: 0 });
     expect((await run(env, 'activity')).out).toMatch(/you {2}close by-hand\n.*you {2}spawn by-hand/s);
+  });
+
+  it('starts an agent at the reasoning effort asked for, which show prints, and refuses one its harness does not take', async () => {
+    const { env, client, web } = await board();
+
+    expect(await run(env, 'new', '--zone', ref('zone', web.id), '--name', 'deep', '--effort', 'xhigh', '--', 'Think hard')).toMatchObject({ code: 0 });
+    expect((await client.call('agent.list')).find((agent) => agent.name === 'deep')!.effort).toBe('xhigh');
+    expect((await run(env, 'show', 'deep')).out).toMatch(/reasoning {2,}xhigh\n/);
+    // One it has yet to take says when.
+    const deep = (await client.call('agent.list')).find((agent) => agent.name === 'deep')!;
+    await client.call('agent.setEffort', { sessionId: deep.sessionId, effort: null });
+    expect((await run(env, 'show', 'deep')).out).toMatch(/reasoning {2,}its harness's own \(on restart\)\n/);
+
+    const refused = await run(env, 'new', '--zone', ref('zone', web.id), '--harness', 'codex', '--effort', 'max', '--', 'Think harder');
+    expect(refused).toMatchObject({ code: 1, err: expect.stringContaining('Codex takes a reasoning effort of low, medium, high or xhigh') });
   });
 
   it('checks each command’s options before it connects', async () => {
@@ -672,6 +694,85 @@ describe('schedules from the command line', () => {
     expect(await run(env, 'schedule', 'remove', 'fix-tests')).toMatchObject({ code: 1, err: expect.stringContaining('is not a schedule') });
     expect((await client.call('item.list')).filter((each) => each.kind === 'clock')).toHaveLength(1);
     expect((await run(env, 'activity')).out).toMatch(/you {2}remove-clock clock Daily 00:00.*you {2}add-clock clock Daily 00:00.*you {2}add-clock clock Weekdays 09:00/s);
+  });
+});
+
+describe('crew prefabs from the command line', () => {
+  it('checks the prefab commands’ arguments before it connects', async () => {
+    const usage = async (command: string, args: string[], message: string) =>
+      expect(await run({}, command, ...args)).toMatchObject({ code: 2, err: expect.stringContaining(message) });
+    await usage('prefab', ['ls', 'extra'], 'unexpected extra');
+    await usage('prefab', ['show'], 'give a prefab name');
+    await usage('prefab', ['import'], 'give one .crew.json file');
+    await usage('prefab', ['import', 'a.crew.json', '--replace'], '--replace goes with --add');
+    await usage('prefab', ['show', 'Pair', '--out', 'x'], '--out is only for `prefab export`');
+    await usage('prefab', ['ls', '--add'], '--add and --replace are only for `prefab import`');
+    await usage('prefab', ['copy', 'x'], 'the prefab commands are');
+    await usage('new', ['--prefab', 'Pair', '--model', 'opus', '--', 'Go'], "--model is the prefab's to set");
+  });
+
+  it('lists the library, exports a prefab, imports it back only with --add, and removes it', async () => {
+    const { env } = await board();
+    const dir = tempDataDir();
+
+    const listed = await run(env, 'prefab');
+    expect(listed.out).toMatch(/^Solo agent +built-in {2}agent {2}One agent/m);
+    expect(listed.out).toMatch(/^Lead and crew +built-in {2}lead, impl, review/m);
+    expect((await run(env, 'prefab', 'show', 'implementer + REVIEWER')).out).toContain(
+      "  review  reviewer · claude, starts at the builder's first hand-off\n\n{\n  \"agentBoardCrewPrefab\": 1,",
+    );
+
+    const file = join(dir, 'pair.crew.json');
+    expect(await run(env, 'prefab', 'export', 'Implementer + reviewer', '--out', file)).toMatchObject({ code: 0, out: expect.stringContaining('Wrote Implementer + reviewer to') });
+    expect(await run(env, 'prefab', 'export', 'Implementer + reviewer', '--out', file)).toMatchObject({ code: 1, err: expect.stringContaining('exists already') });
+    const text = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ ...text, name: 'Pair', roundLimit: 4 }));
+
+    const shown = await run(env, 'prefab', 'import', file);
+    expect(shown.out).toContain('holds this crew prefab:\n\nPair: One builds');
+    expect(shown.out).toContain('Nothing is added yet');
+    expect((await run(env, 'prefab')).out).not.toMatch(/^Pair /m);
+    expect(await run(env, 'prefab', 'import', file, '--add')).toMatchObject({ code: 0, out: expect.stringContaining('Added Pair to the crew prefab library') });
+    expect((await run(env, 'prefab')).out).toMatch(/^Pair +saved {5}impl, review/m);
+    expect(await run(env, 'prefab', 'import', file, '--add')).toMatchObject({ code: 1, err: expect.stringContaining('already') });
+    expect(await run(env, 'prefab', 'import', file, '--add', '--replace')).toMatchObject({ code: 0 });
+
+    writeFileSync(file, JSON.stringify({ ...text, name: 'Leaky', prompt: 'Ship it' }));
+    expect(await run(env, 'prefab', 'import', file)).toMatchObject({ code: 1, err: expect.stringContaining('a crew prefab holds no prompt') });
+
+    expect((await run(env, 'activity')).out).toMatch(/you {2}save-prefab .*Pair/);
+    expect((await run(env, 'prefab', 'remove', 'pair')).out).toContain('Removed the crew prefab pair.');
+    expect(await run(env, 'prefab', 'remove', 'Solo agent')).toMatchObject({ code: 1, err: expect.stringContaining("can't be removed") });
+  });
+
+  it('starts a crew with new --prefab, saying which members start later, and follows and stops it with crew', async () => {
+    const { web, env } = await board();
+
+    const started = await run(env, 'new', '--prefab', 'Implementer + reviewer', '--zone', ref('zone', web.id), '--', 'Add a footer');
+
+    expect(started).toMatchObject({ code: 0 });
+    expect(started.out).toMatch(/^Started crew:[0-9a-f]{8} from Implementer \+ reviewer:\n {2}impl: agent:\S+ {2}Add a footer {2}\[\S+\] {2}\(implementer\)/);
+    expect(started.out).toContain("  review: starts on impl's branch each time impl hands off, a fresh one each round");
+    const crew = /Started (crew:[0-9a-f]{8})/.exec(started.out)![1]!;
+    expect(started.out).toContain(`agent-board crew show ${crew} follows its rounds; agent-board wait ${crew} waits until it stops.`);
+    expect((await run(env, 'crew')).out).toMatch(new RegExp(`^${crew} {2}Implementer \\+ reviewer {2}round 1 of 3, (building|reviewing)`, 'm'));
+    expect((await run(env, 'crew', 'show', crew)).out).toMatch(/^ {2}builder: Add a footer \(agent:\S+\)$/m);
+    expect(await run(env, 'crew', 'round', crew)).toMatchObject({ code: 1, err: expect.stringContaining('crew round gives one more round to a crew stopped at its round limit') });
+    expect((await run(env, 'crew', 'stop', crew)).out).toContain(`Stopped ${crew}: no more reviewers start, and no reviews go back.`);
+    expect(await run(env, 'wait', crew, '--timeout', '5')).toMatchObject({ code: 0, out: expect.stringMatching(new RegExp(`^${crew} {2}Implementer \\+ reviewer {2}stopped after round 1 of 3`)) });
+    expect(await run(env, 'wait', crew, '--until', 'finished')).toMatchObject({ code: 2, err: expect.stringContaining('wait <crew> takes the one crew alone') });
+    expect(await run(env, 'crew', 'show', 'crew:nope')).toMatchObject({ code: 1, err: expect.stringContaining('there is no crew crew:nope') });
+    expect(JSON.parse((await run(env, 'new', '--prefab', 'Solo agent', '--zone', ref('zone', web.id), '--json', '--', 'Tidy up')).out)).toMatchObject({
+      prefab: 'Solo agent',
+      crew: null,
+      started: [{ member: 'agent' }],
+      later: [],
+    });
+    expect((await run(env, 'new', '--prefab', 'Lead and crew', '--zone', ref('zone', web.id), '--', 'Lead it')).out).toContain('  impl: for lead to start when its work is ready');
+    expect(await run(env, 'new', '--prefab', 'Nope', '--zone', ref('zone', web.id), '--', 'Go')).toMatchObject({
+      code: 1,
+      err: expect.stringContaining('no crew prefab named Nope'),
+    });
   });
 });
 

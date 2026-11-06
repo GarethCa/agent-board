@@ -126,6 +126,8 @@ export interface FakeHarnessEnvOptions {
    * turn of its own once this one ends.
    */
   queueMidTurn?: boolean;
+  /** Lines of an earlier conversation the `busy` scenario prints first, as scrollback. None by default. */
+  backlogLines?: number;
   /** The environment to start from. Defaults to the process's own, less the session variables of an enclosing board. */
   base?: NodeJS.ProcessEnv;
 }
@@ -167,6 +169,7 @@ export function fakeHarnessEnv(options: FakeHarnessEnvOptions): NodeJS.ProcessEn
     FAKE_HARNESS_RATE_LIMIT_SCREEN: options.rateLimitScreen ?? '',
     FAKE_HARNESS_QUEUE_MID_TURN: options.queueMidTurn ? '1' : '0',
     FAKE_HARNESS_RATE_LIMITS: options.rateLimits === undefined ? '' : JSON.stringify(options.rateLimits),
+    FAKE_HARNESS_BACKLOG_LINES: String(options.backlogLines ?? 0),
     FAKE_HARNESS_TRUST_SCREEN: typeof options.trustScreen === 'string' ? options.trustScreen : options.trustScreen ? '1' : '0',
   };
 }

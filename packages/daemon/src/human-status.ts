@@ -51,6 +51,8 @@ const NEEDS_YOU_DETAILS: Record<Exclude<NeedsYouKind, 'flagged'>, string | null>
   permission: 'Wants your permission',
   asks: 'Asks you',
   plan: 'Plan to review',
+  steps: 'Asks you',
+  todo: 'Waits on your to-do',
   turn: null,
 };
 

@@ -10,6 +10,7 @@ import type { Rect } from '../../geometry';
 import { align, distribute, reorder, type Alignment, type Reorder } from './arrange';
 import { BOARD_CLIPBOARD_TYPE, centreOf, copied, diagramCopy, mermaidOf, parseCopied, placed, plainText, serialiseCopied, skippedNotice, type Copied } from './clipboard';
 import { selectedNodes } from './selection';
+import { laidOutTile } from '../shelves';
 import { swapped } from '../connectors/relations';
 import type { BoardHistory } from './use-history';
 
@@ -51,6 +52,8 @@ interface EditingOptions {
 export interface SelectionSummary {
   /** The nodes selected, zones' contents left out when their zone is selected too (they go with it). */
   nodes: BoardNode[];
+  /** Those an align or distribute may move: not a tile drawn where its zone's layout puts it (shelves, clusters). */
+  movable: BoardNode[];
   items: ItemNodeType[];
   /** Whether it is one agent or shell tile, which can be renamed. */
   renamable: boolean;
@@ -68,6 +71,7 @@ function summarise(nodes: readonly BoardNode[]): SelectionSummary {
   const items = selected.filter(isItemNode);
   return {
     nodes: top,
+    movable: top.filter((node) => !laidOutTile(node, nodes)),
     items,
     renamable: top.length === 1 && isSessionTile(top[0]!) && (top[0].data.agent !== undefined || top[0].data.shell !== undefined),
     hasSessions: selected.some(isSessionTile),
@@ -239,7 +243,8 @@ export function useEditing(options: EditingOptions) {
   const arrange = useCallback(
     (arrangement: (boxes: (Rect & { id: string })[]) => Map<string, { x: number; y: number }>) => {
       const { rectOf } = optionsRef.current;
-      const movable = selection().nodes;
+      // A tile laid out on shelves or in clusters is drawn away from its saved place: moved from there, it would lose it.
+      const { movable } = selection();
       const rects = new Map(
         movable.flatMap((node) => {
           const rect = rectOf(node.id);

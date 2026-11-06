@@ -25,14 +25,16 @@ import { useGateRun } from '../gate/GatesProvider';
 import { HarnessMark } from './HarnessMark';
 import { agentStartLines, StartFailedActions, StartOutput, StartSteps, StartTile } from './StartTile';
 import { useCheckoutWarning } from './checkout-warning';
-import { agentSetupLine, branchLine, modelLabel, roleText } from './AgentSetup';
-import { useNow } from '../inbox/use-now';
+import { agentSetupLine, branchLine, EFFORT_LABELS, effortText, modelLabel, roleText } from './AgentSetup';
+import { useNow, useNowForSince } from '../inbox/use-now';
 import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
-import { ArrowUpRight, BellOff, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
+import { ArrowUpRight, BellOff, Brain, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
 import { Character } from './Character';
 import { CommandFigure } from './CommandFigure';
+import { JobTicket, useHeldJobs } from './items/taken-jobs';
+import { useJobDropOver } from './items/queue-board';
 import { HandoffsContext } from './flow-edges';
 import { badgeLine, checksLabel, foldRanking, isStarting, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
@@ -58,6 +60,8 @@ import { CalmTile } from './CalmTile';
 import { ResumeButton } from './RestartBanner';
 import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
+import { quickAskOf } from './quick-ask';
+import { TileQuickAsk } from './TileQuickAsk';
 import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /**
@@ -102,6 +106,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   const gate = useGateRun(agent.sessionId);
   const clickOpens = useContext(ClickOpensContext);
   const dropOver = dropOverValue.use();
+  const jobDrop = useJobDropOver() === agent.sessionId;
   const rounds = roundsOf(useReviews(), agent.sessionId);
   const latestRound = rounds.at(-1);
   const starting = isStarting(agent);
@@ -114,10 +119,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   const nameClicks = useSlowClickRename(renaming, selected);
   const handoffs = useContext(HandoffsContext);
   const shells = windowShells({ kind: 'agent', agent }, tabs ?? []);
-  const { shown, folded: overflow } = tileFooter(agent, shells.length);
+  const held = useHeldJobs(agent.sessionId);
+  const { shown, folded: overflow } = tileFooter(agent, shells.length, held);
   const ranking = foldRanking(shown);
   const fitted = useFittedLines();
   const ask = askOf(agent);
+  const quick = quickAskOf(agent);
   // An orchestrator in the repo's own checkout says when that checkout is dirty or off its default branch, until it is not.
   // With no worktree of its own (a folder outside git, or a repo with no commits on a git too old for a worktree), it
   // shares where it works; an orchestrator in the main checkout chose that, and its Checkout row said so.
@@ -162,6 +169,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
       data-zone={agent.zoneId ?? ''}
       data-tab-drop={dropKey({ kind: 'agent', id: agent.sessionId })}
       data-drop-over={dropOver === dropKey({ kind: 'agent', id: agent.sessionId }) || undefined}
+      data-job-drop={jobDrop || undefined}
       data-muted={agent.muted}
       data-seen={seen || undefined}
       data-needs-you={needsYouNow(agent, shows) || undefined}
@@ -173,8 +181,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
       data-crew={crewOf}
       onMouseEnter={crew === undefined ? undefined : () => lightCrew(agent.sessionId)}
       onMouseLeave={crew === undefined ? undefined : () => lightCrew(undefined)}
-      title={lastMessage !== undefined ? undefined : clickOpens === 'window' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
-      onDoubleClick={() => (clickOpens === 'window' ? openAgent(agent) : expand(id))}
+      title={lastMessage !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+      onDoubleClick={() => (clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
     >
       {agent.master && (
         <span className="hybrid-tile-master-badge" data-testid="master-badge">
@@ -278,12 +286,19 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           onClear={() => clearUnsent(agent.sessionId)}
         />
       ) : ask !== undefined ? (
-        <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" data-question={ask.question} title={ask.title ?? ask.text}>
-          <span className="hybrid-tile-text">
-            {ask.tool !== undefined && <strong>{ask.tool} </strong>}
-            {ask.text}
+        <>
+          {quick !== undefined && (
+            <span className="quick-ask-row">
+              <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+            </span>
+          )}
+          <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" data-question={ask.question} title={ask.title ?? ask.text}>
+            <span className="hybrid-tile-text">
+              {ask.tool !== undefined && <strong>{ask.tool} </strong>}
+              {ask.text}
+            </span>
           </span>
-        </span>
+        </>
       ) : agent.flag !== null ? (
         // Its flag: to the user, the needs-you orange; to its orchestrator, the crew's violet.
         <span ref={fitted} className="hybrid-tile-body hybrid-tile-flag" data-testid="tile-flag" data-to={agent.flag.to} title={agent.flag.reason}>
@@ -328,6 +343,20 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                       <span className="hybrid-tile-badge-text">{modelLabel(badge.model)}</span>
                     </Tag>
                   );
+                case 'effort':
+                  return (
+                    <Tag
+                      key="effort"
+                      className="hybrid-tile-setup"
+                      data-testid="tile-effort"
+                      {...(badge.pending === null ? {} : { 'data-pending': badge.pending })}
+                      title={effortText(agent) ?? undefined}
+                    >
+                      <Brain aria-hidden />
+                      {/* One still to come reads as coming: "Max…". */}
+                      <span className="hybrid-tile-badge-text">{`${badge.effort === null ? 'Default' : EFFORT_LABELS[badge.effort]}${badge.pending === null ? '' : '…'}`}</span>
+                    </Tag>
+                  );
                 case 'role':
                   return (
                     <Tag
@@ -356,6 +385,8 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                       {shortIssueId(badge.issue)}
                     </Chip>
                   );
+                case 'job':
+                  return <JobTicket key={`job-${badge.taken.job.id}`} taken={badge.taken} onOpen={commands.showItem} />;
                 case 'finished':
                   return (
                     <Tag key="finished" className="hybrid-tile-setup" data-testid="tile-finished" title={`${badgeLine(badge, shells.length)} (${new Date(badge.at).toLocaleString()})`}>
@@ -366,7 +397,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                 case 'pr':
                   return <PullRequestChip key={badge.pr.number} pr={badge.pr} pushed={badge.pushed} open={() => openPullRequest(agent, badge.pr)} />;
                 case 'schedule':
-                  return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => commands.showClock(badge.schedule.clockId)} />;
+                  return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => commands.showItem(badge.schedule.clockId)} />;
                 case 'shells':
                   return <ShellsChip key="shells" agent={agent} shells={shells} />;
                 case 'muted':
@@ -503,8 +534,8 @@ function ShellTile({ id, shell, selected }: { id: string; shell: Shell; selected
       data-tab-drop={dropKey({ kind: 'shell', id: shell.id })}
       data-drop-over={dropOver === dropKey({ kind: 'shell', id: shell.id }) || undefined}
       data-state={stopped > 0 ? 'stopped-by-restart' : live === 0 ? 'done' : 'idle'}
-      title={clickOpens === 'window' ? 'Double-click to open its terminal window' : 'Double-click to expand it here'}
-      onDoubleClick={() => (clickOpens === 'window' ? openShell(shell) : expand(id))}
+      title={clickOpens !== 'expand' ? 'Double-click to open its terminal window' : 'Double-click to expand it here'}
+      onDoubleClick={() => (clickOpens !== 'expand' ? openShell(shell) : expand(id))}
     >
       <div className="hybrid-tile-head">
         <HarnessMark className="hybrid-tile-icon" harness="shell" />
@@ -552,7 +583,7 @@ function ContinueButton({ onContinue }: { onContinue(): Promise<void> }) {
 
 /** A paused tile's line, who paused it and how long ago, kept current while it shows. */
 function PausedLine({ hibernated }: { hibernated: NonNullable<Agent['hibernated']> }) {
-  const { who, when } = pausedLine(hibernated, useNow(true));
+  const { who, when } = pausedLine(hibernated, useNowForSince(hibernated.at));
   return (
     <span className="hybrid-tile-byline hybrid-tile-paused" data-testid="tile-paused" data-yields="" title={`${who}, ${new Date(hibernated.at).toLocaleString()}`}>
       <Pause aria-hidden />

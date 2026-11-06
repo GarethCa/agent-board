@@ -1,14 +1,19 @@
 // What an agent tile's footer shows, and what folds into its "+N" (the TileCompact mock). Pure, so the rules are
 // unit-tested; HybridTile draws it.
-import type { Agent, AgentRole, AgentSchedule, LinkedIssue, PullRequest } from '@agent-board/daemon/protocol';
-import { modelLabel, roleText } from './AgentSetup';
+import type { Agent, AgentRole, AgentSchedule, LinkedIssue, PullRequest, TakenJob } from '@agent-board/daemon/protocol';
+import type { Effort, EffortPending } from '@agent-board/daemon/protocol';
+import { EFFORT_LABELS, modelLabel, roleText } from './AgentSetup';
 
 export type TileBadge =
   /** The model it was started with, when not its harness's default. */
   | { kind: 'model'; model: string }
+  /** Its reasoning effort (null for its harness's own), when set, or one it has yet to take (`pending`). */
+  | { kind: 'effort'; effort: Effort | null; pending: EffortPending | null }
   /** The role it was started in, when it has one, and a custom role's name. */
   | { kind: 'role'; role: AgentRole; name: string | null }
   | { kind: 'issue'; issue: LinkedIssue }
+  /** A job it holds from a queue, as a ticket: it never folds, as it is what the agent is doing. */
+  | { kind: 'job'; taken: TakenJob }
   /** It says its work is finished (`Agent.workFinishedAt`): it handed off, or set its status done. */
   | { kind: 'finished'; at: string }
   /** A pull request of its own branch, or, `pushed`, of a branch it pushed to: shown, never acted on from it. */
@@ -29,17 +34,20 @@ export interface TileFooter {
 const MAX_PULL_REQUEST_CHIPS = 2;
 
 /**
- * The tile's footer: its model and role (none for the default model and no role, so tiles without look as before), its
- * linked issue, its first pull requests (its own branch's, else those of the branches it pushed to), its schedule, a mute's bell and its shells chip (when it
+ * The tile's footer: its model, reasoning effort and role (none for the defaults and no role, so tiles without look as before), its
+ * linked issue, the jobs it holds from queues as tickets, its first pull requests (its own branch's, else those of the branches it pushed to), its schedule, a mute's bell and its shells chip (when it
  * has `shells`) as badges, and the pull requests past those folded into a "+N", so the tile's head keeps its name
  * readable however much there is. A notice is no badge (the TileCompact mock folds it): it says why the agent stopped,
  * so the tile's body shows it.
  */
-export function tileFooter(agent: Agent, shells = 0): TileFooter {
+export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] = []): TileFooter {
   const shown: TileBadge[] = [];
   if (agent.model !== null) shown.push({ kind: 'model', model: agent.model });
+  if (agent.effort !== null || agent.effortPending !== null) shown.push({ kind: 'effort', effort: agent.effort, pending: agent.effortPending });
   if (agent.role !== null) shown.push({ kind: 'role', role: agent.role, name: agent.roleName });
   if (agent.issue !== null) shown.push({ kind: 'issue', issue: agent.issue });
+  // The first job it holds rides on it as a ticket; any more fold into the "+N".
+  if (jobs[0] !== undefined) shown.push({ kind: 'job', taken: jobs[0] });
   // Until its session's first hook, nothing else can apply: no work to finish, branch to put up, schedule to run or shell to open.
   if (isStarting(agent)) return { shown, folded: [] };
   if (agent.workFinishedAt !== null) shown.push({ kind: 'finished', at: agent.workFinishedAt });
@@ -49,7 +57,7 @@ export function tileFooter(agent: Agent, shells = 0): TileFooter {
   if (agent.muted) shown.push({ kind: 'muted' });
   if (shells > 0) shown.push({ kind: 'shells' });
 
-  const folded = pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((badge) => badgeLine(badge, shells));
+  const folded = [...jobs.slice(1).map((taken) => badgeLine({ kind: 'job', taken }, shells)), ...pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((badge) => badgeLine(badge, shells))];
   return { shown, folded };
 }
 
@@ -71,10 +79,10 @@ export const FOOTER_LINES = 1;
 
 /**
  * The order the footer's badges fold into the "+N" when they don't fit in its line (the mock leaves it open): the
- * shells chip, the schedule, the role before the model, the mute's bell, then pull requests, the later first. The issue
+ * shells chip, the schedule, the role before the reasoning effort before the model, the mute's bell, then pull requests, the later first. The issue
  * never folds: it is what the tile is for, and it is short. Nor does finished: it is what a lead looks for.
  */
-const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'model', 'muted', 'pr'];
+const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'effort', 'model', 'muted', 'pr'];
 
 /** The indexes in `shown` of the badges that can fold, in the order they do. */
 export function foldRanking(shown: TileBadge[]): number[] {
@@ -90,10 +98,14 @@ export function badgeLine(badge: TileBadge, shells: number): string {
   switch (badge.kind) {
     case 'model':
       return `Model: ${modelLabel(badge.model)}`;
+    case 'effort':
+      return `Reasoning: ${badge.effort === null ? 'Default' : EFFORT_LABELS[badge.effort]}${badge.pending === null ? '' : badge.pending === 'after-turn' ? ', after this turn' : ', on restart'}`;
     case 'role':
       return `Role: ${roleText(badge.role, badge.name)}`;
     case 'issue':
       return `${badge.issue.id} ${badge.issue.title}`;
+    case 'job':
+      return `Its job from “${badge.taken.queueTitle}”: ${badge.taken.job.text}`;
     case 'finished':
       return 'Says its work is finished';
     case 'pr':

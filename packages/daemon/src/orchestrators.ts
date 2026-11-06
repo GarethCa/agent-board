@@ -14,7 +14,7 @@ import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
 import { createReplyPaths } from './reply-paths.ts';
-import { invalidParams, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, oneOf, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   CREW_EVENT_KINDS,
@@ -40,6 +40,7 @@ import {
   type DaemonEvent,
   type DaemonMethod,
   type DaemonMethods,
+  type Effort,
   type Harness,
   type OrchestrateScope,
   type OrchestratorAction,
@@ -56,7 +57,19 @@ import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 /** The orchestrator methods but the layout commands, which `orchestrator-layout.ts` handles. */
 type OrchestratorMethods = Omit<
   Pick<DaemonMethods, Extract<keyof DaemonMethods, `orchestrator.${string}`>>,
-  keyof LayoutMethods | 'orchestrator.roles' | 'orchestrator.setRole' | 'orchestrator.removeRole' | 'orchestrator.addClock' | 'orchestrator.removeClock'
+  | keyof LayoutMethods
+  | 'orchestrator.roles'
+  | 'orchestrator.setRole'
+  | 'orchestrator.removeRole'
+  | 'orchestrator.addClock'
+  | 'orchestrator.removeClock'
+  | 'orchestrator.prefabs'
+  | 'orchestrator.savePrefab'
+  | 'orchestrator.removePrefab'
+  | 'orchestrator.startPrefab'
+  | 'orchestrator.crews'
+  | 'orchestrator.stopCrew'
+  | 'orchestrator.crewRound'
 >;
 
 /** The terminal an orchestrator's agent starts in, before any client attaches and resizes it. */
@@ -103,6 +116,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.addZone': 'add-zone',
   'orchestrator.changeZone': 'change-zone',
   'orchestrator.removeZone': 'remove-zone',
+  'orchestrator.zoneLayout': 'zone-layout',
   'orchestrator.addNote': 'add-note',
   'orchestrator.editNote': 'edit-note',
   'orchestrator.removeNote': 'remove-note',
@@ -117,6 +131,11 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.removeClock': 'remove-clock',
   'orchestrator.setRole': 'set-role',
   'orchestrator.removeRole': 'remove-role',
+  'orchestrator.savePrefab': 'save-prefab',
+  'orchestrator.removePrefab': 'remove-prefab',
+  'orchestrator.startPrefab': 'spawn',
+  'orchestrator.stopCrew': 'stop-crew',
+  'orchestrator.crewRound': 'crew-round',
 };
 
 /**
@@ -244,6 +263,8 @@ export interface OrchestratorHost {
   refused(sessionId: string, method: DaemonMethod, params: unknown, reason: string): void;
   /** Hears an agent's own pull requests read (`PullRequestWatcherOptions.onRead`): a new open one is a crew event. */
   onPullRequestsRead(sessionId: string, own: readonly PullRequest[], first: boolean): void;
+  /** Logs a running crew's news as an event of its builder (`CrewEventLog.crewNews`), which moves waits on. */
+  crewNews(sessionId: string, kind: 'round' | 'crew-stopped', detail: string): void;
   /** Hears every event the daemon broadcasts: agents' updates move waits on. */
   onEvent(event: DaemonEvent): void;
   handlers<Context extends BoardConnection>(): RpcHandlers<OrchestratorMethods, Context>;
@@ -386,11 +407,13 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
   };
 
   /**
-   * A reviewer started on a branch is joined to the one agent that owns the branch, both ways, as manual edges (never
-   * to the orchestrator that started it): the findings back, and the next round. Another agent in scope, none, or
-   * several owning the branch, leaves it unlinked, and an edge already there is kept as it is.
+   * Only when asked (`--edges`), a reviewer started on a branch is joined to the one agent that owns the branch, both
+   * ways (never to the orchestrator that started it): the findings back, and the next round. They talk through `send`
+   * by default, with no edge for the user to press. Another agent in scope, none, or several owning the branch,
+   * leaves it unlinked, and an edge already there is kept as it is.
    */
-  const linkReviewer = (me: Orchestrator, reviewer: Agent) => {
+  const linkReviewer = (me: Orchestrator, reviewer: Agent, edges: 'auto' | 'manual' | undefined) => {
+    if (edges === undefined) return;
     if (reviewer.reviews === null) return;
     const owner = reviewedAgent(agents.list(), reviewer);
     if (owner === undefined || owner.sessionId === me.agent?.sessionId) return;
@@ -402,9 +425,9 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     }
     // The reviewer is running by now: failing to join it must not fail its start.
     try {
-      for (const [from, to] of [[reviewer, owner], [owner, reviewer]] as const) {
-        options.flowEdges.link(from.sessionId, to.sessionId, me.agent?.sessionId);
-      }
+      // `auto` hands findings back by itself; the way back stays manual, since two auto edges in a loop re-trigger each other.
+      options.flowEdges.link(reviewer.sessionId, owner.sessionId, me.agent?.sessionId, edges);
+      options.flowEdges.link(owner.sessionId, reviewer.sessionId, me.agent?.sessionId, 'manual');
     } catch (error) {
       options.log(`could not link reviewer ${reviewer.name} to ${owner.name}: ${(error as Error).message}`);
     }
@@ -666,6 +689,11 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
       record({ sessionId: caller.tileId, name: caller.name }, action, { detail: askedText(params) }, reason);
     },
 
+    crewNews(sessionId, kind, detail) {
+      crewEvents.crewNews(sessionId, kind, detail);
+      notifyWaiters();
+    },
+
     onPullRequestsRead(sessionId, own, first) {
       crewEvents.pullRequestsRead(sessionId, own, first);
       notifyWaiters();
@@ -722,6 +750,8 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (repo !== undefined && !isAbsolute(repo)) throw invalidParams(`repo path must be absolute, got ${repo}`);
             if (repo !== undefined && zone.repoRoot !== null) throw invalidParams(`${zone.name} is bound to its own repo: its agents work there`);
             const baseBranch = optionalStringParam(p, 'baseBranch');
+            const edgesParam = p.edges === undefined ? undefined : oneOf(p, 'edges', ['auto', 'manual'] as const);
+            if (edgesParam !== undefined && baseBranch === undefined) throw invalidParams('--edges joins a reviewer to the agent whose branch it reviews: give --base');
             const repoRoot = repo ?? zone.repoRoot ?? zone.defaultRepo;
             if (baseBranch !== undefined) {
               if (repoRoot === null) throw invalidParams(`${zone.name} has no repo to cut a branch from`);
@@ -733,8 +763,10 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
                 zoneId,
                 harness: harness as Harness,
                 model: optionalStringParam(p, 'model'),
+                effort: optionalStringParam(p, 'effort') as Effort | undefined,
                 role: optionalStringParam(p, 'role'),
                 noTemplate: optionalBooleanParam(p, 'noTemplate'),
+                template: optionalStringParam(p, 'template'),
                 name: optionalStringParam(p, 'name'),
                 ...(repo === undefined ? {} : { repo: { path: repo } }),
                 branch: optionalStringParam(p, 'branch'),
@@ -749,7 +781,7 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             );
             if (agent.description !== '') awaitingTurn.add(agent.sessionId);
             entry.on = agentTarget(agent);
-            linkReviewer(me, agent);
+            linkReviewer(me, agent, edgesParam);
             return { ...agent, template: used.template };
           });
         },

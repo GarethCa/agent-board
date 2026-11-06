@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPermissionHolds, permissionReply, stateWithPrompts } from '../src/permissions.ts';
+import { createPermissionHolds, permissionReply, promptCounts, questionsOf, stateWithPrompts } from '../src/permissions.ts';
+import { needsYouKind, type Agent } from '../src/protocol.ts';
 
 const BASH = { tool_name: 'Bash', tool_input: { command: 'rm -rf dist' } };
 const request = (fields: Record<string, unknown> = {}) => ({ hook_event_name: 'PermissionRequest', ...BASH, ...fields });
@@ -49,6 +50,7 @@ describe('permission holds', () => {
       heldUntil: new Date(T0.getTime() + HOLD_MS).toISOString(),
       asksInTerminal: false,
       sessionGrant: null,
+      questions: null,
     });
     expect(await settled(reply)).toBeUndefined();
 
@@ -300,7 +302,84 @@ describe('permission holds', () => {
   });
 });
 
+const QUESTIONS = [
+  {
+    question: 'Which cache should the build use?',
+    header: 'Cache',
+    options: [
+      { label: 'Redis', description: 'Shared across machines' },
+      { label: 'In memory', description: 'Per process' },
+    ],
+    multiSelect: false,
+  },
+];
+const askQuestion = (fields: Record<string, unknown> = {}) => request({ tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS }, ...fields });
+
+describe("Claude's question tool", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('lists its call as questions, not a permission, and never holds it: its own dialog takes the answers', async () => {
+    const { permissions } = holds();
+    const reply = permissions.hold('s1', askQuestion(), open(), true);
+
+    expect(await settled(reply)).toEqual({ value: undefined });
+    const [prompt] = permissions.prompts('s1');
+    expect(prompt).toMatchObject({ toolName: 'AskUserQuestion', heldUntil: null, sessionGrant: null, questions: QUESTIONS });
+    expect(promptCounts(permissions.prompts('s1'))).toEqual({ pending: 0, questions: 1 });
+  });
+
+  it('can be neither allowed nor denied from the board', async () => {
+    const { permissions } = holds();
+    void permissions.hold('s1', askQuestion(), open(), true);
+    const [prompt] = permissions.prompts('s1');
+
+    expect(permissions.decide('s1', prompt!.id, { behavior: 'allow' })).toBe(false);
+    expect(permissions.decide('s1', prompt!.id, { behavior: 'deny' })).toBe(false);
+    expect(permissions.release('s1', prompt!.id)).toBe(false);
+    expect(permissions.prompts('s1')).toHaveLength(1);
+  });
+
+  it('is settled by its call running, whatever its input comes back with (its answers added), but not by another tool or asker', () => {
+    const { permissions } = holds();
+    void permissions.hold('s1', askQuestion(), open(), true);
+    const answered = { questions: [{ ...QUESTIONS[0], extra: true }], answers: { 'Which cache should the build use?': 'Redis' } };
+
+    expect(permissions.afterHook('s1', hook('PostToolUse', { ...BASH }))).toBe(false);
+    expect(permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: answered, ...inSubagent('a1') }))).toBe(false);
+    expect(permissions.afterHook('s1', hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: answered }))).toBe(true);
+    expect(permissions.prompts('s1')).toEqual([]);
+  });
+
+  it('keeps the questions it can read and drops malformed ones', () => {
+    expect(questionsOf({ tool_name: 'Bash', tool_input: { questions: QUESTIONS } })).toBeNull();
+    expect(questionsOf({ tool_name: 'AskUserQuestion', tool_input: {} })).toEqual([]);
+    expect(questionsOf({ tool_name: 'AskUserQuestion', tool_input: { questions: [null, { question: '' }, { question: 'Go?', options: [{ label: 'Yes' }, { nope: 1 }] }] } })).toEqual([
+      { question: 'Go?', header: '', options: [{ label: 'Yes', description: '' }], multiSelect: false },
+    ]);
+  });
+
+  it('puts the agent in Needs you as asking, not as asking for permission', () => {
+    const prompt = { id: 'q', toolName: 'AskUserQuestion', toolInput: { questions: QUESTIONS }, subagent: null, requestedAt: T0.toISOString(), heldUntil: null, asksInTerminal: true, sessionGrant: null, questions: QUESTIONS };
+    const agent: Pick<Agent, 'endedAt' | 'state' | 'permissions' | 'ask' | 'plan' | 'stepsWait' | 'flag' | 'ledBy'> = { endedAt: null, state: 'waiting', permissions: [prompt], ask: null, plan: null, stepsWait: null, flag: null, ledBy: null };
+
+    expect(needsYouKind(agent, 'explicit')).toBe('asks');
+    expect(needsYouKind({ ...agent, permissions: [prompt, { ...prompt, id: 'p', toolName: 'Bash', questions: null }] }, 'explicit')).toBe('permission');
+  });
+});
+
 describe("an agent's state with its permission prompts", () => {
+  it('waits for the user, not for a permission, while only questions are up', () => {
+    for (const state of ['running', 'thinking', 'needs-permission'] as const) {
+      expect(stateWithPrompts(state, { pending: 0, questions: 1, settled: false }), state).toBe('waiting');
+    }
+    expect(stateWithPrompts('running', { pending: 1, questions: 1, settled: false })).toBe('needs-permission');
+    expect(stateWithPrompts('done', { pending: 0, questions: 1, settled: false })).toBe('done');
+  });
+
   it('needs permission while any prompt is pending, whatever else its hooks say', () => {
     for (const state of ['running', 'thinking', 'idle', 'waiting', 'needs-permission'] as const) {
       expect(stateWithPrompts(state, { pending: 1, settled: false }), state).toBe('needs-permission');

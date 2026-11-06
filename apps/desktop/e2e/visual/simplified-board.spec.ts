@@ -408,6 +408,12 @@ const SIMPLIFIED_PACKS = [
   { theme: 'gruvbox-dark', scheme: 'dark' },
 ] as const;
 
+// Rosé Pine Dawn's desk is nearly its note's colour at the app's usual paper fill, so its notes take a deeper one.
+test('agent notes in the Simplified design over a theme pack whose desk is close to the paper fill, rose-pine-dawn', async () => {
+  needsBaselines('simplified-agent-notes-rose-pine-dawn');
+  await shootSimplifiedNotes('rose-pine-dawn', 'light', 'simplified-agent-notes-rose-pine-dawn');
+});
+
 // The Simplified design over a theme pack: its shapes, type and shadows in the pack's colours.
 for (const { theme, scheme } of SIMPLIFIED_PACKS) {
   const appearance = { AGENT_BOARD_APPEARANCE: theme };

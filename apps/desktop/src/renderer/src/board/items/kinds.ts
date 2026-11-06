@@ -5,6 +5,9 @@ import {
   CLOCK_SIZE,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
+  STEPS_CARD_SIZE,
+  MEMORY_CARD_SIZE,
+  QUEUE_CARD_SIZE,
   STICKY_COLORS,
   STICKY_SIZE,
   type BoardItemKind,
@@ -22,7 +25,12 @@ import { PlanNode } from './PlanNode';
 import { ImageNode, imageData } from './ImageNode';
 import { ISSUE_CARD_SIZE, IssueNode } from './IssueNode';
 import { LINK_CARD_SIZE, LinkNode } from './LinkNode';
+import { newMemoryData } from './memory-card';
+import { MemoryNode } from './MemoryNode';
+import { newQueueData } from './queue-card';
+import { QueueNode } from './QueueNode';
 import { ShapeNode, SHAPE_SIZE } from './ShapeNode';
+import { newStepsData, StepsNode } from './StepsNode';
 import { newStickyData, StickyNode, stickyData } from './StickyNode';
 import { filledIn, inSlot, newShapeData, newTextData, shapeData, textData } from './text-style';
 import { TextNode } from './TextNode';
@@ -35,8 +43,11 @@ export interface ItemKind {
   node: ComponentType<NodeProps<ItemNodeType>>;
   /** A new item's size. */
   size: { width: number; height: number };
-  /** A new item's data, for a kind the user makes empty. Other kinds are made from what is pasted. */
-  newData?(): Record<string, unknown>;
+  /**
+   * A new item's data, for a kind the user makes empty, given the name of the zone it lands in. Other kinds are made
+   * from what is pasted.
+   */
+  newData?(where: { zoneName?: string }): Record<string, unknown>;
   /** Whether a new one opens ready to type into. */
   editOnCreate: boolean;
   /** The item's colour on the minimap, from its data. */
@@ -158,6 +169,33 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     newData: () => ({ ...clockData({}) }),
     editOnCreate: false,
     minimapColor: () => 'var(--accent)',
+  },
+  // An agent's (`steps new`), or the user's from the board's menu or K, typed in as it is made.
+  steps: {
+    label: 'steps card',
+    node: StepsNode,
+    size: STEPS_CARD_SIZE,
+    newData: () => ({ ...newStepsData() }),
+    editOnCreate: true,
+    minimapColor: () => 'var(--steps)',
+  },
+  // Made from the board's menu (or M), named after its zone, or by an agent's `memory new`.
+  memory: {
+    label: 'memory',
+    node: MemoryNode,
+    size: MEMORY_CARD_SIZE,
+    newData: ({ zoneName }) => ({ ...newMemoryData(zoneName) }),
+    editOnCreate: true,
+    minimapColor: () => 'var(--raised)',
+  },
+  // Made from the board's menu (or Q), for agents and named after its zone, or by an agent's `queue new`.
+  queue: {
+    label: 'queue',
+    node: QueueNode,
+    size: QUEUE_CARD_SIZE,
+    newData: ({ zoneName }) => ({ ...newQueueData(zoneName) }),
+    editOnCreate: true,
+    minimapColor: () => 'var(--raised)',
   },
 };
 

@@ -4,6 +4,8 @@ import {
   APPEARANCE_IPC,
   DESIGN_IPC,
   TECHNICAL_IPC,
+  DOCK_IPC,
+  MINIMISED_IPC,
   CAPTURE_IPC,
   CAPTURE_READS,
   CONNECTOR_IPC,
@@ -36,9 +38,11 @@ import {
 } from './api';
 import { appearanceFromQuery } from '../shared/appearance';
 import { designFrom } from '../shared/design';
+import { dockFrom } from '../shared/dock';
 import { technicalFromQuery } from '../shared/technical';
 import { ipcErrorMessage } from '../shared/errors';
 import { captureFrameFrom } from '../shared/capture';
+import { ACCEPT_AFTER_MS } from '../shared/accept';
 import { ipcCalls, readOnlyIpc } from './ipc';
 
 // A capture window only reads the board (shared/capture.ts).
@@ -129,6 +133,14 @@ const api: AgentBoardApi = {
     clocks: () => invoke(ITEM_IPC.clocks),
     addClock: (data, place) => invoke(ITEM_IPC.addClock, data, place),
     onClockChanged: (listener) => subscribe(ITEM_IPC.clockChanged, listener),
+    readMemory: (id, search) => invoke(ITEM_IPC.readMemory, id, search),
+    changeMemory: (id, change) => invoke(ITEM_IPC.changeMemory, id, change),
+    memoryHistory: (id, entry) => invoke(ITEM_IPC.memoryHistory, id, entry),
+    readQueue: (id) => invoke(ITEM_IPC.readQueue, id),
+    changeQueue: (id, change) => invoke(ITEM_IPC.changeQueue, id, change),
+    queueHistory: (id, job) => invoke(ITEM_IPC.queueHistory, id, job),
+    handJob: (id, job, sessionId, text) => invoke(ITEM_IPC.handJob, id, job, sessionId, text),
+    takenJobs: () => invoke(ITEM_IPC.takenJobs),
   },
   connectors: {
     list: () => invoke(CONNECTOR_IPC.list),
@@ -178,8 +190,9 @@ const api: AgentBoardApi = {
     onChanged: (listener) => subscribe(GATE_IPC.changed, listener),
   },
   asks: {
-    answer: (sessionId, askId, answer) => invoke(ASK_IPC.answer, sessionId, askId, answer),
-    place: (sessionId, askId, at) => invoke(ASK_IPC.place, sessionId, askId, at),
+    answer: (sessionId, askId, answer, index) => invoke(ASK_IPC.answer, sessionId, askId, answer, index),
+    sendAsk: (sessionId, askId) => invoke(ASK_IPC.sendAsk, sessionId, askId),
+    askToCard: (sessionId, askId) => invoke(ASK_IPC.askToCard, sessionId, askId),
     plans: (sessionId) => invoke(ASK_IPC.plans, sessionId),
     decide: (sessionId, planId, outcome, comments) => invoke(ASK_IPC.decide, sessionId, planId, outcome, comments),
     editPlan: (sessionId, planId, body) => invoke(ASK_IPC.editPlan, sessionId, planId, body),
@@ -189,6 +202,9 @@ const api: AgentBoardApi = {
     readDoc: (documentId) => invoke(ASK_IPC.readDoc, documentId),
     saveDoc: (documentId, text, baseVersion, force) => invoke(ASK_IPC.saveDoc, documentId, text, baseVersion, force),
     commentDoc: (documentId, text) => invoke(ASK_IPC.commentDoc, documentId, text),
+    answerStep: (id, stepId, answer) => invoke(ASK_IPC.answerStep, id, stepId, answer),
+    tickStep: (id, stepId, done) => invoke(ASK_IPC.tickStep, id, stepId, done),
+    sendSteps: (id) => invoke(ASK_IPC.sendSteps, id),
   },
   webTabs: {
     open(tabId, url, { onState, onKey }, options) {
@@ -231,6 +247,10 @@ const api: AgentBoardApi = {
     onLogged: (listener) => subscribe(ORCHESTRATOR_IPC.logged, listener),
     usage: () => invoke(ORCHESTRATOR_IPC.usage),
     onUsage: (listener) => subscribe(ORCHESTRATOR_IPC.usageChanged, listener),
+    prefabs: () => invoke(ORCHESTRATOR_IPC.prefabs),
+    savePrefab: (prefab, replaces) => invoke(ORCHESTRATOR_IPC.savePrefab, prefab, replaces),
+    removePrefab: (name) => invoke(ORCHESTRATOR_IPC.removePrefab, name),
+    checkPrefab: (prefab) => invoke(ORCHESTRATOR_IPC.checkPrefab, prefab),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),
@@ -267,6 +287,7 @@ const api: AgentBoardApi = {
     setSchedule: (sessionId, schedule) => invoke(AGENT_IPC.setSchedule, sessionId, schedule),
     markSeen: (sessionId) => invoke(AGENT_IPC.markSeen, sessionId),
     setMuted: (sessionId, muted) => invoke(AGENT_IPC.setMuted, sessionId, muted),
+    setEffort: (sessionId, effort) => invoke(AGENT_IPC.setEffort, sessionId, effort),
     setRecordDeleted: (sessionId, kind, key, deleted) => invoke(AGENT_IPC.setRecordDeleted, sessionId, kind, key, deleted),
     readDoc: (sessionId, path) => invoke(AGENT_IPC.readDoc, sessionId, path),
     setName: (sessionId, name) => invoke(AGENT_IPC.setName, sessionId, name),
@@ -358,6 +379,16 @@ const api: AgentBoardApi = {
     set: (technical) => invoke(TECHNICAL_IPC.set, technical),
     onChanged: (listener) => subscribe(TECHNICAL_IPC.changed, listener),
   },
+  dock: {
+    initial: dockFrom(new URLSearchParams(location.search).get(WINDOW_QUERY.dock)),
+    get: () => invoke(DOCK_IPC.get),
+    set: (dock) => invoke(DOCK_IPC.set, dock),
+    onChanged: (listener) => subscribe(DOCK_IPC.changed, listener),
+  },
+  minimised: {
+    report: (windows) => ipc.send(MINIMISED_IPC.report, windows),
+    onRestore: (listener) => subscribe(MINIMISED_IPC.restore, listener),
+  },
   setup: {
     check: (tool) => invoke(SETUP_IPC.check, tool),
     testNotification: () => invoke(SETUP_IPC.testNotification),
@@ -395,6 +426,7 @@ const api: AgentBoardApi = {
       return unsubscribe;
     },
     chrome: windowChrome(process.platform),
+    acceptAfterMs: Number(process.env.AGENT_BOARD_ACCEPT_AFTER_MS) || ACCEPT_AFTER_MS,
     isFullScreen: () => invoke(WINDOW_IPC.isFullScreen),
     onFullScreenChanged: (listener) => subscribe(WINDOW_IPC.fullScreen, listener),
   },

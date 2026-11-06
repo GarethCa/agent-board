@@ -3,8 +3,8 @@ import { cpus, loadavg } from 'node:os';
 import { defaultWorkers } from '../../scripts/e2e-lock/workers.ts';
 
 const PERF = /board-perf\.spec\.ts/;
-/** The rendering benchmark, run only by hand: `pnpm bench:render`. */
-const BENCH = /render-bench\.spec\.ts/;
+/** The benchmarks, run only by hand: `pnpm bench:render` and `pnpm bench:agents`. */
+const BENCH = /(render|agents)-bench\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
 const VISUAL = /(^|\/)e2e\/visual\/[^/]+\.spec\.ts$/;
 const README = /readme-screenshots\.spec\.ts/;
@@ -40,7 +40,7 @@ export default defineConfig({
     { name: 'promo', testMatch: PROMO },
     // Frame timings are only meaningful with no other app running, so the benchmark waits for the rest.
     { name: 'perf', testMatch: PERF, dependencies: ['app'] },
-    // The rendering benchmark: no gate runs it.
+    // The benchmarks: no gate runs them.
     { name: 'bench', testMatch: BENCH },
     // The .app from `pnpm package`, run on its own by `pnpm test:e2e:packaged` (it needs packaging first).
     { name: 'packaged', testMatch: PACKAGED },

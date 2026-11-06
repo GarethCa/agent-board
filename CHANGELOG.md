@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.6.15 (2026-11-06)
+
+- Steps, part 4b: answering a steps card from Needs you and the agent's window
+- Sidebar, part 2: shelves opening on the agent's own page
+- Crew prefabs, slice 3: the flow editor, with its diagram, inspector and the flow in words
+- After a failed full check, check:pr --recheck reruns only the failures and what the fix touched, reusing the rest
+- Hide the gallery page's scrollbar so full-width gallery shots stop including its thumb
+- Queues, part 4: hand a job to an idle agent, tickets on takers, drain, and the user's queue with Needs-you rows and a focus view
+- The Simplified design uses Classic's colour palette
+- Steps, part 3b: the quick ask on the tile, and Put on the board
+- Claude's question tool shows as its questions in Needs you, never as a permission with only Allow
+- Queues, part 3: the queue card on the board, folding to its ticket icon, with a peek to reorder and finish
+- Crew prefabs, slice 2: the running crew, its loop and round count
+- More board background options: fine and large dots, lines, isometric, paper, vignette, plain
+- Review… opens the terminal; steady the inbox and panel e2e specs
+- A zone can lay out its work in clusters: each ticket's tiles together, what needs you first
+- Memories, part 2: the memory card on the board, folding to its brain icon, with a peek to search and edit
+- Crew prefabs, slice 1: the .crew.json model, one app-wide library, prefab export and import, and new --prefab
+- Steps, part 2: the steps card on the board
+- The Captain's chat follows the app theme, and an agent's chat can be light
+- Sidebar, part 1: agents write their own page from blocks, with curated icons and tones (CLI and MCP)
+- Migration 0072 deletes the events on the reviewer edges it drops, and a guard checks every migration does the same
+- Memories and queues: the model, the CLI and the MCP (no board UI yet)
+- The crew outline holds exactly the orchestrator's crew in its zone, in parts round other tiles
+- Light agent notes stand apart from agent tiles as clearly as in dark
+- Steps, part 1: steps cards in the daemon, with the agent's steps commands
+- Terminals draw with xterm's WebGL renderer, with a DOM fallback, a 12-context budget and a Settings switch
+- Agents take a reasoning effort: at start, from Settings, and changed live between turns
+- The Simplified Needs-you list in sections, with Accept changes and Problems, one row pattern
+- Gates start with a one-second pre-flight on the merged tree and stop early when it or a quick check fails
+- The Captain, and any agent a clock messages, is resumed after a restart
+- Starting a reviewer no longer draws Send edges, and Send says how it went
+- Clear the minimatch denial-of-service alert for tooling that can take minimatch 11
+- A zone can lay out its work on status shelves: To do, Doing, Waiting, Done, with stacks and the lead pinned top-left
+- Pasting an image into an agent's terminal gives the image to the agent
+- A session window's ⋯ menu has Maximise, and a setting can open it maximised
+- Agent notes carry a small robot icon, so they stand apart from people's notes
+- A first message to a Codex agent started with no task is held until Codex is up
+- A Dock setting: show everything, only what you pin, or off
+- Trim fixed test costs: one scene per theme for the chat shots, a start-limit override
+- The board menu opens with only Zones expanded and remembers each section
+- Many-agents perf spike: panes rebuilt on return and every agent change redrawing every tile; benchmark, findings, plan, two measured fixes
+
 ## v0.6.14 (2026-11-04)
 
 - check-pr's new comments use wording the release leak check accepts

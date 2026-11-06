@@ -18,11 +18,15 @@ import { invalidParams } from './params.ts';
 import { ASKING_PERMISSION_HOLD_MS } from './permissions.ts';
 import {
   AGENT_ERROR,
+  effortRefusal,
   MAX_ASK_WAIT_MS,
   MAX_DESCRIPTION_LENGTH,
+  MAX_ROLE_TEMPLATE_LENGTH,
+  MODEL_NAME,
   ORCHESTRATE_SCOPES,
   REVIEWER_ROLES,
   type Agent,
+  type Effort,
   type Harness,
   type LinkedIssue,
   type SpawnAgentParams,
@@ -44,19 +48,14 @@ import {
   freeBranchName,
   freeTypedBranch,
   freeWorktreePath,
-  nameSlug,
   removeWorktree,
 } from './worktrees.ts';
+import { nameSlug } from './work-units.ts';
 import { groupFolder, initProject, resolveZoneFolder, zoneFolder } from './zones.ts';
 
 /** Codex's flag that runs untrusted hooks without review (ADR-0004). */
 export const CODEX_BYPASS_FLAG = '--dangerously-bypass-hook-trust';
 
-/**
- * What a model name may be (`opus`, `claude-opus-5-5[1m]`, `gpt-5-codex`): never an option of the harness's own, nor
- * whitespace, since it is passed as an argument.
- */
-const MODEL_NAME = /^[\w.:@/[\]][\w.:@/[\]-]*$/;
 
 /** Longest default name made from the task. */
 const MAX_DEFAULT_NAME_LENGTH = 40;
@@ -88,6 +87,7 @@ interface AgentSpawnOptions
     | 'boardCliPath'
     | 'env'
     | 'compactWindow'
+    | 'defaultEffort'
     | 'clickableLinks'
     | 'shell'
     | 'shellArgs'
@@ -139,6 +139,8 @@ export interface LaunchSpec {
   harness: Harness;
   /** Its model, or null for the harness's default. */
   model: string | null;
+  /** Its reasoning effort, one its harness takes, or null for the harness's own. */
+  effort: Effort | null;
   /** The setting of the zone it starts from: Codex starts with `--dangerously-bypass-hook-trust`. */
   bypassHookTrust: boolean;
   /** The zone its tile is in, whose setting says whether it gets the board MCP server; null for loose. */
@@ -189,10 +191,10 @@ export function createAgentSpawns(
 } {
   const { db, sessions, getRow, get, rows, getZone, repoZoneFor, announce, watch } = options;
   const insert = db.prepare(
-    `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, role, role_name, name, description,
+    `INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, model, effort, role, role_name, name, description,
        branch, worktree, state, issue_provider, issue_id, issue_title, issue_url, x, y, z, review_of, base_commit,
        owns_worktree, harness_session_id, orchestrate, spawned_by, reviews_branch, reviews_head)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const setPlainFolder = db.prepare('UPDATE agents SET plain_folder = 1 WHERE session_id = ?');
   const selectNames = db.prepare('SELECT name FROM agents');
@@ -245,6 +247,7 @@ export function createAgentSpawns(
           settings,
           ...(boardCli === undefined ? [] : ['--mcp-config', JSON.stringify(claudeMcpConfig(options.boardMcpUrl()))]),
           ...(spec.model === null ? [] : ['--model', spec.model]),
+          ...(spec.effort === null ? [] : ['--effort', spec.effort]),
           ...(spec.readOnly === true ? ['--permission-mode', 'plan'] : []),
         ],
       };
@@ -255,6 +258,7 @@ export function createAgentSpawns(
         zoneBypassHookTrust: spec.bypassHookTrust,
         boardCli,
         model: spec.model ?? undefined,
+        effort: spec.effort ?? undefined,
         cwd,
         worktree,
         resume: spec.resume?.codexSessionId ?? undefined,
@@ -299,9 +303,10 @@ export function createAgentSpawns(
       ...spec.size,
       hookTokenSha256: hashToken(token),
     });
-    // A Claude agent with no task waits for its session too: a message typed while Claude loads sits unsent. (Codex
-    // fires no hook before its first prompt, and its composer is watched only for a task.)
-    if (task !== undefined || harness === 'claude') options.typeFirstPrompt(id, task, harness);
+    // An agent with no task waits for its session too: a message typed while its harness loads (or shows a startup
+    // screen) sits unsent, or answers that screen. Codex fires no hook before its first prompt: its composer drawn says
+    // its session is up.
+    options.typeFirstPrompt(id, task, harness);
     return harness === 'codex' && harnessCommand.args.includes(CODEX_BYPASS_FLAG);
   };
 
@@ -401,6 +406,10 @@ export function createAgentSpawns(
     };
   };
 
+  /** `values` with a crew's round and last review in place of the branch's, for a crew's reviewer. */
+  const crewValues = (values: TemplateValues, crew: SpawnUsed['crewReview']): TemplateValues =>
+    crew === undefined ? values : { ...values, round: String(crew.round), prev_review: crew.previous ?? 'none' };
+
   /** An earlier review of a branch: the copy kept of it, else the file its reviewer, still on the board, left. */
   const previousReview = (review: BranchReviewRow): string | undefined => {
     if (review.review_path !== null) return review.review_path;
@@ -449,7 +458,7 @@ export function createAgentSpawns(
     params: SpawnAgentParams,
     spawnedBy?: string,
     place?: FolderPlace,
-    used?: { template: string | null },
+    used?: SpawnUsed,
   ): { sessionId: string; done: Promise<Agent> } => {
     const { zoneId, harness = 'claude', prompt = '', name, issueId, position } = params;
     const zone = zoneId === null ? undefined : getZone(zoneId);
@@ -459,9 +468,20 @@ export function createAgentSpawns(
     const model = params.model?.trim() || null;
     // Passed to the harness as an argument: never an option of its own.
     if (model !== null && !MODEL_NAME.test(model)) throw invalidParams(`${model} is not a model name`);
+    const notTaken = params.effort === undefined ? undefined : effortRefusal(harness, params.effort);
+    if (notTaken !== undefined) throw invalidParams(notTaken);
     if (params.role !== undefined && typeof params.role !== 'string') throw invalidParams('role must be a string');
     // A built-in role, or a custom one by its name.
     const choice = params.role === undefined ? null : roleChoice(params.role);
+    if (params.template !== undefined && (typeof params.template !== 'string' || choice?.name == null)) {
+      throw invalidParams('only a named role starts with a template of its own: a built-in role starts with its zone’s');
+    }
+    if (params.template !== undefined && params.noTemplate === true) throw invalidParams('give a template or noTemplate, not both');
+    if (params.template !== undefined && params.template.length > MAX_ROLE_TEMPLATE_LENGTH) {
+      throw invalidParams(`a template is at most ${MAX_ROLE_TEMPLATE_LENGTH} characters`);
+    }
+    // Not asked for, it is its role's default from Settings, else every new agent's.
+    const effort = params.effort ?? options.defaultEffort(harness, choice === null ? null : (choice.name ?? choice.role));
     // A reviewer checks out the branch it reviews, detached: it has none of its own.
     const reviewer = choice !== null && REVIEWER_ROLES.includes(choice.role);
     if (reviewer && params.branch !== undefined) {
@@ -494,9 +514,9 @@ export function createAgentSpawns(
     const shownName = name?.trim() || (issueId !== undefined ? issueId : prompt.trim() === '' ? freeAgentName() : defaultName(prompt.trim()));
     // Kept until its agent is made or its tile dismissed, so no other start takes the name meanwhile.
     reservedNames.set(id, shownName);
-    const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, spawnedBy: spawnedBy ?? null };
+    const shown: NewStart = { sessionId: id, zoneId, position: position ?? null, name: shownName, harness, model, effort, spawnedBy: spawnedBy ?? null };
     const run = (progress: StartProgress, allowProjectCodexConfig: boolean) =>
-      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
+      startAgent({ id, shownName, params, spawnedBy, place: at, plain: folder !== undefined, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig }, progress);
     const progress = starts.open(shown, {
       retry: (again, allow) => void run(again, allow).catch(() => {}),
       dismissed: () => reservedNames.delete(id),
@@ -521,10 +541,11 @@ export function createAgentSpawns(
       place: FolderPlace | undefined;
       /** Its place is its group's own folder, outside git. */
       plain: boolean;
-      used: { template: string | null } | undefined;
+      used: SpawnUsed | undefined;
       zone: ZoneRow | undefined;
       harness: Harness;
       model: string | null;
+      effort: Effort | null;
       choice: ReturnType<typeof roleChoice> | null;
       reviewer: boolean;
       /** It works in the repo's own checkout: no worktree is made for it. */
@@ -534,7 +555,7 @@ export function createAgentSpawns(
     },
     progress: StartProgress,
   ): Promise<Agent> => {
-    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
+    const { id, shownName, params, spawnedBy, place, plain, used, zone, harness, model, effort, choice, reviewer, mainCheckout, fromZone, allowProjectCodexConfig } = start;
     const { zoneId, prompt = '', name, issueId, cols, rows } = params;
     const role = choice?.role ?? null;
     // A scope by hand is the user's alone (ADR-0011): an orchestrator's agents, like any, follow their zone's switch.
@@ -625,17 +646,23 @@ export function createAgentSpawns(
       const description =
         prompt.trim() || fromIssue?.issue.description.trim() || task || (reviews === null ? '' : `Reviews ${reviews.branch}`);
       // A role's template comes first, filled in for this agent; then the issue, then what was typed.
+      const templateZone = zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null;
       const template =
         choice === null || params.noTemplate === true
           ? ''
           : fillTemplate(
-              options.roleTemplates.body(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice),
-              templateValues({ repoRoot, branch, worktree, reviews, issue: fromIssue?.issue ?? null }),
+              params.template ?? options.roleTemplates.body(templateZone, repoRoot, choice),
+              crewValues(templateValues({ repoRoot, branch, worktree, reviews, issue: fromIssue?.issue ?? null }), used?.crewReview),
             ).trim();
       // A named role's template may be an orchestrator's: checked as its text, filled in, whoever starts the agent.
       if (choice?.name != null) checkNamedTemplate(choice.name, template);
       if (used !== undefined) {
-        used.template = template === '' ? null : options.roleTemplates.describe(zoneId ?? repoZoneFor(null, repoRoot)?.id ?? null, repoRoot, choice!);
+        used.template =
+          template === ''
+            ? null
+            : params.template !== undefined
+              ? `the crew prefab's ${choice!.name} template`
+              : options.roleTemplates.describe(templateZone, repoRoot, choice!);
       }
       const firstMessage = [template, task].filter(Boolean).join('\n\n');
       // A zone-less agent takes the bypass setting of its repo's zone, else the default (on).
@@ -652,6 +679,7 @@ export function createAgentSpawns(
         id,
         harness,
         model,
+        effort,
         bypassHookTrust: bypassHookTrust === 1,
         zoneId: tile.zoneId,
         cwd,
@@ -671,6 +699,7 @@ export function createAgentSpawns(
         repoRoot,
         bypassHookTrust,
         model,
+        effort,
         role,
         choice?.name ?? null,
         tile.name,
@@ -761,6 +790,8 @@ export function createAgentSpawns(
         return { branch, worktree };
       });
       const loose = implementer.zone_id === null && implementer.x !== null && implementer.y !== null;
+      // A reviewer's effort is its role's default, not the implementer's.
+      const effort = options.defaultEffort(implementer.harness, 'reviewer');
       const id = randomUUID();
       // The folder of its worktree the implementer works in, a folder zone's.
       const cwd = join(worktree, relative(implementer.worktree, implementer.cwd));
@@ -770,6 +801,7 @@ export function createAgentSpawns(
           id,
           harness: implementer.harness,
           model: implementer.model,
+          effort,
           bypassHookTrust: implementer.codex_bypass_hook_trust === 1,
           zoneId: implementer.zone_id,
           cwd,
@@ -788,6 +820,7 @@ export function createAgentSpawns(
         repoRoot,
         implementer.codex_bypass_hook_trust,
         implementer.model,
+        effort,
         'reviewer',
         null,
         name,
@@ -855,6 +888,7 @@ export function createAgentSpawns(
           id: sessionId,
           harness,
           model: null,
+          effort: null,
           bypassHookTrust: bypassHookTrust === 1,
           zoneId,
           cwd: at.cwd,
@@ -872,6 +906,7 @@ export function createAgentSpawns(
         zoneId,
         at.repoRoot,
         bypassHookTrust,
+        null,
         null,
         null,
         null,
@@ -1035,6 +1070,8 @@ export interface CodexLaunchOptions {
   resume?: string;
   /** Its model (`-m`); Codex's default without. */
   model?: string;
+  /** Its reasoning effort (`model_reasoning_effort`), one Codex takes; Codex's own without. */
+  effort?: Effort;
   /** In Codex's read-only sandbox (`-s read-only`). */
   readOnly?: boolean;
 }
@@ -1079,6 +1116,7 @@ export function codexLaunch(options: CodexLaunchOptions): HarnessLaunch & { proj
   const projectConfig = projectCodexConfig(options.cwd, options.worktree);
   if (options.zoneBypassHookTrust && projectConfig === undefined) args.push(CODEX_BYPASS_FLAG);
   if (options.model !== undefined) args.push('-m', options.model);
+  if (options.effort !== undefined) args.push('-c', `model_reasoning_effort=${JSON.stringify(options.effort)}`);
   if (options.readOnly === true) args.push('-s', 'read-only');
   return projectConfig === undefined ? { command: options.command, args } : { command: options.command, args, projectConfig };
 }
@@ -1134,6 +1172,16 @@ function wrapInvalid(error: Error): never {
 }
 
 /** The review a reviewer left in its worktree: the newest `.agent-board/review*.md`, or undefined for none. */
+/**
+ * What a spawn reports back, the template it used, and, for a running crew's reviewer, what the crew gives it: the
+ * crew's round and this member's last review, which its template's `{{round}}` and `{{prev_review}}` are filled with in
+ * place of the branch's own count of reviews (a crew with two reviewers starts two a round).
+ */
+export interface SpawnUsed {
+  template: string | null;
+  crewReview?: { round: number; previous: string | null };
+}
+
 export function reviewFile(worktree: string): string | undefined {
   const dir = join(worktree, '.agent-board');
   try {

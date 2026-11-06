@@ -7,7 +7,7 @@ const shown = (hits: readonly SettingsHit[]) =>
 
 describe('searchSettings', () => {
   it('finds a section by its name, with every control in it', () => {
-    expect(shown(searchSettings('appearance', { simplified: false }))).toEqual(['General › Appearance: Mode, Theme']);
+    expect(shown(searchSettings('appearance', { simplified: false }))).toEqual(['General › Appearance: Mode, Theme, Board background']);
   });
 
   it('finds controls by their labels across groups, in the order the sidebar lists them', () => {
@@ -21,6 +21,7 @@ describe('searchSettings', () => {
     expect(shown(searchSettings('spacing', { simplified: false }))).toEqual(['Board › Tidying: Arrange spacing']);
     expect(shown(searchSettings('hooks', { simplified: false }))).toEqual(['Accounts › Other terminals: Other terminals']);
     expect(shown(searchSettings('dark', { simplified: false }))).toEqual(['General › Appearance: Mode']);
+    for (const word of ['maximise', 'maximised', 'maximize']) expect(shown(searchSettings(word, { simplified: false }))).toEqual(['Board › Opening tiles: Double-clicking a tile opens']);
   });
 
   it('ignores case, accents and the space around the words', () => {

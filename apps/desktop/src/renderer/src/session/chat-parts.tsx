@@ -208,6 +208,11 @@ export function liveLine(live: LiveState): LiveLine {
   const since = (at: string | undefined) => (at === undefined || msBetween(at, at) === undefined ? {} : { since: at });
   switch (live.kind) {
     case 'permission': {
+      // Claude's question tool's call asks questions: it reads as them, answered in the terminal, never as an allow.
+      if (live.prompt.questions !== null) {
+        const [first] = live.prompt.questions;
+        return { tone: 'wait', Icon: MessageCircleQuestion, label: first?.question ?? 'Asks you questions', detail: toolSummary(live.prompt), going: false };
+      }
       const asker = live.prompt.subagent ? `Its ${live.prompt.subagent.type} subagent: allow ${live.prompt.toolName}?` : `Allow ${live.prompt.toolName}?`;
       return { tone: 'wait', Icon: Pause, label: asker, detail: toolSummary(live.prompt), going: false };
     }

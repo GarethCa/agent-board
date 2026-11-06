@@ -1,15 +1,15 @@
-// What the Simplified design's inspector says of an agent (SimplifiedInspector.tsx): its status line, its pull
-// requests, and what its "More details" fold holds. The records are the details strip's (sidebar-records.ts).
+// What an agent's sidebar (SimplifiedInspector.tsx) says of an agent: who started it, and its pull requests as Made
+// lists them for now. The records are the details strip's (sidebar-records.ts).
 
 import type { Agent, PullRequest } from '@agent-board/daemon/protocol';
 import { checksLabel } from '../board/tile-footer';
 import { storedValue } from '../stored-value';
-import { crewSection, docSection, documentSection, pinSection, pullRequestSection, subagentSection } from './sidebar-records';
+import { pullRequestSection } from './sidebar-records';
 
 /** Whether the inspector is shown, one choice for every agent window: hidden until it is first shown. */
 export const inspectorShown = storedValue('agent-board.inspector-shown');
 
-/** Who started it, as its status line says: "you", "the Captain", the orchestrator's name, or "an agent" not listed. */
+/** Who started it, as the page's Now says: "you", "the Captain", the orchestrator's name, or "an agent" not listed. */
 export function startedBy(agent: Pick<Agent, 'spawnedBy'>, agents: readonly Pick<Agent, 'sessionId' | 'name' | 'master'>[]): string {
   if (agent.spawnedBy === null) return 'you';
   const by = agents.find((each) => each.sessionId === agent.spawnedBy);
@@ -17,12 +17,12 @@ export function startedBy(agent: Pick<Agent, 'spawnedBy'>, agents: readonly Pick
   return by.master ? 'the Captain' : by.name;
 }
 
-/** The line under its status: what the status word leaves out, if anything, then who started it and when. */
+/** The page's status line: what the status word leaves out, if anything, then who started it and when. */
 export function statusLine(detail: string | null, by: string, at: string): string {
   return [detail, `started by ${by}, ${at}`].filter(Boolean).join(' · ');
 }
 
-/** A pull request row of the Work group. */
+/** A pull request row of Made. */
 export interface PullRequestInspectorRow {
   key: string;
   url: string;
@@ -32,7 +32,7 @@ export interface PullRequestInspectorRow {
   pr: PullRequest | undefined;
 }
 
-/** Its pull requests, recorded or found, as the Work group lists them. */
+/** Its pull requests, recorded or found, as Made lists them. */
 export function pullRequestRows(agent: Pick<Agent, 'records' | 'pullRequests' | 'pushedPullRequests' | 'recordedPullRequests'>): PullRequestInspectorRow[] {
   return pullRequestSection(agent).rows.map(({ key, item }) => ({
     key,
@@ -41,32 +41,4 @@ export function pullRequestRows(agent: Pick<Agent, 'records' | 'pullRequests' | 
     checks: item.pr && checksLabel(item.pr),
     pr: item.pr,
   }));
-}
-
-/** How many of each thing the "More details" fold holds. */
-export interface MoreDetailsCounts {
-  agents: number;
-  documents: number;
-  pins: number;
-  subagents: number;
-  schedules: number;
-}
-
-/** What the fold holds: its crew, its hand-off docs and documents, its pins, its subagents and its schedule. */
-export function moreDetailsCounts(agent: Agent, agents: readonly Agent[]): MoreDetailsCounts {
-  return {
-    agents: crewSection(agent, agents).rows.length,
-    documents: docSection(agent).rows.length + documentSection(agent).length,
-    pins: pinSection(agent).rows.length,
-    subagents: subagentSection(agent).rows.length,
-    schedules: agent.schedule === null ? 0 : 1,
-  };
-}
-
-const NOUNS: Record<keyof MoreDetailsCounts, string> = { agents: 'agent', documents: 'document', pins: 'pin', subagents: 'subagent', schedules: 'schedule' };
-
-/** "2 agents, 1 document": the fold's counts after its name, or undefined when it holds nothing and isn't drawn. */
-export function moreDetailsLabel(counts: MoreDetailsCounts): string | undefined {
-  const parts = (Object.keys(NOUNS) as (keyof MoreDetailsCounts)[]).filter((key) => counts[key] > 0).map((key) => `${counts[key]} ${NOUNS[key]}${counts[key] === 1 ? '' : 's'}`);
-  return parts.length === 0 ? undefined : parts.join(', ');
 }

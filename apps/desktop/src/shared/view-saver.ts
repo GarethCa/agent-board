@@ -40,6 +40,8 @@ export const VIEW_KEYS = {
   agentNoteLook: 'agentNoteLook',
   /** Which sidebar an agent's window shows under Classic: the full details strip or the simple inspector. */
   agentSidebar: 'agentSidebar',
+  /** Whether terminals draw with the GPU (xterm's WebGL renderer), falling back to the DOM renderer: on unless turned off. */
+  gpuTerminals: 'gpuTerminals',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

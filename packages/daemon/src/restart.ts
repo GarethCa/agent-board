@@ -87,7 +87,10 @@ export async function restartDaemon(dataDir: string, options: RestartDaemonOptio
         // As the daemon decided, which a restart from an older build's daemon leaves unknown, so unsaid.
         if (resumed.cutOffMidTurn === true) midTurn.push(agent.name);
       } catch (error) {
-        notResumed.push({ name: agent.name, message: (error as Error).message });
+        // Its clock may have relaunched it since the list was read: running again, it is back as a resume would leave it.
+        const now = (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId);
+        if (now?.endedAt === null) agents.push(agent.name);
+        else notResumed.push({ name: agent.name, message: (error as Error).message });
       }
     }
     const stoppedBefore = new Set(before.shells.flatMap((shell) => shell.stoppedPanes));

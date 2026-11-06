@@ -48,11 +48,31 @@ const ended: Agent = { ...galleryAgent('done'), endedAt: AT };
 
 describe("an agent's menu", () => {
   it("lists a running agent's rows, in order", () => {
-    expect(menuIds(agentMenu(agentInput(running)))).toEqual(['expand', 'pop-out', 'pause', 'rename', 'schedule', 'link-issue', 'mute', 'start-review', 'run-gate', 'delete']);
+    expect(menuIds(agentMenu(agentInput(running)))).toEqual([
+      'expand', 'pop-out', 'pause', 'rename', 'schedule', 'link-issue', 'mute',
+      'reasoning', 'reasoning/default', 'reasoning/low', 'reasoning/medium', 'reasoning/high', 'reasoning/xhigh', 'reasoning/max',
+      'start-review', 'run-gate', 'delete',
+    ]);
+  });
+
+  it("offers the reasoning levels its harness takes, its own ticked, and says when it takes a new one", () => {
+    const claude = row(agentMenu(agentInput({ ...running, harness: 'claude', effort: 'high' })), 'reasoning') as Extract<ModelEntry, { entries: unknown }>;
+    expect(claude).toMatchObject({ label: 'Reasoning', detail: 'High' });
+    expect(claude.entries[0]).toEqual({ heading: 'Typed at its prompt between turns' });
+    // No harness can be told its own default live: it waits for a restart, and says so.
+    expect(claude.entries[1]).toMatchObject({ label: 'Default', hint: 'Applies when the agent restarts' });
+    expect(claude.entries.at(-1)).toMatchObject({ label: 'Max', hint: 'Slowest, most usage' });
+    const codex = row(agentMenu(agentInput({ ...running, harness: 'codex' })), 'reasoning') as Extract<ModelEntry, { entries: unknown }>;
+    expect(codex).toMatchObject({ detail: 'Default', entries: [{ heading: 'Applies when the agent restarts' }, ...['Default', 'Low', 'Medium', 'High', 'Extra high'].map((label) => ({ label }))] });
+    expect(menuIds(agentMenu(agentInput(ended)))).toContain('reasoning');
+    const actions = spies<AgentMenuInput['actions']>();
+    ((row(agentMenu(agentInput(running, { actions })), 'reasoning') as Extract<ModelEntry, { entries: unknown }>).entries as { id?: string; onSelect?(): void }[]).find((entry) => entry.id === 'max')!.onSelect!();
+    expect(actions.calls).toEqual([['setEffort', [running.sessionId, 'max']]]);
   });
 
   it('offers to open its window when a click expands it, and the other way round', () => {
     expect(menuIds(agentMenu(agentInput(running, { clickOpens: 'expand' })))[0]).toBe('open-window');
+    expect(menuIds(agentMenu(agentInput(running, { clickOpens: 'maximised' })))[0]).toBe('expand');
   });
 
   it('folds and restarts an ended agent, with nothing to pause', () => {
@@ -135,6 +155,7 @@ const repoZone: Zone = {
   gateCommand: null,
   tracker: null,
   spacing: 'normal',
+  layoutMode: 'free',
   clone: null,
   managedClone: false,
   defaultRepo: null,
@@ -153,6 +174,9 @@ describe("a zone's ⋯ menu", () => {
     expect(menuIds(zoneMenu(zoneInput(repoZone)))).toEqual([
       'tidy',
       'spacing',
+      'spacing/layout-free',
+      'spacing/layout-shelves',
+      'spacing/layout-clusters',
       'spacing/spacing-compact',
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
@@ -165,6 +189,7 @@ describe("a zone's ⋯ menu", () => {
       'orchestrate',
       'gate-command',
       'role-templates',
+      'crew-prefabs',
       'delete',
     ]);
   });
@@ -228,8 +253,17 @@ describe("a zone's tab chips, folded into ⋯", () => {
 });
 
 describe("a zone's tab menus", () => {
-  it('lists Tidy ▾: Tidy now, its spacings, and the spacing for new zones', () => {
-    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
+  it('disables every Tidy on status shelves, saying why: it would move the tiles folded into stacks', () => {
+    const shelved = { ...repoZone, layoutMode: 'shelves' as const };
+    const why = { disabled: true, hint: expect.stringMatching(/folded into stacks/) };
+    expect(row(tidyMenu(shelved, undefined, spies()), 'tidy')).toMatchObject(why);
+    expect(row(zoneMenu(zoneInput(shelved)), 'tidy')).toMatchObject(why);
+    expect(row(tidyMenu({ ...repoZone, layoutMode: 'clusters' }, undefined, spies()), 'tidy')).toMatchObject({ disabled: true, hint: expect.stringMatching(/lays its tiles out itself/) });
+    expect(row(tidyMenu(repoZone, undefined, spies()), 'tidy')).not.toHaveProperty('disabled');
+  });
+
+  it('lists Tidy ▾: Tidy now, its layouts, its spacings, and the spacing for new zones', () => {
+    expect(menuIds(tidyMenu(repoZone, undefined, spies()))).toEqual(['tidy', 'layout-free', 'layout-shelves', 'layout-clusters', 'spacing-compact', 'spacing-normal', 'spacing-roomy', 'new-zone-spacing']);
     expect(row(tidyMenu(repoZone, 'roomy', spies()), 'new-zone-spacing')).toMatchObject({ detail: 'Roomy · Settings' });
   });
 
@@ -307,6 +341,43 @@ describe("every row's fields", () => {
           "id": "mute",
           "label": "Mute notifications",
         },
+        {
+          "detail": "Default",
+          "entries": [
+            {
+              "heading": "Typed at its prompt between turns",
+            },
+            {
+              "hint": "Applies when the agent restarts",
+              "id": "default",
+              "label": "Default",
+            },
+            {
+              "hint": "Fastest, least usage",
+              "id": "low",
+              "label": "Low",
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+            },
+            {
+              "id": "high",
+              "label": "High",
+            },
+            {
+              "id": "xhigh",
+              "label": "Extra high",
+            },
+            {
+              "hint": "Slowest, most usage",
+              "id": "max",
+              "label": "Max",
+            },
+          ],
+          "id": "reasoning",
+          "label": "Reasoning",
+        },
         "separator",
         {
           "disabled": false,
@@ -364,6 +435,37 @@ describe("every row's fields", () => {
         {
           "id": "mute",
           "label": "Mute notifications",
+        },
+        {
+          "detail": "Default",
+          "entries": [
+            {
+              "heading": "Applies when the agent restarts",
+            },
+            {
+              "id": "default",
+              "label": "Default",
+            },
+            {
+              "hint": "Fastest, least usage",
+              "id": "low",
+              "label": "Low",
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+            },
+            {
+              "id": "high",
+              "label": "High",
+            },
+            {
+              "id": "xhigh",
+              "label": "Extra high",
+            },
+          ],
+          "id": "reasoning",
+          "label": "Reasoning",
         },
         "separator",
         {
@@ -429,6 +531,42 @@ describe("every row's fields", () => {
           "id": "mute",
           "label": "Mute notifications",
         },
+        {
+          "detail": "Default",
+          "entries": [
+            {
+              "heading": "Applies when the agent restarts",
+            },
+            {
+              "id": "default",
+              "label": "Default",
+            },
+            {
+              "hint": "Fastest, least usage",
+              "id": "low",
+              "label": "Low",
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+            },
+            {
+              "id": "high",
+              "label": "High",
+            },
+            {
+              "id": "xhigh",
+              "label": "Extra high",
+            },
+            {
+              "hint": "Slowest, most usage",
+              "id": "max",
+              "label": "Max",
+            },
+          ],
+          "id": "reasoning",
+          "label": "Reasoning",
+        },
         "separator",
         {
           "disabled": false,
@@ -482,6 +620,42 @@ describe("every row's fields", () => {
         {
           "id": "mute",
           "label": "Mute notifications",
+        },
+        {
+          "detail": "Default",
+          "entries": [
+            {
+              "heading": "Applies when the agent restarts",
+            },
+            {
+              "id": "default",
+              "label": "Default",
+            },
+            {
+              "hint": "Fastest, least usage",
+              "id": "low",
+              "label": "Low",
+            },
+            {
+              "id": "medium",
+              "label": "Medium",
+            },
+            {
+              "id": "high",
+              "label": "High",
+            },
+            {
+              "id": "xhigh",
+              "label": "Extra high",
+            },
+            {
+              "hint": "Slowest, most usage",
+              "id": "max",
+              "label": "Max",
+            },
+          ],
+          "id": "reasoning",
+          "label": "Reasoning",
         },
         "separator",
         {
@@ -576,6 +750,31 @@ describe("every row's fields", () => {
         {
           "entries": [
             {
+              "heading": "Layout",
+            },
+            {
+              "checked": true,
+              "hint": "Each tile where you put it",
+              "id": "layout-free",
+              "label": "Free",
+            },
+            {
+              "checked": false,
+              "hint": "Shelves by status, a stack per ticket",
+              "id": "layout-shelves",
+              "label": "Status shelves",
+            },
+            {
+              "checked": false,
+              "hint": "Each ticket's tiles together, what needs you first",
+              "id": "layout-clusters",
+              "label": "Clusters",
+            },
+            "separator",
+            {
+              "heading": "Spacing",
+            },
+            {
               "checked": false,
               "detail": "8 · 32",
               "id": "spacing-compact",
@@ -595,7 +794,7 @@ describe("every row's fields", () => {
             },
           ],
           "id": "spacing",
-          "label": "Spacing",
+          "label": "Layout and spacing",
         },
         {
           "id": "rename",
@@ -651,6 +850,11 @@ describe("every row's fields", () => {
           "hint": "What agents started here in a role begin with",
           "id": "role-templates",
           "label": "Role templates…",
+        },
+        {
+          "hint": "Saved crews, for every board",
+          "id": "crew-prefabs",
+          "label": "Crew prefabs…",
         },
         "separator",
         {
@@ -711,6 +915,31 @@ describe("every row's fields", () => {
         {
           "entries": [
             {
+              "heading": "Layout",
+            },
+            {
+              "checked": true,
+              "hint": "Each tile where you put it",
+              "id": "layout-free",
+              "label": "Free",
+            },
+            {
+              "checked": false,
+              "hint": "Shelves by status, a stack per ticket",
+              "id": "layout-shelves",
+              "label": "Status shelves",
+            },
+            {
+              "checked": false,
+              "hint": "Each ticket's tiles together, what needs you first",
+              "id": "layout-clusters",
+              "label": "Clusters",
+            },
+            "separator",
+            {
+              "heading": "Spacing",
+            },
+            {
               "checked": false,
               "detail": "8 · 32",
               "id": "spacing-compact",
@@ -730,7 +959,7 @@ describe("every row's fields", () => {
             },
           ],
           "id": "spacing",
-          "label": "Spacing",
+          "label": "Layout and spacing",
         },
         {
           "id": "rename",
@@ -787,6 +1016,11 @@ describe("every row's fields", () => {
           "id": "role-templates",
           "label": "Role templates…",
         },
+        {
+          "hint": "Saved crews, for every board",
+          "id": "crew-prefabs",
+          "label": "Crew prefabs…",
+        },
         "separator",
         {
           "danger": true,
@@ -833,6 +1067,28 @@ describe("every row's fields", () => {
         {
           "id": "tidy",
           "label": "Tidy now",
+        },
+        "separator",
+        {
+          "heading": "Layout",
+        },
+        {
+          "checked": true,
+          "hint": "Each tile where you put it",
+          "id": "layout-free",
+          "label": "Free",
+        },
+        {
+          "checked": false,
+          "hint": "Shelves by status, a stack per ticket",
+          "id": "layout-shelves",
+          "label": "Status shelves",
+        },
+        {
+          "checked": false,
+          "hint": "Each ticket's tiles together, what needs you first",
+          "id": "layout-clusters",
+          "label": "Clusters",
         },
         "separator",
         {
@@ -936,6 +1192,11 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a1)",
         "link-issue → linkIssue(#a1)",
         "mute → setMuted("a1", true)",
+        "reasoning/default → setEffort("a1", null)",
+        "reasoning/low → setEffort("a1", "low")",
+        "reasoning/medium → setEffort("a1", "medium")",
+        "reasoning/high → setEffort("a1", "high")",
+        "reasoning/xhigh → setEffort("a1", "xhigh")",
         "open-review → openReview("a1")",
         "start-review → startReview(#a1)",
         "run-gate → openGate(#a1, true)",
@@ -947,6 +1208,11 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a1)",
         "link-issue → linkIssue(#a1)",
         "mute → setMuted("a1", true)",
+        "reasoning/default → setEffort("a1", null)",
+        "reasoning/low → setEffort("a1", "low")",
+        "reasoning/medium → setEffort("a1", "medium")",
+        "reasoning/high → setEffort("a1", "high")",
+        "reasoning/xhigh → setEffort("a1", "xhigh")",
         "open-review → openReview("impl")",
         "run-gate → openGate(#a1, true)",
         "delete → deleteAgent("a1")",
@@ -958,6 +1224,12 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a2)",
         "link-issue → linkIssue(#a2)",
         "mute → setMuted("a2", true)",
+        "reasoning/default → setEffort("a2", null)",
+        "reasoning/low → setEffort("a2", "low")",
+        "reasoning/medium → setEffort("a2", "medium")",
+        "reasoning/high → setEffort("a2", "high")",
+        "reasoning/xhigh → setEffort("a2", "xhigh")",
+        "reasoning/max → setEffort("a2", "max")",
         "start-review → startReview(#a2)",
         "run-gate → openGate(#a2, true)",
         "delete → deleteAgent("a2")",
@@ -968,6 +1240,11 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a3)",
         "link-issue → linkIssue(#a3)",
         "mute → setMuted("a3", true)",
+        "reasoning/default → setEffort("a3", null)",
+        "reasoning/low → setEffort("a3", "low")",
+        "reasoning/medium → setEffort("a3", "medium")",
+        "reasoning/high → setEffort("a3", "high")",
+        "reasoning/xhigh → setEffort("a3", "xhigh")",
         "start-review → startReview(#a3)",
         "run-gate → openGate(#a3, true)",
         "delete → deleteAgent("a3")",
@@ -978,6 +1255,12 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a4)",
         "link-issue → linkIssue(#a4)",
         "mute → setMuted("a4", true)",
+        "reasoning/default → setEffort("a4", null)",
+        "reasoning/low → setEffort("a4", "low")",
+        "reasoning/medium → setEffort("a4", "medium")",
+        "reasoning/high → setEffort("a4", "high")",
+        "reasoning/xhigh → setEffort("a4", "xhigh")",
+        "reasoning/max → setEffort("a4", "max")",
         "start-review → startReview(#a4)",
         "run-gate → openGate(#a4, true)",
         "delete → deleteAgent("a4")",
@@ -989,6 +1272,12 @@ describe("every row's handler", () => {
         "schedule → scheduleAgent(#a5)",
         "link-issue → linkIssue(#a5)",
         "mute → setMuted("a5", true)",
+        "reasoning/default → setEffort("a5", null)",
+        "reasoning/low → setEffort("a5", "low")",
+        "reasoning/medium → setEffort("a5", "medium")",
+        "reasoning/high → setEffort("a5", "high")",
+        "reasoning/xhigh → setEffort("a5", "xhigh")",
+        "reasoning/max → setEffort("a5", "max")",
         "start-review → startReview(#a5)",
         "run-gate → openGate(#a5, true)",
         "delete → deleteAgent("a5")",
@@ -1033,6 +1322,9 @@ describe("every row's handler", () => {
     ]).toMatchInlineSnapshot(`
       [
         "tidy → tidy(#z1)",
+        "spacing/layout-free → setLayoutMode(#z1, "free")",
+        "spacing/layout-shelves → setLayoutMode(#z1, "shelves")",
+        "spacing/layout-clusters → setLayoutMode(#z1, "clusters")",
         "spacing/spacing-compact → setSpacing(#z1, "compact")",
         "spacing/spacing-normal → setSpacing(#z1, "normal")",
         "spacing/spacing-roomy → setSpacing(#z1, "roomy")",
@@ -1045,8 +1337,12 @@ describe("every row's handler", () => {
         "orchestrate → setAgentsOrchestrate(#z1, true)",
         "gate-command → editGateCommand(#z1)",
         "role-templates → editRoleTemplates(#z1)",
+        "crew-prefabs → editCrewPrefabs()",
         "delete → deleteZone(#z1)",
         "tidy → tidy(#g1)",
+        "spacing/layout-free → setLayoutMode(#g1, "free")",
+        "spacing/layout-shelves → setLayoutMode(#g1, "shelves")",
+        "spacing/layout-clusters → setLayoutMode(#g1, "clusters")",
         "spacing/spacing-compact → setSpacing(#g1, "compact")",
         "spacing/spacing-normal → setSpacing(#g1, "normal")",
         "spacing/spacing-roomy → setSpacing(#g1, "roomy")",
@@ -1059,6 +1355,7 @@ describe("every row's handler", () => {
         "orchestrate → setAgentsOrchestrate(#g1, true)",
         "gate-command → editGateCommand(#g1)",
         "role-templates → editRoleTemplates(#g1)",
+        "crew-prefabs → editCrewPrefabs()",
         "delete → deleteZone(#g1)",
         "tab-tracker → pickTracker(#z1)",
         "tab-add-issue → addIssue(#z1)",
@@ -1077,6 +1374,9 @@ describe("every row's handler", () => {
         "tab-new-shell → newShell(#c1)",
         "tab-tidy → tidy(#c1)",
         "tidy → tidy(#z1)",
+        "layout-free → setLayoutMode(#z1, "free")",
+        "layout-shelves → setLayoutMode(#z1, "shelves")",
+        "layout-clusters → setLayoutMode(#z1, "clusters")",
         "spacing-compact → setSpacing(#z1, "compact")",
         "spacing-normal → setSpacing(#z1, "normal")",
         "spacing-roomy → setSpacing(#z1, "roomy")",
@@ -1166,6 +1466,9 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
+        "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
+        "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
         "options/issues/tracker → pickTracker(#z1)",
         "options/issues/add-issue → addIssue(#z1)",
         "options/folder/trust-folder → setTrustsFolder(#z1, false)",
@@ -1174,6 +1477,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
+        "options/agents/crew-prefabs → editCrewPrefabs()",
         "options/delete → deleteZone(#z1)",
         "delete → deleteZone(#z1)",
         "— a group with a default repo, outside git",
@@ -1193,6 +1497,9 @@ describe("a project's menus, under the Simplified design", () => {
         "options/spacing/spacing-normal → setSpacing(#z1, "normal")",
         "options/spacing/spacing-roomy → setSpacing(#z1, "roomy")",
         "options/spacing/new-zone-spacing → openSettings()",
+        "options/layout/layout-free → setLayoutMode(#z1, "free")",
+        "options/layout/layout-shelves → setLayoutMode(#z1, "shelves")",
+        "options/layout/layout-clusters → setLayoutMode(#z1, "clusters")",
         "options/issues/tracker → pickTracker(#z1)",
         "options/folder/repo → bind(#z1, "repo")",
         "options/folder/project → bind(#z1, "project")",
@@ -1203,6 +1510,7 @@ describe("a project's menus, under the Simplified design", () => {
         "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
+        "options/agents/crew-prefabs → editCrewPrefabs()",
         "options/delete → deleteZone(#z1)",
         "delete → deleteZone(#z1)",
         "— a cloning project",
@@ -1230,6 +1538,10 @@ describe("a project's menus, under the Simplified design", () => {
       'spacing/spacing-normal',
       'spacing/spacing-roomy',
       'spacing/new-zone-spacing',
+      'layout',
+      'layout/layout-free',
+      'layout/layout-shelves',
+      'layout/layout-clusters',
       'issues',
       'issues/tracker',
       'issues/add-issue',
@@ -1241,6 +1553,7 @@ describe("a project's menus, under the Simplified design", () => {
       'agents/orchestrate',
       'agents/gate-command',
       'agents/role-templates',
+      'agents/crew-prefabs',
       'delete',
     ]);
   });
@@ -1275,8 +1588,8 @@ describe("a project's menus, under the Simplified design", () => {
       const agents = row(projectMenu(projectInput(projects[0]![1], { technical })), 'agents') as { entries: ModelEntry[] };
       return agents.entries.flatMap((entry) => (entry !== 'separator' && 'label' in entry ? [entry.label] : []));
     };
-    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…']);
-    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…']);
+    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…', 'Crew prefabs…']);
+    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…', 'Crew prefabs…']);
   });
 
   it("says why it can't start an agent, and Delete… is last and red", () => {

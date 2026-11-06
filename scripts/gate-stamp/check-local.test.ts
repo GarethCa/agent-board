@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { readStamp } from './stamp.ts';
+import { readRecord } from '../gate-results/results.ts';
 
 const gate = join(import.meta.dirname, '..', 'check-local.sh');
 let dir: string | undefined;
@@ -33,7 +34,7 @@ interface GateOptions {
 }
 
 /** Runs the gate with every step passing but `failing`. */
-async function runGate(args: string[], { dirty = false, failing, staleReport = false }: GateOptions = {}): Promise<{ code: number | null; output: string; sha: string; stamps: string }> {
+async function runGate(args: string[], { dirty = false, failing, staleReport = false }: GateOptions = {}): Promise<{ code: number | null; output: string; sha: string; stamps: string; tree: string }> {
   dir = mkdtempSync(join(tmpdir(), 'ab-gate-'));
   const bin = join(dir, 'bin');
   const repo = join(dir, 'repo');
@@ -82,11 +83,11 @@ async function runGate(args: string[], { dirty = false, failing, staleReport = f
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
   child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
   const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
-  return { code, output: `${output}\n${readFileSync(calls, 'utf8')}`, sha: git('rev-parse', 'HEAD'), stamps };
+  return { code, output: `${output}\n${readFileSync(calls, 'utf8')}`, sha: git('rev-parse', 'HEAD'), stamps, tree: git('rev-parse', 'HEAD^{tree}') };
 }
 
 it('passes a run whose e2e test passed only on a retry, names the test as flaky, and stamps the commit green', async () => {
-  const { code, output, sha, stamps } = await runGate([]);
+  const { code, output, sha, stamps, tree } = await runGate([]);
 
   expect(code).toBe(0);
   expect(output).toMatch(/\| `e2e` \| pass, 1 flaky \| \d+s \|/);
@@ -96,21 +97,51 @@ it('passes a run whose e2e test passed only on a retry, names the test as flaky,
   expect(output).toContain('test:e2e --retries 2 --reporter list,json --update-snapshots none');
   expect(output).toMatch(/--filter @agent-board\/desktop test:visual .*--retries 2 --reporter list,json --update-snapshots none/);
   expect(readStamp(stamps, sha)).toBeInstanceOf(Date);
+  // The unit run writes a JSON report for the result record, which says every step passed.
+  expect(output).toContain('test --reporter=default --reporter=json --outputFile.json=');
+  expect(readRecord(join(stamps, 'results'), tree)?.steps).toEqual(Object.fromEntries(['preflight', 'lint', 'typecheck', 'test', 'build', 'e2e', 'visual', 'markdownlint', 'knip'].map((step) => [step, { outcome: 'pass' }])));
 });
 
-it('writes no stamp from a tree with uncommitted changes', async () => {
+it('writes no stamp or result record from a tree with uncommitted changes', async () => {
   const { code, stamps } = await runGate([], { dirty: true });
 
   expect(code).toBe(0);
   expect(() => readdirSync(stamps)).toThrow();
 });
 
-it('writes no stamp from a run with a failed step', async () => {
-  const { code, output, stamps } = await runGate([], { failing: 'lint' });
+it('writes no stamp from a run with a failed step, but a result record of what failed and what did not run', async () => {
+  const { code, output, stamps, tree } = await runGate([], { failing: 'lint' });
 
   expect(code).toBe(1);
   expect(output).toMatch(/\| `lint` \| FAIL \|/);
-  expect(() => readdirSync(stamps)).toThrow();
+  expect(readdirSync(stamps)).toEqual(['results']);
+  expect(readRecord(join(stamps, 'results'), tree)?.steps).toMatchObject({ lint: { outcome: 'FAIL' }, typecheck: { outcome: 'pass' }, test: { outcome: 'not run' }, e2e: { outcome: 'not run' } });
+});
+
+it('stops before the unit tests when a quick check fails, as the gate can no longer pass', async () => {
+  const { code, output } = await runGate([], { failing: 'knip' });
+
+  expect(code).toBe(1);
+  expect(output).toMatch(/\| `knip` \| FAIL \|/);
+  expect(output).toMatch(/\| `build` \| pass \|/);
+  for (const step of ['test', 'e2e', 'visual']) expect(output).toContain(`| \`${step}\` | not run: a quick check failed | |`);
+  expect(output).not.toMatch(/^test( |$)/m);
+  expect(output).not.toContain('test:e2e');
+});
+
+it('runs nothing else when the pre-flight fails', async () => {
+  const { code, output, stamps } = await runGate([], { failing: 'preflight' });
+
+  expect(code).toBe(1);
+  expect(output).toMatch(/\| `preflight` \| FAIL \|/);
+  for (const step of ['lint', 'typecheck', 'test', 'build', 'e2e', 'visual', 'markdownlint', 'knip']) {
+    expect(output).toContain(`| \`${step}\` | not run: the pre-flight failed | |`);
+  }
+  // The fake pnpm logs each call it gets: the pre-flight's was the only one.
+  expect(output.trim().split('\n').at(-1)).toBe('preflight');
+  expect(output).not.toMatch(/^(lint|build|test)( |$)/m);
+  // No stamp; the result record says what to rerun.
+  expect(readdirSync(stamps)).toEqual(['results']);
 });
 
 it("reads no flaky tests from an earlier run's report left in a reused log dir", async () => {
@@ -126,7 +157,7 @@ it('--quick runs all but the visual and e2e steps, and writes no stamp', async (
 
   expect(code).toBe(0);
   expect(output).toContain('Quick Local checks');
-  for (const step of ['lint', 'typecheck', 'test', 'build', 'markdownlint', 'knip']) expect(output).toMatch(new RegExp(`\\| \`${step}\` \\| pass \\|`));
+  for (const step of ['preflight', 'lint', 'typecheck', 'test', 'build', 'markdownlint', 'knip']) expect(output).toMatch(new RegExp(`\\| \`${step}\` \\| pass \\|`));
   for (const step of ['e2e', 'visual']) expect(output).not.toContain(`| \`${step}\` |`);
   expect(output).not.toContain('test:e2e');
   expect(() => readdirSync(stamps)).toThrow();

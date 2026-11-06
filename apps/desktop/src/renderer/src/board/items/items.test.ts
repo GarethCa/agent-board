@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BoardItem } from '@agent-board/daemon/protocol';
-import { boundsOnBoard, itemNode, placeOnBoard, withItem, withoutItem } from './items';
+import { boundsOnBoard, itemNode, placeOnBoard, restoredData, withItem, withoutItem } from './items';
 
 const zones = [
   { id: 'a', x: 0, y: 0, width: 500, height: 400 },
@@ -120,5 +120,18 @@ describe('boundsOnBoard', () => {
     expect(turned.height).toBeCloseTo(200);
     expect(boundsOnBoard(itemNode(item()), rect)).toEqual(rect);
     expect(boundsOnBoard({ id: 'a', position: { x: 0, y: 0 }, data: {} }, rect)).toEqual(rect);
+  });
+});
+
+describe('restoredData', () => {
+  it('puts back only a steps card’s fold: its answers, ticks and steps are the daemon’s, newer than any undo', () => {
+    const steps = item({ kind: 'steps', data: { title: 'Release', steps: [{ id: 's1' }], sent: null, waits: [], collapsed: true } });
+    expect(restoredData(steps)).toEqual({ collapsed: true });
+    expect(restoredData(item({ kind: 'steps', data: { title: 'Release', steps: [] } }))).toEqual({ collapsed: false });
+  });
+
+  it('puts back any other item’s data whole, and an agent note with its size mark cleared unless it was set', () => {
+    expect(restoredData(item())).toEqual({ text: '', color: '#fff3a3' });
+    expect(restoredData(item({ kind: 'agent-note', data: { text: 'hi' } }))).toEqual({ userSized: false, text: 'hi' });
   });
 });

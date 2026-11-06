@@ -3,7 +3,7 @@ import { FLOW_EDGE_SHAPE_KEYS, type FlowEdge, type FlowEdgeShape } from '@agent-
 import type { FlowEdgeChange } from '../../../preload/api';
 import type { FlowEdgeActions } from './FlowEdge';
 import { tokenNumber } from '../theme';
-import { liveHandoffs, withFlowEdgeChange, withChanges, withChangesUndone } from './flow-edges';
+import { liveHandoffs, sendOutcome, withFlowEdgeChange, withChanges, withChangesUndone } from './flow-edges';
 import { railMoved, railMoveRefused } from './rails';
 import { historyKey, type Change } from './editing/use-history';
 
@@ -12,10 +12,14 @@ const RECORDED_KEYS = [...FLOW_EDGE_SHAPE_KEYS, 'from', 'to'] as const;
 
 /**
  * The board's flow edges, as the daemon has them and every window hears them change, and what the board can
- * do with them. `report(action)` shows why one failed; `record` puts an edge made, reshaped or deleted in the undo
+ * do with them. `report(action)` shows why one failed, `inform` says something went through; `record` puts an edge made, reshaped or deleted in the undo
  * history.
  */
-export function useFlowEdges(report: (action: string) => (error: unknown) => void, record: (changes: readonly Change[]) => void) {
+export function useFlowEdges(
+  report: (action: string) => (error: unknown) => void,
+  record: (changes: readonly Change[]) => void,
+  inform: (message: string) => void,
+) {
   const [edges, setEdges] = useState<FlowEdge[]>([]);
   /** The flow edges selected, by id. React Flow reports a selection, and the edges are drawn from `edges`. */
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -118,7 +122,15 @@ export function useFlowEdges(report: (action: string) => (error: unknown) => voi
           window.agentBoard.flowEdges.delete(id).catch(report('delete the flow edge'));
         },
         send(id) {
-          window.agentBoard.flowEdges.send(id).catch(report('send along the flow edge'));
+          // Says how it went: delivered, queued behind the agent's turn, or why nothing was sent.
+          window.agentBoard.flowEdges
+            .send(id)
+            .then((sent) => {
+              const outcome = sendOutcome(sent);
+              if (outcome.sent) inform(outcome.message);
+              else report('send along the flow edge')(new Error(outcome.message));
+            })
+            .catch(report('send along the flow edge'));
         },
         approve(id, command, fingerprint, from) {
           window.agentBoard.flowEdges.approve(id, command, fingerprint, from).catch(report('approve the command'));

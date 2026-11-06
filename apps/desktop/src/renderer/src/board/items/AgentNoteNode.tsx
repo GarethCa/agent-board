@@ -1,7 +1,7 @@
 import { memo, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type Ref } from 'react';
 import { NodeResizer, NodeToolbar, Position, useReactFlow, useStore, type NodeProps } from '@xyflow/react';
 import { MAX_AGENT_NOTE_HEIGHT, MAX_STICKY_TEXT, MAX_AGENT_NOTE_SIZE, MIN_AGENT_NOTE_SIZE, type BoardItem } from '@agent-board/daemon/protocol';
-import { Trash2 } from 'lucide-react';
+import { Bot, Trash2 } from 'lucide-react';
 import { useBoardCommands } from '../commands';
 import { HarnessMark } from '../HarnessMark';
 import { isZone, tileNodeId } from '../tiles';
@@ -214,7 +214,9 @@ export function AgentNoteFace({ item, look, zoneColor, tileShown, body, onShowAg
       disabled={!tileShown}
       onClick={onShowAgent}
     >
-      <span className={named ? 'agent-note-label agent-note-label-named' : 'agent-note-label'}>Note</span>
+      {/* The robot marks an agent note. On a named tab it stands in for the word Note, so the tab is no longer than before; on an unnamed one it comes before the word. */}
+      <Bot className="agent-note-robot" role="img" aria-label={named ? 'Note' : undefined} aria-hidden={named ? undefined : true} />
+      {!named && <span className="agent-note-label">Note</span>}
       {named && <HarnessMark harness={agent.harness} className="agent-note-mark" />}
       {named && <span className="agent-note-name">{agent.name}</span>}
       {named && agent.role !== null && <span className="agent-note-role">· {agent.role}</span>}

@@ -46,7 +46,7 @@ import type { BoardConnection } from './board.ts';
 import { checkedData } from './items.ts';
 import { keyedQueue } from './keyed-queue.ts';
 import type { ActivityEntry, Orchestrator, OrchestratorAccess } from './orchestrators.ts';
-import { finiteNumberParam, invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   AGENT_STATES,
   ARRANGE_BYS,
@@ -55,6 +55,7 @@ import {
   COLOR_SLOTS,
   DEFAULT_ARRANGE_SETTINGS,
   DEFAULT_ZONE_SIZE,
+  ZONE_LAYOUT_MODES,
   NOTE_KINDS,
   CONNECTOR_STYLES,
   MAX_CONNECTOR_LABEL,
@@ -108,7 +109,7 @@ import {
 } from './protocol.ts';
 import { RpcMethodError, type RpcHandlers } from './rpc.ts';
 import { cutText } from './text-cut.ts';
-import { nameSlug } from './worktrees.ts';
+import { reviewedBy, workTilesOf } from './work-units.ts';
 import { buildZoneMap } from './zone-map.ts';
 import { facingSides, shapeSize } from './diagram.ts';
 import { layOutDiagram, MAX_MERMAID_LENGTH, parseMermaid } from './mermaid.ts';
@@ -126,6 +127,7 @@ export type LayoutMethods = Pick<
   | 'orchestrator.addZone'
   | 'orchestrator.changeZone'
   | 'orchestrator.removeZone'
+  | 'orchestrator.zoneLayout'
   | 'orchestrator.addNote'
   | 'orchestrator.editNote'
   | 'orchestrator.removeNote'
@@ -365,26 +367,6 @@ function textItemData(text: string, colors: NoteColors): Record<string, unknown>
 
 /** An orchestrator's signature on a note it writes: 🤖, its name and the time, on a line of its own at the end. */
 const SIGNATURE = /\n\n🤖 [^\n]* · \d\d:\d\d$/;
-
-/** The agent `agent` reviews, among `agents`: its `reviewOf`, else the one in its zone on the branch it reviews. */
-function reviewedBy(agents: readonly Agent[], agent: Agent): Agent | undefined {
-  if (agent.reviewOf !== null) return agents.find((each) => each.sessionId === agent.reviewOf);
-  if (agent.reviews === null) return undefined;
-  return agents.find((each) => each.zoneId === agent.zoneId && each.sessionId !== agent.sessionId && each.branch === agent.reviews!.branch);
-}
-
-/** Whether `agent`'s branch is the one agent-board named for it (`agentBranchName`), which names no ticket but its own name's. */
-const namedBranch = (agent: Agent) => new RegExp(`^${nameSlug(agent.name)}-[0-9a-f]{6}$`).test(agent.branch);
-
-/**
- * The branch whose ticket labels `agent`'s cluster: its own, or a reviewer's the one it reviews; none for a branch
- * agent-board named after its agent (`namedBranch`), whose name holds no ticket.
- */
-function ticketBranch(agents: readonly Agent[], agent: Agent): string | null {
-  if (agent.reviews === null) return namedBranch(agent) ? null : agent.branch;
-  const reviewed = reviewedBy(agents, agent);
-  return reviewed !== undefined && namedBranch(reviewed) ? null : agent.reviews.branch;
-}
 
 /** The last `STATUS:` line an agent ended its last message with, without the marker. */
 const finalStatus = (message: string | null): string | undefined => [...(message ?? '').matchAll(/^STATUS:\s*(.+)$/gm)].at(-1)?.[1]?.trim();
@@ -1192,26 +1174,8 @@ export function layoutHandlers<Context extends BoardConnection>({
    */
   const crewOf = (me: Orchestrator, board: Board, zone: Zone): ArrangeTile[] => {
     const agentsHere = board.agents.filter((agent) => agent.zoneId === zone.id && access.reachesAgent(me, agent));
-    const branches = new Map(agentsHere.filter((agent) => agent.branch !== '').map((agent) => [agent.branch, agent.sessionId]));
     return [
-      ...agentsHere.map((agent): ArrangeTile => {
-        // A reviewer the user started reviews `reviewOf`; one an orchestrator started reviews a branch.
-        const reviewed = agent.reviewOf ?? (agent.reviews === null ? undefined : branches.get(agent.reviews.branch));
-        return {
-          id: tileSizeKey('agent', agent.sessionId),
-          name: agent.name,
-          kind: 'agent',
-          role: agent.role,
-          issue: agent.issue?.id ?? null,
-          issueTitle: agent.issue?.title ?? null,
-          state: agent.state,
-          reviewOf: reviewed === undefined ? null : tileSizeKey('agent', reviewed),
-          lead: agent.sessionId === me.agent?.sessionId,
-          branch: ticketBranch(board.agents, agent),
-          createdAt: agent.createdAt,
-          ...(board.sizes[tileSizeKey('agent', agent.sessionId)] === undefined ? {} : { size: board.sizes[tileSizeKey('agent', agent.sessionId)] }),
-        };
-      }),
+      ...workTilesOf(board.agents, agentsHere, me.agent?.sessionId, board.sizes),
       ...board.shells
         .filter((shell) => shell.zoneId === zone.id)
         .map((shell): ArrangeTile => ({
@@ -1357,6 +1321,9 @@ export function layoutHandlers<Context extends BoardConnection>({
         const board = await readBoard();
         const zone = checkDestination(me, board, zoneId)!;
         entry.on = { id: zone.id, name: zone.name };
+        // On shelves or in clusters it lays itself out: an arrange would move the places it isn't drawn at, and free would
+        // not be as it was.
+        if (zone.layoutMode !== 'free') throw invalidParams(`${zone.name} is laid out ${zone.layoutMode === 'shelves' ? 'on status shelves' : 'in clusters, by ticket'}: set it free first (zone layout free) to arrange it`);
         // Kept only once the arrange is sure to go ahead: a refused one keeps nothing.
         const { by, layout } = { ...(await settingsOf(me)), ...changed };
         // What it lays out round is as big as the app draws it.
@@ -1561,6 +1528,8 @@ export function layoutHandlers<Context extends BoardConnection>({
     try {
       const me = caller();
       if (!(await settingsOf(me)).auto) return false;
+      // A zone on shelves or in clusters lays itself out: nothing to arrange, and nothing to warn of.
+      if (((await readBoard()).zones.find((zone) => zone.id === zoneId)?.layoutMode ?? 'free') !== 'free') return false;
       await arrangeIn(me, zoneId, () => ({}), ', by itself');
       return true;
     } catch (error) {
@@ -1797,6 +1766,21 @@ export function layoutHandlers<Context extends BoardConnection>({
         // As the board's Delete: its tiles and notes stay where they are drawn, loose.
         await call('zone.dissolve', { id: zone.id });
         return null;
+      });
+    },
+
+    'orchestrator.zoneLayout': async (params, connection) => {
+      const p = paramsObject(params);
+      const me = access.caller('orchestrator.zoneLayout', p, connection);
+      const mode = oneOf(p, 'mode', ZONE_LAYOUT_MODES);
+      const entry: ActivityEntry = { detail: mode };
+      return access.logged(me, 'zone-layout', entry, async () => {
+        const zoneId = optionalStringParam(p, 'zoneId') ?? me.zoneId;
+        if (zoneId === null) throw invalidParams(`${me.agent === null ? 'you have' : 'your tile is in'} no zone: name the zone to lay out`);
+        const zone = checkDestination(me, await readBoard(), zoneId)!;
+        entry.on = { id: zone.id, name: zone.name };
+        // Only how the zone draws what it holds: no tile's saved place changes, so back to free is as it was.
+        return call('zone.configure', { id: zone.id, layoutMode: mode });
       });
     },
 

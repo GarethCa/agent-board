@@ -5,18 +5,31 @@ import { describe, expect, it } from 'vitest';
 import { createAskHost } from '../src/asks.ts';
 import { readPlanSource } from '../src/board-ops.ts';
 import { migrate } from '../src/migrate.ts';
-import { DEFAULT_ASK_WAIT_MS, DEFAULT_PLAN_WAIT_MS, MAX_ASK_OPTIONS, isMidTurn, pauseRefusal, planPending, waitsOnUser } from '../src/protocol.ts';
+import {
+  DEFAULT_ASK_WAIT_MS,
+  DEFAULT_PLAN_WAIT_MS,
+  MAX_ASK_OPTIONS,
+  isMidTurn,
+  pauseRefusal,
+  planPending,
+  waitsOnUser,
+  type AgentAsk,
+  type BoardItem,
+  type StepsAskEnd,
+} from '../src/protocol.ts';
 import { createFakeClock } from './fake-clock.ts';
 import { tempDataDir } from './helpers.ts';
 
 const START = new Date('2026-10-14T14:00:00.000Z');
 
-/** A host over a fresh database, with the changes it reports, on a fake clock. */
+/** A host over a fresh database, with the changes it reports, on a fake clock, and the steps cards its asks become. */
 function asks(db = memoryDb(), worktree?: string) {
   const clock = createFakeClock(START);
   const changes: [string, boolean][] = [];
   const placed: string[] = [];
   const told: [string, string][] = [];
+  const cards: { sessionId: string; ask: AgentAsk; ended: { at: string; how: StepsAskEnd } | null }[] = [];
+  const ended: [string, StepsAskEnd][] = [];
   const host = createAskHost({
     db,
     clock,
@@ -24,8 +37,13 @@ function asks(db = memoryDb(), worktree?: string) {
     touched: (sessionId) => placed.push(sessionId),
     worktree: () => worktree,
     told: (sessionId, text) => told.push([sessionId, text]),
+    toCard: (sessionId, ask, end) => {
+      cards.push({ sessionId, ask, ended: end });
+      return Promise.resolve({ id: `card-${cards.length}` } as BoardItem);
+    },
+    cardEnded: (cardId, end) => ended.push([cardId, end.how]),
   });
-  return { db, clock, changes, placed, told, host };
+  return { db, clock, changes, placed, told, cards, ended, host };
 }
 
 function memoryDb(): DatabaseSync {
@@ -105,28 +123,187 @@ describe('questions an agent asks the user', () => {
     expect(() => host.ask('s2', { question: 'Which?', options: ['Redis', ''] }, never())).toThrow(/option 2 must not be empty/);
   });
 
-  it('shows a question on the board only when the agent asks for its card, beside its tile until the user moves it', async () => {
-    const { host, changes, placed } = asks();
+  it('puts a question on the board at once, as a steps card it waits on, only when the agent asks for that', async () => {
+    const { host, cards } = asks();
     void host.ask('s1', { question: 'Which cache?' }, never());
-    expect(host.pendingAsk('s1')).toMatchObject({ onBoard: false, at: null });
+    expect(host.pendingAsk('s1')).toMatchObject({ onBoard: false, card: null });
 
-    const answered = host.ask('s2', { question: 'Which cache?', options: ['Redis'], onBoard: true }, never());
+    const answered = host.ask('s2', { question: 'Which cache?', options: ['Redis', 'SQLite'], onBoard: true }, never());
     const { id } = host.pendingAsk('s2')!;
-    expect(host.pendingAsk('s2')).toMatchObject({ onBoard: true, at: null });
+    await Promise.resolve();
+    expect(cards.map((card) => card.sessionId)).toEqual(['s2']);
+    expect(host.pendingAsk('s2')).toMatchObject({ onBoard: true, card: 'card-1' });
+    expect(() => host.answer('s2', id, { option: 0 })).toThrow(/answer it on its card/);
 
-    host.place('s2', id, { x: 420, y: -80 });
-    expect(host.pendingAsk('s2')).toMatchObject({ id, onBoard: true, at: { x: 420, y: -80 } });
-    // A move is no new question: the agent's tile and the inbox follow, and what the user saw of it stays seen.
-    expect(placed).toEqual(['s2']);
-    expect(changes).toEqual([['s1', true], ['s2', true]]);
+    expect(host.sendFromCard('s2', id, 'card-1', [{ option: 1 }])).toBe(true);
+    expect(await answered).toEqual({ outcome: 'answered', answer: 'SQLite', card: 'card-1' });
+  });
+});
 
-    expect(() => host.place('s2', 'another', { x: 0, y: 0 })).toThrow(/no longer asks/);
-    expect(() => host.place('s1', host.pendingAsk('s1')!.id, { x: 0, y: 0 })).toThrow(/not on the board/);
-    expect(() => host.place('s2', id, { x: Number.NaN, y: 0 })).toThrow(/point/);
+describe('an ask of several questions', () => {
+  const QUESTIONS = [
+    { question: 'Which store?', options: ['Redis', 'SQLite'] },
+    { question: 'Keep the old limit?', options: ['Yes', 'No'] },
+    { question: 'Anything else?' },
+  ];
 
-    host.answer('s2', id, { option: 0 });
-    expect(await answered).toEqual({ outcome: 'answered', answer: 'Redis' });
-    expect(() => host.place('s2', id, { x: 0, y: 0 })).toThrow(/no longer asks/);
+  it('keeps each answer until the user sends them, then gives every one, a question left unanswered as skipped', async () => {
+    const { host, placed } = asks();
+    const answered = host.ask('s1', { questions: QUESTIONS }, never());
+    const ask = host.pendingAsk('s1')!;
+    // Its first question is the ask's own, for what reads one question.
+    expect(ask).toMatchObject({ question: 'Which store?', options: ['Redis', 'SQLite'], answers: [null, null, null], card: null });
+    expect(ask.questions.map((each) => each.freeText)).toEqual([false, false, true]);
+
+    host.answer('s1', ask.id, { option: 1 }, 0);
+    host.answer('s1', ask.id, { text: ' Ship it Friday ' }, 2);
+    // An answer changed before it is sent is the one sent.
+    host.answer('s1', ask.id, { option: 0 }, 0);
+    expect(host.pendingAsk('s1')!.answers).toEqual([{ option: 0 }, null, { text: ' Ship it Friday ' }]);
+    expect(placed).toEqual(['s1', 's1', 's1']);
+    expect(() => host.answer('s1', ask.id, { option: 5 }, 1)).toThrow(/no option 6/);
+    expect(() => host.answer('s1', ask.id, { option: 0 }, 3)).toThrow(/no question 4: it asks 3/);
+
+    host.send('s1', ask.id);
+    expect(await answered).toEqual({
+      outcome: 'answered',
+      answer: 'Redis',
+      answers: [
+        { question: 'Which store?', answer: 'Redis' },
+        { question: 'Keep the old limit?', answer: null },
+        { question: 'Anything else?', answer: 'Ship it Friday' },
+      ],
+    });
+  });
+
+  it('skips as a whole, and sent with nothing answered it is skipped', async () => {
+    const { host } = asks();
+    const skipped = host.ask('s1', { questions: QUESTIONS }, never());
+    host.answer('s1', host.pendingAsk('s1')!.id, { skip: true });
+    expect(await skipped).toMatchObject({ outcome: 'skipped', answer: null });
+
+    const empty = host.ask('s1', { questions: QUESTIONS }, never());
+    host.send('s1', host.pendingAsk('s1')!.id);
+    expect(await empty).toMatchObject({ outcome: 'skipped' });
+  });
+
+  it('holds 1 to 4 questions: more is a steps card', () => {
+    const { host } = asks();
+    const five = Array.from({ length: 5 }, (_, at) => ({ question: `Question ${at + 1}?` }));
+    expect(() => host.ask('s1', { questions: five }, never())).toThrow(/That's a steps card: use steps_new/);
+    expect(() => host.ask('s1', { questions: [] }, never())).toThrow(/at least one question/);
+    expect(() => host.ask('s1', { question: 'Which?', questions: QUESTIONS }, never())).toThrow(/exactly one of question or questions/);
+    expect(() => host.ask('s1', { questions: [{ question: ' ' }] }, never())).toThrow(/question must not be empty/);
+    expect(host.pendingAsk('s1')).toBeNull();
+  });
+
+  it('is put on the board while the agent still waits, and then answered only on its card, whose Send answers the call', async () => {
+    const { host, cards } = asks();
+    const answered = host.ask('s1', { questions: QUESTIONS }, never());
+    const { id } = host.pendingAsk('s1')!;
+    host.answer('s1', id, { option: 1 }, 0);
+
+    const card = await host.toCard('s1', id);
+    expect(card.id).toBe('card-1');
+    expect(cards).toEqual([{ sessionId: 's1', ask: expect.objectContaining({ answers: [{ option: 1 }, null, null] }), ended: null }]);
+    expect(host.pendingAsk('s1')!.card).toBe('card-1');
+    await expect(host.toCard('s1', id)).rejects.toThrow(/on the board already/);
+    expect(() => host.answer('s1', id, { option: 0 }, 1)).toThrow(/answer it on its card \(item:card-1\)/);
+    expect(() => host.send('s1', id)).toThrow(/answer it on its card/);
+
+    // Only the card it waits on answers it.
+    expect(host.sendFromCard('s1', 'another ask', 'card-1', [])).toBe(false);
+    expect(host.sendFromCard('s1', id, 'an old card', [])).toBe(false);
+    expect(host.waitsOnCard('s1', id, 'card-1')).toBe(true);
+    expect(host.sendFromCard('s1', id, 'card-1', [{ option: 1 }, { option: 0 }, null])).toBe(true);
+    expect(await answered).toMatchObject({ outcome: 'answered', answer: 'SQLite', card: 'card-1', answers: [{ answer: 'SQLite' }, { answer: 'Yes' }, { answer: null }] });
+    expect(host.sendFromCard('s1', id, 'card-1', [])).toBe(false);
+  });
+
+  it('makes one card for a double Put on the board, and takes no answer while it is made', async () => {
+    const { host, cards } = asks();
+    void host.ask('s1', { questions: QUESTIONS }, never());
+    const { id } = host.pendingAsk('s1')!;
+    const first = host.toCard('s1', id);
+    const second = host.toCard('s1', id);
+    expect(() => host.answer('s1', id, { option: 0 }, 1)).toThrow(/being put on the board/);
+    expect(() => host.send('s1', id)).toThrow(/being put on the board/);
+    expect((await first).id).toBe('card-1');
+    expect((await second).id).toBe('card-1');
+    expect(cards).toHaveLength(1);
+  });
+
+  it('takes back a card put back on the board while it waits with none, and only its own', async () => {
+    const { host, placed } = asks();
+    void host.ask('s1', { questions: QUESTIONS }, never());
+    const { id } = host.pendingAsk('s1')!;
+    await host.toCard('s1', id);
+    expect(host.cardBack('card-1', 's1', id)).toBe(true);
+    // Taken off, then put back by an undo: it waits on it again, and the tile no longer answers it.
+    host.cardGone('card-1');
+    expect(host.cardBack('card-1', 's1', id)).toBe(true);
+    expect(host.pendingAsk('s1')!.card).toBe('card-1');
+    expect(placed.at(-1)).toBe('s1');
+    // Another card of it, or one of an ask that no longer waits, answers nothing.
+    expect(host.cardBack('card-9', 's1', id)).toBe(false);
+    expect(host.cardBack('card-1', 's1', 'an old ask')).toBe(false);
+  });
+
+  it('keeps answers in words a card can hold, for several questions', () => {
+    const { host } = asks();
+    void host.ask('s1', { questions: QUESTIONS }, never());
+    expect(() => host.answer('s1', host.pendingAsk('s1')!.id, { text: 'x'.repeat(2_001) }, 2)).toThrow(/at most 2000 characters/);
+  });
+
+  it('keeps no card for an agent whose session ends with an ask half-answered', async () => {
+    const { host, cards } = asks();
+    const ended = host.ask('s1', { questions: QUESTIONS }, never());
+    host.answer('s1', host.pendingAsk('s1')!.id, { option: 0 }, 0);
+    host.end('s1');
+    await expect(ended).rejects.toThrow(/stopped waiting/);
+    expect(cards).toEqual([]);
+  });
+
+  it('comes back to its tile once its card is taken off the board, and is skipped wherever it is', async () => {
+    const { host, placed, ended } = asks();
+    const answered = host.ask('s1', { questions: QUESTIONS }, never());
+    const { id } = host.pendingAsk('s1')!;
+    host.answer('s1', id, { option: 1 }, 0);
+    await host.toCard('s1', id);
+    host.cardGone('another card');
+    expect(host.pendingAsk('s1')!.card).toBe('card-1');
+
+    host.cardGone('card-1');
+    expect(host.pendingAsk('s1')).toMatchObject({ card: null, answers: [{ option: 1 }, null, null] });
+    expect(placed.at(-1)).toBe('s1');
+    host.answer('s1', id, { option: 0 }, 1);
+
+    await host.toCard('s1', id);
+    host.answer('s1', id, { skip: true });
+    expect(await answered).toMatchObject({ outcome: 'skipped', card: 'card-2' });
+    expect(ended).toEqual([['card-2', 'stopped']]);
+  });
+
+  it('kept on a card as it ends half-answered, its card stamped; with no answer it just goes', async () => {
+    const { host, clock, cards, ended } = asks();
+    const late = host.ask('s1', { questions: QUESTIONS, timeoutMs: 60_000 }, never());
+    host.answer('s1', host.pendingAsk('s1')!.id, { option: 0 }, 1);
+    clock.advance(60_000);
+    expect(await late).toEqual({ outcome: 'timed-out', answer: null, card: 'card-1' });
+    expect(cards[0]!.ended).toEqual({ at: expect.any(String), how: 'timed-out' });
+
+    const stopped = new AbortController();
+    const dropped = host.ask('s1', { questions: QUESTIONS }, stopped.signal);
+    const { id } = host.pendingAsk('s1')!;
+    await host.toCard('s1', id);
+    stopped.abort();
+    await expect(dropped).rejects.toThrow(/stopped waiting/);
+    expect(ended).toEqual([['card-2', 'stopped']]);
+
+    const unanswered = host.ask('s1', { questions: QUESTIONS, timeoutMs: 60_000 }, never());
+    clock.advance(60_000);
+    expect(await unanswered).toEqual({ outcome: 'timed-out', answer: null });
+    expect(cards).toHaveLength(2);
   });
 });
 

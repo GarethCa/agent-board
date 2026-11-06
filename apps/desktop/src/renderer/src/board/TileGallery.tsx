@@ -42,7 +42,7 @@ const EXTRAS: Record<GalleryState, { harness: Harness; name: string } & Partial<
     harness: 'claude',
     name: 'Clean the build',
     muted: true,
-    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
+    permissions: [{ id: 'ask', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
   },
   idle: {
     harness: 'codex',
@@ -100,6 +100,8 @@ export const galleryAgent = (state: AgentState): Agent => ({
   repoRoot: '/code/gallery',
   position: null,
   model: null,
+  effort: null,
+  effortPending: null,
   role: null,
   roleName: null,
   reviews: null,
@@ -121,6 +123,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   records: [],
   recordedPullRequests: [],
   guessedDoc: null,
+  page: null,
   createdAt: AT,
   endedAt: null,
   exitCode: null,
@@ -134,6 +137,7 @@ export const galleryAgent = (state: AgentState): Agent => ({
   finishedAt: null,
   permissions: [],
   ask: null,
+  stepsWait: null,
   plan: null,
   docs: [],
   schedule: null,
@@ -175,10 +179,13 @@ const CROWDED: Agent = {
   schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
 };
 
-/** Names of 10, 30 and 60 characters, on tiles that are not crowded, and a reviewer's: none is cut off before its second line. */
+/**
+ * Names of 10, 30 and 60 characters, on tiles that are not crowded, and a reviewer's: none is cut off before its
+ * second line. The first two show a reasoning effort's badge: one taken, one still to take after its turn.
+ */
 const NAMES: Agent[] = [
-  { ...galleryAgent('running'), sessionId: 'gallery-name-10', name: 'Fix a bug!' },
-  { ...galleryAgent('waiting'), sessionId: 'gallery-name-30', name: 'Move the dock into the island' },
+  { ...galleryAgent('running'), sessionId: 'gallery-name-10', name: 'Fix a bug!', effort: 'high' },
+  { ...galleryAgent('waiting'), sessionId: 'gallery-name-30', name: 'Move the dock into the island', effort: 'max', effortPending: 'after-turn' },
   { ...galleryAgent('done'), sessionId: 'gallery-name-60', name: 'Rework the movable sessions follow-up so the dock keeps up!' },
   { ...galleryAgent('thinking'), sessionId: 'gallery-reviewer', name: 'Write the code · review r1', reviewOf: 'gallery-running' },
 ];
@@ -217,6 +224,7 @@ export const START: AgentStart = {
   name: 'Pick a cache',
   harness: 'claude',
   model: 'opus',
+  effort: null,
   spawnedBy: null,
   steps: [{ kind: 'worktree', state: 'now', detail: null }],
   error: null,

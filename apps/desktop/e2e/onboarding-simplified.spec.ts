@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { fakeBinDir } from '@agent-board/fake-harness';
 import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen } from './agent-helpers.ts';
+import { launch, screen, unfoldMenuSection } from './agent-helpers.ts';
 import { test, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -133,6 +133,7 @@ test('Simplified first run, installed but signed out: Sign in runs Claude Codeâ€
   await expect(window.locator('html')).toHaveAttribute('data-design', 'simplified');
   await expect(window.getByTestId('onboarding')).toHaveCount(0);
   await window.getByRole('button', { name: 'Board menu' }).click();
+  await unfoldMenuSection(window, 'Help');
   await window.getByRole('button', { name: 'Getting started' }).click();
   await expect(window.getByRole('dialog', { name: 'Ahoy! Iâ€™m the Captain.' })).toBeVisible();
   await window.keyboard.press('Escape');

@@ -20,8 +20,8 @@ export function codexLoadingComposer(): string[] {
 }
 
 /** Its composer once its session is up, its status line naming `model` and `cwd` under it. */
-export function codexComposer(model: string, cwd: string): string[] {
-  return ['', CODEX_COMPOSER, '', `  ${model} default · ${cwd}`, '  ← for agents · ? for shortcuts'];
+export function codexComposer(model: string, cwd: string, effort = 'default'): string[] {
+  return ['', CODEX_COMPOSER, '', `  ${model} ${effort} · ${cwd}`, '  ← for agents · ? for shortcuts'];
 }
 
 /**

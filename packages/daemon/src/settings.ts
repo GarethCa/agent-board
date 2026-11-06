@@ -5,10 +5,14 @@ import {
   ARRANGE_SPACINGS,
   COMPACT_WINDOW_RANGE,
   DEFAULT_ARRANGE_SPACING,
+  EFFORTS,
+  HARNESS_EFFORTS,
   HELD_PAYLOAD_STORAGE,
   NEEDS_YOU_SHOWS,
   type DaemonMethods,
   type DaemonSettings,
+  type Effort,
+  type Harness,
 } from './protocol.ts';
 import type { RpcHandlers } from './rpc.ts';
 
@@ -26,6 +30,8 @@ const DEFAULT_SETTINGS: DaemonSettings = {
   notifyInFront: false,
   arrangeSpacing: DEFAULT_ARRANGE_SPACING,
   keepWebLogins: true,
+  defaultEffort: null,
+  roleEfforts: {},
 };
 
 /** The settings that are switches. */
@@ -53,6 +59,8 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       if (key === 'needsYouShows' && NEEDS_YOU_SHOWS.includes(JSON.parse(value))) settings.needsYouShows = JSON.parse(value);
       if (key === 'arrangeSpacing' && ARRANGE_SPACINGS.includes(JSON.parse(value))) settings.arrangeSpacing = JSON.parse(value);
       for (const name of SWITCHES) if (key === name && typeof JSON.parse(value) === 'boolean') settings[name] = JSON.parse(value);
+      if (key === 'defaultEffort' && EFFORTS.includes(JSON.parse(value))) settings.defaultEffort = JSON.parse(value);
+      if (key === 'roleEfforts') settings.roleEfforts = savedRoleEfforts(JSON.parse(value));
     }
     return settings;
   };
@@ -64,6 +72,10 @@ export function createSettings(db: DatabaseSync, changed: (now: DaemonSettings, 
       'settings.set': (params) => {
         const fields = paramsObject(params);
         const was = get();
+        const efforts = fields.defaultEffort === undefined ? undefined : defaultEffortParam(fields);
+        const roleEfforts = fields.roleEfforts === undefined ? undefined : roleEffortsParam(fields);
+        if (efforts !== undefined) upsert.run('defaultEffort', JSON.stringify(efforts));
+        if (roleEfforts !== undefined) upsert.run('roleEfforts', JSON.stringify(roleEfforts));
         if (fields.heldPayloads !== undefined) upsert.run('heldPayloads', JSON.stringify(oneOf(fields, 'heldPayloads', HELD_PAYLOAD_STORAGE)));
         for (const key of ['claudePath', 'codexPath'] as const) {
           if (fields[key] !== undefined) upsert.run(key, JSON.stringify(harnessPathParam(fields, key)));
@@ -101,4 +113,55 @@ function compactWindowParam(fields: Record<string, unknown>): number {
     throw invalidParams(`compactWindow must be 0 (off), or a whole number from ${COMPACT_WINDOW_RANGE.min} to ${COMPACT_WINDOW_RANGE.max}`);
   }
   return value;
+}
+
+/**
+ * The reasoning effort a new `harness` agent in role `role` (a built-in role, or a custom one's name) starts at when it
+ * is not asked for one: its role's in Settings, else every new agent's; null for the harness's own. One the harness
+ * doesn't take (Codex has no `max`) is the highest it does.
+ */
+export function defaultEffort(settings: Pick<DaemonSettings, 'defaultEffort' | 'roleEfforts'>, harness: Harness, role: string | null): Effort | null {
+  const wanted = (role === null ? undefined : settings.roleEfforts[roleKey(role)]) ?? settings.defaultEffort;
+  if (wanted === null) return null;
+  const takes = HARNESS_EFFORTS[harness];
+  return takes.includes(wanted) ? wanted : takes.at(-1)!;
+}
+
+/**
+ * The name a role's effort is kept under: matched in ASCII case only, as role templates are, and a follow-up reviewer's
+ * under the reviewers'.
+ */
+function roleKey(role: string): string {
+  const key = role.trim().replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  return key === 'follow-up-reviewer' ? 'reviewer' : key;
+}
+
+/** Every new agent's reasoning effort from Settings: a level, or null for the harness's own. */
+function defaultEffortParam(fields: Record<string, unknown>): Effort | null {
+  const value = fields.defaultEffort;
+  if (value !== null && !EFFORTS.includes(value as Effort)) throw invalidParams(`defaultEffort must be one of ${EFFORTS.join(', ')}, or null`);
+  return value as Effort | null;
+}
+
+/** Each role's reasoning effort from Settings, by the role's name: a role left out takes every new agent's. */
+function roleEffortsParam(fields: Record<string, unknown>): Record<string, Effort> {
+  const value = fields.roleEfforts;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw invalidParams('roleEfforts must be an object of role names to efforts');
+  const efforts: Record<string, Effort> = {};
+  for (const [role, effort] of Object.entries(value)) {
+    if (role.trim() === '') throw invalidParams('roleEfforts takes a role by its name');
+    if (!EFFORTS.includes(effort as Effort)) throw invalidParams(`roleEfforts.${role} must be one of ${EFFORTS.join(', ')}`);
+    efforts[roleKey(role)] = effort as Effort;
+  }
+  return efforts;
+}
+
+/** The role efforts saved, leaving out any that are not a level. */
+function savedRoleEfforts(value: unknown): Record<string, Effort> {
+  if (typeof value !== 'object' || value === null) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, effort]) => EFFORTS.includes(effort as Effort))
+      .map(([role, effort]) => [roleKey(role), effort]),
+  ) as Record<string, Effort>;
 }

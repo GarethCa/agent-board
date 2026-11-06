@@ -25,6 +25,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   'add-zone': { done: 'made', tried: 'make', of: 'the group ', nothing: 'a group' },
   'change-zone': { done: 'changed', tried: 'change', of: 'the group ', nothing: 'a group' },
   'remove-zone': { done: 'removed', tried: 'remove', of: 'the group ', nothing: 'a group' },
+  'zone-layout': { done: 'set the layout of', tried: 'set the layout of', of: 'the zone ', nothing: 'a zone' },
   'add-note': { done: 'added', tried: 'add', nothing: 'a note' },
   'edit-note': { done: 'edited', tried: 'edit', nothing: 'a note' },
   'remove-note': { done: 'removed', tried: 'remove', nothing: 'a note' },
@@ -41,6 +42,10 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   release: { done: 'released', tried: 'release', of: 'the zone ', nothing: 'a zone' },
   'set-role': { done: 'set', tried: 'set', of: 'the default role ', nothing: 'a default role' },
   'remove-role': { done: 'removed', tried: 'remove', of: 'the default role ', nothing: 'a default role' },
+  'save-prefab': { done: 'saved', tried: 'save', of: 'the crew prefab ', nothing: 'a crew prefab' },
+  'remove-prefab': { done: 'removed', tried: 'remove', of: 'the crew prefab ', nothing: 'a crew prefab' },
+  'stop-crew': { done: 'stopped', tried: 'stop', of: 'the crew ', nothing: 'a crew' },
+  'crew-round': { done: 'gave one more round to', tried: 'give one more round to', of: 'the crew ', nothing: 'a crew' },
   'set-status': { done: 'set the status of', tried: 'set the status of' },
 };
 

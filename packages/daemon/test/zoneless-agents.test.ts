@@ -156,6 +156,26 @@ describe('zone-less agents', () => {
     expect(commandOf(session!.pid)).toContain('--model haiku');
   });
 
+  it('run at the reasoning effort asked for, and keep it', async () => {
+    const { client } = await agentDaemon();
+
+    const agent = await client.call('agent.spawn', { zoneId: null, repo: { path: tempRepo() }, prompt: 'Go', effort: 'high', position: at, ...SIZE });
+
+    expect(agent.effort).toBe('high');
+    const [session] = await client.call('session.list');
+    expect(commandOf(session!.pid)).toContain('--effort high');
+  });
+
+  it('refuse a reasoning effort the harness does not take', async () => {
+    const { client } = await agentDaemon();
+    const spawn = (harness: 'claude' | 'codex', effort: string) =>
+      client.call('agent.spawn', { zoneId: null, repo: { path: tempRepo() }, prompt: 'Go', harness, effort: effort as 'high', position: at, ...SIZE });
+
+    await expect(spawn('claude', 'huge')).rejects.toMatchObject({ code: RPC_ERROR.invalidParams, message: 'Claude takes a reasoning effort of low, medium, high, xhigh or max' });
+    await expect(spawn('codex', 'max')).rejects.toMatchObject({ code: RPC_ERROR.invalidParams, message: 'Codex takes a reasoning effort of low, medium, high or xhigh' });
+    expect(await client.call('agent.list')).toEqual([]);
+  });
+
   it('leave nothing behind when they fail to start: no scratch repo, no worktree, no recent folder', async () => {
     const { client, scratchDir } = await agentDaemon();
     const repo = tempRepo();

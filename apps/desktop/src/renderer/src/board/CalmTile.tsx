@@ -13,6 +13,9 @@ import { Character } from './Character';
 import { CommandFigure } from './CommandFigure';
 import { lightCrew } from './crew-view';
 import { HandoffsContext } from './flow-edges';
+import { JobTicket, useHeldJobs } from './items/taken-jobs';
+import { useJobDropOver } from './items/queue-board';
+import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
 import { agentMenu } from './menu-model';
 import { useRenameRequest } from './rename';
@@ -21,6 +24,8 @@ import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
 import { lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 import { useFittedLines } from './use-fitted-lines';
+import { quickAskOf } from './quick-ask';
+import { TileQuickAsk } from './TileQuickAsk';
 
 type CalmTileProps = { id: string; selected: boolean; agent: Agent } & Pick<TileData, 'repo' | 'from' | 'crew' | 'crewFlags' | 'implementer'>;
 
@@ -39,15 +44,19 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const gate = useGateRun(agent.sessionId);
   const rounds = roundsOf(useReviews(), agent.sessionId);
   const dropOver = dropOverValue.use();
+  const jobDrop = useJobDropOver() === agent.sessionId;
   const handoffs = useContext(HandoffsContext);
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const fitted = useFittedLines();
+  const held = useHeldJobs(agent.sessionId);
+  const commands = useBoardCommands();
   const face = calmFace(agent, shows, implementer);
+  const quick = quickAskOf(agent);
   const sending = handoffs.sending.has(agent.sessionId) && face.status !== 'needs-you';
   const card = lastMessageCard(agent);
-  const open = () => (clickOpens === 'window' ? openAgent(agent) : expand(id));
+  const open = () => (clickOpens !== 'expand' ? openAgent(agent) : expand(id));
   const closed = isClosed(agent);
   const { startup } = agent;
   const drop = dropKey({ kind: 'agent', id: agent.sessionId });
@@ -65,6 +74,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         data-zone={agent.zoneId ?? ''}
         data-tab-drop={drop}
         data-drop-over={dropOver === drop || undefined}
+        data-job-drop={jobDrop || undefined}
         data-muted={agent.muted}
         data-seen={(agent.seen && waitsForYou(agent, shows)) || undefined}
         data-needs-you={needsYouNow(agent, shows) || undefined}
@@ -75,7 +85,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
         data-crew={crew === undefined ? from?.sessionId : agent.sessionId}
         onMouseEnter={crew === undefined ? undefined : () => lightCrew(agent.sessionId)}
         onMouseLeave={crew === undefined ? undefined : () => lightCrew(undefined)}
-        title={card !== undefined ? undefined : clickOpens === 'window' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+        title={card !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
         onDoubleClick={open}
       >
         <div className="hybrid-tile-head calm-tile-head">
@@ -144,7 +154,18 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
               ⚑ {crewFlags}
             </span>
           )}
-          {face.action !== null && <CalmButton action={face.action} agent={agent} actions={tileActions} open={open} />}
+          {held[0] !== undefined && <JobTicket taken={held[0]} onOpen={commands.showItem} />}
+          {held.length > 1 && (
+            <span className="calm-tile-more" title={held.slice(1).map((taken) => `Its job from “${taken.queueTitle}”: ${taken.job.text}`).join('\n')}>
+              +{held.length - 1}
+            </span>
+          )}
+          {/* Its ask opens from its chip, beside the tile, in the button's place. */}
+          {quick !== undefined ? (
+            <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+          ) : (
+            face.action !== null && <CalmButton action={face.action} agent={agent} actions={tileActions} open={open} />
+          )}
         </span>
         <span className="calm-tile-technical" data-testid="tile-technical" data-technical-detail="">
           <HarnessMark harness={agent.harness} />

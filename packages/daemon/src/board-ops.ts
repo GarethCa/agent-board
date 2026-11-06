@@ -1,11 +1,12 @@
 // The board as the agent-facing CLI and MCP see it (ADR-0010): one module both call, over the daemon methods the app
 // uses (plus `board.identify` and `board.setStatus`). Refs, resolving them, and each view as text and as JSON.
 import { cronWords } from './cron.ts';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 import { BOARD_DATA_DIR_ENV, BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from './board-env.ts';
 import type { AskSpec, PlanSpec } from './asks.ts';
+import { oneLine } from './terminal-input.ts';
 import { connectDaemon, DaemonRpcError, type DaemonClient } from './client.ts';
 import { shortCommit } from './gate-rules.ts';
 import { daemonPaths, defaultDataDir } from './paths.ts';
@@ -13,9 +14,16 @@ import {
   BOARD_ERROR,
   DEFAULT_ASK_WAIT_MS,
   type Agent,
+  type CrewPrefab,
+  type Crew,
+  type CrewReviewer,
+  type CrewStop,
+  type LibraryPrefab,
+  type PrefabMember,
   type AgentRecord,
   type SentToOrchestrator,
   type PlanFormat,
+  type PageParams,
   type PinRef,
   type RecordParams,
   type SendDelivery,
@@ -23,6 +31,7 @@ import {
   type BoardCaller,
   type CrewEvent,
   type CrewEventKind,
+  type Effort,
   type Harness,
   type OrchestrateScope,
   type OrchestratorActivity,
@@ -50,6 +59,7 @@ import {
   type Zone,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
+import { parsePrefab, prefabFile, prefabFileName } from './crew-prefabs.ts';
 import { minutes, planDecisionText } from './plan-told.ts';
 
 /** A failure to show the user as it is: a bad ref, no daemon, an unknown token. */
@@ -807,6 +817,10 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
             ['status', agent.status === null ? 'not set' : agentDoing(agent)],
             ['task', agent.description === '' ? '(none)' : cut(agent.description, 200)],
             ['harness', `${agent.harness}${agent.model === null ? '' : ` (${agent.model})`}`],
+            [
+              'reasoning',
+              `${agent.effort ?? "its harness's own"}${agent.effortPending === 'after-turn' ? ' (after this turn)' : agent.effortPending === 'restart' ? ' (on restart)' : ''}`,
+            ],
             ['role', roleLabel(agent)],
             ['zone', inZone(refs, agent.zoneId)],
             ['repo', tilde(agent.repoRoot)],
@@ -935,6 +949,8 @@ export interface NewAgentOptions {
   zone?: string;
   harness?: string;
   model?: string;
+  /** Its reasoning effort, as typed: the daemon checks it is one its harness takes. */
+  effort?: string;
   role?: string;
   /** Start it without its role's template: its first message is exactly `prompt`. */
   noTemplate?: boolean;
@@ -944,6 +960,8 @@ export interface NewAgentOptions {
   branch?: string;
   /** The branch to cut it from, or an agent ref for that agent's branch. */
   base?: string;
+  /** Join a reviewer started on an agent's branch to that agent: none without. */
+  edges?: 'auto' | 'manual';
   issue?: string;
 }
 
@@ -1019,12 +1037,14 @@ export async function newAgent(session: BoardSession, options: NewAgentOptions):
     ...(zoneId === undefined ? {} : { zoneId }),
     ...(options.harness === undefined ? {} : { harness: options.harness as Harness }),
     ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.effort === undefined ? {} : { effort: options.effort as Effort }),
     ...(options.role === undefined ? {} : { role: options.role }),
     ...(options.noTemplate === true ? { noTemplate: true } : {}),
     ...(options.name === undefined ? {} : { name: options.name }),
     ...(repo === undefined ? {} : { repo }),
     ...(options.branch === undefined ? {} : { branch: options.branch }),
     ...(baseBranch === undefined ? {} : { baseBranch }),
+    ...(options.edges === undefined ? {} : { edges: options.edges }),
     ...(options.issue === undefined ? {} : { issueId: options.issue }),
   });
   const fresh = await freshAgentLine(session, started.sessionId);
@@ -1084,6 +1104,224 @@ export async function removeDefaultRole(session: BoardSession, name: string, zon
   await session.client.call('orchestrator.removeRole', { token: session.token, name, ...(zone === undefined ? {} : { zoneId: zone.id }) });
   const shown = name.trim();
   return { text: zone === undefined ? `Removed the default role ${shown}.` : `Removed ${zone.name}'s template for ${shown}.`, json: { removed: shown } };
+}
+
+/** A crew prefab's member in a line: its id, role, harness, model and reasoning, and when it starts. */
+function memberLine(member: PrefabMember, width: number): string {
+  const what = [member.role ?? 'no role', member.harness, member.model, member.effort === null ? null : `${member.effort} effort`].filter(Boolean).join(' · ');
+  const when = member.starts === 'prompt' ? 'starts on the prompt' : member.starts === 'handoff' ? "starts at the builder's first hand-off" : 'started by the lead';
+  const checks = member.subagents.length === 0 ? '' : `, with ${member.subagents.map((each) => each.name).join(', ')}`;
+  return `  ${member.id.padEnd(width)}  ${what}, ${when}${checks}`;
+}
+
+/** A crew prefab in a few lines: its name and what it is for, its round limit, and its members. */
+function prefabLines(prefab: CrewPrefab): string {
+  const width = Math.max(...prefab.members.map((member) => member.id.length));
+  const tiles = prefab.onBoard === 'tiles' ? ', drawn as member tiles' : '';
+  return [
+    `${prefab.name}${prefab.purpose === '' ? '' : `: ${prefab.purpose}`}`,
+    `  At most ${prefab.roundLimit} review ${prefab.roundLimit === 1 ? 'round' : 'rounds'}${tiles}.`,
+    ...prefab.members.map((member) => memberLine(member, width)),
+  ].join('\n');
+}
+
+/** The library's prefab `name`, in ASCII case as names match, else a `BoardError` that says how to list them. */
+async function libraryPrefab(session: BoardSession, name: string): Promise<LibraryPrefab> {
+  const folded = (text: string) => text.trim().replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  const { prefabs, unreadable } = await session.client.call('orchestrator.prefabs', { token: session.token });
+  const found = prefabs.find((each) => folded(each.name) === folded(name));
+  if (found !== undefined) return found;
+  const bad = unreadable.find((each) => folded(each.name) === folded(name));
+  if (bad !== undefined) throw new BoardError(`the crew prefab ${bad.name} can't be read (${bad.reason}): remove it, or import it again`);
+  throw new BoardError(`the library has no crew prefab named ${name.trim()}: agent-board prefab ls lists them`);
+}
+
+/** `prefab ls`: every prefab in the library, built-ins first, each with its members and what it is for. */
+export async function prefabsView(session: BoardSession): Promise<BoardView> {
+  const { prefabs, unreadable } = await session.client.call('orchestrator.prefabs', { token: session.token });
+  const width = Math.max(...[...prefabs, ...unreadable].map((prefab) => prefab.name.length));
+  return {
+    text: [
+      ...prefabs.map((prefab) => {
+        const members = prefab.members.map((member) => member.id).join(', ');
+        return `${prefab.name.padEnd(width)}  ${prefab.builtIn ? 'built-in' : 'saved   '}  ${members}${prefab.purpose === '' ? '' : `  ${cut(prefab.purpose, 80)}`}`;
+      }),
+      // Saved by an earlier release that read it looser: listed, so it can be removed or imported again.
+      ...unreadable.map((bad) => `${bad.name.padEnd(width)}  unreadable  ${cut(bad.reason, 80)}: \`agent-board prefab remove\` it, or import it again`),
+    ].join('\n'),
+    json: { prefabs, unreadable },
+  };
+}
+
+/** `prefab show`: one prefab, its members in words, then its whole `.crew.json` file. */
+export async function prefabView(session: BoardSession, name: string): Promise<BoardView> {
+  const prefab = await libraryPrefab(session, name);
+  return { text: `${prefabLines(prefab)}\n\n${prefabFile(prefab)}`, json: prefab };
+}
+
+/** `prefab export`: writes the prefab's `.crew.json` file to `out` (a file named after it, here, without), never over one. */
+export async function exportPrefab(session: BoardSession, name: string, out: string | undefined): Promise<BoardView> {
+  const prefab = await libraryPrefab(session, name);
+  const path = out ?? resolvePath(process.cwd(), prefabFileName(prefab));
+  try {
+    writeFileSync(path, prefabFile(prefab), { flag: 'wx' });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new BoardError(code === 'EEXIST' ? `${tilde(path)} exists already: give another --out` : `can't write ${tilde(path)}: ${(error as Error).message}`);
+  }
+  return { text: `Wrote ${prefab.name} to ${tilde(path)}. Anyone can add it with \`agent-board prefab import\`.`, json: { prefab: prefab.name, path } };
+}
+
+/** The most a `.crew.json` file may be: a prefab is a few members, never more than this. */
+const MAX_PREFAB_FILE_BYTES = 1_000_000;
+
+/**
+ * `prefab import`: reads a `.crew.json` file and shows it whole, as it would be added; with `add`, adds it to the
+ * library (with `replace`, over a saved one of the same name).
+ */
+export async function importPrefab(session: BoardSession, path: string, options: { add: boolean; replace: boolean }): Promise<BoardView> {
+  let text: string;
+  try {
+    if (statSync(path).size > MAX_PREFAB_FILE_BYTES) throw new BoardError(`${tilde(path)} is too big for a crew prefab file`);
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error instanceof BoardError) throw error;
+    throw new BoardError(`can't read ${tilde(path)}: ${(error as Error).message}`);
+  }
+  let prefab: CrewPrefab;
+  try {
+    prefab = parsePrefab(text);
+  } catch (error) {
+    throw new BoardError(`${tilde(path)}: ${(error as Error).message}`);
+  }
+  const whole = `${prefabLines(prefab)}\n\n${prefabFile(prefab)}`;
+  if (!options.add) {
+    return { text: `${tilde(path)} holds this crew prefab:\n\n${whole}\nNothing is added yet: run it again with --add to add it to the library.`, json: prefab };
+  }
+  const saved = await session.client.call('orchestrator.savePrefab', { token: session.token, text, ...(options.replace ? { replace: true } : {}) });
+  return { text: `Added ${saved.name} to the crew prefab library:\n\n${whole}`, json: saved };
+}
+
+/** `prefab remove`: removes a prefab the library saved. */
+export async function removePrefab(session: BoardSession, name: string): Promise<BoardView> {
+  await session.client.call('orchestrator.removePrefab', { token: session.token, name });
+  return { text: `Removed the crew prefab ${name.trim()}.`, json: { removed: name.trim() } };
+}
+
+export interface StartPrefabOptions {
+  name: string;
+  prompt: string;
+  zone?: string;
+  /** In a group, the absolute path of the repo (or a folder in one) to cut its worktree from. */
+  repo?: string;
+  issue?: string;
+}
+
+/** `new --prefab`: starts a crew from a prefab, its builder or lead with the prompt, and says which members start later. */
+export async function startPrefab(session: BoardSession, options: StartPrefabOptions): Promise<BoardView> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  let zoneId: string | undefined;
+  if (options.zone !== undefined) {
+    const object = refs.resolve(options.zone, caller);
+    if (object.kind !== 'zone') throw new BoardError(`${options.zone} is a ${object.kind}, not a zone`);
+    zoneId = object.zone.id;
+  }
+  const crew = await session.client.call('orchestrator.startPrefab', {
+    token,
+    name: options.name,
+    prompt: options.prompt,
+    ...(zoneId === undefined ? {} : { zoneId }),
+    ...(options.repo === undefined ? {} : { repo: options.repo }),
+    ...(options.issue === undefined ? {} : { issueId: options.issue }),
+  });
+  const lines = [crew.crew === null ? `Started a crew from ${crew.prefab}:` : `Started crew:${crew.crew} from ${crew.prefab}:`];
+  const json: unknown[] = [];
+  for (const started of crew.started) {
+    const fresh = await freshAgentLine(session, started.sessionId);
+    lines.push(`  ${started.member}: ${fresh.line}`, `    ${checkout(started)} in ${tilde(started.worktree)}, ${inZone(fresh.refs, started.zoneId)}`);
+    json.push({ member: started.member, ...agentJson(fresh.refs, fresh.agent, session.caller) });
+  }
+  const builder = crew.started[0]?.member ?? 'the builder';
+  for (const later of crew.later) {
+    lines.push(
+      later.starts === 'handoff'
+        ? `  ${later.member}: starts on ${builder}'s branch each time ${builder} hands off, a fresh one each round`
+        : `  ${later.member}: for ${builder} to start when its work is ready`,
+    );
+  }
+  if (crew.crew !== null) lines.push(`agent-board crew show crew:${crew.crew} follows its rounds; agent-board wait crew:${crew.crew} waits until it stops.`);
+  return { text: lines.join('\n'), json: { prefab: crew.prefab, crew: crew.crew === null ? null : `crew:${crew.crew}`, started: json, later: crew.later } };
+}
+
+/** What a crew's stop says, in words. */
+const CREW_STOP_WORDS: Record<CrewStop, string> = {
+  'ready-to-merge': 'ready to merge',
+  'round-limit': 'stopped at its round limit',
+  stopped: 'stopped',
+  merged: 'merged, its agents closed',
+  'builder-gone': 'stopped: its builder is gone',
+};
+
+/** A crew in lines: its state, its builder, and each round's reviewers with what they said. */
+function crewLines(crew: Crew, name: (sessionId: string) => string): string[] {
+  const state =
+    crew.stopped === null
+      ? `round ${crew.round} of ${crew.roundLimit}, ${crew.phase === 'building' ? 'building' : 'reviewing'}${crew.needsYou ? ', needs you' : ''}`
+      : `${CREW_STOP_WORDS[crew.stopped]} after round ${Math.min(crew.round, crew.roundLimit)} of ${crew.roundLimit}`;
+  const said = (reviewer: CrewReviewer) =>
+    reviewer.verdict === null
+      ? reviewer.blockers === null ? 'reviewing' : 'left no verdict'
+      : `${reviewer.verdict}${reviewer.blockers ? `, ${reviewer.blockers} ${reviewer.blockers === 1 ? 'blocker' : 'blockers'} open` : ''}`;
+  return [
+    `crew:${crew.id}  ${crew.prefab}  ${state}`,
+    `  builder: ${name(crew.builder)}`,
+    ...crew.reviewers.map((reviewer) => `  round ${reviewer.round}: ${reviewer.member} ${name(reviewer.sessionId)} (${said(reviewer)})`),
+  ];
+}
+
+/** `agent-board crew [show <crew>]`: the running crews, or one. */
+export async function crewsView(session: BoardSession, crewRef?: string): Promise<BoardView> {
+  const crews = await session.client.call('orchestrator.crews', { token: session.token, ...(crewRef === undefined ? {} : { crewId: crewRef }) });
+  const refs = new BoardRefs(await readBoard(session.client));
+  const name = (sessionId: string) => {
+    const agent = refs.board.agents.find((each) => each.sessionId === sessionId);
+    return agent === undefined ? `${sessionId.slice(0, 8)} (gone)` : `${agent.name} (${refs.refOf({ kind: 'agent', agent })})`;
+  };
+  const text = crews.length === 0 ? 'No crews: agent-board new --prefab starts one.' : crews.flatMap((crew) => crewLines(crew, name)).join('\n');
+  return { text, json: crews };
+}
+
+/** `agent-board crew stop <crew>`. */
+export async function stopCrew(session: BoardSession, crewRef: string): Promise<BoardView> {
+  const crew = await session.client.call('orchestrator.stopCrew', { token: session.token, crewId: crewRef });
+  return { text: `Stopped crew:${crew.id}: no more reviewers start, and no reviews go back. Its agents are left as they are.`, json: crew };
+}
+
+/** `agent-board crew round <crew>`: one more round for a crew stopped at its limit. */
+export async function crewRound(session: BoardSession, crewRef: string): Promise<BoardView> {
+  const crew = await session.client.call('orchestrator.crewRound', { token: session.token, crewId: crewRef });
+  const went =
+    crew.phase === 'building'
+      ? `round ${crew.round - 1}'s reviews went back to its builder`
+      : `round ${crew.round}'s reviews go back to its builder once it can take them`;
+  return { text: `crew:${crew.id} takes one more round (now ${crew.roundLimit}): ${went}.`, json: crew };
+}
+
+/** How often `wait crew:<id>` asks after its crew. */
+const CREW_WAIT_POLL_MS = 1000;
+
+/** `agent-board wait crew:<id>`: until the crew stops, or `timeoutMs` passes. */
+export async function waitForCrew(session: BoardSession, crewRef: string, timeoutMs: number | undefined): Promise<BoardView & { timedOut: boolean }> {
+  const until = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
+  for (;;) {
+    const [crew] = await session.client.call('orchestrator.crews', { token: session.token, crewId: crewRef });
+    const left = until - Date.now();
+    if (crew!.stopped !== null || left <= 0) {
+      const view = await crewsView(session, crewRef);
+      return { ...view, timedOut: crew!.stopped === null };
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(CREW_WAIT_POLL_MS, left)));
+  }
 }
 
 /** How much of the message `send` prints as the agent reads it. */
@@ -1416,7 +1654,7 @@ export async function removeEdge(session: BoardSession, ref: string): Promise<Bo
 }
 
 /** The caller's board token, for a call only an agent in a session makes: `doing` says what, in the refusal. */
-function agentToken(session: BoardSession, doing: string): string {
+export function agentToken(session: BoardSession, doing: string): string {
   if (session.token === undefined || session.caller === null) {
     throw new BoardError(`Only an agent in an agent-board session can ${doing}: there is no ${BOARD_TOKEN_ENV} here.`);
   }
@@ -1461,6 +1699,31 @@ export async function unpinEntry(session: BoardSession, ref: PinRef, cwd: string
   return { text: `Unpinned ${pinName(record)} from ${ref.forOrchestrator === true ? "your orchestrator's" : 'your'} sidebar.`, json: record };
 }
 
+/**
+ * `page`: writes the caller's page, the default shelf of its sidebar, replacing the one it had; with `page` null, clears
+ * it. A link's relative path is from `cwd`.
+ */
+export async function setOwnPage(session: BoardSession, page: PageParams | null, cwd: string): Promise<BoardView> {
+  const token = agentToken(session, 'write its page');
+  const written = await session.client.call('board.setPage', { token, page: page === null ? null : withLinkPaths(page, cwd) });
+  if (written === null) return { text: 'Cleared your page: your sidebar shows the board\'s Now until you write one.', json: null };
+  const blocks = written.blocks.length === 1 ? '1 block' : `${written.blocks.length} blocks`;
+  return { text: `Wrote your page, ${written.name} (${written.icon}), with ${blocks}.`, json: written };
+}
+
+/** `page` with each links block's relative paths made absolute from `cwd`, the rest left for the daemon to check. */
+function withLinkPaths(page: PageParams, cwd: string): PageParams {
+  if (!Array.isArray(page.blocks)) return page;
+  const blocks = page.blocks.map((block) => {
+    if (typeof block !== 'object' || block === null || !('links' in block) || !Array.isArray(block.links)) return block;
+    const links = block.links.map((link: unknown) =>
+      typeof link === 'object' && link !== null && 'path' in link && typeof link.path === 'string' && link.path.trim() !== '' ? { ...link, path: resolvePath(cwd, link.path.trim()) } : link,
+    );
+    return { ...block, links };
+  });
+  return { ...page, blocks };
+}
+
 /** A pin as a reply names it: a note by its label, a file or link by its label and itself, or itself. */
 function pinName(record: AgentRecord): string {
   if (record.kind !== 'pin') return record.key;
@@ -1486,12 +1749,20 @@ export async function askUser(
   const result = await session.client.call('board.ask', { token, ...question });
   if ('sentTo' in result) return { text: sentToLead(result, 'question'), json: result };
   const waited = minutes(question.timeoutMs ?? DEFAULT_ASK_WAIT_MS);
+  const several = result.answers !== undefined;
+  const kept =
+    result.card === undefined
+      ? ''
+      : ` Your ${several ? 'questions are' : 'question is'} on the board as a steps card (item:${result.card}): the user's answers come as your next message once they send them.`;
+  const each = (result.answers ?? []).map((one, at) => `${at + 1}. ${oneLine(one.question)}\n   ${one.answer === null ? '(skipped)' : one.answer.replace(/\n/g, '\n   ')}`);
   const text =
     result.outcome === 'answered'
-      ? `The user answered: ${result.answer}`
+      ? several
+        ? `The user answered:\n\n${each.join('\n')}`
+        : `The user answered: ${result.answer}`
       : result.outcome === 'skipped'
-        ? 'The user skipped the question without answering. Carry on with your best judgement, and say what you assumed.'
-        : `No answer came within ${waited}. Carry on with your best judgement and say what you assumed, or ask again later.`;
+        ? `The user skipped ${several ? 'your questions' : 'the question'} without answering. Carry on with your best judgement, and say what you assumed.`
+        : `No answer came within ${waited}.${kept || ' Carry on with your best judgement and say what you assumed, or ask again later.'}`;
   return { text, json: result };
 }
 

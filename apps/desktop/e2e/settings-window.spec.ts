@@ -127,9 +127,9 @@ test('searching settings filters the sidebar across groups, and ⌘K opens the w
     await search.fill('appearance');
     await expect(settings.getByRole('heading', { level: 1 })).toHaveText('Search');
     await expect(sidebar.locator('.settings-group-head')).toHaveText(['General']);
-    await expect(sidebar.getByRole('list', { name: 'General' }).getByRole('button')).toHaveText(['Appearance2']);
+    await expect(sidebar.getByRole('list', { name: 'General' }).getByRole('button')).toHaveText(['Appearance3']);
     const page = settings.getByRole('main', { name: 'Search' });
-    await expect(page.getByRole('heading', { level: 2 })).toHaveText('2 results for “appearance”');
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText('3 results for “appearance”');
     await expect(page.getByRole('region', { name: 'General › Appearance' }).getByRole('group', { name: 'Mode' }).last()).toBeVisible();
 
     // Case and accents aside, the matches in the page are painted.

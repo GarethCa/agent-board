@@ -140,8 +140,8 @@ describe('spotlightGroups and settings', () => {
 
   it("finds a group's sections by the group's name, as the Settings window's search does", () => {
     expect(settingRows('advanced').map((row) => row.subject)).toEqual(
-      // Equal matches, so by name: Background service, Command line, Held hand-offs, Programs, Web tabs.
-      ['service', 'cli', 'handoffs', 'programs', 'webTabs'].map((section) => ({ kind: 'setting', pane: `advanced.${section}` })),
+      // Equal matches, so by name: Background service, Command line, Held hand-offs, Programs, Terminals, the first five.
+      ['service', 'cli', 'handoffs', 'programs', 'terminals'].map((section) => ({ kind: 'setting', pane: `advanced.${section}` })),
     );
     expect(names(settingRows('accounts'))).toEqual(['Other terminals']);
   });
@@ -247,5 +247,33 @@ describe('fuzzyMatch', () => {
 
   it('misses letters out of order', () => {
     expect(fuzzyMatch('ver', 'Review')).toBeUndefined();
+  });
+});
+
+describe('spotlightGroups and the Dock setting under Classic', () => {
+  const docs = agent('Docs', { sessionId: 's-docs' });
+  const api = agent('API', { sessionId: 's-api' });
+  const windows = [
+    { kind: 'session' as const, id: 's-api', title: 'API', placement: 'docked' as const },
+    { kind: 'session' as const, id: 's-docs', title: 'Docs', placement: 'docked' as const, pinned: true },
+  ];
+  const sources = { agents: [docs, api], shells: [], zones, shows: 'turns' as const };
+
+  it('lists the windows given in a Windows group once the dock leaves them out, minimised first in its sub line', () => {
+    const groups = spotlightGroups('', { ...sources, windows: [windows[0]!], windowsListed: true });
+    expect(groups.map((group) => group.label)).toEqual(['Windows', 'Recent', 'Zones']);
+    expect(names(groups[0]!.rows)).toEqual(['API']);
+    expect(groups[0]!.rows[0]!.sub.split(' · ')[0]).toBe('Minimised');
+    expect(names(groups[1]!.rows)).toEqual(['Docs']);
+  });
+
+  it('finds a window the dock leaves out by typing its name', () => {
+    const [group] = spotlightGroups('api', { ...sources, windows, windowsListed: true });
+    expect(group!.label).toBe('Windows');
+    expect(group!.rows[0]!.window).toBe('docked');
+  });
+
+  it('adds no Windows group while the dock shows everything', () => {
+    expect(spotlightGroups('', { ...sources, windows }).some((group) => group.label === 'Windows')).toBe(false);
   });
 });

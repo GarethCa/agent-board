@@ -1,6 +1,7 @@
 // Where each session window is: shown on the board, minimised to the dock, or popped out into its own OS window.
 // Pure, so every move is unit-tested; the board holds the list in state.
 import type { ShellChange, WindowTarget } from '../../../preload/api';
+import type { DockMode } from '../../../shared/dock';
 
 /** At most one window is `shown` on the board at a time. */
 export type Placement = 'shown' | 'docked' | 'popped';
@@ -8,6 +9,8 @@ export type Placement = 'shown' | 'docked' | 'popped';
 /** A window: what it shows (a session or a shell tile, by ID), what its title bar and dock button call it, and where. */
 export interface SessionWindowEntry extends WindowTarget {
   placement: Placement;
+  /** Pinned to the dock by the user: with the Dock setting on Only what I pin, only these are in it. Kept while it is off. */
+  pinned?: boolean;
 }
 
 /** The board's session windows, in the order they were first opened: their order in the dock. */
@@ -37,9 +40,11 @@ export function switchWindow(windows: SessionWindows, fromId: string, target: Wi
   const existing = windows.find((entry) => entry.id === target.id);
   if (existing?.placement === 'popped' || target.id === fromId) return windows;
   if (!windows.some((entry) => entry.id === fromId)) return showWindow(windows, target);
+  // The target keeps its pin: a pinned window switched to and minimised again is still in the dock.
+  const pin = existing?.pinned === true ? { pinned: true } : {};
   return windows
     .filter((entry) => entry !== existing)
-    .map((entry) => (entry.id === fromId ? { ...target, placement: 'shown' as const } : entry));
+    .map((entry) => (entry.id === fromId ? { ...target, ...pin, placement: 'shown' as const } : entry));
 }
 
 /**
@@ -48,7 +53,8 @@ export function switchWindow(windows: SessionWindows, fromId: string, target: Wi
  */
 export function switchPoppedWindow(windows: SessionWindows, fromId: string, target: WindowTarget): SessionWindows {
   const rest = windows.filter((entry) => entry.id !== target.id);
-  const out = { ...target, placement: 'popped' as const };
+  const pinned = windows.find((entry) => entry.id === target.id)?.pinned === true;
+  const out = { ...target, ...(pinned ? { pinned } : {}), placement: 'popped' as const };
   return rest.some((entry) => entry.id === fromId) ? rest.map((entry) => (entry.id === fromId ? out : entry)) : [...rest, out];
 }
 
@@ -60,6 +66,26 @@ export function poppedOut(windows: SessionWindows): ReadonlySet<string> {
 /** Minimises the window to the dock. */
 export function minimiseWindow(windows: SessionWindows, id: string): SessionWindows {
   return update(windows, id, (entry) => ({ ...entry, placement: 'docked' }));
+}
+
+/** Pins the window to the dock, or takes it off. */
+export function pinWindow(windows: SessionWindows, id: string, pinned: boolean): SessionWindows {
+  return update(windows, id, ({ placement, kind, id: windowId, title }) => ({ kind, id: windowId, title, placement, ...(pinned ? { pinned } : {}) }));
+}
+
+/** Whether the dock holds the window under the Dock setting: not one shown on the board; every other with Show everything, only a pinned one with Only what I pin, none when it is off. */
+export function inDock(entry: SessionWindowEntry, dock: DockMode): boolean {
+  return entry.placement !== 'shown' && (dock === 'all' || (dock === 'pinned' && entry.pinned === true));
+}
+
+/** The windows the dock leaves out under the Dock setting and ⌘K's Windows group lists in their place (none with Show everything). */
+export function outOfDock(windows: SessionWindows, dock: DockMode): SessionWindows {
+  return dock === 'all' ? [] : windows.filter((entry) => !inDock(entry, dock));
+}
+
+/** The windows minimised to the dock, which the Window menu lists whatever the dock shows. */
+export function minimisedWindows(windows: SessionWindows): SessionWindows {
+  return windows.filter((entry) => entry.placement === 'docked');
 }
 
 /** Closes the window, wherever it is. What it shows keeps running. */
@@ -100,18 +126,18 @@ export function restoreWindows(saved: unknown, current: SessionWindows): Session
   const restored: SessionWindowEntry[] = [];
   for (const entry of Array.isArray(saved) ? (saved as unknown[]) : []) {
     if (typeof entry !== 'object' || entry === null) continue;
-    const { kind, id, title, placement } = entry as Record<string, unknown>;
+    const { kind, id, title, placement, pinned } = entry as Record<string, unknown>;
     if ((kind !== 'session' && kind !== 'shell' && kind !== 'tabs') || typeof id !== 'string' || typeof title !== 'string') continue;
     // A tab window is only ever an OS window of its own.
     if (kind === 'tabs' && placement !== 'popped') continue;
     if (!PLACEMENTS.includes(placement as Placement) || restored.some((known) => known.id === id)) continue;
     const shownAlready = placement === 'shown' && restored.some((known) => known.placement === 'shown');
-    restored.push({ kind, id, title, placement: shownAlready ? 'docked' : (placement as Placement) });
+    restored.push({ kind, id, title, placement: shownAlready ? 'docked' : (placement as Placement), ...(pinned === true ? { pinned } : {}) });
   }
   let windows: SessionWindows = restored;
   for (const entry of current) {
     if (entry.placement === 'shown') windows = showWindow(update(windows, entry.id, (known) => ({ ...known, placement: 'docked' })), entry);
-    else if (windows.some((known) => known.id === entry.id)) windows = update(windows, entry.id, () => entry);
+    else if (windows.some((known) => known.id === entry.id)) windows = update(windows, entry.id, (known) => ({ ...entry, ...(known.pinned === true ? { pinned: true } : {}) }));
     else windows = [...windows, entry];
   }
   return windows;

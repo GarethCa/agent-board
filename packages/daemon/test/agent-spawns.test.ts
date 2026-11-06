@@ -53,6 +53,7 @@ function setup(zone: Partial<ZoneRow> = {}, compactWindow = 0, { clickableLinks 
     ensureHookShim() {},
     boardCliPath: '/bin/agent-board',
     compactWindow: () => compactWindow,
+    defaultEffort: () => null,
     clickableLinks: () => clickableLinks,
     env: { PATH: '/bin', CLAUDECODE: '1', ...env },
     shell: '/bin/zsh',
@@ -84,6 +85,7 @@ describe("launching an agent's harness", () => {
       id: 'a',
       harness: 'claude',
       model: 'opus',
+      effort: null,
       bypassHookTrust: true,
       zoneId: 'z',
       cwd,
@@ -120,11 +122,14 @@ describe("launching an agent's harness", () => {
     expect(session!.hookTokenSha256).toBe(hashToken(session!.env[HOOK_TOKEN_ENV]!));
   });
 
-  it('holds what is sent to a claude agent with no task until its session is up, but not a codex one', () => {
+  it('holds what is sent to an agent with no task until its session is up, a codex one too', () => {
     const { spawns, typed } = setup();
     spawns.launch(spec({ task: undefined }));
     spawns.launch(spec({ id: 'b', harness: 'codex', task: undefined }));
-    expect(typed).toEqual([{ sessionId: 'a', prompt: undefined }]);
+    expect(typed).toEqual([
+      { sessionId: 'a', prompt: undefined },
+      { sessionId: 'b', prompt: undefined },
+    ]);
   });
 
   it("passes claude the compact window only when the setting is on, and never changes codex's env", () => {
@@ -315,6 +320,13 @@ describe('launching codex', () => {
     const { args } = codexLaunch({ ...base, cwd, worktree: cwd, readOnly: true });
     expect(args.slice(-2)).toEqual(['-s', 'read-only']);
     expect(codexLaunch({ ...base, cwd, worktree: cwd }).args).not.toContain('read-only');
+  });
+
+  it('passes the reasoning effort asked for as a model_reasoning_effort override, and none without', () => {
+    const cwd = tempDataDir();
+    const { args } = codexLaunch({ ...base, cwd, worktree: cwd, effort: 'xhigh' });
+    expect(args.filter((_, i) => args[i - 1] === '-c')).toContain('model_reasoning_effort="xhigh"');
+    expect(codexLaunch({ ...base, cwd, worktree: cwd }).args.some((arg) => arg.startsWith('model_reasoning_effort'))).toBe(false);
   });
 
   it('finds .codex from the start directory up to the worktree root, and nowhere else', () => {

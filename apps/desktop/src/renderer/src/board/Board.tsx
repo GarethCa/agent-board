@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyNodeChanges as applyFlowNodeChanges,
-  Background,
-  BackgroundVariant,
   ConnectionMode,
   ReactFlow,
   ReactFlowProvider,
@@ -50,6 +48,7 @@ import {
   type ZoneLayout,
   zoneSnapshot,
 } from '@agent-board/daemon/protocol';
+import { EFFORT_LABELS } from './AgentSetup';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { repoZoneOf } from '@agent-board/daemon/repo-zone';
 import { BoardChrome } from '../chrome/BoardChrome';
@@ -88,6 +87,7 @@ import {
 import { boardDrop } from '../session/window-drags';
 import { documentSurfaceOf, gateSurfaceOf, liveShellCount, planSurfaceOf, pullRequestSurfaceOf, tabSurface } from '../session/tabs';
 import { shownWindow } from '../windows/session-windows';
+import { BoardBackdrop } from './BoardBackdrop';
 import { oneAtATime } from './one-at-a-time';
 import { installWheelLatch } from './wheel-latch';
 import { CONNECTOR_LABEL_PLACES, ConnectorActionsContext, type ConnectorActions } from './connectors/actions';
@@ -111,8 +111,16 @@ import {
 import { AddZonePopover } from './AddZonePopover';
 import { draggedZoneLayout, popoverPlacement } from './add-zone';
 import { AgentFlowEdge, BriefEdge, FlowEdgeActionsContext, type FlowEdgeActions } from './FlowEdge';
+import { TakenJobsContext, useTakenJobs } from './items/taken-jobs';
+import { draggedJob, JOB_DRAG, openHandOn, QueueBoardContext, setJobDropOver, startJobDrag, takesJobFrom, type QueueBoard } from './items/queue-board';
+import { HandOnHost } from './items/HandOn';
+import { DrainSheetHost } from './items/DrainSheet';
+import { QueueFocusHost } from './items/QueueFocus';
 import { FLOW_EDGE_TYPE, flowEdgeIdOf, flowEdgeIdsOf, flowEdges, type FlowRailData, handoffEnds, HandoffsContext, isFlowEdge, NEW_EDGE_LABEL, panClear } from './flow-edges';
 import { useFlowEdges } from './use-flow-edges';
+import { foldedStack, isLead, laidOutTile, pinnedLead, withShelves } from './shelves';
+import { ShelvesContext } from './ShelvesView';
+import { useShelves } from './use-shelves';
 import { useIncoming } from './use-incoming';
 import { ConnectionLine, HandingOffContext } from './ConnectionLine';
 import { HandOffChooser } from './connectors/HandOffChooser';
@@ -132,6 +140,8 @@ import { useAskClaude } from './ask/AskClaude';
 import { SuggestionActionsContext, SuggestionGhosts, useSuggestionCommands } from './ask/SuggestionGhosts';
 import { DocumentCardsContext, type DocumentCards } from './items/DocumentNode';
 import { PlanCardsContext, type PlanCards } from './items/PlanNode';
+import { StepsLookupContext } from './items/StepsNode';
+import type { StepsLookup } from './items/steps-view';
 import { useShownDocuments } from '../doc/use-shown-documents';
 import { agentLine, externalEnded, externalLine, type PendingDelete } from './editing/delete-plan';
 import { useEditing } from './editing/use-editing';
@@ -142,7 +152,7 @@ import { useSnapping } from './editing/use-snapping';
 import { tidySize, VIEW_FOLLOW_DELAY_MS } from './expanded';
 import { tileOpenAction } from './click-opens';
 import { focusTerminalIn, pulseTile } from './tile-attention';
-import { crewFrames, crewMoves, landingRects, withCrewFollowing } from './crews';
+import { crewFrames, crewMoves, frameableTiles, landingRects, withCrewFollowing } from './crews';
 import { restoreViewSettings, setCrewLook, setViewSetting, useViewSettings } from './view-settings';
 import { ConnectionCountsContext, edgeCounts, nextConnectionsView, shownEdges } from './connections-view';
 import { railOf, withRailSelected } from './rails';
@@ -158,6 +168,7 @@ import {
   ItemActionsContext,
   placeOnBoard,
   SeveralSelectedContext,
+  restoredData,
   withItem,
   withoutItem,
   type ItemActions,
@@ -167,7 +178,7 @@ import { MIN_SHAPE_SIZE } from './items/ShapeNode';
 import { SHAPES } from './items/shapes/catalogue';
 import { QuickInsert } from './items/shapes/QuickInsert';
 import { lastShape, noteShapeUsed } from './items/shapes/recents';
-import { completeShapeData, newShapeData } from './items/text-style';
+import { newShapeData } from './items/text-style';
 import { ITEM_KINDS, ITEM_NODE_TYPES, type ItemKind } from './items/kinds';
 import { liveRotations, LiveRotationsContext, withRotation } from './items/Rotatable';
 import type { BoardRequest, ScreenPoint, WindowTarget } from '../../../preload/api';
@@ -185,6 +196,7 @@ import { useClockStatuses } from './use-clocks';
 import { GateCommandDialog } from '../gate/GateCommandDialog';
 import { ResumeExternalDialog } from './ResumeExternalDialog';
 import { NewAgentDialog } from './NewAgentDialog';
+import { PrefabsDialog } from '../crews/PrefabsDialog';
 import { RoleTemplatesDialog } from './RoleTemplatesDialog';
 import { DefaultRepoDialog } from './DefaultRepoDialog';
 import { useRestartBanner } from './RestartBanner';
@@ -244,9 +256,6 @@ import { useCheatSheet } from '../keys/CheatSheet';
 import { keyText } from '../keys/registry';
 import { centreOf } from '../geometry';
 import { useZoneResize } from './use-zone-resize';
-import { isQuestionNodeId, QUESTION_CARD_TYPE, questionTethers, type QuestionNodeType } from './question-cards';
-import { QuestionCardNode } from './QuestionCardNode';
-import { useQuestionCards } from './use-question-cards';
 import { useMeasuredBoxes } from './measured-boxes';
 import { AgentNoteMeasurer } from './items/AgentNoteMeasurer';
 import { CAPTURE_FRAME, captureViewport, edgesAmong, nodesInZone, useCaptureReady } from './capture-mode';
@@ -261,11 +270,7 @@ const nodeTypes: NodeTypes = {
   tile: withConnectorHandles(TileNode),
   // An item's connector handles turn with it.
   ...Object.fromEntries(Object.entries(ITEM_NODE_TYPES).map(([type, node]) => [type, withRotation(withConnectorHandles(node))])),
-  // Joined to nothing but its tile: no connector handles.
-  [QUESTION_CARD_TYPE]: QuestionCardNode,
 };
-/** Why a connector doesn't join a question card. */
-const CARD_NOT_JOINED = 'A question card can’t be connected: it goes once its question is answered. Connect its agent’s tile instead.';
 /** How long a tile's hidden connections stay shown after the pointer leaves it, to reach one. */
 const HOVER_GRACE_MS = 400;
 const edgeTypes: EdgeTypes = { connector: ConnectorEdge, [BRIEF_EDGE_TYPE]: BriefEdge, [FLOW_EDGE_TYPE]: AgentFlowEdge, [TETHER_EDGE_TYPE]: TetherEdge };
@@ -433,6 +438,7 @@ function BoardView() {
   const [clockEditing, setClockEditing] = useState<ClockEditing>();
   const [gateCommandZone, setGateCommandZone] = useState<Zone>();
   const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
+  const [crewPrefabsOpen, setCrewPrefabsOpen] = useState(false);
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
   /** The view settings every window shares: what a double-click opens, how crews and agent notes look, which connections are drawn. */
   const { clickOpens, crewLook, connections, agentNoteLook: savedNoteLook } = useViewSettings();
@@ -462,7 +468,7 @@ function BoardView() {
   useEffect(() => () => clearTimeout(hoverEnds.current), []);
   // Who is in each crew frame, where the tiles are saved: for the tiles, and for an expanded tile to push each crew
   // aside as one; kept while the same so a frame moving with its crew redraws only the zones.
-  const savedFrames = useMemo(() => (crewLook === 'frames' ? crewFrames(nodes.filter(isSessionTile)) : []), [crewLook, nodes]);
+  const savedFrames = useMemo(() => (crewLook === 'frames' ? crewFrames(frameableTiles(nodes)) : []), [crewLook, nodes]);
   const crewsKey = savedFrames.map((frame) => frame.members.join(' ')).join('\n');
   const framedKey = savedFrames.flatMap((frame) => frame.members).join(' ');
   const crewView = useMemo<CrewView>(() => ({ look: crewLook, framed: new Set(framedKey.split(' ').filter(Boolean)) }), [crewLook, framedKey]);
@@ -470,21 +476,10 @@ function BoardView() {
     () => (crewsKey === '' ? [] : crewsKey.split('\n').map((members) => members.split(' ').map((id) => tileNodeId('agent', id)))),
     [crewsKey],
   );
-  /** Applies React Flow's changes to the question cards, which are not the board's nodes (`useQuestionCards`). */
-  const applyCardChanges = useRef<(changes: NodeChange<QuestionNodeType>[]) => void>(undefined);
-  /**
-   * React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames. A question
-   * card's go to its own state.
-   */
+  /** React Flow's node changes applied, with an orchestrator's crew dragged along with it under crew frames. */
   const applyNodeChanges = useCallback(
     (changes: NodeChange<BoardNode>[]) => {
-      const isCard = (change: NodeChange<BoardNode>) => 'id' in change && isQuestionNodeId(change.id);
-      const cards = changes.filter(isCard);
-      if (cards.length > 0) applyCardChanges.current?.(cards as unknown as NodeChange<QuestionNodeType>[]);
-      const rest = cards.length > 0 ? changes.filter((change) => !isCard(change)) : changes;
-      // Only the cards' changes: the nodes stay. No changes at all still sets them, so React Flow takes our selection again.
-      if (cards.length > 0 && rest.length === 0) return;
-      setNodes((current) => applyFlowNodeChanges(crewLookRef.current === 'frames' ? withCrewFollowing(rest, current) : rest, current));
+      setNodes((current) => applyFlowNodeChanges(crewLookRef.current === 'frames' ? withCrewFollowing(changes, current) : changes, current));
     },
     [setNodes],
   );
@@ -600,7 +595,7 @@ function BoardView() {
     restoreViewSettings(view);
   }, []);
 
-  const flow = useFlowEdges(report, history.record);
+  const flow = useFlowEdges(report, history.record, (message) => toasts.show({ tone: 'info', message }));
   const flowEdgesRef = useRef(flow.edges);
   flowEdgesRef.current = flow.edges;
   const {
@@ -654,7 +649,7 @@ function BoardView() {
   } = useExpandedTiles({ nodes, loaded, agents, shells, externals, windows, windowsRestored, relayout, crews: crewBlocks });
   /** The crew frames as drawn, for the zones: round where their tiles are drawn, pushed aside by an expanded tile or not. */
   const shownFrames = useMemo(
-    () => (crewLook === 'frames' ? crewFrames(nodes.filter(isSessionTile), shown.filter(isSessionTile)) : []),
+    () => (crewLook === 'frames' ? crewFrames(frameableTiles(nodes), shown.filter(isSessionTile)) : []),
     [crewLook, nodes, shown],
   );
   // Each project's heading under the Simplified design: how many of its agents need you, and the rest by status.
@@ -664,13 +659,35 @@ function BoardView() {
   const summariesKey = JSON.stringify([...summaries]);
   const projectSummary = useMemo(() => summaries, [summariesKey]);
   restoreTiles.current = restoreExpanded;
-  // An agent's question, beside its tile as drawn, when it asked for it on the board.
-  const questionCards = useQuestionCards(agents, shown, report('move the question card'));
   const clockStatuses = useClockStatuses(report, loaded);
   useCaptureReady(loaded);
   useMeasuredBoxes(nodes, shown, expandedRef.current, agentNoteLook);
-  applyCardChanges.current = questionCards.apply;
-  const drawn = useMemo(() => (questionCards.cards.length === 0 ? shown : [...shown, ...(questionCards.cards as unknown as BoardNode[])]), [shown, questionCards.cards]);
+  // The shelved zones' work on their shelves, as drawn only: what the user dragged and saved stays as it was.
+  const shelves = useShelves();
+  const shelfLinks = useMemo(() => flow.edges.map((edge) => ({ from: tileNodeId('agent', edge.from), to: tileNodeId('agent', edge.to) })), [flow.edges]);
+  const shelved = useMemo(
+    () => withShelves(shown, { agents, links: shelfLinks, shows: needsYouShows, choice: shelves.choice }),
+    [shown, agents, shelfLinks, needsYouShows, shelves.choice],
+  );
+  const shelvedRef = useRef(shelved);
+  shelvedRef.current = shelved;
+  const { openStack, showDone } = shelves;
+  /**
+   * An agent folded out of sight in a zone laid out by status, shown: Done shown if that is where it is, its stack fanned
+   * out on shelves, and the part of the board it will be drawn in, to bring into view. Undefined for one drawn as a tile.
+   */
+  const unfoldStack = useCallback(
+    (sessionId: string) => {
+      const place = foldedStack(shelvedRef.current, sessionId, AGENT_TILE_SIZE.height);
+      if (place?.showDone === true) showDone(place.zoneId);
+      if (place?.fan === true) openStack(place.zoneId, place.key);
+      return place?.rect;
+    },
+    [openStack, showDone],
+  );
+  const shelvesActions = useMemo(() => ({ toggleStack: shelves.toggleStack, toggleDone: shelves.toggleDone, shows: needsYouShows }), [shelves.toggleStack, shelves.toggleDone, needsYouShows]);
+  // The board's nodes as drawn: a shelved zone's work on its shelves.
+  const drawn = shelved;
 
   // The refs laidOut reads are this render's.
   useEffect(() => {
@@ -910,6 +927,12 @@ function BoardView() {
           agentHeard,
           report(muted ? "mute the agent's notifications" : "unmute the agent's notifications"),
         ),
+      setEffort: (sessionId, effort) =>
+        void window.agentBoard.agents.setEffort(sessionId, effort).then(({ agent, applies }) => {
+          agentHeard(agent);
+          const when = applies === 'after-turn' ? 'once it is back at its prompt' : applies === 'restart' ? 'when it restarts' : undefined;
+          if (when !== undefined) toasts.show({ tone: 'info', message: `${agent.name} takes ${effort === null ? 'its default' : EFFORT_LABELS[effort]} reasoning ${when}.` });
+        }, report("change the agent's reasoning")),
       openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')),
       // An ended one is forgotten at once; one still running is only taken off the board, which it is told first.
       dismissExternal(id) {
@@ -1025,6 +1048,14 @@ function BoardView() {
     }),
     [agents, tileActions],
   );
+  // A steps card names agents: who does a step, who waits on it, and who answers it while it is live.
+  const stepsLookup = useMemo<StepsLookup>(
+    () => ({
+      live: (sessionId) => agents.some((each) => each.sessionId === sessionId && each.endedAt === null),
+      name: (sessionId) => agents.find((each) => each.sessionId === sessionId)?.name,
+    }),
+    [agents],
+  );
   const planCards = useMemo<PlanCards>(
     () => ({ find: (sessionId) => agents.find((each) => each.sessionId === sessionId), open: (agent) => tileActions.openPlan(agent) }),
     [agents, tileActions],
@@ -1129,8 +1160,7 @@ function BoardView() {
   const tileDropped = (node: TileNodeType) => {
     const at = absoluteOf(node);
     // Dropped onto another tile, one of the two expanded, the two may overlap: after the move, which ends any pair before.
-    // A question card is no place to keep clear of: it floats, and goes with its question.
-    const shown = getNodes().filter((known) => !isQuestionNodeId(known.id));
+    const shown = getNodes();
     const onto = droppedOnto(shown, node.id, expandedRef.current);
     const move = { ...placeOnBoard(at, compactSizeOf(node), zoneLayouts()), toFront: true };
     // Its crew comes along under crew frames, each where it was beside it, undone with it as one step.
@@ -1147,7 +1177,8 @@ function BoardView() {
     // The one it was dropped onto stays where it was seen, even if only drawn there, moved clear of something.
     const target = shown.find((known): known is TileNodeType => known.id === onto && isSessionTile(known));
     const stored = nodesRef.current.find((known) => known.id === onto);
-    if (target !== undefined && stored !== undefined) {
+    // Not one drawn where its zone's layout puts it (shelves, clusters): that is no place of its own to keep.
+    if (target !== undefined && stored !== undefined && !laidOutTile(stored, nodesRef.current)) {
       const { x, y } = target.position;
       if (x !== stored.position.x || y !== stored.position.y) moveTile(target.id, target.data, { zoneId: target.parentId ?? null, x, y });
     }
@@ -1386,15 +1417,17 @@ function BoardView() {
       const size = made.size ?? ITEM_KINDS[kind].size;
       const at = { x: centre.x - size.width / 2, y: centre.y - size.height / 2 };
       const place = placeOnBoard(at, size, zoneLayouts());
+      const zone = place.zoneId === null ? undefined : getNodes().find((node) => node.id === place.zoneId);
+      const zoneName = zone !== undefined && isZone(zone) ? zone.data.zone.name : undefined;
       const id = crypto.randomUUID();
       putItem(
-        { id, kind, ...place, ...size, z: topZ() + 1, rotation: 0, data: made.data ?? newData?.() ?? {}, createdAt: '', updatedAt: '' },
+        { id, kind, ...place, ...size, z: topZ() + 1, rotation: 0, data: made.data ?? newData?.({ zoneName }) ?? {}, createdAt: '', updatedAt: '' },
         { editing: editOnCreate },
       );
       selectOnly(new Set([`${ITEM_NODE_PREFIX}${id}`]));
       return id;
     },
-    [zoneLayouts, putItem, topZ, selectOnly],
+    [zoneLayouts, getNodes, putItem, topZ, selectOnly],
   );
 
   /** The board's own box on the screen. */
@@ -1538,12 +1571,6 @@ function BoardView() {
     const onPointerDown = (event: PointerEvent) => {
       const target = (event.target as Element | null)?.closest?.('.react-flow__node')?.getAttribute('data-id');
       if (target === undefined || target === null || target === connectingFrom) return finish();
-      if (isQuestionNodeId(target)) {
-        event.preventDefault();
-        event.stopPropagation();
-        setNotice({ message: CARD_NOT_JOINED });
-        return finish();
-      }
       event.preventDefault();
       event.stopPropagation();
       connectNodes(connectingFrom, target);
@@ -1592,12 +1619,7 @@ function BoardView() {
         const drop = dropAt(point, new Set(nodes.filter(isZone).map((zone) => zone.id)));
         if (drop.type === 'nothing' || (drop.type === 'node' && drop.nodeId === fromNode.id)) return;
         // The object whose handles were lit as it was let go, by the same hit-test: on it, or near it.
-        const near = findNear(point, (nodeId) => nodeId !== fromNode.id && !isQuestionNodeId(nodeId));
-        // Let go on a question card with nothing else near: refused, saying why, rather than a note made under it.
-        if (near === undefined && drop.type === 'node' && isQuestionNodeId(drop.nodeId)) {
-          setNotice({ message: CARD_NOT_JOINED });
-          return;
-        }
+        const near = findNear(point, (nodeId) => nodeId !== fromNode.id);
         if (near !== undefined) {
           // It arrives on the side facing where it came from.
           const rect = rectOf(near);
@@ -1671,7 +1693,7 @@ function BoardView() {
   // While a connector is dragged, the object near the pointer, other than the one it is drawn from, shows its handles.
   useEffect(() => {
     if (connecting === undefined) return;
-    const onMove = (event: PointerEvent) => findNear({ x: event.clientX, y: event.clientY }, (nodeId) => nodeId !== connecting && !isQuestionNodeId(nodeId));
+    const onMove = (event: PointerEvent) => findNear({ x: event.clientX, y: event.clientY }, (nodeId) => nodeId !== connecting);
     window.addEventListener('pointermove', onMove, { capture: true });
     return () => {
       window.removeEventListener('pointermove', onMove, { capture: true });
@@ -1851,7 +1873,9 @@ function BoardView() {
   const tidyZone = useCallback(
     (zoneId: string, spacing?: ArrangeSpacing) => {
       const zone = nodesRef.current.filter(isZone).find((node) => node.id === zoneId);
-      if (zone === undefined) return;
+      // On shelves or in clusters the zone lays itself out: a tidy would move the places its tiles aren't drawn at, and
+      // Free would no longer be as it was.
+      if (zone === undefined || zone.data.zone.layoutMode !== 'free') return;
       const children = nodesRef.current.filter((node) => node.parentId === zoneId);
       const tiles = children.filter(isSessionTile);
       const items = children.filter(isItemNode).map((node) => node.data.item);
@@ -2009,9 +2033,8 @@ function BoardView() {
       if (state?.type === 'item') {
         const { item } = state;
         const { id, zoneId, x, y, width, height, z, rotation } = item;
-        // An agent note's size mark is explicit, so undoing the step that set it clears it (a data update merges).
-        const data = item.kind === 'shape' ? completeShapeData(item.data) : item.kind === 'agent-note' ? { userSized: false, ...item.data } : item.data;
-        if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, rotation, data });
+        // A data update merges: `restoredData` says what of the item's data goes back.
+        if (nodeIds.has(`${ITEM_NODE_PREFIX}${id}`)) itemActions.update({ id, zoneId, x, y, width, height, z, rotation, data: restoredData(item) });
         else putItem(item);
       }
     }
@@ -2298,6 +2321,20 @@ function BoardView() {
       const clockId = createItem('clock', screenToFlowPosition(at));
       setClockEditing({ clockId, data: { ...clockData({}) } });
     },
+    addSteps: (at) => void createItem('steps', screenToFlowPosition(at)),
+    addMemory: (at) => void createItem('memory', screenToFlowPosition(at)),
+    addQueue: (at) => void createItem('queue', screenToFlowPosition(at)),
+    leadPinned: (nodeId) => {
+      const subject = tileSubject(nodeId);
+      const agent = subject?.kind === 'agent' ? agents.find((known) => known.sessionId === subject.id) : undefined;
+      const zone = agent?.zoneId === null || agent === undefined ? undefined : nodes.find((node) => node.id === agent.zoneId);
+      if (agent === undefined || !isLead(agent, agents) || zone === undefined || !isZone(zone) || zone.data.zone.layoutMode === 'free') return undefined;
+      return pinnedLead(agent, agents, shelves.choice.freed);
+    },
+    setLeadPinned: (nodeId, pinned) => {
+      const subject = tileSubject(nodeId);
+      if (subject?.kind === 'agent') shelves.setPinned(subject.id, pinned, new Set(agents.map((agent) => agent.sessionId)));
+    },
   });
 
   const { onFilesDropped } = useIncoming({ loaded, createItem, report, pasteItems: editing.paste, pasteDiagram: editing.pasteDiagram, pointer, boardCentre, screenToFlowPosition });
@@ -2490,6 +2527,10 @@ function BoardView() {
         }, report('change the zone’s spacing'));
       },
       openSettings: () => void window.agentBoard.setup.openSettings('board.tidying').catch(report('open Settings')),
+      setLayoutMode(zone, layoutMode) {
+        // Only how the zone is drawn: no tile's saved place changes, so Free again shows it as it was.
+        window.agentBoard.zones.configure(zone.id, { layoutMode }).then((saved) => setNodes((current) => withZone(current, saved)), report('change the zone’s layout'));
+      },
       rename: (zone, name) => tileActions.rename({ kind: 'zone', zoneId: zone.id }, name),
       recolor(zone, color) {
         const { fillOpacity } = zone;
@@ -2545,6 +2586,7 @@ function BoardView() {
       },
       editGateCommand: setGateCommandZone,
       editRoleTemplates: setRoleTemplatesZone,
+      editCrewPrefabs: () => setCrewPrefabsOpen(true),
       setAgentsOrchestrate(zone, agentsOrchestrate) {
         window.agentBoard.zones.configure(zone.id, { agentsOrchestrate }).then(
           (saved) => {
@@ -2606,8 +2648,8 @@ function BoardView() {
         else if (agent !== undefined) openAgent(agent);
         return shell !== undefined || agent !== undefined;
       },
-      showClock(clockId) {
-        const nodeId = `${ITEM_NODE_PREFIX}${clockId}`;
+      showItem(itemId) {
+        const nodeId = `${ITEM_NODE_PREFIX}${itemId}`;
         const node = getInternalNode(nodeId);
         if (node === undefined) return;
         selectOnly(new Set([nodeId]));
@@ -2616,6 +2658,12 @@ function BoardView() {
       focusSession(sessionId) {
         const shell = shellWithPane(shellsRef.current, sessionId);
         const nodeId = shell !== undefined ? tileNodeId('shell', shell.id) : tileNodeId('agent', sessionId);
+        const folded = shell === undefined ? unfoldStack(sessionId) : undefined;
+        if (folded !== undefined) {
+          selectOnly(new Set([nodeId]));
+          bringIntoView(folded);
+          return;
+        }
         const node = getInternalNode(nodeId);
         if (node === undefined) return;
         selectOnly(new Set([nodeId]));
@@ -2623,6 +2671,12 @@ function BoardView() {
       },
       showTile({ kind, id }) {
         const nodeId = tileNodeId(kind, id);
+        const folded = kind === 'agent' ? unfoldStack(id) : undefined;
+        if (folded !== undefined) {
+          selectOnly(new Set([nodeId]));
+          pulseTile(nodeId, flyTo(folded));
+          return true;
+        }
         const node = getInternalNode(nodeId);
         if (node === undefined) return false;
         selectOnly(new Set([nodeId]));
@@ -2664,7 +2718,7 @@ function BoardView() {
         if (zone !== undefined) setNewAgent({ zone, name });
       },
     }),
-    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre],
+    [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack],
   );
   useProvideBoardCommands(loaded ? boardCommands : undefined);
 
@@ -2757,6 +2811,17 @@ function BoardView() {
   );
 
   /** What clocks draw from: their statuses, the agents' names, and their editor. */
+  const queueBoard = useMemo<QueueBoard>(
+    () => ({ agents, openAgent, openLink: (url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link')) }),
+    [agents, openAgent, report],
+  );
+  const queues = useMemo(() => boardItems.filter((item) => item.kind === 'queue'), [boardItems]);
+  /** The agent under the pointer that takes a dragged job of a queue in `zoneId`: idle, and in its scope. */
+  const jobTakerAt = (x: number, y: number, zoneId: string | null) => {
+    const owner = ownerAtPoint(x, y, { agentsOnly: true });
+    const agent = owner === undefined ? undefined : agents.find((each) => each.sessionId === owner.id);
+    return agent !== undefined && takesJobFrom(agent, zoneId) ? agent : undefined;
+  };
   const clockBoard = useMemo<ClockBoard>(
     () => ({
       statuses: clockStatuses,
@@ -2782,19 +2847,22 @@ function BoardView() {
       ...agentNoteTethers(nodes),
       ...masterRails(nodeIds, agents),
       ...clockTethers(nodes, clockStatuses),
-      ...questionTethers(questionCards.cards),
       // Its tiles as React Flow measured them, as each rail is drawn from (`useLine`): a token's slot is by the side its rail ends on.
       ...flowEdges(flow.edges, nodeIds, flow.selected, { live: flow.live, names: agentNames, ready, rectOf: (sessionId) => rectOf(tileNodeId('agent', sessionId)) }),
     ];
-  }, [connectors, nodes, questionCards.cards, selectedConnectors, agents, flow.edges, flow.selected, flow.live, rectOf, clockStatuses]);
+  }, [connectors, nodes, selectedConnectors, agents, flow.edges, flow.selected, flow.live, rectOf, clockStatuses]);
   // With some hidden, a tile that is selected or hovered shows its own; the rest are told how many they have.
   const selectedKey = connections === 'all' ? '' : nodes.filter((node) => node.selected === true).map((node) => node.id).join('\n');
+  // What a shelved zone folded into its stacks is hidden, and so are the lines to it.
+  const hiddenKey = drawn.flatMap((node) => (node.hidden === true ? [node.id] : [])).join('\n');
   const edges = useMemo(() => {
-    if (connections === 'all') return allEdges;
+    const hidden = new Set(hiddenKey.split('\n').filter(Boolean));
+    const shown = hidden.size === 0 ? allEdges : allEdges.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target));
+    if (connections === 'all') return shown;
     const revealed = new Set(selectedKey.split('\n').filter(Boolean));
     if (hoveredTile !== undefined) revealed.add(hoveredTile);
-    return shownEdges(allEdges, connections, revealed);
-  }, [allEdges, connections, selectedKey, hoveredTile]);
+    return shownEdges(shown, connections, revealed);
+  }, [allEdges, connections, selectedKey, hoveredTile, hiddenKey]);
   /** In a capture window, what it draws: its zone and what is in it, and the edges between those (capture-mode.ts). */
   const captured = useMemo(() => {
     if (CAPTURE_FRAME === undefined) return undefined;
@@ -2853,11 +2921,7 @@ function BoardView() {
     });
   }, [setSelectedFlowEdges]);
   const rotations = useMemo(liveRotations, []);
-  // A question card counts: one selected with a tile is not selected alone.
-  const severalSelected = useMemo(
-    () => nodes.filter((node) => node.selected === true).length + questionCards.cards.filter((card) => card.selected === true).length > 1,
-    [nodes, questionCards.cards],
-  );
+  const severalSelected = useMemo(() => nodes.filter((node) => node.selected === true).length > 1, [nodes]);
   /** The flow edge whose Edge rules are open: the one selected, alone. */
   const shownFlowEdge = flow.selected.size === 1 ? flow.edges.find((edge) => flow.selected.has(edge.id)) : undefined;
   // The edges on its rail: a switch in its rules picks between them.
@@ -2889,6 +2953,7 @@ function BoardView() {
   }, [shownFlowEdgeId, flowStore, getInternalNode, flowToScreenPosition, setViewport]);
   /** Who is handing off along a live edge, and who is receiving. */
   const handoffs = useMemo(() => handoffEnds(flow.edges, flow.live), [flow.edges, flow.live]);
+  const takenJobs = useTakenJobs();
   /** The zones on the board, for the board menu and the zone island. */
   const zones = useMemo(() => nodes.filter(isZone).map((node) => node.data.zone), [nodes]);
   // Each agent's name and worktree: a shell moved into another agent's window says whose worktree it runs in.
@@ -2913,6 +2978,16 @@ function BoardView() {
       }}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+        // A queue's job, to hand to the agent it is dropped on: that tile lights up.
+        // Only an idle agent in the job's queue's scope takes it: a working one, or one out of scope, takes no drop.
+        const job = draggedJob();
+        if (job !== undefined && event.dataTransfer.types.includes(JOB_DRAG)) {
+          event.preventDefault();
+          const taker = jobTakerAt(event.clientX, event.clientY, job.zoneId);
+          event.dataTransfer.dropEffect = taker === undefined ? 'none' : 'move';
+          setJobDropOver(taker?.sessionId);
+          return;
+        }
         // A tab dragged in this window or another of the app's: that a drag is on is heard from main, as its data
         // type may not reach a window it didn't start in.
         const drag = tabDrag();
@@ -2924,9 +2999,21 @@ function BoardView() {
       }}
       onDragLeave={(event) => {
         // Off the window, the tile or window it was over is no longer shown.
-        if (event.relatedTarget === null) dropOver.set(undefined);
+        if (event.relatedTarget === null) {
+          dropOver.set(undefined);
+          setJobDropOver(undefined);
+        }
       }}
       onDrop={(event) => {
+        const job = draggedJob();
+        if (job !== undefined && event.dataTransfer.types.includes(JOB_DRAG)) {
+          event.preventDefault();
+          setJobDropOver(undefined);
+          startJobDrag(undefined);
+          const taker = jobTakerAt(event.clientX, event.clientY, job.zoneId);
+          if (taker !== undefined) openHandOn({ queueId: job.queueId, jobId: job.jobId, sessionId: taker.sessionId });
+          return;
+        }
         const drag = tabDrag();
         if (drag !== undefined) {
           event.preventDefault();
@@ -2970,6 +3057,7 @@ function BoardView() {
                       <CrewViewContext value={crewView}>
                       <AgentNoteLookContext value={agentNoteLook}>
                       <CrewFramesContext value={shownFrames}>
+                      <ShelvesContext value={shelvesActions}>
                       <ProjectSummaryContext value={projectSummary}>
                       <NewNoteContext value={newNoteAt}>
                       <ShellFoldersContext value={shellFolders}>
@@ -2977,13 +3065,16 @@ function BoardView() {
                         <ItemActionsContext value={itemActions}>
                           <DocumentCardsContext value={documentCards}>
                           <PlanCardsContext value={planCards}>
+                          <StepsLookupContext value={stepsLookup}>
                           <ClockBoardContext value={clockBoard}>
+                          <QueueBoardContext value={queueBoard}>
                           <SuggestionActionsContext value={suggestionActions}>
                           <LiveRotationsContext value={rotations}>
                           <SeveralSelectedContext value={severalSelected}>
                           <ConnectorActionsContext value={connectorActions}>
                           <FlowEdgeActionsContext value={flowEdgeActions}>
                           <HandoffsContext value={handoffs}>
+                          <TakenJobsContext value={takenJobs}>
                           <HandingOffContext value={handingOff}>
                             <RepresentationProvider style={DEFAULT_REPRESENTATION}>
                               <ReactFlow
@@ -3105,8 +3196,7 @@ function BoardView() {
                               panActivationKeyCode="Space"
                               multiSelectionKeyCode="Shift"
                               selectionMode={SelectionMode.Full}
-                              // A question card has no menu: it is answered, or moved, and nothing else.
-                              onNodeContextMenu={(event, node) => (isQuestionNodeId(node.id) ? event.preventDefault() : onNodeContextMenu(event, node))}
+                              onNodeContextMenu={onNodeContextMenu}
                               onSelectionContextMenu={onSelectionContextMenu}
                               onPaneContextMenu={onPaneContextMenu}
                               onlyRenderVisibleElements
@@ -3119,12 +3209,7 @@ function BoardView() {
                               onMoveEnd={(_event, { x, y, zoom }) => CAPTURE_FRAME === undefined && saveViewport({ x, y, zoom })}
                               proOptions={{ hideAttribution: true }}
                             >
-                              <Background
-                                variant={BackgroundVariant.Dots}
-                                gap={desk.gap}
-                                size={desk.size}
-                                color="var(--surface-dot)"
-                              />
+                              <BoardBackdrop gap={desk.gap} size={desk.size} />
                               <ConnectorMarkers />
                               <SelectionBox onAsk={askClaude.open} />
                               <SuggestionGhosts />
@@ -3175,13 +3260,16 @@ function BoardView() {
                             )}
                           </RepresentationProvider>
                           </HandingOffContext>
+                          </TakenJobsContext>
                           </HandoffsContext>
                           </FlowEdgeActionsContext>
                           </ConnectorActionsContext>
                           </SeveralSelectedContext>
                           </LiveRotationsContext>
                           </SuggestionActionsContext>
+                          </QueueBoardContext>
                           </ClockBoardContext>
+                          </StepsLookupContext>
                           </PlanCardsContext>
                           </DocumentCardsContext>
                         </ItemActionsContext>
@@ -3189,6 +3277,7 @@ function BoardView() {
                       </ShellFoldersContext>
                       </NewNoteContext>
                       </ProjectSummaryContext>
+                      </ShelvesContext>
                       </CrewFramesContext>
                       </AgentNoteLookContext>
                       </CrewViewContext>
@@ -3247,6 +3336,7 @@ function BoardView() {
             ghostSize={{ width: AGENT_TILE_SIZE.width * getZoom(), height: AGENT_TILE_SIZE.height * getZoom() }}
             onDropTool={dropTool}
             onSticky={() => createItem('sticky', boardCentre())}
+            onSteps={() => createItem('steps', boardCentre())}
             onRunInShell={startLooseShell}
             onCloseWindow={closeWindow}
           />
@@ -3266,6 +3356,9 @@ function BoardView() {
               onOpenLink={(url) => void window.agentBoard.trackers.openLink(url).catch(report('open the link'))}
             />
           )}
+          <QueueFocusHost queues={queues} board={queueBoard} onError={(message) => setNotice({ message })} />
+          <HandOnHost queues={queues} board={queueBoard} onError={(message) => setNotice({ message })} />
+          <DrainSheetHost queues={queues} zones={zones} onSave={(id, drain) => itemActions.update({ id, data: { drain: { ...drain } } })} />
           {/* Only while both its agents are on the board: one deleted takes the edge, which may not have been heard yet. */}
           {shownFlowEdge !== undefined && shownEnds?.from !== undefined && shownEnds.to !== undefined && (
             <EdgeRules
@@ -3359,6 +3452,7 @@ function BoardView() {
           {roleTemplatesZone !== undefined && (
             <RoleTemplatesDialog key={roleTemplatesZone.id} zone={roleTemplatesZone} onClose={() => setRoleTemplatesZone(undefined)} />
           )}
+          {crewPrefabsOpen && <PrefabsDialog onClose={() => setCrewPrefabsOpen(false)} />}
           {gateCommandZone !== undefined && (
             <GateCommandDialog
               key={gateCommandZone.id}
@@ -3496,6 +3590,7 @@ function BoardView() {
               notice={loaded ? restartBanner : null}
               sessions={navSessions}
               zones={zones}
+              opensMaximised={clickOpens === 'maximised'}
             />
           </TileActionsContext>
         </>

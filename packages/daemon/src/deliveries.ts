@@ -4,7 +4,7 @@ import { handoffLine } from './handoff-text.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
-import type { Agent } from './protocol.ts';
+import { questionPrompt, type Agent } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
 import { answerInput, draftAfterInput, oneLine, submittedText } from './terminal-input.ts';
@@ -128,7 +128,7 @@ interface DeliveryOptions<Row extends DeliveryRow> {
   write(sessionId: string, data: string): void;
   getRow(sessionId: string): Row | undefined;
   /** The agent, or an invalid-params error if there is none. */
-  requireAgent(sessionId: string): Pick<Agent, 'name' | 'endedAt' | 'state' | 'lastMessage'>;
+  requireAgent(sessionId: string): Pick<Agent, 'name' | 'endedAt' | 'state' | 'lastMessage' | 'permissions'>;
   /** Why a run can't start in the live agent now, or undefined if it can (`evenAsking` as for a hand-off). */
   whyNotReady(row: Row, evenAsking?: boolean): string | undefined;
   /** Relaunches the ended agent with `prompt` as its first message, carrying on Codex conversation `codexSessionId`. */
@@ -378,10 +378,12 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
    * prompt or question came up while it waited, where its keys would answer that instead.
    */
   const whyNotAnswer = (sessionId: string): string | undefined => {
-    const { name, endedAt, state, lastMessage } = requireAgent(sessionId);
+    const agent = requireAgent(sessionId);
+    const { name, endedAt, state, lastMessage } = agent;
     if (endedAt !== null) return `${name} has ended`;
     if (options.promptNow(sessionId) !== 'moved-on') return undefined;
     if (state === 'needs-permission') return `${name} needs permission first`;
+    if (questionPrompt(agent) !== undefined) return `${name} is asking you questions: answer them in its terminal`;
     // Its harness may show a menu of what to do about it, where Enter would pick one.
     if (state === 'rate-limited') return `${name} is rate-limited: answer it in its terminal, or Continue on credits`;
     // Claude asked for input (`agent_needs_input`): a question of its turn, or a dialog of its own, which Enter would answer.
@@ -570,6 +572,41 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
           setUnsent(sessionId, kept, whyGaveUp(now));
           return false;
         });
+      });
+    },
+
+    /**
+     * Types `command`, one the harness runs itself at its prompt with no turn (`/effort high`), and presses Enter once it
+     * has landed, after whatever is being typed at the agent already: only at a prompt between turns holding nothing,
+     * neither a message never sent nor the user's own typing, with nothing up that Enter would answer. As it starts no
+     * turn, none is waited for. Resolves undefined once typed, else why not now, for the caller to try again later.
+     */
+    typeCommand(sessionId: string, command: string): Promise<string | undefined> {
+      const notNow = (): string | undefined => {
+        const row = getRow(sessionId);
+        if (row === undefined || row.ended_at !== null) return 'its session has ended';
+        if (unsent.has(sessionId)) return UNSENT_REASON;
+        if (queued.has(sessionId) || afterTurn.has(sessionId)) return 'a message waits to be taken up first';
+        const now = options.promptNow(sessionId);
+        if (now === 'typing') return 'you are typing at its prompt';
+        if (now !== 'at-prompt') return 'it is not at its prompt';
+        return whyNotReadyNow(sessionId, row, true);
+      };
+      return inTurn(sessionId, async () => {
+        const before = notNow();
+        if (before !== undefined) return before;
+        await typeAndSettle(sessionId, command);
+        // The user started typing meanwhile, or something came up: what is at the prompt is theirs now, to send or clear,
+        // and nothing more is typed onto it until they do.
+        const after = notNow();
+        if (after !== undefined) {
+          options.log(`${command} was typed at ${sessionId}'s prompt but not sent: ${after}`);
+          if (getRow(sessionId)?.ended_at === null) setUnsent(sessionId, { what: `Reasoning (${command})`, lines: 1 }, whyGaveUp(options.promptNow(sessionId)));
+          return after;
+        }
+        options.write(sessionId, '\r');
+        options.log(`typed ${command} at ${sessionId}'s prompt`);
+        return undefined;
       });
     },
 
@@ -856,6 +893,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (agent.endedAt !== null) throw invalidParams(`${agent.name} has ended`);
       // Its state says so while any permission prompt, its own or a subagent's, is pending.
       if (agent.state === 'needs-permission') throw invalidParams(`${agent.name} needs permission first`);
+      // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
+      if (questionPrompt(agent) !== undefined) throw invalidParams(`${agent.name} is asking you questions: answer them in its terminal`);
       if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
       if (notUp.has(sessionId)) {
         queueOrHandBack(sessionId, answerInput(text, paste), 'A message', text);

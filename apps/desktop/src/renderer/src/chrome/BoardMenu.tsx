@@ -8,7 +8,7 @@ import { binding, chordText, isActive, keyText } from '../keys/registry';
 import { Sessions } from '../Sessions';
 import { Button, EmptyState, Input, Island, IslandSeparator, Kbd, PanelRow, Popover, Section, ToolButton, Tooltip } from '../ui';
 import { BrandMark } from './BrandMark';
-import { useSessionsOpen } from './board-menu-fold';
+import { useMenuSectionOpen } from './board-menu-fold';
 import { QuickSettings } from './QuickSettings';
 
 /** Whether the board menu is open, and whether it put the focus in its search field as it opened. */
@@ -50,7 +50,9 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const simplified = useSimplified();
-  const [sessionsOpen, setSessionsOpen] = useSessionsOpen();
+  const [zonesOpen, setZonesOpen] = useMenuSectionOpen('zones');
+  const [sessionsOpen, setSessionsOpen] = useMenuSectionOpen('sessions');
+  const [helpOpen, setHelpOpen] = useMenuSectionOpen('help');
   const at = menu.open ? menu.at : undefined;
   /** When it was last asked to focus there: asked again while open, it focuses again. */
   const asked = menu.open ? menu.asked : undefined;
@@ -65,6 +67,8 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
   const close = () => onMenu({ open: false });
   const wanted = filter.trim().toLowerCase();
   const shownZones = zones?.filter((zone) => zone.name.toLowerCase().includes(wanted));
+  // A search opens Zones while it has matches; that is for the search only, so a click on the heading then does nothing.
+  const zonesForcedOpen = wanted !== '' && shownZones !== undefined && shownZones.length > 0;
   const panel = (
     <div className="board-menu-panel">
       <div className="board-menu-search">
@@ -79,7 +83,12 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
         />
       </div>
       <div className="board-menu-sections">
-        <Section label="Zones" meta={zones === undefined ? undefined : zones.length === 0 ? 'None' : String(zones.length)}>
+        <Section
+          label="Zones"
+          meta={zones === undefined ? undefined : zones.length === 0 ? 'None' : String(zones.length)}
+          open={zonesForcedOpen || zonesOpen}
+          onOpenChange={(next) => !zonesForcedOpen && setZonesOpen(next)}
+        >
           {shownZones !== undefined && shownZones.length > 0 ? (
             <ul className="board-menu-list">
               {shownZones.map((zone) => {
@@ -133,9 +142,9 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
             </Button>
           </div>
         </Section>
-        <Sessions agents={agents} shells={shells} filter={filter} open={wanted !== '' || sessionsOpen} onOpenChange={setSessionsOpen} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
+        <Sessions agents={agents} shells={shells} filter={filter} open={wanted !== '' || sessionsOpen} onOpenChange={(next) => wanted === '' && setSessionsOpen(next)} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
         {onGettingStarted !== undefined && (
-          <Section label="Help">
+          <Section label="Help" open={helpOpen} onOpenChange={setHelpOpen}>
             <div className="board-menu-actions">
               <Button
                 size="sm"

@@ -13,6 +13,48 @@ const TWO_STEPS: Migration[] = [
   { version: 2, name: 'tiles', sql: 'CREATE TABLE tiles (id TEXT PRIMARY KEY, zone_id TEXT REFERENCES zones(id));' },
 ];
 
+/** Each match of `pattern` in `sql`: the table its first group names, and where it starts. */
+const statements = (sql: string, pattern: RegExp) =>
+  [...sql.matchAll(pattern)].map((match) => ({ table: match[1]!.toLowerCase(), at: match.index }));
+
+/**
+ * Where a migration deletes rows another table still points at without clearing that table first, as `migration:
+ * parent <- child`. Foreign keys are off while migrations run, so ON DELETE CASCADE, SET NULL and the rest never fire,
+ * and each child row of a deleted one is left pointing at nothing. A REPLACE deletes the row it conflicts with, so it
+ * counts as a delete. Triggers fire at run time, with foreign keys on, so a statement inside a trigger's body doesn't
+ * count. It checks only that an earlier DELETE or UPDATE of each child is there, not that its WHERE matches the
+ * parent's: a test that seeds child rows and runs the migration checks that.
+ */
+function deletesLeavingChildren(migrations: readonly Migration[]): string[] {
+  const db = new DatabaseSync(':memory:');
+  const children = () => {
+    const byParent = new Map<string, Set<string>>();
+    for (const table of tables(db)) {
+      for (const { table: parent } of db.prepare(`PRAGMA foreign_key_list("${table}")`).all() as { table: string }[]) {
+        if (parent === table) continue;
+        byParent.set(parent, (byParent.get(parent) ?? new Set()).add(table));
+      }
+    }
+    return byParent;
+  };
+  const found: string[] = [];
+  migrations.forEach((migration, index) => {
+    const before = children();
+    migrate(db, migrations.slice(0, index + 1));
+    const after = children();
+    const sql = migration.sql.replace(/--[^\n]*/g, '').replace(/\bCREATE\s+TRIGGER\b[\s\S]*?\bEND\s*;/gi, '');
+    const writes = statements(sql, /\b(?:DELETE\s+FROM|UPDATE(?:\s+OR\s+\w+)?)\s+"?(\w+)"?/gi);
+    for (const { table, at } of statements(sql, /\b(?:DELETE\s+FROM|(?:INSERT\s+OR\s+)?REPLACE\s+INTO)\s+"?(\w+)"?/gi)) {
+      for (const child of new Set([...(before.get(table) ?? []), ...(after.get(table) ?? [])])) {
+        if (!writes.some((write) => write.table === child.toLowerCase() && write.at < at)) {
+          found.push(`${String(migration.version).padStart(4, '0')}_${migration.name}: ${table} <- ${child}`);
+        }
+      }
+    }
+  });
+  return found;
+}
+
 describe('MIGRATIONS', () => {
   it('lists every .sql file in the migrations folder, in order, with its text', () => {
     const dir = new URL('../src/migrations/', import.meta.url);
@@ -102,6 +144,30 @@ describe('migrate', () => {
 });
 
 describe('the shipped migrations', () => {
+  it('clear the rows that point at any rows they delete, first, as no foreign key action fires while they run', () => {
+    expect(deletesLeavingChildren(MIGRATIONS)).toEqual([]);
+  });
+
+  it('are checked for that by a scan that finds a delete with its children left, and passes one that clears them', () => {
+    const cascade: Migration[] = [
+      ...TWO_STEPS.slice(0, 1),
+      { version: 2, name: 'tiles', sql: 'CREATE TABLE tiles (id TEXT PRIMARY KEY, zone_id TEXT REFERENCES zones(id) ON DELETE CASCADE);' },
+    ];
+    const step = (sql: string): Migration[] => [...cascade, { version: 3, name: 'prune', sql }];
+
+    expect(deletesLeavingChildren(step("DELETE FROM zones WHERE id = 'old';"))).toEqual(['0003_prune: zones <- tiles']);
+    expect(deletesLeavingChildren(step("DELETE FROM zones WHERE id = 'old'; DELETE FROM tiles WHERE zone_id = 'old';"))).toEqual([
+      '0003_prune: zones <- tiles',
+    ]);
+    expect(deletesLeavingChildren(step("DELETE FROM tiles WHERE zone_id = 'old'; DELETE FROM zones WHERE id = 'old';"))).toEqual([]);
+    expect(deletesLeavingChildren(step("UPDATE tiles SET zone_id = NULL WHERE zone_id = 'old'; DELETE FROM zones WHERE id = 'old';"))).toEqual([]);
+    expect(
+      deletesLeavingChildren(step('CREATE TRIGGER prune AFTER DELETE ON tiles BEGIN DELETE FROM zones WHERE id = OLD.zone_id; END;')),
+    ).toEqual([]);
+    expect(deletesLeavingChildren(step("INSERT OR REPLACE INTO zones (id) VALUES ('old');"))).toEqual(['0003_prune: zones <- tiles']);
+    expect(deletesLeavingChildren(step("REPLACE INTO zones (id) VALUES ('old');"))).toEqual(['0003_prune: zones <- tiles']);
+  });
+
   it('are numbered 1..n', () => {
     expect(MIGRATIONS.length).toBeGreaterThan(0);
     expect(MIGRATIONS.map((m) => m.version)).toEqual(MIGRATIONS.map((_, i) => i + 1));
@@ -534,5 +600,37 @@ describe('the drop-pacing migration', () => {
     expect(db.prepare('SELECT state, hibernated_at FROM agents').all()).toEqual([{ state: 'idle', hibernated_at: '2026-10-28T10:00:00Z' }]);
     expect(db.prepare('SELECT five_hour_used FROM usage_reading').all()).toEqual([{ five_hour_used: 72 }]);
     expect(db.prepare('SELECT key FROM settings').all()).toEqual([{ key: 'arrangeSpacing' }]);
+  });
+});
+
+describe('the drop-reviewer-edges migration', () => {
+  it("drops the reviewer's edges an agent made and what happened along them; an edge the user drew keeps its history", () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const drop = MIGRATIONS.findIndex((m) => m.name === 'drop_reviewer_edges');
+    expect(drop).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, drop));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd)
+        VALUES ('owner', 'claude', 'ho', '/o'), ('reviewer', 'claude', 'hr', '/r'), ('lead', 'claude', 'hl', '/l'), ('second', 'claude', 'hs', '/s');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, reviews_branch)
+        VALUES ('owner', 'z', '/code/app', 1, 'Owner', '', 'feature', '/o', 'idle', NULL),
+          ('reviewer', 'z', '/code/app', 1, 'Reviewer', '', 'review-feature', '/r', 'idle', 'feature'),
+          ('second', 'z', '/code/app', 1, 'Second', '', 'second-look', '/s', 'idle', 'feature'),
+          ('lead', 'z', '/code/app', 1, 'Lead', '', 'lead', '/l', 'idle', NULL);
+      INSERT INTO flow_edges (id, from_session_id, to_session_id, trigger, payload, made_by, one_off)
+        VALUES ('findings', 'reviewer', 'owner', 'manual', 'final-message', 'lead', 0),
+          ('next-round', 'owner', 'reviewer', 'manual', 'final-message', 'lead', 0),
+          ('drawn', 'second', 'owner', 'manual', 'final-message', NULL, 0);
+      INSERT INTO flow_edge_events (edge_id, kind, detail)
+        VALUES ('findings', 'delivered', 'sent the findings'), ('next-round', 'delivered', 'sent the next round'),
+          ('drawn', 'delivered', 'sent by hand');`);
+
+    migrate(db, MIGRATIONS.slice(0, drop + 1));
+
+    expect(db.prepare('SELECT id FROM flow_edges').all()).toEqual([{ id: 'drawn' }]);
+    expect(db.prepare('SELECT edge_id, detail FROM flow_edge_events').all()).toEqual([{ edge_id: 'drawn', detail: 'sent by hand' }]);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });

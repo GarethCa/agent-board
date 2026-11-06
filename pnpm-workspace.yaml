@@ -11,6 +11,15 @@ overrides:
   "undici@7": ^7.30.1
   "fast-uri@3": ^3.1.9
   "zod@4": ^4.6.6
+  # minimatch < 11.0.1 has a denial of service via globparts amplification (GHSA-g3hv-75wg-m249).
+  # These parents only use the named exports (minimatch, Minimatch), which 11 keeps. @electron/asar,
+  # dir-compare, glob@7 and filelist import it as a default function, which 11 dropped, so they
+  # stay on 3/5.
+  "eslint>minimatch": ^11.0.1
+  "@eslint/config-array>minimatch": ^11.0.1
+  "@typescript-eslint/typescript-estree>minimatch": ^11.0.1
+  "app-builder-lib>minimatch": ^11.0.1
+  "@electron/universal>minimatch": ^11.0.1
 allowBuilds:
   electron: true
   electron-winstaller: false

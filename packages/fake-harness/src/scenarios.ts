@@ -4,7 +4,7 @@ import { demoScripts } from './demo-scenarios.ts';
 import type { FakeSession } from './session.ts';
 
 /** The scripted runs every fake harness can replay. Pick one with FAKE_HARNESS_SCENARIO. */
-export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'emoji-link', 'ask-selection', 'background', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
+export const SCENARIOS = ['output', 'waiting', 'permission', 'two-permissions', 'long-permission', 'subagent', 'subagent-permission', 'subagent-ask', 'subagents-working', 'review', 'board', 'ask-plan', 'orchestrate', 'crash', 'rate-limit', 'markdown', 'emoji-link', 'ask-selection', 'ask-questions', 'background', 'busy', 'demo-plan', 'demo-implement', 'demo-review', 'demo-codex'] as const;
 export type FakeScenario = (typeof SCENARIOS)[number];
 
 export function isScenario(name: string): name is FakeScenario {
@@ -132,6 +132,34 @@ const scripts: Record<FakeScenario, Script> = {
       true,
     );
     await session.say(ran ? 'Removed dist.' : 'Okay, I left dist alone.');
+    await session.stop();
+  },
+
+  /**
+   * Asks the user which cache to use with Claude's question tool (Codex has none, so it only says so), and says what was
+   * picked: `Going with <answer>.`, or `No answer came.` if the call ran with none.
+   */
+  async 'ask-questions'(session, prompt) {
+    await session.submit(prompt);
+    if (session.harness !== 'claude') {
+      await session.say('I have no question tool here.');
+      return session.stop();
+    }
+    await session.say('I have a question before I start.');
+    const answers = await session.askQuestions([
+      {
+        question: 'Which cache should the build use?',
+        header: 'Cache',
+        options: [
+          { label: 'Redis', description: 'Shared across machines' },
+          { label: 'In memory', description: 'One per process' },
+        ],
+        multiSelect: false,
+      },
+    ]);
+    if (answers === undefined) return session.end('prompt_input_exit');
+    const picked = Object.values(answers)[0];
+    await session.say(picked === undefined ? 'No answer came.' : `Going with ${picked}.`);
     await session.stop();
   },
 
@@ -296,7 +324,8 @@ const scripts: Record<FakeScenario, Script> = {
   /**
    * Asks the user and presents plans through the board MCP, by prompt, then ends its turn on what it was told.
    * `Ask: <question> | <option> | …` asks with those options and a reply field (`Ask only: …` without the field);
-   * `Ask in words: <question>` asks with no options; `Ask briefly: <question>` waits a minute at most; `Ask on the board:
+   * `Ask in words: <question>` asks with no options; `Ask several: <question> | <option> | … ;; <question> …` asks up to
+   * four questions at once, each with its options or in words; `Ask briefly: <question>` waits a minute at most; `Ask on the board:
    * …` asks for a question card too; `Identify, then ask: …` prints its board token first; `Ask and give up: <question>` asks and, as a harness whose own tool timeout
    * passes first, drops the call after half a second with no cancel and ends its turn. `Plan: <title>`
    * presents a Markdown plan and, if changes are asked for, a v2 with the comments in it, until a decision other than
@@ -307,7 +336,10 @@ const scripts: Record<FakeScenario, Script> = {
    * <path>` shows it as a card on the board too. Nothing waits on either. `Plan doc on the board: <path>` writes a
    * migration plan in Markdown to `<path>` and shows it with `show_doc` as a plan with its card on the board, waiting
    * for the decision. `Plan doc by CLI: <path>` writes the same plan and leaves it with `agent-board doc --plan --board`,
-   * which returns at once, then ends its turn; the decision is typed at its prompt later. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
+   * which returns at once, then ends its turn; the decision is typed at its prompt later. `Steps, then wait on <n>: …` puts up
+   * a steps card of those lines and waits on its step n. `Steps: <line> ;; <line> …`
+   * prints its board token, then puts up a steps card of those lines with `steps_new` and ends its turn. `Memory: <title>` and `Queue: <title>` print its board
+   * token, then put up a memory or a queue of that title with `memory_new` or `queue_new`, and end its turn. `Pins: <path>` writes and shows that Markdown file, then pins it as `Report`, a `shot.png` beside
    * it, a link to `http://localhost:9/preview` and a note labelled `Test logins`.
    */
   async 'ask-plan'(session, prompt) {
@@ -318,9 +350,35 @@ const scripts: Record<FakeScenario, Script> = {
     };
     // Its board token on its screen first, for a test to act as the agent with.
     if (prompt.startsWith('Identify, then ask')) await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+    // `Steps, then wait on <n>: <line> ;; …` puts up the card, then waits on its step n, a to-do of the user's.
+    const waited = /^Steps, then wait on (\d+): (.*)/.exec(prompt);
+    if (waited !== null) {
+      const made = await session.callMcpTool('agent-board', 'steps_new', { steps: waited[2]!.split(' ;; ').join('\n') });
+      const card = /item:\S+/.exec(made?.text ?? '')?.[0];
+      if (card === undefined) return say(made);
+      return say(await session.callMcpTool('agent-board', 'steps_update', { card, action: 'wait', step: Number(waited[1]) }));
+    }
+    const steps = /^Steps: (.*)/.exec(prompt)?.[1];
+    if (steps !== undefined) {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return say(await session.callMcpTool('agent-board', 'steps_new', { steps: steps.split(' ;; ').join('\n') }));
+    }
+    const made = /^(Memory|Queue): (.*)/.exec(prompt);
+    if (made !== null) {
+      await session.runShell('echo "identity:$AGENT_BOARD_IDENTITY:end"');
+      return say(await session.callMcpTool('agent-board', made[1] === 'Memory' ? 'memory_new' : 'queue_new', { title: made[2]! }));
+    }
     const givenUp = /^Ask and give up: (.*)/.exec(prompt)?.[1];
     if (givenUp !== undefined) {
       return say(await session.callMcpTool('agent-board', 'ask', { question: givenUp }, { giveUpMs: 500 }));
+    }
+    const several = /^Ask several: (.*)/.exec(prompt)?.[1];
+    if (several !== undefined) {
+      const questions = several.split(' ;; ').map((each) => {
+        const [question, ...options] = each.split(' | ');
+        return options.length === 0 ? { question } : { question, options };
+      });
+      return say(await session.callMcpTool('agent-board', 'ask', { questions }));
     }
     const ask = /^(?:Identify, then )?[Aa]sk( only| in words| briefly| on the board)?: (.*)/.exec(prompt);
     if (ask !== null) {
@@ -399,14 +457,22 @@ const scripts: Record<FakeScenario, Script> = {
    * fires its `Stop` too, after the interrupt;
    * `Work slowly` runs `sleep 5`; `Work slowly, then fail` and `Work slowly, then hit the rate limit` run it, then
    * fail the turn (Claude's StopFailure: `server_error`, `rate_limit`);
-   * `Ask permission` plays `permission`; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
+   * `Ask permission` plays `permission`; `Run: ‹command› | ‹what it is for›` asks to run that command and says whether it ran; `Think, then send a subagent` thinks a step and plays `subagent`; `Ask: …`, `Plan: …`, `Flag: …`, `Doc: …` and `Pins: …` play `ask-plan`; `Hit the rate limit` plays `rate-limit`. Any other prompt is a worker's:
    * it writes `.agent-board/handover.md` in its shell and ends on `STATUS: done`.
    */
   async orchestrate(session, prompt) {
     // Prompts that play another scenario, which submits them itself.
     if (prompt === 'Ask permission') return scripts.permission(session, prompt);
-    if (/^(Ask( only| in words| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
+    if (/^(Ask( only| in words| several| briefly| on the board)?|Plan( doc on the board| doc by CLI)?|Flag|Doc( on the board)?|Pins): /.test(prompt)) return scripts['ask-plan'](session, prompt);
     await session.submit(prompt);
+    // A plain command it needs permission for, with what it is for, and what came of the answer.
+    const run = /^Run: (.*?) \| (.*)$/.exec(prompt);
+    if (run !== null) {
+      const [, command = '', description = ''] = run;
+      const ran = await session.runTool(session.shellTool, { command, description }, { stdout: '', stderr: '', interrupted: false }, true);
+      await session.say(ran ? `Ran ${command}.` : `Okay, I did not run ${command}.`);
+      return session.stop();
+    }
     if (prompt === 'Think, then send a subagent') {
       await session.recordThought('Sessions are made somewhere in the daemon: an explorer can find where.');
       return sendExplorer(session);
@@ -599,6 +665,19 @@ const scripts: Record<FakeScenario, Script> = {
     }
   },
 
+  /**
+   * Load for a board of many agents. A prompt starting `Keep busy` runs a turn that never ends on its own: it streams as
+   * a long turn does (`keepBusy`) until Ctrl-C. Any other prompt is answered at once, leaving the session at its prompt.
+   * With `FAKE_HARNESS_BACKLOG_LINES`, either first prints that many lines of an earlier conversation, as scrollback.
+   */
+  async busy(session, prompt) {
+    await session.submit(prompt);
+    session.printBacklog(Number(process.env.FAKE_HARNESS_BACKLOG_LINES ?? 0));
+    if (prompt.startsWith('Keep busy')) await session.keepBusy();
+    await session.say('Ready.');
+    await session.stop();
+  },
+
   ...demoScripts,
 
   /** The turn fails on a rate limit (Claude's StopFailure; Codex prints the error only). */
@@ -656,6 +735,7 @@ export async function play(
   for (;;) {
     const line = await session.waitForInput();
     if (line === undefined) await session.end('prompt_input_exit');
+    if (await session.localCommand(line!)) continue;
     if (repeat) {
       await session.interruptible(() => scripts[scenario](session, line!));
       continue;

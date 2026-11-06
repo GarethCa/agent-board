@@ -217,6 +217,27 @@ describe('orchestrator.move', () => {
     expect(await lastLine(setup.client)).toMatchObject({ action: 'move', outcome: 'refused', reason: expect.stringMatching(/whole board/) });
   });
 
+  it("sets its zone's layout, moving no tile, and is refused one outside its scope, logging each", async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const before = (await setup.client.call('agent.list')).map((agent) => agent.position);
+
+    const shelved = await me.connection.call('orchestrator.zoneLayout', { token: me.token, mode: 'shelves' });
+    expect(shelved).toMatchObject({ id: setup.zone.id, layoutMode: 'shelves' });
+    expect((await setup.client.call('agent.list')).map((agent) => agent.position)).toEqual(before);
+    expect(await lastLine(setup.client)).toMatchObject({ action: 'zone-layout', outcome: 'done', targetName: setup.zone.name, detail: 'shelves' });
+
+    await expect(me.connection.call('orchestrator.zoneLayout', { token: me.token, zoneId: setup.other.id, mode: 'shelves' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    await expect(me.connection.call('orchestrator.zoneLayout', { token: me.token, mode: 'grid' as never })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+    expect((await setup.client.call('zone.list')).find((zone) => zone.id === setup.other.id)?.layoutMode).toBe('free');
+
+    // On shelves there is nothing to arrange: it says so, and moves nothing.
+    await expect(me.connection.call('orchestrator.arrange', { token: me.token })).rejects.toThrow(/is laid out on status shelves/);
+    await me.connection.call('orchestrator.zoneLayout', { token: me.token, mode: 'clusters' });
+    await expect(me.connection.call('orchestrator.arrange', { token: me.token })).rejects.toThrow(/is laid out in clusters/);
+    expect((await setup.client.call('agent.list')).map((agent) => agent.position)).toEqual(before);
+  });
+
   it('is refused to an agent that may not orchestrate', async () => {
     const setup = await layoutDaemon();
     const me = await lead(setup, setup.zone.id);
@@ -586,7 +607,7 @@ describe('orchestrator.arrange', () => {
     const lane = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note' && Array.isArray(item.data.members) && item.data.members.includes(impl.sessionId))!;
     await setup.client.call('item.update', { id: lane.id, height: 96 });
     const before = await rectsIn(setup.client, setup.zone.id);
-    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch, edges: 'manual' });
     const rects = await rectsIn(setup.client, setup.zone.id);
     expect(rects.get('review')).toMatchObject({ x: before.get('impl')!.x + COLUMN, y: before.get('impl')!.y });
     expect(review.position).toMatchObject({ x: before.get('impl')!.x + COLUMN, y: before.get('impl')!.y });
@@ -597,7 +618,7 @@ describe('orchestrator.arrange', () => {
     expect(sticky.data.text).toMatch(/^- \*\*impl\*\*: .+\n- \*\*review\*\*: .+$/);
     expect(sticky.data.text).not.toContain('Reviews');
     expect(sticky.height).toBe(agentNoteSize(String(sticky.data.text), sticky.width, 0).height);
-    // It is joined to its implementer by edges as it starts, so the next arrange leaves a rail's room between them
+    // Asked for edges to its implementer as it starts, so the next arrange leaves a rail's room between them
     // (the first column past it), and from then on it stays put.
     await me.connection.call('orchestrator.arrange', { token: me.token });
     const arranged = await rectsIn(setup.client, setup.zone.id);
@@ -606,6 +627,22 @@ describe('orchestrator.arrange', () => {
     expectNoOverlap(arranged);
     const again = await me.connection.call('orchestrator.arrange', { token: me.token });
     expect(again.moved).toEqual([]);
+  });
+
+  it('keeps a reviewer started with no edges in its implementer\'s cluster, after it, on arrange', async () => {
+    const setup = await layoutDaemon();
+    const me = await lead(setup, setup.zone.id);
+    const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl', role: 'custom' });
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+    expect(await setup.client.call('flowEdge.list')).toEqual([]);
+    await me.connection.call('orchestrator.arrange', { token: me.token });
+    const rects = await rectsIn(setup.client, setup.zone.id);
+    expect(rects.get('review')).toMatchObject({ y: rects.get('impl')!.y });
+    expect(rects.get('review')!.x).toBeGreaterThan(rects.get('impl')!.x);
+    const sticky = (await setup.client.call('item.list')).find((item) => item.kind === 'agent-note' && Array.isArray(item.data.members) && item.data.members.includes(impl.sessionId))!;
+    expect(sticky.data.members).toEqual([impl.sessionId, review.sessionId]);
+    expectNoOverlap(rects);
   });
 
   it("re-anchors an edited sticky when its cluster's key changes, never deleting it", async () => {
@@ -754,7 +791,7 @@ describe('orchestrator.arrange', () => {
       await setup.client.call('zone.update', { id: setup.other.id, x: 12_000, y: 0, width: 720, height: 480 });
       const me = await lead(setup, setup.zone.id);
       const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
-      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch, edges: 'manual' });
       // The lead's notes, long and stacked in a column down the zone's left edge, as they were after earlier arranges.
       const notes: BoardItem[] = [];
       for (let index = 0; index < 10; index++) {
@@ -811,7 +848,7 @@ describe('orchestrator.arrange', () => {
       const setup = await layoutDaemon();
       const me = await lead(setup, setup.zone.id);
       const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
-      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+      await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch, edges: 'manual' });
       await setup.client.call('view.set', { key: 'expandedTiles', value: [{ id: `agent:${me.agent.sessionId}`, width: 960, height: 600 }] });
       // Lanes go by state, so wait until every agent has settled between turns: the lead's Stop comes a while after its identity is
       // printed, and left to chance, a loaded run arranges one daemon's crew still starting or its lead still mid-turn.
@@ -902,7 +939,7 @@ describe('the zone map and arranging by itself', () => {
   async function crewWithLanes(setup: Setup) {
     const me = await lead(setup, setup.zone.id);
     const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'impl' });
-    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
+    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch, edges: 'manual' });
     return { me, impl, review };
   }
   const key = (agent: Agent) => `agent:${agent.sessionId}`;
@@ -1637,8 +1674,8 @@ describe('arranging a unit of work with a ticket and a pull request', () => {
     const setup = await layoutDaemon({ gh: github.gh });
     const me = await lead(setup, setup.zone.id);
     const impl = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'menu', role: 'custom', branch: 'acme-199-menu-scroll' });
-    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch });
-    // Started on the implementer's branch, the reviewer is joined to it, both ways, already.
+    const review = await me.connection.call('orchestrator.spawn', { token: me.token, name: 'review', role: 'reviewer', baseBranch: impl.branch, edges: 'manual' });
+    // Asked for an edge each way, the pair has a rail between them; arrange pairs them by the branch either way.
     const url = 'https://github.com/acme/app/pull/41';
     github.setState({
       ...FAKE_GITHUB_STATE,

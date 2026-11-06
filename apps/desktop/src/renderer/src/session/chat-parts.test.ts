@@ -84,3 +84,11 @@ describe('the live clock', () => {
     clock.stop();
   });
 });
+
+describe("the live line for Claude's question tool", () => {
+  test('reads as its question and options, not as an allow', () => {
+    const questions = [{ question: 'Which cache?', header: 'Cache', options: [{ label: 'Redis', description: '' }, { label: 'In memory', description: '' }], multiSelect: false }];
+    const prompt = { id: 'q', toolName: 'AskUserQuestion', toolInput: { questions }, subagent: null, requestedAt: START, heldUntil: null, asksInTerminal: true, sessionGrant: null, questions };
+    expect(liveLine({ kind: 'permission', prompt })).toMatchObject({ label: 'Which cache?', detail: 'Which cache? (Redis · In memory)', tone: 'wait' });
+  });
+});

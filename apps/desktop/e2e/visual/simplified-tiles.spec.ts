@@ -614,8 +614,8 @@ for (const { theme, suffix } of [
     await shootSimplifiedNotes(theme, theme, `simplified-agent-notes${suffix}`);
   });
 
-  test(`a question asked on the board: its card beside the asking agent's tile, its tail at the tile, ${theme}`, async () => {
-    needsBaselines(`question-card${suffix}`);
+  test(`a question asked on the board: a steps card beside the asking agent's tile, ${theme}`, async () => {
+    needsBaselines(`ask-on-board${suffix}`);
     const { dir, repo, env } = scratch('ask-plan');
     const dataDir = tempDataDir();
     const { app, window } = await launch(
@@ -631,13 +631,13 @@ for (const { theme, suffix } of [
       await pickFolderNext(app, repo);
       await browseForZone(window);
       await spawnAgent(window, 'monorepo', 'Ask on the board: Which database should I use for the job cache? | SQLite | Postgres');
-      await expect(window.getByTestId('question-card')).toBeVisible({ timeout: TURN_MS });
+      await expect(window.getByTestId('steps-card')).toBeVisible({ timeout: TURN_MS });
       await window.getByRole('button', { name: /^Fit view/ }).click();
       await viewSettled(window);
       await pinRandomText(window);
       const restorePointer = await ignorePointer(window);
       await settle(window);
-      await expect.soft(window.locator('.board')).toHaveScreenshot(`question-card${suffix}.png`, SHOT);
+      await expect.soft(window.locator('.board')).toHaveScreenshot(`ask-on-board${suffix}.png`, SHOT);
       await restorePointer();
     } finally {
       await app.close();

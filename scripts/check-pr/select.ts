@@ -28,6 +28,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
       'apps/desktop/src/renderer/src/swatch-folding.test.ts',
       'apps/desktop/src/renderer/src/chrome/drag-regions.test.ts',
       'apps/desktop/src/renderer/src/demo/demo-mode.test.ts',
+      'apps/desktop/src/renderer/src/board/board-background.test.ts',
     ],
     // The `shared/` theme sources are a full gate today (`FULL_GATE_GLOBS`); the glob takes effect when that narrows.
     globs: ['apps/desktop/src/renderer/**/*.{css,ts,tsx}', 'apps/desktop/src/shared/{themes,theme-pack-tokens,design,colour}.ts'],
@@ -242,6 +243,10 @@ export interface Plan {
   processes?: string[];
   /** With `e2eAll`: also the perf project (frame-time benchmark). */
   perf?: boolean;
+  /** A recheck after a failed full run: every unit test of both projects (`pnpm test`), in place of `unit`. */
+  testAll?: boolean;
+  /** A recheck after failed shots: the visual run on just these spec files (under apps/desktop/e2e), when `visual` is false. */
+  visualFiles?: string[];
   /** One line per decision, for the reviewer to check. */
   reasons: string[];
 }

@@ -10,12 +10,14 @@ import { folderPath } from './repo-zone.ts';
 import { finiteNumberParam, invalidParams, oneOf, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   ARRANGE_SPACINGS,
+  ZONE_LAYOUT_MODES,
   DEFAULT_ARRANGE_SPACING,
   DEFAULT_ZONE_SIZE,
   MIN_ZONE_SIZE,
   validZoneFillOpacity,
   ZONE_COLORS,
   type ArrangeSpacing,
+  type ZoneLayoutMode,
   type DaemonEvent,
   type DaemonMethods,
   type TrackerProvider,
@@ -63,6 +65,7 @@ interface ZoneRow {
   agents_orchestrate: number;
   gate_command: string | null;
   spacing: ArrangeSpacing;
+  layout_mode: ZoneLayoutMode;
   tracker_provider: TrackerProvider | null;
   tracker_scope: string | null;
   tracker_project: string | null;
@@ -208,6 +211,7 @@ export function createZoneTable(
     agentsOrchestrate: row.agents_orchestrate === 1,
     gateCommand: row.gate_command,
     spacing: row.spacing,
+    layoutMode: row.layout_mode,
     tracker:
       row.tracker_provider === null || row.tracker_scope === null
         ? null
@@ -319,6 +323,7 @@ export function zoneHandlers<Context>(
   const updateAgentsOrchestrate = db.prepare('UPDATE zones SET agents_orchestrate = ? WHERE id = ?');
   const updateGateCommand = db.prepare('UPDATE zones SET gate_command = ? WHERE id = ?');
   const updateSpacing = db.prepare('UPDATE zones SET spacing = ? WHERE id = ?');
+  const updateLayoutMode = db.prepare('UPDATE zones SET layout_mode = ? WHERE id = ?');
   const updateTracker = db.prepare('UPDATE zones SET tracker_provider = ?, tracker_scope = ?, tracker_project = ? WHERE id = ?');
   // Its tracker stays, and so its issue cards and agents' links: a group's issues start agents in a repo picked for
   // each. The tracker is taken away on its own, from the zone's tracker dialog.
@@ -450,8 +455,9 @@ export function zoneHandlers<Context>(
       const agentsOrchestrate = optionalBooleanParam(fields, 'agentsOrchestrate');
       const gateCommand = gateCommandParam(fields);
       const spacing = fields.spacing === undefined ? undefined : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
-      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined) {
-        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand or spacing');
+      const layoutMode = fields.layoutMode === undefined ? undefined : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
+      if (bypass === undefined && trustsFolder === undefined && boardMcp === undefined && agentsOrchestrate === undefined && gateCommand === undefined && spacing === undefined && layoutMode === undefined) {
+        throw invalidParams('give codexBypassHookTrust, trustsFolder, boardMcp, agentsOrchestrate, gateCommand, spacing or layoutMode');
       }
       const zone = zones.get(id);
       if (trustsFolder === true && zone.repoRoot === null) {
@@ -459,6 +465,7 @@ export function zoneHandlers<Context>(
       }
       if (gateCommand !== undefined) updateGateCommand.run(gateCommand, id);
       if (spacing !== undefined) updateSpacing.run(spacing, id);
+      if (layoutMode !== undefined) updateLayoutMode.run(layoutMode, id);
       if (bypass !== undefined) updateBypass.run(bypass ? 1 : 0, id);
       if (trustsFolder !== undefined) updateTrustsFolder.run(trustsFolder ? 1 : 0, id);
       if (boardMcp !== undefined) updateBoardMcp.run(boardMcp ? 1 : 0, id);
@@ -514,6 +521,7 @@ export function zoneHandlers<Context>(
       if (ownFolder !== null && !isAbsolute(ownFolder)) throw invalidParams(`groupFolder must be absolute, got ${ownFolder}`);
       // A snapshot from before zones had a spacing is of a zone laid out at normal's gaps, as the migration keeps those.
       const spacing = fields.spacing === undefined ? 'normal' : oneOf(fields, 'spacing', ARRANGE_SPACINGS);
+      const layoutMode = fields.layoutMode === undefined ? 'free' : oneOf(fields, 'layoutMode', ZONE_LAYOUT_MODES);
       return queue(`zone ${id}`, async () => {
         if (zones.find(id) !== undefined) throw invalidParams(`zone ${id} exists already`);
         // As the setter does; but a folder that has gone since is left out, rather than failing the undo it is for.
@@ -526,6 +534,7 @@ export function zoneHandlers<Context>(
         const kept = plain?.repoRoot === null ? plain.path : null;
         zones.insert({ ...layout, id, name, color, repoRoot: bound?.repoRoot ?? null, folder: bound?.folder ?? '', tracker, spacing, groupFolder: kept });
         updateFillOpacity.run(fillOpacity, id);
+        updateLayoutMode.run(layoutMode, id);
         updateBypass.run(optionalBooleanParam(fields, 'codexBypassHookTrust') === false ? 0 : 1, id);
         updateTrustsFolder.run(bound !== null && optionalBooleanParam(fields, 'trustsFolder') === true ? 1 : 0, id);
         updateBoardMcp.run(optionalBooleanParam(fields, 'boardMcp') === false ? 0 : 1, id);

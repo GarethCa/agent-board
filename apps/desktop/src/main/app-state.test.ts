@@ -18,7 +18,7 @@ describe('appStateOf', () => {
 
   it('counts a pending permission prompt as waiting, whatever the state', () => {
     const asking = agent('a', 'running', {
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: {}, subagent: null, requestedAt: '', heldUntil: null, asksInTerminal: false, sessionGrant: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: {}, subagent: null, requestedAt: '', heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
     });
     expect(appStateOf([asking], 'turns')).toEqual({ state: 'needs', waiting: 1 });
   });

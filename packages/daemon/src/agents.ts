@@ -2,13 +2,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isAbsolute, join, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { PullRequest } from '@agent-board/tracker';
+import { createAgentPageStore, type AgentPageStore } from './agent-page.ts';
 import { createAgentRecordStore, guessedDocOf, recordHandlers, type AgentRecordStore } from './agent-records.ts';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
 import { createAgentLifecycle, RELAUNCHED_NOTICE } from './agent-lifecycle.ts';
 import { systemClock, type Clock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
-import { createAgentSpawns, issueColumns, type FolderPlace } from './agent-spawns.ts';
+import { createAgentSpawns, issueColumns, type FolderPlace, type SpawnUsed } from './agent-spawns.ts';
 import type { StartChange } from './agent-starts.ts';
 import { createDeliveries, type AfterTurn, type Answered, type UnsentSent } from './deliveries.ts';
 import { createHookStates } from './hook-states.ts';
@@ -17,6 +18,7 @@ import { type HarnessPaths } from './harness-path.ts';
 import {
   dimensionParam,
   invalidParams,
+  oneOf,
   optionalBooleanParam,
   optionalCountParam,
   optionalStringParam,
@@ -26,10 +28,12 @@ import {
 } from './params.ts';
 import type { AskHost } from './asks.ts';
 import type { DocumentHost } from './documents.ts';
-import { ASKING_PERMISSION_HOLD_MS, createPermissionHolds, stateWithPrompts, type HookReply } from './permissions.ts';
+import { ASKING_PERMISSION_HOLD_MS, createPermissionHolds, promptCounts, stateWithPrompts, type HookReply } from './permissions.ts';
 import {
   AGENT_ERROR,
   DEFAULT_REVIEW_CAP,
+  EFFORTS,
+  effortRefusal,
   INTERRUPT_KEY,
   isMidTurn,
   pauseRefusal,
@@ -39,11 +43,13 @@ import {
   MAX_FLAG_LENGTH,
   MAX_STATUS_LENGTH,
   type Agent,
+  type AgentStepsWait,
   type AgentRepo,
   type AgentStart,
   type AgentRole,
-  type AgentState,
   type DaemonEvent,
+  type Effort,
+  type EffortApplies,
   type Harness,
   type TileMove,
   type AgentFlag,
@@ -101,6 +107,9 @@ const TRUST_GONE_WAIT_MS = 3_000;
 /** The agent's hooks after which its branch is read: not the ones before a tool runs or that only notify. */
 const BRANCH_HOOKS = new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']);
 
+/** How long after typing `/effort` at an agent its `UserPromptSubmit` for it is still known as that, not a prompt. */
+const EFFORT_ECHO_MS = 60_000;
+
 /** The agent's own hooks that begin a turn, or end one with no `Stop` after them (`onTurnBoundary`). */
 const TURN_BOUNDARIES: ReadonlySet<unknown> = new Set(['UserPromptSubmit', 'StopFailure', 'Interrupt', 'SessionEnd']);
 
@@ -146,6 +155,8 @@ export interface AgentHostOptions {
   boardCliPath?: string;
   /** The context size Claude agents compact at (`DaemonSettings.compactWindow`), read as each starts; 0 for Claude's own. */
   compactWindow: () => number;
+  /** The reasoning effort Settings give a new agent not asked for one (`defaultEffort` in settings.ts), read as each starts. */
+  defaultEffort: (harness: Harness, role: string | null) => Effort | null;
   /** Whether Claude agents get `FORCE_HYPERLINK=1` (`DaemonSettings.clickableLinks`), read as each starts. */
   clickableLinks: () => boolean;
   /** The environment harness sessions start from. */
@@ -162,6 +173,8 @@ export interface AgentHostOptions {
    * terminal waits on the hook. One its terminal asks at the same time is held for `ASKING_PERMISSION_HOLD_MS`.
    */
   permissionHoldMs: number;
+  /** How long an agent's session gets to say it is up before its first prompt is offered by hand: a minute by default (tests shorten it). */
+  startLimitMs?: number;
   /** How long a step of an agent's start may wait on another process: `START_STEP_TIMEOUT_MS` by default. */
   startStepTimeoutMs?: number;
   /** How long Enter first gets to start a turn of a message typed at an agent's prompt before it is pressed again. */
@@ -191,6 +204,8 @@ export interface AgentHostOptions {
   onRemoving(sessionId: string): void;
   /** The questions and plans agents wait on the user for: while one does, it is `waiting`. */
   asks?: Pick<AskHost, 'pendingAsk' | 'latestPlan' | 'drop'>;
+  /** What an agent waits on the user for on a steps card, between turns (Needs you). */
+  stepsWait?(sessionId: string): AgentStepsWait | null;
   /** The documents agents show the user. */
   documents?: Pick<DocumentHost, 'list'>;
   /** Ends the shells in the agent's session window's tabs, and removes the tabs: it is being deleted. */
@@ -234,7 +249,7 @@ export interface AgentHost {
   /** Whether the agent is being deleted: from the start of `delete` until its row is gone, its worktree too. */
   isDeleting(sessionId: string): boolean;
   /** Starts an agent; `spawnedBy` is the orchestrator starting it, if one is. */
-  spawn(params: SpawnAgentParams, spawnedBy?: string, place?: FolderPlace, used?: { template: string | null }): Promise<Agent>;
+  spawn(params: SpawnAgentParams, spawnedBy?: string, place?: FolderPlace, used?: SpawnUsed): Promise<Agent>;
   /** Starts an agent as `spawn` does, settling as soon as its tile is on the board (`agent.start`). */
   start(params: SpawnAgentParams): Promise<{ sessionId: string }>;
   /** The agents being started, and the starts that failed (`AgentStart`). */
@@ -278,6 +293,10 @@ export interface AgentHost {
   link(sessionId: string, issueId: string | null): Promise<Agent>;
   /** Mutes the agent's OS notifications, or unmutes them. */
   setMuted(sessionId: string, muted: boolean): Agent;
+  /** Sets the agent's reasoning effort, and says when it takes it: as `agent.setEffort`. */
+  setEffort(sessionId: string, effort: Effort | null): Promise<{ agent: Agent; applies: EffortApplies }>;
+  /** Types the reasoning effort the agent waits to be given at its prompt, if it is ready for it now (call on each change of it). */
+  applyEffort(sessionId: string): void;
   /**
    * Marks the agent's current ask seen, if it has one: it stops needing the user until it works and asks again. Its
    * flag, if it has one, goes: the user has looked.
@@ -429,6 +448,8 @@ export interface AgentHost {
   announce(sessionId: string): void;
   /** What agents recorded about their own work (`Agent.records`). */
   records: AgentRecordStore;
+  /** The pages agents wrote for their sidebars (`Agent.page`). */
+  pages: AgentPageStore;
   /**
    * Tells every client the agent began (`began`) or stopped waiting on a question or plan. One beginning is a
    * new ask: what the user saw of its last is over.
@@ -463,6 +484,7 @@ export interface AgentRow extends PositionColumns {
   codex_bypass_hook_trust: number;
   harness: Harness;
   model: string | null;
+  effort: Effort | null;
   role: AgentRole | null;
   role_name: string | null;
   name: string;
@@ -582,6 +604,47 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
+  const updateEffort = db.prepare('UPDATE agents SET effort = ? WHERE session_id = ?');
+  /** Per live Claude agent, the reasoning effort to type at its prompt (`/effort`) once it is between turns. */
+  const effortAfterTurn = new Map<string, Effort>();
+  /** Agents whose `effortAfterTurn` is being typed now. */
+  const typingEffort = new Set<string>();
+  /**
+   * Per Claude agent, the `/effort` command last typed at its prompt, and when. Should Claude fire `UserPromptSubmit`
+   * for it, that starts no turn (none will end with a `Stop`), so the hook is passed over (`isEffortEcho`).
+   */
+  const effortTyped = new Map<string, { command: string; at: number }>();
+  /** Whether `payload` is the `UserPromptSubmit` of the `/effort` just typed at the agent: once, within a minute. */
+  const isEffortEcho = (sessionId: string, payload: Record<string, unknown>): boolean => {
+    const typed = effortTyped.get(sessionId);
+    if (payload.hook_event_name !== 'UserPromptSubmit' || payload.agent_id !== undefined || typed === undefined) return false;
+    if (typeof payload.prompt !== 'string' || payload.prompt.trim() !== typed.command || Date.now() - typed.at > EFFORT_ECHO_MS) return false;
+    effortTyped.delete(sessionId);
+    return true;
+  };
+  /** Live Codex agents set to a reasoning effort their session doesn't have: they take it when next started. */
+  const effortAtRestart = new Set<string>();
+
+  /**
+   * Types the reasoning effort the live Claude agent waits for at its prompt, if it is ready for it now; resolves
+   * whether it was typed. One not ready is tried again on its next change (`applyEffort`).
+   */
+  const typeEffort = async (sessionId: string): Promise<boolean> => {
+    const effort = effortAfterTurn.get(sessionId);
+    if (effort === undefined || typingEffort.has(sessionId)) return false;
+    typingEffort.add(sessionId);
+    const command = `/effort ${effort}`;
+    effortTyped.set(sessionId, { command, at: Date.now() });
+    try {
+      const why = await deliveries.typeCommand(sessionId, command);
+      if (why !== undefined) return false;
+      // Set again meanwhile, to another: that one is typed next.
+      if (effortAfterTurn.get(sessionId) === effort) effortAfterTurn.delete(sessionId);
+      return true;
+    } finally {
+      typingEffort.delete(sessionId);
+    }
+  };
   const updateSeen = db.prepare('UPDATE agents SET seen = ? WHERE session_id = ?');
   const updateBranch = db.prepare('UPDATE agents SET branch = ?, current_branch = ?, detached = ? WHERE session_id = ?');
   const updateName = db.prepare('UPDATE agents SET name = ? WHERE session_id = ?');
@@ -608,6 +671,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   const subagents = createSubagentStore();
   const records = createAgentRecordStore(db);
+  const pages = createAgentPageStore(db);
   /**
    * The final message of each agent's last finished turn (its Stop's `last_assistant_message`), which a manual edge
    * sends. Unlike its last message (`hookStates`) a new prompt keeps it: it is still the last finished turn's. Kept in
@@ -1014,6 +1078,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const shown = await probeFirstPrompt(sessionId, true);
     // Typed, or given up on by another read meanwhile.
     if (firstPrompts.get(sessionId) !== entry || entry.stalled) return;
+    // No task and its composer seen up (holding a draft of the user's): its session is up, nothing is stalled.
+    if (entry.prompt === undefined && entry.watchScreen && composerWatch.seenUp(sessionId)) return;
     entry.stalled = true;
     if (entry.trust) return announce(sessionId);
     options.log(
@@ -1040,6 +1106,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const stopWatchingScreen = (sessionId: string) => {
     const entry = firstPrompts.get(sessionId);
     if (entry === undefined || !entry.watchScreen) return;
+    // No task to wait for Send: the user submitting at a composer seen up says its session is up.
+    if (entry.prompt === undefined) {
+      hookStates.composerUp(sessionId);
+      return settleFirstPrompt(sessionId, true);
+    }
     entry.watchScreen = false;
     composerWatch.forget(sessionId);
     options.log(`${sessionId} began a turn by hand before its first prompt was typed: that prompt waits for Send`);
@@ -1056,6 +1127,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     unsee: (sessionId) => updateSeen.run(0, sessionId),
     log: (message) => options.log(message),
     clock: options.clock ?? systemClock,
+    startingMaxMs: options.startLimitMs,
     onCommand: (sessionId) => backgroundCommands.of(sessionId).length > 0,
     startingEnded(sessionId) {
       announce(sessionId);
@@ -1151,7 +1223,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       settleFirstPrompt(sessionId, false);
       const { promise: ready, resolve: settle } = Promise.withResolvers<boolean>();
       // One relaunched (woken, restarted) shows no `starting` to give up: it is given up on after as long.
-      const cancel = (options.clock ?? systemClock).setTimer(() => stallSoon(sessionId), FIRST_PROMPT_STALL_MS);
+      const cancel = (options.clock ?? systemClock).setTimer(() => stallSoon(sessionId), options.startLimitMs ?? FIRST_PROMPT_STALL_MS);
       firstPrompts.set(sessionId, { prompt, harness, settle, stalled: false, trust: false, trusted: false, zoneTried: false, flagId: null, cancel, watchScreen: harness === 'codex' });
       deliveries.firstPrompt(sessionId, prompt, ready);
     },
@@ -1192,11 +1264,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   });
 
   /**
-   * The state an agent without an enabled schedule shows: `stopped-by-restart` once its daemon went away under it,
-   * until it is resumed. (A scheduled one follows its schedule, which relaunches it.)
+   * Whether its daemon went away under the agent, and it has not been resumed since: so with a schedule too, whose
+   * clock may not fire for days, if ever again.
    */
-  const unscheduledState = (row: AgentRow): AgentState =>
-    row.ended_at !== null && row.stopped_by_restart === 1 ? 'stopped-by-restart' : row.state;
+  const isStoppedByRestart = (row: AgentRow) => row.ended_at !== null && row.stopped_by_restart === 1;
 
   /** Whether the agent is paused: ended by a pause, not woken since. */
   const isHibernated = (row: AgentRow) => row.ended_at !== null && row.hibernated_at !== null;
@@ -1236,7 +1307,15 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     const plan = options.asks?.latestPlan(row.session_id) ?? null;
     // A clock's fresh agent whose turn ended on a question waits for you, as a scheduled one does: its run goes on.
     const clockRunAsking = options.schedules.runOf(row.session_id) !== undefined && hookStates.askingAtPrompt(row);
-    const hooked = isHibernated(row) ? 'hibernated' : schedule?.enabled ? hookStates.scheduledState(row) : clockRunAsking ? 'waiting' : unscheduledState(row);
+    const hooked = isHibernated(row)
+      ? 'hibernated'
+      : isStoppedByRestart(row)
+        ? 'stopped-by-restart'
+        : schedule?.enabled
+          ? hookStates.scheduledState(row)
+          : clockRunAsking
+            ? 'waiting'
+            : row.state;
     // Its call waits on the user mid-turn, whatever its hooks say, but for a permission prompt of a subagent's.
     const state = live && waitsOnUser({ ask, plan }) && hooked !== 'needs-permission' ? 'waiting' : hooked;
     // Its first prompt is queued and its session has sent no hook: the turn hasn't begun, which is not idle.
@@ -1260,6 +1339,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       repoRoot: row.repo_root,
       harness: row.harness,
       model: row.model,
+      effort: row.effort,
+      effortPending: !live ? null : effortAfterTurn.has(row.session_id) ? 'after-turn' : effortAtRestart.has(row.session_id) ? 'restart' : null,
       role: row.role,
       roleName: row.role_name,
       reviews: row.reviews_branch === null || row.reviews_head === null ? null : { branch: row.reviews_branch, head: row.reviews_head },
@@ -1318,6 +1399,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       finishedAt: row.finished_at,
       permissions: permissions.prompts(row.session_id),
       ask,
+      stepsWait: live ? (options.stepsWait?.(row.session_id) ?? null) : null,
       plan,
       docs: options.documents?.list(row.session_id) ?? [],
       schedule,
@@ -1331,6 +1413,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       spawnedBy: row.spawned_by,
       ledBy: led(row),
       records: records.of(row.session_id),
+      page: pages.of(row.session_id) ?? null,
       guessedDoc: guessedDocOf(row.worktree),
       startup,
       flag: flagOf(row),
@@ -1721,10 +1804,10 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         throw new RpcMethodError(AGENT_ERROR.permissionGone, `${agent.name} is no longer waiting on that permission here`);
       }
       // The harness has its answer and carries on (its next hook says how), unless more prompts are pending.
-      const pending = permissions.prompts(sessionId).length;
+      const counts = promptCounts(permissions.prompts(sessionId));
       const row = getRow(sessionId)!;
       hookStates.permissionDecided(sessionId);
-      save(row, stateWithPrompts(row.state, { pending, settled: true }), subagents.of(sessionId), true);
+      save(row, stateWithPrompts(row.state, { ...counts, settled: true }), subagents.of(sessionId), true);
     },
 
     releasePermission(sessionId, requestId) {
@@ -1805,6 +1888,39 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       return announced(sessionId);
     },
 
+    async setEffort(sessionId, effort) {
+      const row = requireRow(sessionId);
+      const notTaken = effort === null ? undefined : effortRefusal(row.harness, effort);
+      if (notTaken !== undefined) throw invalidParams(notTaken);
+      // Already its harness's own: nothing changes, and nothing waits for a restart that a level set before didn't.
+      if (effort === null && row.effort === null) return { agent: requireAgent(sessionId), applies: effortAtRestart.has(sessionId) ? 'restart' : 'now' };
+      updateEffort.run(effort, sessionId);
+      effortAfterTurn.delete(sessionId);
+      if (row.ended_at !== null) return { agent: announced(sessionId), applies: 'restart' };
+      // Neither harness has a command for its own default: its next start, passing none, gives it.
+      if (row.harness === 'codex' || effort === null) {
+        effortAtRestart.add(sessionId);
+        options.log(`${sessionId} takes reasoning effort ${effort ?? "of its harness's own"} when it is next started`);
+        return { agent: announced(sessionId), applies: 'restart' };
+      }
+      // Typed live, it is what the session runs at from then on: nothing waits for a restart any more.
+      effortAtRestart.delete(sessionId);
+      effortAfterTurn.set(sessionId, effort);
+      const typed = await typeEffort(sessionId).catch((error: Error) => {
+        options.log(`could not type /effort at ${sessionId}: ${error.message}`);
+        return false;
+      });
+      return { agent: announced(sessionId), applies: typed ? 'now' : 'after-turn' };
+    },
+
+    applyEffort(sessionId) {
+      if (!effortAfterTurn.has(sessionId)) return;
+      void typeEffort(sessionId).then(
+        (typed) => typed && announce(sessionId),
+        (error: Error) => options.log(`could not type /effort at ${sessionId}: ${error.message}`),
+      );
+    },
+
     setMuted(sessionId, muted) {
       requireAgent(sessionId);
       updateMuted.run(muted ? 1 : 0, sessionId);
@@ -1876,6 +1992,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const row = getRow(sessionId);
       // A hook still in flight when the process exited must not revive the ended agent's state.
       if (row === undefined || row.ended_at !== null) return undefined;
+      // The `/effort` the board typed, should Claude report it as a prompt: it starts no turn.
+      if (isEffortEcho(sessionId, payload)) {
+        options.log(`${sessionId} reported the ${String(payload.prompt)} typed at its prompt as a prompt: no turn starts on it`);
+        return undefined;
+      }
       // Hooks follow the agent's tool calls, so look for config it may have just written, in case a watch missed it.
       lifecycle.checkGuard(sessionId);
       if (payload.hook_event_name === 'SessionStart') lifecycle.started(sessionId);
@@ -1952,6 +2073,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       // What it printed last, as it ended, is why its start failed.
       if (hookStates.startFailed(session.id)) startupLines.now(session.id);
       deliveries.ended(session.id, session.stoppedByRestart);
+      // Its next start takes the effort it was last set to.
+      effortAfterTurn.delete(session.id);
+      effortAtRestart.delete(session.id);
       lifecycle.stopGuard(session.id);
       // What was never delivered to it is flagged on, for Resend.
       if (flags.get(session.id)?.keepsEnded !== true) flags.delete(session.id);
@@ -1980,6 +2104,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     announce,
     records,
+    pages,
 
     waitChanged(sessionId, began) {
       if (began) updateSeen.run(0, sessionId);
@@ -2013,6 +2138,7 @@ function spawnParams(params: unknown): SpawnAgentParams {
     branch: optionalStringParam(p, 'branch'),
     harness: optionalStringParam(p, 'harness') as Harness | undefined,
     model: optionalStringParam(p, 'model'),
+    effort: optionalStringParam(p, 'effort') as Effort | undefined,
     role: optionalStringParam(p, 'role'),
     noTemplate: optionalBooleanParam(p, 'noTemplate'),
     checkout: optionalStringParam(p, 'checkout') as 'main' | 'worktree' | undefined,
@@ -2124,6 +2250,10 @@ export function agentHandlers<Context>(
       return agents.setOrchestrate(stringParam(p, 'sessionId'), p.scope === null ? null : (stringParam(p, 'scope') as OrchestrateScope));
     },
     'agent.markSeen': (params) => agents.markSeen(stringParam(paramsObject(params), 'sessionId')),
+    'agent.setEffort': (params) => {
+      const p = paramsObject(params);
+      return agents.setEffort(stringParam(p, 'sessionId'), p.effort === null ? null : oneOf(p, 'effort', EFFORTS));
+    },
     'agent.setMuted': (params) => {
       const p = paramsObject(params);
       if (typeof p.muted !== 'boolean') throw invalidParams('muted must be a boolean');

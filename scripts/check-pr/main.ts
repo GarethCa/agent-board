@@ -3,7 +3,9 @@
  * why, and runs just those, in parallel where they don't depend on each other. A change to the gate, the shared config,
  * the e2e helpers, the fake CLIs or the protocol runs the full `check:local` instead. Rules: select.ts.
  *
- *   node scripts/check-pr/main.ts [--dry-run] [--base <ref>]
+ *   node scripts/check-pr/main.ts [--dry-run] [--base <ref> | --recheck]
+ *
+ * --recheck checks a fix to a failed full run: against that run's result record, not origin/main (recheck.ts).
  *
  * Run `git fetch origin` first so the diff is against the current main. --dry-run prints the plan and runs nothing. Exits non-zero if any step failed.
  */
@@ -17,8 +19,10 @@ import { acquireLock } from '../e2e-lock/lock.ts';
 import { reapWorktree } from '../e2e-lock/reap.ts';
 import { keepAwake, readBatteryNote, readSleeps, sleepNote } from '../machine-sleep/sleeps.ts';
 import { releaseRulePaths, selectChecks } from './select.ts';
-import { leakCheckStep, STAGES, stepsFor, type Step } from './steps.ts';
+import { leakCheckStep, runStages, stepsFor, type Step } from './steps.ts';
 import { filesNamingTickets } from './ticket-ids.ts';
+import { resultsDir, writeRecord, type GateRecord } from '../gate-results/results.ts';
+import { findRecord, recheckPlan } from './recheck.ts';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -26,6 +30,11 @@ const baseIndex = args.indexOf('--base');
 const baseArg = baseIndex >= 0 ? args[baseIndex + 1] : undefined;
 if (baseIndex >= 0 && !baseArg) {
   console.error('check:pr: --base needs a ref');
+  process.exit(2);
+}
+const recheck = args.includes('--recheck');
+if (recheck && baseArg !== undefined) {
+  console.error('check:pr: --recheck compares against the last full run, so it takes no --base');
   process.exit(2);
 }
 const root = join(import.meta.dirname, '..', '..');
@@ -127,7 +136,24 @@ function run(step: Step, logDir: string): Promise<{ name: string; outcome: strin
   });
 }
 
-const { files, base } = changedFiles();
+/** For --recheck: the nearest full run's record, and the files changed since its tree. */
+function changedSinceRecord(): { files: string[]; base: string; record: GateRecord } {
+  const found = findRecord(root, resultsDir());
+  if (found === undefined) {
+    console.error('check:pr: --recheck found no full-gate result in the last commits: run pnpm check:local first');
+    process.exit(2);
+  }
+  const { record, behind } = found;
+  const files = [
+    ...lines(git('diff', '--name-only', record.tree, 'HEAD^{tree}')),
+    ...lines(git('diff', '--name-only', 'HEAD')),
+    ...lines(git('ls-files', '--others', '--exclude-standard')),
+  ];
+  return { files: [...new Set(files)], base: `the full gate's run on ${record.sha.slice(0, 7)} (${behind === 0 ? 'this commit' : `${behind} commit(s) back`})`, record };
+}
+
+const startSha = git('rev-parse', 'HEAD');
+const { files, base, record } = recheck ? changedSinceRecord() : { ...changedFiles(), record: undefined };
 /** The release config's file names for the release rules test; a checkout without the config has none. */
 async function ruleFiles(): Promise<string[]> {
   if (!existsSync(join(root, 'release/public.config.ts'))) return [];
@@ -137,12 +163,17 @@ async function ruleFiles(): Promise<string[]> {
   return releaseRulePaths(config);
 }
 
-const plan = selectChecks(files, (file) => existsSync(join(root, file)), await ruleFiles());
+const exists = (file: string): boolean => existsSync(join(root, file));
+const rules = await ruleFiles();
+const changedPlan = selectChecks(files, exists, rules);
+const rechecked = record !== undefined && !changedPlan.full ? recheckPlan(record, changedPlan, files, (some) => some.length > 0 && selectChecks(some, exists, rules).visual) : undefined;
+const plan = rechecked?.plan ?? changedPlan;
 const naming = filesNamingTickets(files, root);
 const leakCheck = naming.length > 0;
 plan.reasons.push(leakCheck ? `release-leaks: ${naming.length} changed file(s) name a ticket ID, so the release leak check runs` : 'release-leaks: skipped, no changed file names a ticket ID');
 console.log(`check:pr: ${files.length} file(s) changed against ${base}`);
 for (const reason of plan.reasons) console.log(`  ${reason}`);
+if (rechecked !== undefined && rechecked.reused.length > 0) console.log(`  recheck: reused from ${record!.sha.slice(0, 7)}, where they passed: ${rechecked.reused.join(', ')}`);
 
 if (plan.full) {
   console.log('check:pr: running the full gate, pnpm check:local');
@@ -150,9 +181,14 @@ if (plan.full) {
   const logDir = process.env.CHECK_LOG_DIR ?? mkdtempSync(join(tmpdir(), 'agent-board-check-pr.'));
   mkdirSync(logDir, { recursive: true });
   const leaks = leakCheck ? (await run(leakCheckStep, logDir)).outcome : 'pass';
+  if (leaks !== 'pass') {
+    // As on the subset path, a failed quick check ends the run: the full gate could not pass it.
+    console.log('check:pr: the release leak check failed; the full gate is not run');
+    process.exit(1);
+  }
   const full = spawn('sh', ['scripts/check-local.sh'], { cwd: root, stdio: 'inherit' });
   fullGate = full;
-  full.on('close', (code) => process.exit(code || leaks !== 'pass' ? 1 : 0));
+  full.on('close', (code) => process.exit(code ? 1 : 0));
 } else {
   const steps = stepsFor(plan, { leakCheck, exists: (file) => existsSync(join(root, file)), headless: process.platform === 'linux' && !process.env.DISPLAY });
   console.log(`check:pr: steps: ${steps.map((s) => s.name).join(', ')}`);
@@ -167,51 +203,59 @@ if (plan.full) {
     const r = await run(step, logDir);
     results.set(r.name, r);
   };
-  // Stages (STAGES in steps.ts): 1: the static checks and the build. 2: unit. 3: the processes project's related tests. 4: the native visual run, then the e2e.
-  const named = (...names: string[]): Step[] => steps.filter((s) => names.includes(s.name));
-  const [staticStage, unitStage, processesStage, ...electronStages] = STAGES as [string[], string[], string[], ...string[][]];
-  await Promise.all(named(...staticStage).map(settle));
-  await Promise.all(named(...unitStage).map(settle));
-  await Promise.all(named(...processesStage).map(settle));
-  if ((results.get('build')?.outcome ?? 'pass') === 'pass') {
-    // One Electron run at a time across the machine (scripts/e2e-lock): other gates queue, and this one reaps what its run left.
-    const electronSteps = named(...electronStages.flat());
-    if (electronSteps.length > 0) {
+  // Stages and early stops: runStages in steps.ts.
+  const { notRun } = await runStages(steps, {
+    settle,
+    outcomeOf: (name) => results.get(name)?.outcome,
+    runElectron: async (stages) => {
+      // One Electron run at a time across the machine (scripts/e2e-lock): other gates queue, and this one reaps what its run left.
+      const electronSteps = stages.flat();
       const lock = await acquireLock({ step: electronSteps.map((s) => s.name).join('+'), worktree: root }).catch((error: Error) => {
         console.error(error.message);
         return undefined;
       });
-      if (lock !== undefined) {
-        heldLock = lock;
-        try {
-          await reapWorktree(root);
-          for (const stage of electronStages) await Promise.all(named(...stage).map(settle));
-        } finally {
-          await reapWorktree(root, process.pid);
-          lock.release();
-          heldLock = undefined;
-        }
-      } else {
+      if (lock === undefined) {
         for (const step of electronSteps) results.set(step.name, { outcome: 'FAIL', seconds: 0 });
+        return;
       }
-    }
-  }
+      heldLock = lock;
+      try {
+        await reapWorktree(root);
+        for (const stage of stages) await Promise.all(stage.map(settle));
+      } finally {
+        await reapWorktree(root, process.pid);
+        lock.release();
+        heldLock = undefined;
+      }
+    },
+  });
+  if (notRun !== 'the build failed') console.log(`check:pr: ${notRun}; the rest is not run`);
   let failed = false;
   const rows: string[] = [];
   const flaky: string[] = [];
   for (const step of steps) {
     const r = results.get(step.name);
-    if (!r) { rows.push(`| \`${step.name}\` | not run: the build failed | |`); failed = true; continue; }
+    if (!r) { rows.push(`| \`${step.name}\` | not run: ${notRun} | |`); failed = true; continue; }
     if (r.outcome !== 'pass') failed = true;
     const names = flakyOf(step, logDir);
     flaky.push(...names);
     rows.push(`| \`${step.name}\` | ${r.outcome}${names.length > 0 ? `, ${names.length} flaky` : ''} | ${r.seconds}s |`);
   }
+  for (const name of rechecked?.reused ?? []) rows.push(`| \`${name}\` | reused: passed on ${record!.sha.slice(0, 7)} | |`);
   const dirty = git('status', '--porcelain').length > 0;
   console.log(`\nPer-PR checks on \`${git('rev-parse', '--short', 'HEAD')}\`${dirty ? ' (with uncommitted changes)' : ''}, ${Math.round((Date.now() - started) / 1000)}s wall:\n`);
   console.log(['| Step | Result | Time |', '| --- | --- | --- |', ...rows].join('\n'));
   if (flaky.length > 0) console.log(`\nFlaky, passed on a retry (fix them; they don't fail the gate):\n\n${flaky.map((name) => `- ${name}`).join('\n')}`);
-  console.log('\nThis is the subset for this change, not the full gate; the master runs `pnpm check:local` on main after merge.');
+  if (record === undefined) console.log('\nThis is the subset for this change, not the full gate; the master runs `pnpm check:local` on main after merge.');
+  else {
+    // Never a green stamp: the release trusts one as a full pass, and a recheck is the subset check:pr chooses.
+    console.log(`\nA recheck against the full run on ${record.sha.slice(0, 7)}, not the full gate: it writes no green stamp.`);
+    if (!failed && rechecked?.failedRun === true && !dirty && git('rev-parse', 'HEAD') === startSha) {
+      // The fix to a failed run passed: a record of its own lets a second fix recheck on top of this one.
+      writeRecord(resultsDir(), composedRecord(record, startSha, git('rev-parse', 'HEAD^{tree}')));
+      console.log(`Recheck passed on a clean tree: result record written for ${startSha.slice(0, 7)}, for a later recheck to build on.`);
+    } else if (!failed && dirty) console.log('Recheck passed, but the tree has uncommitted changes: commit and run it again for a record a later recheck can build on.');
+  }
   const slept = sleepNote(await readSleeps(new Date(started)), new Date(started), new Date());
   if (slept !== undefined) console.log(`\n${slept}`);
   // Read again: plugged in or unplugged since the start, the end is what the next run inherits.
@@ -219,4 +263,9 @@ if (plan.full) {
   if (batteryNow !== undefined) console.log(`\n${batteryNow}`);
   writeFileSync(join(logDir, 'summary.md'), rows.join('\n'));
   process.exit(failed ? 1 : 0);
+}
+
+/** The record of a recheck that passed: every step of the full run's record passes on this tree, on top of that run. */
+function composedRecord(from: GateRecord, sha: string, tree: string): GateRecord {
+  return { ...from, sha, tree, at: new Date().toISOString(), rechecks: from.rechecks ?? from.sha, steps: Object.fromEntries(Object.keys(from.steps).map((name) => [name, { outcome: 'pass' }])) };
 }

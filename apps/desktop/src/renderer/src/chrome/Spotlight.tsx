@@ -10,10 +10,11 @@ import { keysText, keyText, pressed } from '../keys/registry';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { useSimplified } from '../design';
+import { useDock } from '../dock';
 import { Kbd, StatusPill, Tag, useToast } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
-import type { SessionWindows } from '../windows/session-windows';
+import { outOfDock, type SessionWindows } from '../windows/session-windows';
 import { ACTIONS_GROUP, SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
 
 /**
@@ -131,11 +132,14 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
 
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
+  // Under Classic the Windows group lists the windows the dock leaves out (Settings › Board › Opening tiles › Dock); the Simplified design lists them all.
+  const dock = useDock();
+  const listedWindows = useMemo(() => (simplified || windows === undefined ? windows : outOfDock(windows, dock)), [simplified, windows, dock]);
   // The id of the session the view shows already, from its row key (`agent:<id>`, `shell:<id>`).
   const current = opened?.place.current?.replace(/^(agent|shell):/, '');
   const groups = useMemo(
-    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows, current, canStartAgent, simplified }),
-    [query, agents, shells, zones, shows, windows, current, canStartAgent, simplified],
+    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, simplified, windowsListed: simplified || dock !== 'all' }),
+    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, simplified, dock],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;

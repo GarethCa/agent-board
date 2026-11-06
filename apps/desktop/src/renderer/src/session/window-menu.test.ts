@@ -32,6 +32,16 @@ describe("an agent window's ⋯ menu", () => {
     ]);
   });
 
+  it('on the board, has Maximise, or Restore once maximised, among the window’s rows', () => {
+    const toggle = vi.fn();
+    const rowsFor = (maximised: boolean) => windowMenu({ agent: live, placement: 'board', terminalToggle: { current: vi.fn() }, onPopOut: vi.fn(), maximise: { maximised, toggle }, onClose: vi.fn(), onEnd: vi.fn(), board });
+    expect(labels(rowsFor(false))).toContain('Maximise');
+    expect(labels(rowsFor(false))).not.toContain('Restore');
+    expect(labels(rowsFor(true))).toContain('Restore');
+    (rowsFor(false).find((entry) => entry !== 'separator' && 'label' in entry && entry.label === 'Maximise') as { onSelect(): void }).onSelect();
+    expect(toggle).toHaveBeenCalledOnce();
+  });
+
   it('has no End agent… for an agent that has ended, and leaves no separator doubled or at an end', () => {
     const entries = windowMenu({ agent: { endedAt: '2026-10-30T12:00:00Z' } as Agent, placement: 'board', terminalToggle: toggle, onClose: vi.fn(), onEnd: vi.fn(), board: ['separator', row('delete', 'Delete agent')] });
     expect(labels(entries)).toEqual(['Show terminal, or back', '—', 'Delete agent']);

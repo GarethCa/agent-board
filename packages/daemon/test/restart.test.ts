@@ -9,6 +9,7 @@ import { paneIds } from '../src/pane-layout.ts';
 import { daemonPaths } from '../src/paths.ts';
 import type { AgentUpdatedEvent, BuildInfo, DaemonEvent } from '../src/protocol.ts';
 import { restartDaemon } from '../src/restart.ts';
+import { createFakeClock } from './fake-clock.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const OLD_BUILD: BuildInfo = { sha: 'aaaaaaa', date: '2026-10-01T12:00:00Z' };
@@ -75,6 +76,64 @@ describe('restartDaemon', () => {
     const [restored] = await after.call('shell.list');
     expect(restored!.stoppedPanes).toEqual([]);
     expect((await after.call('session.list')).map((s) => s.id).sort()).toEqual([agent.sessionId, ...paneIds(shell.layout)].sort());
+  });
+
+  it('resumes the Captain and an agent a clock messages, which their clocks would not relaunch until they next fire', async () => {
+    const [dataDir, home] = [tempDataDir(), tempDataDir()];
+    const old = await startTestDaemon(daemonOptions(dataDir, home, 'waiting'));
+    const client = await connectTestClient(old);
+    const recorder = recordEvents(client);
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+    const captain = await client.call('master.start', SIZE);
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Watch the gate', name: 'Watcher', ...SIZE });
+    await untilState(recorder, captain.sessionId, 'waiting');
+    await untilState(recorder, agent.sessionId, 'waiting');
+    // Once a year: a morning round-up's, its day gone by.
+    for (const { sessionId } of [captain, agent]) {
+      await client.call('agent.setSchedule', { sessionId, schedule: { cron: '0 7 30 10 *', prompt: 'Morning round-up' } });
+    }
+
+    const result = await restartDaemon(dataDir, { start: () => void startTestDaemon(daemonOptions(dataDir, home, 'waiting')) });
+
+    expect(result).toMatchObject({ status: 'restarted', notResumed: [] });
+    expect(result.status === 'restarted' && [...result.agents].sort()).toEqual(['Captain', 'Watcher']);
+    const after = await connectDaemon(daemonPaths(dataDir).socket);
+    onTestFinished(() => after.close());
+    expect((await after.call('agent.list')).map((a) => [a.name, a.endedAt === null])).toEqual(
+      expect.arrayContaining([
+        ['Captain', true],
+        ['Watcher', true],
+      ]),
+    );
+  });
+
+  it('counts an agent its clock relaunched while the others were resumed as resumed, not as one it could not resume', async () => {
+    const [dataDir, home] = [tempDataDir(), tempDataDir()];
+    const old = await startTestDaemon(daemonOptions(dataDir, home, 'waiting'));
+    const client = await connectTestClient(old);
+    const recorder = recordEvents(client);
+    const zone = await client.call('zone.add', { path: tempRepo(), x: 0, y: 0 });
+    const first = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Go first', name: 'First', ...SIZE });
+    const clocked = await client.call('agent.spawn', { zoneId: zone.id, prompt: 'Watch the gate', name: 'Clocked', ...SIZE });
+    await untilState(recorder, first.sessionId, 'waiting');
+    await untilState(recorder, clocked.sessionId, 'waiting');
+    await client.call('agent.setSchedule', { sessionId: clocked.sessionId, schedule: { cron: '0 9 * * *', prompt: 'Watch tick' } });
+
+    const clock = createFakeClock(new Date(2026, 9, 10, 8, 59, 59));
+    const result = await restartDaemon(dataDir, {
+      start: () =>
+        void startTestDaemon(
+          daemonOptions(dataDir, home, 'waiting', {
+            clock,
+            // Its clock fires as the first agent is resumed: it is live before the restart gets to it.
+            log: (message) => {
+              if (message.includes(`relaunched claude agent ${first.sessionId}`)) clock.advanceTo(new Date(2026, 9, 10, 9, 0));
+            },
+          }),
+        ),
+    });
+
+    expect(result).toMatchObject({ status: 'restarted', agents: ['First', 'Clocked'], notResumed: [] });
   });
 
   it('names the agents it cut off mid-turn, and resumes them too', async () => {

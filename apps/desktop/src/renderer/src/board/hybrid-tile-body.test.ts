@@ -41,21 +41,21 @@ describe("an agent tile's body", () => {
       ...idle,
       status,
       state: 'needs-permission',
-      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null }],
+      permissions: [{ id: 'p', toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, subagent: null, requestedAt: AT, heldUntil: null, asksInTerminal: false, sessionGrant: null, questions: null }],
     });
     expect(prompt).toContain('tile-ask');
     expect(prompt).toContain('rm -rf dist');
     expect(prompt).not.toContain('tile-set-by');
 
-    const question = render({ ...idle, status, ask: { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'] } as unknown as Agent['ask'] });
+    const question = render({ ...idle, status, ask: { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], questions: [{ question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'] }], answers: [null], card: null } as unknown as Agent['ask'] });
     expect(question).toContain('Postgres or SQLite?');
     expect(question).toContain('tile-ask');
   });
 
-  it('points at a question on its card rather than repeating it', () => {
-    const html = render({ ...idle, ask: { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], onBoard: true } as unknown as Agent['ask'] });
+  it('points at a question on its steps card rather than repeating it', () => {
+    const html = render({ ...idle, ask: { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], questions: [], answers: [], card: 'card-1' } as unknown as Agent['ask'] });
     expect(html).toContain('tile-ask');
-    expect(html).toContain('>Asking you ↗<');
+    expect(html).toContain('>Asking you on a steps card<');
     expect(html).not.toContain('>Postgres or SQLite?');
   });
 

@@ -145,7 +145,7 @@ test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, b
   }
 });
 
-test('New agent’s footer model chip shrinks beside a long id, and Start stays inside the dialog', async () => {
+test('New agent’s footer chips wrap beside a long model id, which shows in full, and Start stays inside the dialog', async () => {
   const { dir, repo, env } = scratch('waiting');
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
@@ -159,14 +159,15 @@ test('New agent’s footer model chip shrinks beside a long id, and Start stays 
     await pickInChip(form, 'Role', 'Follow-up reviewer');
     const start = form.getByRole('button', { name: 'Start' });
     await expectWithin(start, form, 'Start');
-    for (const chip of ['Harness', 'Model', 'Role']) await expectWithin(form.getByRole('button', { name: new RegExp(`^${chip}:`) }), form, chip);
+    for (const chip of ['Harness', 'Model', 'Reasoning', 'Role']) await expectWithin(form.getByRole('button', { name: new RegExp(`^${chip}:`) }), form, chip);
 
-    // Only the model's text is cut short; the harness and the role stay readable.
+    // No chip's text is cut short: the row wraps instead, so the whole model id shows.
     const cutShort = (chip: string) =>
       form.getByRole('button', { name: new RegExp(`^${chip}:`) }).locator('.agent-setup-text').evaluate((el) => el.scrollWidth > el.clientWidth);
     expect(await cutShort('Harness')).toBe(false);
+    expect(await cutShort('Reasoning')).toBe(false);
     expect(await cutShort('Role')).toBe(false);
-    expect(await cutShort('Model')).toBe(true);
+    expect(await cutShort('Model')).toBe(false);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampFrame, defaultFrame, frameFrom, fromFractions, MIN_HEIGHT, MIN_WIDTH, resizeFrame, toFractions } from './window-frame';
+import { clampFrame, defaultFrame, frameFrom, fromFractions, MIN_HEIGHT, MIN_WIDTH, openedMaximised, resizeFrame, toFractions } from './window-frame';
 
 const bounds = { width: 1200, height: 800 };
 const frame = { x: 100, y: 80, width: 600, height: 400 };
@@ -96,5 +96,30 @@ describe('a board with its top edge kept clear (the traffic lights)', () => {
 
   it('stops dragging the top edge at it', () => {
     expect(resizeFrame({ x: 100, y: 100, width: 600, height: 400 }, 'n', 0, -500, clear)).toMatchObject({ y: 68, height: 432 });
+  });
+});
+
+describe('a window opening under the Maximised setting', () => {
+  const restored = { frame: { x: 0.2, y: 0.2, width: 0.5, height: 0.5 }, maximised: false };
+  const opens = { previousId: undefined, shownId: 'a', steppedTo: undefined, maximisedSetting: true, kept: restored };
+
+  it('fills the board, keeping the size to restore to', () => {
+    expect(openedMaximised(opens)).toEqual({ ...restored, maximised: true });
+  });
+
+  it('fills the board when another window was shown, as from the dock or a tile', () => {
+    expect(openedMaximised({ ...opens, previousId: 'b' })).toEqual({ ...restored, maximised: true });
+  });
+
+  it('leaves the size alone for the window already shown, a step with ‹ ›, another setting, and one already maximised', () => {
+    expect(openedMaximised({ ...opens, previousId: 'a' })).toBeUndefined();
+    expect(openedMaximised({ ...opens, previousId: 'b', steppedTo: 'a' })).toBeUndefined();
+    expect(openedMaximised({ ...opens, maximisedSetting: false })).toBeUndefined();
+    expect(openedMaximised({ ...opens, kept: { ...restored, maximised: true } })).toBeUndefined();
+  });
+
+  it('leaves it for no window shown, and for no kept frame, which already fills the board', () => {
+    expect(openedMaximised({ ...opens, shownId: undefined, previousId: 'a' })).toBeUndefined();
+    expect(openedMaximised({ ...opens, kept: null })).toBeUndefined();
   });
 });

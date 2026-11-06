@@ -24,6 +24,7 @@ const start = (sessionId: string, zoneId: string | null, position: { x: number; 
   name: sessionId,
   harness: 'claude',
   model: null,
+  effort: null,
   spawnedBy: null,
   steps: [{ kind: 'worktree', state: 'now', detail: null }],
   error: null,
@@ -51,6 +52,27 @@ describe('withTiles', () => {
       ['agent:b', tileSlot(1, 800)],
       ['shell:s', tileSlot(2, 800)],
     ]);
+  });
+
+  it("keeps each tile's data while what it shows is unchanged, so one agent's change redraws only its tile", () => {
+    const lead = agent('lead', 'z');
+    const crewMember = { ...agent('crew', 'z'), spawnedBy: 'lead' } as Agent;
+    const tab = { ...shell('t', 'z'), owner: { kind: 'agent', id: 'crew' } } as Shell;
+    const before = withTiles([zone('z')], [lead, crewMember, agent('other', 'z')], [tab], []);
+
+    const changed = { ...agent('other', 'z'), name: 'renamed' } as Agent;
+    // Lists and the shells come again as new arrays, as a change from the daemon brings them.
+    const after = withTiles(before, [lead, crewMember, changed], [tab], []);
+
+    expect(tile(after, 'agent:lead').data).toBe(tile(before, 'agent:lead').data);
+    expect(tile(after, 'agent:crew').data).toBe(tile(before, 'agent:crew').data);
+    expect(tile(after, 'agent:other').data).not.toBe(tile(before, 'agent:other').data);
+    expect(tile(after, 'agent:other').data.label).toBe('renamed');
+
+    // Its orchestrator renamed: the crew member's "from" line changes, so its data does.
+    const renamedLead = { ...lead, name: 'Release lead' } as Agent;
+    const again = withTiles(after, [renamedLead, crewMember, changed], [tab], []);
+    expect(tile(again, 'agent:crew').data.from).toEqual({ sessionId: 'lead', name: 'Release lead' });
   });
 
   it("gives a reviewer's tile the agent it reviews, so its card can say it waits for it", () => {

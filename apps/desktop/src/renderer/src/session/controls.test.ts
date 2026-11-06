@@ -46,7 +46,7 @@ describe('session window controls', () => {
   });
 
   it('interrupts an agent waiting mid-call on a question it asked through the board', () => {
-    const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, at: null };
+    const ask = { id: 'q1', question: 'Which cache?', options: [], freeText: true, askedAt: '', expiresAt: '', onBoard: false, questions: [{ question: 'Which cache?', options: [], freeText: true }], answers: [null], card: null };
     expect(enabled(sessionControls({ agent: agent('waiting', null, { ask }), live: true }))).toEqual(['interrupt', 'stop']);
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GateRun, GateStep } from '@agent-board/daemon/protocol';
-import { gateHeadline, gateTone, mergedText, shownStep, staleNote, withGateChange } from './gate-view';
+import { gateHeadline, gateTone, mergedText, mergePlanText, shownStep, staleNote, withGateChange } from './gate-view';
 
 const HEAD = '9b41e07'.padEnd(40, '0');
 const OLD = '3f2a1c9'.padEnd(40, '0');
@@ -82,3 +82,24 @@ describe('the merge popover', () => {
   });
 });
 
+
+describe('what a merge will do, said before it runs', () => {
+  const all = { close: true, worktree: true, branch: true, comment: true };
+  it('names each clean-up step it will take, and the issue comment only where there is an issue', () => {
+    expect(mergePlanText(all, { agent: 'Tidy the docs', branch: 'tidy-docs', issue: 'ENG-7' })).toBe(
+      'Squash-merges it, then closes Tidy the docs, removes its worktree, deletes tidy-docs and comments on ENG-7.',
+    );
+    expect(mergePlanText(all, { agent: 'Tidy the docs', branch: 'tidy-docs', issue: undefined })).toBe(
+      'Squash-merges it, then closes Tidy the docs, removes its worktree and deletes tidy-docs.',
+    );
+  });
+
+  it('says it keeps everything when no step is taken', () => {
+    expect(mergePlanText({ close: false, worktree: false, branch: false, comment: false }, { agent: 'A', branch: 'a', issue: undefined })).toBe(
+      'Squash-merges it, and keeps the agent, its worktree and its branch.',
+    );
+    expect(mergePlanText({ close: true, worktree: false, branch: false, comment: false }, { agent: 'A', branch: 'a', issue: undefined })).toBe(
+      'Squash-merges it, then closes A.',
+    );
+  });
+});

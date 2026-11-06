@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentRecord, PullRequest } from '@agent-board/daemon/protocol';
-import { moreDetailsCounts, moreDetailsLabel, pullRequestRows, startedBy, statusLine } from './inspector';
+import { pullRequestRows, startedBy, statusLine } from './inspector';
 
 const agent = (overrides: Partial<Agent> = {}): Agent =>
   ({
@@ -13,6 +13,7 @@ const agent = (overrides: Partial<Agent> = {}): Agent =>
     pushedPullRequests: [],
     recordedPullRequests: [],
     guessedDoc: null,
+    page: null,
     docs: [],
     plan: null,
     subagents: [],
@@ -62,26 +63,5 @@ describe('pullRequestRows', () => {
     const url = 'https://github.com/o/r/pull/9';
     const rows = pullRequestRows(agent({ records: [record({ kind: 'pr', key: 'github.com/o/r#9', url, title: null, deletedAt: '2026-10-30T10:00:00Z' } as Partial<AgentRecord>)] }));
     expect(rows).toEqual([]);
-  });
-});
-
-describe('More details', () => {
-  it('counts what the fold holds, and has no label when it holds nothing', () => {
-    expect(moreDetailsLabel(moreDetailsCounts(agent(), []))).toBeUndefined();
-  });
-
-  it('names its agents, documents, pins, subagents and schedule, each counted', () => {
-    const crew = [agent({ sessionId: 'x', name: 'x', spawnedBy: 'a' }), agent({ sessionId: 'y', name: 'y', spawnedBy: 'a' })];
-    const counts = moreDetailsCounts(
-      agent({
-        guessedDoc: '/wt/.agent-board/handover.md',
-        docs: [{ id: 'd', title: 'Notes', version: 1, shownAt: '2026-10-30T09:00:00Z', path: '/wt/notes.md' }] as unknown as Agent['docs'],
-        records: [record({ kind: 'pin', key: 'p', target: { kind: 'note', text: 'hi' }, label: 'Read me', from: null } as Partial<AgentRecord>)],
-        schedule: { cron: '0 9 * * 1-5' } as Agent['schedule'],
-      }),
-      crew,
-    );
-    expect(counts).toEqual({ agents: 2, documents: 2, pins: 1, subagents: 0, schedules: 1 });
-    expect(moreDetailsLabel(counts)).toBe('2 agents, 2 documents, 1 pin, 1 schedule');
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentAsk, PermissionPrompt, PlanSummary } from '@agent-board/daemon/protocol';
-import { decisionId, deferDecision, deferredDecision, deferredDecisions, paneDecision, subscribeDeferred } from './pane-decision';
+import { decisionId, deferDecision, deferredDecision, deferredDecisions, paneDecision, showsStepsStrip, subscribeDeferred } from './pane-decision';
 
 const ask: AgentAsk = {
   id: 'ask-1',
@@ -10,7 +10,9 @@ const ask: AgentAsk = {
   askedAt: '2026-10-31T09:00:00Z',
   expiresAt: '2026-10-31T09:30:00Z',
   onBoard: false,
-  at: null,
+  questions: [{ question: 'Who is the guide for?', options: ['New developers', 'The product team'], freeText: true }],
+  answers: [null],
+  card: null,
 };
 
 const plan = {
@@ -33,7 +35,7 @@ const prompt = (id: string, heldUntil: string | null = '2026-10-31T09:00:20Z'): 
   requestedAt: '2026-10-31T09:00:00Z',
   heldUntil,
   asksInTerminal: false,
-  sessionGrant: null,
+  sessionGrant: null, questions: null,
 });
 
 describe('paneDecision: a permission prompt', () => {
@@ -117,5 +119,26 @@ describe('deferDecision', () => {
     expect(deferredDecisions().has('ask-9')).toBe(false);
     expect(heard).toBe(2);
     stop();
+  });
+});
+
+describe("the strip of the steps card an agent waits on, above its composer", () => {
+  const stepsWait = { kind: 'steps' as const, itemId: 'card-1', title: 'Release 1.4', stepId: 's1', text: 'Which database?', open: 2, since: '2026-10-31T09:00:00Z' };
+  const waiting = { ask: null, plan: null, stepsWait };
+
+  it('shows while the agent waits on a card, in either design and view, and never without one', () => {
+    expect(showsStepsStrip(waiting, { simplified: false, chat: false })).toBe(true);
+    expect(showsStepsStrip(waiting, { simplified: false, chat: true })).toBe(true);
+    expect(showsStepsStrip(waiting, { simplified: true, chat: false })).toBe(true);
+    expect(showsStepsStrip({ ...waiting, stepsWait: null }, { simplified: true, chat: true })).toBe(false);
+  });
+
+  it("stands back while the Simplified chat's pane shows a decision, one at a time, and shows again once it is put off", () => {
+    const asking = { ...waiting, ask };
+    expect(showsStepsStrip(waiting, { simplified: true, chat: true })).toBe(true);
+    expect(showsStepsStrip(asking, { simplified: true, chat: true })).toBe(false);
+    // Classic has no pane: the strip shows beside the question.
+    expect(showsStepsStrip(asking, { simplified: false, chat: true })).toBe(true);
+    expect(showsStepsStrip(asking, { simplified: true, chat: true }, new Set([ask.id]))).toBe(true);
   });
 });

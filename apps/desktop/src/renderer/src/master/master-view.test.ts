@@ -82,7 +82,7 @@ describe('the Captain', () => {
   it('says in a line what each request asks', () => {
     expect(askLine(agent('f', { flag: { reason: 'Ready for review' } as Agent['flag'] }), 'flagged')).toBe('Ready for review');
     expect(askLine(agent('q', { ask: { question: 'Which base?' } as Agent['ask'] }), 'asks')).toBe('Which base?');
-    expect(askLine(agent('p', { permissions: [{ toolName: 'Bash' }] as Agent['permissions'] }), 'permission')).toBe('Asks to use Bash');
+    expect(askLine(agent('p', { permissions: [{ toolName: 'Bash', questions: null }] as Agent['permissions'] }), 'permission')).toBe('Asks to use Bash');
     expect(askLine(agent('p'), 'permission')).toBe('Asking for permission in its terminal');
   });
 });

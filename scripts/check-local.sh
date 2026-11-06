@@ -1,10 +1,14 @@
 #!/bin/sh
 # The merge gate, run locally: what CI's `check` job runs, plus the Markdown lint and knip (unused files, exports and
 # dependencies). Prints one result line per step and the commit it ran on, ready to paste into the PR. Exits non-zero if
-# any step failed; the other steps still run.
+# any step failed.
 #
-# The steps run in stages, the independent ones within a stage at the same time: lint, typecheck, Markdown lint, knip and the build;
-# then the unit tests; then, once the build has passed, the native visual spec and the end-to-end tests.
+# The steps run in stages, the independent ones within a stage at the same time. First the pre-flight (scripts/preflight,
+# about a second): the branch merges into origin/main with no conflict, no file holds a conflict marker, and the merged
+# tree's migrations are numbered 1..n. Then lint, typecheck, Markdown lint, knip and the build; then the unit tests; then,
+# once the build has passed, the native visual spec and the end-to-end tests. A failed pre-flight stops the gate there,
+# and a failed lint, typecheck, Markdown lint or knip stops it before the unit tests: a run that cannot pass ends in a
+# minute or two, not after the 35-minute heavy runs. The build's own failure stops only the visual and e2e steps.
 # The heavy runs never overlap: the unit tests have 5-second timeouts and the e2e waits on app state, and both fail when
 # starved. So the wall time is the build plus the slowest of the rest, not the sum. For the per-PR subset, see `pnpm check:pr`.
 #
@@ -36,8 +40,8 @@ case "${1:-}" in
   "") ;;
   *) echo "usage: check-local.sh [--quick]" >&2; exit 2 ;;
 esac
-steps="lint typecheck test build e2e visual markdownlint knip"
-[ -n "$quick" ] && steps="lint typecheck test build markdownlint knip"
+steps="preflight lint typecheck test build e2e visual markdownlint knip"
+[ -n "$quick" ] && steps="preflight lint typecheck test build markdownlint knip"
 
 # Retries, and a JSON report beside the log to read the flaky tests from.
 playwright_args="--retries 2 --reporter list,json --update-snapshots none"
@@ -100,13 +104,23 @@ start() {
 }
 
 # A reused log dir keeps the last run's results and Playwright reports, which would count as this run's.
-rm -f "$log_dir"/*.result "$log_dir/visual.json" "$log_dir/e2e.json"
+rm -f "$log_dir"/*.result "$log_dir/visual.json" "$log_dir/e2e.json" "$log_dir/test.json"
 # A Mac that sleeps mid-run freezes the tests, and they wake to find their timeouts gone: keep it awake until this
 # gate exits, and say beside the table if it slept anyway (scripts/machine-sleep).
 gate_started=$(date +%s)
 node scripts/machine-sleep/main.ts keep-awake $$
 battery=$(node scripts/machine-sleep/main.ts battery)
 [ -n "$battery" ] && echo "$battery"
+outcome_of() { cut -d' ' -f1 "$log_dir/$1.result" 2>/dev/null; }
+# Why a step has no result: set when a stage is skipped, read by the table below.
+not_run="the build failed"
+# Stage 0: the pre-flight, alone. On its failure nothing else runs: the merged tree is not the one the steps would check.
+start preflight $deadline preflight "$checks_min" -- pnpm preflight
+wait
+if [ "$(outcome_of preflight)" != pass ]; then
+  not_run="the pre-flight failed"
+  echo "lint, typecheck, test, build, e2e, visual, markdownlint, knip: not run, $not_run"
+else
 # Stage 1: the cheap steps and the build, together.
 start build $deadline build "$checks_min" -- pnpm build
 start lint $deadline lint "$checks_min" -- pnpm lint
@@ -114,12 +128,20 @@ start typecheck $deadline typecheck "$checks_min" -- pnpm typecheck
 start markdownlint $deadline markdownlint "$checks_min" -- pnpm dlx markdownlint-cli2@0.23.2
 start knip $deadline knip "$checks_min" -- pnpm knip
 wait
+quick_failed=
+for name in lint typecheck markdownlint knip; do [ "$(outcome_of "$name")" = pass ] || quick_failed=1; done
+if [ -n "$quick_failed" ]; then
+  # The unit, visual and e2e runs would take half an hour to end in a gate that has already failed.
+  not_run="a quick check failed"
+  echo "test, e2e, visual: not run, $not_run"
+else
 # Stage 2: the unit tests alone. They have 5-second timeouts and run slower than that beside anything heavy.
-start test $deadline test "$test_min" -- pnpm test
+# The JSON report names the failed files for the result record below.
+start test $deadline test "$test_min" -- pnpm test --reporter=default --reporter=json "--outputFile.json=$log_dir/test.json"
 wait
 if [ -n "$quick" ]; then
   :
-elif [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
+elif [ "$(outcome_of build)" = pass ]; then
   # Stage 3: the Electron runs. The native visual run goes first, alone of the Electron runs: its screenshots differ when
   # the e2e's apps are launching beside it. Its own spec files share its workers (3, or 2 when the load is high); five
   # clean runs in a row (166 shots, 6 to 7 minutes each, no retries, load 6 to 15) showed that is stable, and the gate's two
@@ -131,6 +153,8 @@ elif [ "$(cut -d' ' -f1 "$log_dir/build.result")" = pass ]; then
 else
   # The e2e drives the built app; with the build broken it would test a stale one.
   echo "e2e, visual: not run, the build failed"
+fi
+fi
 fi
 
 failed=0
@@ -150,7 +174,7 @@ row() {
     results="$results| \`$name\` | $outcome | ${seconds}s |
 "
   else
-    results="$results| \`$name\` | not run: the build failed | |
+    results="$results| \`$name\` | not run: $not_run | |
 "
     failed=1
   fi
@@ -169,6 +193,13 @@ if [ -n "$flaky" ]; then
   echo "Flaky, passed on a retry (fix them; they don't fail the gate):"
   echo
   printf '%s\n' "$flaky" | sed 's/^/- /'
+fi
+# The result record says what this run found, per step and failed file, so `pnpm check:pr --recheck` after a fix
+# reruns only that and what the fix touched (scripts/gate-results). Passed or not, but only from a whole run on a tree
+# that was clean and on the same commit from start to end.
+if [ -z "$quick" ] && [ -z "$dirty" ] && [ -z "$(git status --porcelain | head -n 1)" ] && [ "$(git rev-parse HEAD)" = "$sha" ]; then
+  echo
+  node scripts/gate-results/main.ts write "$sha" "$log_dir" $steps
 fi
 # The stamp says this commit passed: only with every step run and passed, on a tree that was clean and on the same
 # commit from start to end.

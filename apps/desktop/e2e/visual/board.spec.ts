@@ -587,6 +587,10 @@ test('linked sessions as one rail: a pair waiting for Send beside a one-way link
     const longTrip = await window.addStyleTag({ content: ':root { --motion-handoff: 600000ms !important; }' });
     await token.filter({ hasText: 'review.md' }).getByTestId('rail-token-send').click();
     await expect(token.filter({ hasText: 'review.md' })).toHaveAttribute('data-state', 'sending');
+    // Send says "Sent." in a toast, which is not part of the rail's picture: dismissed before any shot.
+    const toasts = window.getByRole('list', { name: 'Notifications' });
+    await toasts.getByRole('button', { name: 'Dismiss' }).click({ timeout: 2000 }).catch(() => undefined);
+    await expect(toasts.getByRole('listitem')).toHaveCount(0);
     // The fixer's turn on it ends meanwhile, and its handover is held until CI is green: shot once its tile is still.
     const held = async () => (await window.evaluate(() => globalThis.window.agentBoard.flowEdges.list())).find((edge) => edge.id === handover.id)?.held;
     await expect.poll(held, { timeout: 30_000 }).not.toBeNull();

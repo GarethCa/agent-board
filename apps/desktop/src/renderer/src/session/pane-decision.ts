@@ -30,6 +30,15 @@ export function paneDecision(agent: Waiting, deferred: ReadonlySet<string> = new
   return pendingDecisions(agent).find((decision) => !deferred.has(decisionId(decision)));
 }
 
+/**
+ * Whether the agent's window shows the strip of the steps card it waits on, above its composer: whenever it waits on
+ * one, but under the Simplified design's chat, where the pane shows one decision at a time, not while that shows one.
+ */
+export function showsStepsStrip(agent: Waiting & Pick<Agent, 'stepsWait'>, look: { simplified: boolean; chat: boolean }, deferred: ReadonlySet<string> = new Set()): boolean {
+  if (agent.stepsWait === null) return false;
+  return !(look.simplified && look.chat && paneDecision(agent, deferred) !== undefined);
+}
+
 /** The first decision `agent` waits on that the user put off, for the pane's line that brings it back. */
 export function deferredDecision(agent: Waiting, deferred: ReadonlySet<string>): PaneDecision | undefined {
   return pendingDecisions(agent).find((decision) => deferred.has(decisionId(decision)));

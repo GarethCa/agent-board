@@ -1,3 +1,5 @@
+import { imageProblem } from '../board/items/paste';
+
 /** What a key does in the composer: sends the message, makes a new line in it, or nothing of the composer's own. */
 export type ComposerKey = 'send' | 'newline' | undefined;
 
@@ -29,4 +31,22 @@ const SHELL_SPECIAL = /[\s'"`\\$!&;|<>()*?[\]#{}]/g;
  */
 export function droppedPath(path: string): string {
   return path.replace(SHELL_SPECIAL, (character) => `\\${character}`);
+}
+
+/**
+ * The image files a paste brought, in order. None when it was text or something else, and none when it also carries
+ * text: a copy from a spreadsheet or a document puts a picture beside its text, and the text is what was copied.
+ */
+export function pastedImages(data: Pick<DataTransfer, 'files' | 'getData'> | null): File[] {
+  if (data === null || data.getData('text/plain') !== '') return [];
+  return [...data.files].filter((file) => file.type.startsWith('image/'));
+}
+
+/** Keeps `files` where an agent can read them: each one's shell-escaped path, in order. Refuses one the app would refuse. */
+export async function keepPastedImages(files: File[]): Promise<string[]> {
+  const problem = files.map((file) => imageProblem(file)).find((each) => each !== undefined);
+  if (problem !== undefined) throw new Error(problem);
+  const paths: string[] = [];
+  for (const file of files) paths.push(droppedPath(await window.agentBoard.agents.pasteImage(await file.arrayBuffer())));
+  return paths;
 }

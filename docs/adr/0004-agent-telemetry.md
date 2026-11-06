@@ -409,14 +409,15 @@ PTY.
   Clearing the agent's flag while one of them shows (`needs_you` with clear, or its orchestrator's `send`) takes its
   own reason off that one and leaves the rest standing. Once its session ends, only what was never delivered stands,
   without the agent's own reason, which it can no longer answer.
-- **A Claude launch with no task waits too.** A Claude agent started with no task, or relaunched (woken, resumed,
+- **A launch with no task waits too.** A Claude or Codex agent started with no task, or relaunched (woken, resumed,
   restarted) with no new prompt, is held the same way until its session is up: nothing is typed at it, and what is
-  sent meanwhile is queued, as above, so a message is never typed into Claude while it loads (its splash, a resumed
-  conversation being redrawn, its trust screen), where it would sit at the prompt, unsent. The trust screen and the
+  sent meanwhile is queued, as above, so a message is never typed into the harness while it loads (its splash, a resumed
+  conversation being redrawn, its trust or startup screen), where it would sit at the prompt, unsent. The trust screen and the
   stall below apply as for a task. With no task to paste into a turn begun by hand, any hook of its own but `SessionEnd`
   says its session is up, not only `SessionStart`. A stalled one's flag names no Send, as there is no task to send. One with
-  nothing queued can be paused before it is up, as it holds nothing a pause would lose. Codex launched with no task is
-  not held: it fires no hook before a first prompt, and its composer is read only for one. A hand-off refused as busy
+  nothing queued can be paused before it is up, as it holds nothing a pause would lose. Codex fires no hook
+  before a first prompt, so its composer drawn says its session is up, as for a task (a startup screen over it holds
+  what is sent until the user answers it), and a stall flags it. A hand-off refused as busy
   meanwhile waits for its edge to try again, so a message sent after it, queued here, may land first.
 - **Claude's trust screen.** In a folder Claude has never opened it shows a trust screen first ("Quick safety check
   … ❯ No, exit / Yes, I trust this folder" in 2.1.312) and fires no `SessionStart` until it is answered. While the
@@ -560,3 +561,37 @@ PTY.
 - Not settled: after an answer in the terminal, the inbox keeps the prompt's buttons until the call's `PostToolUse`
   (a `PreToolUse` settles nothing); a click then is dropped by Claude, and the daemon releases the hook at that
   `PostToolUse`.
+
+**Reasoning effort**, as built (`packages/daemon/src/agent-spawns.ts` `launch` and `codexLaunch`, `agents.ts`
+`setEffort`, `deliveries.ts` `typeCommand`):
+
+- **At launch.** Checked against each CLI's own `--help` and bundle, no tokens spent (Claude Code 2.1.317, codex-cli
+  0.162.0-alpha.17.2). Claude takes `--effort low|medium|high|xhigh|max`. Codex has no flag: it takes
+  `-c model_reasoning_effort="<level>"` (`minimal|low|medium|high|xhigh`, no `max`). The board offers `low` to `max`,
+  refuses `max` for Codex rather than passing it, and leaves Codex's `minimal` out. The level is the agent's column
+  `effort`, so every launch, a restart or a resume included, passes it again.
+- **Live, Claude only.** Claude Code's `/effort <level>` sets it at its prompt. The ⋯ menu's Reasoning types exactly
+  that, as the user would, and presses Enter once: only between turns, at a prompt holding nothing (no unsent message,
+  nothing the user typed, no question or permission prompt up), after whatever else is being typed at the agent. One
+  set mid-turn waits for the turn's end, on the agent's next change. It is a command the harness runs itself, so no
+  turn is waited for: the fake models it firing no hook, and the board leans on that, as it does for `/compact`. Not
+  settled against the real CLI: whether Claude fires `UserPromptSubmit` for it (were it to, the agent would read as
+  working until its next turn ends). Unlike the Simplified composer's commands (ADR-0022), which are typed into the
+  field for the user to send because they may be mid-message there, this one is sent: the user finished choosing in a
+  menu, and the prompt it lands on holds nothing of theirs.
+- **Not live, Codex.** Codex changes it only through its `/model` picker, a menu the board would have to steer: so it
+  types nothing, keeps the level for the agent's next start, and says so (`Agent.effortPending` `restart`).
+- **Back to the harness's own.** Neither harness has a command for "its own default", so `agent.setEffort` with null
+  types nothing for either: the agent's next start passes no level, and until then it says `restart`.
+- **Not an orchestrator's.** `send` still types no harness command (ADR-0011); an orchestrator gives the level at
+  spawn (`agent-board new --effort`, `new_agent`'s `effort`). `agent.setEffort` is the user's alone.
+
+## Claude's question tool is not a permission
+
+Claude's `AskUserQuestion` call fires `PermissionRequest` too, but its dialog is where the user picks the answers, which come back in the call's input (`answers`). An `allow` from the board would run it with none: the agent carries on as if the user had answered nothing.
+
+- **Never held, never decided.** `permissions.hold` lists the call as a prompt with its `questions` and answers the hook at once with no decision, so Claude's dialog asks as usual (a subagent's included). `decide` and `release` refuse it, so no board click can allow or deny it.
+- **Waiting, not needs-permission.** While only question prompts are up the agent is `waiting` (`stateWithPrompts`), and `needsYouKind` lists it as `asks`. Needs you, the tile and the Captain's panel show the questions and their options to read, with Open the agent to answer; the composer is blocked, since anything typed would land in the dialog.
+- **Settled by its tool.** Its `PostToolUse` carries the answers in `tool_input`, so its input never matches the request's. An agent or subagent has one question dialog up at a time, so a question prompt is settled by any `PostToolUse` or `PostToolUseFailure` of the question tool from the same asker. The turn ending settles it as for any prompt.
+- **A permission first.** With a permission prompt up beside it (a subagent's), the agent is `needs-permission`, and every line that names one prompt names the permission (`permissionPrompt`).
+- **Not yet.** Answering the questions from the board, by allowing with the answers as `updatedInput`, is left for later.

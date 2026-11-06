@@ -26,6 +26,16 @@ interface BoardMenuOptions {
   selectOnly(nodeIds: ReadonlySet<string>): void;
   /** Puts a new clock at `at`, on the screen, and opens its editor. */
   addClock(at: { x: number; y: number }): void;
+  /** Puts a new steps card of the user's at `at`, on the screen, ready to type its steps into. */
+  addSteps(at: { x: number; y: number }): void;
+  /** Adds a memory centred at `at`, a point on the screen. */
+  addMemory(at: { x: number; y: number }): void;
+  /** Adds a queue centred at `at`, a point on the screen. */
+  addQueue(at: { x: number; y: number }): void;
+  /** Whether the tile `nodeId` is a lead pinned top-left in its shelved zone; undefined for any other tile. */
+  leadPinned(nodeId: string): boolean | undefined;
+  /** Pins the lead tile `nodeId` top-left in its shelved zone again, or frees it to be a stack like any other. */
+  setLeadPinned(nodeId: string, pinned: boolean): void;
 }
 
 /** Where a right-click was, on the screen. */
@@ -49,12 +59,20 @@ export function useBoardMenu({
   arrangeBoard,
   selectOnly,
   addClock,
+  addSteps,
+  addMemory,
+  addQueue,
+  leadPinned,
+  setLeadPinned,
 }: BoardMenuOptions) {
   /** The context menu open, where it was asked for and on what: the selection, or empty board. */
   const [contextMenu, setContextMenu] = useState<{ at: { x: number; y: number }; on: 'selection' | 'board' }>();
 
+  const [only, second] = editing.selection().nodes;
+  const pinned = only === undefined || second !== undefined ? undefined : leadPinned(only.id);
   const contextActions: ContextActions = {
     ...editing,
+    ...(pinned === undefined || only === undefined ? {} : { leadPin: { pinned, toggle: () => setLeadPinned(only.id, !pinned) } }),
     // After the menu has handed the focus back, or the popover's field would lose it at once.
     askClaude: () => setTimeout(askClaude, MENU_FOCUS_RETURN_MS),
     deleteSelection: deleteSelected,
@@ -78,6 +96,18 @@ export function useBoardMenu({
     addClock: () => {
       const at = contextMenu?.at;
       if (at !== undefined) setTimeout(() => addClock(at), MENU_FOCUS_RETURN_MS);
+    },
+    addSteps: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => addSteps(at), MENU_FOCUS_RETURN_MS);
+    },
+    addMemory: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => addMemory(at), MENU_FOCUS_RETURN_MS);
+    },
+    addQueue: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => addQueue(at), MENU_FOCUS_RETURN_MS);
     },
   };
 

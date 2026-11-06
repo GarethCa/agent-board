@@ -1,6 +1,6 @@
 /**
  * The merge gate (scripts/check-local.sh) runs each stage under a wall-clock limit. Here it runs on a fake `pnpm` whose
- * unit tests never finish and whose build fails, so the Electron stages, which would take the machine-wide e2e lock,
+ * unit tests never finish and whose build fails (exiting 124, as a timed-out step does), so the Electron stages, which would take the machine-wide e2e lock,
  * never start.
  */
 import { spawn } from 'node:child_process';
@@ -27,7 +27,7 @@ it('fails a stage that runs past its limit, says so in the table, and leaves not
   const pidFile = join(dir, 'test.pid');
   writeFileSync(
     join(bin, 'pnpm'),
-    `#!/bin/sh\ncase "$1" in\n  test) echo $$ > ${pidFile}; exec sleep 60 ;;\n  build) exit 1 ;;\n  knip) exit 124 ;;\n  *) exit 0 ;;\nesac\n`,
+    `#!/bin/sh\ncase "$1" in\n  test) echo $$ > ${pidFile}; exec sleep 60 ;;\n  build) exit 124 ;;\n  *) exit 0 ;;\nesac\n`,
   );
   chmodSync(join(bin, 'pnpm'), 0o755);
   const child = spawn('sh', [gate], {
@@ -45,7 +45,7 @@ it('fails a stage that runs past its limit, says so in the table, and leaves not
   expect(output).toMatch(/\| `test` \| FAIL: over its 0\.03 min limit \| \d+s \|/);
   expect(output).toContain('| `lint` | pass |');
   // A step that exits 124 on its own did not run over.
-  expect(output).toMatch(/\| `knip` \| FAIL \| \d+s \|/);
+  expect(output).toMatch(/\| `build` \| FAIL \| \d+s \|/);
   expect(readFileSync(join(dir, 'logs', 'test.log'), 'utf8')).toContain('stage `test` exceeded its 0.03 min limit');
   expect(existsSync(pidFile)).toBe(true);
   expect(alive(Number(readFileSync(pidFile, 'utf8')))).toBe(false);

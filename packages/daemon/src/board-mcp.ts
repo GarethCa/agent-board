@@ -2,6 +2,8 @@
 // once where the agent is and to read `agent-board --help` for the rest. One set of handlers, two transports: stdio
 // here (`agent-board mcp`), and Streamable HTTP in the daemon (`board-mcp-http.ts`).
 import { addSchedule, listSchedules, removeSchedule } from './clock-ops.ts';
+import { listSteps, newSteps, readStepsCard, updateSteps, type StepsUpdate } from './steps-ops.ts';
+import { listMemories, listQueues, memoryHistory, newMemory, newQueue, queueHistory, readMemory, readQueue, updateMemory, updateQueue, type MemoryUpdate, type QueueUpdate } from './memory-ops.ts';
 import {
   addEdge,
   BoardError,
@@ -11,6 +13,9 @@ import {
   pauseAgent,
   wakeAgent,
   defaultRolesView,
+  prefabsView,
+  prefabView,
+  startPrefab,
   usageView,
   presentPlan,
   readPlanSource,
@@ -38,6 +43,7 @@ import {
   openOwnPullRequest,
   recordEntry,
   pinEntry,
+  setOwnPage,
   unpinEntry,
   treeView,
   waitForAgents,
@@ -51,6 +57,7 @@ import {
   addNote,
   addShape,
   arrangeZone,
+  setZoneLayout,
   connectItems,
   editConnector,
   editNote,
@@ -67,11 +74,24 @@ import {
   type ShapeOptions,
 } from './layout-ops.ts';
 import {
+  MAX_FIGURE_VALUE,
+  MAX_PAGE_BLOCKS,
+  MAX_PAGE_FIGURES,
+  MAX_PAGE_ITEM,
+  MAX_PAGE_ITEMS,
+  MAX_PAGE_NAME,
+  MAX_PAGE_TEXT,
+  MAX_PAGE_TITLE,
+  PAGE_BLOCK_KINDS,
+  PAGE_CHECK_STATES,
+  PAGE_ICONS,
+  PAGE_TONES,
   AGENT_ROLES,
   ARRANGE_BYS,
   CAPTURE_STYLES,
   CREW_EVENT_KINDS,
   ARRANGE_LAYOUTS,
+  ZONE_LAYOUT_MODES,
   NOTE_KINDS,
   CONNECTOR_STYLES,
   RELATIONS,
@@ -81,17 +101,21 @@ import {
   DEFAULT_ASK_WAIT_MS,
   DEFAULT_PLAN_WAIT_MS,
   MAX_ASK_OPTIONS,
+  MAX_ASK_QUESTIONS,
   MAX_PIN_LABEL,
   MAX_PIN_NOTE,
   MAX_ASK_WAIT_MS,
   MAX_OPTION_LENGTH,
   MAX_PLAN_TITLE_LENGTH,
+  MAX_STEPS,
+  MAX_STEPS_QUESTIONS,
   MAX_ROLE_NAME_LENGTH,
   MAX_QUESTION_LENGTH,
   FLOW_CONDITION_KINDS,
   FLOW_EDGE_TRIGGERS,
   DEFAULT_ORCHESTRATOR_WAIT_MS,
   CLOCK_RESULTS,
+  EFFORTS,
   HARNESSES,
   isCrewSince,
   isWaitState,
@@ -121,9 +145,10 @@ export const BOARD_MCP_INSTRUCTIONS =
 export const ORCHESTRATOR_INSTRUCTIONS =
   'The user lets you orchestrate: you may start, message, watch and close other agents, join them with edges, and keep ' +
   'your zone tidy (move tiles, arrange your crew, notes), with the tools below or the same commands in ' +
-  '`agent-board help orchestrate`. A reviewer started from an agent\'s branch is joined to that agent both ways, as ' +
-  'manual edges; wire only reviewer ↔ implementer (findings back, next round), never an edge to your own tile, and ' +
-  'keep one of the pair manual, as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
+  '`agent-board help orchestrate`. A reviewer started from an agent\'s branch gets no edge to that agent: it and its implementer talk through `send` (findings back, next round), and the user presses no Send ' +
+  'button. Ask for a line between them only with `new` `edges` (`auto` hands the findings back by itself, the way ' +
+  'back manual; `manual` leaves both for the user), never an edge to your own tile, and keep one of a pair manual, ' +
+  'as two auto edges in a loop re-trigger each other. Keep your crew\'s tile lines current ' +
   'with `set_status` and `agent`: what each agent is doing now, as its work moves on. A crew member\'s `needs_you` comes ' +
   'to you, typed at your prompt, and so do its `ask` questions and plans (`show_doc` with `plan`, written in its ' +
   'worktree, for `read`): answer it with `send`, which clears its flag, or pass it on to the user with `needs_you` ' +
@@ -195,12 +220,29 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Ask the user a question you can\'t settle yourself, and wait for the answer: it shows in their Needs you inbox, ' +
       'each option a button, and your tile says you ask them. Returns their answer, or that they skipped it or no ' +
       `answer came in time (${DEFAULT_ASK_WAIT_MS / 60_000} minutes by default): then carry on with your best judgement. ` +
-      'One question at a time. If an orchestrator started you, the question goes to it instead and nothing waits: end ' +
-      'your turn, and its answer comes as your next message.',
+      `Ask one question, or up to ${MAX_ASK_QUESTIONS} with questions, which the user steps through and sends together. ` +
+      'More than that, or to-dos, is a steps card: use steps_new. One ask at a time. If an orchestrator started you, ' +
+      'the question goes to it instead and nothing waits: end your turn, and its answer comes as your next message.',
     inputSchema: {
       type: 'object',
       properties: {
-        question: { type: 'string', maxLength: MAX_QUESTION_LENGTH, description: 'The question, in a sentence or two.' },
+        question: { type: 'string', maxLength: MAX_QUESTION_LENGTH, description: 'The question, in a sentence or two. Or give questions.' },
+        questions: {
+          type: 'array',
+          minItems: 1,
+          maxItems: MAX_ASK_QUESTIONS,
+          description: 'Several questions instead of question, stepped through one at a time and sent together.',
+          items: {
+            type: 'object',
+            properties: {
+              question: { type: 'string', maxLength: MAX_QUESTION_LENGTH },
+              options: { type: 'array', items: { type: 'string', maxLength: MAX_OPTION_LENGTH }, maxItems: MAX_ASK_OPTIONS },
+              free_text: { type: 'boolean' },
+            },
+            required: ['question'],
+            additionalProperties: false,
+          },
+        },
         options: {
           type: 'array',
           items: { type: 'string', maxLength: MAX_OPTION_LENGTH },
@@ -210,11 +252,10 @@ export const BOARD_MCP_TOOLS: Tool[] = [
         free_text: { type: 'boolean', description: 'Let the user reply in their own words besides the options.' },
         on_board: {
           type: 'boolean',
-          description: 'Also show it as a card beside your tile on the board, for a quick question the user can answer at a glance.',
+          description: 'Put it on the board at once, as a steps card beside your tile: you still wait, and its Send answers you.',
         },
         timeout_minutes: { type: 'integer', minimum: 1, maximum: MAX_ASK_WAIT_MS / 60_000, description: 'How long to wait.' },
       },
-      required: ['question'],
       additionalProperties: false,
     },
   },
@@ -374,6 +415,257 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'steps_new',
+    description:
+      'Put a steps card beside your tile: an ordered list of questions for the user to step through and to-dos, each ' +
+      'ticked by whoever it names. For more than one question, or a list of things to get done in order; one quick ' +
+      'question is `ask`. Returns at once: nothing waits. End your turn. Once the user has answered and pressed Send, ' +
+      'the answers are typed at your prompt, led by [agent-board] (later, only what they changed). If an orchestrator ' +
+      'started you, it answers instead. Naming an agent on a to-do sends it nothing. One step a line: `- [ ] text ' +
+      '@who -> link` a to-do (@user for the user; you, without one; [x] done), `? text [a | b]` pick one, ' +
+      '`? text [any: a | b]` pick any, `? text [yes/no]`, `? text [order: a | b]` put in order, `? text` in words; ' +
+      '`(required)` on a step it can\'t be sent without; `## heading` starts a section; `# title` names it. ' +
+      '` -> ` in a to-do starts its link, and a choice can\'t hold `|` or `]`. At most ' +
+      `${MAX_STEPS} steps and ${MAX_STEPS_QUESTIONS} questions. As \`agent-board steps new\`.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it is, in a line; else its "# title" line.' },
+        steps: { type: 'string', description: 'The steps, one a line, in the format above.' },
+      },
+      required: ['steps'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'steps_read',
+    description:
+      'Read a steps card in full, each step numbered with its answer or tick; without card, list the cards you can read ' +
+      '(in your zone, in zones your orchestrator scope reaches, loose ones, and any you are part of), with mine only ' +
+      'those with a to-do of yours not yet done. As `agent-board steps read` and `steps ls`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        card: { type: 'string', description: 'The card, by ref (item:3f2a).' },
+        mine: { type: 'boolean', description: 'Without card: only cards with a to-do of yours not yet done.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'steps_update',
+    description:
+      'Change a steps card: done ticks a to-do that names you (with undo, unticks it); wait tells you at your prompt ' +
+      'once someone else ticks a to-do, or the card is closed; add adds steps to the end of a card you made; answer, for an orchestrator, ' +
+      "answers a crew member's question (send sends the answers, as the user's Send does); close says you are done " +
+      'with a card you made. As `agent-board steps done|wait|add|answer|close`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        card: { type: 'string', description: 'The card, by ref (item:3f2a).' },
+        action: { type: 'string', enum: ['done', 'wait', 'add', 'answer', 'close'], description: 'What to do.' },
+        step: { type: 'integer', minimum: 1, description: 'For done, wait and answer: the step, by its number.' },
+        steps: { type: 'string', description: 'For add: the steps, one a line.' },
+        answer: { type: 'string', description: 'For answer: a choice by its number or text, several split by commas, yes or no, or words.' },
+        undo: { type: 'boolean', description: 'For done: untick it instead.' },
+        send: { type: 'boolean', description: 'For answer: send the answers once this one is in (step and answer may be left out).' },
+      },
+      required: ['card', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'memory_new',
+    description: 'Put a new memory beside your tile: shared context that agents in its scope and the user read and write. As `agent-board memory new`.',
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it remembers, in a line.' } },
+      required: ['title'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'memory_read',
+    description:
+      'Without memory, list the memories you can read (in your zone, zones your orchestrator scope reaches, and loose ones). ' +
+      'With memory, its entries, pinned first, then newest first (search: only those holding it); with entry, that one in full ' +
+      '(a file whole), or with history its versions, newest first. As `agent-board memory ls|read|history`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memory: { type: 'string', description: 'The memory, by ref (item:3f2a) or title.' },
+        entry: { type: 'string', description: 'An entry, by its key or #id.' },
+        search: { type: 'string', description: 'Only entries whose key or text holds this (any case).' },
+        history: { type: 'boolean', description: "With entry: its versions, every change anyone made, to put one back with memory_update's restore." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'memory_update',
+    description:
+      'Change a memory: add remembers text ("key: value" with a one-word key replaces that key\'s value; else a note) or, ' +
+      'with file, a whole file (up to 1 MB) under its name; edit changes an entry\'s text, key or pin; remove removes one; ' +
+      'restore puts a version back (memory_read with history lists them). Anyone in scope may change any entry, the ' +
+      "user's too. As `agent-board memory add|edit|rm|restore`.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memory: { type: 'string', description: 'The memory, by ref (item:3f2a) or title.' },
+        action: { type: 'string', enum: ['add', 'edit', 'remove', 'restore'], description: 'What to do.' },
+        entry: { type: 'string', description: 'For edit, remove and restore: the entry, by its key or #id.' },
+        text: { type: 'string', description: 'For add and edit: the text.' },
+        key: { type: 'string', description: 'For add and edit: the key to keep it under (spaces and all).' },
+        no_key: { type: 'boolean', description: 'For add: keep the text as a note, "a: b" and all; for edit, take its key off.' },
+        file: { type: 'string', description: 'For add: a file to keep whole, by path (relative to where you started).' },
+        pinned: { type: 'boolean', description: 'For edit: pin it to the top rows, or unpin it.' },
+        version: { type: 'integer', minimum: 1, description: 'For restore: the version to put back.' },
+      },
+      required: ['memory', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'queue_new',
+    description: 'Put a new queue beside your tile: jobs for agents in its scope to take one at a time, and notes; with for_user, a queue of things for the user to look at, which no agent takes from. As `agent-board queue new`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', maxLength: MAX_PLAN_TITLE_LENGTH, description: 'What it queues, in a line.' },
+        for_user: { type: 'boolean', description: "The user's queue: agents add to it, the user goes through it." },
+      },
+      required: ['title'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'queue_read',
+    description: 'Without queue, list the queues you can read; with queue, its jobs and notes in order, then those done; with job, that job\'s versions, newest first. As `agent-board queue ls|read|history`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        queue: { type: 'string', description: 'The queue, by ref (item:3f2a) or title.' },
+        job: { type: 'string', description: "A job's #id (its start will do): its history." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'queue_update',
+    description:
+      'Change a queue: add queues jobs, one a line (" -> link" at its end; front puts them at the front; kind note adds ' +
+      'notes); take takes the next job, or job: it is yours until done or drop, and goes back to the front if your session ' +
+      'ends first; drop puts a job you took back at the front, counted; done finishes it; edit, remove and restore (a ' +
+      'version from queue_read) change a job or note; move puts one before another open job (to: its #id), at the top or last. ' +
+      'drain (on a queue you made) has the board start fresh agents for its waiting jobs. ' +
+      'As `agent-board queue add|take|drop|done|edit|move|rm|restore|drain`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        queue: { type: 'string', description: 'The queue, by ref (item:3f2a) or title.' },
+        action: { type: 'string', enum: ['add', 'take', 'drop', 'done', 'edit', 'move', 'remove', 'restore', 'drain'], description: 'What to do.' },
+        job: { type: 'string', description: "The job or note, by #id (its start will do). For take, leave it out for the next one." },
+        text: { type: 'string', description: 'For add: the jobs, one a line; for edit, the new text.' },
+        kind: { type: 'string', enum: ['job', 'note'], description: 'For add: jobs (the default) or notes.' },
+        front: { type: 'boolean', description: 'For add: at the front, in the order given.' },
+        link: { type: 'string', description: 'For add (one job) and edit: its link; "" clears it.' },
+        version: { type: 'integer', minimum: 1, description: 'For restore: the version to put back.' },
+        to: { type: 'string', description: 'For move: the #id of the open job to put it before, top, or last.' },
+        on: { type: 'boolean', description: 'For drain, on a queue you made: whether the board starts fresh agents for its waiting jobs.' },
+        most: { type: 'integer', minimum: 1, maximum: 3, description: 'For drain: the most agents at once.' },
+      },
+      required: ['queue', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'set_page',
+    description:
+      'Write your page: the shelf your sidebar opens on, which is yours to fill. Name its tab, pick its icon, and give ' +
+      'it blocks: a heading with your progress, key figures, a checklist, a callout, links, a note. Each block may have ' +
+      'a title, an icon and a tone. Writing it again replaces the whole page, so send every block each time; keep it ' +
+      'current as your work moves on. With clear, the sidebar shows the board\'s Now instead. As `agent-board page`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', maxLength: MAX_PAGE_NAME, description: `The tab's name, at most ${MAX_PAGE_NAME} characters: "Export".` },
+        icon: { type: 'string', enum: [...PAGE_ICONS], description: "The tab's icon." },
+        blocks: {
+          type: 'array',
+          minItems: 1,
+          maxItems: MAX_PAGE_BLOCKS,
+          description: 'The page, top to bottom.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: [...PAGE_BLOCK_KINDS],
+                description:
+                  'heading (title, text, progress 0-100), figures (figures), checklist (items), callout (text), links (links), note (title, text).',
+              },
+              title: { type: 'string', maxLength: MAX_PAGE_TITLE, description: "The block's title; a heading and a note need one." },
+              icon: { type: 'string', enum: [...PAGE_ICONS] },
+              tone: { type: 'string', enum: [...PAGE_TONES], description: 'neutral unless you pick one.' },
+              text: { type: 'string', maxLength: MAX_PAGE_TEXT, description: "A heading's line or two, a callout's or a note's text." },
+              progress: { type: 'integer', minimum: 0, maximum: 100, description: "A heading's progress bar." },
+              figures: {
+                type: 'array',
+                minItems: 1,
+                maxItems: MAX_PAGE_FIGURES,
+                items: {
+                  type: 'object',
+                  properties: {
+                    value: { type: 'string', maxLength: MAX_FIGURE_VALUE, description: 'Drawn large: "214", "18k".' },
+                    label: { type: 'string', maxLength: MAX_PAGE_ITEM, description: 'What it counts: "tests passing".' },
+                    icon: { type: 'string', enum: [...PAGE_ICONS] },
+                    tone: { type: 'string', enum: [...PAGE_TONES] },
+                  },
+                  required: ['value', 'label'],
+                  additionalProperties: false,
+                },
+              },
+              items: {
+                type: 'array',
+                minItems: 1,
+                maxItems: MAX_PAGE_ITEMS,
+                description: "A checklist's lines, in order.",
+                items: {
+                  type: 'object',
+                  properties: {
+                    text: { type: 'string', maxLength: MAX_PAGE_ITEM },
+                    state: { type: 'string', enum: [...PAGE_CHECK_STATES], description: 'todo unless you say; at most one line is doing, the one you are on now.' },
+                  },
+                  required: ['text'],
+                  additionalProperties: false,
+                },
+              },
+              links: {
+                type: 'array',
+                minItems: 1,
+                maxItems: MAX_PAGE_ITEMS,
+                items: {
+                  type: 'object',
+                  description: 'One of url (an http or https link, opened in a web tab) and path (a file).',
+                  properties: {
+                    url: { type: 'string' },
+                    path: { type: 'string', description: 'Relative to your working directory, or absolute.' },
+                    label: { type: 'string', maxLength: MAX_PAGE_ITEM },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['kind'],
+            additionalProperties: false,
+          },
+        },
+        clear: { type: 'boolean', description: 'Clear your page instead.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 const AGENT_REF = { type: 'string', description: 'The agent, by ref (agent:9c1e) or unique name.' };
@@ -420,6 +712,11 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         zone: { type: 'string', description: 'A zone ref; yours by default.' },
         harness: { type: 'string', enum: [...HARNESSES] },
         model: { type: 'string', description: "The harness's model (opus, sonnet, haiku; gpt-5-codex, gpt-5); its default without." },
+        effort: {
+          type: 'string',
+          enum: [...EFFORTS],
+          description: "Its reasoning effort (Codex takes no max). Without, the Settings default for its role, else for new agents, else the harness's own.",
+        },
         role: {
           type: 'string',
           maxLength: MAX_ROLE_NAME_LENGTH,
@@ -442,7 +739,21 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         },
         branch: { type: 'string', description: 'Its new branch; made from its name by default. Not for a reviewer.' },
         base: { type: 'string', description: "The branch to cut it from (a reviewer's to review), or an agent ref for that agent's branch (and, in a group, its repo, unless repo names one)." },
+        edges: {
+          type: 'string',
+          enum: ['auto', 'manual'],
+          description:
+            "Join a reviewer started on an agent's branch to that agent. None without: they talk through send. auto hands the reviewer's findings back by itself (the way back is manual); manual leaves both for the user to send.",
+        },
         issue: { type: 'string', description: "An issue in the zone's tracker, which comes first in its prompt." },
+        prefab: {
+          type: 'string',
+          description:
+            'Start a crew from this crew prefab (as `agent-board prefab ls` lists them) in place of one agent: its member ' +
+            'that starts on the prompt, its builder or its lead, gets the prompt, started as the prefab says. Its reviewers ' +
+            'start on the builder\'s branch each time the builder hands off, and their reviews go back to it, until each approves ' +
+            'or the round limit (`agent-board crew`); a lead starts its own crew. Takes zone, repo and issue; the prefab sets the rest.',
+        },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -638,6 +949,26 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
         },
         auto: { type: 'boolean', description: 'Arrange by itself after every agent you start, note you add and agent you close (true), or stop (false). Off at first.' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'zone_layout',
+    description:
+      'Set how your zone (or one in your scope) draws what it holds, as its Layout menu does in the app: free, each tile ' +
+      'where it was put (every zone starts free); shelves, one stack per ticket on To do, Doing, Waiting and Done shelves ' +
+      "under a head row of the zone's leads and shells, a click on a stack fanning its tiles out below the shelves; clusters, " +
+      "each ticket's tiles drawn together, what needs the user first. Moves no tile's own place, so free again shows the " +
+      'zone as it was. A zone is never laid out so by itself: choose shelves when its work is easier to follow by status, ' +
+      'clusters when by ticket. As ' +
+      '`agent-board zone layout`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        layout: { type: 'string', enum: [...ZONE_LAYOUT_MODES], description: 'free, shelves or clusters.' },
+        zone: { type: 'string', description: 'The zone, by ref; yours by default.' },
+      },
+      required: ['layout'],
       additionalProperties: false,
     },
   },
@@ -855,6 +1186,18 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'prefabs',
+    description:
+      "The app's crew prefabs, one library for every board: each a saved crew shape (its members, when each starts, " +
+      'its round limit), built-ins first. With name, that one whole, as its .crew.json file. Start a crew from one with ' +
+      'new_agent and prefab. As `agent-board prefab ls` and `prefab show`.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'A prefab to show whole; every prefab in a line each without.' } },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'roles',
     description:
       "The app's default roles: a custom role's name and the template an agent started in it begins with, in any zone " +
@@ -941,6 +1284,114 @@ function stringArg(args: Record<string, unknown>, name: string, optional = false
   return value;
 }
 
+/** A whole version number, from `args.version`. */
+function versionArg(args: Record<string, unknown>): number {
+  if (!Number.isInteger(args.version) || (args.version as number) < 1) throw new BoardError('restore needs version: a version number, as history lists them');
+  return args.version as number;
+}
+
+/** A boolean argument, if given. */
+function booleanArg(args: Record<string, unknown>, name: string): boolean | undefined {
+  if (args[name] !== undefined && typeof args[name] !== 'boolean') throw new BoardError(`${name} must be true or false`);
+  return args[name] as boolean | undefined;
+}
+
+/** `memory_update`'s arguments as the update `memory add|edit|rm|restore` makes. */
+function memoryUpdateArg(args: Record<string, unknown>): MemoryUpdate {
+  const key = stringArg(args, 'key', true);
+  const note = booleanArg(args, 'no_key') === true;
+  if (key !== undefined && note) throw new BoardError('give key or no_key, not both');
+  const text = stringArg(args, 'text', true);
+  const entry = () => stringArg(args, 'entry');
+  switch (args.action) {
+    case 'add': {
+      const path = stringArg(args, 'file', true);
+      return { action: 'add', ...(text === undefined ? {} : { text }), ...(path === undefined ? {} : { path }), ...(key === undefined ? {} : { key }), note };
+    }
+    case 'edit': {
+      const pinned = booleanArg(args, 'pinned');
+      return { action: 'edit', entry: entry(), ...(text === undefined ? {} : { text }), ...(key === undefined ? {} : { key }), note, ...(pinned === undefined ? {} : { pinned }) };
+    }
+    case 'remove':
+      return { action: 'remove', entry: entry() };
+    case 'restore':
+      return { action: 'restore', entry: entry(), version: versionArg(args) };
+    default:
+      throw new BoardError('action must be add, edit, remove or restore');
+  }
+}
+
+/** `queue_update`'s arguments as the update `queue add|take|…` makes. */
+function queueUpdateArg(args: Record<string, unknown>): QueueUpdate {
+  const job = () => stringArg(args, 'job');
+  const text = stringArg(args, 'text', true);
+  const link = stringArg(args, 'link', true);
+  switch (args.action) {
+    case 'add': {
+      if (args.kind !== undefined && args.kind !== 'job' && args.kind !== 'note') throw new BoardError('kind must be job or note');
+      return { action: 'add', text: stringArg(args, 'text'), kind: (args.kind as 'job' | 'note' | undefined) ?? 'job', front: booleanArg(args, 'front') === true, ...(link === undefined ? {} : { link }) };
+    }
+    case 'take': {
+      const which = stringArg(args, 'job', true);
+      return { action: 'take', ...(which === undefined ? {} : { job: which }) };
+    }
+    case 'edit':
+      if (text === undefined && link === undefined) throw new BoardError('edit needs text or link');
+      return { action: 'edit', job: job(), ...(text === undefined ? {} : { text }), ...(link === undefined ? {} : { link }) };
+    case 'drop':
+    case 'done':
+    case 'remove':
+      return { action: args.action, job: job() };
+    case 'restore':
+      return { action: 'restore', job: job(), version: versionArg(args) };
+    case 'move':
+      return { action: 'move', job: job(), to: stringArg(args, 'to') };
+    case 'drain': {
+      const on = booleanArg(args, 'on');
+      if (on === undefined) throw new BoardError('drain needs on: true or false');
+      const most = args.most;
+      if (most !== undefined && (!Number.isInteger(most) || (most as number) < 1 || (most as number) > 3)) throw new BoardError('most is 1, 2 or 3');
+      return { action: 'drain', on, ...(most === undefined ? {} : { most: most as number }) };
+    }
+    default:
+      throw new BoardError('action must be add, take, drop, done, edit, move, remove, restore or drain');
+  }
+}
+
+/** `steps_update`'s arguments as the update `steps done|wait|add|answer|close` makes. */
+function stepsUpdateArg(args: Record<string, unknown>): StepsUpdate {
+  const step = args.step;
+  if (step !== undefined && (!Number.isInteger(step) || (step as number) < 1)) throw new BoardError('step must be a step number, from 1');
+  for (const flag of ['undo', 'send']) {
+    if (args[flag] !== undefined && typeof args[flag] !== 'boolean') throw new BoardError(`${flag} must be true or false`);
+  }
+  const needStep = () => {
+    if (step === undefined) throw new BoardError(`${String(args.action)} needs step`);
+    return step as number;
+  };
+  switch (args.action) {
+    case 'done':
+      return { action: 'done', steps: [needStep()], undo: args.undo === true };
+    case 'wait':
+      return { action: 'wait', step: needStep() };
+    case 'add':
+      return { action: 'add', text: stringArg(args, 'steps') };
+    case 'answer':
+      return { action: 'answer', ...(step === undefined ? {} : { step: step as number, answer: stringArg(args, 'answer') }), send: args.send === true };
+    case 'close':
+      return { action: 'close' };
+    default:
+      throw new BoardError('action must be done, wait, add, answer or close');
+  }
+}
+
+/** `new`'s `edges`: auto or manual, or undefined. */
+function edgesArg(args: Record<string, unknown>): 'auto' | 'manual' | undefined {
+  const value = stringArg(args, 'edges', true);
+  if (value !== undefined && value !== 'auto' && value !== 'manual') throw new BoardError('edges must be auto or manual');
+  return value;
+}
+
 /** The string arguments of `names` that were given, each checked, as an object of only those. */
 function givenStrings<Name extends string>(args: Record<string, unknown>, names: readonly Name[]): Partial<Record<Name, string>> {
   return Object.fromEntries(
@@ -1008,6 +1459,16 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   unpin: async (session, args, cwd) => {
     return (await unpinEntry(session, { ...givenStrings(args, ['path', 'url', 'label']), forOrchestrator: args.for_orchestrator === true }, cwd)).text;
   },
+  set_page: async (session, args, cwd) => {
+    if (args.clear === true) {
+      if (args.name !== undefined || args.icon !== undefined || args.blocks !== undefined) throw new BoardError('clear takes no name, icon or blocks');
+      return (await setOwnPage(session, null, cwd)).text;
+    }
+    const name = stringArg(args, 'name');
+    const icon = stringArg(args, 'icon');
+    if (!Array.isArray(args.blocks)) throw new BoardError('give blocks, a list of at least one block, or clear');
+    return (await setOwnPage(session, { name, icon, blocks: args.blocks }, cwd)).text;
+  },
   needs_you: async (session, { reason, via, clear }) => {
     if (clear === true) return flagLine(await flagOwn(session, undefined), true);
     if (typeof reason !== 'string') throw new BoardError('give a reason, or clear');
@@ -1025,22 +1486,39 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     const agent = await setOwnStatus(session, summary, progress, done === true);
     return `Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`;
   },
-  new_agent: async (session, args) =>
-    (
+  new_agent: async (session, args) => {
+    const prefab = stringArg(args, 'prefab', true);
+    if (prefab !== undefined) {
+      const set = ['name', 'harness', 'model', 'effort', 'role', 'template', 'branch', 'base', 'edges'].find((key) => args[key] !== undefined);
+      if (set !== undefined) throw new BoardError(`${set} is the prefab's to set: with prefab, give zone, repo and issue alone`);
+      return (
+        await startPrefab(session, {
+          name: prefab,
+          prompt: stringArg(args, 'prompt'),
+          zone: stringArg(args, 'zone', true),
+          repo: stringArg(args, 'repo', true),
+          issue: stringArg(args, 'issue', true),
+        })
+      ).text;
+    }
+    return (
       await newAgent(session, {
         prompt: stringArg(args, 'prompt'),
         name: stringArg(args, 'name', true),
         zone: stringArg(args, 'zone', true),
         harness: stringArg(args, 'harness', true),
         model: stringArg(args, 'model', true),
+        effort: stringArg(args, 'effort', true),
         role: stringArg(args, 'role', true),
         noTemplate: args.template === false,
         repo: stringArg(args, 'repo', true),
         branch: stringArg(args, 'branch', true),
         base: stringArg(args, 'base', true),
+        edges: edgesArg(args),
         issue: stringArg(args, 'issue', true),
       })
-    ).text,
+    ).text;
+  },
   send: async (session, args) => {
     const draft = args.submit === true ? { submit: true as const } : args.clear === true ? { clear: true as const } : undefined;
     if ((args.submit === true && args.clear === true) || (draft !== undefined && args.text !== undefined)) {
@@ -1109,21 +1587,39 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     ).text;
   },
   ask: async (session, args) => {
-    const { options, free_text: freeText, on_board: onBoard } = args;
-    if (options !== undefined && (!Array.isArray(options) || !options.every((option) => typeof option === 'string'))) {
-      throw new BoardError('options must be a list of strings');
+    const { options, free_text: freeText, on_board: onBoard, questions } = args;
+    const strings = (value: unknown, name: string) => {
+      if (value !== undefined && (!Array.isArray(value) || !value.every((option) => typeof option === 'string'))) throw new BoardError(`${name} must be a list of strings`);
+      return value as string[] | undefined;
+    };
+    const flag = (value: unknown, name: string) => {
+      if (value !== undefined && typeof value !== 'boolean') throw new BoardError(`${name} must be true or false`);
+      return value as boolean | undefined;
+    };
+    flag(onBoard, 'on_board');
+    if (questions !== undefined && !Array.isArray(questions)) throw new BoardError('questions must be a list of { question, options?, free_text? }');
+    const asked =
+      questions === undefined
+        ? {
+            question: stringArg(args, 'question'),
+            ...(options === undefined ? {} : { options: strings(options, 'options') }),
+            ...(freeText === undefined ? {} : { freeText: flag(freeText, 'free_text') }),
+          }
+        : {
+            questions: questions.map((each: unknown, at) => {
+              if (each === null || typeof each !== 'object') throw new BoardError(`question ${at + 1} must be { question, options?, free_text? }`);
+              const q = each as Record<string, unknown>;
+              return {
+                question: stringArg(q, 'question'),
+                ...(q.options === undefined ? {} : { options: strings(q.options, `question ${at + 1}'s options`) }),
+                ...(q.free_text === undefined ? {} : { freeText: flag(q.free_text, `question ${at + 1}'s free_text`) }),
+              };
+            }),
+          };
+    if (questions !== undefined && (args.question !== undefined || options !== undefined || freeText !== undefined)) {
+      throw new BoardError('give question (with options and free_text) or questions (each with its own), not both');
     }
-    if (freeText !== undefined && typeof freeText !== 'boolean') throw new BoardError('free_text must be true or false');
-    if (onBoard !== undefined && typeof onBoard !== 'boolean') throw new BoardError('on_board must be true or false');
-    return (
-      await askUser(session, {
-        question: stringArg(args, 'question'),
-        ...(options === undefined ? {} : { options: options as string[] }),
-        ...(freeText === undefined ? {} : { freeText }),
-        ...(onBoard === undefined ? {} : { onBoard }),
-        ...timeoutArg(args),
-      })
-    ).text;
+    return (await askUser(session, { ...asked, ...(onBoard === undefined ? {} : { onBoard: onBoard as boolean }), ...timeoutArg(args) })).text;
   },
   present_plan: async (session, args, cwd) => {
     const source = { markdown: stringArg(args, 'markdown', true), html: stringArg(args, 'html', true), path: stringArg(args, 'path', true) };
@@ -1158,6 +1654,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
       { type: 'text', text: caption },
     ];
   },
+  zone_layout: async (session, args) => (await setZoneLayout(session, stringArg(args, 'layout'), stringArg(args, 'zone', true))).text,
   map: async (session, args) => (await zoneMap(session, stringArg(args, 'zone', true), { boxes: args.boxes === true, sections: args.sections === true, face: 'mcp' })).text,
   add_note: async (session, args) =>
     (
@@ -1201,7 +1698,51 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
       })
     ).text,
   list_schedules: async (session) => (await listSchedules(session)).text,
+  steps_new: async (session, args) => (await newSteps(session, { title: stringArg(args, 'title', true), text: stringArg(args, 'steps') })).text,
+  steps_read: async (session, args) => {
+    const card = stringArg(args, 'card', true);
+    if (args.mine !== undefined && typeof args.mine !== 'boolean') throw new BoardError('mine must be true or false');
+    if (card === undefined) return (await listSteps(session, { mine: args.mine === true })).text;
+    if (args.mine !== undefined) throw new BoardError('mine is for listing: leave out card');
+    return (await readStepsCard(session, card)).text;
+  },
+  steps_update: async (session, args) => (await updateSteps(session, stringArg(args, 'card'), stepsUpdateArg(args))).text,
+  memory_new: async (session, args) => (await newMemory(session, stringArg(args, 'title'))).text,
+  memory_read: async (session, args) => {
+    const memory = stringArg(args, 'memory', true);
+    const entry = stringArg(args, 'entry', true);
+    const search = stringArg(args, 'search', true);
+    if (args.history !== undefined && typeof args.history !== 'boolean') throw new BoardError('history must be true or false');
+    if (memory === undefined) {
+      if (entry !== undefined || search !== undefined || args.history !== undefined) throw new BoardError('give the memory');
+      return (await listMemories(session)).text;
+    }
+    if (args.history === true) {
+      if (entry === undefined) throw new BoardError('history needs entry');
+      return (await memoryHistory(session, memory, entry)).text;
+    }
+    return (await readMemory(session, memory, { ...(entry === undefined ? {} : { entry }), ...(search === undefined ? {} : { search }) })).text;
+  },
+  memory_update: async (session, args, cwd) => (await updateMemory(session, stringArg(args, 'memory'), memoryUpdateArg(args), cwd)).text,
+  queue_new: async (session, args) => {
+    if (args.for_user !== undefined && typeof args.for_user !== 'boolean') throw new BoardError('for_user must be true or false');
+    return (await newQueue(session, stringArg(args, 'title'), args.for_user === true)).text;
+  },
+  queue_read: async (session, args) => {
+    const queue = stringArg(args, 'queue', true);
+    const job = stringArg(args, 'job', true);
+    if (queue === undefined) {
+      if (job !== undefined) throw new BoardError('give the queue');
+      return (await listQueues(session)).text;
+    }
+    return job === undefined ? (await readQueue(session, queue)).text : (await queueHistory(session, queue, job)).text;
+  },
+  queue_update: async (session, args) => (await updateQueue(session, stringArg(args, 'queue'), queueUpdateArg(args))).text,
   remove_schedule: async (session, args) => (await removeSchedule(session, stringArg(args, 'schedule'))).text,
+  prefabs: async (session, args) => {
+    const name = stringArg(args, 'name', true);
+    return (name === undefined ? await prefabsView(session) : await prefabView(session, name)).text;
+  },
   roles: async (session) => (await defaultRolesView(session)).text,
   set_role: async (session, args) =>
     (await setDefaultRole(session, stringArg(args, 'name'), stringArg(args, 'template'), stringArg(args, 'zone', true))).text,

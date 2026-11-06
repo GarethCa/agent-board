@@ -1938,6 +1938,7 @@ describe('the needs-you inbox', () => {
         heldUntil: expect.any(String),
         asksInTerminal: true,
         sessionGrant: null,
+        questions: null,
       },
     ]);
     // Claude asks in its terminal too while the hook is held, and says so with its permission_prompt notification:
@@ -2024,6 +2025,31 @@ describe('the needs-you inbox', () => {
     await expect(
       client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: prompt!.id, behavior: 'deny' }),
     ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+  });
+
+  it("lists Claude's question tool call as its questions, waiting for the user, never holds it, and clears it once answered in its terminal", async () => {
+    const { client, recorder } = await agentDaemon('ask-questions');
+    const zone = await addZone(client, tempRepo());
+    const agent = await spawnAttached(client, zone.id, 'Set up the build');
+
+    const asking = await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length > 0);
+    await recorder.waitForText(agent.sessionId, '3. Other');
+    const now = (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!;
+    expect(now.state).toBe('waiting');
+    expect(now.permissions).toEqual([
+      expect.objectContaining({ toolName: 'AskUserQuestion', heldUntil: null, sessionGrant: null, questions: [expect.objectContaining({ question: 'Which cache should the build use?', header: 'Cache' })] }),
+    ]);
+    // Only its own dialog answers it: an allow from the board would answer none of its questions.
+    await expect(
+      client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow' }),
+    ).rejects.toMatchObject({ code: AGENT_ERROR.permissionGone });
+    // Nor does a message typed at it: its keys would pick an answer in the dialog.
+    await expect(client.call('agent.answer', { sessionId: agent.sessionId, text: 'Redis' })).rejects.toMatchObject({ code: RPC_ERROR.invalidParams });
+
+    const typed = recorder.events.length;
+    await client.call('session.write', { sessionId: agent.sessionId, data: '2\r' });
+    await recorder.waitForText(agent.sessionId, 'Going with In memory.');
+    await untilAgent(recorder, agent.sessionId, (a) => a.permissions.length === 0 && a.state !== 'waiting', typed);
   });
 
   describe('with two subagents asking at once', () => {
@@ -2327,7 +2353,7 @@ describe('long-lived agents', () => {
     expect(await commandLine(client, agent.sessionId)).toContain('--dangerously-bypass-hook-trust');
   });
 
-  it('relaunches its agent after a daemon restart', async () => {
+  it('shows its agent stopped by restart after a daemon restart, to resume, and relaunches it if it is still stopped when it fires', async () => {
     const dataDir = tempDataDir();
     const first = await agentDaemon('output', { dataDir });
     const zone = await addZone(first.client, tempRepo());
@@ -2338,7 +2364,7 @@ describe('long-lived agents', () => {
     const clock = createFakeClock(start);
     const second = await agentDaemon('output', { dataDir, clock });
     expect(await second.client.call('agent.list')).toEqual([
-      expect.objectContaining({ state: 'failed', schedule: expect.objectContaining({ nextRunAt: nineOClock.toISOString() }) }),
+      expect.objectContaining({ state: 'stopped-by-restart', schedule: expect.objectContaining({ nextRunAt: nineOClock.toISOString() }) }),
     ]);
     clock.advanceTo(nineOClock);
     await second.recorder.waitFor(isRunPrompt('Sweep'));
@@ -2583,6 +2609,25 @@ describe('Codex agents', () => {
     );
     const updates = recorder.events.filter((e): e is AgentUpdatedEvent => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId);
     expect(updates.filter((e) => e.agent.flag !== null || e.agent.untypedPrompt !== null)).toEqual([]);
+  });
+
+  it('raises no flag for a Codex agent with no task that the user types into by hand before its composer settles', async () => {
+    const { client, recorder } = await agentDaemon('output', { startScreen: 'folder-trust' });
+    const zone = await addZone(client, tempRepo());
+    const agent = await client.call('agent.spawn', { zoneId: zone.id, harness: 'codex', ...SIZE });
+    await client.call('session.attach', { sessionId: agent.sessionId });
+    await recorder.waitForText(agent.sessionId, 'enter continue');
+
+    // The user answers its trust screen and starts typing at once: its composer comes up holding their draft, and they send it.
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\rSay hi' });
+    await recorder.waitForText(agent.sessionId, 'default · ');
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await client.call('session.write', { sessionId: agent.sessionId, data: '\r' });
+    await recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const updates = recorder.events.filter((e): e is AgentUpdatedEvent => isAgentUpdate(e) && e.agent.sessionId === agent.sessionId);
+    expect(updates.filter((e) => e.agent.flag !== null)).toEqual([]);
+    expect((await client.call('agent.list'))[0]).toMatchObject({ queuedUntilUp: 0, flag: null });
   });
 
   it('holds its PermissionRequest for the inbox, and its forwarder carries the decision back to Codex', async () => {

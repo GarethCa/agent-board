@@ -1,19 +1,18 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { shortIssueId, type Agent, type PullRequest, type SplitDirection } from '@agent-board/daemon/protocol';
 import { HUMAN_STATUS_LABELS, humanStatus } from '@agent-board/daemon/human-status';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { Bot, ChevronDown, ChevronRight, ClipboardList, Clock, FileText, Folder, FolderOpen, GitBranch, GitPullRequest, Globe, ListTodo, Pin, Sparkles, StickyNote, Workflow } from 'lucide-react';
+import { Bot, ClipboardList, Clock, FileText, Folder, FolderOpen, GitBranch, GitPullRequest, Globe, ListTodo, Pin, Sparkles, StickyNote, Workflow } from 'lucide-react';
 import { agentSetupLine, branchLine } from '../board/AgentSetup';
 import { clockBadge } from '../board/schedule';
 import { useNow } from '../inbox/use-now';
 import { useNeedsYouShows } from '../needs-you-setting';
-import { storedValue, type StoredValue } from '../stored-value';
 import { useAction } from '../use-action';
 import { useTechnicalDetails } from '../technical';
-import { shortWhen } from '../when';
 import { errorMessage } from '../../../shared/errors';
 import { useDetailsWidth } from './DetailsHandle';
-import { moreDetailsCounts, moreDetailsLabel, pullRequestRows, startedBy, statusLine } from './inspector';
+import { pullRequestRows } from './inspector';
+import { AgentShelves } from './AgentShelves';
 import { insideWorktree, tildify, useLiveFolder } from './live-folder';
 import { crewSection, docSection, documentSection, pinSection, subagentSection, type PinRow } from './sidebar-records';
 import { docName, docSurfaceOf, documentSurfaceOf, planSurfaceOf } from './tabs';
@@ -41,56 +40,83 @@ export interface SimplifiedInspectorProps {
   controls?: { live: boolean; onSplit?(direction: SplitDirection): void };
 }
 
-/** Whether "More details" is open, one choice for every inspector. */
-const moreOpen = storedValue('agent-board.inspector-more');
-/** Whether "Technical details" is open, one choice for every inspector. */
-const technicalOpen = storedValue('agent-board.inspector-technical');
-
 /**
- * An agent's inspector, at its window's leading edge (the left): the Simplified design's sidebar, and
- * Classic's when its Agent sidebar setting is Simple. The work comes first: a line with what the header's status leaves
- * out, then its task when linked and its pull requests. Then two folds, closed and remembered: Technical details
- * (branch, folder, AI and model), drawn only while technical details show, and More details, naming what it holds (its
- * crew, hand-off docs, documents, pins, subagents and schedule, and under Classic its window's controls). A fold with
- * nothing in it doesn't show. Classic's Full sidebar is its details strip (SessionDetails.tsx).
+ * An agent's sidebar, at its window's leading edge (the left): the Simplified design's, and Classic's when its Agent
+ * sidebar setting is Simple. Its shelves (AgentShelves.tsx) open on the agent's own page, the board's Now until it writes
+ * one. Made, Crew and Setup hold, for now, the rows this sidebar had (`inspectorShelves`). Classic's Full sidebar is its
+ * details strip (SessionDetails.tsx).
  */
-export function SimplifiedInspector({ agent, onProblem, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb, controls }: SimplifiedInspectorProps) {
+export function SimplifiedInspector(props: SimplifiedInspectorProps) {
+  const { agent, onProblem, onOpenLink, onOpenPullRequest, onOpenSurface, onOpenWeb } = props;
   const width = useDetailsWidth();
   const shows = useNeedsYouShows();
   const technical = useTechnicalDetails();
   const { agents = [] } = useLiveAgents();
-  const reading = humanStatus(agent, shows);
-  const pulls = pullRequestRows(agent);
-  const counts = moreDetailsCounts(agent, agents);
-  const more = moreDetailsLabel(counts);
+  const revealFile = (path: string) => void window.agentBoard.sessions.revealFile(path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`));
   return (
-    <aside className="inspector" aria-label="Inspector" data-testid="inspector" style={{ width }}>
-      <p className="inspector-status-line" data-testid="inspector-status-line">
-        {statusLine(reading.detail, startedBy(agent, agents), shortWhen(agent.createdAt))}
-      </p>
-      <InspectorGroup label="Work">
-        {agent.issue !== null && (
-          <InspectorRow icon={<ListTodo />} name="Task" end={`${shortIssueId(agent.issue)} ↗`} title={`${agent.issue.title}: opens in your browser`} onClick={() => onOpenLink(agent.issue!.url)} />
-        )}
-        {pulls.length === 0 ? (
-          <InspectorRow icon={<GitPullRequest />} name="Pull request" end="not yet" />
-        ) : (
-          pulls.map((row) => <InspectorRow key={row.key} icon={<GitPullRequest />} name={row.name} end={row.checks} title="Open it in a PR tab" onClick={() => onOpenPullRequest(row)} />)
-        )}
-      </InspectorGroup>
-      {technical && (
-        <InspectorFold label="Technical details" stored={technicalOpen}>
-          <TechnicalDetails agent={agent} onProblem={onProblem} />
-        </InspectorFold>
-      )}
-      {(more !== undefined || controls !== undefined) && (
-        <InspectorFold label="More details" stored={moreOpen} count={more}>
-          <MoreDetails agent={agent} agents={agents} onProblem={onProblem} onOpenSurface={onOpenSurface} onOpenWeb={onOpenWeb} />
-          {controls && <WindowControls agent={agent} live={controls.live} onSplit={controls.onSplit} onProblem={onProblem} />}
-        </InspectorFold>
-      )}
-    </aside>
+    <AgentShelves
+      agent={agent}
+      agents={agents}
+      shows={shows}
+      width={width}
+      actions={{ openLink: onOpenLink, openPullRequest: onOpenPullRequest, openSurface: onOpenSurface, openWeb: onOpenWeb, revealFile }}
+      shelves={inspectorShelves({ ...props, agents, technical })}
+    />
   );
+}
+
+/**
+ * What Made, Crew and Setup hold for now: the rows this sidebar had. Made its pull requests, hand-off docs, documents
+ * and pins; Crew the agents it started and its subagents; Setup its task, where it works (its branch, folder and AI,
+ * shown only while technical details show), its schedule and, under Classic, its window's controls. Setup is undefined,
+ * so it has no tab, when it has none of these.
+ */
+export function inspectorShelves({
+  agent,
+  agents,
+  technical,
+  controls,
+  onProblem,
+  onOpenLink,
+  onOpenPullRequest,
+  onOpenSurface,
+  onOpenWeb,
+}: SimplifiedInspectorProps & { agents: readonly Agent[]; technical: boolean }): { made: ReactNode; crew: ReactNode; setup?: ReactNode } {
+  const pulls = pullRequestRows(agent);
+  const setup = agent.issue !== null || technical || agent.schedule !== null || controls !== undefined;
+  return {
+    made: (
+      <InspectorGroup label="Made">
+        {pulls.map((row) => (
+          <InspectorRow key={row.key} icon={<GitPullRequest />} name={row.name} end={row.checks} title="Open it in a PR tab" onClick={() => onOpenPullRequest(row)} />
+        ))}
+        <MadeRows agent={agent} onProblem={onProblem} onOpenSurface={onOpenSurface} onOpenWeb={onOpenWeb} />
+      </InspectorGroup>
+    ),
+    crew: (
+      <InspectorGroup label="Crew">
+        <CrewRows agent={agent} agents={agents} onOpenSurface={onOpenSurface} />
+      </InspectorGroup>
+    ),
+    setup: setup ? (
+      <>
+        {agent.issue !== null && (
+          <InspectorGroup label="Task">
+            <InspectorRow icon={<ListTodo />} name="Task" end={`${shortIssueId(agent.issue)} ↗`} title={`${agent.issue.title}: opens in your browser`} onClick={() => onOpenLink(agent.issue!.url)} />
+          </InspectorGroup>
+        )}
+        {technical && (
+          // Open, under a plain label: the shelf is what was picked to see it, so no fold hides it again.
+          <section className="inspector-where" aria-label="Where it works" data-testid="setup-where">
+            <p className="page-label">Where it works</p>
+            <TechnicalDetails agent={agent} onProblem={onProblem} />
+          </section>
+        )}
+        <ScheduleRow agent={agent} />
+        {controls && <WindowControls agent={agent} live={controls.live} onSplit={controls.onSplit} onProblem={onProblem} />}
+      </>
+    ) : undefined,
+  };
 }
 
 /** The work's rows, first and with no heading: its region keeps its name for a screen reader. */
@@ -98,21 +124,6 @@ function InspectorGroup({ label, children }: { label: string; children: ReactNod
   return (
     <section className="inspector-group" aria-label={label}>
       <ul className="inspector-rows">{children}</ul>
-    </section>
-  );
-}
-
-/** A fold of the inspector, open or closed as it last was in any window; closed, it names what it holds when it says. */
-function InspectorFold({ label, stored, count, children }: { label: string; stored: StoredValue; count?: string; children: ReactNode }) {
-  const open = useSyncExternalStore(stored.subscribe, () => stored.get() === 'open');
-  return (
-    <section className="inspector-more" aria-label={label} data-open={open}>
-      <button type="button" className="inspector-more-head" aria-expanded={open} onClick={() => stored.set(open ? undefined : 'open')}>
-        {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
-        <b>{open || count === undefined ? label : `${label}:`}</b>
-        {!open && count !== undefined && <span data-testid="inspector-more-count"> {count}</span>}
-      </button>
-      {open && children}
     </section>
   );
 }
@@ -163,7 +174,10 @@ function InspectorRow({
   );
 }
 
-/** Its branch, its folder now (copied, or revealed in Finder; said when it has left its worktree) and its AI, model and role: only while technical details show. */
+/**
+ * Its branch, its folder now (copied, or revealed in Finder; said when it has left its worktree) and its AI, model,
+ * reasoning effort and role: only while technical details show.
+ */
 function TechnicalDetails({ agent, onProblem }: { agent: Agent; onProblem(problem: string | undefined): void }) {
   const folder = useLiveFolder(agent.shellSessionId ?? agent.sessionId) ?? agent.cwd;
   const home = useHomeDir();
@@ -188,29 +202,21 @@ function TechnicalDetails({ agent, onProblem }: { agent: Agent; onProblem(proble
   );
 }
 
-/** What the fold holds, each a short row that opens its item as the details strip's did. */
-function MoreDetails({
+/** Made's rows, as the inspector had them: its hand-off docs, documents and pins, each opening as the details strip's do. */
+function MadeRows({
   agent,
-  agents,
   onProblem,
   onOpenSurface,
   onOpenWeb,
 }: {
   agent: Agent;
-  agents: readonly Agent[];
   onProblem(problem: string | undefined): void;
   onOpenSurface: ((surface: Surface) => void) | undefined;
   onOpenWeb(url: string): void;
 }) {
-  const shows = useNeedsYouShows();
-  const { schedule } = agent;
-  const now = useNow(schedule !== null);
-  const badge = schedule && clockBadge(schedule, agent.endedAt !== null, new Date(now));
-  const crew = crewSection(agent, agents).rows;
   const docs = docSection(agent).rows;
   const documents = documentSection(agent);
   const pins = pinSection(agent).rows;
-  const subagents = subagentSection(agent).rows;
   const openPin = ({ target, opens }: PinRow): (() => void) | undefined => {
     if (target.kind === 'link') return () => onOpenWeb(target.url);
     if (target.kind !== 'file') return undefined;
@@ -218,22 +224,7 @@ function MoreDetails({
     return () => void window.agentBoard.sessions.revealFile(target.path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`));
   };
   return (
-    <ul className="inspector-rows">
-      {crew.map(({ key, item }) => {
-        const member = agents.find((each) => each.sessionId === item.sessionId);
-        const status = member && humanStatus(member, shows).status;
-        return (
-          <InspectorRow
-            key={key}
-            icon={<Bot />}
-            testId="inspector-crew"
-            name={item.name}
-            end={status && HUMAN_STATUS_LABELS[status]}
-            title="Show it in a tab here"
-            onClick={onOpenSurface && (() => onOpenSurface({ kind: 'session', target: { kind: 'agent', id: item.sessionId } }))}
-          />
-        );
-      })}
+    <>
       {docs.map(({ key, item }) => (
         <InspectorRow key={key} icon={<FileText />} testId="inspector-doc" name={docName(item.path)} end="hand-off" title={`${item.path}: opens in a Doc tab`} onClick={onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, item.path)))} />
       ))}
@@ -258,10 +249,48 @@ function MoreDetails({
           onClick={openPin(item)}
         />
       ))}
+    </>
+  );
+}
+
+/** Crew's rows, as the inspector had them: the agents it started, each opening in a tab here, and its subagents. */
+function CrewRows({ agent, agents, onOpenSurface }: { agent: Agent; agents: readonly Agent[]; onOpenSurface: ((surface: Surface) => void) | undefined }) {
+  const shows = useNeedsYouShows();
+  const crew = crewSection(agent, agents).rows;
+  const subagents = subagentSection(agent).rows;
+  return (
+    <>
+      {crew.map(({ key, item }) => {
+        const member = agents.find((each) => each.sessionId === item.sessionId);
+        const status = member && humanStatus(member, shows).status;
+        return (
+          <InspectorRow
+            key={key}
+            icon={<Bot />}
+            testId="inspector-crew"
+            name={item.name}
+            end={status && HUMAN_STATUS_LABELS[status]}
+            title="Show it in a tab here"
+            onClick={onOpenSurface && (() => onOpenSurface({ kind: 'session', target: { kind: 'agent', id: item.sessionId } }))}
+          />
+        );
+      })}
       {subagents.map(({ key, item }) => (
         <InspectorRow key={key} icon={<Workflow />} name={item.type} title={item.result ?? undefined} />
       ))}
-      {badge && <InspectorRow icon={<Clock />} name="Schedule" end={badge.label} title={badge.title} />}
+    </>
+  );
+}
+
+/** Its schedule's row, when it has one: when it next runs. */
+function ScheduleRow({ agent }: { agent: Agent }) {
+  const { schedule } = agent;
+  const now = useNow(schedule !== null);
+  const badge = schedule && clockBadge(schedule, agent.endedAt !== null, new Date(now));
+  if (!badge) return null;
+  return (
+    <ul className="inspector-rows">
+      <InspectorRow icon={<Clock />} name="Schedule" end={badge.label} title={badge.title} />
     </ul>
   );
 }

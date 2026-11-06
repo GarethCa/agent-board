@@ -2,7 +2,7 @@
 //, in the flow look the "issue brief" edge has.
 import { createContext } from 'react';
 import type { Edge } from '@xyflow/react';
-import { DEFAULT_PAYLOAD_PATHS, type FlowCondition, type FlowEdge, type FlowEdgeEvent, type UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
+import { DEFAULT_PAYLOAD_PATHS, type FlowCondition, type FlowEdge, type FlowEdgeEvent, type FlowEdgeSent, type UpdateFlowEdgeParams } from '@agent-board/daemon/protocol';
 import type { FlowEdgeChange } from '../../../preload/api';
 import type { Rect } from '../geometry';
 import { railsOf, railToken, tokenSlots, type Rail, type RailToken, type TokenSlot } from './rails';
@@ -82,6 +82,18 @@ export function flowEdges(
       },
     };
   });
+}
+
+/**
+ * How the user's Send went, from the edge the daemon answers with: delivered, queued until its `to` agent's turn ends,
+ * or not sent, and why. Never silent, so a Send that did nothing says so.
+ */
+export function sendOutcome(edge: Pick<FlowEdgeSent, 'lastDelivery' | 'queued' | 'unsent'>): { sent: boolean; message: string } {
+  if (edge.unsent) return { sent: false, message: 'it was typed at the agent’s prompt but no turn started; send it from the agent’s tile' };
+  if (edge.queued !== null) return { sent: true, message: 'Queued: it goes as soon as the agent’s turn ends.' };
+  const last = edge.lastDelivery;
+  if (last?.delivered === true) return { sent: true, message: 'Sent.' };
+  return { sent: false, message: last?.reason ?? 'nothing was delivered' };
 }
 
 /**

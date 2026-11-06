@@ -2,6 +2,7 @@
 // handler it calls, with a stable id. Any menu of one of them (its tile's or tab's ⋯, a right-click, the menu bar) takes
 // its rows from here, so a row reads and does the same wherever it shows. Pure, so it is unit-tested.
 import {
+  Brain,
   Check,
   CircleDot,
   Bell,
@@ -19,6 +20,7 @@ import {
   FoldVertical,
   GitBranch,
   Hash,
+  LayoutDashboard,
   LayoutGrid,
   Link2,
   ListPlus,
@@ -39,6 +41,7 @@ import {
   Trash2,
   Unlink,
   X,
+  Users,
 } from 'lucide-react';
 import {
   ARRANGE_SPACINGS,
@@ -46,7 +49,10 @@ import {
   ZONE_COLOR_NAMES,
   ZONE_COLORS,
   ZONE_FILL_OPACITY,
+  HARNESS_EFFORTS,
+  ZONE_LAYOUT_MODES,
   type Agent,
+  type Effort,
   type ArrangeSpacing,
   type ExternalSession,
   type GateRun,
@@ -54,10 +60,12 @@ import {
   type Shell,
   type Zone,
   type ZoneBinding,
+  type ZoneLayoutMode,
 } from '@agent-board/daemon/protocol';
 import { isClosed, SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { startBlocked } from '@agent-board/daemon/review-doc';
 import type { MenuAction, MenuHeading, SliderRow, Submenu, SwatchRow } from '../ui/Menu';
+import { EFFORT_HINTS, EFFORT_LABELS } from './AgentSetup';
 import { gated } from '../gate/gate-view';
 import { runGateShortcut } from '../session/window-keys';
 import { keyText } from '../keys/registry';
@@ -86,9 +94,9 @@ export function menuIds(entries: readonly ModelEntry[]): string[] {
 
 /** The ⋯ menu's way to do, once, what a click on the tile doesn't: expand it in place, or open its window. */
 function otherOpen(clickOpens: ClickOpens, expand: () => void, open: () => void): ModelEntry {
-  return clickOpens === 'window'
-    ? { id: 'expand', label: 'Expand in place', icon: <Expand />, onSelect: expand }
-    : { id: 'open-window', label: 'Open window', icon: <Maximize2 />, onSelect: open };
+  return clickOpens === 'expand'
+    ? { id: 'open-window', label: 'Open window', icon: <Maximize2 />, onSelect: open }
+    : { id: 'expand', label: 'Expand in place', icon: <Expand />, onSelect: expand };
 }
 
 type AgentMenuActions = Pick<
@@ -104,6 +112,7 @@ type AgentMenuActions = Pick<
   | 'scheduleAgent'
   | 'linkIssue'
   | 'setMuted'
+  | 'setEffort'
   | 'openReview'
   | 'startReview'
   | 'openGate'
@@ -170,6 +179,7 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
       icon: agent.muted ? <Bell /> : <BellOff />,
       onSelect: () => actions.setMuted(agent.sessionId, !agent.muted),
     },
+    reasoningEntry(agent, actions),
     'separator',
     ...reviewEntries(input),
     ...(gated(agent)
@@ -188,6 +198,34 @@ export function agentMenu(input: AgentMenuInput): ModelEntry[] {
     'separator',
     { id: 'delete', label: 'Delete agent', icon: <Trash2 />, danger: true, onSelect: () => actions.deleteAgent(agent.sessionId) },
   ];
+}
+
+/**
+ * An agent's Reasoning ▸: Default (its harness's own) and the levels its harness takes, its own ticked, the outer ones
+ * saying what they cost. A live Claude agent has a level typed at its prompt between turns; anything else, and Default
+ * (no harness can be told it live), applies when the agent restarts, which the submenu says.
+ */
+function reasoningEntry(agent: Agent, actions: Pick<AgentMenuActions, 'setEffort'>): ModelEntry {
+  const live = agent.endedAt === null;
+  const typed = live && agent.harness === 'claude';
+  const row = (id: string, label: string, effort: Effort | null, hint?: string): ModelEntry => ({
+    id,
+    label,
+    icon: agent.effort === effort ? <Check /> : <span className="agent-setup-blank" aria-hidden />,
+    ...(hint === undefined ? {} : { hint }),
+    onSelect: () => actions.setEffort(agent.sessionId, effort),
+  });
+  return {
+    id: 'reasoning',
+    label: 'Reasoning',
+    icon: <Brain />,
+    detail: agent.effort === null ? 'Default' : EFFORT_LABELS[agent.effort],
+    entries: [
+      { heading: typed ? 'Typed at its prompt between turns' : 'Applies when the agent restarts' },
+      row('default', 'Default', null, typed ? 'Applies when the agent restarts' : undefined),
+      ...HARNESS_EFFORTS[agent.harness].map((effort) => row(effort, EFFORT_LABELS[effort], effort, EFFORT_HINTS[effort])),
+    ],
+  };
 }
 
 /** What a shell's menu is drawn from. */
@@ -240,6 +278,8 @@ export interface ZoneBindingActions {
   setSpacing(zone: Zone, spacing: ArrangeSpacing): void;
   /** Opens Settings, where the spacing new zones take is. */
   openSettings(): void;
+  /** Draws the zone's work as `mode` lays it out: free, on shelves, or in clusters. Moves no tile's saved place. */
+  setLayoutMode(zone: Zone, mode: ZoneLayoutMode): void;
   /** Renames it; rejects if the daemon refuses. */
   rename(zone: Zone, name: string): Promise<unknown>;
   recolor(zone: Zone, color: string): void;
@@ -261,6 +301,8 @@ export interface ZoneBindingActions {
   editGateCommand(zone: Zone): void;
   /** Opens the zone's role templates. */
   editRoleTemplates(zone: Zone): void;
+  /** Opens the app's crew prefabs, one library for every board. */
+  editCrewPrefabs(): void;
 }
 
 /** What a zone's menus do to it: the handlers its tab is given, but for renaming, which its menu starts in place. */
@@ -278,12 +320,42 @@ function spacingEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setSpacing'>
 }
 
 /**
- * The tab's Tidy ▾ menu: Tidy now, the zone's spacing, and where the spacing for new zones is set, named as it is
+ * A Tidy row's state in a zone on shelves or in clusters: disabled, saying why, since the zone lays itself out and a tidy
+ * would move the places its tiles are not drawn at. Nothing for a free zone.
+ */
+export function tidyBlocked(zone: Pick<Zone, 'layoutMode'>): { disabled: true; hint: string } | Record<string, never> {
+  if (zone.layoutMode === 'shelves') return { disabled: true, hint: 'Not on status shelves: it would move the tiles folded into stacks' };
+  if (zone.layoutMode === 'clusters') return { disabled: true, hint: 'Not in clusters: the zone lays its tiles out itself' };
+  return {};
+}
+
+/** Each zone layout's name and what it draws, as the zone's Layout menu offers them. */
+const LAYOUT_MODE_LABELS: Record<ZoneLayoutMode, { label: string; hint: string }> = {
+  free: { label: 'Free', hint: 'Each tile where you put it' },
+  shelves: { label: 'Status shelves', hint: 'Shelves by status, a stack per ticket' },
+  clusters: { label: 'Clusters', hint: "Each ticket's tiles together, what needs you first" },
+};
+
+function layoutModeEntries(zone: Zone, actions: Pick<ZoneMenuActions, 'setLayoutMode'>): ModelEntry[] {
+  return ZONE_LAYOUT_MODES.map((mode) => ({
+    id: `layout-${mode}`,
+    label: LAYOUT_MODE_LABELS[mode].label,
+    hint: LAYOUT_MODE_LABELS[mode].hint,
+    checked: zone.layoutMode === mode,
+    onSelect: () => actions.setLayoutMode(zone, mode),
+  }));
+}
+
+/**
+ * The tab's Tidy ▾ menu: Tidy now, the zone's layout and spacing, and where the spacing for new zones is set, named as it is
  * (`newZones`, read as the menu opens).
  */
-export function tidyMenu(zone: Zone, newZones: ArrangeSpacing | undefined, actions: Pick<ZoneMenuActions, 'tidy' | 'setSpacing' | 'openSettings'>): ModelEntry[] {
+export function tidyMenu(zone: Zone, newZones: ArrangeSpacing | undefined, actions: Pick<ZoneMenuActions, 'tidy' | 'setSpacing' | 'openSettings' | 'setLayoutMode'>): ModelEntry[] {
   return [
-    { id: 'tidy', label: 'Tidy now', icon: <LayoutGrid />, onSelect: () => actions.tidy(zone) },
+    { id: 'tidy', label: 'Tidy now', icon: <LayoutGrid />, ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
+    'separator',
+    { heading: 'Layout' },
+    ...layoutModeEntries(zone, actions),
     'separator',
     { heading: 'Spacing in this zone' },
     ...spacingEntries(zone, actions),
@@ -346,7 +418,7 @@ export function zoneTabEntries(zone: Zone, noAgents: string | undefined, actions
     agent: { id: 'tab-new-agent', label: 'New agent', icon: <Plus />, disabled: noAgents !== undefined, hint: noAgents, onSelect: () => actions.newAgent(zone) },
     shell: { id: 'tab-new-shell', label: 'New shell', icon: <Plus />, onSelect: () => actions.newShell(zone) },
     // The zone's own ⋯ has Tidy already; while it clones, ⋯ holds only what folded.
-    tidy: clone === null ? undefined : { id: 'tab-tidy', label: 'Tidy', icon: <LayoutGrid />, onSelect: () => actions.tidy(zone) },
+    tidy: clone === null ? undefined : { id: 'tab-tidy', label: 'Tidy', icon: <LayoutGrid />, ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
   };
 }
 
@@ -371,8 +443,14 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
   const unbound = zone.repoRoot === null;
   return [
     ...(folded.length > 0 ? [...folded, 'separator' as const] : []),
-    { id: 'tidy', label: 'Tidy', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', onSelect: () => actions.tidy(zone) },
-    { id: 'spacing', label: 'Spacing', icon: <Rows3 />, entries: spacingEntries(zone, actions) },
+    { id: 'tidy', label: 'Tidy', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
+    // One row for both, so ⋯ grows no taller for the layout.
+    {
+      id: 'spacing',
+      label: 'Layout and spacing',
+      icon: <Rows3 />,
+      entries: [{ heading: 'Layout' }, ...layoutModeEntries(zone, actions), 'separator', { heading: 'Spacing' }, ...spacingEntries(zone, actions)],
+    },
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
     {
       id: 'colour',
@@ -451,6 +529,13 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       hint: 'What agents started here in a role begin with',
       onSelect: () => actions.editRoleTemplates(zone),
     },
+    {
+      id: 'crew-prefabs',
+      label: 'Crew prefabs…',
+      icon: <Users />,
+      hint: 'Saved crews, for every board',
+      onSelect: () => actions.editCrewPrefabs(),
+    },
     'separator',
     {
       id: 'delete',
@@ -500,7 +585,7 @@ const newShellRow = ({ zone, actions }: ProjectMenuInput, label: string): ModelE
 
 const addIssueRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'add-issue', label: 'Add issue…', icon: <ListPlus />, detail: zone.tracker?.scope, onSelect: () => actions.addIssue(zone) });
 
-const tidyUpRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'tidy', label: 'Tidy up', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', onSelect: () => actions.tidy(zone) });
+const tidyUpRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({ id: 'tidy', label: 'Tidy up', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) });
 
 const colourRow = ({ zone, actions }: ProjectMenuInput): ModelEntry => ({
   id: 'colour',
@@ -581,6 +666,7 @@ function agentSettingEntries({ zone, technical, actions }: ProjectMenuInput): Mo
       onSelect: () => actions.editGateCommand(zone),
     },
     { id: 'role-templates', label: 'Role templates…', icon: <FileText />, hint: 'What agents started here in a role begin with', onSelect: () => actions.editRoleTemplates(zone) },
+    { id: 'crew-prefabs', label: 'Crew prefabs…', icon: <Users />, hint: 'Saved crews, for every board', onSelect: () => actions.editCrewPrefabs() },
   ];
 }
 
@@ -629,6 +715,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
         { id: 'new-zone-spacing', label: 'Default for new projects…', icon: <Rows3 />, detail: newZones === undefined ? 'Settings' : `${SPACING_LABELS[newZones]} · Settings`, onSelect: actions.openSettings },
       ],
     },
+    { id: 'layout', label: 'Layout', icon: <LayoutDashboard />, entries: layoutModeEntries(zone, actions) },
     issues,
     folder,
     { id: 'agents', label: 'Agents in this project', icon: <Network />, entries: agentSettingEntries(input) },
