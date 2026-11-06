@@ -38,6 +38,7 @@ interface AgentFields {
   ownsWorktree?: boolean;
   spawnedBy?: string | null;
   bypass?: number;
+  hadTurn?: boolean;
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -170,8 +171,8 @@ function setup(
     );
     db.prepare(
       `INSERT INTO agents (session_id, name, description, branch, worktree, state, repo_root, codex_bypass_hook_trust,
-         notice, seen, harness_session_id, transcript_path, review_of, reviews_branch, reviews_head, owns_worktree, spawned_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         notice, seen, harness_session_id, transcript_path, review_of, reviews_branch, reviews_head, owns_worktree, spawned_by, had_turn)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       `agent ${id}`,
@@ -190,6 +191,7 @@ function setup(
       fields.reviews ? 'abc123' : null,
       fields.ownsWorktree === false ? 0 : 1,
       fields.spawnedBy ?? null,
+      fields.hadTurn ? 1 : 0,
     );
     return getRow(id)!;
   };
@@ -263,11 +265,38 @@ describe('relaunching an ended agent', () => {
     expect(lifecycle.fallbackShell('a')).toBeUndefined();
   });
 
-  it('starts a Claude agent that never had a turn fresh, on its task, and says so', () => {
+  it('starts a Claude agent that never had a turn fresh, on its task, saying nothing', () => {
     const { lifecycle, addAgent, launches, getRow } = setup();
     lifecycle.relaunch(addAgent('a', { description: 'the task' }), undefined, 'to restart it');
     expect(launches[0]).toMatchObject({ task: 'the task', resume: { codexSessionId: null, claudeConversation: false } });
+    expect(getRow('a')!.notice).toBeNull();
+  });
+
+  it('starts a Claude agent whose conversation is gone fresh on its task, and says so', () => {
+    const { lifecycle, addAgent, launches, getRow } = setup();
+    lifecycle.relaunch(addAgent('a', { description: 'the task', hadTurn: true }), undefined, 'to restart it');
+    expect(launches[0]).toMatchObject({ task: 'the task', resume: { claudeConversation: false } });
     expect(getRow('a')!.notice).toBe('No earlier conversation: started fresh');
+  });
+
+  it('says nothing when an agent given a new conversation is resumed again before its first turn', async () => {
+    const { lifecycle, addAgent, getRow } = setup();
+    addAgent('a', { hadTurn: true, state: 'done' });
+    await lifecycle.resume('a', 'a test', false, {});
+    expect(getRow('a')!.had_turn).toBe(0);
+    lifecycle.relaunch(getRow('a')!, undefined, 'to resume it after a restart');
+    expect(getRow('a')!.notice).toBeNull();
+  });
+
+  it('puts back that an agent had a turn when starting its new conversation fails', async () => {
+    const { lifecycle, addAgent, getRow } = setup({
+      launch: () => {
+        throw new Error('spawn failed');
+      },
+    });
+    addAgent('a', { hadTurn: true, state: 'done' });
+    await expect(lifecycle.resume('a', 'a test', false, {})).rejects.toThrow('spawn failed');
+    expect(getRow('a')!.had_turn).toBe(1);
   });
 
   it('starts one with no task and no conversation on no prompt at all', () => {
@@ -300,7 +329,7 @@ describe('relaunching an ended agent', () => {
       ['the task', { codexSessionId: null, claudeConversation: false }],
     ]);
     expect(getRow('a')!.notice).toBeNull();
-    expect(getRow('b')!.notice).toBe('No earlier conversation: started fresh');
+    expect(getRow('b')!.notice).toBeNull();
   });
 
   it("takes its repo zone's Codex setting, or with none the one it last started with, and keeps it", () => {
@@ -573,7 +602,7 @@ describe('resuming an agent', () => {
     await lifecycle.resume('a', 'a test', false);
     expect(launches[0]!.task).toBe(told ? CONTINUE_LINE : undefined);
     expect(launches[0]!.resume).toMatchObject({ claudeConversation: true });
-    expect(getRow('a')!.notice).toBe('Relaunched after a restart');
+    expect(getRow('a')!.notice).toBeNull();
   });
 
   it('never tells one the user stopped, or that exited on its own, to carry on', async () => {
@@ -636,7 +665,7 @@ describe('resuming an agent', () => {
 
   it('starts one with no conversation to carry on fresh on its task, not the continue line', async () => {
     const { lifecycle, addAgent, launches, getRow } = setup();
-    addAgent('a', { state: 'failed', stoppedByRestart: true, description: 'Run the tests' });
+    addAgent('a', { state: 'failed', stoppedByRestart: true, description: 'Run the tests', hadTurn: true });
     lifecycle.exited('a', true, 'running');
     await lifecycle.resume('a', 'a test', false);
     expect(launches[0]).toMatchObject({ task: 'Run the tests', resume: { claudeConversation: false } });

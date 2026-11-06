@@ -105,7 +105,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'opensOn', label: 'Agent windows open on', home: 'agents.chat', simplifiedOnly: true, also: 'chat terminal timeline view default open' },
   { id: 'conversationAs', label: 'Show the conversation as', home: 'agents.chat', simplifiedOnly: true, also: 'terminal style timeline rail tui transcript' },
   { id: 'chatStyle', label: 'Style', home: 'agents.chat', also: 'cards timeline rail status line conversation' },
-  { id: 'agentSidebar', label: 'Agent sidebar', home: 'agents.sidebar', classicOnly: true, also: 'details inspector strip panel simple full window' },
+  { id: 'agentSidebar', label: 'Agent sidebar', home: 'agents.sidebar', classicOnly: true, also: 'details shelves page made crew setup rail peek inspector strip panel simple full window' },
   { id: 'defaultEffort', label: 'Reasoning for new agents', home: 'agents.reasoning', also: 'effort thinking think harder default level' },
   { id: 'roleEfforts', label: 'Reasoning per role', home: 'agents.reasoning', also: 'effort thinking role level' },
   { id: 'compactWindow', label: "Compact agents' context at", home: 'agents.context', also: 'context window tokens' },

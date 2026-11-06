@@ -45,6 +45,7 @@ export function PopOutSpotlight({ target, onSwitched }: { target: WindowTarget; 
       onPick={onPick}
       canStartAgent={zones.some((zone) => zone.repoRoot !== null)}
       onNewAgent={(from, name) => void windows.requestBoard({ kind: 'newAgent', name, zoneId: zoneOf(from) })}
+      onCrew={(from, prefab) => void windows.requestBoard({ kind: 'crew', prefab, zoneId: zoneOf(from) })}
     />
   );
 }

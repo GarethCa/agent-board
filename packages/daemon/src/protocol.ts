@@ -3202,6 +3202,7 @@ export const ORCHESTRATOR_ACTIONS = [
   'spawn',
   'send',
   'interrupt',
+  'effort',
   'continue',
   'restart',
   'pause',
@@ -4642,6 +4643,11 @@ export interface DaemonMethods {
   'orchestrator.read': { params: { token?: string; sessionId: string; path?: string }; result: OrchestratorReadResult };
   /** Interrupts the agent's turn (`agent.interrupt`). */
   'orchestrator.interrupt': { params: { token?: string; sessionId: string }; result: Agent };
+  /**
+   * Sets the agent's reasoning effort (`agent.setEffort`, as the tile's Reasoning menu does), and resolves with when it
+   * takes it: now, once its turn ends, or when next started.
+   */
+  'orchestrator.setEffort': { params: { token?: string; sessionId: string; effort: Effort }; result: { agent: Agent; applies: EffortApplies } };
   /** Resumes a rate-limited agent's turn on usage credits (`agent.continueOnCredits`). */
   'orchestrator.continueOnCredits': { params: { token?: string; sessionId: string }; result: Agent };
   /**
@@ -4808,10 +4814,10 @@ export interface DaemonMethods {
    * `prompt`, in `zoneId` (the caller's zone without), as `orchestrator.spawn` starts an agent, scope and logs
    * included. A lead's first message lists its crew, for it to start. The members that start at the hand-off are
    * listed in `later`, and the crew (`crew`) starts them at each of its builder's hand-offs. A prefab with a lead needs
-   * two free levels of crew depth.
+   * two free levels of crew depth. `roundLimit` replaces the prefab's for this crew alone (the prompt box's Stop after).
    */
   'orchestrator.startPrefab': {
-    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string };
+    params: { token?: string; name: string; prompt?: string; zoneId?: string; repo?: string; issueId?: string; roundLimit?: number };
     result: PrefabStarted;
   };
   /** The running crews the caller reaches (by their builders), newest first; the one `crewId` names alone if given. */
@@ -5406,6 +5412,7 @@ export const ORCHESTRATOR_METHODS: ReadonlySet<DaemonMethod> = new Set<DaemonMet
   'orchestrator.wait',
   'orchestrator.read',
   'orchestrator.interrupt',
+  'orchestrator.setEffort',
   'orchestrator.continueOnCredits',
   'orchestrator.restart',
   'orchestrator.pause',

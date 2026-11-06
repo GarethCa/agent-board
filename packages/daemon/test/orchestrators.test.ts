@@ -694,6 +694,42 @@ describe('steering a turn', () => {
     expect((await connection.call('orchestrator.read', { token, sessionId: worker.sessionId })).text).toBe(`Done: ${sentBy(me, 'Do it faster')}.`);
   });
 
+  it('changes a crew agent’s reasoning effort between turns, and refuses one out of its scope', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent: me, token, connection } = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await connection.call('orchestrator.spawn', { token, name: 'slow', prompt: 'Work slowly' });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.state === 'running');
+
+    // Mid-turn it waits for the turn to end, as the tile's menu does.
+    const midTurn = await connection.call('orchestrator.setEffort', { token, sessionId: worker.sessionId, effort: 'low' });
+    expect(midTurn).toMatchObject({ applies: 'after-turn', agent: { effort: 'low', effortPending: 'after-turn' } });
+    await untilAgent(setup.recorder, worker.sessionId, (seen) => seen.state === 'idle' && seen.effortPending === null);
+    const idle = await connection.call('orchestrator.setEffort', { token, sessionId: worker.sessionId, effort: 'max' });
+    expect(idle).toMatchObject({ applies: 'now', agent: { effort: 'max' } });
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: worker.sessionId, effort: 'extreme' as never })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+
+    // Codex has no command for it: it takes the level when next started, and takes no max.
+    const codex = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, harness: 'codex', name: 'codex', ...SIZE });
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: codex.sessionId, effort: 'max' })).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+    });
+    expect(await connection.call('orchestrator.setEffort', { token, sessionId: codex.sessionId, effort: 'low' })).toMatchObject({
+      applies: 'restart',
+      agent: { effort: 'low', effortPending: 'restart' },
+    });
+
+    // Never itself, nor an agent out of its zone; the user sees it tried.
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: me.sessionId, effort: 'low' })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
+    const elsewhere = await setup.client.call('agent.spawn', { zoneId: setup.other.id, name: 'elsewhere', ...SIZE });
+    await expect(connection.call('orchestrator.setEffort', { token, sessionId: elsewhere.sessionId, effort: 'low' })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    const [line] = await setup.client.call('orchestrator.activity', { limit: 1 });
+    expect(line).toMatchObject({ action: 'effort', outcome: 'refused', targetName: 'elsewhere' });
+  });
+
   it('never types to an agent waiting mid-turn on the user’s answer to its question', async () => {
     const setup = await orchestrateDaemon();
     const { token, connection } = await agentSide(setup, setup.zone.id, 'zone');
@@ -1115,7 +1151,7 @@ describe('agent-board mcp for an orchestrator', () => {
     const leadMcp = mcpAs(setup, lead.token);
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
-      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
+      'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
       'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close',
     ]);
 

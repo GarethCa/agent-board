@@ -226,6 +226,15 @@ describe('starting a crew from a prefab', () => {
     for (const sessionId of reviewers) expect(await firstPrompt(setup, sessionId)).toContain('review round 1.');
   });
 
+  it('takes a round limit for this crew alone, keeping the prefab’s, and refuses one out of range', async () => {
+    const setup = await prefabDaemon();
+    const started = await setup.client.call('orchestrator.startPrefab', { name: 'Implementer + reviewer', prompt: 'Add a footer', zoneId: setup.zone.id, roundLimit: 5 });
+    expect(await setup.client.call('orchestrator.crews', { crewId: started.crew! })).toEqual([expect.objectContaining({ roundLimit: 5 })]);
+    const { prefabs } = await setup.client.call('orchestrator.prefabs', {});
+    expect(prefabs.find((prefab) => prefab.name === 'Implementer + reviewer')!.roundLimit).toBe(3);
+    await expect(setup.client.call('orchestrator.startPrefab', { name: 'Solo agent', prompt: 'Go', zoneId: setup.zone.id, roundLimit: 11 })).rejects.toThrow(/whole number from 1 to 10/);
+  });
+
   it('starts its builder at the reasoning effort the prefab gives it', async () => {
     const setup = await prefabDaemon();
     await setup.client.call('orchestrator.savePrefab', {

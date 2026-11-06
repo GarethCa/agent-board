@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type Ref } from 'react';
 import * as RadixDialog from '@radix-ui/react-dialog';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { Plus, Search, Settings } from 'lucide-react';
+import { Plus, Search, Settings, LibraryBig } from 'lucide-react';
+import { CrewFaces } from '../crews/icons';
+import { usePrefabs } from '../crews/prefab-store';
 import { SESSION_SURFACES } from '../board/board-shortcuts';
 import { HarnessMark } from '../board/HarnessMark';
 import { agentTitle, shellTitle } from '../board/use-board-windows';
@@ -15,7 +17,7 @@ import { Kbd, StatusPill, Tag, useToast } from '../ui';
 import type { WindowTarget } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { outOfDock, type SessionWindows } from '../windows/session-windows';
-import { ACTIONS_GROUP, SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
+import { ACTIONS_GROUP, CREWS_GROUP, newAgentLeads, SETTINGS_GROUP, spotlightGroups, type BoardSubject, type SpotlightRow, type SpotlightSubject } from './spotlight-results';
 
 /**
  * Where ⌘K was pressed, as the window it opens in reads it: what ↵ does there, and the session that view shows already.
@@ -56,6 +58,8 @@ export interface SpotlightProps<C> {
   /** Whether a new agent can start from here: "New agent named …" is offered only then. */
   canStartAgent: boolean;
   onNewAgent(context: C, name: string): void;
+  /** Opens the prompt box of a crew from the prefab named, or with none, the crew library. */
+  onCrew(context: C, prefab: string | null): void;
 }
 
 interface Opened<C> {
@@ -96,7 +100,8 @@ function focusKeeper(at: Element | null): () => void {
  * window's: the board's shows the tile or switches the view in focus (`BoardSpotlight`), a popped-out window switches
  * its session (`PopOutSpotlight`).
  */
-export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onPick, canStartAgent, onNewAgent }: SpotlightProps<C>) {
+export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onPick, canStartAgent, onNewAgent, onCrew }: SpotlightProps<C>) {
+  const prefabs = usePrefabs();
   const [opened, setOpened] = useState<Opened<C>>();
   const [query, setQuery] = useState('');
   const [activeKey, setActiveKey] = useState<string>();
@@ -138,16 +143,17 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   // The id of the session the view shows already, from its row key (`agent:<id>`, `shell:<id>`).
   const current = opened?.place.current?.replace(/^(agent|shell):/, '');
   const groups = useMemo(
-    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, simplified, windowsListed: simplified || dock !== 'all' }),
-    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, simplified, dock],
+    () => spotlightGroups(query, { agents, shells: shells ?? [], zones, shows, windows: listedWindows, current, canStartAgent, prefabs, simplified, windowsListed: simplified || dock !== 'all' }),
+    [query, agents, shells, zones, shows, listedWindows, current, canStartAgent, prefabs, simplified, dock],
   );
   const rows = groups.flatMap((group) => group.rows);
   const place = opened?.place;
   const newName = query.trim();
   // Offered whenever no session or zone matches, settings and actions or not: first, so ↵ still starts it. Not beside
   // the New agent action, which matches it: that one is first then, and starts a blank one.
-  const offerNew = newName !== '' && canStartAgent && groups.every((group) => group.label === SETTINGS_GROUP || group.label === ACTIONS_GROUP) && !rows.some((row) => row.key === 'action:newAgent');
-  const keys = [...(offerNew ? [NEW_AGENT_KEY] : []), ...rows.map((row) => row.key)];
+  const offerNew = newName !== '' && canStartAgent && groups.every((group) => group.label === SETTINGS_GROUP || group.label === ACTIONS_GROUP || group.label === CREWS_GROUP) && !rows.some((row) => row.key === 'action:newAgent');
+  const newLeads = newAgentLeads(groups);
+  const keys = [...(offerNew && newLeads ? [NEW_AGENT_KEY] : []), ...rows.map((row) => row.key), ...(offerNew && !newLeads ? [NEW_AGENT_KEY] : [])];
   // Kept by key as the rows change under it; the first once it has gone.
   const activeKeyNow = activeKey !== undefined && keys.includes(activeKey) ? activeKey : keys[0];
   const active = rows.find((row) => row.key === activeKeyNow);
@@ -168,6 +174,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
     setOpened(undefined);
     // The Settings window comes forward with the focus; if it can't, it says so and the focus goes back here.
     if (subject.kind === 'action' && subject.action === 'newAgent') return onNewAgent(opened.place.context, '');
+    if (subject.kind === 'crew') return onCrew(opened.place.context, subject.prefab);
     const shown =
       subject.kind === 'setting' || subject.kind === 'action'
         ? window.agentBoard.setup.openSettings(subject.kind === 'setting' ? subject.pane : undefined).then(
@@ -202,7 +209,29 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
   };
 
   const showing = place?.mode === 'show';
-  const where = showing ? 'show on board' : 'switch here';
+  // A crew's row opens its prompt box, wherever ⌘K was pressed.
+  const opensCrew = active?.subject.kind === 'crew';
+  const where = opensCrew ? 'open' : showing ? 'show on board' : 'switch here';
+  const newAgentRow = offerNew && (
+    <div
+      id={`${listId}-${NEW_AGENT_KEY}`}
+      className="spotlight-row"
+      role="option"
+      aria-selected={activeKeyNow === NEW_AGENT_KEY}
+      data-active={activeKeyNow === NEW_AGENT_KEY || undefined}
+      data-testid="spotlight-new-agent"
+      onPointerMove={activeKeyNow === NEW_AGENT_KEY ? undefined : () => setActiveKey(NEW_AGENT_KEY)}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={startNew}
+    >
+      <span className="spotlight-mark" aria-hidden>
+        <Plus />
+      </span>
+      <span className="spotlight-main">
+        <span className="spotlight-name">New agent named ‘{newName}’</span>
+      </span>
+    </div>
+  );
   return (
     <RadixDialog.Root open={opened !== undefined} onOpenChange={(open) => !open && opened !== undefined && dismiss(opened)}>
       <RadixDialog.Portal>
@@ -247,26 +276,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
             </span>
           </div>
           <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions and zones">
-            {offerNew && (
-              <div
-                id={`${listId}-${NEW_AGENT_KEY}`}
-                className="spotlight-row"
-                role="option"
-                aria-selected={activeKeyNow === NEW_AGENT_KEY}
-                data-active={activeKeyNow === NEW_AGENT_KEY || undefined}
-                data-testid="spotlight-new-agent"
-                onPointerMove={activeKeyNow === NEW_AGENT_KEY ? undefined : () => setActiveKey(NEW_AGENT_KEY)}
-                onPointerDown={(event) => event.preventDefault()}
-                onClick={startNew}
-              >
-                <span className="spotlight-mark" aria-hidden>
-                  <Plus />
-                </span>
-                <span className="spotlight-main">
-                  <span className="spotlight-name">New agent named ‘{newName}’</span>
-                </span>
-              </div>
-            )}
+            {newLeads && newAgentRow}
             {groups.map((group, index) => (
               <Fragment key={group.label ?? index}>
                 {group.label !== undefined && (
@@ -280,6 +290,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
                 ))}
               </Fragment>
             ))}
+            {!newLeads && newAgentRow}
             {rows.length === 0 && !offerNew && <p className="spotlight-empty">{newName === '' ? 'Nothing on the board yet' : 'Nothing matches'}</p>}
           </div>
           <div className="spotlight-foot" aria-hidden>
@@ -290,9 +301,9 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
               move
             </span>
             <span>
-              <Kbd>{keyText('dialog.pick')}</Kbd> {showing ? 'show' : 'switch'}
+              <Kbd>{keyText('dialog.pick')}</Kbd> {opensCrew ? 'open' : showing ? 'show' : 'switch'}
             </span>
-            {showing && (
+            {showing && !opensCrew && (
               <span>
                 <Kbd>{keyText('dialog.openFromSwitcher')}</Kbd> open
               </span>
@@ -310,6 +321,8 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
 function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightRow; active: boolean; onHover(): void; onPick(): void }) {
   const { subject } = row;
   const shows = useNeedsYouShows();
+  const prefabs = usePrefabs();
+  const crewMembers = subject.kind === 'crew' ? prefabs.find((prefab) => prefab.name === subject.prefab)?.members : undefined;
   return (
     <div
       id={id}
@@ -325,7 +338,13 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
       onClick={onPick}
     >
       <span className="spotlight-mark" aria-hidden>
-        {subject.kind === 'setting' || subject.kind === 'action' ? (
+        {subject.kind === 'crew' ? (
+          crewMembers === undefined ? (
+            <LibraryBig />
+          ) : (
+            <CrewFaces members={crewMembers} most={3} />
+          )
+        ) : subject.kind === 'setting' || subject.kind === 'action' ? (
           subject.kind === 'action' && subject.action === 'newAgent' ? <Plus /> : <Settings />
         ) : subject.kind === 'zone' ? (
           // A zone's colour is its data, not a theme token.
@@ -349,7 +368,7 @@ function Row({ id, row, active, onHover, onPick }: { id: string; row: SpotlightR
       ) : subject.kind === 'action' ? (
         <span className="spotlight-act">run</span>
       ) : (
-        <span className="spotlight-act">open setting</span>
+        <span className="spotlight-act">{subject.kind === 'crew' ? 'open' : 'open setting'}</span>
       )}
     </div>
   );

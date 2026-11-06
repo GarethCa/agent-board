@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scrubBoardEnv } from '../board-guard.ts';
+import { compileCacheGlobalSetup } from '../compile-cache.ts';
 import { gitGuardGlobalSetup } from '../git-guard.ts';
 import { harnessGuardGlobalSetup } from '../guard.ts';
 import { reapStaleRuns, registerRun, stopWhenOrphaned } from './reap.ts';
@@ -15,6 +16,7 @@ export default async function globalSetup(): Promise<() => void> {
   await reapStaleRuns();
   const unregister = registerRun();
   scrubBoardEnv();
+  compileCacheGlobalSetup();
   // With no AGENT_BOARD_SOCKET, the `agent-board` CLI and MCP fall back to the daemon of $AGENT_BOARD_DATA_DIR, else
   // the real app's: a test that forgets to point them at its own daemon must find none, not the live board.
   const dataDir = mkdtempSync(join(tmpdir(), 'ab-vitest-data-'));

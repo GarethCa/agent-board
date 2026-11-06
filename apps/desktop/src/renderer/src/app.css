@@ -2081,6 +2081,18 @@ kbd {
   flex: none;
 }
 
+/* At the tile's narrowest the status word gives way (an ellipsis) before the button and the crew's flags do. */
+.calm-tile-foot > .status-mark {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.calm-tile-foot .status-mark-word {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* How many of its crew flag it for a look, waiting for its answer. */
 .calm-tile-more {
   flex: none;
@@ -11840,79 +11852,10 @@ tr[data-status='running'] .gate-step-icon {
   border-top: 0;
 }
 
-/* The rows the shelves' Made, Crew and Setup hold for now: the inspector's, as it drew them. */
-.inspector-rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.inspector-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-75);
-  box-sizing: border-box;
-  width: calc(100% - 2 * var(--space-1-5));
-  min-height: var(--space-6-5);
-  margin: 0 var(--space-1-5);
-  padding: var(--space-1) var(--space-2-5);
-  border: 0;
-  border-radius: var(--radius-item);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-size-xs);
-  text-align: left;
-}
-
-button.inspector-row:hover:enabled {
-  background: var(--hover);
-}
-
-button.inspector-row:disabled {
-  color: var(--muted);
-}
-
-.inspector-row-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--muted);
-}
-
-.inspector-row-icon svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-}
-
-.inspector-row-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inspector-row-name[data-mono] {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-}
-
-.inspector-row-end {
-  flex: none;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.inspector-where {
-  margin-top: var(--space-2);
-}
-.inspector-where > .page-label {
-  padding: 0 var(--space-3-5) var(--space-1);
-}
-
 /*
- * An agent's shelves (AgentShelves.tsx), the Simplified design's sidebar and Classic's Simple one: at the window's
- * leading edge, a row of icon tabs over the shelf shown. Its width is the details strip's, dragged on the
+ * An agent's shelves (AgentShelves.tsx), the Simplified design's sidebar and Classic's Shelves one: at the window's
+ * leading edge, a row of icon tabs over the shelf shown; collapsed, a rail of the shelves' icons, each opening its shelf as
+ * a peek over the terminal. Its width is the details strip's, dragged on the
  * handle after it. It reads role tokens only, so it takes each design's and theme's values; an agent's tones are the
  * shapes' palette, never the board's orange or red.
  */
@@ -11999,7 +11942,7 @@ button.inspector-row:disabled {
 .agent-shelves-tab-count {
   position: absolute;
   top: 2px;
-  right: 6px;
+  left: calc(50% + 10px);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--font-size-3xs);
@@ -12014,7 +11957,8 @@ button.inspector-row:disabled {
 }
 .agent-shelves-tab .agent-shelves-dot {
   top: 3px;
-  right: 8px;
+  right: auto;
+  left: calc(50% + 6px);
   outline-color: var(--hover);
 }
 .agent-shelves-tab[aria-selected='true'] .agent-shelves-dot {
@@ -12105,8 +12049,24 @@ button.inspector-row:disabled {
 /* In a row's end, in place of a pill: where the row is too narrow for one. */
 .agent-shelves-dot-inline {
   position: static;
+  display: block;
   flex: none;
   outline: 0;
+}
+.agent-shelves-dot-inline[data-tone='working'] {
+  background: var(--accent);
+}
+.agent-shelves-dot-inline[data-tone='problem'] {
+  background: var(--checks-failing);
+}
+.agent-shelves-dot-inline[data-tone='done'] {
+  background: var(--muted);
+}
+/* A ring, so paused and done differ with no colour to tell them. */
+.agent-shelves-dot-inline:is([data-tone='paused'], [data-tone='scheduled']) {
+  background: none;
+  outline: 2px solid var(--muted);
+  outline-offset: -2px;
 }
 /* The robot mark: the agent, not the board, picked this or put it here, as on agent notes. */
 .agent-shelves-agent-mark {
@@ -12264,6 +12224,7 @@ button.agent-shelves-row:hover {
 }
 .page-block[data-kind='checklist'] .page-block-head,
 .page-block[data-kind='links'] .page-block-head,
+.page-pins .page-block-head,
 .page-note .page-block-head {
   font-size: var(--font-size-md);
 }
@@ -12521,6 +12482,14 @@ button.agent-shelves-row:hover {
 .page-block[data-tone='teal'] .page-bar > i {
   background: var(--shape-ink-teal);
 }
+/* Narrow, a row's name takes two lines, not cut before the part that says which it is. */
+.agent-shelves[data-icons-only] :is(.agent-shelves-row-name, .ui-row-name) {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
 /* Narrow, the blocks take the full width: the tab's robot says the agent made the page, so each block's goes. */
 .agent-shelves[data-icons-only] .page-block > .agent-shelves-agent-mark {
   display: none;
@@ -12538,19 +12507,365 @@ button.agent-shelves-row:hover {
   border-top: 1px solid var(--separator);
 }
 .page-invite {
-  display: grid;
-  gap: var(--space-2-5);
   margin: 0;
-  padding: var(--space-3);
-  border: 1.5px dashed var(--neutral-edge);
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--raised) 50%, transparent);
   color: var(--muted);
   font-size: var(--font-size-sm);
-  line-height: var(--leading-roomy);
 }
-.page-invite-faces {
+.agent-shelves-group {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.agent-shelves-group > * {
+  min-width: 0;
+}
+.agent-shelves-group-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.agent-shelves-row-actions {
+  display: inline-flex;
+  gap: var(--space-0-5);
+}
+.agent-shelves-row-arrow {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+.agent-shelves-folder {
+  display: block;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+.agent-shelves-mono {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+}
+[data-tone='merged']:is(.agent-shelves-face) {
+  background: var(--pr-merged-soft);
+  color: var(--pr-merged);
+}
+[data-tone='scheduled']:is(.agent-shelves-face) {
+  background: var(--state-scheduled-soft);
+  color: var(--state-scheduled-ink);
+}
+.page-pins .details-list {
+  margin: 0;
+}
+/* Made's open pull request, as a card: its title, then its checks, gate and issue as facts. */
+.made-pr {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--raised);
+}
+.made-pr-top {
   display: flex;
+  align-items: flex-start;
+  gap: var(--space-2-25);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.made-pr-title {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+.made-pr-top:hover .made-pr-title {
+  text-decoration: underline;
+}
+.made-pr-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin: 0;
+}
+.made-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-1-75);
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+.made-fact svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+.made-fact[data-tone='pending'] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.made-fact[data-tone='passing'] {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.made-fact[data-tone='failing'] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.made-pr > .details-record-delete {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-1-5);
+  margin: 0;
+}
+/* A recorded card's × shows as a recorded row's does, in room the title leaves for it. */
+.made-pr:is(:hover, :focus-within) > .details-record-delete {
+  opacity: 1;
+}
+.made-pr[data-source='recorded'] .made-pr-top {
+  padding-right: var(--space-6);
+}
+/*
+ * On the shelves a record's rule is its own, short and inset, so a list of them isn't one long bar; and its × is out of
+ * the flow until it shows, so every row's end lines up and its name has the room. Still in the tab order: focus shows it.
+ */
+:is(.agent-shelves, .agent-shelves-peek) :is(.details-record, .made-pr) {
+  position: relative;
+}
+:is(.agent-shelves, .agent-shelves-peek) .details-record,
+:is(.agent-shelves, .agent-shelves-peek) .details-record[data-source] {
+  border-left: 0;
+}
+:is(.agent-shelves, .agent-shelves-peek) .details-record::before,
+:is(.agent-shelves, .agent-shelves-peek) .made-pr[data-source='guessed']::before {
+  position: absolute;
+  top: var(--space-1-5);
+  bottom: var(--space-1-5);
+  left: 0;
+  border-left: 2px solid var(--state-running);
+  content: '';
+}
+:is(.agent-shelves, .agent-shelves-peek) :is(.details-record, .made-pr)[data-source='guessed']::before {
+  border-left: 2px dotted var(--neutral-edge);
+}
+/* A row with its × showing gives it room, so it never covers what the row ends in. */
+:is(.agent-shelves, .agent-shelves-peek) .details-record[data-source='recorded']:is(:hover, :focus-within) > .ui-row {
+  padding-right: var(--space-7);
+}
+:is(.agent-shelves, .agent-shelves-peek) .details-record > .details-record-delete {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  margin: 0;
+  background: var(--panel);
+  transform: translateY(-50%);
+}
+:is(.agent-shelves, .agent-shelves-peek) :is(.details-record, .made-pr):not(:hover, :focus-within) > .details-record-delete {
+  pointer-events: none;
+}
+/* The workspace, two lines at the foot of every shelf. */
+.agent-shelves-footer {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-2-5) var(--space-2-25) var(--space-3);
+  border-top: 1px solid var(--separator);
+}
+.agent-shelves-footer p {
+  margin: 0;
+}
+.agent-shelves-footer-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+.agent-shelves-footer-lead {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted);
+}
+.agent-shelves-footer-branch {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-shelves-footer-top > :last-child {
+  margin-left: var(--space-1);
+}
+.agent-shelves-footer-sub {
+  overflow: hidden;
+  padding-left: var(--space-5);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The rail: the shelves collapsed (⌘I), each an icon; and its peek, a shelf over the terminal beside the icon clicked. */
+.agent-shelves-rail-wrap {
+  position: relative;
+  z-index: var(--layer-raised);
+  display: flex;
+  flex: none;
+}
+.agent-shelves-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  width: var(--size-rail);
+  padding: var(--space-2-5) 0 var(--space-2);
+  border-right: 1px solid var(--separator);
+  background: var(--panel);
+}
+.agent-shelves-rail-fill {
+  flex: 1;
+}
+.agent-shelves-rail-item {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  width: 46px;
+  padding: var(--space-1) 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--text-soft);
+  font: inherit;
+}
+.agent-shelves-rail-item:hover,
+.agent-shelves-rail-item[aria-expanded='true'] {
+  background: var(--hover);
+}
+.agent-shelves-rail-item > .agent-shelves-face {
+  width: 32px;
+  height: 32px;
+}
+.agent-shelves-rail-item > .agent-shelves-face svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.agent-shelves-rail-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 17px;
+  height: 17px;
+  box-sizing: border-box;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-snug);
+  text-align: center;
+}
+.agent-shelves-rail-badge[data-tone='needs-you'] {
+  border-color: transparent;
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+.agent-shelves-rail-badge[data-tone='pending'] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.agent-shelves-rail-badge[data-tone='failing'] {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.agent-shelves-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+}
+.agent-shelves-ring > svg {
+  position: absolute;
+  inset: 0;
+  width: 36px;
+  height: 36px;
+  transform: rotate(-90deg);
+}
+.agent-shelves-ring circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.agent-shelves-ring-track {
+  stroke: var(--separator);
+}
+.agent-shelves-ring-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+.agent-shelves-ring[data-needs-you] .agent-shelves-ring-fill {
+  stroke: var(--state-waiting);
+}
+.agent-shelves-ring > .agent-shelves-face {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+}
+.agent-shelves-peek {
+  position: absolute;
+  top: var(--peek-top);
+  left: calc(100% + var(--space-1-5));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  box-sizing: border-box;
+  width: 300px;
+  /* A glance: its body scrolls, and Open as shelves is for the whole of it. */
+  max-height: 60%;
+  outline: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+  font-size: var(--font-size-sm-plus);
+}
+.agent-shelves-peek-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-0-5) var(--space-1) var(--space-1-5);
+  border-bottom: 1px solid var(--separator);
+}
+.agent-shelves-peek-head b {
+  flex: 1;
+  font-size: var(--font-size-md);
+}
+.agent-shelves-peek .agent-shelves-body {
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+/* Under Classic, the shelves' window controls in the header: one state button and ⋯. */
+.session-window-shelf-controls,
+.shelf-controls {
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-1-5);
 }
 /*
@@ -14183,28 +14498,78 @@ button.agent-shelves-row:hover {
   font-size: var(--font-size-sm);
 }
 
-.prefab-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
+/* The crew library: cards of faces, what each is for, and how heavy it runs. */
+.ui-dialog:has(.prefab-cards) {
+  width: min(var(--size-prefab-editor), calc(100vw - var(--space-8)));
+}
+
+.prefab-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--size-prefab-card), 1fr));
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.prefab-list-row {
+.prefab-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+}
+
+.prefab-card-faces {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.prefab-card-more {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.prefab-card-name {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  font-size: var(--font-size-md);
+}
+
+.prefab-card-purpose {
+  flex: 1;
+  color: var(--text-soft);
+  font-size: var(--font-size-sm);
+}
+
+.prefab-card-foot {
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  padding: var(--space-1-5) var(--space-2);
-  border-radius: var(--radius-md);
 }
 
-.prefab-list-row:hover {
-  background: var(--hover);
+.prefab-card-weight {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
 }
 
-.prefab-list-mark {
+.prefab-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.prefab-card-ask {
+  color: var(--text-soft);
+  font-size: var(--font-size-xs);
+}
+
+.prefab-mark {
   display: inline-grid;
   flex: none;
   place-items: center;
@@ -14215,40 +14580,226 @@ button.agent-shelves-row:hover {
   color: var(--prefab-ink);
 }
 
-.prefab-list-mark svg {
+.prefab-mark svg {
   width: var(--space-4);
   height: var(--space-4);
 }
 
-.prefab-list-text {
+.prefab-mark.small {
+  width: var(--space-5-5);
+  height: var(--space-5-5);
+}
+
+.prefab-mark.small svg {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+}
+
+/* A crew's one prompt box. */
+.crew-prompt {
   display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: var(--space-0-5) var(--space-1-5);
-  align-items: baseline;
-  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2-5);
+}
+
+.ui-dialog:has(.crew-prompt) {
+  width: min(var(--size-crew-prompt), calc(100vw - var(--space-8)));
+}
+
+.crew-prompt-title {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.crew-prompt-rounds {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--text-soft);
   font-size: var(--font-size-sm);
 }
 
-.prefab-list-sub {
-  flex-basis: 100%;
-  overflow: hidden;
+.crew-prompt-rounds .ui-select {
+  min-width: var(--space-24);
+}
+
+.crew-prompt-repo {
+  display: flex;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+.crew-prompt-repo .ui-select-wrap {
+  flex: 1;
+}
+
+.crew-prompt-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crew-prompt-member {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: center;
+  font-size: var(--font-size-sm);
+}
+
+.crew-prompt-member-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.crew-prompt-member-detail {
   color: var(--muted);
   font-size: var(--font-size-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.prefab-list-ask {
-  align-self: center;
-  color: var(--text-soft);
+/* New agent's Agent | Crew switch, and what Crew lists. */
+/* It stays put as the sheet changes: at the head's end, the sheet's top edge fixed however tall its body is. */
+.ui-dialog-head .new-agent-kind {
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+}
+
+.ui-dialog-head .new-agent-kind + .ui-icon-button {
+  margin-left: 0;
+}
+
+.ui-dialog:has(.new-agent-kind):not([data-inline='true']) {
+  top: var(--sheet-top);
+  max-height: calc(100vh - var(--sheet-top) - var(--space-4));
+  translate: -50% 0;
+  animation-name: ui-fade;
+}
+
+.new-crew-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.new-crew-row {
+  gap: var(--space-2-5);
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: start;
+}
+
+.new-crew-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.new-crew-row-text span {
+  color: var(--muted);
   font-size: var(--font-size-xs);
 }
 
-.prefab-list-actions {
-  display: flex;
+/* A crew at a glance, wherever a row names one. */
+.crew-faces {
+  display: inline-flex;
   flex: none;
+  gap: var(--space-0-5);
+  align-items: center;
+  /* Three faces wide at least, so the names beside them line up. */
+  min-width: calc(var(--size-crew-face) * 3 + var(--space-0-5) * 2);
+}
+
+/* ⌘K's crew rows: a column for three faces and a +N, the same on each, so the names line up. */
+.spotlight-row[data-kind='crew'] {
+  grid-template-columns: var(--size-spotlight-faces) minmax(0, 1fr) auto;
+}
+
+.spotlight-row[data-kind='crew'] .spotlight-mark {
+  justify-items: start;
+  width: auto;
+}
+
+.crew-face {
+  display: inline-grid;
+  place-items: center;
+  width: var(--size-crew-face);
+  height: var(--size-crew-face);
+  border-radius: var(--radius-pill);
+  background: var(--prefab-soft);
+  color: var(--prefab-ink);
+}
+
+.crew-face svg,
+.ui-menu-item .crew-face svg {
+  width: var(--space-3);
+  height: var(--space-3);
+}
+
+.crew-faces-more {
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+}
+
+.crew-prompt-no-zone {
+  display: flex;
+  gap: var(--space-2-5);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.prefab-card.mine {
+  border-color: var(--prefab-edge);
+}
+
+.prefab-card-make button {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: var(--space-30);
+  padding: var(--space-3);
+  border: 1.5px dashed var(--control-edge);
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.prefab-card-make button:hover {
+  background: var(--hover);
+}
+
+.prefab-card-make svg {
+  width: var(--space-5);
+  height: var(--space-5);
+  color: var(--prefab-ink);
+}
+
+.prefab-card-make span {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
 }
 
 .gallery-prefabs {
@@ -14475,4 +15026,48 @@ button.agent-shelves-row:hover {
   border-radius: var(--radius-item);
   background: var(--window-bg);
   color: var(--window-ink);
+}
+/* The "+N" chip's list: what its tile's footer had no room for, a row each; a row with something to open is a button. */
+.ui-popover.tile-folded-popover {
+  padding: var(--space-1-25);
+}
+
+.tile-folded-list {
+  display: flex;
+  flex-direction: column;
+  min-width: var(--size-menu);
+  max-width: min(var(--radix-popover-content-available-width), var(--size-popover-wide));
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
+}
+
+.tile-folded-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-row);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--font-size-md);
+  text-align: left;
+}
+
+/* A long line is cut with an ellipsis; its row's title has all of it. */
+.tile-folded-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.tile-folded-row {
+  color: var(--text);
+  cursor: pointer;
+}
+
+button.tile-folded-row:is(:hover, :focus-visible) {
+  background: var(--hover);
+  outline: none;
 }

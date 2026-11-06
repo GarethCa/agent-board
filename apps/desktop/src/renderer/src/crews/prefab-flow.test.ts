@@ -1,7 +1,7 @@
 // A crew prefab as its flow editor draws and words it.
 import { describe, expect, it } from 'vitest';
 import type { CrewPrefab, PrefabMember } from '@agent-board/daemon/protocol';
-import { draftProblems, flowLayout, flowSentence, memberLabel, memberModel, modelChoice, newMember, readModelChoice } from './prefab-flow';
+import { draftProblems, flowLayout, flowSentence, memberLabel, memberModel, memberRun, modelChoice, newMember, prefabWeight, readModelChoice } from './prefab-flow';
 
 const member = (fields: Partial<PrefabMember> & Pick<PrefabMember, 'id' | 'starts'>): PrefabMember => ({
   role: 'implementer',
@@ -158,5 +158,24 @@ describe('the AI and model picker', () => {
     expect(readModelChoice(modelChoice('claude', bedrock))).toEqual({ harness: 'claude', model: bedrock });
     expect(readModelChoice(modelChoice('codex', null))).toEqual({ harness: 'codex', model: null });
     expect(readModelChoice(modelChoice('claude', 'opus'))).toEqual({ harness: 'claude', model: 'opus' });
+  });
+});
+
+describe('a prefab, as its card and prompt box word it', () => {
+  it('says how heavy it runs', () => {
+    expect(prefabWeight(prefab([builder]))).toBe('no loop');
+    expect(prefabWeight(prefab([builder, code]))).toBe('3 rounds');
+    expect(prefabWeight(prefab([builder, code], { roundLimit: 1 }))).toBe('1 round');
+    expect(prefabWeight(prefab([member({ id: 'lead', role: 'orchestrator', starts: 'prompt' }), member({ id: 'impl', starts: 'lead' })]))).toBe('lead decides');
+  });
+
+  it('says what each member does and when it starts', () => {
+    const crew = prefab([builder, code]);
+    expect(memberRun(builder, crew)).toMatchObject({ does: 'builds it', when: 'starts now' });
+    expect(memberRun(code, crew)).toMatchObject({ does: 'reviews it', when: 'after Builder hands off' });
+    const led = prefab([member({ id: 'lead', role: 'orchestrator', starts: 'prompt' }), member({ id: 'impl', starts: 'lead' })]);
+    expect(memberRun(led.members[0]!, led)).toMatchObject({ does: 'runs the crew', when: 'starts now' });
+    expect(memberRun(builder, crew, false).detail).not.toMatch(/worktree|branch/);
+    expect(memberRun(led.members[1]!, led)).toMatchObject({ when: 'by the lead' });
   });
 });

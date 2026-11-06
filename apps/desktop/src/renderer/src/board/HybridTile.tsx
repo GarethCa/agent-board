@@ -36,7 +36,8 @@ import { CommandFigure } from './CommandFigure';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { HandoffsContext } from './flow-edges';
-import { badgeLine, checksLabel, foldRanking, isStarting, tileFooter } from './tile-footer';
+import { PlusChip, type PlusItem } from './PlusChip';
+import { badgeLine, checksLabel, EXTRA_FOLD_RANK, foldRanking, isStarting, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -120,7 +121,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   const handoffs = useContext(HandoffsContext);
   const shells = windowShells({ kind: 'agent', agent }, tabs ?? []);
   const held = useHeldJobs(agent.sessionId);
-  const { shown, folded: overflow } = tileFooter(agent, shells.length, held);
+  const { shown, overflow } = tileFooter(agent, shells.length, held);
   const ranking = foldRanking(shown);
   const fitted = useFittedLines();
   const ask = askOf(agent);
@@ -146,13 +147,116 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   );
   // Badges that don't fit in its one line fold into the "+N", the lowest ranked first, and fold again whenever what the footer
   // says changes.
+  // The chips beside the badges (its review, plan, docs, gate and what waits for it) fold too, after the badges, the least
+  // urgent first: an orchestrator holds many, and none may run past the tile. One list draws each chip and words its line
+  // in the "+N" list, so the two can't disagree. Its crew's flags never fold: they are what a lead looks for.
+  const extras: { key: string; rank: number; line: string; open?(): void; chip: ReactNode }[] = [];
+  if (!starting && latestRound !== undefined) {
+    extras.push({
+      key: 'review',
+      open: () => openReview(agent.sessionId),
+      rank: EXTRA_FOLD_RANK.review,
+      line: `Review round ${latestRound.round}`,
+      chip: (
+        <Chip key="review" className="hybrid-tile-review nodrag" data-fold-rank={EXTRA_FOLD_RANK.review} data-testid="tile-review" data-status={latestRound.status} title={`Review round ${latestRound.round}: open it`} onClick={() => openReview(agent.sessionId)} onDoubleClick={stopPropagation}>
+          <FileCheck aria-hidden />r{latestRound.round}
+        </Chip>
+      ),
+    });
+  }
+  if (!starting && agent.plan !== null) {
+    const { plan } = agent;
+    extras.push({
+      key: 'plan',
+      open: () => openPlan(agent),
+      rank: EXTRA_FOLD_RANK.plan,
+      line: `Plan: ${planBadge(plan)}`,
+      chip: (
+        <Chip key="plan" className="hybrid-tile-plan nodrag" data-fold-rank={EXTRA_FOLD_RANK.plan} data-testid="tile-plan" data-pending={planPending(agent) || undefined} title={`${plan.title} · ${planStamp(plan).label}: open its Plan tab`} onClick={() => openPlan(agent)} onDoubleClick={stopPropagation}>
+          <ClipboardList aria-hidden />
+          {planBadge(plan)}
+        </Chip>
+      ),
+    });
+  }
+  if (!starting && agent.docs.length > 0) {
+    const docs = agent.docs.length === 1 ? '1 doc' : `${agent.docs.length} docs`;
+    extras.push({
+      key: 'docs',
+      open: () => openDoc(agent, latestShown(agent.docs)),
+      rank: EXTRA_FOLD_RANK.docs,
+      line: docs,
+      chip: (
+        <Chip key="docs" className="hybrid-tile-docs nodrag" data-fold-rank={EXTRA_FOLD_RANK.docs} data-testid="tile-docs" title={`${agent.docs.map((each) => each.title).join('\n')}\nOpen the latest as a Document tab`} onClick={() => openDoc(agent, latestShown(agent.docs))} onDoubleClick={stopPropagation}>
+          <FileText aria-hidden />
+          {docs}
+        </Chip>
+      ),
+    });
+  }
+  if (!starting && gate !== undefined) {
+    extras.push({
+      key: 'gate',
+      open: () => openGate(agent, false),
+      rank: EXTRA_FOLD_RANK.gate,
+      line: `Gate: ${gateBadge(gate)}`,
+      chip: (
+        <Chip key="gate" className="hybrid-tile-gate nodrag" data-fold-rank={EXTRA_FOLD_RANK.gate} data-testid="tile-gate" data-status={gate.status} title={`The gate, ${gate.command}, on ${shortCommit(gate.commit)}: open its Gate tab`} onClick={() => openGate(agent, false)} onDoubleClick={stopPropagation}>
+          {gateBadge(gate)}
+        </Chip>
+      ),
+    });
+  }
+  if (agent.queuedUntilUp > 0) {
+    const queued = `${agent.queuedUntilUp} queued until it's up`;
+    extras.push({
+      key: 'queued',
+      rank: EXTRA_FOLD_RANK.queued,
+      line: queued,
+      chip: (
+        <Chip key="queued" className="hybrid-tile-queued" data-fold-rank={EXTRA_FOLD_RANK.queued} data-testid="tile-queued" title="Sent before its session was up: typed once it is, after its first prompt">
+          <Timer aria-hidden />
+          {queued}
+        </Chip>
+      ),
+    });
+  }
+  if (agent.messagesWaiting > 0) {
+    const waiting = `${agent.messagesWaiting} message${agent.messagesWaiting === 1 ? '' : 's'} waiting`;
+    extras.push({
+      key: 'messages',
+      rank: EXTRA_FOLD_RANK.messages,
+      line: waiting,
+      chip: (
+        <Chip key="messages" className="hybrid-tile-queued" data-fold-rank={EXTRA_FOLD_RANK.messages} data-testid="tile-messages-waiting" title="Sent by other agents mid-turn: each is typed once its turn ends, as a turn of its own">
+          <Timer aria-hidden />
+          {waiting}
+        </Chip>
+      ),
+    });
+  }
   const footer = useFooterFold({
-    key: JSON.stringify([shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt, crewFlags]),
+    key: JSON.stringify([shown, shells.length, latestRound?.round, gate?.status, gate === undefined ? '' : gateBadge(gate), agent.state, receiving, sending, agent.shellSessionId, agent.endedAt, crewFlags, extras.map((each) => each.line)]),
     badges: shown.length,
     ranking,
-    plusShown: overflow.length > 0,
+    plusShown: overflow.jobs.length + overflow.pullRequests.length > 0,
   });
-  const folded = [...ranking.slice(0, footer.folded).map((index) => badgeLine(shown[index]!, shells.length)), ...overflow];
+  // What the "+N" lists: the badges and chips that folded, the lowest ranked first, then what never had room (the jobs and
+  // pull requests past the first and second). A row opens what it names, when it names something to open.
+  const ranked: (PlusItem & { rank: number })[] = [
+    ...ranking.map((index, rank) => {
+      const badge = shown[index]!;
+      const open =
+        badge.kind === 'pr' ? () => openPullRequest(agent, badge.pr) : badge.kind === 'schedule' ? () => commands.showItem(badge.schedule.clockId) : undefined;
+      return { rank, line: badgeLine(badge, shells.length), ...(open === undefined ? {} : { open }) };
+    }),
+    ...extras.map(({ rank, line, open }) => ({ rank, line, ...(open === undefined ? {} : { open }) })),
+  ];
+  const foldedItems: PlusItem[] = [
+    ...ranked.sort((a, b) => a.rank - b.rank).slice(0, footer.folded),
+    ...overflow.jobs.map((line) => ({ line })),
+    ...overflow.pullRequests.map((badge) => ({ line: badgeLine(badge, shells.length), open: () => openPullRequest(agent, badge.pr) })),
+  ];
   // Its last message, a hover away, while the body says what it is doing; an ask or a notice is the body's, as it was.
   const card = lastMessageCard(agent);
   const lastMessage = card?.text;
@@ -408,81 +512,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
                   );
               }
             })}
-            {!starting && latestRound !== undefined && (
-              <Chip
-                className="hybrid-tile-review nodrag"
-                data-testid="tile-review"
-                data-status={latestRound.status}
-                title={`Review round ${latestRound.round}: open it`}
-                onClick={() => openReview(agent.sessionId)}
-                onDoubleClick={stopPropagation}
-              >
-                <FileCheck aria-hidden />r{latestRound.round}
-              </Chip>
-            )}
-            {!starting && agent.plan !== null && (
-              <Chip
-                className="hybrid-tile-plan nodrag"
-                data-testid="tile-plan"
-                data-pending={planPending(agent) || undefined}
-                title={`${agent.plan.title} · ${planStamp(agent.plan).label}: open its Plan tab`}
-                onClick={() => openPlan(agent)}
-                onDoubleClick={stopPropagation}
-              >
-                <ClipboardList aria-hidden />
-                {planBadge(agent.plan)}
-              </Chip>
-            )}
-            {!starting && agent.docs.length > 0 && (
-              <Chip
-                className="hybrid-tile-docs nodrag"
-                data-testid="tile-docs"
-                title={`${agent.docs.map((each) => each.title).join('\n')}\nOpen the latest as a Document tab`}
-                onClick={() => openDoc(agent, latestShown(agent.docs))}
-                onDoubleClick={stopPropagation}
-              >
-                <FileText aria-hidden />
-                {agent.docs.length === 1 ? '1 doc' : `${agent.docs.length} docs`}
-              </Chip>
-            )}
-            {!starting && gate !== undefined && (
-              <Chip
-                className="hybrid-tile-gate nodrag"
-                data-testid="tile-gate"
-                data-status={gate.status}
-                title={`The gate, ${gate.command}, on ${shortCommit(gate.commit)}: open its Gate tab`}
-                onClick={() => openGate(agent, false)}
-                onDoubleClick={stopPropagation}
-              >
-                {gateBadge(gate)}
-              </Chip>
-            )}
-            {/* Always drawn, so the footer can measure it; hidden while nothing is folded. A button, so the keyboard reaches it and its tooltip; it opens nothing. */}
-            <Chip
-              className="hybrid-tile-folded nodrag"
-              data-testid="tile-folded"
-              data-folded-chip=""
-              title={folded.join('\n')}
-              aria-label={`${folded.length} more: ${folded.join('; ')}`}
-              onDoubleClick={stopPropagation}
-            >
-              +{folded.length}
-            </Chip>
-            {agent.queuedUntilUp > 0 && (
-              <Chip className="hybrid-tile-queued" data-testid="tile-queued" title="Sent before its session was up: typed once it is, after its first prompt">
-                <Timer aria-hidden />
-                {agent.queuedUntilUp} queued until it&apos;s up
-              </Chip>
-            )}
-            {agent.messagesWaiting > 0 && (
-              <Chip className="hybrid-tile-queued" data-testid="tile-messages-waiting" title="Sent by other agents mid-turn: each is typed once its turn ends, as a turn of its own">
-                <Timer aria-hidden />
-                {agent.messagesWaiting} message{agent.messagesWaiting === 1 ? '' : 's'} waiting
-              </Chip>
-            )}
+            {extras.map((each) => each.chip)}
+            <PlusChip items={foldedItems} name={agent.name} />
             {!starting && crewFlags !== undefined && (
-              <Chip className="hybrid-tile-crew-flags" data-testid="crew-flags" title="Crew members waiting for its answer: sending each a message clears its flag">
-                ⚑ {crewFlags} crew flag{crewFlags === 1 ? '' : 's'}
+              <Chip className="hybrid-tile-crew-flags" data-testid="crew-flags" title={`${crewFlags} crew member${crewFlags === 1 ? '' : 's'} waiting for its answer: sending each a message clears its flag`} aria-label={`${crewFlags} crew flag${crewFlags === 1 ? '' : 's'}`}>
+                ⚑ {crewFlags}
               </Chip>
             )}
             {pill}

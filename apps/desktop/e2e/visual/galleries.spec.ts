@@ -117,6 +117,85 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
+// The crew library and a crew's prompt box, in both designs.
+for (const { theme, suffix } of THEMES) {
+  for (const design of ['classic', 'simplified'] as const) {
+    const shot = `crew-library${design === 'simplified' ? '-simplified' : ''}${suffix}`;
+    test(`the crew library's cards and a crew's prompt box: the crew gallery, ${design}, ${theme}`, async () => {
+      needsBaselines(shot);
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
+      try {
+        const gallery = window.getByTestId('crew-gallery');
+        await gallery.scrollIntoViewIfNeeded();
+        await expect(gallery).toBeVisible();
+        await pinFonts(window);
+        await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
+// A crowded orchestrator's chips stay inside its tile, at the board's size and at its narrowest, in both designs: what doesn't
+// fit folds into "+N" in Classic, and gives way in Simplified's foot.
+for (const { theme, suffix } of THEMES) {
+  for (const design of ['classic', 'simplified'] as const) {
+    test(`an orchestrator with a plan, docs, messages, flags and pull requests keeps every chip inside its tile, ${design}, ${theme}`, async () => {
+      const shot = `${design === 'simplified' ? 'simplified-' : ''}orchestrator-tile-crowded${suffix}`;
+      needsBaselines(...(design === 'classic' ? [shot, `${shot}-list`] : [shot]));
+      const dataDir = tempDataDir();
+      const { app, window } = await launchGallery(dataDir, theme, undefined, design === 'simplified' ? { design } : {});
+      try {
+        const gallery = window.getByTestId('crowded-orchestrator-gallery');
+        await expect(gallery).toBeVisible();
+        await pinFonts(window);
+        const restorePointer = await ignorePointer(window);
+        await settle(window);
+        await expect.soft(gallery).toHaveScreenshot(`${shot}.png`, SHOT);
+        await restorePointer();
+        const tiles = await gallery.getByTestId('agent-tile').all();
+        expect(tiles).toHaveLength(2);
+        for (const tile of tiles) {
+          const box = (await tile.boundingBox())!;
+          const foot = design === 'simplified' ? '.calm-tile-foot' : '.hybrid-tile-footer';
+          const children = await tile.locator(`${foot} > :not([data-folded])`).all();
+          expect(children.length).toBeGreaterThan(0);
+          for (const child of children) {
+            const at = (await child.boundingBox())!;
+            expect(at.x + at.width, 'a footer child ends inside the tile').toBeLessThanOrEqual(box.x + box.width + 1);
+            expect(at.y + at.height, 'a footer child sits inside the tile').toBeLessThanOrEqual(box.y + box.height + 1);
+          }
+          await expect(tile.getByTestId('crew-flags'), 'its crew flags never fold').toBeVisible();
+          if (design === 'classic') {
+            // The "+N" counts what folded: the chips and badges hidden, and the pull requests past the second.
+            const overflowPullRequests = 1; // The fixture's third pull request, past the two a tile shows.
+            const hidden = await tile.locator(`${foot} > [data-folded]:not([data-folded-chip])`).count();
+            const plus = tile.getByTestId('tile-folded');
+            await expect(plus).toHaveText(`+${hidden + overflowPullRequests}`);
+            // Clicking it lists them, a row each, the overflowed pull request's among them.
+            await plus.click();
+            const popover = window.locator('.tile-folded-popover');
+            const rows = popover.getByTestId('tile-folded-row');
+            await expect(rows).toHaveCount(hidden + overflowPullRequests);
+            await expect(rows.filter({ hasText: '#216' })).toBeVisible();
+            if (tile === tiles[0]) await expect.soft(popover).toHaveScreenshot(`${shot}-list.png`, SHOT);
+            await window.keyboard.press('Escape');
+            await expect(popover).toBeHidden();
+          }
+        }
+      } finally {
+        await app.close();
+        await removeDataDir(dataDir);
+      }
+    });
+  }
+}
+
 // A shape's colours are the theme's: each slot's fill and outline, and a fixed colour, in a dark pack and another.
 for (const theme of ['catppuccin-mocha', 'gruvbox-dark']) {
   test(`shapes in every theme colour and a fixed one: the shape colours gallery, ${theme}`, async () => {

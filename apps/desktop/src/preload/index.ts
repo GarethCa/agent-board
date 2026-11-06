@@ -251,6 +251,8 @@ const api: AgentBoardApi = {
     savePrefab: (prefab, replaces) => invoke(ORCHESTRATOR_IPC.savePrefab, prefab, replaces),
     removePrefab: (name) => invoke(ORCHESTRATOR_IPC.removePrefab, name),
     checkPrefab: (prefab) => invoke(ORCHESTRATOR_IPC.checkPrefab, prefab),
+    startPrefab: (params) => invoke(ORCHESTRATOR_IPC.startPrefab, params),
+    importPrefab: () => invoke(ORCHESTRATOR_IPC.importPrefab),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),

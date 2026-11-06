@@ -1,4 +1,5 @@
 import { existsSync, writeFileSync } from 'node:fs';
+import { flushCompileCache } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigError } from '../hooks.ts';
@@ -11,6 +12,8 @@ import { FakeSession, type Invocation } from '../session.ts';
  * test never looks like the `crash` scenario (exit 1).
  */
 export async function runFakeCli(harness: HarnessName, invoke: () => Invocation): Promise<void> {
+  // Node writes its compile cache at a clean exit, and a test's fake usually ends by a signal (compile-cache.ts).
+  flushCompileCache();
   let invocation: Invocation;
   try {
     invocation = invoke();

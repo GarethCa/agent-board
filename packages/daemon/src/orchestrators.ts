@@ -41,6 +41,7 @@ import {
   type DaemonMethod,
   type DaemonMethods,
   type Effort,
+  EFFORTS,
   type Harness,
   type OrchestrateScope,
   type OrchestratorAction,
@@ -103,6 +104,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.send': 'send',
   'orchestrator.setStatus': 'set-status',
   'orchestrator.interrupt': 'interrupt',
+  'orchestrator.setEffort': 'effort',
   'orchestrator.continueOnCredits': 'continue',
   'orchestrator.restart': 'restart',
   'orchestrator.pause': 'pause',
@@ -200,7 +202,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
+    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -1018,6 +1020,20 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             entry.on = agentTarget(agent);
             checkSteerable(me, agent);
             return agents.interrupt(agent.sessionId, actedBy(me, 'interrupt'));
+          });
+        },
+
+        'orchestrator.setEffort': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.setEffort', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'effort', entry, async () => {
+            const agent = agentNamed(stringParam(p, 'sessionId'));
+            entry.on = agentTarget(agent);
+            checkSteerable(me, agent);
+            const effort = oneOf(p, 'effort', EFFORTS);
+            entry.detail = effort;
+            return agents.setEffort(agent.sessionId, effort);
           });
         },
 

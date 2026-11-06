@@ -21,11 +21,8 @@ import type { SubagentStore } from './subagents.ts';
 import type { TranscriptReader } from './transcripts.ts';
 import { removeWorktree, unsavedWork } from './worktrees.ts';
 
-/** The tile's notice for an agent relaunched without a conversation to carry on. */
-const NO_CONVERSATION_NOTICE = 'No earlier conversation: started fresh';
-
-/** The tile's notice for an agent resumed after its daemon went away under it, until its next turn begins. */
-export const RELAUNCHED_NOTICE = 'Relaunched after a restart';
+/** The tile's notice for an agent that had turns, relaunched without the conversation to carry on; cleared once a turn begins. */
+export const NO_CONVERSATION_NOTICE = 'No earlier conversation: started fresh';
 
 /**
  * What a resumed agent whose turn its daemon cut off is told, as its next message, by any resume in its conversation
@@ -167,8 +164,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const selectChildren = db.prepare('SELECT session_id FROM agents WHERE spawned_by = ?');
   const forgetParent = db.prepare('UPDATE agents SET spawned_by = NULL WHERE spawned_by = ?');
   const keepConversation = db.prepare('INSERT INTO agent_conversations (session_id, harness_session_id, transcript_path) VALUES (?, ?, ?)');
-  const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL WHERE session_id = ?');
-  const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ? WHERE session_id = ?');
+  const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL, had_turn = 0 WHERE session_id = ?');
+  const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ?, had_turn = ? WHERE session_id = ?');
   const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
   const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ? WHERE session_id = ?');
   /** Live Codex agents running with the bypass flag, watched for project config appearing. */
@@ -284,9 +281,9 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     hookStates.relaunched(sessionId);
     // Whatever started it, it is awake now.
     updateHibernated.run(null, null, sessionId);
-    // Its daemon went away under it: it says so until its next turn begins (`agents.ts`'s `save`).
-    const afterRestart = row.ended_at !== null && row.stopped_by_restart === 1;
-    updateNotice.run(noConversation && prompt === undefined && !fresh ? NO_CONVERSATION_NOTICE : afterRestart ? RELAUNCHED_NOTICE : null, sessionId);
+    // A resume after a restart is normal and says nothing. Only a conversation really lost says so: an agent that never
+    // had a turn has nothing to lose.
+    updateNotice.run(noConversation && prompt === undefined && !fresh && row.had_turn === 1 ? NO_CONVERSATION_NOTICE : null, sessionId);
     // A cut-off turn is kept until a turn begins (`agents.ts`'s `save`), so a restart before the line is typed tells it
     // again; one started on a new conversation, or afresh on its task, has none to carry on.
     if (noConversation || fresh) updateCutOff.run(0, sessionId);
@@ -530,7 +527,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       await endFallbackShell(sessionId, `restart for ${asked}`);
       let row = getRow(sessionId);
       if (row === undefined || row.ended_at === null) return requireAgent(sessionId);
-      const previous = { conversation: row.harness_session_id, transcript: row.transcript_path };
+      const previous = { conversation: row.harness_session_id, transcript: row.transcript_path, hadTurn: row.had_turn };
       if (fresh !== undefined) {
         // Its harness must find the new conversation on the row to launch it; put back below if it doesn't start.
         startConversation.run(row.harness === 'claude' ? randomUUID() : null, sessionId);
@@ -549,7 +546,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       const carryOn = fresh === undefined && row.turn_cut_off === 1;
       const resumed = relaunch(row, fresh?.prompt, why, fresh === undefined ? undefined : null, fresh !== undefined, carryOn);
       if (fresh !== undefined) {
-        if (!resumed.started) restoreConversation.run(previous.conversation, previous.transcript, sessionId);
+        if (!resumed.started) restoreConversation.run(previous.conversation, previous.transcript, previous.hadTurn, sessionId);
         else {
           // The old conversation is kept only once the new one has started.
           const old = row.harness === 'claude' ? (previous.conversation ?? sessionId) : previous.conversation;

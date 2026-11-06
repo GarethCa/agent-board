@@ -260,13 +260,22 @@ export function roleNote(role: string, whose: string): string {
 
 /**
  * An agent's harness, model, reasoning effort (when not its harness's own) and role on one line, and what a reviewer
- * reviews: the tile's badges' tooltip, and the inspector's line.
+ * reviews: the tile's badges' tooltip.
  */
 export function agentSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'effort' | 'effortPending' | 'role' | 'roleName' | 'reviews'>): string {
   const role = agent.role === null ? 'no role' : roleText(agent.role, agent.roleName);
   const effort = effortText(agent);
   const line = [HARNESSES[agent.harness].label, agent.model === null ? 'default model' : modelLabel(agent.model), ...(effort === null ? [] : [effort]), role].join(' · ');
   return agent.reviews === null ? line : `${line}. Reviews ${agent.reviews.branch} at ${shortCommit(agent.reviews.head)}.`;
+}
+
+/**
+ * The same as the shelves say it, leaving out what isn't there: a default model, no role. The footer's branch line says
+ * what a reviewer reviews.
+ */
+export function shelvesSetupLine(agent: Pick<Agent, 'harness' | 'model' | 'effort' | 'effortPending' | 'role' | 'roleName'>): string {
+  const effort = effortText(agent);
+  return [HARNESSES[agent.harness].label, ...(agent.model === null ? [] : [modelLabel(agent.model)]), ...(effort === null ? [] : [effort]), ...(agent.role === null ? [] : [roleText(agent.role, agent.roleName)])].join(' · ');
 }
 
 /** An agent's branch as its tile and details say it: a reviewer's reads "detached @ <commit> · <branch it reviews>". */

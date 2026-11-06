@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent } from '@agent-board/daemon/protocol';
-import { agentSetupLine, effortText } from './AgentSetup';
+import { agentSetupLine, effortText, shelvesSetupLine } from './AgentSetup';
 
 const setup = (fields: Partial<Agent> = {}) =>
   ({ harness: 'claude', model: null, effort: null, effortPending: null, role: null, roleName: null, reviews: null, ...fields }) as Agent;
@@ -16,5 +16,13 @@ describe("an agent's setup line", () => {
     expect(effortText(setup({ harness: 'codex', effort: 'low', effortPending: 'restart' }))).toBe('Low reasoning on restart');
     expect(effortText(setup())).toBeNull();
     expect(effortText(setup({ effortPending: 'restart' }))).toBe('Default reasoning on restart');
+  });
+});
+
+describe("an agent's setup line on its shelves", () => {
+  it('leaves out what is not there: a default model, no role', () => {
+    expect(shelvesSetupLine(setup())).toBe('Claude');
+    expect(shelvesSetupLine(setup({ model: 'opus' }))).toBe('Claude · Opus');
+    expect(shelvesSetupLine(setup({ model: 'opus', effort: 'high', role: 'reviewer' }))).toBe('Claude · Opus · High reasoning · Reviewer');
   });
 });

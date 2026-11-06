@@ -90,6 +90,7 @@
   --prefab: var(--paint-pink);
   --prefab-soft: var(--shape-fill-pink);
   --prefab-ink: var(--shape-ink-pink);
+  --prefab-edge: color-mix(in srgb, var(--prefab) 40%, var(--border)); /* round a prefab of your own, in the library */
   --prefab-wire: var(--control-edge); /* who gets whose work, in the editor's diagram */
 
   /* Inverse: a dark chip on the light desk, for tooltips and toasts */
@@ -758,6 +759,11 @@
   --size-role-templates: 760px; /* a zone's role templates dialog: the roles beside the editor */
   --size-prefab-editor: 1080px; /* a crew prefab's flow editor: the diagram beside the picked member */
   --size-prefab-inspector: 340px; /* its inspector column */
+  --size-prefab-card: 240px; /* a prefab's card in the library, at its narrowest */
+  --size-crew-prompt: 560px; /* a crew's prompt box */
+  --size-crew-face: 18px; /* a member's face in a row that names a crew */
+  --size-spotlight-faces: calc(var(--size-crew-face) * 3 + var(--space-0-5) * 3 + var(--space-5)); /* ⌘K's crew rows: three faces and a +N */
+  --sheet-top: 14vh; /* New agent's top edge, fixed so its Agent | Crew switch stays put */
   --size-prefab-bubble: 44px; /* a member's bubble in the diagram */
   --size-prefab-bubble-small: 28px; /* the same, at the inspector's head */
   --size-prefab-pill: 30px; /* your prompt, and where it ends */
@@ -837,6 +843,7 @@
   --size-hover-card: 270px; /* a hover card's widest */
   --size-toast: 380px; /* a toast's widest */
   --size-menu: 214px; /* a menu's narrowest */
+  --size-popover-wide: 420px; /* the widest a list popover grows, long lines cut with an ellipsis */
   --size-empty-body: 200px; /* an empty state's text, widest */
   --size-dialog: 440px; /* a dialog's width */
   --size-view-popover: 260px; /* the zoom bar's View popover */

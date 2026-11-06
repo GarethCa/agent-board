@@ -46,6 +46,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
   shells: readonly Shell[] | undefined;
   /** Opens Add zone in the middle of the view, on the source's tab (GitHub without one). */
   onAddZone(source?: ZoneSource): void;
+  onCrewLibrary(): void;
   /** Lays the zones out in rows and gathers the loose tiles below them. */
   onArrangeBoard(): void;
   onJump(zone: Zone): void;
@@ -72,7 +73,7 @@ export interface BoardChromeProps extends CreateToolbarProps {
  * right. On macOS the traffic lights sit left of the board menu, and the window drags by the thin strip along the top
  * and the board menu's empty space (DecU, U2).
  */
-export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, onMaster, onNeedsYou, onSettings, shells, onAddZone, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, ...toolbar }: BoardChromeProps) {
+export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, onMaster, onNeedsYou, onSettings, shells, onAddZone, onCrewLibrary, onArrangeBoard, onJump, currentZone, onKeyboardHelp, onOpenAgent, onOpenShell, onError, minimapColor, grid, onGrid, onRunInShell, onCloseWindow, ...toolbar }: BoardChromeProps) {
   const status = useDaemonStatus();
   const [menu, setMenu] = useState<BoardMenuState>({ open: false });
   const onboarding = useOnboarding(loaded, loadedEmpty, onError);
@@ -106,6 +107,7 @@ export function BoardChrome({ loaded, empty, loadedEmpty, zones, agents, pane, o
         shells={shells}
         onJump={onJump}
         onAddZone={() => onAddZone()}
+        onCrewLibrary={onCrewLibrary}
         onArrangeBoard={onArrangeBoard}
         onOpenAgent={onOpenAgent}
         onOpenShell={onOpenShell}

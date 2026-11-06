@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, AgentPage, AgentRecord, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
-import { crewNeedingYou, madeCount, nowCard, pullRequestsToWatch, shelfShown, shelfTabs } from './shelves';
+import type { Agent, AgentPage, AgentRecord, GateRun, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
+import { clockMeta, crewNeedingYou, crewStatus, folderMeta, gateWords, madeCount, pageProgress, startedBy, statusLine, nowCard, planMeta, pullRequestsToWatch, shelfShown, shelfTabs, shortFolder, subagentStatus } from './shelves';
 
 const agent = (overrides: Partial<Agent> = {}): Agent =>
   ({
@@ -23,6 +23,7 @@ const agent = (overrides: Partial<Agent> = {}): Agent =>
     docs: [],
     subagents: [],
     schedule: null,
+    issue: null,
     status: null,
     lastMessage: null,
     ...overrides,
@@ -34,7 +35,7 @@ const pr = (number: number, overrides: Partial<PullRequest> = {}): PullRequest =
 const record = (overrides: Partial<AgentRecord>): AgentRecord => ({ recordedAt: '2026-10-30T09:00:00Z', deletedAt: null, from: null, ...overrides }) as AgentRecord;
 
 const shows: NeedsYouShows = 'explicit';
-const SETUP = { setup: true };
+const SETUP = { technical: true };
 
 const page: AgentPage = {
   name: 'Export',
@@ -68,20 +69,24 @@ describe('the shelves that have a tab', () => {
     expect(madeCount(made)).toBe(4);
   });
 
-  it('count its pins in Made until they move onto its page, and leave out a record the user deleted', () => {
+  it('leave its pins out of Made, on its page now, and leave out of its count a record the user deleted', () => {
     const url = 'https://github.com/o/r/pull/9';
-    const pinned = agent({
-      records: [
-        record({ kind: 'pin', key: 'note:Logins', target: { kind: 'note', text: 'ann' }, label: 'Logins' } as Partial<AgentRecord>),
-        record({ kind: 'pr', key: 'o/r#9', url, title: null, deletedAt: '2026-10-30T10:00:00Z' } as Partial<AgentRecord>),
-      ],
-    });
-    expect(shelfTabs(pinned, [], shows, SETUP)).toContainEqual({ id: 'made', label: 'Made', count: 1 });
+    const pinned = agent({ records: [record({ kind: 'pin', key: 'note:Logins', target: { kind: 'note', text: 'ann' }, label: 'Logins' } as Partial<AgentRecord>)] });
+    expect(shelfTabs(pinned, [], shows, SETUP).map((tab) => tab.id)).toEqual(['page', 'setup']);
     expect(madeCount(agent({ records: [record({ kind: 'pr', key: 'o/r#9', url, title: null, deletedAt: '2026-10-30T10:00:00Z' } as Partial<AgentRecord>)] }))).toBe(0);
   });
 
-  it('give Setup a tab only while the window has something for it', () => {
-    expect(shelfTabs(agent(), [], shows, { setup: false })).toEqual([{ id: 'page', label: 'Now' }]);
+  it('keep Made while all it holds is deleted, so its Show can bring them back', () => {
+    const url = 'https://github.com/o/r/pull/9';
+    const deleted = agent({ records: [record({ kind: 'pr', key: 'o/r#9', url, title: null, deletedAt: '2026-10-30T10:00:00Z' } as Partial<AgentRecord>)] });
+    expect(shelfTabs(deleted, [], shows, SETUP)).toContainEqual({ id: 'made', label: 'Made', count: 0 });
+  });
+
+  it('give Setup a tab with the technical layer, or for a linked issue or a schedule, which are no technical detail', () => {
+    const off = { technical: false };
+    expect(shelfTabs(agent(), [], shows, off)).toEqual([{ id: 'page', label: 'Now' }]);
+    expect(shelfTabs(agent({ issue: { provider: 'linear', id: 'A-1', title: 'T', url: '' } }), [], shows, off).map((tab) => tab.id)).toEqual(['page', 'setup']);
+    expect(shelfTabs(agent({ schedule: { cron: '0 9 * * *' } as Agent['schedule'] }), [], shows, off).map((tab) => tab.id)).toEqual(['page', 'setup']);
   });
 
   it('add Crew once it starts an agent or has a subagent, an orange dot while one of its crew needs you', () => {
@@ -127,4 +132,102 @@ describe('the board’s Now', () => {
     expect(nowCard(agent())).toEqual({ kind: 'none' });
   });
 
+});
+
+describe('a crew member’s status', () => {
+  const ended = (overrides: Partial<Agent>) => agent({ sessionId: 'm', spawnedBy: 'a', endedAt: '2026-10-30T10:00:00Z', exitCode: 0, reviewOf: null, ledBy: null, ...overrides });
+
+  it('says what its own window says of an ended one, never Done for one that failed, is paused or was stopped', () => {
+    expect(crewStatus(ended({ state: 'failed', exitCode: 1 }), shows)).toBe('problem');
+    expect(crewStatus(ended({ state: 'hibernated' }), shows)).toBe('paused');
+    expect(crewStatus(ended({ state: 'stopped-by-restart' }), shows)).toBe('needs-you');
+    expect(crewStatus(ended({ state: 'done', pullRequests: [pr(1)] }), shows)).toBe('needs-you');
+    expect(crewStatus(ended({ state: 'done' }), shows)).toBe('done');
+  });
+
+  it('puts one that needs you in Crew’s dot and From the board as its row says, ended or not', () => {
+    const lead = agent();
+    const stopped = ended({ name: 'Stopped', state: 'stopped-by-restart' });
+    expect(crewNeedingYou(lead, [lead, stopped], shows).map((each) => each.name)).toEqual(['Stopped']);
+    expect(shelfTabs(lead, [lead, stopped], shows, SETUP)).toContainEqual({ id: 'crew', label: 'Crew', count: 1, needsYou: true });
+  });
+});
+
+describe('Setup’s rows', () => {
+  it('say when its folder has left its worktree', () => {
+    expect(folderMeta('/wt/a/src', '/wt/a')).toBe('folder (live)');
+    expect(folderMeta('/tmp/elsewhere', '/wt/a')).toBe('outside its worktree · live');
+  });
+
+  it('say when its clock next runs, or that it is paused', () => {
+    expect(clockMeta('tomorrow 09:00')).toBe('its clock · next tomorrow 09:00');
+    expect(clockMeta('paused')).toBe('its clock · paused');
+  });
+});
+
+describe('the shelves’ words', () => {
+  const run = (fields: Partial<GateRun>): GateRun =>
+    ({ sessionId: 'a', command: 'c', commit: 'abc', dirty: false, startedAt: '', endedAt: null, status: 'running', exitCode: null, steps: [], ...fields }) as GateRun;
+
+  it('put a gate run in words, saying when it failed, whatever its icon', () => {
+    const steps = [{ name: 'lint', status: 'failed', startedAt: null, endedAt: null }] as GateRun['steps'];
+    expect(gateWords(run({ status: 'passed', steps }))).toBe('gate passed');
+    expect(gateWords(run({ status: 'failed', steps }))).toBe('gate failed · lint');
+    expect(gateWords(run({ status: 'failed', exitCode: 1 }))).toBe('gate failed · exit 1');
+    expect(gateWords(run({ status: 'stopped' }))).toBe('gate stopped');
+  });
+
+  it('say a subagent’s state as a crew member’s status', () => {
+    expect(subagentStatus('running')).toBe('working');
+    expect(subagentStatus('thinking')).toBe('working');
+    expect(subagentStatus('idle')).toBe('done');
+    expect(subagentStatus('rate-limited')).toBe('paused');
+    expect(subagentStatus('needs-permission')).toBe('needs-you');
+    expect(subagentStatus('done')).toBe('done');
+    expect(subagentStatus('failed')).toBe('problem');
+  });
+
+  it('keep the part of a worktree’s path that differs', () => {
+    expect(shortFolder('~/.agent-board/worktrees/billing-api/export-csv')).toBe('…/billing-api/export-csv');
+    expect(shortFolder('/tmp/elsewhere')).toBe('/tmp/elsewhere');
+  });
+
+  it('say a plan’s decision, else when it was shown', () => {
+    const when = (at: string) => at;
+    expect(planMeta({ decision: null, presentedAt: '09:31' }, when)).toBe('shown 09:31');
+    expect(planMeta({ decision: { outcome: 'approved', comments: '', decidedAt: '09:40' }, presentedAt: '09:31' }, when)).toBe('approved · 09:40');
+    expect(planMeta({ decision: { outcome: 'timed-out', comments: '', decidedAt: '09:40' }, presentedAt: '09:31' }, when)).toBe('timed out · 09:40');
+  });
+});
+
+describe('the rail’s progress ring', () => {
+  it('reads the page’s first heading with a progress bar, else the status line’s', () => {
+    expect(pageProgress(agent({ page }))).toBe(60);
+    expect(pageProgress(agent({ status: { summary: 's', progress: 30, updatedAt: '', setBy: null } }))).toBe(30);
+    expect(pageProgress(agent())).toBeNull();
+  });
+});
+
+describe('startedBy', () => {
+  it('reads "you" for an agent the user started', () => {
+    expect(startedBy(agent(), [])).toBe('you');
+  });
+
+  it('names the Captain, or the orchestrator, that started it', () => {
+    const captain = agent({ sessionId: 'c', name: 'Captain', master: true });
+    const lead = agent({ sessionId: 'l', name: 'lead' });
+    expect(startedBy(agent({ spawnedBy: 'c' }), [captain, lead])).toBe('the Captain');
+    expect(startedBy(agent({ spawnedBy: 'l' }), [captain, lead])).toBe('lead');
+  });
+
+  it('reads "an agent" while the one that started it is not listed', () => {
+    expect(startedBy(agent({ spawnedBy: 'gone' }), [])).toBe('an agent');
+  });
+});
+
+describe('statusLine', () => {
+  it('leads with what the status word leaves out, then who started it and when', () => {
+    expect(statusLine('Changes ready to review', 'the Captain', '9:02')).toBe('Changes ready to review · started by the Captain, 9:02');
+    expect(statusLine(null, 'you', '9:14')).toBe('started by you, 9:14');
+  });
 });

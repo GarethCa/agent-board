@@ -23,6 +23,7 @@ import {
   Spline,
   LayoutDashboard,
   LayoutGrid,
+  LibraryBig,
   ListTodo,
   Pencil,
   Pin,
@@ -31,8 +32,11 @@ import {
   Sparkles,
   SquareDashedMousePointer,
   Trash2,
+  Users,
   Workflow,
 } from 'lucide-react';
+import { CrewFaces } from '../../crews/icons';
+import { crewGroups } from '../../crews/prefab-store';
 import { binding, isActive, keyText } from '../../keys/registry';
 import type { MenuEntry } from '../../ui';
 import { ITEM_KINDS } from '../items/kinds';
@@ -75,6 +79,10 @@ export interface ContextActions {
   addMemory(): void;
   /** A new queue for agents where the menu was opened, its add box focused. */
   addQueue(): void;
+  /** Opens the prompt box of a crew from the prefab named. */
+  startCrew(prefab: string): void;
+  /** Opens the crew library. */
+  crewLibrary(): void;
   /** With one lead tile selected in a shelved zone: whether it is pinned top-left, and how to free or pin it. */
   leadPin?: { pinned: boolean; toggle(): void };
 }
@@ -181,6 +189,17 @@ export function boardEntries(actions: ContextActions): MenuEntry[] {
     { label: 'Add a clock', icon: <AlarmClock />, hint: 'A schedule that messages an agent, or starts one', onSelect: actions.addClock },
     { label: 'Add a memory', icon: <Brain />, shortcut: keyText('make.memory'), hint: 'Notes and decisions you and agents keep for each other', onSelect: actions.addMemory },
     { label: 'Add a queue', icon: <Ticket />, shortcut: keyText('make.queue'), hint: 'Jobs in order, for agents to take one at a time', onSelect: actions.addQueue },
+    {
+      label: 'New crew',
+      icon: <Users />,
+      entries: [
+        ...crewGroups().flatMap((group): MenuEntry[] => [
+          ...group.map((prefab): MenuEntry => ({ label: prefab.name, icon: <CrewFaces members={prefab.members} />, onSelect: () => actions.startCrew(prefab.name) })),
+          'separator',
+        ]),
+        { label: 'Library…', icon: <LibraryBig />, onSelect: actions.crewLibrary },
+      ],
+    },
     { label: 'Select all', icon: <SquareDashedMousePointer />, shortcut: keyText('edit.selectAll'), onSelect: actions.selectAll },
     { label: actions.grid ? 'Stop snapping to the grid' : 'Snap to the grid', icon: <Grid3x3 />, onSelect: actions.toggleGrid },
     { label: 'Tidy loose tiles', icon: <LayoutGrid />, hint: 'In a grid where they are, in reading order', onSelect: actions.tidyLoose },

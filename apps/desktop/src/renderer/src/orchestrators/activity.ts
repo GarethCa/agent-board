@@ -10,6 +10,7 @@ const VERBS: Record<OrchestratorAction, { done: string; tried: string; of?: stri
   spawn: { done: 'started', tried: 'start' },
   send: { done: 'sent', tried: 'send' },
   interrupt: { done: 'interrupted', tried: 'interrupt' },
+  effort: { done: 'changed the reasoning effort of', tried: 'change the reasoning effort of' },
   continue: { done: 'continued', tried: 'continue', after: ' on credits' },
   restart: { done: 'restarted', tried: 'restart' },
   pause: { done: 'paused', tried: 'pause' },

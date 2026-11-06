@@ -1,4 +1,5 @@
 import { createContext, memo, useContext, useId, useState, type CSSProperties, type ReactNode } from 'react';
+import { usePrefabs } from '../crews/prefab-store';
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react';
 import { ChevronDown, CircleDot, Ellipsis, GitBranch, LayoutGrid, Link2, ListPlus, Plus, X } from 'lucide-react';
 import { Chip, EditableName, Menu, useRenaming } from '../ui';
@@ -120,7 +121,8 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   setAgentsOrchestrate: () => {},
   editGateCommand: () => {},
   editRoleTemplates: () => {},
-  editCrewPrefabs: () => {},
+  startCrew: () => {},
+  crewLibrary: () => {},
 });
 
 /** The fill opacity the theme gives a zone that has none of its own, in percent. */
@@ -362,6 +364,8 @@ function ClassicZone({
     const entry = folded.has(key) ? chips.find((chip) => chip.key === key)?.entry : undefined;
     return entry === undefined ? [] : [entry];
   });
+  // Its New crew lists the library as it is now, and this zone is drawn only when something of its own changes.
+  usePrefabs();
   const menu = zoneMenu({ zone, folded: foldedEntries, themeFill: themeFillOpacity(), rename: renaming.startSoon, actions: binding });
   return (
     <div

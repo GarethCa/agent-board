@@ -22,3 +22,21 @@ export function PrefabIcon({ icon }: { icon: string }) {
   if (icon === 'lead') return <Network aria-hidden />;
   return <Users aria-hidden />;
 }
+
+/** The most faces a row shows before it says how many more. */
+const MAX_ROW_FACES = 4;
+
+/** A crew at a glance, in a row of a menu, a sheet or ⌘K: a small face for each member, so two crews tell apart. */
+export function CrewFaces({ members, most = MAX_ROW_FACES }: { members: readonly Pick<PrefabMember, 'id' | 'name' | 'role'>[]; most?: number }) {
+  const more = members.length - most;
+  return (
+    <span className="crew-faces" aria-hidden>
+      {members.slice(0, most).map((member) => (
+        <span key={member.id} className="crew-face">
+          <RoleIcon member={member} />
+        </span>
+      ))}
+      {more > 0 && <span className="crew-faces-more">+{more}</span>}
+    </span>
+  );
+}

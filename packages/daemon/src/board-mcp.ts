@@ -28,6 +28,7 @@ import {
   connectionsView,
   identifyView,
   interruptAgent,
+  setAgentEffort,
   continueAgent,
   restartAgent,
   newAgent,
@@ -385,7 +386,7 @@ export const BOARD_MCP_TOOLS: Tool[] = [
   {
     name: 'pin',
     description:
-      'Pin something you want the user to see on your sidebar\'s Pins: a file (a Markdown or HTML one opens in a Doc tab, ' +
+      'Pin something you want the user to see on your sidebar, as a Pinned block of your page or in the Full sidebar\'s Pins: a file (a Markdown or HTML one opens in a Doc tab, ' +
       'any other is shown in its folder), an http(s) link (opens in a web tab), or a short note with a label. Give one of ' +
       'path, url or note. Pinning the same file, link or note label again replaces it; the user may delete a pin, not ' +
       'edit it. With for_orchestrator, it goes on the orchestrator that started you instead. As `agent-board pin`.',
@@ -822,6 +823,19 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
     name: 'interrupt',
     description: "Interrupt an agent's turn, as Ctrl-C would: it waits at its prompt. As `agent-board interrupt`.",
     inputSchema: { type: 'object', properties: { agent: AGENT_REF }, required: ['agent'], additionalProperties: false },
+  },
+  {
+    name: 'set_effort',
+    description:
+      "Change an agent's reasoning effort, as its tile's Reasoning menu does. A Claude agent takes it at once if it is at its " +
+      'prompt, or when its turn ends if it is mid-turn (never typed into a turn); a Codex agent (no max) takes it when next ' +
+      'started. The reply says which. As `agent-board effort`.',
+    inputSchema: {
+      type: 'object',
+      properties: { agent: AGENT_REF, effort: { type: 'string', enum: [...EFFORTS], description: 'The new level.' } },
+      required: ['agent', 'effort'],
+      additionalProperties: false,
+    },
   },
   {
     name: 'continue_on_credits',
@@ -1553,6 +1567,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   read: async (session, args) => (await readAgent(session, stringArg(args, 'agent'), stringArg(args, 'path', true))).text,
   interrupt: async (session, args) => (await interruptAgent(session, stringArg(args, 'agent'))).text,
+  set_effort: async (session, args) => (await setAgentEffort(session, stringArg(args, 'agent'), stringArg(args, 'effort'))).text,
   continue_on_credits: async (session, args) => (await continueAgent(session, stringArg(args, 'agent'))).text,
   restart: async (session, args) => {
     const prompt = stringArg(args, 'prompt', true);

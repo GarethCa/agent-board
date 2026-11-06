@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState } from '@agent-board/daemon/protocol';
-import { sessionControls, type ControlId } from './controls';
+import { leadControl, sessionControls, type ControlId } from './controls';
 
 function agent(state: AgentState, endedAt: string | null = null, fields: Partial<Agent> = {}): Agent {
   return { state, endedAt, ask: null, plan: null, permissions: [], ...fields } as Agent;
@@ -58,5 +58,23 @@ describe('session window controls', () => {
 
   it('interrupts and stops a live shell whatever it is doing', () => {
     expect(enabled(sessionControls({ live: true }))).toEqual(['interrupt', 'stop']);
+  });
+});
+
+describe('the header’s one state button', () => {
+  const lead = (fields: Partial<Agent>, live = true) => leadControl(sessionControls({ agent: { state: 'idle', endedAt: null, ask: null, plan: null, permissions: [], hibernated: null, ...fields } as unknown as Agent, live }))?.id;
+
+  it('is Wake while it is paused', () => {
+    expect(lead({ state: 'hibernated', endedAt: '2026-10-30T10:00:00Z' }, false)).toBe('wake');
+  });
+  it('is Interrupt mid-turn, with Pause and Stop left for ⋯', () => {
+    expect(lead({ state: 'running' })).toBe('interrupt');
+  });
+  it('is Pause between turns', () => {
+    expect(lead({ state: 'waiting' })).toBe('pause');
+  });
+  it('is none for one that has gone, ended or with its session lost', () => {
+    expect(lead({ state: 'done', endedAt: '2026-10-30T10:00:00Z' }, false)).toBeUndefined();
+    expect(lead({ state: 'waiting' }, false)).toBeUndefined();
   });
 });

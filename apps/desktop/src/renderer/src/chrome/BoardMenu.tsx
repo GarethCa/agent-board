@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { LayoutDashboard, LifeBuoy, Menu as MenuIcon, Plus, Search, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, LifeBuoy, Menu as MenuIcon, Plus, Search, Settings as SettingsIcon, LibraryBig } from 'lucide-react';
 import { APP_NAME } from '../../../shared/brand';
 import { DaemonStatus, type DaemonStatusValue } from '../DaemonStatus';
 import { useSimplified } from '../design';
@@ -31,6 +31,8 @@ export interface BoardMenuProps {
   onAddZone(): void;
   /** Lays the zones out in rows and gathers the loose tiles below them. */
   onArrangeBoard(): void;
+  /** Opens the crew library. */
+  onCrewLibrary(): void;
   onOpenAgent(agent: Agent): void;
   onOpenShell(shell: Shell): void;
   /** Reopens onboarding; the Help section's Getting started row shows only while it is set. */
@@ -46,7 +48,7 @@ export interface BoardMenuProps {
  * panel with the zones, the agents and shells, and a Settings… row that opens the Settings window. Its search field
  * (⌘\ opens the menu on it) narrows the zones and agents by name; Find opens the ⌘K switcher.
  */
-export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onArrangeBoard, onOpenAgent, onOpenShell, onGettingStarted, onFind, onSettings }: BoardMenuProps) {
+export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump, onAddZone, onArrangeBoard, onCrewLibrary, onOpenAgent, onOpenShell, onGettingStarted, onFind, onSettings }: BoardMenuProps) {
   const [filter, setFilter] = useState('');
   const search = useRef<HTMLInputElement>(null);
   const simplified = useSimplified();
@@ -143,6 +145,19 @@ export function BoardMenu({ menu, onMenu, status, zones, agents, shells, onJump,
           </div>
         </Section>
         <Sessions agents={agents} shells={shells} filter={filter} open={wanted !== '' || sessionsOpen} onOpenChange={(next) => wanted === '' && setSessionsOpen(next)} onPicked={close} onOpenAgent={onOpenAgent} onOpenShell={onOpenShell} />
+        <div className="board-menu-actions board-menu-crews">
+          <Button
+              size="sm"
+              variant="ghost"
+              icon={<LibraryBig />}
+              onClick={() => {
+                close();
+                onCrewLibrary();
+              }}
+            >
+              Crew library
+            </Button>
+        </div>
         {onGettingStarted !== undefined && (
           <Section label="Help" open={helpOpen} onOpenChange={setHelpOpen}>
             <div className="board-menu-actions">

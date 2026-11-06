@@ -49,7 +49,7 @@ describe('the board view settings', () => {
 
   it('read back what was saved, a value it does not know as the default', () => {
     restoreViewSettings({ clickOpens: 'expand', agentNoteLook: 'nonsense', agentSidebar: 'simple' });
-    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'simple' });
+    expect(viewSettings()).toMatchObject({ clickOpens: 'expand', agentNoteLook: 'document', agentSidebar: 'shelves' });
   });
 
   it('are read as a window follows them, and a change another window makes is heard', async () => {
@@ -61,8 +61,8 @@ describe('the board view settings', () => {
     expect(viewSettings().gpuTerminals).toBe(false);
     change('clickOpens', 'expand');
     expect(viewSettings().clickOpens).toBe('expand');
-    change('agentSidebar', 'simple');
-    expect(viewSettings().agentSidebar).toBe('simple');
+    change('agentSidebar', 'shelves');
+    expect(viewSettings().agentSidebar).toBe('shelves');
     change('viewport', { x: 1 });
     expect(viewSettings()).toMatchObject({ clickOpens: 'expand', crewLook: 'off' });
   });

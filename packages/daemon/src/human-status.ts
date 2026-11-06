@@ -30,7 +30,7 @@ export type HumanStatusFacts = NeedsYouFacts & Pick<Agent, 'exitCode' | 'reviewO
 export type ImplementerFacts = Pick<Agent, 'name' | 'state' | 'endedAt'>;
 
 /** Each state's status on its own, for a live agent asking nothing. */
-const BY_STATE: Record<AgentState, HumanStatus> = {
+export const HUMAN_STATUS_BY_STATE: Record<AgentState, HumanStatus> = {
   running: 'working',
   thinking: 'working',
   starting: 'working',
@@ -105,13 +105,13 @@ export function humanStatus(agent: HumanStatusFacts, shows: NeedsYouShows, imple
   if (waiting && implementer != null) {
     return { status: 'paused', detail: `Waits for ${implementer.name}` };
   }
-  return { status: BY_STATE[state], detail: null };
+  return { status: HUMAN_STATUS_BY_STATE[state], detail: null };
 }
 
 /** Whether a reviewer waits on its implementer: one live and working or at its usage limit, or one paused. */
 function waitedOn(implementer: ImplementerFacts): boolean {
   if (implementer.state === 'hibernated') return true;
-  const status = BY_STATE[implementer.state];
+  const status = HUMAN_STATUS_BY_STATE[implementer.state];
   return implementer.endedAt === null && (status === 'working' || status === 'paused');
 }
 

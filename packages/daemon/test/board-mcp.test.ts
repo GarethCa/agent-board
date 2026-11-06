@@ -162,6 +162,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     },
     { tool: 'read', command: 'read', positional: ['agent', 'path'] },
     { tool: 'interrupt', command: 'interrupt', positional: ['agent'] },
+    { tool: 'set_effort', command: 'effort', positional: ['agent', 'effort'] },
     { tool: 'continue_on_credits', command: 'continue', positional: ['agent'] },
     { tool: 'restart', command: 'restart', positional: ['agent'], renamed: { prompt: 'file' } },
     { tool: 'pause', command: 'pause', positional: ['agent'] },

@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { onTestFinished } from 'vitest';
+import { afterAll, onTestFinished } from 'vitest';
 import { createMemoryCredentialStore } from '@agent-board/tracker/testing';
 import { startDaemon, type Daemon, type DaemonOptions } from '../src/daemon.ts';
 import { connectDaemon, type DaemonClient } from '../src/client.ts';
@@ -79,16 +79,40 @@ export async function enclosingBoard(): Promise<{ hits: string[] }> {
   return { hits };
 }
 
-/** A fresh git repo with one commit and an `apps/web` folder, removed when the test ends. */
+/**
+ * A fresh git repo with one commit and an `apps/web` folder, removed when the test ends. It is a copy, so its index's
+ * stat data is stale until something refreshes it: `git status` and `git diff` do, while plumbing such as
+ * `git diff-files` lists the file as changed until then.
+ */
 export function tempRepo(name = 'monorepo'): string {
   const parent = realpathSync(mkdtempSync(join(tmpdir(), 'ab-repo-')));
   onTestFinished(() => rmSync(parent, { recursive: true, force: true }));
   const repo = join(parent, name);
-  mkdirSync(join(repo, 'apps', 'web'), { recursive: true });
-  writeFileSync(join(repo, 'apps', 'web', 'index.ts'), 'export {};\n');
-  git(repo, 'init', '--quiet');
-  git(repo, 'add', '.');
-  git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'initial');
+  cpSync(templateRepo(), repo, { recursive: true });
+  return repo;
+}
+
+let template: string | undefined;
+afterAll(() => {
+  if (template !== undefined) rmSync(dirname(template), { recursive: true, force: true });
+});
+
+/** The repo `tempRepo` copies, made once per test file: three git processes per repo add up over hundreds of tests. */
+function templateRepo(): string {
+  if (template !== undefined) return template;
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'ab-repo-template-')));
+  const repo = join(parent, 'repo');
+  try {
+    mkdirSync(join(repo, 'apps', 'web'), { recursive: true });
+    writeFileSync(join(repo, 'apps', 'web', 'index.ts'), 'export {};\n');
+    git(repo, 'init', '--quiet');
+    git(repo, 'add', '.');
+    git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'initial');
+  } catch (error) {
+    rmSync(parent, { recursive: true, force: true });
+    throw error;
+  }
+  template = repo;
   return repo;
 }
 

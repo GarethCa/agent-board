@@ -1,6 +1,6 @@
 // What the ⌘K switcher lists: grouped before anything is typed, one ranked fuzzy list after. Pure, so the
 // grouping and the ranking are unit-tested.
-import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { needsYouNow, permissionPrompt, planPending, questionPrompt, type Agent, type LibraryPrefab, type NeedsYouShows, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import type { Placement, SessionWindows } from '../windows/session-windows';
 import { SETTINGS_GROUPS } from './settings-ia';
 import { controlsIn, drawnSections, searchable } from './settings-search';
@@ -11,13 +11,14 @@ export type SpotlightSubject =
   | { kind: 'shell'; shell: Shell }
   | { kind: 'zone'; zone: Zone }
   | { kind: 'setting'; pane: string }
-  | { kind: 'action'; action: SpotlightAction };
+  | { kind: 'action'; action: SpotlightAction }
+  | { kind: 'crew'; prefab: string | null };
 
 /** What an action row does: start an agent, or open the Settings window. */
 export type SpotlightAction = 'newAgent' | 'openSettings';
 
 /** A row's subject that the window ⌘K opened in shows: a session or a zone. */
-export type BoardSubject = Exclude<SpotlightSubject, { kind: 'setting' | 'action' }>;
+export type BoardSubject = Exclude<SpotlightSubject, { kind: 'setting' | 'action' | 'crew' }>;
 
 export interface SpotlightRow {
   key: string;
@@ -49,6 +50,8 @@ export interface SpotlightSources {
   current?: string;
   /** Whether a new agent can start from here, so New agent is offered among the actions; not if unset. */
   canStartAgent?: boolean;
+  /** The crew prefabs to find, yours first. */
+  prefabs?: readonly Pick<LibraryPrefab, 'name' | 'purpose'>[];
   /** Whether the Simplified design is on, so the settings it alone draws are found; Classic's if unset. */
   simplified?: boolean;
   /** Whether the Windows group is listed: always under the Simplified design (the default), and under Classic with the windows the dock leaves out. */
@@ -66,6 +69,9 @@ export const SETTINGS_GROUP = 'Settings';
 
 /** The heading the session windows that are open or minimised are listed under, above every other group. */
 const WINDOWS_GROUP = 'Windows';
+
+/** The heading the crew prefabs found are listed under, below the actions: picking one opens its prompt box. */
+export const CREWS_GROUP = 'Crews';
 
 /** The heading the actions found are listed under, above the settings. */
 export const ACTIONS_GROUP = 'Actions';
@@ -87,7 +93,7 @@ const ACTIONS: readonly { action: SpotlightAction; name: string; sub: string; al
  * matches once something is typed, and a session with a window is listed there only; and once something is typed an
  * Actions group, with New agent (where one can start) and Open Settings, comes above Settings. Classic has neither.
  */
-export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, simplified = false, windowsListed = simplified }: SpotlightSources): SpotlightGroup[] {
+export function spotlightGroups(query: string, { agents, shells, zones, shows, windows = [], current, canStartAgent = false, prefabs = [], simplified = false, windowsListed = simplified }: SpotlightSources): SpotlightGroup[] {
   const zoneName = (zoneId: string | null) => (zoneId === null ? 'Loose' : (zones.find((zone) => zone.id === zoneId)?.name ?? 'Loose'));
   // A shell that is a tab is its owner's window's, not a tile of its own.
   const tiles = shells.filter((shell) => shell.owner === null);
@@ -165,8 +171,28 @@ export function spotlightGroups(query: string, { agents, shells, zones, shows, w
   }
   for (const zone of zones) consider([[zone.name, 1]], (marks) => zoneRow(zone, agents, tiles, marks));
   ranked.sort((a, b) => b.score - a.score || a.row.name.localeCompare(b.row.name));
-  const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: simplified ? actionRows(wanted, canStartAgent) : [] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
+  const groups: SpotlightGroup[] = [{ label: matchedWindows.length > 0 ? WINDOWS_GROUP : undefined, rows: matchedWindows.map(({ row }) => row) }, { rows: ranked.map(({ row }) => row) }, { label: ACTIONS_GROUP, rows: simplified ? actionRows(wanted, canStartAgent) : [] }, { label: CREWS_GROUP, rows: canStartAgent ? crewRows(wanted, prefabs) : [] }, { label: SETTINGS_GROUP, rows: settingRows(wanted, simplified) }];
   return groups.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * Whether "New agent named …" leads the list, so ↵ starts it: unless what was typed is in a crew's name, when ↵ opens
+ * that crew and it is offered last. A match only on what a crew is for doesn't count: `build` may well name an agent.
+ */
+export const newAgentLeads = (groups: readonly SpotlightGroup[]): boolean => !groups.some((group) => group.label === CREWS_GROUP && group.rows.some((row) => row.marks.length > 0));
+
+/** The prefabs whose name, or what it is for, holds `wanted`, and the library: `crew` alone finds them all. */
+function crewRows(wanted: string, prefabs: NonNullable<SpotlightSources['prefabs']>): SpotlightRow[] {
+  const found: { score: number; row: SpotlightRow }[] = [];
+  const consider = (key: string, prefab: string | null, name: string, sub: string, also: string) => {
+    const named = fuzzyMatch(wanted, name, true);
+    const other = fuzzyMatch(wanted, also, true);
+    const score = Math.max(named?.score ?? 0, (other?.score ?? 0) * FIELD_WEIGHTS.also);
+    if (score > 0) found.push({ score, row: { key, subject: { kind: 'crew', prefab }, name, sub, marks: named?.positions ?? [] } });
+  };
+  for (const { name, purpose } of prefabs) consider(`crew:${name}`, name, name, purpose, `crew prefab ${purpose}`);
+  consider('crew-library', null, 'Crew library', 'Every crew prefab, to start, edit or make one', 'prefab team');
+  return found.sort((a, b) => b.score - a.score).map(({ row }) => row);
 }
 
 /** The actions whose name or other words hold `wanted`, a match in the name first. */

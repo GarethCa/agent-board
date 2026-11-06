@@ -1,12 +1,12 @@
 // The agent sidebar's gallery (`#gallery-agent-sidebar`, a page of the dev gallery's own): a busy agent and a quiet one, as the design draws them, with the shelves
 // open on the page, the page styled by the agent, the page at the least width, a page of links and a note, and Made,
-// Crew and Setup as the window draws them for now. Fixed data and no daemon, so its
+// Crew and Setup. Fixed data and no daemon, so its
 // shots are the same every run.
-import type { Agent, AgentPage, AgentRecord } from '@agent-board/daemon/protocol';
+import type { Agent, AgentPage, AgentRecord, GateRun } from '@agent-board/daemon/protocol';
 import { galleryAgent } from '../board/TileGallery';
 import { AgentShelves, type ShelfActions } from './AgentShelves';
+import type { RecordDeletes } from './RecordList';
 import type { ShelfId } from './shelves';
-import { inspectorShelves } from './SimplifiedInspector';
 
 const AT = '2026-01-01T09:14:00.000Z';
 const at = (time: string) => `2026-01-01T${time}:00.000Z`;
@@ -64,11 +64,11 @@ const STYLED_PAGE: AgentPage = {
 
 const BUSY_ID = 'gallery-busy';
 
-const crew = (id: string, name: string, roleName: string, overrides: Partial<Agent>): Agent => ({
+const crew = (id: string, name: string, role: Agent['role'], overrides: Partial<Agent>): Agent => ({
   ...galleryAgent('running'),
   sessionId: id,
   name,
-  roleName,
+  role,
   spawnedBy: BUSY_ID,
   lastMessage: null,
   createdAt: AT,
@@ -84,6 +84,8 @@ const CREW: Agent[] = [
   crew('gallery-review', 'Review: CSV export', 'reviewer', { state: 'needs-permission', permissions: [{ id: 'p', tool: 'Bash', input: {}, at: AT }] as unknown as Agent['permissions'] }),
   crew('gallery-docs', 'Docs: export guide', 'implementer', { state: 'running' }),
   crew('gallery-flaky', 'Fix flaky date test', 'implementer', { state: 'done', endedAt: at('10:30') }),
+  crew('gallery-crashed', 'Migrate old exports', 'implementer', { state: 'failed', endedAt: at('10:35'), exitCode: 1 }),
+  crew('gallery-paused', 'Tidy the CSV helpers', 'implementer', { state: 'hibernated', endedAt: at('10:36') }),
 ];
 
 const BUSY: Agent = {
@@ -113,6 +115,7 @@ const BUSY: Agent = {
     record({ kind: 'pr', key: 'acme/billing#482', url: 'https://github.com/acme/billing/pull/482', title: 'Export invoices as CSV', recordedAt: at('10:20') }),
     ...CREW.map((member) => record({ kind: 'crew', key: member.sessionId })),
     record({ kind: 'doc', key: `${WORKTREE}/review-r1.md`, path: `${WORKTREE}/review-r1.md`, from: { sessionId: 'gallery-review', name: 'Review: CSV export' }, recordedAt: at('10:32') }),
+    record({ kind: 'doc', key: `${WORKTREE}/old-notes.md`, path: `${WORKTREE}/old-notes.md`, from: null, deletedAt: at('10:33') }),
     record({ kind: 'pin', key: 'https://localhost:5173/exports', target: { kind: 'link', url: 'http://localhost:5173/exports' }, label: null, from: null }),
     record({ kind: 'pin', key: 'note:Test logins', target: { kind: 'note', text: 'ann, bob and cy · password: demo' }, label: 'Test logins', from: null }),
     record({ kind: 'pin', key: `${WORKTREE}/sample-export.csv`, target: { kind: 'file', path: `${WORKTREE}/sample-export.csv` }, label: null, from: null }),
@@ -138,8 +141,20 @@ const QUIET: Agent = {
 
 const AGENTS = [BUSY, QUIET, ...CREW];
 
-const NO_ACTIONS: ShelfActions = { openLink: () => {}, openPullRequest: () => {}, openSurface: () => {}, openWeb: () => {}, revealFile: () => {} };
-const NO_HANDLERS = { onProblem: () => {}, onOpenLink: () => {}, onOpenPullRequest: () => {}, onOpenSurface: () => {}, onOpenWeb: () => {} };
+const GATE: GateRun = { sessionId: BUSY_ID, command: 'pnpm check', commit: 'a3f91c2d', dirty: false, startedAt: at('10:10'), endedAt: at('10:14'), status: 'passed', exitCode: 0, steps: ['lint', 'typecheck', 'unit', 'e2e'].map((name) => ({ name, status: 'passed', startedAt: at('10:10'), endedAt: at('10:14') })) };
+const FAILED_GATE: GateRun = { ...GATE, status: 'failed', exitCode: 1, steps: [{ name: 'lint', status: 'failed', startedAt: at('10:10'), endedAt: at('10:14') }] };
+const NOW = new Date(at('11:00'));
+const NO_RECORDS: RecordDeletes = { fading: new Set(), remove: () => {}, restore: () => {} };
+const NO_ACTIONS: ShelfActions = {
+  openLink: () => {},
+  openPullRequest: () => {},
+  openSurface: () => {},
+  openWeb: () => {},
+  revealFile: () => {},
+  copyFolder: () => {},
+  revealFolder: () => {},
+  runGate: () => {},
+};
 
 /** An agent whose page links to a page and a file and keeps a note, and whose pull request's checks are failing. */
 const LINKED: Agent = {
@@ -169,18 +184,29 @@ const LINKED: Agent = {
   },
 };
 
-/**
- * One agent's sidebar beside a stand-in terminal, open on `shelf`. Made, Crew and Setup hold the rows the window gives
- * them for now (`inspectorShelves`), Setup with its technical details and, as under Classic, the window's controls.
- */
-function Frame({ agent, caption, shelf, alone = false, width = 316, height = 760, testId }: { agent: Agent; caption: string; shelf?: ShelfId; alone?: boolean; width?: number; height?: number; testId: string }) {
-  // Alone: technical details off and no controls, as under the Simplified design, so Setup has nothing and the page is the one shelf.
-  const shelves = inspectorShelves({ ...NO_HANDLERS, agent, agents: AGENTS, technical: !alone, ...(alone ? {} : { controls: { live: true } }) });
+/** One agent's sidebar beside a stand-in terminal, open on `shelf`. With `alone`, technical details off, as under the Simplified design by default. */
+function Frame({ agent, caption, shelf, peek, alone = false, folder, gate = GATE, width = 316, height = 760, testId }: { agent: Agent; caption: string; shelf?: ShelfId; peek?: ShelfId; alone?: boolean; folder?: string; gate?: GateRun; width?: number; height?: number; testId: string }) {
   return (
     <figure className="shelves-gallery-frame" data-testid={testId}>
       <figcaption>{caption}</figcaption>
-      <div className="shelves-gallery-window" style={{ width: width + 160, height }}>
-        <AgentShelves agent={agent} agents={AGENTS} shows="explicit" actions={NO_ACTIONS} width={width} shelves={shelves} initialShelf={shelf} />
+      <div className="shelves-gallery-window" style={{ width: peek === undefined ? width + 160 : 420, height }}>
+        <AgentShelves
+          agent={agent}
+          agents={AGENTS}
+          shows="explicit"
+          technical={!alone}
+          folder={folder ?? agent.cwd}
+          home={undefined}
+          gate={agent.sessionId === BUSY_ID ? gate : null}
+          now={NOW}
+          records={NO_RECORDS}
+          actions={NO_ACTIONS}
+          width={width}
+          collapsed={peek !== undefined}
+          onCollapsed={() => {}}
+          initialShelf={shelf}
+          initialPeek={peek}
+        />
         <div className="shelves-gallery-terminal" aria-hidden />
       </div>
     </figure>
@@ -193,17 +219,32 @@ export function ShelvesGallery() {
     <section className="shelves-gallery" data-testid="shelves-gallery" aria-label="Agent sidebar">
       <h2>Agent sidebar</h2>
       <div className="shelves-gallery-row" data-testid="shelves-gallery-open">
-        <Frame testId="shelves-busy" caption="Busy agent, its page" agent={BUSY} height={880} />
-        <Frame testId="shelves-quiet" caption="Quiet agent, the board’s Now" agent={QUIET} height={520} />
-        <Frame testId="shelves-styled" caption="Busy agent, its page, styled by the agent" agent={styled} height={880} />
-        <Frame testId="shelves-narrow" caption="Its page at 200px" agent={BUSY} width={200} height={880} />
+        <Frame testId="shelves-busy" caption="Busy agent, its page, with its pins" agent={BUSY} height={1060} />
+        <Frame testId="shelves-quiet" caption="Quiet agent, the board’s Now" agent={QUIET} height={560} />
+        <Frame testId="shelves-styled" caption="Busy agent, its page, styled by the agent" agent={styled} height={1060} />
+        <Frame testId="shelves-narrow" caption="Its page at 200px" agent={BUSY} width={200} height={1060} />
+      </div>
+      <div className="shelves-gallery-row" data-testid="shelves-gallery-rail">
+        <Frame testId="rail-busy-page" caption="Rail: busy agent, its page in a peek" agent={BUSY} peek="page" height={1060} />
+        <Frame testId="rail-quiet-page" caption="Rail: quiet agent, Now in a peek" agent={QUIET} peek="page" height={560} />
+        <Frame testId="rail-busy-made" caption="Rail: busy agent, Made in a peek" agent={BUSY} peek="made" height={620} />
+        <Frame testId="rail-busy-crew" caption="Rail: busy agent, Crew in a peek" agent={BUSY} peek="crew" height={620} />
+        <Frame testId="rail-quiet-setup" caption="Rail: quiet agent, Setup in a peek" agent={QUIET} peek="setup" height={560} />
       </div>
       <div className="shelves-gallery-row" data-testid="shelves-gallery-shelves">
-        <Frame testId="shelves-linked" caption="Links and a note; a pull request failing" agent={LINKED} height={560} />
+        <Frame testId="shelves-made" caption="Made" agent={BUSY} shelf="made" height={620} />
+        <Frame testId="shelves-crew" caption="Crew" agent={BUSY} shelf="crew" height={620} />
+        <Frame testId="shelves-setup" caption="Setup" agent={BUSY} shelf="setup" height={620} />
+        <Frame testId="shelves-made-narrow" caption="Made at 200px" agent={BUSY} shelf="made" width={200} height={620} />
+        <Frame testId="shelves-crew-narrow" caption="Crew at 200px" agent={BUSY} shelf="crew" width={200} height={620} />
+        <Frame testId="shelves-setup-narrow" caption="Setup at 200px" agent={BUSY} shelf="setup" width={200} height={620} />
+        <Frame testId="shelves-crew-wide" caption="Crew at 420px" agent={BUSY} shelf="crew" width={420} height={620} />
+        <Frame testId="shelves-made-gate-failed" caption="Made, its gate failed" agent={BUSY} shelf="made" gate={FAILED_GATE} height={620} />
+        <Frame testId="shelves-setup-gate-failed" caption="Setup, its gate failed" agent={BUSY} shelf="setup" gate={FAILED_GATE} height={620} />
+        <Frame testId="shelves-setup-quiet" caption="Quiet agent, Setup, its folder outside its worktree" agent={QUIET} shelf="setup" folder="/tmp/elsewhere" height={620} />
+        <Frame testId="shelves-made-plain" caption="Made, technical details off: no gate, no footer" agent={BUSY} shelf="made" alone height={620} />
+        <Frame testId="shelves-linked" caption="Links and a note; a pull request failing" agent={LINKED} height={620} />
         <Frame testId="shelves-alone" caption="Its page the one shelf: its name and icon as a header" agent={{ ...QUIET, page: { ...LINKED.page!, blocks: LINKED.page!.blocks.slice(1) } }} alone height={360} />
-        <Frame testId="shelves-made" caption="Made, as the window draws it for now" agent={BUSY} shelf="made" height={560} />
-        <Frame testId="shelves-crew" caption="Crew, as the window draws it for now" agent={BUSY} shelf="crew" height={560} />
-        <Frame testId="shelves-setup" caption="Setup, as the window draws it for now" agent={BUSY} shelf="setup" height={560} />
       </div>
     </section>
   );

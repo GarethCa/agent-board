@@ -8,6 +8,7 @@ export { fakeBinDir } from './paths.ts';
 export { SCENARIOS, type FakeScenario } from './scenarios.ts';
 export { installHarnessGuard, harnessGuardGlobalSetup, guardChildProcess, realHarnessFor, type HarnessGuard } from './guard.ts';
 export { BOARD_SESSION_VARS, RUN_KNOBS, scrubBoardSessionEnv, scrubBoardEnv } from './board-guard.ts';
+export { compileCacheGlobalSetup } from './compile-cache.ts';
 export { REPO_GIT_VARS, leakedGitVars, scrubGitEnv, gitGuardGlobalSetup, assertCoreConfigUnchanged, coreConfigOf } from './git-guard.ts';
 export { HARNESS_NAMES, type HarnessName } from './paths.ts';
 export { CODEX_START_SCREENS, type CodexStartScreen } from './codex-screens.ts';

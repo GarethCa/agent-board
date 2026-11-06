@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { neighbourOf, paneIds } from '@agent-board/daemon/pane-layout';
 import { INTERRUPT_KEY, roleLabel, shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell, type SplitDirection } from '@agent-board/daemon/protocol';
 import type { Surface } from '@agent-board/daemon/window-layout';
-import { ClipboardList, Copy, FileText, FolderOpen, Globe, PanelLeftClose, PanelLeftOpen, RotateCw, StickyNote, X } from 'lucide-react';
+import { ClipboardList, Copy, FileText, FolderOpen, Globe, PanelLeftClose, PanelLeftOpen, RotateCw, StickyNote } from 'lucide-react';
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
 import { agentSetupLine, branchLine } from '../board/AgentSetup';
@@ -11,15 +11,15 @@ import { shortWhen } from '../when';
 import { errorMessage } from '../../../shared/errors';
 import { keyText } from '../keys/registry';
 import { STATE_LABELS } from '../states';
-import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill, useToast } from '../ui';
+import { Button, Chip, ErrorText, Hint, IconButton, Kbd, PanelRow, Section, StatusPill } from '../ui';
 import { gateBadge, shortCommit } from '@agent-board/daemon/gate-rules';
 import { useGateRun } from '../gate/GatesProvider';
 import { gated } from '../gate/gate-view';
 import { requestTab } from './tab-request';
 import { docName, docSurfaceOf, documentSurfaceOf, gateSurfaceOf, planSurfaceOf } from './tabs';
-import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection, type PinRow, type SidebarRow, type SidebarSection } from './sidebar-records';
+import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
 import { useLiveAgents } from './use-live-board';
-import { recordDeleter, type RecordDeleter } from './record-deletes';
+import { pinOpener, recordedWhen, RecordList, useRecordDeletes } from './RecordList';
 import { runGateShortcut } from './window-keys';
 import { useAction } from '../use-action';
 import { sessionControls, type Control, type ControlId } from './controls';
@@ -297,13 +297,11 @@ function AgentSections({
   const docs = docSection(agent, records.fading);
   const documents = documentSection(agent);
   const pins = pinSection(agent, records.fading);
-  /** What clicking a pin does, by how it opens; nothing for a note, which shows all it has. */
-  const openPin = ({ target, opens }: PinRow): (() => void) | undefined => {
-    if (target.kind === 'link') return () => onOpenWeb(target.url);
-    if (target.kind !== 'file') return undefined;
-    if (opens === 'doc') return onOpenSurface && (() => onOpenSurface(docSurfaceOf(agent.sessionId, target.path)));
-    return () => void window.agentBoard.sessions.revealFile(target.path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`));
-  };
+  const openPin = pinOpener(agent.sessionId, {
+    openWeb: onOpenWeb,
+    openSurface: onOpenSurface,
+    revealFile: (path) => void window.agentBoard.sessions.revealFile(path).catch((error: unknown) => onProblem(`could not show the file: ${errorMessage(error)}`)),
+  });
   const subagents = subagentSection(agent);
   return (
     <>
@@ -456,128 +454,6 @@ function AgentSections({
           </>
         )}
       </Section>
-    </>
-  );
-}
-
-/** When a recorded row was recorded, as its meta ends: `recorded 10:12`; nothing for a guess. */
-const recordedWhen = (row: SidebarRow<unknown>): string | undefined => (row.source === 'recorded' ? `recorded ${shortWhen(row.record.recordedAt)}` : undefined);
-
-/** How long a deleted record's row stays, fading out struck through, while its Undo is up. */
-const FADE_MS = 5000;
-
-interface RecordDeletes extends RecordDeleter {
-  /** The records just deleted, still shown as gone. */
-  fading: ReadonlySet<string>;
-}
-
-/** Deleting the agent's records from its sidebar, each with Undo in a toast, and bringing them back. */
-function useRecordDeletes(sessionId: string, onProblem: (problem: string | undefined) => void): RecordDeletes {
-  const toasts = useToast();
-  const [fading, setFading] = useState<ReadonlySet<string>>(new Set());
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  useEffect(() => {
-    const pending = timers.current;
-    return () => pending.forEach((timer) => clearTimeout(timer));
-  }, []);
-  const unfade = (key: string) => {
-    clearTimeout(timers.current.get(key));
-    timers.current.delete(key);
-    setFading((current) => new Set([...current].filter((each) => each !== key)));
-  };
-  const deleter = recordDeleter({
-    set: (record, deleted) =>
-      window.agentBoard.agents.setRecordDeleted(sessionId, record.kind, record.key, deleted).then(
-        () => {},
-        (error: unknown) => onProblem(`could not ${deleted ? 'delete' : 'bring back'} the record: ${errorMessage(error)}`),
-      ),
-    toast: (options) => void toasts.show(options),
-    fade(key) {
-      setFading((current) => new Set([...current, key]));
-      clearTimeout(timers.current.get(key));
-      timers.current.set(key, setTimeout(() => unfade(key), FADE_MS));
-    },
-    unfade,
-  });
-  return { fading, ...deleter };
-}
-
-/** What a row of a section shows: drawn as a recorded or a guessed row by `RecordList`. */
-interface RecordRowView {
-  name: ReactNode;
-  meta?: ReactNode;
-  /** What a guessed row says after its "guessed" tag, in place of `meta`: what it was guessed from. */
-  guess?: string;
-  mark: ReactNode;
-  end?: ReactNode;
-  title?: string;
-  onClick?: (() => void) | undefined;
-  testId?: string;
-}
-
-/**
- * A section's rows: a recorded row with a solid rule and a × on hover that deletes it (with Undo), a guessed one with a
- * dotted rule, lighter, tagged "guessed", and no ×. Under them, what deleted records hide, and Show to bring them back.
- */
-function RecordList<T>({
-  section,
-  empty,
-  records,
-  what,
-  row,
-}: {
-  section: SidebarSection<T>;
-  empty: string;
-  records: RecordDeletes;
-  what(row: SidebarRow<T>): string;
-  row(row: SidebarRow<T>): RecordRowView;
-}) {
-  const { rows, hidden } = section;
-  return (
-    <>
-      {rows.length === 0 ? (
-        <Hint>{empty}</Hint>
-      ) : (
-        <ul className="details-list">
-          {rows.map((each) => {
-            const view = row(each);
-            const gone = each.source === 'recorded' && each.gone === true;
-            const meta = each.source === 'guessed' ? <><em className="details-guessed">guessed</em> {view.guess ?? view.meta}</> : gone ? 'deleted' : view.meta;
-            return (
-              <li key={each.key} className="details-record" data-source={each.source} data-gone={gone || undefined} data-testid={view.testId ?? 'details-record'}>
-                <PanelRow
-                  as={view.onClick && !gone ? 'button' : 'div'}
-                  title={view.title}
-                  onClick={gone ? undefined : view.onClick}
-                  mark={view.mark}
-                  name={view.name}
-                  meta={meta}
-                  end={view.end}
-                />
-                {each.source === 'recorded' && !gone && (
-                  <IconButton
-                    className="details-record-delete"
-                    icon={<X />}
-                    size="sm"
-                    variant="danger"
-                    aria-label="Delete record"
-                    tooltip="Delete record"
-                    onClick={() => records.remove(each.record, what(each))}
-                  />
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {hidden.length > 0 && (
-        <p className="details-hidden" data-testid="details-hidden">
-          {hidden.length} hidden ·{' '}
-          <button type="button" className="details-hidden-show" title="Bring back what was deleted here" onClick={() => records.restore(hidden)}>
-            Show
-          </button>
-        </p>
-      )}
     </>
   );
 }

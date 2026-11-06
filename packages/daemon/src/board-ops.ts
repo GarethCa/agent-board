@@ -1452,6 +1452,27 @@ export async function interruptAgent(session: BoardSession, ref: string): Promis
   return { text: `Interrupted ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
 }
 
+/** What an effort change says of when the agent takes it. */
+const EFFORT_APPLIES = {
+  now: 'now',
+  'after-turn': 'once its turn ends',
+  restart: 'when it is next started',
+} as const;
+
+/**
+ * `effort`: sets the agent's reasoning effort, as its tile's Reasoning menu does: typed at a Claude agent's prompt
+ * now, or once its turn ends if it is mid-turn; a Codex agent takes it when next started.
+ */
+export async function setAgentEffort(session: BoardSession, ref: string, effort: string): Promise<BoardView> {
+  const { token, agent } = await orchestratorTarget(session, ref);
+  const { applies } = await session.client.call('orchestrator.setEffort', { token, sessionId: agent.sessionId, effort: effort as Effort });
+  const fresh = await freshAgentLine(session, agent.sessionId);
+  return {
+    text: `Set ${effort} effort, taken ${EFFORT_APPLIES[applies]}: ${fresh.line}`,
+    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), applies },
+  };
+}
+
 /** `continue`: resumes a rate-limited agent's turn on usage credits, as its harness offers. */
 export async function continueAgent(session: BoardSession, ref: string): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);

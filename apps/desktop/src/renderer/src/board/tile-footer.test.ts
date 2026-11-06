@@ -11,7 +11,7 @@ const agent = (fields: Partial<Agent> = {}) =>
 
 describe('a tile’s footer', () => {
   it('is empty for an agent with nothing to show', () => {
-    expect(tileFooter(agent())).toEqual({ shown: [], folded: [] });
+    expect(tileFooter(agent())).toEqual({ shown: [], folded: [], overflow: { jobs: [], pullRequests: [] } });
   });
 
   it('shows the first job it holds as a ticket, after its issue, and folds any more into the +N', () => {
@@ -45,6 +45,8 @@ describe('a tile’s footer', () => {
       { kind: 'pr', pr: pr(175), pushed: true },
     ]);
     expect(footer.folded).toEqual(['Pushed to #176 PR 176: open, checks passing']);
+    // The list draws what never had room from the badges themselves, so a row can open its pull request.
+    expect(footer.overflow).toEqual({ jobs: [], pullRequests: [{ kind: 'pr', pr: pr(176), pushed: true }] });
     expect(badgeLine({ kind: 'pr', pr: pr(174, 'merged'), pushed: true }, 0)).toBe('Pushed to #174 PR 174: merged, checks passing');
   });
 
@@ -101,13 +103,14 @@ describe('a tile’s footer', () => {
     expect(tileFooter(starting, 2)).toEqual({
       shown: [{ kind: 'model', model: 'opus' }, { kind: 'role', role: 'implementer', name: 'implementer' }, { kind: 'issue', issue }],
       folded: [],
+      overflow: { jobs: [], pullRequests: [] },
     });
     // Once live, the same agent shows them all.
     expect(tileFooter({ ...starting, startup: null }, 2).shown.map((badge) => badge.kind)).toEqual(['model', 'role', 'issue', 'finished', 'pr', 'schedule', 'muted', 'shells']);
   });
 
   it('shows a mute as a bell, never folded on its own into a cryptic +1', () => {
-    expect(tileFooter(agent({ muted: true }))).toEqual({ shown: [{ kind: 'muted' }], folded: [] });
+    expect(tileFooter(agent({ muted: true }))).toEqual({ shown: [{ kind: 'muted' }], folded: [], overflow: { jobs: [], pullRequests: [] } });
   });
 
   it('folds pull requests past the second into a +N, each with a line for its tooltip', () => {

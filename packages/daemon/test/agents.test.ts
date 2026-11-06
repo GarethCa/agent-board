@@ -1366,7 +1366,7 @@ describe('Claude agents', () => {
       });
     });
 
-    it('tells a Claude agent its daemon stopped mid-turn to carry on once resumed, and says it was relaunched until that turn begins', async () => {
+    it('tells a Claude agent its daemon stopped mid-turn to carry on once resumed, and says nothing of the restart', async () => {
       const dataDir = tempDataDir();
       // Its turn's tool call never returns: it is still at work when the daemon shuts down.
       const first = await agentDaemon('output', { dataDir, hangTool: true });
@@ -1378,7 +1378,7 @@ describe('Claude agents', () => {
 
       const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
 
-      expect(resumed.notice).toBe('Relaunched after a restart');
+      expect(resumed.notice).toBeNull();
       const told = await second.recorder.waitFor(
         (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit',
       );
@@ -1394,7 +1394,24 @@ describe('Claude agents', () => {
         (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Notification' && e.payload.notification_type === 'idle_prompt',
       );
       expect(third.recorder.events.some((e) => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit')).toBe(false);
-      expect((await third.client.call('agent.list'))[0]).toMatchObject({ notice: 'Relaunched after a restart' });
+      expect((await third.client.call('agent.list'))[0]).toMatchObject({ notice: null });
+    });
+
+    it('shows a resumed agent whose process then dies as failed, with no notice to soften it', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir, hangTool: true });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, prompt: 'Run the tests', ...SIZE });
+      await untilState(first.recorder, agent.sessionId, 'running');
+      await first.daemon.stop();
+      const second = await agentDaemon('output', { dataDir, home: first.home });
+      await second.client.call('agent.resume', { sessionId: agent.sessionId });
+      const pid = (await second.client.call('session.list')).find((session) => session.id === agent.sessionId)!.pid;
+
+      process.kill(pid, 'SIGKILL');
+
+      await untilState(second.recorder, agent.sessionId, 'failed');
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({ state: 'failed', notice: null });
     });
 
     it('tells it again, once, when the daemon restarts before its line could be typed', async () => {
@@ -1498,7 +1515,7 @@ describe('Claude agents', () => {
 
       const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
 
-      expect(resumed).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: 'No earlier conversation: started fresh' });
+      expect(resumed).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: null });
       const sessionStart = await second.recorder.waitFor(
         (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
       );
@@ -1525,6 +1542,34 @@ describe('Claude agents', () => {
       // Its task goes again as its first message.
       await second.client.call('session.attach', { sessionId: agent.sessionId });
       await second.recorder.waitForText(agent.sessionId, 'Which database should I use');
+      // Its first turn in the new conversation has begun: the notice is over.
+      await vi.waitFor(async () => expect((await second.client.call('agent.list'))[0]).toMatchObject({ notice: null }));
+    });
+
+    it('keeps the notice of a Claude agent with a lost conversation and no task until a turn begins', async () => {
+      const dataDir = tempDataDir();
+      const first = await agentDaemon('output', { dataDir });
+      const zone = await addZone(first.client, tempRepo());
+      const agent = await first.client.call('agent.spawn', { zoneId: zone.id, ...SIZE });
+      // Its one turn is typed at its prompt, so it has had a turn but has no task to retype.
+      await first.client.call('agent.answer', { sessionId: agent.sessionId, text: 'Pick a database' });
+      await first.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop');
+      await first.daemon.stop();
+      rmSync(join(first.home, '.claude', 'projects'), { recursive: true, force: true });
+      const second = await agentDaemon('output', { dataDir, home: first.home });
+
+      const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
+
+      expect(resumed.notice).toBe('No earlier conversation: started fresh');
+      // Up and at its prompt, with no turn begun: it is still there.
+      await second.recorder.waitFor(
+        (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart',
+      );
+      await vi.waitFor(async () => expect((await second.client.call('agent.list'))[0]).toMatchObject({ state: 'idle' }));
+      expect((await second.client.call('agent.list'))[0]).toMatchObject({ notice: 'No earlier conversation: started fresh' });
+      // Its next turn begins: it is over.
+      await second.client.call('agent.answer', { sessionId: agent.sessionId, text: 'SQLite' });
+      await vi.waitFor(async () => expect((await second.client.call('agent.list'))[0]).toMatchObject({ notice: null }));
     });
 
     /** Types a message at the resumed Codex agent once its composer is up, as the user would. */
@@ -1534,7 +1579,7 @@ describe('Claude agents', () => {
       await client.call('session.write', { sessionId, data: 'Carry on\r' });
     }
 
-    it('starts a Codex agent that has no session id fresh, with a notice', async () => {
+    it('starts a Codex agent that has no session id fresh, saying nothing', async () => {
       const dataDir = tempDataDir();
       const first = await agentDaemon('waiting', { dataDir });
       const zone = await addZone(first.client, tempRepo());
@@ -1544,7 +1589,7 @@ describe('Claude agents', () => {
 
       const resumed = await second.client.call('agent.resume', { sessionId: agent.sessionId });
 
-      expect(resumed).toMatchObject({ endedAt: null, notice: 'No earlier conversation: started fresh' });
+      expect(resumed).toMatchObject({ endedAt: null, notice: null });
       // Codex fires its `SessionStart` with its first prompt, typed here by the user.
       await carryOn(second, agent.sessionId);
       const sessionStart = await second.recorder.waitFor(
@@ -1592,8 +1637,8 @@ describe('Claude agents', () => {
 
       await second.client.call('agent.resume', { sessionId: agent.sessionId });
 
-      // Said once it has started afresh: until then, that it was relaunched after a restart.
-      const live = await untilAgent(second.recorder, agent.sessionId, (a) => a.endedAt === null && a.notice !== null && a.notice !== 'Relaunched after a restart');
+      // Said once it has started afresh; a resume after a restart says nothing.
+      const live = await untilAgent(second.recorder, agent.sessionId, (a) => a.endedAt === null && a.notice !== null);
       expect(live.notice).toContain('started a new conversation');
       expect(live.state).not.toBe('failed');
       await carryOn(second, agent.sessionId);
@@ -1665,7 +1710,7 @@ describe('an agent that exited', () => {
 
     const restarted = await daemon.client.call('agent.resume', { sessionId: agent.sessionId });
 
-    expect(restarted).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: 'No earlier conversation: started fresh' });
+    expect(restarted).toMatchObject({ sessionId: agent.sessionId, endedAt: null, notice: null });
     const sessionStart = await daemon.recorder.waitFor(
       (e): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart' && e.payload.source === 'startup',
     );

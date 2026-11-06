@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
+import { describe, expect, it, vi } from 'vitest';
+import { ZONE_COLORS, type Agent, type ExternalSession, type GateRun, type LibraryPrefab, type ReviewRound, type Shell, type Zone } from '@agent-board/daemon/protocol';
 import { keyText } from '../keys/registry';
 import { runGateShortcut } from '../session/window-keys';
 import { agentMenu, bindEntries, externalMenu, menuIds, projectContextMenu, projectMenu, shellMenu, tidyMenu, zoneMenu, zoneTabEntries, type AgentMenuInput, type ModelEntry, type ProjectContextMenuInput, type ZoneMenuInput, type ShellMenuInput } from './menu-model';
@@ -8,6 +8,15 @@ import { galleryAgent } from './TileGallery';
 const AT = '2026-10-22T12:00:00.000Z';
 
 /** Handlers that remember what was called, with what. */
+const library = vi.hoisted(() => ({ current: [] as readonly unknown[] }));
+vi.mock('../crews/prefab-store', async (original) => ({
+  ...(await original<object>()),
+  crewGroups: () => {
+    const prefabs = library.current as LibraryPrefab[];
+    return [prefabs.filter((prefab) => !prefab.builtIn), prefabs.filter((prefab) => prefab.builtIn)].filter((group) => group.length > 0);
+  },
+}));
+
 function spies<T>(): T & { calls: [string, unknown[]][] } {
   const calls: [string, unknown[]][] = [];
   return new Proxy({ calls } as T & { calls: [string, unknown[]][] }, {
@@ -172,6 +181,8 @@ function zoneInput(zone: Zone, more: Partial<ZoneMenuInput> = {}): ZoneMenuInput
 describe("a zone's ⋯ menu", () => {
   it("lists a repo zone's rows, in order", () => {
     expect(menuIds(zoneMenu(zoneInput(repoZone)))).toEqual([
+      'crew',
+      'crew/crew-library',
       'tidy',
       'spacing',
       'spacing/layout-free',
@@ -189,7 +200,6 @@ describe("a zone's ⋯ menu", () => {
       'orchestrate',
       'gate-command',
       'role-templates',
-      'crew-prefabs',
       'delete',
     ]);
   });
@@ -205,8 +215,27 @@ describe("a zone's ⋯ menu", () => {
   it('leads with the chips folded off its tab', () => {
     const folded: ModelEntry[] = [{ id: 'tab-new-agent', label: 'New agent', onSelect: () => {} }];
     const entries = zoneMenu(zoneInput(repoZone, { folded }));
-    expect(menuIds(entries).slice(0, 2)).toEqual(['tab-new-agent', 'tidy']);
-    expect(entries[1]).toBe('separator');
+    expect(menuIds(entries).slice(0, 4)).toEqual(['tab-new-agent', 'crew', 'crew/crew-library', 'tidy']);
+    expect(entries[2]).toBe('separator');
+  });
+
+  it('offers a crew from each prefab in the library, yours first, and the library itself', () => {
+    library.current = [
+      { name: 'Solo agent', icon: 'agent', builtIn: true, members: [] },
+      { name: 'Docs pass', icon: 'review', builtIn: false, members: [] },
+    ] as unknown as LibraryPrefab[];
+    const actions = spies<ZoneMenuInput['actions']>();
+    const crew = row(zoneMenu(zoneInput(repoZone, { actions })), 'crew') as { entries: ModelEntry[] };
+    library.current = [];
+    expect(menuIds(crew.entries)).toEqual(['crew-Docs pass', 'crew-Solo agent', 'crew-library']);
+    // A line between yours and the built-ins, and before the library.
+    expect(crew.entries.filter((entry) => entry === 'separator')).toHaveLength(2);
+    (row(crew.entries, 'crew-Docs pass') as { onSelect(): void }).onSelect();
+    (row(crew.entries, 'crew-library') as { onSelect(): void }).onSelect();
+    expect(actions.calls).toEqual([
+      ['startCrew', ['Docs pass', repoZone]],
+      ['crewLibrary', [repoZone]],
+    ]);
   });
 
   it('holds only what folded while it clones', () => {
@@ -734,6 +763,16 @@ describe("every row's fields", () => {
           "label": "New shell",
         },
         {
+          "entries": [
+            {
+              "id": "crew-library",
+              "label": "Library…",
+            },
+          ],
+          "id": "crew",
+          "label": "New crew",
+        },
+        {
           "id": "tab-tracker",
           "label": "Issues from acme/web…",
         },
@@ -851,11 +890,6 @@ describe("every row's fields", () => {
           "id": "role-templates",
           "label": "Role templates…",
         },
-        {
-          "hint": "Saved crews, for every board",
-          "id": "crew-prefabs",
-          "label": "Crew prefabs…",
-        },
         "separator",
         {
           "danger": true,
@@ -878,6 +912,16 @@ describe("every row's fields", () => {
         {
           "id": "tab-new-shell",
           "label": "New shell",
+        },
+        {
+          "entries": [
+            {
+              "id": "crew-library",
+              "label": "Library…",
+            },
+          ],
+          "id": "crew",
+          "label": "New crew",
         },
         {
           "hint": "The default repo: new agents here start in it",
@@ -1015,11 +1059,6 @@ describe("every row's fields", () => {
           "hint": "What agents started here in a role begin with",
           "id": "role-templates",
           "label": "Role templates…",
-        },
-        {
-          "hint": "Saved crews, for every board",
-          "id": "crew-prefabs",
-          "label": "Crew prefabs…",
         },
         "separator",
         {
@@ -1321,6 +1360,7 @@ describe("every row's handler", () => {
       ...wiring(tidyMenu(repoZone, undefined, actions), actions.calls),
     ]).toMatchInlineSnapshot(`
       [
+        "crew/crew-library → crewLibrary(#z1)",
         "tidy → tidy(#z1)",
         "spacing/layout-free → setLayoutMode(#z1, "free")",
         "spacing/layout-shelves → setLayoutMode(#z1, "shelves")",
@@ -1337,8 +1377,8 @@ describe("every row's handler", () => {
         "orchestrate → setAgentsOrchestrate(#z1, true)",
         "gate-command → editGateCommand(#z1)",
         "role-templates → editRoleTemplates(#z1)",
-        "crew-prefabs → editCrewPrefabs()",
         "delete → deleteZone(#z1)",
+        "crew/crew-library → crewLibrary(#g1)",
         "tidy → tidy(#g1)",
         "spacing/layout-free → setLayoutMode(#g1, "free")",
         "spacing/layout-shelves → setLayoutMode(#g1, "shelves")",
@@ -1355,7 +1395,6 @@ describe("every row's handler", () => {
         "orchestrate → setAgentsOrchestrate(#g1, true)",
         "gate-command → editGateCommand(#g1)",
         "role-templates → editRoleTemplates(#g1)",
-        "crew-prefabs → editCrewPrefabs()",
         "delete → deleteZone(#g1)",
         "tab-tracker → pickTracker(#z1)",
         "tab-add-issue → addIssue(#z1)",
@@ -1450,6 +1489,7 @@ describe("a project's menus, under the Simplified design", () => {
       [
         "— a repo",
         "new-agent → newAgent(#z1)",
+        "crew/crew-library → crewLibrary(#z1)",
         "new-shell → newShell(#z1)",
         "new-note → newNote()",
         "add-issue → addIssue(#z1)",
@@ -1457,6 +1497,7 @@ describe("a project's menus, under the Simplified design", () => {
         "tidy → tidy(#z1)",
         "colour-menu/colour → recolor(#z1, "picked")",
         "options/new-agent → newAgent(#z1)",
+        "options/crew/crew-library → crewLibrary(#z1)",
         "options/new-shell → newShell(#z1)",
         "options/rename → rename()",
         "options/colour → recolor(#z1, "picked")",
@@ -1477,17 +1518,18 @@ describe("a project's menus, under the Simplified design", () => {
         "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
-        "options/agents/crew-prefabs → editCrewPrefabs()",
         "options/delete → deleteZone(#z1)",
         "delete → deleteZone(#z1)",
         "— a group with a default repo, outside git",
         "new-agent → newAgent(#z1)",
+        "crew/crew-library → crewLibrary(#z1)",
         "new-shell → newShell(#z1)",
         "new-note → newNote()",
         "rename → rename()",
         "tidy → tidy(#z1)",
         "colour-menu/colour → recolor(#z1, "picked")",
         "options/new-agent → newAgent(#z1)",
+        "options/crew/crew-library → crewLibrary(#z1)",
         "options/new-shell → newShell(#z1)",
         "options/rename → rename()",
         "options/colour → recolor(#z1, "picked")",
@@ -1510,7 +1552,6 @@ describe("a project's menus, under the Simplified design", () => {
         "options/agents/orchestrate → setAgentsOrchestrate(#z1, true)",
         "options/agents/gate-command → editGateCommand(#z1)",
         "options/agents/role-templates → editRoleTemplates(#z1)",
-        "options/agents/crew-prefabs → editCrewPrefabs()",
         "options/delete → deleteZone(#z1)",
         "delete → deleteZone(#z1)",
         "— a cloning project",
@@ -1528,6 +1569,8 @@ describe("a project's menus, under the Simplified design", () => {
   it("lists a repo project's ⋯, its settings in submenus", () => {
     expect(menuIds(projectMenu(projectInput(projects[0]![1])))).toEqual([
       'new-agent',
+      'crew',
+      'crew/crew-library',
       'new-shell',
       'rename',
       'colour',
@@ -1553,7 +1596,6 @@ describe("a project's menus, under the Simplified design", () => {
       'agents/orchestrate',
       'agents/gate-command',
       'agents/role-templates',
-      'agents/crew-prefabs',
       'delete',
     ]);
   });
@@ -1566,7 +1608,7 @@ describe("a project's menus, under the Simplified design", () => {
 
   it('lists the right-click menu: making things first, then the everyday actions, then ⋯ as Project options', () => {
     const ids = menuIds(projectContextMenu(projectInput(projects[0]![1]))).filter((id) => !id.startsWith('options/'));
-    expect(ids).toEqual(['new-agent', 'new-shell', 'new-note', 'add-issue', 'rename', 'tidy', 'colour-menu', 'colour-menu/colour', 'options', 'delete']);
+    expect(ids).toEqual(['new-agent', 'crew', 'crew/crew-library', 'new-shell', 'new-note', 'add-issue', 'rename', 'tidy', 'colour-menu', 'colour-menu/colour', 'options', 'delete']);
   });
 
   it('marks its agent settings on or off, and flips them', () => {
@@ -1588,8 +1630,8 @@ describe("a project's menus, under the Simplified design", () => {
       const agents = row(projectMenu(projectInput(projects[0]![1], { technical })), 'agents') as { entries: ModelEntry[] };
       return agents.entries.flatMap((entry) => (entry !== 'separator' && 'label' in entry ? [entry.label] : []));
     };
-    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…', 'Crew prefabs…']);
-    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…', 'Crew prefabs…']);
+    expect(labels(false)).toEqual(['Board tools for new agents', 'Let agents start and manage agents', 'Check before merging…', 'Role templates…']);
+    expect(labels(true)).toEqual(['Board MCP for new agents', 'Let agents orchestrate', 'Gate command…', 'Role templates…']);
   });
 
   it("says why it can't start an agent, and Delete… is last and red", () => {

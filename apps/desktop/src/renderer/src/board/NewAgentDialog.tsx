@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { isOrchestratorRole, ORCHESTRATOR_ROLE, shortIssueId, type Agent, type Zone } from '@agent-board/daemon/protocol';
+import { isOrchestratorRole, ORCHESTRATOR_ROLE, shortIssueId, type Agent, type LibraryPrefab, type Zone } from '@agent-board/daemon/protocol';
 import { TriangleAlert } from 'lucide-react';
 import { errorMessage } from '../../../shared/errors';
+import { CrewFaces } from '../crews/icons';
+import { prefabWeight } from '../crews/prefab-flow';
+import { usePrefabs, usePrefabsFailed } from '../crews/prefab-store';
 import { HARNESSES } from '../harness';
 import { Button, Checkbox, Dialog, ErrorText, Field, Fieldset, Hint, Input, Kbd, Segmented, Select, Textarea } from '../ui';
 import type { SegmentedOption } from '../ui';
@@ -38,7 +41,30 @@ interface NewAgentDialogProps {
   onCancel(): void;
   /** The zone's settings changed. */
   onZoneChanged(zone: Zone): void;
+  /** A crew prefab was picked, under Crew: its prompt box takes this sheet's place. */
+  onCrew(prefab: LibraryPrefab): void;
+  /** All prefabs… was picked, under Crew. */
+  onCrewLibrary(): void;
 }
+
+/** What was last started from the sheet (a crew, on picking its prefab), kept so someone who always starts crews sees Crew first. */
+const SHEET_KIND = 'agent-board.new-agent-sheet';
+const rememberedKind = (): 'agent' | 'crew' => {
+  try {
+    return localStorage.getItem(SHEET_KIND) === 'crew' ? 'crew' : 'agent';
+  } catch {
+    return 'agent';
+  }
+};
+const rememberKind = (kind: 'agent' | 'crew') => {
+  try {
+    localStorage.setItem(SHEET_KIND, kind);
+  } catch {
+    // It only remembers: the sheet opens on Agent next time.
+  }
+};
+/** The most prefabs Crew lists before All prefabs…: yours first. */
+const SHEET_PREFABS = 4;
 
 /**
  * What the dialog shows: the form, or the one-time explanation of Codex's hook-trust bypass, before the first Codex
@@ -54,7 +80,24 @@ type Step = { kind: 'form' } | { kind: 'bypass-notice' };
  * its branch. The zone's Codex setting is saved only when a Codex agent starts, so Cancel leaves it as it was. Start
  * closes it as soon as the agent's tile is on the board: what fails after that stays on the tile.
  */
-export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId, name: initialName = '', position, onStarted, onCancel, onZoneChanged }: NewAgentDialogProps) {
+export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId, name: initialName = '', position, onStarted, onCancel, onZoneChanged, onCrew, onCrewLibrary }: NewAgentDialogProps) {
+  // Started for an agent already (from an issue, or a name typed in ⌘K), it has no Crew to switch to.
+  const crewable = initialIssue === undefined && initialName === '';
+  const [kind, setKind] = useState<'agent' | 'crew'>(() => (crewable ? rememberedKind() : 'agent'));
+  const prefabs = usePrefabs();
+  const libraryFailed = usePrefabsFailed();
+  const kindSwitch = crewable && (
+    <Segmented<'agent' | 'crew'>
+      className="new-agent-kind"
+      aria-label="Start"
+      value={kind}
+      onChange={setKind}
+      options={[
+        { id: 'agent', label: 'Agent' },
+        { id: 'crew', label: 'Crew' },
+      ]}
+    />
+  );
   const [setup, setSetup] = useState<AgentSetup>(DEFAULT_SETUP);
   const { harness, model, effort, role } = setup;
   // Under the Simplified design the model, reasoning and role chips go with Show technical details: switching it off puts
@@ -169,6 +212,7 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
         ...NEW_AGENT_SIZE,
       });
       if (options.bypassNoticeShown) markBypassNoticeSeen();
+      if (crewable) rememberKind('agent');
       onStarted(sessionId, issue !== undefined);
     } catch (failure) {
       setError(errorMessage(failure));
@@ -213,15 +257,75 @@ export function NewAgentDialog({ zone, agents, issue: initialIssue, issueZoneId,
     );
   }
 
+  // Fixed while the switch is shown, so the switch stays where it is as the harness or the kind changes.
+  const sheetTitle = (
+    <>
+      New{zone !== undefined && ' in '}
+      {zone !== undefined && <span className="new-agent-zone">{zone.name}</span>}
+    </>
+  );
+
+  if (kind === 'crew') {
+    return (
+      <Dialog
+        aria-label="New agent"
+        title={sheetTitle}
+        headEnd={kindSwitch}
+        onClose={onCancel}
+        footerStart={
+          <Button
+            variant="ghost"
+            onClick={() => {
+              rememberKind('crew');
+              onCrewLibrary();
+            }}
+          >
+            All prefabs…
+          </Button>
+        }
+        footer={
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        }
+      >
+        <ul className="new-crew-list" aria-label="Crew prefabs">
+          {prefabs.slice(0, SHEET_PREFABS).map((prefab, index) => (
+            <li key={prefab.name}>
+              <button type="button" className="ui-row new-crew-row" title={prefab.purpose} autoFocus={index === 0} onClick={() => {
+                  rememberKind('crew');
+                  onCrew(prefab);
+                }}>
+                <CrewFaces members={prefab.members} />
+                <span className="new-crew-row-text">
+                  <b>{prefab.name}</b>
+                  <span>
+                    {prefab.builtIn ? 'built in' : 'yours'} · {prefabWeight(prefab)}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {prefabs.length === 0 && <Hint>{libraryFailed ? "Couldn't read the library. Trying again…" : 'Loading the library…'}</Hint>}
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog
       aria-label="New agent"
       title={
-        <>
-          New {HARNESSES[harness].label} agent{zone !== undefined && ' in '}
-          {zone !== undefined && <span className="new-agent-zone">{zone.name}</span>}
-        </>
+        crewable ? (
+          sheetTitle
+        ) : (
+          <>
+            New {HARNESSES[harness].label} agent{zone !== undefined && ' in '}
+            {zone !== undefined && <span className="new-agent-zone">{zone.name}</span>}
+          </>
+        )
       }
+      headEnd={kindSwitch}
       onClose={onCancel}
       onSubmit={submit}
       footerStart={<AgentSetupChips setup={setup} onChange={setSetup} technical reasoning />}

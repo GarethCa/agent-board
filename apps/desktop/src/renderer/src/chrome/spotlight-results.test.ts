@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
-import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, spotlightGroups, type SpotlightRow } from './spotlight-results';
+import { fuzzyMatch, RECENT_LIMIT, SETTINGS_LIMIT, CREWS_GROUP, newAgentLeads, spotlightGroups, type SpotlightRow } from './spotlight-results';
 
 const zone = (id: string, name: string): Zone => ({ id, name, color: '#3b5bdb' }) as Zone;
 
@@ -210,6 +210,32 @@ describe('spotlightGroups and windows', () => {
     const groups = spotlightGroups('', { ...sources, simplified: false });
     expect(groups.some((group) => group.label === 'Windows')).toBe(false);
     expect(names(groups.flatMap((group) => group.rows))).toEqual(expect.arrayContaining(['Docs', 'API']));
+  });
+});
+
+describe('the Crews group', () => {
+  const sources = { agents: [], shells: [], zones: [], shows: 'turns' as const, canStartAgent: true, prefabs: [{ name: 'Implementer + reviewer', purpose: 'Build and review' }, { name: 'Spike + reviewer', purpose: 'Try an idea' }] };
+  const crews = (query: string, more: object = {}) => spotlightGroups(query, { ...sources, ...more }).find((group) => group.label === CREWS_GROUP)?.rows.map((row) => row.subject);
+
+  it('finds prefabs by name and what they are for, and the library, in either design, only once something is typed', () => {
+    expect(crews('')).toBeUndefined();
+    expect(crews('spike')).toEqual([{ kind: 'crew', prefab: 'Spike + reviewer' }]);
+    expect(crews('try an')).toEqual([{ kind: 'crew', prefab: 'Spike + reviewer' }]);
+    expect(crews('library')).toEqual([{ kind: 'crew', prefab: null }]);
+    expect(crews('crew', { simplified: true })).toEqual(expect.arrayContaining([{ kind: 'crew', prefab: 'Implementer + reviewer' }, { kind: 'crew', prefab: null }]));
+  });
+
+  it('leads with a crew that matches, so ↵ opens it, and New agent named … with no crew to find', () => {
+    expect(newAgentLeads(spotlightGroups('spike', sources))).toBe(false);
+    expect(spotlightGroups('spike', sources)[0]!.rows[0]!.subject).toEqual({ kind: 'crew', prefab: 'Spike + reviewer' });
+    expect(newAgentLeads(spotlightGroups('zzz', sources))).toBe(true);
+    // In what a crew is for, but not its name: it is listed, and an agent can still be named that.
+    expect(crews('try an')).toEqual([{ kind: 'crew', prefab: 'Spike + reviewer' }]);
+    expect(newAgentLeads(spotlightGroups('try an', sources))).toBe(true);
+  });
+
+  it('lists none where no crew could start', () => {
+    expect(crews('spike', { canStartAgent: false })).toBeUndefined();
   });
 });
 
