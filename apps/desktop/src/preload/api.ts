@@ -2,6 +2,7 @@ import type {
   Agent,
   CrewPrefab,
   LibraryPrefab,
+  PrefabStarted,
   Effort,
   EffortApplies,
   AgentRecordKind,
@@ -686,6 +687,8 @@ export const ORCHESTRATOR_IPC = {
   savePrefab: 'orchestrator:save-prefab',
   removePrefab: 'orchestrator:remove-prefab',
   checkPrefab: 'orchestrator:check-prefab',
+  startPrefab: 'orchestrator:start-prefab',
+  importPrefab: 'orchestrator:import-prefab',
 } as const;
 
 /** What orchestrators did and tried: the activity log the daemon keeps. */
@@ -709,6 +712,10 @@ export interface OrchestratorsApi {
   removePrefab(name: string): Promise<void>;
   /** Why the library would refuse `prefab`, read by its own parser, or null if it would take it. */
   checkPrefab(prefab: CrewPrefab): Promise<string | null>;
+  /** Starts a crew from the prefab `name` as the user: its member on the prompt gets `prompt`. */
+  startPrefab(params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }): Promise<PrefabStarted>;
+  /** Asks for a `.crew.json` file and reads it as the library does: the prefab, or null if none was picked. Adds nothing. */
+  importPrefab(): Promise<CrewPrefab | null>;
 }
 
 /** The board item IPC channels between the preload and main. */
@@ -1252,6 +1259,7 @@ export const WINDOW_IPC = {
 export type BoardRequest =
   | { kind: 'zone'; zoneId: string }
   | { kind: 'newAgent'; name: string; zoneId: string | null }
+  | { kind: 'crew'; prefab: string | null; zoneId: string | null }
   | { kind: 'open'; target: WindowTarget };
 
 /**

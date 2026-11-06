@@ -13,10 +13,8 @@ import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SimplifiedHeader } from './SimplifiedHeader';
-import { DetailsToggle } from './DetailsToggle';
 import { isSimplified, useSimplified } from '../design';
-import { inspectorShown } from './inspector';
-import { showsInspector, sidebarFor } from './agent-sidebar';
+import { shelvesCollapsed, showsShelves, sidebarFor } from './agent-sidebar';
 import { useAgentSidebar } from './use-agent-sidebar';
 import { viewSettings } from '../board/view-settings';
 import { SessionBody, type WindowContent } from './SessionBody';
@@ -89,18 +87,23 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');
-  // Classic's details strip opens collapsed to its rail in each window; the inspector (the Simplified design's, or
-  // Classic's with its Simple sidebar) is shown or hidden as it last was.
-  const inspector = showsInspector(useAgentSidebar(), content);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(showsInspector(sidebarFor(isSimplified(), viewSettings().agentSidebar), content) && inspectorShown.get() === 'shown'));
+  // Classic's details strip opens collapsed to its rail in each window; an agent's shelves (the Simplified design's, or
+  // Classic's with its Shelves sidebar) open, or collapsed to their rail, as they last were in any window (⌘I).
+  const shelves = showsShelves(useAgentSidebar(), content);
+  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(showsShelves(sidebarFor(isSimplified(), viewSettings().agentSidebar), content) && shelvesCollapsed.get() !== 'rail'));
   // Switched to the other sidebar while open (a pick in Settings, the design, or its agent listed or gone), it opens as
   // that sidebar opens.
-  const wasInspector = useRef(inspector);
+  const wasShelves = useRef(shelves);
   useEffect(() => {
-    if (wasInspector.current === inspector) return;
-    wasInspector.current = inspector;
-    setDetailsCollapsed(!(inspector && inspectorShown.get() === 'shown'));
-  }, [inspector]);
+    if (wasShelves.current === shelves) return;
+    wasShelves.current = shelves;
+    setDetailsCollapsed(!(shelves && shelvesCollapsed.get() !== 'rail'));
+  }, [shelves]);
+  // One choice for every window: a window open beside the one that changed it follows.
+  useEffect(() => {
+    if (!shelves) return;
+    return shelvesCollapsed.subscribe(() => setDetailsCollapsed(shelvesCollapsed.get() === 'rail'));
+  }, [shelves]);
   const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
@@ -140,19 +143,21 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   useNavKeys(nav);
   // Under the Simplified design an agent's window has one header, which holds its view switch.
   const simplified = useSimplified() && content.kind === 'session';
-  const remembers = useRef(inspector);
-  remembers.current = inspector;
+  const remembers = useRef(shelves);
+  remembers.current = shelves;
   const wasShown = useRef(!detailsCollapsed);
   useEffect(() => {
     if (remembers.current) {
-      inspectorShown.set(detailsCollapsed ? undefined : 'shown');
-      // Hidden from its handle (dragged or stepped below its least), the focus the handle had goes to the header's toggle.
-      const toggle = root.current?.querySelector<HTMLElement>('[data-details-toggle]');
+      shelvesCollapsed.set(detailsCollapsed ? 'rail' : undefined);
+      // Collapsed from its handle (dragged or stepped below its least), the focus the handle had goes to the header's
+      // toggle, or else to the rail's button that opens the shelves again.
+      const toggle = root.current?.querySelector<HTMLElement>('[data-details-toggle], .agent-shelves-rail [aria-label="Show the shelves"]');
       if (wasShown.current && detailsCollapsed && document.activeElement === document.body) toggle?.focus();
     }
     wasShown.current = !detailsCollapsed;
   }, [detailsCollapsed]);
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
+  const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
   const terminalToggle = useRef<(() => void) | null>(null);
   useMinimiseOnClickOutside(root, placement === 'board' ? onMinimise : undefined);
 
@@ -224,7 +229,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         <SessionName agent={agent} shell={shell} name={name} title={title} />
         {agent && <StatusPill {...agentPill(agent, shows)} />}
         {nav && <NavCount nav={nav} />}
-        {where !== undefined && (
+        {/* The shelves' footer says its branch: while they show, the header doesn't say it too. */}
+        {where !== undefined && (!shelves || detailsCollapsed) && (
           <span className="session-window-where" title={agent?.worktree ?? where}>
             {agent && <GitBranch aria-hidden />}
             {where}
@@ -233,8 +239,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
         <span className="session-window-head-fill" />
         {/* Its merge gate, for an agent with a branch of its own. */}
         {agent && gated(agent) && <GateControls agent={agent} visible />}
-        {/* The inspector has no rail of its own to bring it back: this shows and hides it, as the Simplified header's does. */}
-        {inspector && <DetailsToggle open={!detailsCollapsed} onOpen={(open) => setDetailsCollapsed(!open)} />}
+        {/* The shelves' window controls: one state button, and ⋯ for Stop and splitting the tab. */}
+        {shelves && <span className="session-window-shelf-controls" ref={setControlsSlot} />}
         {pin && (
           <IconButton
             icon={<Pin />}
@@ -308,7 +314,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
           onAttachState={setAttach}
           shown={showing === 'terminal'}
           viewSlot={simplified ? viewSlot : undefined}
-          inspector={inspector}
+          shelves={shelves}
+          controlsSlot={controlsSlot}
           terminalToggle={simplified ? terminalToggle : undefined}
         />
       </div>

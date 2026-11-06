@@ -317,7 +317,7 @@ test('a Codex agent explains the bypass flag once, shows the Codex mark, and fol
     await zone.getByRole('button', { name: 'New agent' }).click();
     const form = window.getByRole('dialog', { name: 'New agent' });
     await pickInChip(form, 'Harness', 'Codex');
-    await expect(form.getByRole('heading')).toHaveText('New Codex agent in monorepo');
+    await expect(form.getByRole('heading')).toHaveText('New in monorepo');
     await expect(form.getByRole('checkbox', { name: "Skip Codex's hook review in this zone" })).toBeChecked();
     await form.getByLabel('Task').fill('Run the tests');
     await form.getByRole('button', { name: 'Start' }).click();

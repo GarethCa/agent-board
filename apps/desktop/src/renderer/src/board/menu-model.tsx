@@ -42,7 +42,10 @@ import {
   Unlink,
   X,
   Users,
+  LibraryBig,
 } from 'lucide-react';
+import { CrewFaces } from '../crews/icons';
+import { crewGroups } from '../crews/prefab-store';
 import {
   ARRANGE_SPACINGS,
   continuesOnCredits,
@@ -301,8 +304,10 @@ export interface ZoneBindingActions {
   editGateCommand(zone: Zone): void;
   /** Opens the zone's role templates. */
   editRoleTemplates(zone: Zone): void;
-  /** Opens the app's crew prefabs, one library for every board. */
-  editCrewPrefabs(): void;
+  /** Opens the prompt box of a crew from the prefab named, in the zone. */
+  startCrew(prefab: string, zone: Zone): void;
+  /** Opens the app's crew library, one for every board, a crew from it starting in the zone. */
+  crewLibrary(zone: Zone): void;
 }
 
 /** What a zone's menus do to it: the handlers its tab is given, but for renaming, which its menu starts in place. */
@@ -441,8 +446,13 @@ export interface ZoneMenuInput {
 export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuInput): ModelEntry[] {
   if (zone.clone !== null) return [...folded];
   const unbound = zone.repoRoot === null;
+  // A crew is one more way to start something: under what starts an agent or a shell, where those folded onto this menu.
+  const afterStarts = folded.findLastIndex((entry) => entry !== 'separator' && 'id' in entry && (entry.id === 'tab-new-agent' || entry.id === 'tab-new-shell')) + 1;
   return [
-    ...(folded.length > 0 ? [...folded, 'separator' as const] : []),
+    ...folded.slice(0, afterStarts),
+    crewRow(zone, actions, 'New crew'),
+    ...folded.slice(afterStarts),
+    'separator',
     { id: 'tidy', label: 'Tidy', icon: <LayoutGrid />, hint: 'Its tiles in rows, in reading order', ...tidyBlocked(zone), onSelect: () => actions.tidy(zone) },
     // One row for both, so ⋯ grows no taller for the layout.
     {
@@ -529,13 +539,6 @@ export function zoneMenu({ zone, folded, themeFill, rename, actions }: ZoneMenuI
       hint: 'What agents started here in a role begin with',
       onSelect: () => actions.editRoleTemplates(zone),
     },
-    {
-      id: 'crew-prefabs',
-      label: 'Crew prefabs…',
-      icon: <Users />,
-      hint: 'Saved crews, for every board',
-      onSelect: () => actions.editCrewPrefabs(),
-    },
     'separator',
     {
       id: 'delete',
@@ -574,6 +577,20 @@ const newAgentRow = ({ zone, noAgents, actions }: ProjectMenuInput, label: strin
   disabled: noAgents !== undefined,
   hint: noAgents,
   onSelect: () => actions.newAgent(zone),
+});
+
+/** A crew to start in the zone, from the library as last known, yours first; or the library itself. */
+const crewRow = (zone: Zone, actions: Pick<ZoneMenuActions, 'startCrew' | 'crewLibrary'>, label: string): ModelEntry => ({
+  id: 'crew',
+  label,
+  icon: <Users />,
+  entries: [
+    ...crewGroups().flatMap((group): ModelEntry[] => [
+      ...group.map((prefab): ModelEntry => ({ id: `crew-${prefab.name}`, label: prefab.name, icon: <CrewFaces members={prefab.members} />, onSelect: () => actions.startCrew(prefab.name, zone) })),
+      'separator',
+    ]),
+    { id: 'crew-library', label: 'Library…', icon: <LibraryBig />, onSelect: () => actions.crewLibrary(zone) },
+  ],
 });
 
 const newShellRow = ({ zone, actions }: ProjectMenuInput, label: string): ModelEntry => ({
@@ -666,7 +683,6 @@ function agentSettingEntries({ zone, technical, actions }: ProjectMenuInput): Mo
       onSelect: () => actions.editGateCommand(zone),
     },
     { id: 'role-templates', label: 'Role templates…', icon: <FileText />, hint: 'What agents started here in a role begin with', onSelect: () => actions.editRoleTemplates(zone) },
-    { id: 'crew-prefabs', label: 'Crew prefabs…', icon: <Users />, hint: 'Saved crews, for every board', onSelect: () => actions.editCrewPrefabs() },
   ];
 }
 
@@ -689,6 +705,7 @@ export function projectMenu(input: ProjectMenuInput): ModelEntry[] {
   if (zone.clone !== null) return [newAgentRow(input, 'New agent'), newShellRow(input, 'New terminal'), 'separator', tidyUpRow(input), issues, folder];
   return [
     newAgentRow(input, 'New agent'),
+    crewRow(zone, input.actions, 'New crew'),
     newShellRow(input, 'New terminal'),
     'separator',
     { id: 'rename', label: 'Rename', icon: <Pencil />, onSelect: rename },
@@ -740,6 +757,7 @@ export function projectContextMenu(input: ProjectContextMenuInput): ModelEntry[]
   if (zone.clone !== null) return [newShellRow(input, 'New terminal here'), note, 'separator', options];
   return [
     newAgentRow(input, 'New agent here'),
+    crewRow(zone, input.actions, 'New crew here'),
     newShellRow(input, 'New terminal here'),
     note,
     ...(zone.tracker === null ? [] : [addIssueRow(input)]),

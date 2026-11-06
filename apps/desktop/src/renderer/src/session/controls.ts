@@ -52,3 +52,14 @@ export function sessionControls({ agent, live }: { agent?: Agent; live: boolean 
     },
   ];
 }
+
+/**
+ * The header's one state button, of a window's controls: Wake while it is paused, else Interrupt mid-turn, else Pause.
+ * Stop never leads; and one that has gone, with Stop no use either, has none, as the Simplified header has.
+ */
+export function leadControl(controls: readonly Control[]): Control | undefined {
+  const wake = controls.find((control) => control.id === 'wake');
+  if (wake !== undefined) return wake;
+  if (controls.find((control) => control.id === 'stop')?.enabled !== true) return undefined;
+  return controls.find((control) => control.id === 'interrupt' && control.enabled) ?? controls.find((control) => control.id === 'pause');
+}

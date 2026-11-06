@@ -57,6 +57,7 @@ function host(agents = new Map<string, Agent>()) {
       interrupt: () => {
         throw new Error('not here');
       },
+      setEffort: () => Promise.reject(new Error('not here')),
       continueOnCredits: () => Promise.reject(new Error('not here')),
       sendUnsent: () => Promise.reject(new Error('not here')),
       clearUnsent: () => {

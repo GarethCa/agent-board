@@ -131,11 +131,9 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
     await tabNamed(window, tabText('claude')).getByRole('tab').click();
     if (classic) await showDetails(sessionWindow(window));
     else {
-      await sessionWindow(window).getByRole('button', { name: 'Show details' }).click();
-      await expect(sessionWindow(window).getByTestId('agent-shelves')).toBeVisible();
       await sessionWindow(window).getByTestId('agent-shelves').getByRole('tab', { name: /^Made/ }).click();
     }
-    await sessionWindow(window).getByRole('button', { name: classic ? /#41 Send users home after login/ : /^Pull request #41/ }).click();
+    await sessionWindow(window).getByRole('button', { name: /#41 Send users home after login/ }).click();
     await expect(tabNamed(window, tabText('PR #41'))).toHaveCount(1);
     await expect(tabNamed(window, tabText('PR #41'))).toHaveAttribute('data-active', 'true');
 

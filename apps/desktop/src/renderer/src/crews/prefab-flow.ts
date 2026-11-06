@@ -9,6 +9,26 @@ import {
   type PrefabMember,
 } from '@agent-board/daemon/protocol';
 
+/** How heavy a prefab runs, on its card: `no loop`, `lead decides`, `3 rounds`. */
+export function prefabWeight(prefab: Pick<CrewPrefab, 'members' | 'roundLimit'>): string {
+  if (prefab.members.length <= 1) return 'no loop';
+  if (ledCrew(prefab)) return 'lead decides';
+  return `${prefab.roundLimit} ${prefab.roundLimit === 1 ? 'round' : 'rounds'}`;
+}
+
+/** What a member does and when, as the prompt box lists it. */
+export function memberRun(member: PrefabMember, prefab: Pick<CrewPrefab, 'members'>, technical = true): { does: string; detail: string; when: string } {
+  const first = promptMember(prefab);
+  if (member.starts === 'prompt') {
+    if (isOrchestratorRole(member.role)) return { does: 'runs the crew', detail: 'Gets your prompt, then starts its crew.', when: 'starts now' };
+    const detail = technical ? 'Gets your prompt, on a new branch in its own worktree.' : 'Gets your prompt, and works on its own copy of the code.';
+    return { does: member.role === 'implementer' ? 'builds it' : 'works on it', detail, when: 'starts now' };
+  }
+  if (member.starts === 'lead') return { does: 'works for the lead', detail: 'Starts when the lead has work ready for it.', when: 'by the lead' };
+  const after = first === undefined ? 'the hand-off' : `${memberLabel(first)} hands off`;
+  return { does: 'reviews it', detail: 'Changes nothing. Replies with a review.', when: `after ${after}` };
+}
+
 /** The AI and model picker's value for a harness and model (null for its default): `claude:opus`, `codex:`. */
 export const modelChoice = (harness: Harness, model: string | null): string => `${harness}:${model ?? ''}`;
 

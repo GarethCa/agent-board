@@ -211,7 +211,8 @@ test('a zone takes its issues from a GitHub repo through gh, an agent starts fro
     });
     await expect(agentTile.getByTestId('tile-pr')).toHaveText(['#44', '#43']);
     await expect(agentTile.getByTestId('tile-folded')).toHaveText('+2');
-    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('title', /^#43 .*\n#41 /s);
+    // It names them in its label, in order (its list, a click away, is in tile-chip-overflow.spec.ts: the PR tab stays open over this tile).
+    await expect(agentTile.getByTestId('tile-folded')).toHaveAttribute('aria-label', /^2 more: #43 .*; #41 /s);
 
     // The agent commits and pushes onto another branch's PR, as a fix agent cut from it does: its tile shows
     // that PR, marked as pushed to, open and once merged. It is only shown: the agent has no PR of its own to merge.

@@ -11,6 +11,8 @@ const FIELD = 'input:not([type="hidden"]):not(:disabled), textarea:not(:disabled
 interface DialogProps {
   /** The heading. It also names the dialog, unless `aria-label` gives a shorter name. */
   title: ReactNode;
+  /** A control beside the heading, not part of it: a switch of what the dialog is for. */
+  headEnd?: ReactNode;
   /** The dialog's accessible name, when the title is long or changes: "New agent", not "New Codex agent in web". */
   'aria-label'?: string;
   /** Closing it any way: Esc, the close button or a click on the scrim. */
@@ -37,7 +39,7 @@ interface DialogProps {
  * while it is open and returns to what opened it after; Esc closes it. It opens on the body's first field (or the one
  * marked autoFocus), else on the footer's last button, the primary action; an alertdialog on its first, the safe answer.
  */
-export function Dialog({ title, onClose, footer, footerStart, children, role = 'dialog', onSubmit, inline = false, ...rest }: DialogProps) {
+export function Dialog({ title, headEnd, onClose, footer, footerStart, children, role = 'dialog', onSubmit, inline = false, ...rest }: DialogProps) {
   const alert = role === 'alertdialog';
   // Its parent opens it by mounting it, so Radix has no trigger to give focus back to: this is that trigger.
   const [opener] = useState(() => openerOf(document.activeElement));
@@ -45,6 +47,7 @@ export function Dialog({ title, onClose, footer, footerStart, children, role = '
     <>
       <div className="ui-dialog-head">
         <RadixDialog.Title className="ui-dialog-title">{title}</RadixDialog.Title>
+        {headEnd}
         {!alert && (
           <RadixDialog.Close asChild>
             <IconButton

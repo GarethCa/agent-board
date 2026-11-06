@@ -262,8 +262,8 @@ for (const { theme, suffix } of THEMES) {
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
   for (const technical of [false, true]) {
-    const shot = `simplified-inspector${technical ? '-technical' : ''}${suffix}`;
-    test(`an agent's inspector as the Simplified design draws it, technical details ${technical ? 'on' : 'off'}, ${theme}`, async () => {
+    const shot = `simplified-agent-shelves-live${technical ? '-setup' : ''}${suffix}`;
+    test(`an agent's shelves as the Simplified design draws it, technical details ${technical ? 'on' : 'off'}, ${theme}`, async () => {
       needsBaselines(shot);
       const { dir, repo, env } = scratch('waiting');
       const dataDir = tempDataDir();
@@ -278,17 +278,16 @@ for (const { theme, suffix } of THEMES) {
         await spawnAgent(window, 'monorepo', 'Pick a database');
         await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
         await tile(window).dblclick();
-        await sessionWindow(window).locator('.session-window-head').getByRole('button', { name: 'Show details' }).click();
-        const inspector = sessionWindow(window).getByTestId('agent-shelves');
-        await expect(inspector.getByTestId('page-now')).toContainText('Postgres or SQLite');
+        const shelves = sessionWindow(window).getByTestId('agent-shelves');
+        await expect(shelves.getByTestId('page-now')).toContainText('Postgres or SQLite');
         if (technical) {
-          await inspector.getByRole('tab', { name: 'Setup' }).click();
-          await expect(inspector.getByRole('region', { name: 'Where it works' })).toContainText('Claude · default model');
+          await shelves.getByRole('tab', { name: 'Setup' }).click();
+          await expect(shelves.getByRole('region', { name: 'Where it works' })).toContainText('Claude');
         }
         await pinRandomText(window);
         const restorePointer = await ignorePointer(window);
         await settle(window);
-        await expect.soft(inspector).toHaveScreenshot(`${shot}.png`, SHOT);
+        await expect.soft(shelves).toHaveScreenshot(`${shot}.png`, SHOT);
         await restorePointer();
       } finally {
         await app.close();
@@ -299,11 +298,11 @@ for (const { theme, suffix } of THEMES) {
   }
 }
 
-// Classic's Simple agent sidebar: the shelves in Classic's tokens, in place of the details strip, open on the board's Now.
+// Classic's Shelves sidebar: the shelves in Classic's tokens, in place of the details strip, open on the board's Now.
 for (const { theme, suffix } of THEMES) {
   const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
-  const shot = `inspector-simple-classic${suffix}`;
-  test(`an agent's inspector as Classic's Simple sidebar draws it, ${theme}`, async () => {
+  const shot = `agent-shelves-live${suffix}`;
+  test(`an agent's shelves as Classic's Shelves sidebar draws it, ${theme}`, async () => {
     needsBaselines(shot);
     const { dir, repo, env } = scratch('waiting');
     const dataDir = tempDataDir();
@@ -316,18 +315,18 @@ for (const { theme, suffix } of THEMES) {
       await browseForZone(window);
       await spawnAgent(window, 'monorepo', 'Pick a database');
       await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });
-      // Picked in Settings, which shows the inspector too.
+      // Picked in Settings, which shows the shelves too.
       const settings = await openSettings(window, 'agents.sidebar');
-      await settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' }).getByRole('button', { name: 'Simple' }).click();
+      await settingsSection(settings, 'Sidebar').getByRole('group', { name: 'Agent sidebar' }).getByRole('button', { name: 'Shelves' }).click();
       await settings.close();
       await tile(window).dblclick();
-      const inspector = sessionWindow(window).getByTestId('agent-shelves');
-      await expect(inspector.getByTestId('page-now')).toContainText('Postgres or SQLite');
-      await expect(inspector.getByRole('tab', { name: 'Setup' })).toBeVisible();
+      const shelves = sessionWindow(window).getByTestId('agent-shelves');
+      await expect(shelves.getByTestId('page-now')).toContainText('Postgres or SQLite');
+      await expect(shelves.getByRole('tab', { name: 'Setup' })).toBeVisible();
       await pinRandomText(window);
       const restorePointer = await ignorePointer(window);
       await settle(window);
-      await expect.soft(inspector).toHaveScreenshot(`${shot}.png`, SHOT);
+      await expect.soft(shelves).toHaveScreenshot(`${shot}.png`, SHOT);
       await restorePointer();
     } finally {
       await app.close();

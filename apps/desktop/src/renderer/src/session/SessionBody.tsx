@@ -10,7 +10,7 @@ import { useAction } from '../use-action';
 import { errorMessage } from '../../../shared/errors';
 import { SessionDetails } from './SessionDetails';
 import { DetailsHandle } from './DetailsHandle';
-import { SimplifiedInspector } from './SimplifiedInspector';
+import { LiveShelves, ShelfControls } from './LiveShelves';
 import { ChatView } from './ChatView';
 import { openingView, useConversationAs } from './conversation-as';
 import { Composer } from './Composer';
@@ -78,10 +78,12 @@ interface SessionBodyProps {
   /** Set to what ⌥⌘T does, with the switch in the header, for the header's menu to do too. */
   terminalToggle?: RefObject<(() => void) | null>;
   /**
-   * Whether an agent's details are the inspector, on the left and hidden while collapsed, rather than the
-   * details strip: in an agent's session window under the Simplified design, or Classic's Simple sidebar.
+   * Whether an agent's details are its shelves, on the left and collapsed to their rail, rather than the details
+   * strip: in an agent's session window under the Simplified design, or Classic's when its sidebar is Shelves.
    */
-  inspector?: boolean;
+  shelves?: boolean;
+  /** Under Classic, where in the header the shelves' window controls go (null until the header is drawn). */
+  controlsSlot?: HTMLElement | null;
 }
 
 /**
@@ -99,7 +101,8 @@ export function SessionBody({
   shown = true,
   viewSlot,
   terminalToggle,
-  inspector = false,
+  shelves = false,
+  controlsSlot,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -155,8 +158,8 @@ export function SessionBody({
     if (surface === undefined || panes === undefined) openLink(pr.url);
     else panes.open(surface);
   };
-  // The agent the inspector is of, when its details are the inspector.
-  const inspectorAgent = inspector ? agent : undefined;
+  // The agent the shelves are of, when its details are its shelves.
+  const shelvesAgent = shelves ? agent : undefined;
   // The chat is picked for the agent's own pane: a shell tab stays a terminal, with no message box or chat actions under it.
   // The Timeline is the chat drawn as its rail, in the Simplified design's window, whose header has the switch and which
   // opens on the view its settings name: the terminal, or the conversation as it is shown. Anywhere else (Classic, an
@@ -305,7 +308,7 @@ export function SessionBody({
       data-tab-drop={from === undefined ? undefined : dropKey(from)}
       data-drop-over={(from !== undefined && dropOver === dropKey(from)) || undefined}
     >
-      {content.kind !== 'tabs' && !inspector && (
+      {content.kind !== 'tabs' && !shelves && (
       <SessionDetails
         sessionId={controlSession}
         agent={agent}
@@ -323,21 +326,24 @@ export function SessionBody({
         onOpenWeb={panes?.openWeb}
       />
       )}
-      {content.kind !== 'tabs' && !inspector && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
-      {inspectorAgent && !detailsCollapsed && (
+      {content.kind !== 'tabs' && !shelves && <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />}
+      {shelvesAgent && (
         <>
-          <SimplifiedInspector
-            agent={inspectorAgent}
+          <LiveShelves
+            agent={shelvesAgent}
+            collapsed={detailsCollapsed}
+            onCollapsed={onDetailsCollapsed}
             onProblem={setProblem}
             onOpenLink={openLink}
             onOpenPullRequest={openPullRequest}
             onOpenSurface={panes && ((surface) => panes.open(surface))}
             onOpenWeb={panes?.openWeb ?? openLink}
-            controls={simplified ? undefined : { live, onSplit: panes?.splitFromDetails }}
           />
-          <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
+          {!detailsCollapsed && <DetailsHandle collapsed={false} onCollapsed={onDetailsCollapsed} />}
         </>
       )}
+      {/* Under Classic the header holds the window's controls while the shelves are its sidebar. */}
+      {shelvesAgent && !simplified && controlsSlot && createPortal(<ShelfControls agent={shelvesAgent} live={live} onSplit={panes?.splitFromDetails} onProblem={setProblem} />, controlsSlot)}
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
           {panes ? (

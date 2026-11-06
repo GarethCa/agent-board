@@ -1,4 +1,4 @@
-import { gitGuardGlobalSetup, harnessGuardGlobalSetup, scrubBoardEnv } from '@agent-board/fake-harness';
+import { compileCacheGlobalSetup, gitGuardGlobalSetup, harnessGuardGlobalSetup, scrubBoardEnv } from '@agent-board/fake-harness';
 import { createFakeGitHub } from '@agent-board/tracker/testing';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ export default function globalSetup(): () => Promise<void> {
   // them race to unpack the same Electron.app and one launches a half-installed binary ("Process failed to launch!").
   createRequire(import.meta.url)('electron');
   scrubBoardEnv();
+  compileCacheGlobalSetup();
   const teardownGuard = harnessGuardGlobalSetup();
   // git in a spec must not see a GIT_DIR from the run's own environment, and this checkout's core config must come out as it went in.
   const teardownGit = gitGuardGlobalSetup();

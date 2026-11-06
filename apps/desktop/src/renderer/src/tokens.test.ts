@@ -185,6 +185,7 @@ const LOCAL = [
   '--edge-room',
   '--for-you-height',
   '--dock-room',
+  '--radix-popover-content-available-width',
   '--radix-popover-content-available-height',
   '--radix-dropdown-menu-content-available-height',
   '--pane-top',
@@ -225,6 +226,8 @@ const LOCAL = [
   '--box-width',
   '--box-height',
   '--zoom',
+  // Where an agent's shelf peek opens, beside the rail icon clicked.
+  '--peek-top',
   // Where a context menu opens, or Ask Claude's popover points.
   '--anchor-x',
   '--anchor-y',

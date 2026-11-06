@@ -1,15 +1,8 @@
 import { setViewSetting, useViewSettings } from '../board/view-settings';
-import { AGENT_SIDEBARS, AGENT_SIDEBAR_LABELS, type AgentSidebar } from '../session/agent-sidebar';
-import { inspectorShown } from '../session/inspector';
+import { AGENT_SIDEBARS, AGENT_SIDEBAR_LABELS } from '../session/agent-sidebar';
 import { Hint, Segmented } from '../ui';
 
-/** Picks the sidebar; Simple shows the inspector in the windows open now, rather than leaving it hidden behind its toggle. */
-function pick(value: AgentSidebar): void {
-  if (value === 'simple') inspectorShown.set('shown');
-  setViewSetting('agentSidebar', value);
-}
-
-/** Settings › Agents › Sidebar, under Classic: an agent window's full details strip, or the simple inspector. */
+/** Settings › Agents › Sidebar, under Classic: an agent window's shelves, or the full details strip. */
 export function AgentSidebarSetting() {
   const { agentSidebar } = useViewSettings();
   return (
@@ -18,9 +11,9 @@ export function AgentSidebarSetting() {
         aria-label="Agent sidebar"
         options={AGENT_SIDEBARS.map((id) => ({ id, label: AGENT_SIDEBAR_LABELS[id] }))}
         value={agentSidebar}
-        onChange={pick}
+        onChange={(value) => setViewSetting('agentSidebar', value)}
       />
-      <Hint>Agent sidebar: Simple shows an agent&apos;s work first and folds the rest away. Full is every section and control.</Hint>
+      <Hint>Agent sidebar: Shelves opens on an agent&apos;s own page, with the rest a tab away. Full is every section and control.</Hint>
     </>
   );
 }

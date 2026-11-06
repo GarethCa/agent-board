@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.16 (2026-11-06)
+
+- Profile the slowest test files; tempRepo copies a template, and test runs share a Node compile cache
+- An orchestrator's tile keeps its chips inside it, folding the rest into +N
+- Sidebar, part 4: rail and peek, and Shelves replaces Simple
+- An orchestrator can change a running agent's reasoning effort: set_effort and agent-board effort
+- A resume after a restart says nothing, instead of a red 'Relaunched after a restart'
+- Crew prefabs, slice 4: New agent's Crew, the crew library, one prompt box, right-click and ⌘K
+- Sidebar, part 3: Made, Crew and Setup rebuilt, pins on the page, controls in the header
+- Guard the menu template's accelerators and the terminal's keys from the board
+
 ## v0.6.15 (2026-11-06)
 
 - Steps, part 4b: answering a steps card from Needs you and the agent's window

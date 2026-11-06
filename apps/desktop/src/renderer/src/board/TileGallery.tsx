@@ -1,4 +1,4 @@
-import { AGENT_STATES, type Agent, type AgentStart, type AgentState, type Harness, type Shell } from '@agent-board/daemon/protocol';
+import { AGENT_STATES, type Agent, type AgentStart, type AgentState, type DocumentSummary, type Harness, type PlanSummary, type Shell } from '@agent-board/daemon/protocol';
 import { HandoffsContext } from './flow-edges';
 import { GitBranch } from 'lucide-react';
 import { HarnessMark } from './HarnessMark';
@@ -177,6 +177,37 @@ const CROWDED: Agent = {
     { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
   ],
   schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+};
+
+/**
+ * An orchestrator with everything a lead collects: a role, a model, an issue, three pull requests, a schedule, a mute, a
+ * plan, docs, a review round, queued and waiting messages and its crew's flags. Every chip that doesn't fit its one footer
+ * line folds into the "+N", so none runs past the tile.
+ */
+const CROWDED_ORCHESTRATOR: Agent = {
+  ...galleryAgent('waiting'),
+  sessionId: 'gallery-crowded-orchestrator',
+  name: 'Release orchestrator',
+  model: 'claude-opus-5-5',
+  role: 'custom',
+  roleName: 'orchestrator',
+  issue: { provider: 'linear', id: 'ACME-18', title: 'Workbench light theme and brand assets', url: '' },
+  lastMessage: null,
+  compactingSince: null,
+  muted: true,
+  pullRequests: [
+    { number: 214, title: 'Movable sessions', url: '', state: 'open', checks: 'passing' },
+    { number: 215, title: 'Movable sessions, part two', url: '', state: 'open', checks: 'failing' },
+    { number: 216, title: 'Movable sessions, part three', url: '', state: 'draft', checks: 'pending' },
+  ],
+  schedule: { clockId: 'clock-1', cron: '0 9 * * 2', prompt: 'Follow up', enabled: true, nextRunAt: NEXT_RUN, lastRun: null },
+  plan: { id: 'plan', version: 3, title: 'Cut the release', format: 'markdown', presentedAt: AT, expiresAt: null, left: true, decision: null, author: 'agent' } as PlanSummary,
+  docs: [
+    { id: 'doc-1', sessionId: 'gallery-crowded-orchestrator', path: '/docs/a.md', title: 'Status', format: 'markdown', version: 1, writtenAt: AT, writtenBy: 'agent' },
+    { id: 'doc-2', sessionId: 'gallery-crowded-orchestrator', path: '/docs/b.md', title: 'Handoff', format: 'markdown', version: 1, writtenAt: AT, writtenBy: 'agent' },
+  ] as DocumentSummary[],
+  queuedUntilUp: 2,
+  messagesWaiting: 3,
 };
 
 /**
@@ -417,6 +448,24 @@ export function TileGallery() {
           </div>
         ))}
         <HeaderCases />
+      </div>
+    </HandoffsContext>
+  );
+}
+
+/** A crowded orchestrator's tile at the board's size and at its narrowest, for checking that its chips stay inside it. Shown at `#gallery`. */
+export function CrowdedOrchestratorGallery() {
+  return (
+    <HandoffsContext value={HANDOFFS}>
+      <div className="tile-gallery" data-testid="crowded-orchestrator-gallery">
+        {[AGENT_TILE_SIZE.width, 200].map((width) => (
+          <div key={width} style={{ ...AGENT_TILE_SIZE, width }}>
+            <HybridTile
+              id={`${CROWDED_ORCHESTRATOR.sessionId}-${width}`}
+              tile={{ label: CROWDED_ORCHESTRATOR.name, harness: CROWDED_ORCHESTRATOR.harness, agent: CROWDED_ORCHESTRATOR, crew: 24, crewFlags: 3 }}
+            />
+          </div>
+        ))}
       </div>
     </HandoffsContext>
   );

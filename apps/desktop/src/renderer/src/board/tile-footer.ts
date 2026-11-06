@@ -26,9 +26,14 @@ export type TileBadge =
 export interface TileFooter {
   /** The badges the footer row shows, on one line. */
   shown: TileBadge[];
-  /** The rest, one line each, for the "+N" chip's tooltip. */
+  /** The rest, one line each, for the "+N" chip's list. */
   folded: string[];
+  /** What never had room, as the list draws it: the jobs past the first (as lines) and the pull requests past the second (to open). */
+  overflow: { jobs: string[]; pullRequests: PullRequestBadge[] };
 }
+
+/** A pull request as a footer badge: its branch's, or one of a branch it pushed to. */
+export type PullRequestBadge = Extract<TileBadge, { kind: 'pr' }>;
 
 /** Pull requests shown as chips; more fold into the "+N". */
 const MAX_PULL_REQUEST_CHIPS = 2;
@@ -49,16 +54,21 @@ export function tileFooter(agent: Agent, shells = 0, jobs: readonly TakenJob[] =
   // The first job it holds rides on it as a ticket; any more fold into the "+N".
   if (jobs[0] !== undefined) shown.push({ kind: 'job', taken: jobs[0] });
   // Until its session's first hook, nothing else can apply: no work to finish, branch to put up, schedule to run or shell to open.
-  if (isStarting(agent)) return { shown, folded: [] };
+  if (isStarting(agent)) return { shown, folded: [], overflow: { jobs: [], pullRequests: [] } };
   if (agent.workFinishedAt !== null) shown.push({ kind: 'finished', at: agent.workFinishedAt });
-  const pullRequests = [...agent.pullRequests.map((pr) => ({ kind: 'pr' as const, pr })), ...agent.pushedPullRequests.map((pr) => ({ kind: 'pr' as const, pr, pushed: true as const }))];
+  const pullRequests = pullRequestBadges(agent);
   shown.push(...pullRequests.slice(0, MAX_PULL_REQUEST_CHIPS));
   if (agent.schedule !== null) shown.push({ kind: 'schedule', schedule: agent.schedule });
   if (agent.muted) shown.push({ kind: 'muted' });
   if (shells > 0) shown.push({ kind: 'shells' });
 
-  const folded = [...jobs.slice(1).map((taken) => badgeLine({ kind: 'job', taken }, shells)), ...pullRequests.slice(MAX_PULL_REQUEST_CHIPS).map((badge) => badgeLine(badge, shells))];
-  return { shown, folded };
+  const overflow = { jobs: jobs.slice(1).map((taken) => badgeLine({ kind: 'job', taken }, shells)), pullRequests: pullRequests.slice(MAX_PULL_REQUEST_CHIPS) };
+  return { shown, folded: [...overflow.jobs, ...overflow.pullRequests.map((badge) => badgeLine(badge, shells))], overflow };
+}
+
+/** Its pull requests as badges, its branch's first, then those of the branches it pushed to. */
+function pullRequestBadges(agent: Agent): PullRequestBadge[] {
+  return [...agent.pullRequests.map((pr) => ({ kind: 'pr' as const, pr })), ...agent.pushedPullRequests.map((pr) => ({ kind: 'pr' as const, pr, pushed: true as const }))];
 }
 
 /** Whether the agent is still starting: its tile shows its start's steps, and only the badges that already apply. */
@@ -84,6 +94,9 @@ export const FOOTER_LINES = 1;
  */
 const FOLD_ORDER: TileBadge['kind'][] = ['shells', 'schedule', 'role', 'effort', 'model', 'muted', 'pr'];
 
+/** Where the chips beside the badges fold, after every badge (those rank from 0), the lower first: docs go before the review. */
+export const EXTRA_FOLD_RANK = { docs: 100, plan: 101, review: 102, gate: 103, queued: 104, messages: 105 } as const;
+
 /** The indexes in `shown` of the badges that can fold, in the order they do. */
 export function foldRanking(shown: TileBadge[]): number[] {
   return shown
@@ -93,7 +106,7 @@ export function foldRanking(shown: TileBadge[]): number[] {
     .map(({ index }) => index);
 }
 
-/** What a badge says, in a line, for the "+N" chip's tooltip once it has folded into it. */
+/** What a badge says, in a line, for the "+N" chip's list once it has folded into it. */
 export function badgeLine(badge: TileBadge, shells: number): string {
   switch (badge.kind) {
     case 'model':

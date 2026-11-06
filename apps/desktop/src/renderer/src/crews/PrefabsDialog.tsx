@@ -1,49 +1,90 @@
-import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { LibraryPrefab } from '@agent-board/daemon/protocol';
 import { errorMessage } from '../../../shared/errors';
 import { Button, Dialog, ErrorText, Hint, Tag } from '../ui';
 import { useAction } from '../use-action';
-import { PrefabIcon } from './icons';
-import { PrefabEditor } from './PrefabEditor';
-import { memberLabel } from './prefab-flow';
+import { RoleIcon } from './icons';
+import { memberLabel, prefabWeight } from './prefab-flow';
+import { refreshPrefabs, yoursFirst } from './prefab-store';
+
+/** The most member faces a card shows before it says how many more. */
+const MAX_FACES = 5;
+
+export interface PrefabsDialogProps {
+  onClose(): void;
+  /** Opens the prompt box for a crew from the prefab. */
+  onStart(prefab: LibraryPrefab): void;
+  /** Opens the flow editor: on the prefab, or null for a new one. */
+  onEdit(prefab: LibraryPrefab | null): void;
+  /** Asks for a `.crew.json` file, to show it whole before it is added. */
+  onImport(): void;
+  /** What it shows in place of reading the library, and a card asking before it removes, for the gallery. */
+  library?: Library;
+  asking?: string;
+}
 
 interface Library {
-  prefabs: LibraryPrefab[];
-  unreadable: { name: string; reason: string }[];
+  prefabs: readonly LibraryPrefab[];
+  unreadable: readonly { name: string; reason: string }[];
+}
+
+/** A prefab as a card of the library: its faces, what it is for and how heavy it runs, then what to do with it. */
+function PrefabCard({ prefab, children }: { prefab: LibraryPrefab; children: ReactNode }) {
+  const more = prefab.members.length - MAX_FACES;
+  return (
+    <li className={`prefab-card${prefab.builtIn ? '' : ' mine'}`} data-testid="prefab-card">
+      <span className="prefab-card-faces" aria-hidden>
+        {prefab.members.slice(0, MAX_FACES).map((member) => (
+          <span key={member.id} className="prefab-node-bubble small">
+            <RoleIcon member={member} />
+          </span>
+        ))}
+        {more > 0 && <span className="prefab-card-more">+{more}</span>}
+      </span>
+      <span className="prefab-card-name">
+        <b>{prefab.name}</b>
+      </span>
+      <span className="prefab-card-purpose">{prefab.purpose || prefab.members.map(memberLabel).join(', ')}</span>
+      <span className="prefab-card-foot">
+        <Tag>{prefab.builtIn ? 'Built in' : 'Yours'}</Tag>
+        <span className="prefab-card-weight">{prefabWeight(prefab)}</span>
+      </span>
+      <span className="prefab-card-actions">{children}</span>
+    </li>
+  );
 }
 
 /**
- * The app's crew prefabs, one library for every board, from the board menu: each with its members and what it is for,
- * to edit (a built-in, as a copy of your own) or remove, and New prefab. Each opens the flow editor in its place.
+ * The app's crew prefabs, one library for every board, yours first: each a card to start a crew from, to edit (a
+ * built-in, as a copy of your own) or remove, with Make a prefab and Import a file. A prefab can't be got back once
+ * removed, so Remove asks first, on its card.
  */
-export function PrefabsDialog({ onClose }: { onClose(): void }) {
-  const [library, setLibrary] = useState<Library>();
+export function PrefabsDialog({ onClose, onStart, onEdit, onImport, library: given, asking }: PrefabsDialogProps) {
+  const [library, setLibrary] = useState<Library | undefined>(given);
   const [loadError, setLoadError] = useState<string>();
-  // undefined: the list; null: a new prefab; else the one being edited.
-  const [editing, setEditing] = useState<LibraryPrefab | null>();
-  // A prefab can't be got back once removed, so Remove asks first, in its row.
-  const [removing, setRemoving] = useState<string>();
+  const [removing, setRemoving] = useState(asking);
   const { busy, error, run } = useAction();
 
   const load = () => window.agentBoard.orchestrators.prefabs().then(setLibrary, (failure: unknown) => setLoadError(errorMessage(failure)));
-  useEffect(() => void load(), []);
+  useEffect(() => {
+    if (given === undefined) void load();
+    // Loaded once as it opens; saving reloads it from the flow it opened.
+  }, []);
 
-  if (editing !== undefined) {
-    return <PrefabEditor prefab={editing} onClose={() => setEditing(undefined)} onSaved={() => void load()} />;
-  }
   const remove = (name: string) =>
     run(
       () => window.agentBoard.orchestrators.removePrefab(name),
       () => {
         setRemoving(undefined);
         void load();
+        void refreshPrefabs();
       },
     );
-  /** Remove, or once asked, the question with its answers. */
   const removeButtons = (name: string) =>
     removing === name ? (
       <>
-        <span className="prefab-list-ask">Remove it for good?</span>
+        <span className="prefab-card-ask">Remove it for good?</span>
         <Button size="sm" variant="danger" loading={busy} onClick={() => remove(name)}>
           Remove
         </Button>
@@ -59,52 +100,49 @@ export function PrefabsDialog({ onClose }: { onClose(): void }) {
 
   return (
     <Dialog
-      aria-label="Crew prefabs"
-      title="Crew prefabs"
+      aria-label="Crew library"
+      title="Crew library"
       onClose={onClose}
-      footerStart={<Button onClick={() => setEditing(null)}>New prefab</Button>}
-      footer={
-        <Button variant="primary" onClick={onClose}>
-          Done
+      data-testid="crew-library"
+      inline={given !== undefined}
+      footerStart={
+        <Button variant="ghost" onClick={onImport}>
+          Import a file
         </Button>
       }
+      footer={<Button onClick={onClose}>Done</Button>}
     >
       {library === undefined ? (
         loadError === undefined ? <Hint>Loading…</Hint> : <ErrorText>{loadError}</ErrorText>
       ) : (
-        <ul className="prefab-list" aria-label="Library">
-          {library.prefabs.map((prefab) => (
-            <li key={prefab.name} className="prefab-list-row">
-              <span className="prefab-list-mark" aria-hidden>
-                <PrefabIcon icon={prefab.icon} />
-              </span>
-              <span className="prefab-list-text">
-                <b>{prefab.name}</b>
-                {prefab.builtIn && <Tag>Built-in</Tag>}
-                <span className="prefab-list-sub">{prefab.purpose || prefab.members.map(memberLabel).join(', ')}</span>
-              </span>
-              <span className="prefab-list-actions">
-                <Button size="sm" onClick={() => setEditing(prefab)}>
-                  {prefab.builtIn ? 'Copy' : 'Edit'}
-                </Button>
-                {!prefab.builtIn && removeButtons(prefab.name)}
-              </span>
-            </li>
+        <ul className="prefab-cards" aria-label="Library">
+          {yoursFirst(library.prefabs).map((prefab) => (
+            <PrefabCard key={prefab.name} prefab={prefab}>
+              <Button size="sm" onClick={() => onStart(prefab)}>
+                Start
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => onEdit(prefab)}>
+                {prefab.builtIn ? 'Copy' : 'Edit'}
+              </Button>
+              {!prefab.builtIn && removeButtons(prefab.name)}
+            </PrefabCard>
           ))}
           {library.unreadable.map((row) => (
-            <li key={row.name} className="prefab-list-row">
-              <span className="prefab-list-mark" aria-hidden>
-                <PrefabIcon icon="crew" />
-              </span>
-              <span className="prefab-list-text">
+            <li key={row.name} className="prefab-card" data-testid="prefab-card">
+              <span className="prefab-card-name">
                 <b>{row.name}</b>
-                <span className="prefab-list-sub">Can't be read: {row.reason}</span>
               </span>
-              <span className="prefab-list-actions">
-                {removeButtons(row.name)}
-              </span>
+              <span className="prefab-card-purpose">Can't be read: {row.reason}</span>
+              <span className="prefab-card-actions">{removeButtons(row.name)}</span>
             </li>
           ))}
+          <li className="prefab-card-make">
+            <button type="button" onClick={() => onEdit(null)}>
+              <Plus aria-hidden />
+              Make a prefab
+              <span>Start blank, or copy one above</span>
+            </button>
+          </li>
         </ul>
       )}
       {error && <ErrorText>{error}</ErrorText>}

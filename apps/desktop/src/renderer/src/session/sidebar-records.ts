@@ -136,10 +136,10 @@ export interface PinRow {
 }
 
 /** Whether a file is one the Doc tab draws, by its name: Markdown or HTML. */
-const DOC_FILE = /\.(md|markdown|html?)$/i;
+export const isDocFile = (path: string): boolean => /\.(md|markdown|html?)$/i.test(path);
 
 const pinOpens = (target: PinTarget): PinOpens =>
-  target.kind === 'file' ? (DOC_FILE.test(target.path) ? 'doc' : 'reveal') : target.kind === 'link' ? 'web' : 'none';
+  target.kind === 'file' ? (isDocFile(target.path) ? 'doc' : 'reveal') : target.kind === 'link' ? 'web' : 'none';
 
 /** A link as the sidebar names it: its host and path, with no scheme. */
 function linkName(url: string): string {

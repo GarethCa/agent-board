@@ -6,7 +6,7 @@ import { createAgentPageStore, type AgentPageStore } from './agent-page.ts';
 import { createAgentRecordStore, guessedDocOf, recordHandlers, type AgentRecordStore } from './agent-records.ts';
 import { runGit } from './git.ts';
 import { stateAfterExit } from './claude-state.ts';
-import { createAgentLifecycle, RELAUNCHED_NOTICE } from './agent-lifecycle.ts';
+import { createAgentLifecycle, NO_CONVERSATION_NOTICE } from './agent-lifecycle.ts';
 import { systemClock, type Clock } from './clock.ts';
 import { createComposerWatch } from './codex-screen.ts';
 import { createAgentSpawns, issueColumns, type FolderPlace, type SpawnUsed } from './agent-spawns.ts';
@@ -514,6 +514,8 @@ export interface AgentRow extends PositionColumns {
   stopped_by_restart: number;
   /** 1 once its daemon went away under it at work, until it is started again (migration 0069). */
   turn_cut_off: number;
+  /** 1 once its current conversation has had a turn of its own (migration 0078); a fresh restart resets it. */
+  had_turn: number;
   review_of: string | null;
   /** When its own turn last ended with a final message (migration 0049). */
   finished_at: string | null;
@@ -601,6 +603,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const updatePlace = db.prepare('UPDATE agents SET zone_id = ?, x = ?, y = ?, z = ? WHERE session_id = ?');
   const update = db.prepare('UPDATE agents SET state = ? WHERE session_id = ?');
   const updateNotice = db.prepare('UPDATE agents SET notice = ? WHERE session_id = ?');
+  const updateHadTurn = db.prepare('UPDATE agents SET had_turn = 1 WHERE session_id = ? AND had_turn = 0');
   const updateCutOff = db.prepare('UPDATE agents SET turn_cut_off = 0 WHERE session_id = ?');
   const updateTrustedByZone = db.prepare('UPDATE agents SET trusted_by_zone = 1 WHERE session_id = ?');
   const updateMuted = db.prepare('UPDATE agents SET muted = ? WHERE session_id = ?');
@@ -1491,9 +1494,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     subagents.set(row.session_id, next);
     // A new state is a new ask, or work: either way what was seen is over.
     if (state !== row.state) updateSeen.run(0, row.session_id);
-    // Its next turn has begun: what it says about being relaunched after a restart is over, and so is a cut-off turn,
-    // carried on or not (the continue line, or any other message, began it).
-    if (AT_WORK.has(state) && row.notice === RELAUNCHED_NOTICE) updateNotice.run(null, row.session_id);
+    // Its next turn has begun: a cut-off turn is over, carried on or not (the continue line, or any other message, began it).
+    // A turn has begun: its new conversation has started, so "no earlier conversation" is over.
+    if (AT_WORK.has(state) && row.notice === NO_CONVERSATION_NOTICE) updateNotice.run(null, row.session_id);
     if (AT_WORK.has(state) && row.turn_cut_off === 1) updateCutOff.run(row.session_id);
     update.run(state, row.session_id);
     options.broadcast({ type: 'agent.updated', agent: get(row.session_id)! });
@@ -2015,6 +2018,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       if (payload.agent_id === undefined && TURN_BOUNDARIES.has(payload.hook_event_name)) options.onTurnBoundary?.(sessionId);
       // Its own turn started or ran, so what was typed at its prompt has been taken; never a stale hook of a turn interrupted.
       if (payload.agent_id === undefined && TURN_HOOKS.has(payload.hook_event_name) && !hookStates.isStale(sessionId, payload)) {
+        updateHadTurn.run(sessionId);
         if (payload.hook_event_name === 'UserPromptSubmit') deliveries.promptSubmitted(sessionId, payload.prompt);
         deliveries.turnSeen(sessionId, TURN_ENDS.has(payload.hook_event_name));
       }
@@ -2091,8 +2095,6 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       announceCrew(session.id);
       // Always tell clients: the agent has ended even if its state already said so. Stopped by the user is not a failure.
       const state = lifecycle.isStopping(session.id) ? 'done' : stateAfterExit(row.state, session.exitCode);
-      // Relaunched after a restart, it ended before a turn began: that is over, and why it ended shows instead.
-      if (row.notice === RELAUNCHED_NOTICE) updateNotice.run(null, session.id);
       save(row, state, subagentsAfterExit(subagents.of(session.id), state, new Date()), true);
       lifecycle.exited(session.id, session.stoppedByRestart, row.state);
     },

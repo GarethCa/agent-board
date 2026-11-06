@@ -38,7 +38,7 @@ export const VIEW_KEYS = {
   connections: 'connections',
   /** How agent notes look: document cards or terminal cards. */
   agentNoteLook: 'agentNoteLook',
-  /** Which sidebar an agent's window shows under Classic: the full details strip or the simple inspector. */
+  /** Which sidebar an agent's window shows under Classic: the shelves or the full details strip. */
   agentSidebar: 'agentSidebar',
   /** Whether terminals draw with the GPU (xterm's WebGL renderer), falling back to the DOM renderer: on unless turned off. */
   gpuTerminals: 'gpuTerminals',

@@ -9,6 +9,7 @@ import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject,
 import {
   BOARD_ERROR,
   MAX_CREW_DEPTH,
+  MAX_REVIEW_CAP,
   ORCHESTRATE_SETTING,
   REVIEWER_ROLES,
   type CrewPrefab,
@@ -205,6 +206,14 @@ export function createPrefabLibrary(db: DatabaseSync): PrefabLibrary {
           let prefab: LibraryPrefab;
           try {
             prefab = startable(me, stringParam(fields, 'name'), zoneId);
+            // For this crew alone: the prefab keeps its own.
+            const roundLimit = fields.roundLimit;
+            if (roundLimit !== undefined) {
+              if (typeof roundLimit !== 'number' || !Number.isInteger(roundLimit) || roundLimit < 1 || roundLimit > MAX_REVIEW_CAP) {
+                throw invalidParams(`the round limit is a whole number from 1 to ${MAX_REVIEW_CAP}`);
+              }
+              prefab = { ...prefab, roundLimit };
+            }
           } catch (error) {
             // Refused before any agent is asked for: logged as a refused start, as `spawn` logs its own refusals.
             const name = typeof fields.name === 'string' ? fields.name.trim() : '';

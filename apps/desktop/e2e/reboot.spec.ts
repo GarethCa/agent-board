@@ -144,14 +144,14 @@ test('Resume all after a daemon restart tells the agent it cut off mid-turn to c
     await banner(again).getByRole('button', { name: 'Resume all' }).click();
     await expect(banner(again)).toBeHidden();
 
-    // The idle one waits at its prompt, saying why it was started again; the cut-off one carries on, told to.
-    await expect(quiet(again)).toContainText('Relaunched after a restart');
+    // The idle one waits at its prompt, saying nothing of the restart; the cut-off one carries on, told to.
+    await expect(quiet(again)).not.toContainText('Relaunched');
     await busy(again).dblclick();
     await expect(screen(again)).toContainText('Done: The app restarted; carry on from where you were..');
-    await expect(busy(again)).not.toContainText('Relaunched after a restart');
     // At its prompt (waiting once Claude's idle prompt fires), with no turn begun.
     await expect(quiet(again)).toHaveAttribute('data-state', /^(idle|waiting)$/);
-    await expect(quiet(again)).toContainText('Relaunched after a restart');
+    await expect(quiet(again)).not.toContainText('Relaunched');
+    await expect(quiet(again).locator('.hybrid-tile-notice')).toHaveCount(0);
   } finally {
     for (const app of apps) await app.close().catch(() => {});
     await removeDataDir(dataDir);

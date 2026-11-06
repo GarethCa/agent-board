@@ -4,7 +4,7 @@ import { expect, type Locator } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, zoneNamed } from './agent-helpers.ts';
+import { agents, LONG_MODEL, launch, narrowBy, pickInChip, startBadgedAgent, sessionWindow, startCrowdedAgent, tile, TURN_MS, zoneNamed } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -71,7 +71,9 @@ test('a crowded tile’s footer, narrowed, stays on one line, folds the rest int
     const folded = footer.getByTestId('tile-folded');
     await expect(folded).toBeVisible();
     // The role goes before the model.
-    await expect(folded).toHaveAttribute('title', /Role: Follow-up reviewer/);
+    await folded.click();
+    await expect(window.getByTestId('tile-folded-row').filter({ hasText: 'Role: Follow-up reviewer' })).toBeVisible();
+    await window.keyboard.press('Escape');
     // The model badge keeps its full id in its tooltip while its text is cut short.
     await expect(footer.getByTestId('tile-model')).toHaveAttribute('title', new RegExp(LONG_MODEL));
   } finally {
@@ -137,7 +139,53 @@ test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, b
       await expectChildrenWithin(footer, tile(window));
       expect(await boxes()).toEqual(before);
     }
-    await expect(footer.getByTestId('tile-folded')).toHaveAttribute('title', /Role: Implementer/);
+    // Clicking the +N lists what folded, a row each; a third pull request, past the two the footer shows, joins them, and its
+    // row names it.
+    await footer.getByTestId('tile-folded').click();
+    const list = window.getByTestId('tile-folded-list');
+    await expect(list.getByTestId('tile-folded-row').filter({ hasText: 'Role: Implementer' })).toBeVisible();
+    // One row for each of the +N.
+    await expect(footer.getByTestId('tile-folded')).toHaveText(`+${await list.getByTestId('tile-folded-row').count()}`);
+    await window.keyboard.press('Escape');
+    await expect(list).toBeHidden();
+    github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [41, 42, 43].map(pullRequest) });
+    const plus = footer.getByTestId('tile-folded');
+    const folded = Number((await plus.textContent())!.slice(1));
+    await expect(plus).toHaveText(`+${folded + 1}`, { timeout: 20_000 });
+    await plus.click();
+    await expect(list.getByTestId('tile-folded-row')).toHaveCount(folded + 1);
+    await expect(list.getByTestId('tile-folded-row').filter({ hasText: '#43 Pull request 43' })).toBeVisible();
+
+    // The list is the tile's, though it is drawn in a portal: a double-click on an info row opens no session window.
+    await list.getByTestId('tile-folded-row').filter({ hasText: 'Role: Implementer' }).dblclick();
+    await expect(list).toBeVisible();
+    await expect(sessionWindow(window)).toHaveCount(0);
+    await window.keyboard.press('Escape');
+
+    // Many pull requests with long titles: the list stays inside the window, its rows cut with an ellipsis and the list
+    // scrolling, so every row can be reached.
+    const long = (number: number): FakeGitHubPullRequest => ({ ...pullRequest(number), title: `Pull request ${number}: ${'a title that runs on and on '.repeat(8)}` });
+    github.setState({ ...FAKE_GITHUB_STATE, pullRequests: Array.from({ length: 30 }, (_, index) => long(index + 1)) });
+    // More than fit the window's height, whatever number of them the board keeps.
+    await expect(plus).toHaveText(/^\+(1\d|[2-9]\d)$/, { timeout: 30_000 });
+    const many = Number((await plus.textContent())!.slice(1));
+    await plus.click();
+    await expect(list.getByTestId('tile-folded-row')).toHaveCount(many);
+    const view = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    const box = (await list.boundingBox())!;
+    expect(box.x + box.width, 'the list ends inside the window').toBeLessThanOrEqual(view.width);
+    expect(box.y + box.height, 'the list ends inside the window').toBeLessThanOrEqual(view.height);
+    expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight), 'the list scrolls').toBe(true);
+    expect(await list.locator('.tile-folded-text').last().evaluate((element) => element.scrollWidth > element.clientWidth), 'a long row is cut').toBe(true);
+    await window.keyboard.press('Escape');
+
+    // A row opens what it names: the third pull request's row opens its PR tab.
+    github.setState({ ...FAKE_GITHUB_STATE, pullRequests: [41, 42, 43].map(pullRequest) });
+    await expect(plus).toHaveText(`+${folded + 1}`, { timeout: 30_000 });
+    await plus.click();
+    await list.getByTestId('tile-folded-row').filter({ hasText: '#43 Pull request 43' }).click();
+    await expect(list).toBeHidden();
+    await expect(sessionWindow(window).getByTestId('pr-view')).toContainText('#43');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

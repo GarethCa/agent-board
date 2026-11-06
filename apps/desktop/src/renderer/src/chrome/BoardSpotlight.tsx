@@ -80,6 +80,7 @@ export function BoardSpotlight({ ref, agents, shells, zones }: { ref?: Ref<Spotl
       onPick={onPick}
       canStartAgent={board.canStartAgent()}
       onNewAgent={(context, name) => board.newAgentNamed(name, zoneOf(context))}
+      onCrew={(context, prefab) => board.startCrew(prefab, zoneOf(context))}
     />
   );
 }

@@ -1,5 +1,7 @@
-import type { LibraryPrefab, PrefabMember } from '@agent-board/daemon/protocol';
+import type { LibraryPrefab, PrefabMember, Zone } from '@agent-board/daemon/protocol';
+import { CrewPromptDialog } from './CrewPromptDialog';
 import { PrefabEditor } from './PrefabEditor';
+import { PrefabsDialog } from './PrefabsDialog';
 
 const member = (fields: Partial<PrefabMember> & Pick<PrefabMember, 'id' | 'starts'>): PrefabMember => ({
   role: 'implementer',
@@ -65,6 +67,29 @@ export function PrefabGallery() {
       <PrefabEditor prefab={TRIO} onClose={() => {}} inline picked="builder" />
       <PrefabEditor prefab={LED} onClose={() => {}} inline picked="impl" />
       <PrefabEditor prefab={BIG} onClose={() => {}} inline picked="security-review" />
+    </section>
+  );
+}
+
+const SOLO: LibraryPrefab = { ...TRIO, name: 'Solo agent', icon: 'agent', purpose: 'One agent, as New agent starts it', builtIn: true, editedAt: null, members: [member({ id: 'agent', starts: 'prompt' })] };
+const PAIR: LibraryPrefab = { ...TRIO, name: 'Implementer + reviewer', purpose: 'Build, review, fix, until the review approves', builtIn: true, editedAt: null, members: [TRIO.members[0]!, TRIO.members[1]!] };
+const ZONE = { id: 'gallery-web', name: 'web', repoRoot: '/code/web', defaultRepo: null, clone: null } as unknown as Zone;
+const nothing = () => {};
+
+const GROUP = { id: 'gallery-group', name: 'scratch', repoRoot: null, defaultRepo: null, clone: null } as unknown as Zone;
+
+/**
+ * The crew library's cards, yours first, one asking before it is removed, and a crew's prompt box: named its zone, with
+ * a loop; asking for a zone; asking for a repo in a group; and on a board with no zone to start in.
+ */
+export function CrewGallery() {
+  return (
+    <section className="gallery-prefabs" data-testid="crew-gallery">
+      <PrefabsDialog onClose={nothing} onStart={nothing} onEdit={nothing} onImport={nothing} asking="Five checks" library={{ prefabs: [SOLO, PAIR, LED, TRIO, BIG], unreadable: [{ name: 'From a later release', reason: 'the round limit is a whole number from 1 to 10' }] }} />
+      <CrewPromptDialog prefab={TRIO} zones={[ZONE]} zone={ZONE} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+      <CrewPromptDialog prefab={SOLO} zones={[ZONE, GROUP]} zone={undefined} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+      <CrewPromptDialog prefab={PAIR} zones={[GROUP]} zone={GROUP} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
+      <CrewPromptDialog prefab={PAIR} zones={[]} zone={undefined} onAddZone={nothing} onStarted={nothing} onCancel={nothing} inline />
     </section>
   );
 }

@@ -634,3 +634,53 @@ describe('the drop-reviewer-edges migration', () => {
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });
+
+describe('the clear-relaunched-notice migration', () => {
+  it("clears the old 'Relaunched after a restart' note and leaves every other notice alone", () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const clear = MIGRATIONS.findIndex((m) => m.name === 'clear_relaunched_notice');
+    expect(clear).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, clear));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd)
+        VALUES ('old', 'claude', 'h1', '/1'), ('fresh', 'claude', 'h2', '/2'), ('none', 'claude', 'h3', '/3');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, notice)
+        VALUES ('old', 'z', '/code/app', 1, 'Old', '', 'a', '/1', 'idle', 'Relaunched after a restart'),
+          ('fresh', 'z', '/code/app', 1, 'Fresh', '', 'b', '/2', 'idle', 'No earlier conversation: started fresh'),
+          ('none', 'z', '/code/app', 1, 'None', '', 'c', '/3', 'idle', NULL);`);
+
+    migrate(db, MIGRATIONS.slice(0, clear + 1));
+
+    expect(db.prepare('SELECT session_id, notice FROM agents ORDER BY session_id').all()).toEqual([
+      { session_id: 'fresh', notice: 'No earlier conversation: started fresh' },
+      { session_id: 'none', notice: null },
+      { session_id: 'old', notice: null },
+    ]);
+  });
+});
+
+describe('the agent-had-turn migration', () => {
+  it('counts an agent whose turn has ended as having had one, and any other as not', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON');
+    const at = MIGRATIONS.findIndex((m) => m.name === 'agent_had_turn');
+    expect(at).toBeGreaterThan(0);
+    migrate(db, MIGRATIONS.slice(0, at));
+    db.exec(`INSERT INTO zones (id, repo_root, folder, name, color, x, y, width, height)
+        VALUES ('z', '/code/app', '', 'app', '#4c6ef5', 0, 0, 300, 200);
+      INSERT INTO sessions (id, harness, hook_token_sha256, cwd)
+        VALUES ('done', 'claude', 'h1', '/1'), ('new', 'claude', 'h2', '/2');
+      INSERT INTO agents (session_id, zone_id, repo_root, codex_bypass_hook_trust, name, description, branch, worktree, state, finished_at)
+        VALUES ('done', 'z', '/code/app', 1, 'Done', '', 'a', '/1', 'idle', '2026-11-01T10:00:00Z'),
+          ('new', 'z', '/code/app', 1, 'New', '', 'b', '/2', 'idle', NULL);`);
+
+    migrate(db, MIGRATIONS.slice(0, at + 1));
+
+    expect(db.prepare('SELECT session_id, had_turn FROM agents ORDER BY session_id').all()).toEqual([
+      { session_id: 'done', had_turn: 1 },
+      { session_id: 'new', had_turn: 0 },
+    ]);
+  });
+});

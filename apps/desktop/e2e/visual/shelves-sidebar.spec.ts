@@ -8,9 +8,9 @@ test.use({ viewport: null });
 /**
  * An agent's sidebar from the gallery (session/ShelvesGallery.tsx): a busy agent and a quiet one with the shelves open on
  * the page, the page styled by the agent, the page at 200px, a page of links and a note with a failing pull request, and
- * Made, Crew and Setup as the window draws them for now, and a page that is the one shelf. In both designs, light and dark.
+ * Made, Crew and Setup, and a page that is the one shelf. In both designs, light and dark.
  */
-const ROWS = ['open', 'shelves'] as const;
+const ROWS = ['open', 'rail', 'shelves'] as const;
 
 for (const design of ['classic', 'simplified'] as const) {
   for (const { theme, suffix } of THEMES) {
@@ -28,7 +28,8 @@ for (const design of ['classic', 'simplified'] as const) {
         });
         const gallery = window.getByTestId('shelves-gallery');
         await expect(gallery).toBeVisible();
-        await expect(gallery.getByTestId('agent-shelves')).toHaveCount(9);
+        await expect(gallery.getByTestId('agent-shelves')).toHaveCount(17);
+        await expect(gallery.getByTestId('agent-shelves-peek')).toHaveCount(5);
         if (design === 'classic') await pinFonts(window);
         else await window.evaluate(() => document.fonts.ready);
         await ignorePointer(window);
@@ -43,3 +44,25 @@ for (const design of ['classic', 'simplified'] as const) {
     });
   }
 }
+
+test("hovering a crew row's record shows its x beside its status, never over it", async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launchGallery(dataDir, 'light');
+  try {
+    await window.evaluate(() => {
+      location.hash = '#gallery-agent-sidebar';
+      location.reload();
+    });
+    for (const frame of ['shelves-crew', 'shelves-crew-narrow']) {
+      const row = window.getByTestId(frame).getByTestId('details-record').first();
+      await row.hover();
+      const remove = row.getByRole('button', { name: 'Delete record' });
+      await expect(remove).toHaveCSS('opacity', '1');
+      const status = (await row.locator('.agent-shelves-pill, .agent-shelves-dot').boundingBox())!;
+      expect(status.x + status.width).toBeLessThanOrEqual((await remove.boundingBox())!.x + 1);
+    }
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

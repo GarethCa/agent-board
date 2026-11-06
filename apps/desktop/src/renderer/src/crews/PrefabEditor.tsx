@@ -47,6 +47,8 @@ const mayCarryTemplate = (member: PrefabMember) => member.starts === 'prompt' &&
 export interface PrefabEditorProps {
   /** The prefab to edit, or null for a new one. A built-in is saved as a copy under a name of its own. */
   prefab: LibraryPrefab | null;
+  /** For a new one, what it starts as, in place of a blank prefab: a file being imported, shown whole before it is added. */
+  imported?: CrewPrefab;
   onClose(): void;
   /** Heard once the library has saved it. */
   onSaved?(saved: LibraryPrefab): void;
@@ -73,10 +75,10 @@ const blank = (): CrewPrefab => ({
  * beside the picked member's inspector, the flow in words under them, and the prefab's round limit and how its crews
  * are drawn. Saving writes it to the app's library as its `.crew.json` file, read as strictly as an imported one.
  */
-export function PrefabEditor({ prefab, onClose, onSaved, inline = false, picked: pickedAt }: PrefabEditorProps) {
+export function PrefabEditor({ prefab, imported, onClose, onSaved, inline = false, picked: pickedAt }: PrefabEditorProps) {
   const copy = prefab?.builtIn === true;
   const [draft, setDraft] = useState<CrewPrefab>(() => {
-    if (prefab === null) return blank();
+    if (prefab === null) return imported ?? blank();
     // The prefab alone: whether it is built in, and when it was saved, are the library's.
     const own: CrewPrefab = { name: prefab.name, icon: prefab.icon, purpose: prefab.purpose, roundLimit: prefab.roundLimit, onBoard: prefab.onBoard, members: prefab.members };
     return copy ? { ...own, name: `${own.name} (mine)` } : own;
@@ -129,12 +131,12 @@ export function PrefabEditor({ prefab, onClose, onSaved, inline = false, picked:
       },
     );
 
-  const origin = prefab === null ? 'New' : copy ? `A copy of the built-in ${prefab.name}` : 'Yours';
+  const origin = imported !== undefined ? 'From a file: added to the library once you save' : prefab === null ? 'New' : copy ? `A copy of the built-in ${prefab.name}` : 'Yours';
   return (
     <>
     <Dialog
       aria-label="Crew prefab"
-      title={prefab === null ? 'New crew prefab' : copy ? 'Copy a crew prefab' : 'Edit crew prefab'}
+      title={imported !== undefined ? 'Import a crew prefab' : prefab === null ? 'New crew prefab' : copy ? 'Copy a crew prefab' : 'Edit crew prefab'}
       onClose={close}
       inline={inline}
       data-testid="prefab-editor"

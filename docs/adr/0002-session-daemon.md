@@ -102,8 +102,8 @@ that ask relayed, not the app acting on its own. The record stays until a turn b
 could be typed tells it again; it goes once its session ends any other way, or it starts on a new conversation. An agent
 that was idle, or had ended its turn on a question, is told nothing. With no conversation to carry on it starts afresh
 on its task, as before. `Agent.cutOffMidTurn` says it is still to be told, which is how `restart-daemon` names the
-agents it told, rather than guessing from their states before the stop. Every agent resumed after a restart says "Relaunched after a restart" on its tile until its next turn
-begins, or its session ends first.
+agents it told, rather than guessing from their states before the stop. A resume after a restart is normal, so it puts no
+notice on the tile. Only an agent that had turns but lost its conversation is told so, until a turn begins.
 
 Keeping the agents themselves alive across a daemon restart was considered and left for later. A PTY is owned by the
 process that opened it, so it would take a holder process per agent and a protocol to reattach to it; and each agent

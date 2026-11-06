@@ -63,7 +63,7 @@ export async function pinRandomText(page: Page) {
       while (walker.nextNode()) nodes.push(walker.currentNode as Text);
       return nodes;
     };
-    for (const element of document.querySelectorAll('.hybrid-tile-branch, .session-window-where, .details-branch, .inspector-branch, .ui-section-meta, .spotlight-sub')) {
+    for (const element of document.querySelectorAll(".hybrid-tile-branch, .session-window-where, .details-branch, .agent-shelves-footer-branch, [data-testid='setup-branch'] .agent-shelves-mono, .ui-section-meta, .spotlight-sub")) {
       for (const node of textNodes(element)) node.data = node.data.replace(/-[0-9a-f]{6}(?=$|-review-r\d+$)/, '-000000');
     }
     for (const element of document.querySelectorAll('.details-soft')) {
@@ -71,11 +71,11 @@ export async function pinRandomText(page: Page) {
     }
     for (const element of document.querySelectorAll("[data-testid='daemon-details']")) element.textContent = 'Build 0000000 · daemon 0.0.0 · pid 1000 · schema v1';
     // An agent's sidebar: when it started (the page's status line), and its worktree's folder.
-    for (const element of document.querySelectorAll("[data-testid='inspector-status-line']")) {
+    for (const element of document.querySelectorAll("[data-testid='page-status-line']")) {
       for (const node of textNodes(element)) node.data = node.data.replace(/\d{1,2}:\d\d(?:\s?[AP]M)?/i, '09:14');
     }
-    for (const element of document.querySelectorAll('.inspector-folder')) {
-      for (const node of textNodes(element)) node.data = `~/.agent-board/worktrees/${node.data.split('/').at(-1)!.replace(/-[0-9a-f]{6}$/, '-000000')}`;
+    for (const element of document.querySelectorAll("[data-testid='setup-folder'] .agent-shelves-mono")) {
+      for (const node of textNodes(element)) node.data = `…/${node.data.split('/').at(-1)!.replace(/-[0-9a-f]{6}$/, '-000000')}`;
     }
     for (const element of document.querySelectorAll('.rail-token-note')) {
       for (const node of textNodes(element)) node.data = node.data.replace(/\d\d:\d\d/, '14:31');

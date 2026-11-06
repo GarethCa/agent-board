@@ -32,6 +32,10 @@ interface BoardMenuOptions {
   addMemory(at: { x: number; y: number }): void;
   /** Adds a queue centred at `at`, a point on the screen. */
   addQueue(at: { x: number; y: number }): void;
+  /** Opens the prompt box of a crew from the prefab named, its Zone on the one nearest `at`, a point on the screen. */
+  startCrew(prefab: string, at: { x: number; y: number }): void;
+  /** Opens the crew library, a crew from it starting on the zone nearest `at`. */
+  crewLibrary(at: { x: number; y: number }): void;
   /** Whether the tile `nodeId` is a lead pinned top-left in its shelved zone; undefined for any other tile. */
   leadPinned(nodeId: string): boolean | undefined;
   /** Pins the lead tile `nodeId` top-left in its shelved zone again, or frees it to be a stack like any other. */
@@ -62,6 +66,8 @@ export function useBoardMenu({
   addSteps,
   addMemory,
   addQueue,
+  startCrew,
+  crewLibrary,
   leadPinned,
   setLeadPinned,
 }: BoardMenuOptions) {
@@ -108,6 +114,14 @@ export function useBoardMenu({
     addQueue: () => {
       const at = contextMenu?.at;
       if (at !== undefined) setTimeout(() => addQueue(at), MENU_FOCUS_RETURN_MS);
+    },
+    startCrew: (prefab) => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => startCrew(prefab, at), MENU_FOCUS_RETURN_MS);
+    },
+    crewLibrary: () => {
+      const at = contextMenu?.at;
+      if (at !== undefined) setTimeout(() => crewLibrary(at), MENU_FOCUS_RETURN_MS);
     },
   };
 

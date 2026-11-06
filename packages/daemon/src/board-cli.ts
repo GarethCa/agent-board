@@ -28,6 +28,7 @@ import {
   handOff,
   identifyView,
   interruptAgent,
+  setAgentEffort,
   continueAgent,
   restartAgent,
   newAgent,
@@ -229,7 +230,7 @@ ORCHESTRATING
   and always the agents it started. \`identify\` says whether you may. The agents you start are
   linked to you on the board, and orchestrate as their zone lets them, up to three deep. In a
   shell, or a terminal outside agent-board, these act for the user on any agent. Each start,
-  message, interrupt, continue, restart, pause, wake and close is logged for the user.
+  message, interrupt, effort, continue, restart, pause, wake and close is logged for the user.
   \`agent-board help orchestrate\` shows the loop.
 
   new [options] [--] <prompt>
@@ -248,6 +249,7 @@ ORCHESTRATING
                         or a pull request was opened. Each once.
   read <ref> [<path>]   An agent's final message, or a file in its worktree.
   interrupt <ref>       Stop an agent's turn; it waits at its prompt.
+  effort <ref> <level>  Change an agent's reasoning effort: low, medium, high, xhigh or max.
   continue <ref>        Continue on credits: resume a turn its usage limit stopped.
   restart <ref> [--fresh [--] [<prompt>]]
                         Start an ended agent again in its tile, worktree and branch, carrying
@@ -484,8 +486,9 @@ delete a record, not edit it.
   },
   pin: {
     usage: 'agent-board pin <path|url> [--label <text>] [--for orchestrator] | pin --note <text> --label <text>',
-    text: `Pins something you want the user to see on your sidebar's Pins, the details beside your
-terminal in your session window: the preview you started, a screenshot, a log, a login to try.
+    text: `Pins something you want the user to see on your sidebar, beside your terminal in your session
+window, as a Pinned block of your page or in the Full sidebar's Pins: the preview you started,
+a screenshot, a log, a login to try.
 
   pin <path>            A file. A Markdown or HTML one opens in a Doc tab; any other is shown
                         in its folder. A relative path is from where you are.
@@ -594,7 +597,7 @@ For a question with answers to pick from, use the MCP tool \`ask\`, which waits 
     usage: 'agent-board mcp',
     text: `Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
-interrupt, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
+interrupt, set_effort, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
@@ -620,7 +623,7 @@ as that shell (or as you). The agents they start are the user's own.
   repo    the agents of its repo, in any zone of it
   board   any agent, in any zone
 It may always act on the agents it started, wherever they are, and never on itself. It may
-read and wait for another orchestrator, but not steer one (send, interrupt, restart, pause, wake,
+read and wait for another orchestrator, but not steer one (send, interrupt, effort, restart, pause, wake,
 close, or wire an edge into it) whose scope is wider than its own (board > repo > zone): a message
 runs under the permissions of the agent that gets it.
 
@@ -920,6 +923,16 @@ ${READ_FLAGS}`,
     text: `Interrupts the agent's turn, as Ctrl-C in its terminal would: it waits at its prompt.
 
   --json   Print the agent as JSON.`,
+  },
+  effort: {
+    usage: 'agent-board effort <ref> <level> [--json]',
+    text: `Changes an agent's reasoning effort (low, medium, high, xhigh or max; Codex takes no max), as
+its tile's Reasoning menu does, and says when it takes it. A Claude agent at its prompt takes it
+at once: \`/effort <level>\` is typed there as you would. One mid-turn, waiting on a question or
+a permission prompt, or with you typing at it, takes it once it is free, never typed into a turn.
+A Codex agent, or an ended one, takes it when next started. A restart keeps it.
+
+  --json   Print the agent as JSON, with when it applies.`,
   },
   continue: {
     usage: 'agent-board continue <ref> [--json]',
@@ -2039,6 +2052,11 @@ function parseCommand(command: string, args: string[]): (session: BoardSession, 
     case 'interrupt': {
       const ref = oneRef();
       return async (session) => print(await interruptAgent(session, ref));
+    }
+    case 'effort': {
+      if (positionals.length !== 2) throw new UsageError('give an agent ref and a level: agent-board effort <ref> <level>');
+      const [ref, level] = positionals as [string, string];
+      return async (session) => print(await setAgentEffort(session, ref, level));
     }
     case 'continue': {
       const ref = oneRef();

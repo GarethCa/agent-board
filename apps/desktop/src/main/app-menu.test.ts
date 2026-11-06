@@ -39,6 +39,26 @@ describe('the app menu', () => {
     }
   });
 
+  it('has no accelerator but the allow-listed ones, and none a bare key', () => {
+    // Menu accelerators are chords the renderer's board and terminal keys also use (see keys/registry.ts), and a key the
+    // menu owns can be taken from a focused terminal. Adding one means adding it here, with who owns the routing.
+    const ALLOWED = ['CommandOrControl+,']; // Settings…
+    const accelerators = (list: MenuItemConstructorOptions[]): string[] =>
+      list.flatMap((item) => [
+        ...(item.accelerator === undefined ? [] : [String(item.accelerator)]),
+        ...(Array.isArray(item.submenu) ? accelerators(item.submenu) : []),
+      ]);
+    for (const mac of [true, false]) {
+      for (const packaged of [true, false]) {
+        const all = accelerators(menuTemplate({ mac, packaged, name: 'agent-board' }, actions(), technical()));
+        for (const accelerator of all) {
+          expect(accelerator).toContain('+');
+          expect(ALLOWED).toContain(accelerator);
+        }
+      }
+    }
+  });
+
   it('has the app menu only on macOS', () => {
     const labels = (mac: boolean) => menuTemplate({ mac, packaged: true, name: 'agent-board' }, actions(), technical()).map((menu) => menu.label);
     expect(labels(true)[0]).toBe('agent-board');

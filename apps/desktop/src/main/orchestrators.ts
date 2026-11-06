@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { readFile } from 'node:fs/promises';
 import type { DaemonLink } from '@agent-board/daemon/client';
 import { parsePrefab, prefabFile } from '@agent-board/daemon/crew-prefabs';
 import { DEFAULT_ACTIVITY_LIMIT, type CrewPrefab } from '@agent-board/daemon/protocol';
@@ -43,6 +44,15 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
       });
     }
     return saved;
+  });
+  passthrough(daemon, ORCHESTRATOR_IPC.startPrefab, 'orchestrator.startPrefab', (params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }) => params);
+  // Only read: the editor shows it whole, and Save adds it.
+  ipcMain.handle(ORCHESTRATOR_IPC.importPrefab, async (event) => {
+    const options = { title: 'Import a crew prefab', properties: ['openFile' as const], filters: [{ name: 'Crew prefab', extensions: ['json'] }] };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    const [path] = picked.filePaths;
+    return picked.canceled || path === undefined ? null : parsePrefab(await readFile(path, 'utf8'));
   });
   passthroughVoid(daemon, ORCHESTRATOR_IPC.removePrefab, 'orchestrator.removePrefab', (name: string) => ({ name }));
 }

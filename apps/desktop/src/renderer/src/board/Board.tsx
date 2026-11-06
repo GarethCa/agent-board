@@ -196,7 +196,8 @@ import { useClockStatuses } from './use-clocks';
 import { GateCommandDialog } from '../gate/GateCommandDialog';
 import { ResumeExternalDialog } from './ResumeExternalDialog';
 import { NewAgentDialog } from './NewAgentDialog';
-import { PrefabsDialog } from '../crews/PrefabsDialog';
+import { CrewFlow, prefabNamed, type CrewFlowStart } from '../crews/CrewFlow';
+import { usePrefabs } from '../crews/prefab-store';
 import { RoleTemplatesDialog } from './RoleTemplatesDialog';
 import { DefaultRepoDialog } from './DefaultRepoDialog';
 import { useRestartBanner } from './RestartBanner';
@@ -438,7 +439,11 @@ function BoardView() {
   const [clockEditing, setClockEditing] = useState<ClockEditing>();
   const [gateCommandZone, setGateCommandZone] = useState<Zone>();
   const [roleTemplatesZone, setRoleTemplatesZone] = useState<Zone>();
-  const [crewPrefabsOpen, setCrewPrefabsOpen] = useState(false);
+  const [crewFlow, setCrewFlow] = useState<CrewFlowStart>();
+  /** The builder of a crew just started, until its tile is on the board to show. */
+  const [crewStarted, setCrewStarted] = useState<string>();
+  // Keeps the library followed, and the board's right-click menu current with it; a Classic zone's ⋯ follows it itself.
+  usePrefabs();
   const { windows, windowsRestored, windowsRef, showWindow, closeWindow, popOut, popOutTabWindow, openShell, openAgent, poppedOut, onShellChange } = useBoardWindows();
   /** The view settings every window shares: what a double-click opens, how crews and agent notes look, which connections are drawn. */
   const { clickOpens, crewLook, connections, agentNoteLook: savedNoteLook } = useViewSettings();
@@ -2304,6 +2309,13 @@ function BoardView() {
     topZ,
   });
 
+  /** The zone a crew can start in nearest a point on the board: the one it is in, else the closest. */
+  const zoneNearest = (at: { x: number; y: number }): Zone | undefined => {
+    const distance = (zone: Zone) => Math.hypot(Math.max(zone.x - at.x, 0, at.x - zone.x - zone.width), Math.max(zone.y - at.y, 0, at.y - zone.y - zone.height));
+    const bound = nodes.filter(isZone).map((node) => node.data.zone).filter((zone) => zone.clone === null);
+    return bound.reduce<Zone | undefined>((best, zone) => (best === undefined || distance(zone) < distance(best) ? zone : best), undefined);
+  };
+
   const { menu, onNodeContextMenu, onSelectionContextMenu, onPaneContextMenu } = useBoardMenu({
     askClaude: askClaude.open,
     editing,
@@ -2324,6 +2336,11 @@ function BoardView() {
     addSteps: (at) => void createItem('steps', screenToFlowPosition(at)),
     addMemory: (at) => void createItem('memory', screenToFlowPosition(at)),
     addQueue: (at) => void createItem('queue', screenToFlowPosition(at)),
+    startCrew: (name, at) => {
+      const prefab = prefabNamed(name);
+      if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested: zoneNearest(screenToFlowPosition(at)) });
+    },
+    crewLibrary: (at) => setCrewFlow({ kind: 'library', suggested: zoneNearest(screenToFlowPosition(at)) }),
     leadPinned: (nodeId) => {
       const subject = tileSubject(nodeId);
       const agent = subject?.kind === 'agent' ? agents.find((known) => known.sessionId === subject.id) : undefined;
@@ -2586,7 +2603,11 @@ function BoardView() {
       },
       editGateCommand: setGateCommandZone,
       editRoleTemplates: setRoleTemplatesZone,
-      editCrewPrefabs: () => setCrewPrefabsOpen(true),
+      startCrew: (name: string, zone: Zone) => {
+        const prefab = prefabNamed(name);
+        if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, zone });
+      },
+      crewLibrary: (zone: Zone) => setCrewFlow({ kind: 'library', zone }),
       setAgentsOrchestrate(zone, agentsOrchestrate) {
         window.agentBoard.zones.configure(zone.id, { agentsOrchestrate }).then(
           (saved) => {
@@ -2639,6 +2660,14 @@ function BoardView() {
   const openSettings = () => void window.agentBoard.setup.openSettings().catch(report('open Settings'));
   // The board's items as they are drawn: the master's panel shows its latest digest note.
   const boardItems = useMemo(() => nodes.filter(isItemNode).map((node) => node.data.item), [nodes]);
+  /** The zones an agent or crew can start in. */
+  const startableZones = () => nodesRef.current.filter(isZone).map((node) => node.data.zone).filter((zone) => zone.clone === null);
+  /** The startable zone in the middle of the view, if one is. */
+  const zoneInView = () => {
+    const centre = boardCentre();
+    return startableZones().find((zone) => centre.x >= zone.x && centre.x <= zone.x + zone.width && centre.y >= zone.y && centre.y <= zone.y + zone.height);
+  };
+
   const boardCommands = useMemo<BoardCommands>(
     () => ({
       openSession(sessionId) {
@@ -2710,17 +2739,26 @@ function BoardView() {
       },
       canStartAgent: () => nodesRef.current.some((node) => isZone(node) && node.data.zone.clone === null),
       newAgentNamed(name, zoneId) {
-        const bound = nodesRef.current.filter(isZone).map((node) => node.data.zone).filter((zone) => zone.clone === null);
         // The zone asked for, else the one in the middle of the view, else the first.
-        const centre = boardCentre();
-        const inView = bound.find((zone) => centre.x >= zone.x && centre.x <= zone.x + zone.width && centre.y >= zone.y && centre.y <= zone.y + zone.height);
-        const zone = bound.find((known) => known.id === zoneId) ?? inView ?? bound[0];
+        const zone = startableZones().find((known) => known.id === zoneId) ?? zoneInView() ?? startableZones()[0];
         if (zone !== undefined) setNewAgent({ zone, name });
+      },
+      startCrew(name, zoneId) {
+        // A guess at where, so the prompt box shows it in its Zone, to change: the window's zone, else the one in view.
+        const suggested = startableZones().find((known) => known.id === zoneId) ?? zoneInView();
+        if (name === null) return setCrewFlow({ kind: 'library', suggested });
+        const prefab = prefabNamed(name);
+        if (prefab !== undefined) setCrewFlow({ kind: 'prompt', prefab, suggested });
       },
     }),
     [getNodes, getInternalNode, zoneLayouts, openShell, openAgent, report, selectOnly, bringIntoView, flyTo, clickOpens, tileActions, collapse, boardCentre, unfoldStack],
   );
   useProvideBoardCommands(loaded ? boardCommands : undefined);
+
+  // A crew may start in a zone out of view, and its builder's tile is all there is of it yet: shown once it is there.
+  useEffect(() => {
+    if (crewStarted !== undefined && boardCommands.showTile({ kind: 'agent', id: crewStarted })) setCrewStarted(undefined);
+  }, [crewStarted, nodes, boardCommands]);
 
   // What a popped-out window's ⌘K switcher asked of the board, once it has loaded: a zone, New agent, a session's window.
   const [boardRequest, setBoardRequest] = useState<BoardRequest>();
@@ -2730,8 +2768,12 @@ function BoardView() {
     setBoardRequest(undefined);
     if (boardRequest.kind === 'zone') boardCommands.showZone(boardRequest.zoneId);
     else if (boardRequest.kind === 'newAgent') boardCommands.newAgentNamed(boardRequest.name, boardRequest.zoneId);
+    // One already open may hold a typed prompt or unsaved edits, which a pop-out's request mustn't throw away.
+    else if (boardRequest.kind === 'crew') {
+      if (crewFlow === undefined) boardCommands.startCrew(boardRequest.prefab, boardRequest.zoneId);
+    }
     else showWindow(boardRequest.target);
-  }, [loaded, boardRequest, boardCommands, showWindow]);
+  }, [loaded, boardRequest, boardCommands, showWindow, crewFlow]);
 
   /** How an agent starts from the issue card `item`: the New agent dialog, the repo picker, or not now. */
   const issueStartOf = useCallback((item: BoardItem, card: IssueCardData) => {
@@ -3316,6 +3358,7 @@ function BoardView() {
             onOpenShell={openShell}
             onAddZone={openAddZone}
             onArrangeBoard={arrangeBoard}
+            onCrewLibrary={() => boardCommands.startCrew(null, null)}
             onJump={(zone) => {
               // Where it is now: its node may have been moved or resized since the daemon sent it.
               const node = getNodes().filter(isZone).find((known) => known.id === zone.id);
@@ -3396,6 +3439,14 @@ function BoardView() {
                 setNewAgent(undefined);
               }}
               onCancel={() => setNewAgent(undefined)}
+              onCrew={(prefab) => {
+                setCrewFlow({ kind: 'prompt', prefab, zone: newAgent.zone, suggested: newAgent.position && zoneNearest(newAgent.position), fromSheet: { position: newAgent.position } });
+                setNewAgent(undefined);
+              }}
+              onCrewLibrary={() => {
+                setCrewFlow({ kind: 'library', zone: newAgent.zone, suggested: newAgent.position && zoneNearest(newAgent.position), fromSheet: { position: newAgent.position } });
+                setNewAgent(undefined);
+              }}
               onZoneChanged={(zone) => {
                 setNewAgent((current) => current && { ...current, zone });
                 setNodes((current) => withZone(current, zone));
@@ -3452,7 +3503,26 @@ function BoardView() {
           {roleTemplatesZone !== undefined && (
             <RoleTemplatesDialog key={roleTemplatesZone.id} zone={roleTemplatesZone} onClose={() => setRoleTemplatesZone(undefined)} />
           )}
-          {crewPrefabsOpen && <PrefabsDialog onClose={() => setCrewPrefabsOpen(false)} />}
+          {crewFlow !== undefined && (
+            <CrewFlow
+              key={`${crewFlow.kind}:${crewFlow.kind === 'prompt' ? crewFlow.prefab.name : ''}:${crewFlow.zone?.id ?? ''}:${crewFlow.suggested?.id ?? ''}`}
+              start={crewFlow}
+              zones={nodes.filter(isZone).map((node) => node.data.zone).filter((zone) => zone.clone === null)}
+              onStarted={(sessionId) => {
+                setCrewFlow(undefined);
+                setCrewStarted(sessionId);
+              }}
+              onClose={() => {
+                // Back to the sheet it was picked in.
+                if (crewFlow.fromSheet !== undefined) setNewAgent({ zone: crewFlow.zone, position: crewFlow.fromSheet.position });
+                setCrewFlow(undefined);
+              }}
+              onAddZone={() => {
+                setCrewFlow(undefined);
+                openAddZone();
+              }}
+            />
+          )}
           {gateCommandZone !== undefined && (
             <GateCommandDialog
               key={gateCommandZone.id}
