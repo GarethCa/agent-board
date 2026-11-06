@@ -18,7 +18,7 @@ import { gated } from '../gate/gate-view';
 import { requestTab } from './tab-request';
 import { docName, docSurfaceOf, documentSurfaceOf, gateSurfaceOf, planSurfaceOf } from './tabs';
 import { crewSection, docSection, documentSection, pinSection, pullRequestSection, sectionCount, subagentSection } from './sidebar-records';
-import { useLiveAgents } from './use-live-board';
+import { useCrewAgents } from './use-live-board';
 import { pinOpener, recordedWhen, RecordList, useRecordDeletes } from './RecordList';
 import { runGateShortcut } from './window-keys';
 import { useAction } from '../use-action';
@@ -290,10 +290,13 @@ function AgentSections({
   const { issue, schedule } = agent;
   const now = useNow(schedule !== null);
   const badge = schedule && clockBadge(schedule, agent.endedAt !== null, new Date(now));
-  const { agents } = useLiveAgents();
+  const crewAgentList = useCrewAgents(
+    agent.sessionId,
+    agent.records.filter((record) => record.kind === 'crew').map((record) => record.key),
+  );
   const records = useRecordDeletes(agent.sessionId, onProblem);
   const pulls = pullRequestSection(agent, records.fading);
-  const crew = crewSection(agent, agents ?? [], records.fading);
+  const crew = crewSection(agent, crewAgentList ?? [], records.fading);
   const docs = docSection(agent, records.fading);
   const documents = documentSection(agent);
   const pins = pinSection(agent, records.fading);

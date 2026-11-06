@@ -3380,6 +3380,8 @@ function BoardView() {
             onDropTool={dropTool}
             onSticky={() => createItem('sticky', boardCentre())}
             onSteps={() => createItem('steps', boardCentre())}
+            onMemory={() => createItem('memory', boardCentre())}
+            onQueue={() => createItem('queue', boardCentre())}
             onRunInShell={startLooseShell}
             onCloseWindow={closeWindow}
           />

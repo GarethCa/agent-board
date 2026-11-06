@@ -1653,8 +1653,9 @@
   color: var(--muted);
 }
 
-:root[data-design='simplified'] .needs-you-pill.ui-button[data-attention='true'] > svg {
-  color: var(--state-waiting-ink);
+:root[data-design='simplified'] .needs-you-pill .needs-you-count {
+  background: var(--badge-neutral);
+  color: var(--text);
 }
 
 .needs-you-count {
@@ -1690,6 +1691,16 @@
   }
 }
 
+/*
+ * Classic's toolbar has More to add, so Shell keeps only its icon (its tooltip and key say what it is) and the toolbar is
+ * no wider than before. Below 960 px New agent drops its word too, so the toolbar clears the Needs-you island's left edge.
+ */
+@media (max-width: 959px) {
+  :root:not([data-design='simplified']) .create-toolbar-agent-label {
+    display: none;
+  }
+}
+
 @media (max-width: 1099px) {
   :root:not([data-design='simplified']) .master-button.ui-button {
     display: none;
@@ -1697,29 +1708,16 @@
 }
 
 @media (max-width: 959px) {
-  :root[data-design='simplified'] .master-button-label {
-    display: none;
-  }
-}
-
-@media (max-width: 839px) {
   :root[data-design='simplified'] .master-button.ui-button {
     display: none;
   }
 }
 
 /*
- * With the usage island in it, the Simplified top-right island is wider, so it gives way sooner: the Captain's word
- * below 1240 px, then the figures themselves below 1140 px (Settings › Usage still has them), when the Captain's word
- * goes by its own rule, below 960 px.
+ * With the usage island in it, the Simplified top-right island is wider, so the figures give way below 1240 px
+ * (Settings › Usage still has them), before the Captain's word goes by its own rule, below 960 px.
  */
-@media (min-width: 1140px) and (max-width: 1239px) {
-  :root[data-design='simplified'] .needs-you:has(.usage-island) .master-button-label {
-    display: none;
-  }
-}
-
-@media (max-width: 1139px) {
+@media (max-width: 1239px) {
   :root[data-design='simplified'] .needs-you .usage-island,
   :root[data-design='simplified'] .needs-you .usage-island + .ui-island-separator {
     display: none;

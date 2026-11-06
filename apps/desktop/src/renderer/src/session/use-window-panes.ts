@@ -31,6 +31,7 @@ import {
   newWebTabs,
   pullRequestChoices,
   sessionChoices,
+  surfaceAgentIds,
   shellOwner,
   windowOwner,
   tabAtDigit,
@@ -45,7 +46,7 @@ import {
   type TabOwner,
   type WindowSurface,
 } from './tabs';
-import { useLiveAgents, useLiveShells } from './use-live-board';
+import { useDirectoryAgents, useLiveShells } from './use-live-board';
 import { draggedWithin, givesUp, surfaceDrag, surfaceMoveInto } from './window-drags';
 import { ownTabNotice, windowPaneKey, type WindowPaneKey } from './window-keys';
 
@@ -206,7 +207,9 @@ export function useWindowPanes(
   const shellsOf = owner === undefined ? undefined : shellOwner(owner);
   const key = named === undefined ? undefined : dropKey(named);
   const { shells, problem: shellsProblem, apply } = useLiveShells();
-  const { agents, problem: agentsProblem } = useLiveAgents();
+  /** The sessions the window shows, whose every change it renders for: the rest of the agents it knows by name alone. */
+  const [watching, setWatching] = useState<readonly string[]>([]);
+  const { agents, problem: agentsProblem } = useDirectoryAgents(watching);
   const [stored, setStored] = useState<Stored>();
   const [focusedPaneId, setFocusedPaneId] = useState<string>();
   const [focused, setFocused] = useState<Record<string, string>>({});
@@ -287,6 +290,8 @@ export function useWindowPanes(
   const keeps = loaded && stored.unread === undefined;
   const saved = loaded ? stored.layout : null;
   const shown = saved === null ? [] : windowPanes(saved).flatMap((pane) => pane.tabs);
+  const watchingNow = surfaceAgentIds(owner, shown).join('\n');
+  useEffect(() => setWatching(watchingNow === '' ? [] : watchingNow.split('\n')), [watchingNow]);
   const surfaces = owner === undefined ? [] : windowSurfaces(owner, owned, shown, { agents: agents ?? [], tiles: shells ?? [] });
   const shellsById = new Map(owned.map((shell) => [shell.id, shell]));
   const layout = loaded

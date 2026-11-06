@@ -5190,6 +5190,7 @@
 /* Catppuccin Latte */
 :root[data-design='simplified'][data-theme='catppuccin-latte'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5214,6 +5215,7 @@
 /* Catppuccin Frappé */
 :root[data-design='simplified'][data-theme='catppuccin-frappe'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5238,6 +5240,7 @@
 /* Catppuccin Macchiato */
 :root[data-design='simplified'][data-theme='catppuccin-macchiato'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5262,6 +5265,7 @@
 /* Catppuccin Mocha */
 :root[data-design='simplified'][data-theme='catppuccin-mocha'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5286,6 +5290,7 @@
 /* Rosé Pine Dawn */
 :root[data-design='simplified'][data-theme='rose-pine-dawn'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5310,6 +5315,7 @@
 /* Rosé Pine */
 :root[data-design='simplified'][data-theme='rose-pine'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5334,6 +5340,7 @@
 /* Alucard */
 :root[data-design='simplified'][data-theme='alucard'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5358,6 +5365,7 @@
 /* Dracula */
 :root[data-design='simplified'][data-theme='dracula'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5382,6 +5390,7 @@
 /* Nord */
 :root[data-design='simplified'][data-theme='nord'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5406,6 +5415,7 @@
 /* Gruvbox Light */
 :root[data-design='simplified'][data-theme='gruvbox-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5430,6 +5440,7 @@
 /* Gruvbox Dark */
 :root[data-design='simplified'][data-theme='gruvbox-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5454,6 +5465,7 @@
 /* Solarized Light */
 :root[data-design='simplified'][data-theme='solarized-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5478,6 +5490,7 @@
 /* Solarized Dark */
 :root[data-design='simplified'][data-theme='solarized-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5502,6 +5515,7 @@
 /* Tokyo Night Light */
 :root[data-design='simplified'][data-theme='tokyo-night-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5526,6 +5540,7 @@
 /* Tokyo Night */
 :root[data-design='simplified'][data-theme='tokyo-night'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5550,6 +5565,7 @@
 /* One Light */
 :root[data-design='simplified'][data-theme='one-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5574,6 +5590,7 @@
 /* One Dark */
 :root[data-design='simplified'][data-theme='one-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5598,6 +5615,7 @@
 /* Everforest Light */
 :root[data-design='simplified'][data-theme='everforest-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5622,6 +5640,7 @@
 /* Everforest Dark */
 :root[data-design='simplified'][data-theme='everforest-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5646,6 +5665,7 @@
 /* Kanagawa Lotus */
 :root[data-design='simplified'][data-theme='kanagawa-lotus'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5670,6 +5690,7 @@
 /* Kanagawa Wave */
 :root[data-design='simplified'][data-theme='kanagawa-wave'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5694,6 +5715,7 @@
 /* Clear Sight Light */
 :root[data-design='simplified'][data-theme='clear-sight-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5718,6 +5740,7 @@
 /* Clear Sight Dark */
 :root[data-design='simplified'][data-theme='clear-sight-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5742,6 +5765,7 @@
 /* Sand & Indigo Light */
 :root[data-design='simplified'][data-theme='sand-indigo-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5766,6 +5790,7 @@
 /* Sand & Indigo Dark */
 :root[data-design='simplified'][data-theme='sand-indigo-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);
@@ -5790,6 +5815,7 @@
 /* Steel Light */
 :root[data-design='simplified'][data-theme='steel-light'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 5%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(0 0 0 / 12%), 0 2px 6px -2px rgb(0 0 0 / 12%);
@@ -5814,6 +5840,7 @@
 /* Steel Dark */
 :root[data-design='simplified'][data-theme='steel-dark'] {
   --surface-dot: var(--surface);
+  --zone-fill-mix: 4%;
   --rail-width: 1.5px;
   --rail-token-font: var(--font-sans);
   --shadow-tile: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 2px 6px -2px rgb(0 0 0 / 50%);

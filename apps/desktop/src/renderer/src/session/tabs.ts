@@ -311,6 +311,16 @@ export function pullRequestSurfaceOf(pr: Pick<PullRequest, 'url'>): PullRequestS
   return ref === undefined ? undefined : { kind: 'pr', ...ref };
 }
 
+/** The agents a window renders every change of: its own, and those its tabs show (the sorted session ids). */
+export function surfaceAgentIds(owner: TabOwner | undefined, shown: readonly Surface[]): string[] {
+  const ids = new Set<string>(owner?.kind === 'agent' ? [owner.agent.sessionId] : []);
+  for (const surface of shown) {
+    if (surface.kind === 'session' && surface.target.kind === 'agent') ids.add(surface.target.id);
+    else if (surface.kind === 'gate' || surface.kind === 'plan' || surface.kind === 'doc' || surface.kind === 'document') ids.add(surface.sessionId);
+  }
+  return [...ids].sort();
+}
+
 /** The sessions the window's + menu offers to show as a tab: every other agent, then every shell tile, not shown yet. */
 export function sessionChoices(owner: TabOwner, shown: readonly Surface[], targets: SessionTargets): WindowSurface[] {
   const showing = new Set(shown.map(surfaceKey));

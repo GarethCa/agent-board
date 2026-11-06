@@ -5,7 +5,7 @@ import { Check, Circle, ListTodo } from 'lucide-react';
 import type { Agent, AgentStepsWait, BoardItem, StepsData } from '@agent-board/daemon/protocol';
 import { Button, ErrorText } from '../ui';
 import { useAction } from '../use-action';
-import { StepsStepper, type StepsCardActions } from '../board/items/StepsCard';
+import { StepLink, StepsStepper, type StepsCardActions } from '../board/items/StepsCard';
 import type { StepsLookup } from '../board/items/steps-view';
 import { stepsLeftWords } from '../../../shared/needs-you';
 
@@ -85,6 +85,7 @@ export function StepsWaitBody({ wait, agents, open = false, onOpen }: { wait: Ag
     );
   }
   const todo = wait.kind === 'todo';
+  const link = todo ? (data?.steps.find((step) => step.id === wait.stepId)?.link ?? null) : null;
   return (
     <div className="steps-wait" data-testid="steps-wait" data-kind={wait.kind}>
       <div className="steps-wait-line">
@@ -94,6 +95,7 @@ export function StepsWaitBody({ wait, agents, open = false, onOpen }: { wait: Ag
         <span className="steps-wait-words">
           <span className="steps-wait-text">{todo ? wait.text : stepsLeftWords(wait)}</span>
           <span className="steps-wait-on">on “{wait.title}”</span>
+          {link !== null && <StepLink link={link} />}
         </span>
         {onOpen !== undefined && (
           <Button size="sm" variant="ghost" onClick={onOpen}>

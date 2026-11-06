@@ -637,10 +637,11 @@ describe('the Simplified design', () => {
 
   /**
    * All the design may set, in any look: its shapes, type, rail width and token face, shadows, the dim behind a sheet and
-   * the desk's dots. A colour, an alias of one, a mix or a zone's tint would fork Classic's palette, so none is here.
+   * the desk's dots and its zones' fainter tint. A colour, an alias of one, a mix or a zone's tint would fork Classic's palette, so none is here.
    */
   const MAY_SET = new Set([
     '--surface-dot',
+    '--zone-fill-mix',
     '--rail-width',
     '--rail-token-font',
     '--shadow-tile',
@@ -686,6 +687,18 @@ describe('the Simplified design', () => {
 
   it('draws the desk plain, with no dots', () => {
     for (const { stack } of [...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
+  });
+
+  it("tints a zone fainter than Classic does, and leaves Classic's tint as it was", () => {
+    const fill = (stack: string[]) => Number.parseFloat(drawnIn('--zone-fill-mix', stack));
+    expect(fill([])).toBe(8);
+    expect(fill([DARK])).toBe(6);
+    for (const { stack, scheme } of SIMPLIFIED_SCOPES) expect(fill(stack)).toBeLessThan(fill(scheme === 'dark' ? [DARK] : []));
+    for (const { stack, theme } of SIMPLIFIED_PACK_SCOPES) expect(fill(stack)).toBeLessThan(fill([theme.scope]));
+  });
+
+  it("keeps a zone's edge as Classic draws it", () => {
+    for (const { stack, classic } of CLASSIC_OF) expect(drawnIn('--zone-edge-mix', stack)).toBe(drawnIn('--zone-edge-mix', classic));
   });
 
   describe.each(SIMPLIFIED_PACK_SCOPES)('over $name', ({ scope, scheme, theme, stack }) => {

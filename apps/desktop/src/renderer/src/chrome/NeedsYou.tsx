@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { ChevronDown, ChevronUp, Settings as SettingsIcon, SlidersHorizontal } from 'lucide-react';
-import { Captain } from '../board/Character';
 import { StatusGlyph } from '../board/StatusMark';
 import { useSimplified } from '../design';
 import { Inbox } from '../inbox/Inbox';
@@ -33,8 +32,8 @@ export interface NeedsYouProps {
  * over the board, the quiet count of agents on a command beside it, the Captain's button, with the same count, and
  * a gear that opens the Settings window.
  *
- * Under the Simplified design it is three buttons: Needs you with its count, the Captain drawn as the character in the
- * pirate hat, with no count of its own, and the sliders that open Settings. Needs you and the Captain each open the one
+ * Under the Simplified design it is three buttons: Needs you with its count, the Captain as plain text, with no
+ * count of its own, and the sliders that open Settings. Needs you and the Captain each open the one
  * docked pane on their own side, and a second click on the open side closes it. When Settings › Usage shows usage on the
  * board, its figures come first, before Needs you.
  */
@@ -106,9 +105,7 @@ export function NeedsYou({ agents, onOpen, onSettings, onMaster, onNeedsYou, pan
         aria-label="Captain"
         title={`The Captain (${keyText('move.master')})`}
         icon={
-          simplified ? (
-            <Captain size="toolbar" />
-          ) : (
+          simplified ? undefined : (
             <span className="master-glyph" aria-hidden>
               C
             </span>

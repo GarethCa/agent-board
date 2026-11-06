@@ -1347,6 +1347,7 @@
  */
 :root[data-design='simplified'] {
   --surface-dot: var(--surface); /* no dots */
+  --zone-fill-mix: 5%; /* a fainter zone tint (Classic's is 8%) */
 
   /* Connections: today's rails, a little finer, their tokens worded in the system's face */
   --rail-width: 1.5px;
@@ -1384,6 +1385,7 @@
   --sticky-shadow: 0 1px 0 rgb(0 0 0 / 45%), 0 3px 0 -1px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
   --shadow-overlay: 0 0 0 0.5px rgb(255 255 255 / 14%), 0 8px 24px -8px rgb(0 0 0 / 60%);
   --scrim: rgb(0 0 0 / 45%);
+  --zone-fill-mix: 4%; /* Classic's dark tint is 6% */
 }
 
 /*

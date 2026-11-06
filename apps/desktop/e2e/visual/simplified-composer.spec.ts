@@ -243,6 +243,9 @@ for (const { theme, suffix } of THEMES) {
       await box.fill('Ask permission');
       await box.press('Enter');
       await expect(chat.getByTestId('chat-live')).toHaveAttribute('data-live', 'permission', { timeout: TURN_MS });
+      // The decision card takes the focus as it shows, and after a key press the page counts that as keyboard focus and
+      // rings it: the shot is of the card at rest, as the permission shot above takes it.
+      await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await pinRandomText(window);
       await pinChatTimes(window);
       const restorePointer = await ignorePointer(window);

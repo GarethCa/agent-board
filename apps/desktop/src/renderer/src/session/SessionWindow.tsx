@@ -13,10 +13,10 @@ import { roundsOf, showsReviewTab } from '../review/reviews';
 import { ActivityLog, useActivity } from '../orchestrators/ActivityLog';
 import { SessionName } from './SessionName';
 import { SimplifiedHeader } from './SimplifiedHeader';
-import { isSimplified, useSimplified } from '../design';
-import { shelvesCollapsed, showsShelves, sidebarFor } from './agent-sidebar';
+import { useSimplified } from '../design';
+import { showsShelves } from './agent-sidebar';
 import { useAgentSidebar } from './use-agent-sidebar';
-import { viewSettings } from '../board/view-settings';
+import { useSidebarCollapsed } from './use-sidebar-collapsed';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
 import { gateSurfaceOf } from './tabs';
@@ -90,20 +90,8 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   // Classic's details strip opens collapsed to its rail in each window; an agent's shelves (the Simplified design's, or
   // Classic's with its Shelves sidebar) open, or collapsed to their rail, as they last were in any window (⌘I).
   const shelves = showsShelves(useAgentSidebar(), content);
-  const [detailsCollapsed, setDetailsCollapsed] = useState(() => !(showsShelves(sidebarFor(isSimplified(), viewSettings().agentSidebar), content) && shelvesCollapsed.get() !== 'rail'));
-  // Switched to the other sidebar while open (a pick in Settings, the design, or its agent listed or gone), it opens as
-  // that sidebar opens.
-  const wasShelves = useRef(shelves);
-  useEffect(() => {
-    if (wasShelves.current === shelves) return;
-    wasShelves.current = shelves;
-    setDetailsCollapsed(!(shelves && shelvesCollapsed.get() !== 'rail'));
-  }, [shelves]);
-  // One choice for every window: a window open beside the one that changed it follows.
-  useEffect(() => {
-    if (!shelves) return;
-    return shelvesCollapsed.subscribe(() => setDetailsCollapsed(shelvesCollapsed.get() === 'rail'));
-  }, [shelves]);
+  const root = useRef<HTMLDivElement>(null);
+  const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root);
   const shows = useNeedsYouShows();
   const name = agent?.name ?? shell?.name ?? title;
   const where = agent?.branch ?? shell?.cwd;
@@ -138,24 +126,10 @@ export function SessionWindow({ content, title, placement, onClose, onDelete, on
   const activity = useActivity(agent?.sessionId);
   const orchestrates = agent !== undefined && (activity.lines.length > 0 || activity.error !== undefined);
   const showing = (tab === 'review' && reviewable) || (tab === 'activity' && orchestrates) ? tab : 'terminal';
-  const root = useRef<HTMLDivElement>(null);
   const placed = useWindowFrame(root, frame);
   useNavKeys(nav);
   // Under the Simplified design an agent's window has one header, which holds its view switch.
   const simplified = useSimplified() && content.kind === 'session';
-  const remembers = useRef(shelves);
-  remembers.current = shelves;
-  const wasShown = useRef(!detailsCollapsed);
-  useEffect(() => {
-    if (remembers.current) {
-      shelvesCollapsed.set(detailsCollapsed ? 'rail' : undefined);
-      // Collapsed from its handle (dragged or stepped below its least), the focus the handle had goes to the header's
-      // toggle, or else to the rail's button that opens the shelves again.
-      const toggle = root.current?.querySelector<HTMLElement>('[data-details-toggle], .agent-shelves-rail [aria-label="Show the shelves"]');
-      if (wasShown.current && detailsCollapsed && document.activeElement === document.body) toggle?.focus();
-    }
-    wasShown.current = !detailsCollapsed;
-  }, [detailsCollapsed]);
   const [viewSlot, setViewSlot] = useState<HTMLElement | null>(null);
   const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
   const terminalToggle = useRef<(() => void) | null>(null);

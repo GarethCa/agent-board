@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentPage, AgentRecord, GateRun, NeedsYouShows, PullRequest } from '@agent-board/daemon/protocol';
-import { clockMeta, crewNeedingYou, crewStatus, folderMeta, gateWords, madeCount, pageProgress, startedBy, statusLine, nowCard, planMeta, pullRequestsToWatch, shelfShown, shelfTabs, shortFolder, subagentStatus } from './shelves';
+import { clockMeta, crewNeedingYou, crewStatus, folderMeta, gateWords, madeCount, pageProgress, startedBy, statusLine, nowCard, planMeta, foldCue, pullRequestsToWatch, shelfShown, shelfTabs, shortFolder, subagentStatus } from './shelves';
 
 const agent = (overrides: Partial<Agent> = {}): Agent =>
   ({
@@ -229,5 +229,40 @@ describe('statusLine', () => {
   it('leads with what the status word leaves out, then who started it and when', () => {
     expect(statusLine('Changes ready to review', 'the Captain', '9:02')).toBe('Changes ready to review · started by the Captain, 9:02');
     expect(statusLine(null, 'you', '9:14')).toBe('started by you, 9:14');
+  });
+});
+
+describe('foldCue', () => {
+  const lead = agent();
+  const asking = agent({ sessionId: 'q', name: 'Review', spawnedBy: 'a', state: 'needs-permission', permissions: [{ id: 'p' }] as unknown as Agent['permissions'] });
+  const working = agent({ sessionId: 'w', name: 'Docs', spawnedBy: 'a' });
+  const none = { agent: lead, agents: [lead, working], shows, gate: null };
+
+  it('says nothing for a section that holds nothing urgent, whatever it holds', () => {
+    for (const group of ['made-shown', 'made-handoff', 'crew-agents', 'crew-subagents', 'setup-where', 'setup-around'] as const) expect(foldCue(group, none)).toBeUndefined();
+  });
+
+  it('cues Crew while one of the agents it started needs you', () => {
+    expect(foldCue('crew-agents', { ...none, agents: [lead, working, asking] })).toBe('needs-you');
+  });
+
+  it('cues Subagents while one needs you', () => {
+    const blocked = agent({ subagents: [{ id: 's', type: 'Explore', state: 'needs-permission' }] as unknown as Agent['subagents'] });
+    expect(foldCue('crew-subagents', { ...none, agent: blocked })).toBe('needs-you');
+    const running = agent({ subagents: [{ id: 's', type: 'Explore', state: 'running' }] as unknown as Agent['subagents'] });
+    expect(foldCue('crew-subagents', { ...none, agent: running })).toBeUndefined();
+  });
+
+  it('cues Shown to you while a plan waits for a decision, and no longer once decided', () => {
+    const plan = { id: 'p', version: 1, title: 'Plan', presentedAt: '2026-10-30T09:00:00Z', decision: null } as unknown as Agent['plan'];
+    expect(foldCue('made-shown', { ...none, agent: agent({ plan }) })).toBe('needs-you');
+    const decided = { ...plan, decision: { outcome: 'approved', decidedAt: '2026-10-30T09:30:00Z' } } as unknown as Agent['plan'];
+    expect(foldCue('made-shown', { ...none, agent: agent({ plan: decided }) })).toBeUndefined();
+  });
+
+  it('cues Around it as failing while its gate has failed, and not while it passed or has not run', () => {
+    expect(foldCue('setup-around', { ...none, gate: { status: 'failed' } as GateRun })).toBe('failing');
+    expect(foldCue('setup-around', { ...none, gate: { status: 'passed' } as GateRun })).toBeUndefined();
+    expect(foldCue('setup-around', { ...none, gate: undefined })).toBeUndefined();
   });
 });

@@ -82,8 +82,10 @@ interface SessionBodyProps {
    * strip: in an agent's session window under the Simplified design, or Classic's when its sidebar is Shelves.
    */
   shelves?: boolean;
-  /** Under Classic, where in the header the shelves' window controls go (null until the header is drawn). */
+  /** Where in the header the shelves' window controls go (null until the header is drawn): Classic's window and the expanded tile have one. */
   controlsSlot?: HTMLElement | null;
+  /** The controls in that slot take no more room than icons: an expanded tile's header, which is as narrow as 640 px. */
+  compactControls?: boolean;
 }
 
 /**
@@ -103,6 +105,7 @@ export function SessionBody({
   terminalToggle,
   shelves = false,
   controlsSlot,
+  compactControls = false,
 }: SessionBodyProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
@@ -342,8 +345,8 @@ export function SessionBody({
           {!detailsCollapsed && <DetailsHandle collapsed={false} onCollapsed={onDetailsCollapsed} />}
         </>
       )}
-      {/* Under Classic the header holds the window's controls while the shelves are its sidebar. */}
-      {shelvesAgent && !simplified && controlsSlot && createPortal(<ShelfControls agent={shelvesAgent} live={live} onSplit={panes?.splitFromDetails} onProblem={setProblem} />, controlsSlot)}
+      {/* Where the header offers a slot (Classic's window, and the expanded tile) it holds the window's controls while the shelves are its sidebar. */}
+      {shelvesAgent && controlsSlot && createPortal(<ShelfControls agent={shelvesAgent} live={live} compact={compactControls} onSplit={panes?.splitFromDetails} onProblem={setProblem} />, controlsSlot)}
       <div className="session-window-main" data-surface="window">
         <div className="session-window-strip">
           {panes ? (

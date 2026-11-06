@@ -19,6 +19,13 @@ export const EXPANDED_SIZE = { width: 960, height: 600 };
 /** The smallest an expanded tile can be resized to, with its details strip and a usable terminal. */
 export const EXPANDED_MIN_SIZE = { width: 640, height: 360 };
 
+/**
+ * Narrower than this, an expanded tile opens its agent's shelves on their rail, whatever every other window and tile has
+ * them as: the shelves' default width would leave a terminal under about 60 columns. It decides only how the tile opens:
+ * opening or closing the shelves there is the user's, and is every window's as always.
+ */
+export const NARROW_TILE_WIDTH = 800;
+
 /** The biggest an expanded tile can be resized to: about a large screen's worth at full zoom. */
 export const EXPANDED_MAX_SIZE = { width: 3200, height: 2000 };
 

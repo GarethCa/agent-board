@@ -3,6 +3,7 @@
 // agent records it again. Pure, so it is unit-tested.
 import { pullRequestKey, pullRequestOfUrl } from '@agent-board/tracker/pull-request-ref';
 import type { Agent, AgentRecord, AgentRecordKind, DocumentSummary, PinTarget, PullRequest, Subagent } from '@agent-board/daemon/protocol';
+import { startedBy } from './crew-agents';
 
 /**
  * One row of a section: recorded (with its record, which the user may delete) or guessed. A record the user just
@@ -104,7 +105,7 @@ export function crewSection(agent: Pick<Agent, 'sessionId' | 'records'>, agents:
     agent.records,
     'crew',
     (record) => byId.get(record.key),
-    agents.filter((each) => each.spawnedBy === agent.sessionId).map((each) => ({ key: each.sessionId, item: each })),
+    agents.filter((each) => startedBy(each, agent.sessionId)).map((each) => ({ key: each.sessionId, item: each })),
     fading,
   );
 }
