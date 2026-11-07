@@ -182,7 +182,8 @@ export interface SessionsApi {
    * Streams the session: a snapshot of its scrollback and screen first, then its output, and its exit. Returns the
    * function that stops streaming; the session keeps running.
    */
-  attach(sessionId: string, onEvent: (event: SessionStreamEvent) => void): () => void;
+  /** With `streamOnly`, its connection hears only this stream and that sessions ended, for one held open a long time. */
+  attach(sessionId: string, onEvent: (event: SessionStreamEvent) => void, options?: { streamOnly?: boolean }): () => void;
   write(sessionId: string, data: string): void;
   resize(sessionId: string, size: TerminalSize): Promise<void>;
   /** Ends the session's process; resolves with the ended session. */

@@ -178,6 +178,43 @@ describe('findReusableStamp', () => {
     expect(findReusableStamp(repo, head, stamps, (at) => at.getUTCDate() === 3)?.ancestor).toBe(base);
   });
 
+  it("counts an ancestor whose tree was stamped on another commit (a squash merge), and names the commit that ran it", () => {
+    const { repo, stamps, base, commit } = repoWithStampedBase();
+    const git = (...a: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { encoding: 'utf8' }).trim();
+    const tip = commit({ 'scripts/a.ts': 'two\n' });
+    const tree = git('rev-parse', `${tip}^{tree}`);
+    writeStamp(stamps, tip, new Date('2026-11-03T09:00:00Z'), tree);
+    // The same code under a new commit, as a squash merge makes: a sibling of the tip, with the base as its parent.
+    git('reset', '--quiet', '--hard', base);
+    const squash = git('commit-tree', tree, '-p', base, '-m', 'squash');
+    git('reset', '--quiet', '--hard', squash);
+    const head = commit({ 'scripts/a.test.ts': 'a line\n' });
+    const found = findReusableStamp(repo, head, stamps);
+    expect(found?.ancestor).toBe(squash);
+    expect(found?.sameTreeAs).toBe(tip);
+    expect(found?.behind).toBe(1);
+    expect(found?.verdict.safe).toBe(true);
+  });
+
+  it('walks past a stale pass of an ancestor found by its tree to a fresher one further back', () => {
+    const { repo, stamps, base, commit } = repoWithStampedBase();
+    const git = (...a: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { encoding: 'utf8' }).trim();
+    const tip = commit({ 'scripts/a.ts': 'two\n' });
+    const tree = git('rev-parse', `${tip}^{tree}`);
+    // The near ancestor passed only by its tree, long ago; the base's own stamp (3 Nov) is the fresh one.
+    writeStamp(stamps, 'a'.repeat(40), new Date('2026-11-01T00:00:00Z'), tree);
+    const head = commit({ 'scripts/a.ts': 'three\n' });
+    const found = findReusableStamp(repo, head, stamps, (at) => at.getUTCDate() === 3);
+    expect(found?.ancestor).toBe(base);
+    expect(found?.sameTreeAs).toBeUndefined();
+  });
+
+  it('leaves sameTreeAs empty for an ancestor with a stamp of its own', () => {
+    const { repo, stamps, commit } = repoWithStampedBase();
+    const head = commit({ 'scripts/a.test.ts': 'a line\n' });
+    expect(findReusableStamp(repo, head, stamps)?.sameTreeAs).toBeUndefined();
+  });
+
   it('finds nothing when no ancestor is stamped', () => {
     const { repo, commit } = repoWithStampedBase();
     const head = commit({ 'scripts/a.ts': 'two\n' });

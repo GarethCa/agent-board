@@ -2,6 +2,7 @@ import { useSimplified } from '../design';
 import { useTechnicalDetails } from '../technical';
 import { Section, Segmented, Switch } from '../ui';
 import { useMenuSectionOpen } from './board-menu-fold';
+import { CharacterMotionControl, CharacterStyleChoices } from './CharactersSetting';
 import { MODE_OPTIONS, useAppearance } from './appearance-mode';
 import { useUsageOnBoard } from './usage-on-board';
 
@@ -10,7 +11,7 @@ const report = (action: string) => (error: unknown) => console.error(`Could not 
 
 /**
  * The board menu's Quick settings: the few settings worth a click away, each the same setting as its row in the Settings
- * window (Appearance's mode, the Simplified design, Show technical details, Show usage on the board), live in every
+ * window (Appearance's mode, the Simplified design, Show technical details, Characters and their motion, Show usage on the board), live in every
  * window. Show technical details is there only while the Simplified design is on, as in Settings.
  */
 export function QuickSettings() {
@@ -46,6 +47,11 @@ export function QuickSettings() {
             onChange={(event) => void window.agentBoard.technical.set(event.target.checked).catch(report('change Show technical details'))}
           />
         )}
+        <div className="quick-setting quick-setting-characters">
+          <span className="quick-setting-label">Characters</span>
+          <CharacterStyleChoices />
+          <CharacterMotionControl />
+        </div>
         <Switch label="Show usage on the board" checked={usageOnBoard} onChange={(event) => setUsageOnBoard(event.target.checked)} />
       </div>
     </Section>

@@ -7,8 +7,9 @@
  *  - what changed since that commit, chosen as check:pr chooses for a PR (select.ts).
  *
  * Every other pass in the record is reused. A recheck is check:pr's subset, not the full gate, so it never writes the
- * green stamp, which the release trusts as a full pass. A recheck of a failed run that passes on a clean tree writes a
- * record of its own (marked `rechecks`), so a second fix can recheck on top.
+ * green stamp, which the release trusts as a full pass (a fix that falls back to the full check:local is a full run, and
+ * stamps like any other). A recheck of a failed run that passes on a clean tree writes a record of its own (marked
+ * `rechecks`), so a second fix can recheck on top.
  */
 import { execFileSync } from 'node:child_process';
 import { readRecord, type GateRecord } from '../gate-results/results.ts';

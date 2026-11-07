@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, windowKey } from './agent-helpers.ts';
+import { launch, screen, sessionItems, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, windowKey, useFullSidebar } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from './launch.ts';
 import { viewSettled } from './board-helpers.ts';
 import { clickClosing } from './windows.ts';
@@ -127,6 +127,7 @@ for (const harness of ['Claude', 'Codex'] as const) {
     // Slow turns, so there is time to interrupt one; and no idle_prompt, which would move an idle agent on to waiting.
     const { app, window } = await launch(dataDir, { ...env, FAKE_HARNESS_STEP_DELAY_MS: '800', FAKE_HARNESS_IDLE_NOTIFY_MS: '600000' });
     try {
+      await useFullSidebar(window);
       await pickFolderNext(app, repo);
       await browseForZone(window);
       await spawnAgent(window, 'monorepo', 'Run the tests', { harness });

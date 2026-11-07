@@ -1,5 +1,5 @@
 import type { AgentState, Subagent } from '@agent-board/daemon/protocol';
-import type { CharacterPose } from './Character';
+import type { CharacterPose } from './character-figures';
 
 /** Most characters a tile's top edge holds; past that the tile shows an overflow count. */
 export const MAX_PERCHED = 5;

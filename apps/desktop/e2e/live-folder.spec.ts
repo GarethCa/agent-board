@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from './board-helpers.ts';
-import { agents, launch, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, SHELL_ENV, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -53,6 +53,7 @@ test("an agent window shows its live folder beside its fixed worktree, hinting w
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
+    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Pick a database');

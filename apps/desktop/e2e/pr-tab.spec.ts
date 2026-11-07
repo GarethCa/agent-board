@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, launch, sessionWindow, showDetails, spawnAgent, tile } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, runDesign, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -36,6 +36,7 @@ test("an agent's PR chip opens a PR tab: its description, checks, files and comm
   const appEnv = { ...env, AGENT_BOARD_GH: github.gh, AGENT_BOARD_PULL_REQUEST_POLL_MS: '200' };
   let { app, window } = await launch(dataDir, appEnv);
   try {
+    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Fix the login redirect');

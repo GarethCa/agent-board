@@ -22,8 +22,9 @@
 # flaky so it gets fixed. One that fails every try fails the gate. The e2e step's frame-time benchmark (the perf project)
 # gets them too: a slow frame on a busy machine is the flakiest kind of failure. No run writes a screenshot baseline, as
 # a retry would then pass against the one the first try wrote.
-# A run in which every step passed on a clean tree writes a green stamp for its commit (scripts/gate-stamp), so a later
-# step can trust that commit without a second run. $CHECK_STAMP_DIR moves the stamps.
+# A run in which every step passed on a clean tree writes a green stamp for its commit and for its tree (scripts/gate-stamp),
+# so a later step can trust that commit, or another commit of the same code (a squash merge), without a second run.
+# $CHECK_STAMP_DIR moves the stamps.
 #
 # `--quick` runs all but the visual and e2e steps, which a change to text alone cannot break, and writes no stamp.
 set -u
@@ -201,11 +202,11 @@ if [ -z "$quick" ] && [ -z "$dirty" ] && [ -z "$(git status --porcelain | head -
   echo
   node scripts/gate-results/main.ts write "$sha" "$log_dir" $steps
 fi
-# The stamp says this commit passed: only with every step run and passed, on a tree that was clean and on the same
-# commit from start to end.
+# The stamp says this commit, and this tree, passed: only with every step run and passed, on a tree that was clean and on
+# the same commit from start to end.
 if [ -z "$quick" ] && [ $failed = 0 ] && [ -z "$dirty" ] && [ -z "$(git status --porcelain | head -n 1)" ] && [ "$(git rev-parse HEAD)" = "$sha" ]; then
   echo
-  node scripts/gate-stamp/main.ts write "$sha"
+  node scripts/gate-stamp/main.ts write "$sha" "$(git rev-parse "$sha^{tree}")"
 fi
 node scripts/machine-sleep/main.ts note "$gate_started"
 # Read again: plugged in or unplugged since the start, the end is what the next run inherits.

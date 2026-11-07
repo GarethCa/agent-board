@@ -42,6 +42,8 @@ export const VIEW_KEYS = {
   agentSidebar: 'agentSidebar',
   /** Whether terminals draw with the GPU (xterm's WebGL renderer), falling back to the DOM renderer: on unless turned off. */
   gpuTerminals: 'gpuTerminals',
+  /** Whether an open pane's terminal stays alive while it is off screen: off unless turned on. */
+  keepTerminals: 'keepTerminals',
   /** Whether the plan usage pill shows on the board, beside the zoom controls: off unless turned on. */
   usageOnBoard: 'usageOnBoard',
   /** Whether the keys added since the key registry work, the "Extended keyboard shortcuts" setting: on unless turned off. */

@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'full', gpuTerminals: true });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false });
   });
 
   it('change at once and are saved in the view state under their keys', () => {

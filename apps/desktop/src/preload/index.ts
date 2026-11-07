@@ -75,10 +75,10 @@ const api: AgentBoardApi = {
   restartDaemon: (force) => invoke(DAEMON_IPC.restart, force),
   sessions: {
     list: () => invoke(SESSION_IPC.list),
-    attach(sessionId, onEvent) {
+    attach(sessionId, onEvent, options) {
       const attachId = crypto.randomUUID();
       const stop = sessionEvents(attachId, onEvent);
-      ipc.invoke(SESSION_IPC.attach, sessionId, attachId).catch((error: unknown) => {
+      ipc.invoke(SESSION_IPC.attach, sessionId, attachId, options?.streamOnly === true).catch((error: unknown) => {
         stop();
         onEvent({ type: 'session.attachFailed', sessionId, message: ipcErrorMessage(error) });
       });

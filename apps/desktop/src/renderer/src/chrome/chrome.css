@@ -1615,6 +1615,35 @@
   margin-left: var(--space-1);
 }
 
+/*
+ * Classic's toolbar fits More to add without growing: its chevron is joined to the Zone button as a narrow tool, and
+ * the rules between the groups sit close to their neighbours (the island's own gap), so with Shell's word back the
+ * toolbar is no wider than it was before More to add came.
+ */
+.create-toolbar-add {
+  display: inline-flex;
+}
+
+.create-toolbar-add > .ui-tool:first-child {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.create-toolbar .create-toolbar-add .create-toolbar-add-more {
+  width: var(--space-4);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+.create-toolbar-add .create-toolbar-add-more svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+:root:not([data-design='simplified']) .create-toolbar .ui-island-separator {
+  margin: 0;
+}
+
 .create-toolbar .create-toolbar-split .ui-button {
   margin-left: 0;
 }
@@ -1692,11 +1721,11 @@
 }
 
 /*
- * Classic's toolbar has More to add, so Shell keeps only its icon (its tooltip and key say what it is) and the toolbar is
- * no wider than before. Below 960 px New agent drops its word too, so the toolbar clears the Needs-you island's left edge.
+ * Below 960 px Classic's New agent and Shell drop their words (their names and tooltips say what they are), so the
+ * toolbar clears the Needs-you island's left edge, as it did before More to add.
  */
 @media (max-width: 959px) {
-  :root:not([data-design='simplified']) .create-toolbar-agent-label {
+  :root:not([data-design='simplified']) .create-toolbar-word {
     display: none;
   }
 }

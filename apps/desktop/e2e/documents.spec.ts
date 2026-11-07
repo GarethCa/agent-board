@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import type { Agent } from '@agent-board/daemon/protocol';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test, tabText } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { centreOf, drag, settledBox } from './board-helpers.ts';
@@ -236,6 +236,7 @@ test('a selected document card resizes from a side and a corner, undoes in one s
 
 test("an agent's sidebar lists the documents it showed and what it pinned, each opening where it belongs; the user deletes a pin with Undo", async () => {
   await withApp(async (window) => {
+    await useFullSidebar(window);
     const agent = await spawn(window, 'Pins: notes/report.md');
     await expect.poll(async () => (await latest(window, agent)).records.filter((record) => record.kind === 'pin').length, { timeout: TURN_MS }).toBe(4);
     await agentTile(window, agent).getByTestId('tile-docs').click();

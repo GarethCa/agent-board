@@ -57,6 +57,8 @@ const DEFAULT_SIZE: TerminalSize = { cols: 80, rows: 24 };
 /** Where a session's events go: one per client connection. */
 export interface SessionSubscriber {
   send(event: DaemonEvent): void;
+  /** From now on, of what the daemon tells everyone, this connection hears only that a session ended. */
+  hearStreamsOnly?(): void;
   /** Bytes sent to the subscriber that it has not taken yet. */
   backlog(): number;
   /** Calls `callback` once the subscriber has taken everything sent to it. */

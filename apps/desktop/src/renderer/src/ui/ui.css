@@ -633,7 +633,7 @@
   flex: none;
 }
 
-.ui-choice-mark svg {
+.ui-choice-mark > svg {
   width: var(--size-swatch);
   height: var(--size-swatch);
 }

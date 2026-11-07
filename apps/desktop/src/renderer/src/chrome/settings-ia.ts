@@ -91,7 +91,8 @@ export interface SettingsControl {
 export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'simplifiedDesign', label: 'Use the Simplified design', home: 'general.design', also: 'look classic new' },
   { id: 'technicalDetails', label: 'Show technical details', home: 'general.design', simplifiedOnly: true, also: 'branches models pull requests terminals' },
-  { id: 'statusLook', label: "Show each agent's status as", home: 'general.design', simplifiedOnly: true, also: 'characters icons glyph' },
+  { id: 'characters', label: 'Characters', home: 'general.design', also: 'robot bean block pebble pixel figure mascot status icons glyph' },
+  { id: 'characterMotion', label: 'Motion', home: 'general.design', also: 'characters animation dip move still' },
   { id: 'mode', label: 'Mode', home: 'general.appearance', also: 'light dark system' },
   { id: 'theme', label: 'Theme', home: 'general.appearance', also: 'colour color palette pack' },
   { id: 'boardBackground', label: 'Board background', home: 'general.appearance', also: 'desk dots grid lines isometric paper noise vignette plain pattern texture' },
@@ -124,6 +125,7 @@ export const SETTINGS_CONTROLS: readonly SettingsControl[] = [
   { id: 'keepWebLogins', label: 'Keep logins between sessions', home: 'advanced.webTabs', also: 'cookies browser' },
   { id: 'clearBrowsingData', label: 'Clear browsing data', home: 'advanced.webTabs', also: 'cookies cache browser' },
   { id: 'gpuTerminals', label: 'GPU-accelerated terminals', home: 'advanced.terminals', also: 'webgl renderer graphics performance smooth' },
+  { id: 'keepTerminals', label: 'Keep terminals while off screen', home: 'advanced.terminals', also: 'memory cache stutter panes performance smooth' },
   { id: 'daemonStatus', label: 'Build', home: 'advanced.service', also: 'version daemon background service' },
 ];
 

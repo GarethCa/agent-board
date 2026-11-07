@@ -1,14 +1,20 @@
 import { useEffect, useReducer, type CSSProperties } from 'react';
 import type { Harness, Subagent } from '@agent-board/daemon/protocol';
 import { Character } from './Character';
+import { useCharacterStyle } from './characters';
 import { LEAVE_MS, perch, poseOf } from './perch';
 
+/** How tall a perched subagent is drawn, in px. */
+const PERCHED_HEIGHT = 22;
+
 /**
- * An agent's subagents as characters perched on its tile's top edge. A new one pops in; a finished one drops its
- * result and fades; past the cap (see `perch`) the rest show as an overflow count.
+ * An agent's subagents as characters perched on its tile's top edge, in the picked style (Off keeps the bean and block).
+ * A new one pops in; a finished one drops its result and fades; past the cap (see `perch`) the rest show as an overflow
+ * count.
  */
 export function SubagentPerch({ harness, subagents }: { harness: Harness; subagents: readonly Subagent[] }) {
   // Redraws once the next leaving character is gone.
+  const picked = useCharacterStyle();
   const [, redraw] = useReducer((count: number) => count + 1, 0);
   const { perched, overflow, nextChangeInMs } = perch(subagents, Date.now());
   useEffect(() => {
@@ -27,7 +33,7 @@ export function SubagentPerch({ harness, subagents }: { harness: Harness; subage
           data-leaving={subagent.endedAt !== null ? 'true' : undefined}
           title={subagent.result === null ? subagent.type : `${subagent.type}: ${subagent.result}`}
         >
-          <Character harness={harness} pose={poseOf(subagent)} label={subagent.type} />
+          <Character harness={harness} pose={poseOf(subagent)} label={subagent.type} style={picked === 'off' ? 'bean' : picked} height={PERCHED_HEIGHT} />
         </span>
       ))}
       {overflow > 0 && (

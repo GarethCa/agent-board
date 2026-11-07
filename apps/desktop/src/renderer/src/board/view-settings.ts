@@ -9,6 +9,7 @@ import { crewLookFrom, lightCrew, type CrewLook } from './crew-view';
 import { agentNoteLookFrom, type AgentNoteLook } from './items/agent-note-look';
 import { agentSidebarFrom, type AgentSidebar } from '../session/agent-sidebar';
 import { gpuTerminalsFrom } from '../session/terminal-gpu';
+import { keepTerminalsFrom } from '../session/kept-terminals';
 
 export interface ViewSettings {
   clickOpens: ClickOpens;
@@ -17,6 +18,7 @@ export interface ViewSettings {
   agentNoteLook: AgentNoteLook;
   agentSidebar: AgentSidebar;
   gpuTerminals: boolean;
+  keepTerminals: boolean;
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -26,6 +28,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   agentNoteLook: agentNoteLookFrom(undefined),
   agentSidebar: agentSidebarFrom(undefined),
   gpuTerminals: gpuTerminalsFrom(undefined),
+  keepTerminals: keepTerminalsFrom(undefined),
 };
 
 /** Each setting's view state key and the reader of what was saved under it (read back untyped). */
@@ -36,6 +39,7 @@ const SETTINGS = {
   agentNoteLook: { key: VIEW_KEYS.agentNoteLook, from: agentNoteLookFrom },
   agentSidebar: { key: VIEW_KEYS.agentSidebar, from: agentSidebarFrom },
   gpuTerminals: { key: VIEW_KEYS.gpuTerminals, from: gpuTerminalsFrom },
+  keepTerminals: { key: VIEW_KEYS.keepTerminals, from: keepTerminalsFrom },
 } as const;
 
 let current: ViewSettings = DEFAULT_VIEW_SETTINGS;
@@ -93,7 +97,8 @@ export function followViewSettings(): () => void {
   });
 }
 
-function subscribe(listener: () => void): () => void {
+/** Calls `listener` at each change of a setting, for what outlives every component that reads them. */
+export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

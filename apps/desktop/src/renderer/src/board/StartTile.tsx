@@ -152,7 +152,7 @@ export function StartTile({ id, start }: { id: string; start: ShownStart }) {
       ) : (
         <span className={simplified ? 'calm-tile-foot' : 'hybrid-tile-footer'}>
           {/* A starting agent's calm tile says Working, so the start's tile hands over to it without changing its status. */}
-          {simplified ? <StatusMark status="working" /> : <StatusPill state="starting" />}
+          {simplified ? <StatusMark status="working" character={{ harness: start.harness, pose: 'starting' }} /> : <StatusPill state="starting" />}
           {start.model !== null && (
             <Tag className="hybrid-tile-setup" data-testid="tile-model" data-technical-detail="">
               <span className="hybrid-tile-badge-text">{modelLabel(start.model)}</span>

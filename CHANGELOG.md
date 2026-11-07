@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.18 (2026-11-07)
+
+- Light agent notes are beige, not grey
+- Keep terminals off screen, as a setting off by default, so coming back to a zone need not rebuild its panes
+- A green full check counts for the tree, so a release of already-tested code needs no extra full check
+- Characters: terracotta in Simplified
+- Shelves is Classic's default sidebar, Shell's word is back, tiles 800 px or narrower open on the rail
+- Terminals stay sharp at every board zoom and on Retina
+- Characters, part 1: a character on every agent's tile, picked in Settings as Off, Bean & Block, Pebble or Pixel
+
 ## v0.6.17 (2026-11-06)
 
 - Steps, Memory and Queue in the toolbar's add menu, Classic and Simplified

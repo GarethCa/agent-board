@@ -80,6 +80,7 @@
   --pr-merged: #7a33d7;
   --pr-merged-soft: #e1d7f4;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-tab-mix: 0%;
   --agent-note-tab-ink-mix: 0%;
   --agent-note-ink-muted: #5d6073;
@@ -275,6 +276,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -472,6 +474,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -669,6 +672,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -857,6 +861,7 @@
   --pr-merged: #736287;
   --pr-merged-soft: #efe8e9;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 60%;
   --agent-note-tab-mix: 0%;
   --agent-note-tab-ink-mix: 0%;
@@ -1054,6 +1059,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -1242,6 +1248,7 @@
   --pr-merged: #644ac9;
   --pr-merged-soft: #e9e2e6;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-ink-muted: #6a644a;
   --sticky-link: #644ac9;
   --sticky-yellow: #d5ceaf;
@@ -1435,6 +1442,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -1632,6 +1640,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -1820,6 +1829,7 @@
   --pr-merged: #8f3f71;
   --pr-merged-soft: #ecd8bb;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-ink-muted: #655a51;
   --sticky-link: #076678;
   --sticky-yellow: #e6d0af;
@@ -2013,6 +2023,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -2201,6 +2212,7 @@
   --pr-merged: #5b5fa5;
   --pr-merged-soft: #e9e3df;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-tab-mix: 0%;
   --agent-note-tab-ink-mix: 0%;
   --agent-note-ink: #38464b;
@@ -2398,6 +2410,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -2586,6 +2599,7 @@
   --pr-merged: #5a3e8e;
   --pr-merged-soft: #d2cfe0;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 55%;
   --agent-note-ink-muted: #5b5d63;
   --sticky-link: #2959aa;
@@ -2780,6 +2794,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -2968,6 +2983,7 @@
   --pr-merged: #a626a4;
   --pr-merged-soft: #eedcee;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 55%;
   --agent-note-ink-muted: #636670;
   --agent-note-ink-link: #3360c2;
@@ -3163,6 +3179,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -3351,6 +3368,7 @@
   --pr-merged: #9c4a82;
   --pr-merged-soft: #f9e2dd;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 55%;
   --agent-note-tab-mix: 0%;
   --agent-note-tab-ink-mix: 0%;
@@ -3548,6 +3566,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -3736,6 +3755,7 @@
   --pr-merged: #624c83;
   --pr-merged-soft: #ded6b4;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --agent-note-tab-mix: 0%;
   --agent-note-tab-ink-mix: 0%;
   --agent-note-ink: #4d4d5c;
@@ -3933,6 +3953,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -4121,6 +4142,7 @@
   --pr-merged: #935778;
   --pr-merged-soft: #f8ecf3;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --sticky-link: #0072b2;
   --sticky-yellow: #f7dea8;
   --sticky-yellow-ink: #1a1a1a;
@@ -4313,6 +4335,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -4501,6 +4524,7 @@
   --pr-merged: #6c54cb;
   --pr-merged-soft: #e9e6f6;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --sticky-link: #3e63dd;
   --sticky-yellow: #ffebbd;
   --sticky-yellow-ink: #21201c;
@@ -4693,6 +4717,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);
@@ -4881,6 +4906,7 @@
   --pr-merged: #823bed;
   --pr-merged-soft: #efe4ff;
   --sticky-swatch-edge: rgb(0 0 0 / 18%);
+  --agent-note-paper: var(--border);
   --sticky-link: #0e5ef4;
   --sticky-yellow: #e5d6a8;
   --sticky-yellow-ink: #161616;
@@ -5073,6 +5099,7 @@
   --zone-tab-mix: 55%;
   --zone-tab-shade: var(--surface);
   --sticky-swatch-edge: rgb(255 255 255 / 22%);
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);

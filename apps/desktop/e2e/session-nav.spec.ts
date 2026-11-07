@@ -91,7 +91,7 @@ test('a click opens a tile’s session window, which steps through its zone’s 
     await shellTile(window, 'alpha').dblclick();
     await expect(window.getByTestId('expanded-tile')).toBeVisible();
     await expect(sessionWindow(window)).toHaveCount(0);
-    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse' }).click();
+    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse', exact: true }).click();
     await tileAction(shellTile(window, 'bravo'), 'Open window');
     await expect(shownName(window)).toHaveText('bravo');
     await window.getByRole('button', { name: 'Close session window' }).click();

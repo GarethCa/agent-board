@@ -59,6 +59,7 @@ import { ZOOM_KEY } from '../keys';
 import { motionDuration, tokenNumber } from '../theme';
 import { Button, Checkbox, Dialog, useToast } from '../ui';
 import { markSeen } from '../session/mark-seen';
+import { boardSettled } from '../session/terminal-sharpness';
 import { handOffWebTabs, SessionWindowsLayer } from '../windows/SessionWindows';
 import type { NavSession } from '../windows/session-nav';
 import { requestReviewTab } from '../review/review-tab';
@@ -3248,7 +3249,10 @@ function BoardView() {
                               fitView={CAPTURE_FRAME === undefined && fitOnLoad}
                               fitViewOptions={{ maxZoom: 1 }}
                               defaultViewport={CAPTURE_FRAME === undefined ? savedViewport : captureViewport(CAPTURE_FRAME)}
-                              onMoveEnd={(_event, { x, y, zoom }) => CAPTURE_FRAME === undefined && saveViewport({ x, y, zoom })}
+                              onMoveEnd={(_event, { x, y, zoom }) => {
+                                boardSettled();
+                                if (CAPTURE_FRAME === undefined) saveViewport({ x, y, zoom });
+                              }}
                               proOptions={{ hideAttribution: true }}
                             >
                               <BoardBackdrop gap={desk.gap} size={desk.size} />

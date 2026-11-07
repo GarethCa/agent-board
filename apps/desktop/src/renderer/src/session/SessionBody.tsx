@@ -235,6 +235,7 @@ export function SessionBody({
           key={`${content.agent?.createdAt}/${content.agent?.shellSessionId}`}
           sessionId={content.agent?.shellSessionId ?? content.sessionId}
           onStatus={setSingle}
+          startedAt={content.agent?.createdAt}
           autoFocus={autoFocus}
           // In its tab, it has the keyboard while that tab shows and it is the tab's focused pane.
           focused={panes === undefined || (panes.focusedPane.active.key === OWN_SURFACE && anyFocus === agent?.sessionId)}
@@ -538,6 +539,7 @@ function SurfaceView({
         key={`${agent.createdAt}/${agent.shellSessionId}`}
         sessionId={agent.shellSessionId ?? agent.sessionId}
         onStatus={(status) => onPaneStatus(agent.sessionId, status)}
+        startedAt={agent.createdAt}
         focused={keyboard}
         autoFocus={autoFocus}
         harness={agent.shellSessionId ? agent.shellHarness : agent.harness}

@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, tileAction, TURN_MS } from '../agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, tileAction, TURN_MS, useFullSidebar } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -238,6 +238,7 @@ test("an agent's sidebar: the document it showed, and a file, a link and a note 
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   try {
+    await useFullSidebar(window);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
     await pickFolderNext(app, repo);

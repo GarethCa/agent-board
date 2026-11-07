@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { E2E_MAP, SCANNERS, SMOKE_SPECS, selectChecks } from './select.ts';
 import { stepsFor } from './steps.ts';
 
+/** The test that scans every script for a writer of green stamps; any script change selects it. */
+const STAMP_GUARD = 'scripts/gate-stamp/stamp.test.ts';
+
 describe('selectChecks', () => {
   it('runs only lint-level checks for a docs change', () => {
     const plan = selectChecks(['docs/BRIEF.md', 'CONTRIBUTING.md']);
@@ -56,11 +59,9 @@ describe('selectChecks', () => {
     }
   });
 
-  it('runs nothing for the on-request Linux visual tooling', () => {
-    for (const file of ['scripts/visual-linux.sh', 'docker/visual-linux/Dockerfile']) {
-      const plan = selectChecks([file]);
-      expect(plan).toMatchObject({ full: false, unit: [], e2e: [], visual: false });
-    }
+  it('runs nothing for the on-request Linux visual tooling, but the stamp-writer guard for its script', () => {
+    expect(selectChecks(['docker/visual-linux/Dockerfile'])).toMatchObject({ full: false, unit: [], e2e: [], visual: false });
+    expect(selectChecks(['scripts/visual-linux.sh'])).toMatchObject({ full: false, unit: [STAMP_GUARD], e2e: [], visual: false });
   });
 
   it('runs nothing for the board recordings, which no gate step runs', () => {

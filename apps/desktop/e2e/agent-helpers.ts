@@ -87,6 +87,17 @@ export async function showTerminalView(page: Page): Promise<void> {
 
 export const sessionWindow = (page: Page) => page.getByTestId('session-window');
 
+/**
+ * Puts the Agent sidebar setting on Full, the details strip: Classic's windows and expanded tiles open on the shelves
+ * unless it is picked, so a spec about the strip picks it once the app is up, as Settings › Agents › Sidebar does.
+ */
+export async function useFullSidebar(page: Page): Promise<void> {
+  await page.evaluate(() => window.agentBoard.view.set('agentSidebar', 'full'));
+  // The window that sets a view key doesn't hear its own change: reload it, so it reads the saved setting.
+  await page.reload();
+  await connectedDaemonPid(page);
+}
+
 /** Opens the details strip of a session window or expanded tile, which start collapsed to the icon rail. */
 export async function showDetails(scope: Locator): Promise<void> {
   await scope.getByRole('button', { name: 'Show details' }).click();

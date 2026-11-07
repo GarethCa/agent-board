@@ -1165,6 +1165,60 @@ kbd {
   color: var(--checks-pending);
 }
 
+/* What the tile says, beside its character when one is picked: what's under the head, in the tile's own column. */
+.hybrid-tile-said {
+  display: flex;
+  flex: 1 1 0;
+  gap: var(--space-2);
+  align-items: flex-end;
+  min-height: 0;
+}
+
+.hybrid-tile-said-text {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: stretch;
+  justify-content: inherit;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A short tile has less than a character's height to spare: the character shrinks to it, and never reaches the lines above. */
+.hybrid-tile-said .tile-character {
+  box-sizing: border-box;
+  align-self: stretch;
+  align-items: flex-end;
+  min-height: 0;
+  padding-bottom: var(--space-0-5); /* no pose touches the footer's row */
+}
+
+.hybrid-tile-said .character {
+  width: auto;
+  max-height: 100%;
+}
+
+/* The bubble sits on the footer: a chip that arrives there must not move it, so the footer holds a tag's height. */
+.hybrid-tile-said[data-character] ~ .hybrid-tile-footer {
+  min-height: var(--size-tag);
+}
+
+/* With a character, its status line is what it says: a speech bubble, its tail at the character. Its edge is an outline,
+   which takes no room, so `useFittedLines` counts its lines right; short of room for one, it gives up its padding. */
+.hybrid-tile-said[data-character] .hybrid-tile-description {
+  flex: 0 1 auto;
+  margin-top: auto;
+  padding-inline: var(--space-2);
+  outline: 1px solid var(--separator);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
+  background: var(--panel);
+}
+
+.hybrid-tile-said[data-character] .hybrid-tile-description:not([data-tight]) {
+  padding-block: var(--space-0-5);
+}
+
 .hybrid-tile-body {
   display: -webkit-box;
   /* Takes what the head, branch, footer and the rest leave, never more: a long task can't push them off the tile. The
@@ -1630,23 +1684,6 @@ kbd {
   overflow: visible;
 }
 
-.character[data-pose='running'] .character-figure {
-  animation: character-walk var(--motion-step) var(--ease-in-out) infinite alternate;
-}
-
-/* Running legs swing from the hip, one forward as the other goes back; mid-stride when held still. */
-.character[data-pose='running'] .character-leg {
-  --stride: 28deg;
-  transform: rotate(var(--stride));
-  transform-box: fill-box;
-  transform-origin: 50% 0;
-  animation: character-stride var(--motion-stride) var(--ease-in-out) infinite alternate;
-}
-
-.character[data-pose='running'] .character-leg + .character-leg {
-  --stride: -28deg;
-}
-
 .subagent-overflow {
   align-self: center;
   padding: var(--space-0-5) var(--space-1-5);
@@ -1692,22 +1729,35 @@ kbd {
   }
 }
 
-@keyframes character-stride {
-  to {
-    transform: rotate(calc(-1 * var(--stride)));
-  }
+/* Every agent's one body colour: terracotta, under either design. */
+.character-body {
+  fill: var(--figure-body);
 }
 
-@keyframes character-walk {
-  to {
-    transform: translateY(-1.5px);
+/* One dip as a character changes, from its feet (`TileCharacter`). */
+.tile-character {
+  display: inline-flex;
+  flex: none;
+}
+
+.tile-character[data-dip] .character {
+  transform-origin: 50% 100%;
+  animation: character-dip var(--motion-dip) var(--ease-in-out);
+}
+
+@keyframes character-dip {
+  35% {
+    transform: translateY(6%) scale(1.06, 0.9);
+  }
+
+  70% {
+    transform: translateY(-4%) scale(0.97, 1.04);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .subagent,
-  .character-figure,
-  .character-leg,
+  .tile-character[data-dip] .character,
   .subagent[data-leaving] .character-doc {
     animation: none !important;
   }
@@ -1971,15 +2021,44 @@ kbd {
   color: var(--muted);
 }
 
-/* The character stands a little taller than the word, at a size that still reads its pose. */
-.status-mark-character {
-  display: inline-flex;
-  flex: none;
+/* A card of the Characters setting: its live preview above its name. */
+.character-choice {
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  text-align: center;
 }
 
-.status-mark-character .character {
-  width: 18px;
-  height: 21px;
+.character-choice .ui-choice-label {
+  font-size: var(--font-size-xs);
+}
+
+.character-choice-pair {
+  display: flex;
+  gap: var(--space-0-5);
+  align-items: flex-end;
+}
+
+.character-choice-off {
+  display: grid;
+  place-items: center;
+  width: var(--size-character-off);
+  height: var(--size-character-off);
+  border: 1.5px solid var(--muted);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+/* The board menu is narrow: the row stacks, and its cards go two by two across it. */
+.quick-setting.quick-setting-characters {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.quick-setting-characters .ui-choices {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: row;
 }
 
 .status-mark-gallery {
@@ -3621,7 +3700,7 @@ kbd {
   padding: var(--space-2) var(--space-3);
 }
 
-/* A kept terminal's own element, which moves from pane to pane (TerminalPane's prototype). */
+/* A kept terminal's own element, which moves from pane to pane (kept-terminals.ts). */
 .terminal-host {
   height: 100%;
 }
@@ -10318,7 +10397,7 @@ button.chat-chip[aria-expanded='true'] {
 }
 
 .pr-check[data-state='pending'] .pr-check-icon {
-  color: var(--window-code-number);
+  color: var(--checks-pending);
 }
 
 .pr-file {

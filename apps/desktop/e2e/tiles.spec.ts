@@ -7,7 +7,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { centreOf, drag, settledBox, withDaemon } from './board-helpers.ts';
-import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey } from './agent-helpers.ts';
+import { launch, normalNewZones, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, windowKey, useFullSidebar } from './agent-helpers.ts';
 import { test, addEmptyZone, classicOnly, browseForZone, connectedDaemonPid, pickFolderNext, removeDataDir, stopDaemon, tempDataDir, placeWithTool } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -305,6 +305,7 @@ test('a tile for a session started in another terminal drags within its zone, ou
   let session: ChildProcessWithoutNullStreams | undefined;
   let other: ChildProcessWithoutNullStreams | undefined;
   try {
+    await useFullSidebar(window);
     await addZone(app, window, repo);
     const settings = await openSettings(window, 'accounts.terminals');
     const otherTerminals = settingsSection(settings, 'Other terminals').getByRole('switch', { name: 'Show sessions from other terminals' });
@@ -335,7 +336,7 @@ test('a tile for a session started in another terminal drags within its zone, ou
     await expect(expanded.getByRole('button', { name: 'Maximise' })).toHaveCount(0);
     await details.getByRole('button', { name: 'Hide details' }).click();
     await expect(expanded.getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Show details' })).toBeVisible();
-    await expanded.getByRole('button', { name: 'Collapse' }).click();
+    await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expanded).toHaveCount(0);
     await window.getByRole('button', { name: 'Fit View' }).click();
 

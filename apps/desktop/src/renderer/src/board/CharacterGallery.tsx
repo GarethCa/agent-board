@@ -1,13 +1,75 @@
+import { useState } from 'react';
 import type { Harness } from '@agent-board/daemon/protocol';
 import { HARNESSES } from '../harness';
-import { Captain, CAPTAIN_SIZES, Character, CHARACTER_POSES } from './Character';
+import { Captain, CAPTAIN_SIZES, Character } from './Character';
+import { CHARACTER_POSES, type CharacterPose } from './character-figures';
+import { TileCharacter } from './TileCharacter';
+import { CHARACTER_STYLE_LABELS, type DrawnStyle } from './characters';
 
 const GALLERY_HARNESSES: Harness[] = ['claude', 'codex'];
 
 const CAPTAIN_PLACES = Object.keys(CAPTAIN_SIZES) as (keyof typeof CAPTAIN_SIZES)[];
 
+const STYLES: DrawnStyle[] = ['bean', 'pebble', 'pixel'];
+
+/** The poses `#gallery` shows, each a subagent can strike: every pose in every style has its own page. */
+const SUBAGENT_POSES = CHARACTER_POSES.slice(0, 10);
+
+/** Every pose in every style and body, at a tile's size: a page of its own at `#gallery-characters`. */
+export function CharacterStylesGallery() {
+  return (
+    <table className="character-gallery" data-testid="character-styles">
+      <thead>
+        <tr>
+          <th />
+          {STYLES.map((style) => (
+            <th key={style} colSpan={GALLERY_HARNESSES.length}>
+              {CHARACTER_STYLE_LABELS[style]}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {CHARACTER_POSES.map((pose) => (
+          <tr key={pose}>
+            <th>{pose}</th>
+            {STYLES.flatMap((style) =>
+              GALLERY_HARNESSES.map((harness) => (
+                <td key={`${style}/${harness}`}>
+                  <Character harness={harness} pose={pose} style={style} height={34} />
+                </td>
+              )),
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+const DEMO_POSES: CharacterPose[] = ['thinking', 'running', 'waiting'];
+
+/** A tile's character to change by hand, to see it hold and dip as the board's would. */
+export function CharacterChangeDemo() {
+  const [pose, setPose] = useState<CharacterPose>('thinking');
+  const [shown, setShown] = useState(true);
+  return (
+    <div className="character-change-demo" data-testid="character-change-demo">
+      {DEMO_POSES.map((each) => (
+        <button key={each} type="button" onClick={() => setPose(each)}>
+          {each}
+        </button>
+      ))}
+      <button type="button" onClick={() => setShown(!shown)}>
+        toggle
+      </button>
+      {shown && <TileCharacter harness="claude" pose={pose} style="bean" height={34} />}
+    </div>
+  );
+}
+
 /**
- * Every character pose in every body, for checking how they look, and with `captain` (the Simplified design) the
+ * Every subagent's pose in every body, for checking how they look, and with `captain` (the Simplified design) the
  * Captain at each of its sizes. The app shows it at `#gallery`.
  */
 export function CharacterGallery({ captain = false }: { captain?: boolean }) {
@@ -22,7 +84,7 @@ export function CharacterGallery({ captain = false }: { captain?: boolean }) {
         </tr>
       </thead>
       <tbody>
-        {CHARACTER_POSES.map((pose) => (
+        {SUBAGENT_POSES.map((pose) => (
           <tr key={pose}>
             <th>{pose}</th>
             {GALLERY_HARNESSES.map((harness) => (

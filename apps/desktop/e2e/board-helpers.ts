@@ -78,3 +78,39 @@ export async function viewSettled(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="expanded-tile"][data-opening]')).toHaveCount(0);
   await untilStill(() => viewTransform(page));
 }
+
+/** How the WebGL canvas in `terminal` lands on the screen's device pixels now. */
+export const canvasOnScreen = (terminal: Locator) =>
+  terminal.evaluate((pane) => {
+    const canvas = pane.querySelector<HTMLCanvasElement>('.xterm-screen > canvas:not([class*="-layer"])')!;
+    const box = pane.querySelector('.xterm-screen')!.getBoundingClientRect();
+    const dpr = globalThis.devicePixelRatio;
+    return { dpr, pixels: { width: canvas.width, height: canvas.height }, onScreen: { width: box.width * dpr, height: box.height * dpr }, corner: { x: box.left * dpr, y: box.top * dpr } };
+  });
+
+/**
+ * Each canvas pixel of `terminal` is one device pixel, its corner on a whole one: nothing is left for the compositor to
+ * resample. A terminal gets there a moment after the board comes to rest, so a shot of one waits for this first.
+ */
+export async function expectSharp(terminal: Locator, { soft = false } = {}): Promise<void> {
+  await expect
+    .configure({ soft })
+    .poll(async () => {
+      const { pixels, onScreen, corner } = await canvasOnScreen(terminal);
+      const off = [Math.abs(onScreen.width - pixels.width), Math.abs(onScreen.height - pixels.height), Math.abs(corner.x - Math.round(corner.x)), Math.abs(corner.y - Math.round(corner.y))];
+      return Math.max(...off) < 0.05 ? 'sharp' : `canvas ${pixels.width}×${pixels.height}, on screen ${onScreen.width}×${onScreen.height} at ${corner.x}, ${corner.y}`;
+    }, { timeout: 5_000 })
+    .toBe('sharp');
+}
+
+/** The board's zoom, from its viewport's transform. */
+export const boardZoom = (page: Page) => page.locator('.react-flow__viewport').evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+
+/** Zooms the board with its button until `done`, each click waiting for `tile` to stop moving. */
+export async function zoomUntil(page: Page, tile: Locator, button: 'Zoom In' | 'Zoom Out', done: (zoom: number) => boolean): Promise<void> {
+  for (let i = 0; i < 16 && !done(await boardZoom(page)); i++) {
+    await page.getByRole('button', { name: button }).click();
+    await settledBox(tile);
+  }
+  expect(done(await boardZoom(page))).toBe(true);
+}

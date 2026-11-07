@@ -16,6 +16,7 @@ import { SimplifiedHeader } from './SimplifiedHeader';
 import { useSimplified } from '../design';
 import { showsShelves } from './agent-sidebar';
 import { useAgentSidebar } from './use-agent-sidebar';
+import { useViewSettingsLoaded } from '../board/view-settings';
 import { useSidebarCollapsed } from './use-sidebar-collapsed';
 import { SessionBody, type WindowContent } from './SessionBody';
 import { pendingTab, requestTab, useTabRequestCount } from './tab-request';
@@ -83,7 +84,12 @@ interface SessionWindowProps {
  * has an Activity tab, with what it did and tried. An agent's
  * strip has a Terminal/Chat switch: the chat view reads its conversation from its transcript instead.
  */
-export function SessionWindow({ content, title, placement, onClose, onDelete, onMinimise, pin, minimiseTip = 'Minimise to the dock; it keeps running', onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
+export function SessionWindow(props: SessionWindowProps) {
+  // Not drawn before the saved settings are read: a Classic user who picked Full would see the shelves first.
+  return useViewSettingsLoaded() ? <SessionWindowShown {...props} /> : null;
+}
+
+function SessionWindowShown({ content, title, placement, onClose, onDelete, onMinimise, pin, minimiseTip = 'Minimise to the dock; it keeps running', onPopOut, onPopIn, notice, nav, frame }: SessionWindowProps) {
   const agent = content.kind === 'session' ? content.agent : undefined;
   const shell = content.kind === 'shell' ? content.shell : undefined;
   const [attach, setAttach] = useState<AttachState>('attaching');

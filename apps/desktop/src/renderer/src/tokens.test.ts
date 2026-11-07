@@ -329,6 +329,7 @@ const SAME_IN_EVERY_THEME = new Set([
   '--on-zone',
   '--snap-guide',
   '--harness-claude',
+  '--figure-eye',
   '--figure-hat',
   '--figure-hat-emblem',
   '--linear-mark',
@@ -685,6 +686,15 @@ describe('the Simplified design', () => {
     expect(set).toEqual([]);
   });
 
+  it("draws every character's body in Classic's terracotta, with no colour of its own", () => {
+    expect(scopes.get(':root')!.get('--figure-body')).toBe('var(--harness-claude)');
+    const painted: string[] = [];
+    postcss.parse(read('app.css')).walkRules((rule) => {
+      if (rule.selector.includes('character-body')) rule.walkDecls((decl) => void painted.push(`${rule.selector} ${decl.prop}: ${decl.value}`));
+    });
+    expect(painted).toEqual(['.character-body fill: var(--figure-body)']);
+  });
+
   it('draws the desk plain, with no dots', () => {
     for (const { stack } of [...SIMPLIFIED_SCOPES, ...SIMPLIFIED_PACK_SCOPES]) expect(hexOf('--surface-dot', stack)).toBe(hexOf('--surface', stack));
   });
@@ -782,11 +792,11 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
 
   // The tab is a tint of its zone's colour with text leaning on it; a theme whose own text has no more headroom than
   // that on its panel can't be asked for more: the bar is AA, or for a pack, within half a point of its text on its panel.
-  // The fill the CSS declares is the border over the panel; this suite computes it the same way, so the two can't drift.
+  // The fill the CSS declares is the paper colour over the panel; this suite computes it the same way, so the two can't drift.
   const noteMix = () => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get('--agent-note-fill-mix')).find((v) => v !== undefined)!) / 100;
   const noteFill = () => {
-    expect(scopes.get(':root')!.get('--agent-note-fill')).toBe('color-mix(in srgb, var(--border) var(--agent-note-fill-mix), var(--panel))');
-    return mix(hexOf('--border', stack), hexOf('--panel', stack), noteMix());
+    expect(scopes.get(':root')!.get('--agent-note-fill')).toBe('color-mix(in srgb, var(--agent-note-paper) var(--agent-note-fill-mix), var(--panel))');
+    return mix(hexOf('--agent-note-paper', stack), hexOf('--panel', stack), noteMix());
   };
   const declared = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
 
@@ -813,7 +823,7 @@ describe.each(LOOKS)('text contrast in the $id look', ({ id, stack }) => {
     const share = (name: string) => Number.parseFloat([...stack, ':root'].map((at) => scopes.get(at)?.get(name)).find((v) => v !== undefined)!) / 100;
     const [panel, text] = [hexOf('--panel', stack), hexOf('--agent-note-ink', stack)];
     const tint = zone === 'loose' ? hexOf('--agent-note-loose', stack) : zone;
-    const fill = mix(hexOf('--border', stack), panel, share('--agent-note-fill-mix'));
+    const fill = mix(hexOf('--agent-note-paper', stack), panel, share('--agent-note-fill-mix'));
     const tab = mix(tint, fill, share('--agent-note-tab-mix'));
     const ink = mix(tint, text, share('--agent-note-tab-ink-mix'));
     expect(contrast(ink, tab)).toBeGreaterThanOrEqual(['light', 'dark', 'simplified', 'simplified-dark'].includes(id) ? 4.5 : Math.min(contrast(text, fill) - NOTE_TAB_ROOM, 4.5));

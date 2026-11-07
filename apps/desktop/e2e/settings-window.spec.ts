@@ -99,16 +99,19 @@ test('every control is in the section its home names, and a change in the window
   }
 });
 
-test("under the Simplified design, Show each agent's status as Characters is kept as picked", async () => {
+test('Characters is Bean & Block unless picked, and keeps a pick and its Motion in Settings', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, {}, [], { design: 'simplified' });
   try {
     const settings = await openSettings(window, 'general.design');
-    const look = settingsSection(settings, 'Design').getByRole('group', { name: "Show each agent's status as" });
-    await expect(look.getByRole('button', { name: 'Icons and words' })).toHaveAttribute('aria-pressed', 'true');
-    await look.getByRole('button', { name: 'Characters' }).click();
-    await expect(look.getByRole('button', { name: 'Characters' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(look.getByRole('button', { name: 'Icons and words' })).toHaveAttribute('aria-pressed', 'false');
+    const section = settingsSection(settings, 'Design');
+    await expect(section.getByRole('radio', { name: 'Bean & Block' })).toBeChecked();
+    await section.getByRole('radio', { name: 'Pebble' }).check();
+    await expect(section.getByRole('radio', { name: 'Pebble' })).toBeChecked();
+    await section.getByRole('radio', { name: 'Off' }).check();
+    await expect(section.getByRole('radio', { name: 'Off' })).toBeChecked();
+    await section.getByRole('group', { name: 'Motion' }).getByRole('button', { name: 'Still' }).click();
+    await expect(section.getByRole('group', { name: 'Motion' }).getByRole('button', { name: 'Still' })).toHaveAttribute('aria-pressed', 'true');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

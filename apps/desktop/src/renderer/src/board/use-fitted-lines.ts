@@ -33,15 +33,22 @@ export function useFittedLines(): RefCallback<HTMLElement> {
     };
     const yielding = element.nextElementSibling instanceof HTMLElement && element.nextElementSibling.hasAttribute('data-yields') ? element.nextElementSibling : undefined;
     const fit = () => {
-      // Without what yields, so the text is fitted in all the room there is.
-      if (yielding !== undefined) yielding.style.display = 'none';
+      // Without what yields, so the text is fitted in all the room there is. A body that hugs its text (a character's
+      // speech bubble) takes that room while it is measured, or it would seem to leave none for what yields.
+      if (yielding !== undefined) {
+        yielding.style.display = 'none';
+        element.style.flex = '1 1 0';
+      }
       // Back to the stylesheet's ceiling and untrimmed, so what is measured is the room the tile leaves.
       element.removeAttribute('data-tight');
       text.style.removeProperty('-webkit-line-clamp');
       text.style.maxHeight = 'none';
       element.style.maxHeight = 'none';
       let measured = measure();
-      if (measured === undefined) return;
+      if (measured === undefined) {
+        element.style.removeProperty('flex');
+        return;
+      }
       const available = element.clientHeight;
       // The lines the whole text takes (clamp lifted), before the element is trimmed to those that fit.
       const contents = document.createRange();
@@ -51,6 +58,7 @@ export function useFittedLines(): RefCallback<HTMLElement> {
         element.setAttribute('data-tight', '');
         measured = measure()!;
       }
+      element.style.removeProperty('flex');
       const lines = Math.max(1, measured.fits);
       text.style.setProperty('-webkit-line-clamp', String(lines));
       text.style.maxHeight = `${lines * measured.line}px`;
@@ -63,6 +71,16 @@ export function useFittedLines(): RefCallback<HTMLElement> {
       const used = Math.min(lines, Math.max(1, Math.ceil((wanted - 1) / measured.line)));
       element.style.maxHeight = `${used * measured.line + measured.spacing}px`;
       const room = available - (used * measured.line + measured.spacing);
+      if (measured.fits >= 1 && room < yielding.offsetHeight) {
+        // A character's bubble is narrower, so it wraps sooner: there it gives up lines, not who paused or set it.
+        const keeps = element.closest('[data-character]') === null ? 0 : Math.floor((available - measured.spacing - yielding.offsetHeight) / measured.line);
+        if (keeps >= 1) {
+          text.style.setProperty('-webkit-line-clamp', String(keeps));
+          text.style.maxHeight = `${keeps * measured.line}px`;
+          element.style.maxHeight = `${keeps * measured.line + measured.spacing}px`;
+          return;
+        }
+      }
       if (measured.fits < 1 || room < yielding.offsetHeight) yielding.style.display = 'none';
     };
     fit();

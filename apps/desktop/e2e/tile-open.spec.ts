@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, setClickOpens, zoneNamed, SHELL_ENV, showDetails, spawnAgent, tile } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, zoneNamed, SHELL_ENV, showDetails, spawnAgent, tile, useFullSidebar } from './agent-helpers.ts';
 import { test, addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 
@@ -11,6 +11,7 @@ test('a click selects a tile and a double-click opens it, as the setting says; a
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
   try {
+    await useFullSidebar(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);
     await spawnAgent(window, 'monorepo', 'Open me');
@@ -87,7 +88,7 @@ test('a click selects a tile and a double-click opens it, as the setting says; a
     await expect(expandedTile(window)).toHaveCount(1);
     await expect(sessionWindow(window)).toBeHidden();
     // Enter on a selected tile expands it too, and Enter in a window open over the board opens nothing else.
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await tile(window).click({ position: { x: 20, y: 60 } });
     await window.keyboard.press('Enter');

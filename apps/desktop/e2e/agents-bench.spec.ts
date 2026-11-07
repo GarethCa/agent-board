@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { countRenders, installRecorders, phase, processUsage, tracer, zoomTo, type Phase } from './bench-helpers.ts';
+import { countRenders, installRecorders, phase, processMetrics, processUsage, tracer, zoomTo, type Phase } from './bench-helpers.ts';
 import { withDaemon } from './board-helpers.ts';
 import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from './launch.ts';
 
@@ -20,7 +20,7 @@ import { test, connectedDaemonPid, launchApp, removeDataDir, tempDataDir } from 
  * first with no app at all, then while the board sits, zooms into a zone and pans from zone to zone and back.
  *
  * From the environment: `BENCH_AGENTS` (40), `BENCH_PAUSED` of them (20), `BENCH_BUSY` of the live ones streaming
- * (10), `BENCH_EXPANDED` live ones expanded in place (6, half of them busy), `BENCH_STEP_MS` between a busy agent's
+ * (10), `BENCH_EXPANDED` live ones expanded in place (6, half of them busy, in the biggest zone while it has enough), `BENCH_STEP_MS` between a busy agent's
  * redraws (100), `BENCH_LINES` of an earlier conversation each agent prints first, as scrollback (8000), and as the rendering benchmark has: `BENCH_CPU_SLOWDOWN`, `BENCH_TRACE=1`, `BENCH_APP_ENV` (JSON) and
  * `AGENT_BOARD_HEADED=1`; `BENCH_SHOTS=1` too.
  */
@@ -36,6 +36,8 @@ const TRACE = process.env.BENCH_TRACE === '1';
 /** `BENCH_SHOTS=1` saves a screenshot of the window after each phase, to check what each one showed. */
 const SHOTS = process.env.BENCH_SHOTS === '1';
 const CPU_SLOWDOWN = Number(process.env.BENCH_CPU_SLOWDOWN ?? 1);
+/** `BENCH_SOAK_MS` stays that long in the third zone at the end, with the first's panes off screen, reading memory every 30 s. */
+const SOAK_MS = Number(process.env.BENCH_SOAK_MS ?? 0);
 const APP_ENV = JSON.parse(process.env.BENCH_APP_ENV ?? '{}') as Record<string, string>;
 
 /** The share of the agents each zone holds, largest first, as on a busy real board: 16, 13, 7, 2, 1 and 1 of 40. */
@@ -169,7 +171,10 @@ test('many-agents benchmark: paused, idle and busy agents across zones, panes ex
     // comes back to.
     const inBig = (agent: Agent) => agent.zoneId === zones[0]!.id;
     const busyOpen = busy.filter(inBig).slice(0, Math.ceil(SIZE.expanded / 2));
-    const expanded = [...busyOpen, ...idle.filter(inBig).slice(0, SIZE.expanded - busyOpen.length)];
+    const bigOpen = [...busyOpen, ...idle.filter(inBig).slice(0, SIZE.expanded - busyOpen.length)];
+    // Past the biggest zone's live agents, the others' open too, for the most the parked terminals can hold.
+    const others = [...busy, ...idle].filter((agent) => !inBig(agent));
+    const expanded = [...bigOpen, ...others.slice(0, SIZE.expanded - bigOpen.length)];
     await withDaemon(dataDir, (client) => client.call('view.set', { key: EXPANDED_VIEW_KEY, value: expanded.map((agent) => ({ id: tileSizeKey('agent', agent.sessionId), ...EXPANDED })) }));
     // The daemon alone: its agents' output parsed and kept, with no board drawing it. With no live session it has ended
     // with the app, and the next app starts another.
@@ -227,9 +232,33 @@ test('many-agents benchmark: paused, idle and busy agents across zones, panes ex
     await run('zoom out to the overview', () => zoomTo(window, 0.1, centre));
     await run('overview, idle again', () => sleep(8000));
 
-    const result = { size: SIZE, cpuSlowdown: CPU_SLOWDOWN, headed: process.env.AGENT_BOARD_HEADED === '1', appEnv: APP_ENV, daemonAlone, phases };
+    const soak: { seconds: number; rendererMb: number; gpuMb: number; mainMb: number; mainHeapTotalMb: number; mainHeapUsedMb: number }[] = [];
+    if (SOAK_MS > 0) {
+      await goTo(third!);
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < SOAK_MS) {
+        await sleep(30_000);
+        const { rendererMb, gpuMb, mainMb } = await processMetrics(board);
+        const heap = await board.evaluate(() => process.memoryUsage());
+        soak.push({ seconds: Math.round((Date.now() - startedAt) / 1000), rendererMb, gpuMb, mainMb, mainHeapTotalMb: Math.round(heap.heapTotal / 1e6), mainHeapUsedMb: Math.round(heap.heapUsed / 1e6) });
+        console.log(JSON.stringify(soak.at(-1)));
+      }
+    }
+    // What the main process holds at the end, before and after a collection: its working set swings by hundreds of MB
+    // between collections, so only the second says what it keeps.
+    const mainMemory = await board.evaluate(() => {
+      const mb = ({ rss, heapTotal, heapUsed, external, arrayBuffers }: NodeJS.MemoryUsage) => ({ rss, heapTotal, heapUsed, external, arrayBuffers });
+      const before = mb(process.memoryUsage());
+      process.getBuiltinModule('v8').setFlagsFromString('--expose-gc');
+      const collect = process.getBuiltinModule('vm').runInNewContext('gc') as () => void;
+      collect();
+      collect();
+      return { before, after: mb(process.memoryUsage()) };
+    });
+    console.log(JSON.stringify({ mainMemory }));
+    const result = { size: SIZE, cpuSlowdown: CPU_SLOWDOWN, headed: process.env.AGENT_BOARD_HEADED === '1', appEnv: APP_ENV, daemonAlone, phases, mainMemory, soak };
     writeFileSync(test.info().outputPath('agents-bench.json'), `${JSON.stringify(result, null, 2)}\n`);
-    console.table(phases.map(({ name, p95Ms, p99Ms, maxMs, hitches, longTaskMs, mounts, terminals, rendererCpu, mainCpu, gpuCpu, daemonCpu, rendererMb, daemonMb, commits, renders }) => ({ name, p95Ms, p99Ms, maxMs, hitches, longTaskMs, mounts, terminals, rendererCpu, mainCpu, gpuCpu, daemonCpu, rendererMb, daemonMb, commits, renders })));
+    console.table(phases.map(({ name, p95Ms, p99Ms, maxMs, hitches, longTaskMs, rasterMs, rasters, mounts, terminals, parked, parkedMb, letGo, resizes, rendererCpu, mainCpu, gpuCpu, daemonCpu, rendererMb, gpuMb, mainMb, daemonMb, commits, renders }) => ({ name, p95Ms, p99Ms, maxMs, hitches, longTaskMs, rasterMs, rasters, mounts, terminals, parked, parkedMb, letGo, resizes, rendererCpu, mainCpu, gpuCpu, daemonCpu, rendererMb, gpuMb, mainMb, daemonMb, commits, renders })));
     console.log(`results in ${test.info().outputPath('agents-bench.json')}`);
   } finally {
     // Stopping the daemon (in removeDataDir) ends its agents, the busy ones too.

@@ -66,6 +66,8 @@ const idleTimeoutMs = process.env.AGENT_BOARD_DAEMON_IDLE_TIMEOUT_MS;
 const permissionHoldMs = process.env.AGENT_BOARD_PERMISSION_HOLD_MS;
 /** Demo mode records the board for the promo (demo-capture.ts). Never in a packaged build. */
 const demo = !app.isPackaged && process.env.AGENT_BOARD_DEMO === '1';
+/** How many device pixels per CSS pixel a headless test's board paints, as a Retina display does. Never in a packaged build. */
+const testScale = app.isPackaged ? undefined : Number(process.env.AGENT_BOARD_TEST_DEVICE_SCALE) || undefined;
 
 /** Connects to the daemon, starting `agent-board daemon` detached (so it outlives the app) if none runs. */
 const daemonConnection: EnsureDaemonOptions = {
@@ -195,20 +197,20 @@ function openBoard(showing?: WindowTarget): BrowserWindow {
   // Benchmarks fill the board with placeholder tiles and sticky notes (see e2e/board-perf.spec.ts). Never in a packaged build.
   const placeholders = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_TILES;
   const stickies = app.isPackaged ? undefined : process.env.AGENT_BOARD_PLACEHOLDER_STICKIES;
-  // A prototype the rendering benchmark measures: terminals kept, attached, while off screen (session/TerminalPane.tsx).
-  const terminalCache = !app.isPackaged && process.env.AGENT_BOARD_TERMINAL_CACHE === '1';
+  // Turns on keeping terminals while off screen (session/kept-terminals.ts) with this many bytes, for benchmarks and tests.
+  const terminalCache = app.isPackaged ? undefined : process.env.AGENT_BOARD_TERMINAL_CACHE;
   const window = openWindow(
     {
       // Tests keep onboarding from opening by itself on their empty boards, packaged or not; onboarding.spec.ts opts in.
       ...(process.env.AGENT_BOARD_ONBOARDING === '0' ? { onboarding: 'off' } : {}),
       ...(placeholders ? { placeholders } : {}),
       ...(stickies ? { stickies } : {}),
-      ...(terminalCache ? { terminalCache: '1' } : {}),
+      ...(terminalCache ? { terminalCache } : {}),
       // The renderer reads demo mode from here alone, so a packaged build, where `demo` is never set, can't reach it.
       ...(demo ? { [WINDOW_QUERY.demo]: '1' } : {}),
       ...(showing ? { [WINDOW_QUERY.show]: showing.id, [WINDOW_QUERY.kind]: showing.kind, [WINDOW_QUERY.title]: showing.title } : {}),
     },
-    demo ? { offscreenScale: DEMO_SCALE } : {},
+    demo ? { offscreenScale: DEMO_SCALE } : testScale !== undefined ? { offscreenScale: testScale } : {},
   );
   board = window;
   window.on('closed', () => {

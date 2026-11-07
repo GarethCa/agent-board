@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import { createFakeGitHub, FAKE_GITHUB_STATE, type FakeGitHubPullRequest } from '@agent-board/tracker/testing';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, windowKey, zoneNamed } from '../agent-helpers.ts';
+import { agents, launch, listFinishedTurns, LONG_MODEL, narrowBy, pickInChip, screen, sessionWindow, setClickOpens, spawnAgent, startBadgedAgent, startCrowdedAgent, tile, TURN_MS, windowKey, zoneNamed, useFullSidebar } from '../agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, tempDataDir, browseForZone, newShell } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, pinRandomText, settle } from '../render.ts';
 import { scratch } from '../scratch.ts';
@@ -90,7 +90,7 @@ test('the Workbench theme: the empty board, a busy board, its menu and inbox, a 
     await settle(window);
     await expect.soft(window.locator('.board')).toHaveScreenshot('expanded-tile.png', { ...SHOT, mask: [screen(window)] });
     await restorePointer();
-    await expandedTile.getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile.getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile).toHaveCount(0);
 
     await setClickOpens(window, 'Session window');
@@ -198,6 +198,7 @@ test('a finished agent keeps the summary it set and shows no percentage from mid
   const { app, window } = await launch(dataDir, { ...env, ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0' }, RENDER_ARGS);
   await listFinishedTurns(window);
   try {
+    await useFullSidebar(window);
     await window.setViewportSize(VIEWPORT);
     await pinFonts(window);
     await pickFolderNext(app, repo);
@@ -209,7 +210,7 @@ test('a finished agent keeps the summary it set and shows no percentage from mid
     await tile(window).getByRole('button', { name: 'Expand' }).click();
     const expanded = window.getByTestId('expanded-tile');
     await expanded.getByRole('navigation', { name: 'Session controls' }).getByRole('button', { name: 'Stop' }).click();
-    await expanded.getByRole('button', { name: 'Collapse' }).click();
+    await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(tile(window).getByTestId('tile-description')).toHaveText('Look around');
     await pinRandomText(window);
     const restorePointer = await ignorePointer(window);
