@@ -187,7 +187,7 @@
   --pr-closed-soft: var(--danger-soft);
   --checks-passing: var(--success);
   --checks-failing: var(--danger);
-  --checks-pending: var(--warning);
+  --checks-pending: var(--accent-ink); /* waiting is no request: the accent, never the Needs-you orange */
 
   /*
    * Zones. A zone's own colour comes from the daemon (ZONE_COLORS) as --zone-color; these say how much of it tints
@@ -232,8 +232,9 @@
   --agent-note-bar: var(--accent); /* the note on the minimap */
   --agent-note-tab-height: 21px;
   --agent-note-loose: var(--muted); /* the colour a note outside every zone takes in place of a zone's */
-  --agent-note-fill-mix: 50%; /* the border colour in the card and its tab, over the panel: a light note reads as paper beside a white tile; the dark theme sets 0 */
-  --agent-note-fill: color-mix(in srgb, var(--border) var(--agent-note-fill-mix), var(--panel));
+  --agent-note-paper: #e7dac6; /* the light note paper: a beige, not the grey border; a theme pack sets its own (its border) */
+  --agent-note-fill-mix: 50%; /* the paper colour in the card and its tab, over the panel: a light note reads as paper beside a white tile; the dark theme sets 0 */
+  --agent-note-fill: color-mix(in srgb, var(--agent-note-paper) var(--agent-note-fill-mix), var(--panel));
   --agent-note-tab-mix: 12%; /* its zone's colour in the tab that reads NOTE and names the agent, over the card */
   --agent-note-tab-ink-mix: 20%; /* ... in the tab's text, over the text colour */
   --agent-note-edge-mix: 42%; /* ... in the card's dashed edge (and the tab's), over the border colour */
@@ -519,7 +520,9 @@
   --harness-codex: var(--text);
   --harness-shell: var(--neutral); /* a plain shell's mark */
 
-  /* Characters: the line and the light parts (eyes, a carried doc) drawn over a body */
+  /* Characters: every agent's one body colour, the line and the light parts (eyes, a carried doc) drawn over a body */
+  --figure-body: var(--harness-claude);
+  --figure-eye: #1b1a19; /* a limbless body's flat eyes, dark on the body in every theme */
   --figure-ink: var(--text);
   --figure-paper: var(--raised);
   --figure-hat: #1c1c1e; /* the Captain's tricorn, near-black in every theme */
@@ -784,6 +787,7 @@
   --rail-token-room: 160px; /* the shortest rail its token lies along in full; on a shorter one it shows its mark alone. Arrange spaces linked tiles by it (the daemon's RAIL_TOKEN_ROOM) */
   --size-rail-token-height: 24px;
   --size-handoff-figure: 44px; /* an agent's robot over its tile while it hands off (FlowRules) */
+  --size-character-off: 40px; /* Off's card in the Characters setting, as tall as a preview */
   --size-edge-rules: 384px; /* the Edge rules panel's width */
   --size-master-panel: 360px; /* the Captain's docked panel's width */
   --size-edge-preview: 160px; /* the most its payload preview shows before it scrolls */
@@ -910,8 +914,7 @@
   --motion-spin: 800ms; /* one turn of a loading spinner */
   --motion-ring: 1300ms; /* one ring spreading from the chat's live state */
   --motion-pop: 260ms; /* a subagent popping in */
-  --motion-step: 190ms; /* a running character's bob */
-  --motion-stride: 380ms; /* a running character's leg swing: two bobs */
+  --motion-dip: 600ms; /* a character's one dip as it changes */
   --motion-handoff: 1600ms; /* a payload's trip along a flow edge; a hand-off shows for at least this long */
   --motion-pulse: 700ms; /* one pulse of a tile ⌘K showed */
   --motion-record-fade: 5s; /* a deleted sidebar record fading out while its Undo is up */
@@ -1134,6 +1137,7 @@
   --separator: #2c2a28;
   --hover: #2f2d2a;
   --panel: #201f1e;
+  --agent-note-paper: var(--border);
   --agent-note-fill-mix: 0%;
   --agent-note-code: var(--hover);
   --agent-note-rule: var(--separator);

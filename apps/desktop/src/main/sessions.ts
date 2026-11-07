@@ -53,7 +53,7 @@ export function registerSessionIpc(daemon: DaemonLink, connect: () => Promise<Da
     });
   });
 
-  ipcMain.handle(SESSION_IPC.attach, async (event, sessionId: string, attachId: string) => {
+  ipcMain.handle(SESSION_IPC.attach, async (event, sessionId: string, attachId: string, streamOnly = false) => {
     const sender = event.sender;
     opening.add(attachId);
     let client: DaemonClient;
@@ -84,7 +84,7 @@ export function registerSessionIpc(daemon: DaemonLink, connect: () => Promise<Da
       });
     }
     try {
-      await client.call('session.attach', { sessionId });
+      await client.call('session.attach', streamOnly ? { sessionId, streamOnly } : { sessionId });
     } catch (error) {
       attachments.delete(attachId);
       client.close();

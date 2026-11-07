@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { agentSidebarFrom, showsShelves, sidebarFor } from './agent-sidebar';
 
 describe("an agent window's sidebar", () => {
-  it('is the full details strip under Classic until Shelves is chosen', () => {
-    expect(sidebarFor(false, agentSidebarFrom(undefined))).toBe('full');
+  it('is the shelves under Classic until Full is chosen', () => {
+    expect(sidebarFor(false, agentSidebarFrom(undefined))).toBe('shelves');
     expect(sidebarFor(false, 'full')).toBe('full');
     expect(sidebarFor(false, 'shelves')).toBe('shelves');
   });
@@ -17,8 +17,8 @@ describe("an agent window's sidebar", () => {
     expect(agentSidebarFrom('shelves')).toBe('shelves');
     expect(agentSidebarFrom('simple')).toBe('shelves');
     expect(agentSidebarFrom('full')).toBe('full');
-    expect(agentSidebarFrom('compact')).toBe('full');
-    expect(agentSidebarFrom(null)).toBe('full');
+    expect(agentSidebarFrom('compact')).toBe('shelves');
+    expect(agentSidebarFrom(null)).toBe('shelves');
   });
 });
 

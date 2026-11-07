@@ -10,6 +10,7 @@ import {
   EXPANDED_MAX_SIZE,
   EXPANDED_MIN_SIZE,
   EXPANDED_SIZE,
+  isNarrowTile,
   expandTile,
   tidySize,
   expandedFrom,
@@ -260,5 +261,14 @@ describe('tidySize', () => {
     const { positions } = tidyZone({ width: 1400, height: 800 }, tiles);
     const rects = tiles.map((tile) => sizedFootprint(positions.get(tile.id)!, tile));
     for (const [index, rect] of rects.entries()) expect(clearOf(rect, rects.filter((_, other) => other !== index))).toBe(true);
+  });
+});
+
+describe('a tile narrow enough to open its shelves on the rail', () => {
+  it('is 800 px wide or narrower', () => {
+    expect(isNarrowTile(640)).toBe(true);
+    expect(isNarrowTile(800)).toBe(true);
+    expect(isNarrowTile(801)).toBe(false);
+    expect(isNarrowTile(960)).toBe(false);
   });
 });

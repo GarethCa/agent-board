@@ -2,8 +2,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Agent, Subagent } from '@agent-board/daemon/protocol';
-import { Captain, CAPTAIN_SIZES, Character, CHARACTER_POSES } from './Character';
-import { CharacterGallery } from './CharacterGallery';
+import { Captain, CAPTAIN_SIZES, Character } from './Character';
+import { CHARACTER_POSES } from './character-figures';
+import { CharacterGallery, CharacterStylesGallery } from './CharacterGallery';
 import { HybridTile } from './HybridTile';
 import { MAX_PERCHED } from './perch';
 import type { TileData } from './tile';
@@ -27,7 +28,7 @@ const pick = (characters: Drawn[], ...names: string[]) => characters.map((c) => 
 describe('the character gallery', () => {
   const gallery = charactersIn(renderToStaticMarkup(createElement(CharacterGallery)));
 
-  it('shows all ten poses', () => {
+  it('shows the poses a subagent can strike, and its page shows them all', () => {
     expect(CHARACTER_POSES).toEqual([
       'running',
       'thinking',
@@ -39,12 +40,22 @@ describe('the character gallery', () => {
       'done',
       'handing-off',
       'on-command',
+      'starting',
+      'reading',
+      'writing',
+      'testing',
+      'waiting-on-review',
+      'hibernated',
+      'stopped-by-restart',
     ]);
-    expect(new Set(pick(gallery, 'data-pose').flat())).toEqual(new Set(CHARACTER_POSES));
+    expect(new Set(pick(gallery, 'data-pose').flat())).toEqual(new Set(CHARACTER_POSES.slice(0, 10)));
+    const page = charactersIn(renderToStaticMarkup(createElement(CharacterStylesGallery)));
+    expect(new Set(pick(page, 'data-pose').flat())).toEqual(new Set(CHARACTER_POSES));
+    expect(page).toHaveLength(CHARACTER_POSES.length * 6);
   });
 
   it('draws each pose with a bean body for Claude and a block body for Codex', () => {
-    for (const pose of CHARACTER_POSES) {
+    for (const pose of CHARACTER_POSES.slice(0, 10)) {
       const posed = gallery.filter((c) => c.attributes['data-pose'] === pose);
       expect(pick(posed, 'data-harness', 'data-body')).toEqual([
         ['claude', 'bean'],
@@ -53,10 +64,38 @@ describe('the character gallery', () => {
     }
   });
 
-  it('gives each pose its own drawing', () => {
-    const drawings = gallery.filter((c) => c.attributes['data-body'] === 'bean').map((c) => c.drawing);
-    expect(drawings).toHaveLength(CHARACTER_POSES.length);
-    expect(new Set(drawings).size).toBe(CHARACTER_POSES.length);
+  it('gives each pose its own drawing, but for the two that both need the user, in every style', () => {
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      const drawings = CHARACTER_POSES.filter((pose) => pose !== 'needs-permission').map((pose) => charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose, style })))[0]!.drawing);
+      expect(new Set(drawings).size, style).toBe(CHARACTER_POSES.length - 1);
+    }
+  });
+
+  it("paints every style's body with one class, so the design picks its colour and the harness never does", () => {
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      for (const harness of ['claude', 'codex'] as const) {
+        const { drawing } = charactersIn(renderToStaticMarkup(createElement(Character, { harness, pose: 'testing', style })))[0]!;
+        expect(drawing, `${style} ${harness}`).toContain('class="character-body"');
+      }
+    }
+  });
+
+  it('keeps every drawing small, for a board of 40 tiles: each element is one more on every tile', () => {
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      for (const pose of CHARACTER_POSES) {
+        const { drawing } = charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose, style })))[0]!;
+        expect((drawing.match(/<(?!\/)/g) ?? []).length, `${style} ${pose}`).toBeLessThanOrEqual(13);
+      }
+    }
+  });
+
+  it('tells the bodies apart by shape in every style, not colour', () => {
+    for (const style of ['bean', 'pebble', 'pixel'] as const) {
+      const [bean, block] = (['claude', 'codex'] as const).map((harness) => charactersIn(renderToStaticMarkup(createElement(Character, { harness, pose: 'testing', style })))[0]!.drawing);
+      expect(bean, style).not.toBe(block);
+      expect(paints(bean!).filter((paint) => paint.includes('harness'))).toEqual([]);
+      expect(paints(block!).filter((paint) => paint.includes('harness'))).toEqual([]);
+    }
   });
 });
 
@@ -64,9 +103,9 @@ describe('the character gallery', () => {
 const paints = (html: string) => [...html.matchAll(/(?:^|[\s;"])(?:fill|stroke)(?:="|:)([^";]+)/g)].map(([, paint]) => paint!.trim());
 
 describe('the palette', () => {
-  it("paints each pose only with the figure's tokens, its harness's colour and the state it shows", () => {
-    const html = renderToStaticMarkup(createElement(CharacterGallery));
-    expect(new Set(paints(html).filter((paint) => !/^var\(--(figure-(ink|paper)|harness-(claude|codex)|state-[\w-]+)\)$/.test(paint)))).toEqual(new Set(['none']));
+  it("paints each pose in every style only with the figure's tokens and the colour the board gives its state", () => {
+    const html = renderToStaticMarkup(createElement(CharacterStylesGallery));
+    expect(new Set(paints(html).filter((paint) => !/^var\(--(figure-(ink|paper|body|eye)|accent|state-[\w-]+)\)$/.test(paint)))).toEqual(new Set(['none']));
   });
 
   it("paints the Captain only in Claude's orange and the figure's ink, paper and hat: no skin tones", () => {
@@ -95,6 +134,27 @@ describe('the Captain', () => {
 });
 
 describe('a character', () => {
+  it('stays upright as Pixel when it fails, its alert upright beside it, as wide as any other pose', () => {
+    const drawn = (pose: 'failed' | 'idle') => charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose, style: 'pixel' })))[0]!;
+    expect(drawn('failed').drawing).not.toContain('rotate');
+    expect(drawn('failed').attributes.width).toBe(drawn('idle').attributes.width);
+    expect(drawn('failed').drawing).toContain('var(--state-failed)');
+  });
+
+  it('stands as tall as asked, but for Pixel, which snaps so it never blurs', () => {
+    const drawn = (style: 'bean' | 'pixel', height: number) => charactersIn(renderToStaticMarkup(createElement(Character, { harness: 'claude', pose: 'idle', style, height })))[0]!.attributes;
+    expect(drawn('bean', 34)).toMatchObject({ height: '34', width: '30' });
+    expect(drawn('pixel', 34)).toMatchObject({ height: '32', width: '40' });
+    expect(drawn('pixel', 22)).toMatchObject({ height: '24', width: '30' });
+  });
+
+  it('is left out for screen readers on a tile, whose name and status word say what it does', () => {
+    const html = renderToStaticMarkup(createElement(Character, { harness: 'claude', pose: 'idle', decorative: true }));
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).not.toContain('role="img"');
+    expect(html).not.toContain('aria-label');
+  });
+
   it('names its subagent and pose for screen readers', () => {
     const [character] = charactersIn(
       renderToStaticMarkup(createElement(Character, { harness: 'claude', pose: 'needs-permission', label: 'Explore' })),
@@ -191,6 +251,24 @@ describe('subagents on a Hybrid tile', () => {
     };
     return renderToStaticMarkup(createElement(HybridTile, { id: 'agent:s1', tile: data }));
   }
+
+  it('stands the agent itself at the leading edge of its body, apart from what perches', () => {
+    const html = tile([subagent('a')]);
+    expect(html).toMatch(/hybrid-tile-said" data-character="bean"><span class="tile-character" data-pose="running"><svg[^>]*data-testid="tile-character"[^>]*width="30" height="34"/);
+  });
+
+  it("draws an agent ended into a shell by its pill's state, as any agent ended", () => {
+    const done = tile([], 'claude', { shellHarness: 'claude', state: 'done', endedAt: new Date().toISOString(), exitCode: 0 });
+    expect(done).toMatch(/data-testid="tile-character" data-pose="done"/);
+    const failed = tile([], 'claude', { shellHarness: 'claude', state: 'failed', endedAt: new Date().toISOString(), exitCode: 1 });
+    expect(failed).toMatch(/data-testid="tile-character" data-pose="failed"/);
+  });
+
+  it('draws what it hands on and what it times as its own pose, with no second robot over the tile', () => {
+    const html = tile([], 'claude', { state: 'on-command' });
+    expect(html).toMatch(/data-testid="tile-character" data-pose="on-command"/);
+    expect(html).not.toContain('hybrid-tile-handoff');
+  });
 
   it('perches a character for each subagent, in its harness body', () => {
     const html = tile([subagent('a'), subagent('b', { state: 'thinking' })], 'codex');

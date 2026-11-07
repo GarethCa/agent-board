@@ -3,6 +3,7 @@ import { Bell, Bot, ChevronRight, Gauge, LayoutDashboard, Search, SlidersHorizon
 import { errorMessage } from '../../../shared/errors';
 import { ExternalHooksToggle } from '../board/ExternalHooksToggle';
 import { GpuTerminalsSetting } from './GpuTerminalsSetting';
+import { KeepTerminalsSetting } from './KeepTerminalsSetting';
 import { HeldPayloadsSetting } from '../board/HeldPayloadsSetting';
 import { daemonStatusText, useDaemonStatus } from '../DaemonStatus';
 import { useSimplified } from '../design';
@@ -29,6 +30,7 @@ import { OpensOnSetting } from './OpensOnSetting';
 import { SETTINGS_GROUPS, settingsPaneFrom, settingsPaneText, type SettingsGroupId, type SettingsHome, type SettingsPane } from './settings-ia';
 import { drawnPane, drawnSections, searchable, searchSettings, type SettingsHit } from './settings-search';
 import { SimplifiedDesignSetting } from './SimplifiedDesignSetting';
+import { CharactersSetting } from './CharactersSetting';
 import { UsagePlanSetting } from './UsageSetting';
 import { WebTabsSetting } from './WebTabsSetting';
 
@@ -77,7 +79,12 @@ function DaemonStatusSetting() {
 function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
   switch (home) {
     case 'general.design':
-      return <SimplifiedDesignSetting onError={onError} />;
+      return (
+        <>
+          <SimplifiedDesignSetting onError={onError} />
+          <CharactersSetting />
+        </>
+      );
     case 'general.appearance':
       return (
         <>
@@ -127,7 +134,12 @@ function sectionBody(home: SettingsHome, onError: OnError): ReactNode {
     case 'advanced.webTabs':
       return <WebTabsSetting onError={onError} />;
     case 'advanced.terminals':
-      return <GpuTerminalsSetting />;
+      return (
+        <>
+          <GpuTerminalsSetting />
+          <KeepTerminalsSetting />
+        </>
+      );
     case 'advanced.service':
       return <DaemonStatusSetting />;
     default:

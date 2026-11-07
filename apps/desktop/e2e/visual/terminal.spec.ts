@@ -1,6 +1,6 @@
-import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { expect, type ElectronApplication, type Locator } from '@playwright/test';
 import { launch, sessionWindow, setClickOpens } from '../agent-helpers.ts';
-import { run, settledBox } from '../board-helpers.ts';
+import { expectSharp, run, settledBox, zoomUntil } from '../board-helpers.ts';
 import { newShell, removeDataDir, tempDataDir, test } from '../launch.ts';
 import { RENDER_ARGS, RENDER_ENV, VIEWPORT, ignorePointer, pinFonts, settle } from '../render.ts';
 import { SHOT, needsBaselines } from './shared.ts';
@@ -32,7 +32,8 @@ async function shoot(app: ElectronApplication, terminal: Locator, size?: { width
   return Buffer.from(png, 'base64');
 }
 
-const boardZoom = (window: Page) => window.locator('.react-flow__viewport').evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).a);
+/** The same render profile as the WebGL shots, but a window that paints as a Retina display does: the real ratio, not an emulated one. */
+const RETINA_ARGS = RENDER_ARGS.filter((arg) => arg !== '--disable-gpu' && !arg.startsWith('--force-device-scale-factor'));
 
 for (const { renderer, env, args, match } of RENDERERS) {
   test(`a shell expanded in place, its terminal drawn by the ${renderer} renderer, at 100% and zoomed in`, async () => {
@@ -60,16 +61,14 @@ for (const { renderer, env, args, match } of RENDERERS) {
           "printf '\\n  plain text after it, and \\033[32mgreen\\033[0m, \\033[1mbold\\033[0m and \\033[31mred\\033[0m\\n\\033[?25l'",
       );
       await settledBox(tile);
+      if (renderer === 'webgl') await expectSharp(terminal, { soft: true });
       let restorePointer = await ignorePointer(window);
       await settle(window);
       expect.soft(await shoot(app, terminal)).toMatchSnapshot(`${shots[0]}.png`, match);
       await restorePointer();
 
-      for (let i = 0; i < 12 && (await boardZoom(window)) < 1.4; i++) {
-        await window.getByRole('button', { name: 'Zoom In' }).click();
-        await settledBox(tile);
-      }
-      expect(await boardZoom(window)).toBeGreaterThan(1.4);
+      await zoomUntil(window, tile, 'Zoom In', (zoom) => zoom > 1.4);
+      if (renderer === 'webgl') await expectSharp(terminal, { soft: true });
       restorePointer = await ignorePointer(window);
       await settle(window);
       // The top left of the pane, where its text starts, at the board's zoom.
@@ -81,3 +80,60 @@ for (const { renderer, env, args, match } of RENDERERS) {
     }
   });
 }
+
+// A device pixel ratio of 2, and zooms either side of 100%: WebGL's text stays as sharp as at 100%, and so do the zooms where
+// a cell is not a whole number of device pixels. A canvas stretched by the board's zoom shows here, as it doesn't at a ratio of 1.
+test('a shell expanded in place, its terminal drawn by WebGL at a device pixel ratio of 2, at several zooms, and in the session window', async () => {
+  const shots = ['terminal-webgl-dpr2-window', 'terminal-webgl-dpr2', 'terminal-webgl-dpr2-zoomed-in', 'terminal-webgl-dpr2-zoomed-out', 'terminal-webgl-dpr2-right-edge'];
+  needsBaselines(...shots);
+  const match = { maxDiffPixelRatio: 0.005 };
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...RENDER_ENV, SHELL: '/bin/sh', AGENT_BOARD_LOGIN_SHELL: '0', PS1: '$ ', AGENT_BOARD_TERMINAL_RENDERER: 'auto', AGENT_BOARD_TEST_DEVICE_SCALE: '2' }, RETINA_ARGS);
+  try {
+    // Not setViewportSize, whose override puts the page back on a ratio of 1.
+    await app.evaluate(({ BrowserWindow }, { width, height }) => BrowserWindow.getAllWindows()[0]!.setContentSize(width, height), VIEWPORT);
+    await pinFonts(window);
+    await newShell(window);
+    await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
+    const inWindow = window.getByTestId('session-terminal');
+    await expect(inWindow.locator('.xterm')).toHaveAttribute('data-renderer', 'webgl');
+    expect(await window.evaluate(() => devicePixelRatio)).toBe(2);
+    await inWindow.click();
+    await run(window, "clear; printf '\\033[48;2;55;55;55m\\033[38;2;255;255;255m %-48s\\033[K\\033[0m\\n' 'a message the user typed'; printf '\\n  plain text, \\033[32mgreen\\033[0m, \\033[1mbold\\033[0m and \\033[31mred\\033[0m\\n\\033[?25l'");
+    await expectSharp(inWindow, { soft: true });
+    const restorePointer = await ignorePointer(window);
+    await settle(window);
+    expect.soft(await shoot(app, inWindow, { width: 480, height: 100 })).toMatchSnapshot(`${shots[0]}.png`, match);
+    await restorePointer();
+
+    await window.getByRole('button', { name: 'Close session window' }).click();
+    await setClickOpens(window, 'Expand in place');
+    await window.getByTestId('shell-tile').dblclick();
+    const tile = window.getByTestId('expanded-tile');
+    const terminal = tile.getByTestId('session-terminal');
+    await expect(terminal.locator('.xterm')).toHaveAttribute('data-renderer', 'webgl');
+    await settledBox(tile);
+    const shot = async (name: string) => {
+      await expectSharp(terminal, { soft: true });
+      const restore = await ignorePointer(window);
+      await settle(window);
+      expect.soft(await shoot(app, terminal, { width: 480, height: 100 })).toMatchSnapshot(`${name}.png`, match);
+      await restore();
+    };
+    await shot(shots[1]!);
+    await zoomUntil(window, tile, 'Zoom In', (zoom) => zoom > 1.4);
+    await shot(shots[2]!);
+    await zoomUntil(window, tile, 'Zoom Out', (zoom) => zoom < 0.7);
+    await shot(shots[3]!);
+    // The whole pane where rounding costs a ratio of 2 the most: what its right edge looks like beside a row coloured to its full width.
+    await zoomUntil(window, tile, 'Zoom Out', (zoom) => zoom < 0.6);
+    await expectSharp(terminal, { soft: true });
+    const restore = await ignorePointer(window);
+    await settle(window);
+    expect.soft(await shoot(app, terminal)).toMatchSnapshot(`${shots[4]}.png`, match);
+    await restore();
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

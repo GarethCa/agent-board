@@ -11,12 +11,12 @@ export type AgentSidebar = (typeof AGENT_SIDEBARS)[number];
 export const AGENT_SIDEBAR_LABELS: Record<AgentSidebar, string> = { shelves: 'Shelves', full: 'Full' };
 
 /**
- * The saved choice, or Full for none or one this version doesn't know: Classic's windows open as they always have.
+ * The saved choice, or the shelves for none or one this version doesn't know.
  * Simple, which the shelves replace, reads as the shelves.
  */
 export function agentSidebarFrom(saved: unknown): AgentSidebar {
   if (saved === 'simple') return 'shelves';
-  return AGENT_SIDEBARS.find((each) => each === saved) ?? 'full';
+  return AGENT_SIDEBARS.find((each) => each === saved) ?? 'shelves';
 }
 
 /** The sidebar a window shows: the shelves under the Simplified design, whatever was chosen, else the choice. */

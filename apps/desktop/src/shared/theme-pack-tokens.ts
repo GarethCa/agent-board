@@ -145,6 +145,7 @@ function packTokens(theme: PackTheme, base: BaseThemes, required: readonly strin
       pick((fill) => apart(fill) && clear(fill)) ??
       pick(apart) ??
       appShare);
+  set('--agent-note-paper', 'var(--border)');
   const fill = fillAt(fillShare);
   if (!dark && fillShare !== appShare) set('--agent-note-fill-mix', `${Math.round(fillShare * 100)}%`);
   const inks = inksOn(fill);

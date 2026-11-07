@@ -45,7 +45,7 @@ describe('searchSettings', () => {
     expect(shown(searchSettings('technical', { simplified: false }))).toEqual([]);
     expect(shown(searchSettings('technical', { simplified: true }))).toEqual(['General › Design: Show technical details']);
     // A section found by its name lists only the controls drawn.
-    expect(shown(searchSettings('design', { simplified: false }))).toEqual(['General › Design: Use the Simplified design']);
+    expect(shown(searchSettings('design', { simplified: false }))).toEqual(['General › Design: Use the Simplified design, Characters, Motion']);
   });
 
   it('finds nothing for an empty query, or one that matches nothing', () => {

@@ -308,11 +308,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const countLiveSessions = () => (liveSessions.get() as { n: number }).n - agents.fallbackShellCount();
 
     const clients = new Set<Socket>();
+    /** Connections that asked for their sessions' streams alone: every other event is noise to them, and each costs them a parse. */
+    const streamOnly = new WeakSet<Socket>();
     /** What hears every event the daemon sends, beside its clients: the orchestrators' waits, once they are made. */
     const listeners: ((event: DaemonEvent) => void)[] = [];
     const broadcast = (event: DaemonEvent) => {
       const line = eventLine(event);
-      for (const client of clients) if (!client.destroyed) client.write(line);
+      for (const client of clients) if (!client.destroyed && (event.type === 'session.exited' || !streamOnly.has(client))) client.write(line);
       for (const listener of listeners) listener(event);
     };
 
@@ -1103,6 +1105,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       const closed = new AbortController();
       const subscriber: SessionSubscriber & BoardConnection = {
         closed: closed.signal,
+        hearStreamsOnly: () => streamOnly.add(socket),
         send: (event) => {
           if (!socket.destroyed) socket.write(eventLine(event));
         },
@@ -1263,6 +1266,7 @@ function sessionHandlers(
     },
     'session.list': () => sessions.list(),
     'session.attach': (params, subscriber) => {
+      if (paramsObject(params).streamOnly === true) subscriber.hearStreamsOnly?.();
       sessions.attach(sessionId(params), subscriber);
       return null;
     },

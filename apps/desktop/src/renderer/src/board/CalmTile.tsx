@@ -9,8 +9,7 @@ import { useReviews } from '../review/ReviewsProvider';
 import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmFace, technicalLine, type CalmAction } from './calm-tile';
-import { Character } from './Character';
-import { CommandFigure } from './CommandFigure';
+import { TileRobot } from './CommandFigure';
 import { lightCrew } from './crew-view';
 import { HandoffsContext } from './flow-edges';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
@@ -20,6 +19,7 @@ import { HarnessMark } from './HarnessMark';
 import { agentMenu } from './menu-model';
 import { useRenameRequest } from './rename';
 import { StatusMark } from './StatusMark';
+import { poseOfStatus } from './tile-pose';
 import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
 import { lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
@@ -136,7 +136,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           )
         )}
         <span className="calm-tile-foot">
-          <StatusMark status={face.status} />
+          <StatusMark status={face.status} character={{ harness: agent.harness, pose: sending ? 'handing-off' : poseOfStatus(face.status, agent) }} />
           {repo !== undefined && (
             // Outside every zone of its repo, the tile says which repo it works in.
             <span className="calm-tile-repo" data-testid="tile-repo" title={`Works in ${agent.repoRoot}`}>
@@ -172,13 +172,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           <span className="calm-tile-technical-text">{technicalLine(agent)}</span>
         </span>
         <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
-        {sending ? (
-          <span className="hybrid-tile-handoff">
-            <Character harness={agent.harness} pose="handing-off" label={agent.name} />
-          </span>
-        ) : (
-          <CommandFigure agent={agent} />
-        )}
+        <TileRobot agent={agent} sending={sending} />
       </div>
     </HoverCard>
   );

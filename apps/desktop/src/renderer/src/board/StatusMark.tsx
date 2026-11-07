@@ -1,7 +1,9 @@
 import { memo, type ReactNode } from 'react';
 import { HUMAN_STATUS_LABELS, type HumanStatus } from '@agent-board/daemon/human-status';
-import { Character, type CharacterPose } from './Character';
-import { useStatusLook, type StatusLook } from './status-look';
+import type { Harness } from '@agent-board/daemon/protocol';
+import type { CharacterPose } from './character-figures';
+import { useCharacterStyle } from './characters';
+import { TileCharacter } from './TileCharacter';
 
 /**
  * Each status's glyph on a 16 px grid. Only the two that want the user, Needs you and Problem, are filled; their marks
@@ -54,37 +56,19 @@ const GLYPHS: Record<HumanStatus, ReactNode> = {
   ),
 };
 
-/**
- * The pose the orange character strikes for each status: a hand raised, mid-stride, happy with a tick, dozing, timing
- * with a stopwatch, toppled over.
- */
-const STATUS_POSES: Record<HumanStatus, CharacterPose> = {
-  'needs-you': 'waiting',
-  working: 'running',
-  done: 'done',
-  paused: 'idle',
-  scheduled: 'on-command',
-  problem: 'failed',
-};
+/** The height of an agent's character in its status mark, in px. */
+const MARK_CHARACTER_HEIGHT = 22;
 
 /**
- * An agent's status as the Simplified design draws it: its glyph, or with Characters picked the orange character
- * acting it out, and always its word, so the status never rests on a shape or a colour alone. `look` overrides the
- * picked one.
+ * An agent's status as the Simplified design draws it: its glyph, or with `character` given and a style picked the
+ * agent's character acting it out, and always its word, so the status never rests on a shape or a colour alone.
  */
-export const StatusMark = memo(function StatusMark({ status, look }: { status: HumanStatus; look?: StatusLook }) {
-  const picked = useStatusLook();
-  const drawn = look ?? picked;
+export const StatusMark = memo(function StatusMark({ status, character }: { status: HumanStatus; character?: { harness: Harness; pose: CharacterPose } }) {
+  const style = useCharacterStyle();
+  const drawn = character !== undefined && style !== 'off' ? style : undefined;
   return (
-    <span className="status-mark" data-testid="status-mark" data-status={status} data-look={drawn}>
-      {drawn === 'characters' ? (
-        <span className="status-mark-character" aria-hidden="true">
-          {/* Claude's orange character for every agent, whatever its harness. */}
-          <Character harness="claude" pose={STATUS_POSES[status]} />
-        </span>
-      ) : (
-        <StatusGlyph status={status} className="status-mark-glyph" />
-      )}
+    <span className="status-mark" data-testid="status-mark" data-status={status} data-look={drawn ?? 'icons'}>
+      {drawn === undefined ? <StatusGlyph status={status} className="status-mark-glyph" /> : <TileCharacter {...character!} style={drawn} height={MARK_CHARACTER_HEIGHT} />}
       <span className="status-mark-word">{HUMAN_STATUS_LABELS[status]}</span>
     </span>
   );

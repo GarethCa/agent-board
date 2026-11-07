@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, CirclePlus, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Ticket, Type } from 'lucide-react';
+import { Brain, ChevronDown, Hand, ListTodo, MousePointer2, PenLine, Plus, Shapes, SquareDashed, SquareDashedMousePointer, SquareTerminal, StickyNote, Ticket, Type } from 'lucide-react';
 import { useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { GHOST_LABELS, TOOL_DRAG_MIN, ToolGhost, type ArmedTool } from '../board/ToolOverlay';
@@ -65,7 +65,7 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
       onPointerDown={(event) => drag.start('agent', event)}
       data-tour="new-agent"
     >
-      <span className="create-toolbar-agent-label">New agent</span>
+      <span className="create-toolbar-word">New agent</span>
     </Button>
   );
   // How a drag acts, the same under both designs.
@@ -106,10 +106,12 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
       <ToolButton label="Sticky note" icon={<StickyNote />} shortcut={keyText('make.note')} hint="Add a sticky note, or double-click the board" onClick={onSticky} />
       <ToolButton label="Text" icon={<Type />} shortcut={keyText('make.text')} hint="Add text, then click the board" pressed={tool === 'text'} onClick={() => toggle('text')} />
       <ShapeTool armed={tool === 'shape'} onTool={onTool} />
-      <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
-      <Menu entries={keepEntries({ onSteps, onMemory, onQueue })} align="end">
-        <ToolButton label="More to add" icon={<CirclePlus />} hint="Add steps, a memory or a queue" />
-      </Menu>
+      <div className="create-toolbar-add">
+        <ToolButton label="Zone" icon={<SquareDashedMousePointer />} shortcut={keyText('make.zone')} hint="Add a zone: drag out where it goes" pressed={tool === 'zone'} onClick={() => toggle('zone')} data-tour="add-zone" />
+        <Menu entries={keepEntries({ onSteps, onMemory, onQueue })} align="end">
+          <ToolButton label="More to add" className="create-toolbar-add-more" icon={<ChevronDown />} hint="Add steps, a memory or a queue" />
+        </Menu>
+      </div>
       <IslandSeparator />
       {newAgent}
       <Button
@@ -119,7 +121,9 @@ export function CreateToolbar({ mode, onMode, tool, onTool, onSticky, onSteps, o
         tooltip={<>Put a new shell on the board, or in a zone <Kbd>{keyText('make.shell')}</Kbd></>}
         onClick={() => toggle('shell')}
         onPointerDown={(event) => drag.start('shell', event)}
-      />
+      >
+        <span className="create-toolbar-word">Shell</span>
+      </Button>
       {ghost}
     </Island>
   );

@@ -13,7 +13,7 @@ export function AgentSidebarSetting() {
         value={agentSidebar}
         onChange={(value) => setViewSetting('agentSidebar', value)}
       />
-      <Hint>Agent sidebar: Shelves opens on an agent&apos;s own page, with the rest a tab away. Full is every section and control.</Hint>
+      <Hint>Agent sidebar: Shelves opens on an agent&apos;s own page, with the rest a tab away. Full is every section and control, and stays for one more release.</Hint>
     </>
   );
 }

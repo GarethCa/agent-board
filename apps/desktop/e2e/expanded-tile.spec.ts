@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from '@playwright/test';
 import { SPACING_GAPS } from '@agent-board/daemon/board-layout';
 import { rmSync } from 'node:fs';
 import { drag, run, settledBox, viewSettled } from './board-helpers.ts';
-import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones } from './agent-helpers.ts';
+import { agents, launch, sessionWindow, setClickOpens, SHELL_ENV, showDetails, spawnAgent, tile, tileAction, TURN_MS, zones, useFullSidebar } from './agent-helpers.ts';
 import { test, pickFolderNext, removeDataDir, runDesign, tempDataDir, browseForZone, newShell, placeWithTool, addEmptyZone } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { clickClosing } from './windows.ts';
@@ -168,6 +168,7 @@ test('a Claude agent tile expands in place with its details and live terminal, m
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await useFullSidebar(window);
     await setClickOpens(window, 'Expand in place');
     await addRepoZone(window, app, repo);
     await spawnAgent(window, 'monorepo', 'Pick a database');
@@ -256,7 +257,7 @@ test('a Claude agent tile expands in place with its details and live terminal, m
     await expect.poll(() => savedExpanded(window)).toContain(`"width":${width}`);
 
     // Collapse returns it to its tile; the terminal detaches and the session keeps running.
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await expect(tile(window)).toBeVisible();
     await expect(terminals(window)).toHaveCount(0);
@@ -321,7 +322,7 @@ test('a Claude agent tile expands in place with its details and live terminal, m
       await window.getByRole('button', { name: 'Close session window' }).click();
     }
     await expect(expandedTile(window)).toHaveCount(1);
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
 
     // A single click only selects the compact tile; the double-click expands it, the view following if it would open
@@ -376,7 +377,7 @@ test('a shell tile expands in place with its two panes, each taking input, and k
     await expect(panes).toHaveCount(2);
 
     // Collapsed, it attaches nothing; expanded again, both panes come back with what they had.
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(terminals(window)).toHaveCount(0);
     await expect(window.getByTestId('shell-tile-panes')).toHaveText('2 panes');
     await shellTile.dblclick();
@@ -572,7 +573,7 @@ test('an expanded tile pushes its neighbours clear, and they go back to exactly 
     // Only drawn there: what is stored is as it was.
     expect(await stored()).toBe(layout);
 
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await expect.poll(drawn).toEqual(before);
     expect(await stored()).toBe(layout);
@@ -589,7 +590,7 @@ test('an expanded tile pushes its neighbours clear, and they go back to exactly 
     await expect
       .poll(async () => (await storedShellPlaces(window)).find(([id]) => id === rightId)![1])
       .toMatchObject({ x: during[right!]!.x + 1, y: during[right!]!.y });
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await expect.poll(async () => (await drawn())[right!]).toMatchObject({ x: during[right!]!.x + 1, y: during[right!]!.y });
 
@@ -610,7 +611,7 @@ test('an expanded tile pushes its neighbours clear, and they go back to exactly 
     await window.mouse.move(pushed.x + pushed.width / 2, pushed.y + pushed.height / 2 + 120, { steps: 10 });
     await window.mouse.up();
     await expect.poll(stored).not.toBe(layout);
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     // Where it was dropped, below where it was pushed to: stored, and drawn there.
     const shellId = below.slice('shell:'.length);
@@ -662,7 +663,7 @@ test("an expanded tile in a zone grows the zone to hold it, rearranges the zone'
     }
     expect(await stored()).toBe(layout);
 
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await expect.poll(() => zoneRect(zone)).toEqual(before);
     await expect.poll(drawnTiles).toEqual(home);
@@ -722,7 +723,7 @@ for (const loose of [false, true]) {
         });
       expect(await stored()).toBe(layout);
 
-      await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+      await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
       await expect(expandedTile(window)).toHaveCount(0);
       await expect.poll(drawn).toEqual(home);
       expect(await stored()).toBe(layout);
@@ -765,7 +766,7 @@ test("Tidy with a tile expanded lays the zone out round its expanded size, and e
       const place = places.find(([each]) => each === id)!;
       expect(drawnAfter[index]!.x - (await zoneRect(zone)).x).toBe(place[1]);
     }
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await shellNode(window, ids[0]!).dblclick();
     await expect(expandedTile(window)).toHaveCount(1);
@@ -816,14 +817,14 @@ test("an expanded tile in a zone resized by its corner grows the zone and moves 
     expect(width).toBeGreaterThan(EXPANDED_WIDTH);
 
     // Collapsed and expanded again, it opens at the size it was let go at.
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     await shellNode(window, first).dblclick();
     await expect(expandedTile(window)).toHaveCount(1);
     expect(await boardWidthOf(window)).toBe(width);
 
     // And after a restart.
-    await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+    await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expandedTile(window)).toHaveCount(0);
     // Saved a moment after it changes.
     await expect.poll(() => savedSizes(window)).toContain(`"width":${width}`);
@@ -1365,7 +1366,7 @@ test('an expanded tile reshapes its zone round a crew frame: the frame keeps its
       expect(inside(layout.frame, layout.zone), 'the frame inside the zone').toBe(true);
       for (const [id, box] of Object.entries(layout.tiles)) expect(inside(box, layout.zone), `${id} inside the zone`).toBe(true);
       check(layout);
-      await expandedTile(window).getByRole('button', { name: 'Collapse' }).click();
+      await expandedTile(window).getByRole('button', { name: 'Collapse', exact: true }).click();
       await expect(expandedTile(window)).toHaveCount(0);
       expect(rounded(await crewLayout(window)), 'all of it back where it was').toBe(rounded(atRest));
     };

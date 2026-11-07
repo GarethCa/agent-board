@@ -222,7 +222,7 @@ test("a zone with no gate: Merge in the window's and the expanded tile's header,
       pullRequests: [{ repo: 'acme/app', number: 35, title: 'Tidy the docs', headRefName: agent!.branch, headRefOid: head, state: 'OPEN', isDraft: false, statusCheckRollup: [], author: 'octocat' }],
     });
     await expect(expanded.getByTestId('header-merge')).toBeVisible({ timeout: TURN_MS });
-    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse' }).click();
+    await window.getByTestId('expanded-tile').getByRole('button', { name: 'Collapse', exact: true }).click();
     await tile(window).dblclick();
     await expect(header(window).getByTestId('header-merge')).toBeVisible({ timeout: TURN_MS });
     await expect(header(window).getByTestId('header-open-pr')).toHaveCount(0);

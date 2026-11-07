@@ -65,7 +65,7 @@ test('an agent that needs permission shows its window controls at rest, inside t
     await card.getByRole('button', { name: 'Expand', exact: true }).click();
     const expanded = window.getByTestId('expanded-tile');
     await expect(expanded).toBeVisible();
-    await expanded.getByRole('button', { name: 'Collapse' }).click();
+    await expanded.getByRole('button', { name: 'Collapse', exact: true }).click();
     await expect(expanded).toBeHidden();
     await controlsAtRest(tile(window));
   } finally {

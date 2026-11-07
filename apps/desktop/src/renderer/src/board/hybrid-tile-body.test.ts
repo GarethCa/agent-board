@@ -16,6 +16,13 @@ function render(agent: Agent): string {
 const idle: Agent = { ...galleryAgent('waiting'), lastMessage: '…and that is why the retry never fired.', description: 'Fix the checkout flake' };
 
 describe("an agent tile's body", () => {
+  it('stands its character beside what it says, and aside for a row with a button of its own, which needs the width', () => {
+    expect(render(idle)).toContain('data-testid="tile-character"');
+    const untyped = render({ ...idle, untypedPrompt: 'Pick a database' });
+    expect(untyped).toContain('tile-untyped');
+    expect(untyped).not.toContain('data-testid="tile-character"');
+  });
+
   it('says what the agent is for, not its last message, when it waits', () => {
     const html = render(idle);
     expect(html).toContain('Fix the checkout flake');

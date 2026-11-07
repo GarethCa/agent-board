@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { readStamp } from './stamp.ts';
+import { readStamp, readTreeStamp } from './stamp.ts';
 import { readRecord } from '../gate-results/results.ts';
 
 const gate = join(import.meta.dirname, '..', 'check-local.sh');
@@ -97,6 +97,8 @@ it('passes a run whose e2e test passed only on a retry, names the test as flaky,
   expect(output).toContain('test:e2e --retries 2 --reporter list,json --update-snapshots none');
   expect(output).toMatch(/--filter @agent-board\/desktop test:visual .*--retries 2 --reporter list,json --update-snapshots none/);
   expect(readStamp(stamps, sha)).toBeInstanceOf(Date);
+  // The pass is recorded against the tree too, with the commit that ran it, so a squash merge of the same code counts.
+  expect(readTreeStamp(stamps, tree)).toMatchObject({ commit: sha, at: readStamp(stamps, sha) });
   // The unit run writes a JSON report for the result record, which says every step passed.
   expect(output).toContain('test --reporter=default --reporter=json --outputFile.json=');
   expect(readRecord(join(stamps, 'results'), tree)?.steps).toEqual(Object.fromEntries(['preflight', 'lint', 'typecheck', 'test', 'build', 'e2e', 'visual', 'markdownlint', 'knip'].map((step) => [step, { outcome: 'pass' }])));
@@ -115,6 +117,7 @@ it('writes no stamp from a run with a failed step, but a result record of what f
   expect(code).toBe(1);
   expect(output).toMatch(/\| `lint` \| FAIL \|/);
   expect(readdirSync(stamps)).toEqual(['results']);
+  expect(readTreeStamp(stamps, tree)).toBeUndefined();
   expect(readRecord(join(stamps, 'results'), tree)?.steps).toMatchObject({ lint: { outcome: 'FAIL' }, typecheck: { outcome: 'pass' }, test: { outcome: 'not run' }, e2e: { outcome: 'not run' } });
 });
 

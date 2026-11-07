@@ -40,6 +40,26 @@ describe('shell sessions', () => {
     expect(sessionRow(dataDir, session.id)).toMatchObject({ harness: null, ended_at: null });
   });
 
+  it('tells a connection attached for its stream only its output and that a session ended', async () => {
+    const { daemon, client, recorder } = await daemonWithClient();
+    const stream = await connectTestClient(daemon);
+    const streamed = recordEvents(stream);
+    const session = await client.call('session.createShell', SIZE);
+    await stream.call('session.attach', { sessionId: session.id, streamOnly: true });
+    await client.call('session.attach', { sessionId: session.id });
+
+    await client.call('session.write', { sessionId: session.id, data: 'echo out-$((40 + 2))\r' });
+    await streamed.waitForText(session.id, 'out-42');
+    await client.call('settings.set', { claudePath: '/nowhere/claude' });
+    await vi.waitFor(() => expect(recorder.events.map((event) => event.type)).toContain('settings.updated'));
+    await client.call('session.kill', { sessionId: session.id });
+    await vi.waitFor(() => expect(streamed.events.some(isExited)).toBe(true));
+
+    const heard = streamed.events.map((event) => event.type);
+    expect(heard).toContain('session.exited');
+    expect(heard).not.toContain('settings.updated');
+  });
+
   it('starts in the given directory', async () => {
     const { client, recorder } = await daemonWithClient();
     const cwd = tempDataDir();

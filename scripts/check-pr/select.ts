@@ -38,6 +38,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
   { tests: ['scripts/release-public/leak-rules.test.ts'], globs: 'always', why: 'the release leak rules' },
   { tests: ['packages/daemon/src/import-meta-glob.test.ts'], globs: ['{apps,packages}/*/src/**/*.{ts,tsx}'], why: 'source files' },
   { tests: ['scripts/worker-hooks/status-hook.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker status hook it runs' },
+  { tests: ['scripts/gate-stamp/stamp.test.ts'], globs: ['scripts/**/*.{ts,sh}'], why: 'the scripts it scans for a writer of green stamps' },
 ];
 
 /** Files whose change falls back to the full gate. */
@@ -128,6 +129,7 @@ export const SMOKE_SPECS = ['acceptance.spec.ts', 'app.spec.ts', 'tiles.spec.ts'
 
 /** Source globs to the specs that cover them. Every glob that matches a file adds its specs. */
 export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly string[]]> = [
+  ['apps/desktop/src/renderer/src/session/terminal-{gpu,sharpness}*', ['gpu-terminals.spec.ts', 'expanded-tile.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*Zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*flow-edge*', ['flow-edges.spec.ts']],

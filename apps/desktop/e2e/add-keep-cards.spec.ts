@@ -46,3 +46,29 @@ for (const design of ['classic', 'simplified'] as const) {
     }
   }
 }
+
+// Classic's toolbar with Shell's word and More to add is no wider than it was before More to add (512.1 px; 513.2 px
+// with the button on its own), at a wide window and at a narrow one, with the chevron joined to Zone.
+test('classic: the toolbar keeps Shell\u2019s word and is no wider than before, with More to add joined to Zone', async () => {
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, SHELL_ENV, [], { design: 'classic' });
+  try {
+    const toolbar = window.getByRole('toolbar', { name: 'Create' });
+    await expect(toolbar.getByRole('button', { name: 'New shell' })).toHaveText('Shell');
+    for (const width of [1440, 960]) {
+      await window.setViewportSize({ width, height: 800 });
+      await expect.poll(async () => (await toolbar.boundingBox())!.width).toBeLessThanOrEqual(513.2);
+    }
+    // Below 960 px both words go, so the toolbar clears the Needs-you island, as it did before.
+    await window.setViewportSize({ width: 900, height: 800 });
+    await expect.poll(async () => (await toolbar.boundingBox())!.width).toBeLessThanOrEqual(445);
+    await window.setViewportSize({ width: 1440, height: 800 });
+    const zone = (await toolbar.getByRole('button', { name: 'Zone' }).boundingBox())!;
+    const more = (await toolbar.getByRole('button', { name: 'More to add' }).boundingBox())!;
+    expect(more.x - (zone.x + zone.width)).toBeLessThanOrEqual(1);
+    expect(more.width).toBeGreaterThanOrEqual(16);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});

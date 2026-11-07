@@ -4111,7 +4111,7 @@ export interface DaemonMethods {
    * `session.output` events. Attaching again sends a fresh snapshot. A client that falls too far behind skips the
    * output it could not take and is sent a fresh snapshot once it catches up.
    */
-  'session.attach': { params: SessionRef; result: null };
+  'session.attach': { params: SessionRef & { streamOnly?: boolean }; result: null };
   /** Stops streaming the session to this client. The session keeps running. */
   'session.detach': { params: SessionRef; result: null };
   'session.write': { params: SessionRef & { data: string }; result: null };

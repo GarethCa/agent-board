@@ -16,6 +16,8 @@ import './demo/demo.css';
 import { App } from './App';
 import { DaemonGate } from './DaemonStatus';
 import { Gallery } from './Gallery';
+import { CharacterChangeDemo, CharacterStylesGallery } from './board/CharacterGallery';
+import { CharactersSetting } from './chrome/CharactersSetting';
 import { NeedsYouStepsGallery } from './inbox/NeedsYouStepsGallery';
 import { QueueHandOnGallery } from './board/items/QueueGallery';
 import { ShelvesGallery } from './session/ShelvesGallery';
@@ -109,6 +111,13 @@ createRoot(root).render(
           // A page of its own: adding to the dev gallery moves its scrollbar, and so every shot that reaches the page's edge.
           <div className="gallery">
             <QueueHandOnGallery />
+          </div>
+        ) : location.hash === '#gallery-characters' ? (
+          // A page of its own too: every pose in every style, and the setting that picks one.
+          <div className="gallery">
+            <CharacterStylesGallery />
+            <CharactersSetting />
+            <CharacterChangeDemo />
           </div>
         ) : location.hash === '#gallery-agent-sidebar' ? (
           // A page of its own too, as its frames are many and tall.

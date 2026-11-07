@@ -15,7 +15,7 @@ const HITCH_MS = 50;
 /** Installs the recorders in the window: the gaps between frames and the long tasks, while `recording`. */
 export async function installRecorders(window: Page): Promise<void> {
   await window.evaluate(() => {
-    const bench = { recording: false, since: 0, gaps: [] as number[], frameTimes: [] as number[], longTasks: [] as number[], timings: [] as { name: string; startTime: number; duration: number; detail: unknown }[] };
+    const bench = { recording: false, since: 0, gaps: [] as number[], frameTimes: [] as number[], longTasks: [] as number[], parked: undefined as { count: number; bytes: number } | undefined, timings: [] as { name: string; startTime: number; duration: number; detail: unknown }[] };
     (window as unknown as { bench: typeof bench }).bench = bench;
     let last = performance.now();
     const tick = (now: number) => {
@@ -33,6 +33,7 @@ export async function installRecorders(window: Page): Promise<void> {
     // TerminalPane's User Timing measures (`terminal.*`): it clears each as it writes it, so only an observer hears them.
     new PerformanceObserver((list) => {
       for (const { name, startTime, duration, detail } of list.getEntries() as PerformanceMeasure[]) {
+        if (name === 'terminal.parked') bench.parked = detail as typeof bench.parked;
         if (name.startsWith('terminal.')) bench.timings.push({ name, startTime, duration, detail });
       }
     }).observe({ type: 'measure' });
@@ -103,8 +104,16 @@ export interface Phase {
   mostFillFrames: number;
   /** The time spent making WebGL renderers on the main thread, all terminals together. */
   gpuMs: number;
-  /** How many times a terminal resized its session, each redrawing the agent's screen. */
+  /** The time spent redrawing WebGL terminals for a new zoom on the main thread, all terminals together, and how many redraws. */
+  rasterMs: number;
+  rasters: number;
+  /** How many times a terminal already attached resized its session; a new terminal's first size isn't among them. */
   resizes: number;
+  /** The terminals parked off screen, as of the last that left its pane, and what they hold by the budget's estimate. */
+  parked: number;
+  parkedMb: number;
+  /** Terminals let go during the phase, for the budget or because their session ended. */
+  letGo: number;
   /** The longest wait for a snapshot to arrive after attaching: attach to parsed, less the fill. */
   slowestWaitMs: number;
   snapshotKb: number;
@@ -113,6 +122,8 @@ export interface Phase {
   heapMb: number;
   rendererMb: number;
   gpuMb: number;
+  /** The app's main process's working set: a kept terminal holds a connection to the daemon there. */
+  mainMb: number;
   /**
    * CPU over the phase, as a share of one core (100 is one core busy throughout): the board's renderer, the app's main
    * process, the GPU process and the daemon. And the daemon's resident memory after it, MB.
@@ -139,7 +150,7 @@ function percentiles(gaps: number[]) {
  * The working set of the board's renderer and of the GPU process, MB, and their CPU and the main process's since the
  * last call (Electron's own reading, a share of one core).
  */
-async function processMetrics(app: ElectronApplication): Promise<{ rendererMb: number; gpuMb: number; rendererCpu: number; mainCpu: number; gpuCpu: number }> {
+export async function processMetrics(app: ElectronApplication): Promise<{ rendererMb: number; gpuMb: number; mainMb: number; rendererCpu: number; mainCpu: number; gpuCpu: number }> {
   return app.evaluate(({ app: electronApp, BrowserWindow }) => {
     const pid = BrowserWindow.getAllWindows()[0]!.webContents.getOSProcessId();
     const metrics = electronApp.getAppMetrics();
@@ -151,6 +162,7 @@ async function processMetrics(app: ElectronApplication): Promise<{ rendererMb: n
     return {
       rendererMb: mb(renderer?.memory.workingSetSize),
       gpuMb: mb(gpu?.memory.workingSetSize),
+      mainMb: mb(main?.memory.workingSetSize),
       rendererCpu: cpu(renderer?.cpu.percentCPUUsage),
       mainCpu: cpu(main?.cpu.percentCPUUsage),
       gpuCpu: cpu(gpu?.cpu.percentCPUUsage),
@@ -214,7 +226,7 @@ export async function phase(app: ElectronApplication, window: Page, cdp: CDPSess
   const daemonAfter = processUsage(daemonPid);
   const seconds = (performance.now() - startedAt) / 1000;
   const seen = await window.evaluate(() => {
-    const bench = (window as unknown as { bench: { recording: boolean; since: number; gaps: number[]; frameTimes: number[]; longTasks: number[]; timings: { name: string; startTime: number; duration: number; detail: unknown }[] } }).bench;
+    const bench = (window as unknown as { bench: { recording: boolean; since: number; gaps: number[]; frameTimes: number[]; longTasks: number[]; parked?: { count: number; bytes: number }; timings: { name: string; startTime: number; duration: number; detail: unknown }[] } }).bench;
     bench.recording = false;
     const renders = (window as unknown as { benchRenders?: { counting: boolean; commits: number; byComponent: Record<string, number> } }).benchRenders ?? { counting: false, commits: 0, byComponent: {} };
     renders.counting = false;
@@ -230,7 +242,11 @@ export async function phase(app: ElectronApplication, window: Page, cdp: CDPSess
     }));
     return {
       gpuMs: named('terminal.gpu').map((each) => each.duration),
+      rasterMs: named('terminal.raster').map((each) => each.duration),
       resizes: named('terminal.resize').length,
+      // The parked terminals, as of the last that left its pane, and how many the phase let go.
+      parked: bench.parked ?? { count: 0, bytes: 0 },
+      letGo: named('terminal.letGo').length,
       // The wait before each terminal's snapshot arrived: attach to parsed, less the fill.
       waitMs: snapshots.map((snapshot) => {
         const id = (snapshot.detail as { sessionId: string }).sessionId;
@@ -265,7 +281,12 @@ export async function phase(app: ElectronApplication, window: Page, cdp: CDPSess
     slowestSnapshotMs: Math.round(Math.max(0, ...seen.snapshotMs)),
     slowestFillMs: Math.round(Math.max(0, ...seen.fillMs)),
     gpuMs: Math.round(seen.gpuMs.reduce((sum, each) => sum + each, 0)),
+    rasterMs: Math.round(seen.rasterMs.reduce((sum, each) => sum + each, 0)),
+    rasters: seen.rasterMs.length,
     resizes: seen.resizes,
+    parked: seen.parked.count,
+    parkedMb: Math.round(seen.parked.bytes / 1e6),
+    letGo: seen.letGo,
     slowestWaitMs: Math.round(Math.max(0, ...seen.waitMs)),
     mostFillFrames: Math.max(0, ...seen.fillFrames),
     snapshotKb: Math.round(seen.snapshotBytes / 1024),

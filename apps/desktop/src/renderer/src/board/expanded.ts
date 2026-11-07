@@ -20,11 +20,14 @@ export const EXPANDED_SIZE = { width: 960, height: 600 };
 export const EXPANDED_MIN_SIZE = { width: 640, height: 360 };
 
 /**
- * Narrower than this, an expanded tile opens its agent's shelves on their rail, whatever every other window and tile has
+ * At this width or narrower, an expanded tile opens its agent's shelves on their rail, whatever every other window and tile has
  * them as: the shelves' default width would leave a terminal under about 60 columns. It decides only how the tile opens:
  * opening or closing the shelves there is the user's, and is every window's as always.
  */
-export const NARROW_TILE_WIDTH = 800;
+const NARROW_TILE_WIDTH = 800;
+
+/** Whether a tile this wide (in board pixels) is narrow enough to open its shelves on the rail. */
+export const isNarrowTile = (width: number): boolean => width <= NARROW_TILE_WIDTH;
 
 /** The biggest an expanded tile can be resized to: about a large screen's worth at full zoom. */
 export const EXPANDED_MAX_SIZE = { width: 3200, height: 2000 };

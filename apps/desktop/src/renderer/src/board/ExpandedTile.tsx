@@ -13,6 +13,7 @@ import { SessionBody, type WindowContent } from '../session/SessionBody';
 import { SessionDetails } from '../session/SessionDetails';
 import { SessionName } from '../session/SessionName';
 import { useAgentSidebar } from '../session/use-agent-sidebar';
+import { useViewSettingsLoaded } from './view-settings';
 import { useSidebarCollapsed } from '../session/use-sidebar-collapsed';
 import { panesLabel } from '../session/panes';
 import { humanStatus } from '@agent-board/daemon/human-status';
@@ -20,7 +21,7 @@ import { useSimplified } from '../design';
 import { agentPill, STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
 import { Button, Chip, IconButton, StatusPill, Tag } from '../ui';
-import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, NARROW_TILE_WIDTH, resizeAllowed, type ExpandedParent } from './expanded';
+import { EXPANDED_MAX_SIZE, EXPANDED_MIN_SIZE, EXPANDED_SIZE, isNarrowTile, resizeAllowed, type ExpandedParent } from './expanded';
 import { HarnessMark } from './HarnessMark';
 import { CommandFigure } from './CommandFigure';
 import { PullRequestChip } from './HybridTile';
@@ -43,7 +44,12 @@ const EDGES: readonly ControlPosition[] = ['top', 'right', 'bottom', 'left'];
  * shelves, else the details strip) on the LEFT and the live terminal (or a shell's panes) taking input. An external
  * session has no terminal here, only its details. Its corners and edges resize it, what it would cover moving as it goes.
  */
-export function ExpandedTile({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
+export function ExpandedTile(props: TileProps & { parent: ExpandedParent }) {
+  // Not drawn before the saved settings are read: a Classic user who picked Full would see the shelves first.
+  return useViewSettingsLoaded() ? <ExpandedTileShown {...props} /> : null;
+}
+
+function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedParent }) {
   const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
@@ -62,7 +68,7 @@ export function ExpandedTile({ id, tile, parent }: TileProps & { parent: Expande
   const root = useRef<HTMLElement>(null);
   // A tile too narrow for the shelves beside a terminal opens them on the rail, for itself alone: the choice every window
   // and tile shares is not changed by it.
-  const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => (root.current?.offsetWidth ?? NARROW_TILE_WIDTH) < NARROW_TILE_WIDTH);
+  const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => isNarrowTile(root.current?.offsetWidth ?? EXPANDED_SIZE.width));
   // Where in the header the shelves' window controls go: the state button and ⋯, which the strip holds otherwise.
   const [controlsSlot, setControlsSlot] = useState<HTMLElement | null>(null);
   const popOut = agent ? () => popOutAgent(agent) : shell ? () => popOutShell(shell) : undefined;

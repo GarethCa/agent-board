@@ -72,6 +72,8 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   columns and rows are right at any zoom. Its mouse mapping divides the pointer's offset from the scaled on-screen box
   by unscaled cells, so `TerminalPane` wraps xterm's mouse service (`session/zoomed-mouse.ts`) to rescale each pointer
   about the terminal's origin by on-screen width ÷ `offsetWidth` first. Selection and mouse reports are right at any zoom.
+  A WebGL terminal redraws its canvas for the zoom once it settles, leaving its CSS cells and so its columns as they were
+  (`session/terminal-sharpness.ts`).
 
 **Update**:
 

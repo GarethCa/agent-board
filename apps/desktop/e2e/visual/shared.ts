@@ -59,10 +59,10 @@ export async function pinChatTimes(page: Page) {
     while (walker.nextNode()) {
       const node = walker.currentNode as Text;
       node.data = node.data.replace(/\bwithin \d+ s\b/, 'within 20 s');
+      // The fake agent echoes a sender mark, whose ref is the sender's session id: in the chat, and in the sidebar's last message.
+      node.data = node.data.replace(/\bagent:[0-9a-f]{8}\b/g, 'agent:00000000');
       if (node.parentElement?.closest('.chat-frame') == null) continue;
       node.data = node.data.replace(/\b(?:\d+h )?(?:\d+m )?\d+(?:\.\d)?s\b/g, '4.1s');
-      // The fake agent echoes a sender mark, whose ref is the sender's session id.
-      node.data = node.data.replace(/\bagent:[0-9a-f]{8}\b/g, 'agent:00000000');
     }
     // The clock times down the side of the Simplified design's Timeline rail: each turn's first, as a run that crosses a
     // minute shows another (the time column keeps its width without them).

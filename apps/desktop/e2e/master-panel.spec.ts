@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
+import { agents, launch, listFinishedTurns, sessionWindow, showDetails, spawnAgent, tile, TURN_MS, useFullSidebar } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { crowdedPanel, LONG, PATH } from './master-helpers.ts';
@@ -158,6 +158,7 @@ test('every agent’s details strip, which shares nothing with the Captain’s p
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, env);
   try {
+    await useFullSidebar(window);
     await listFinishedTurns(window);
     await pickFolderNext(app, repo);
     await browseForZone(window);

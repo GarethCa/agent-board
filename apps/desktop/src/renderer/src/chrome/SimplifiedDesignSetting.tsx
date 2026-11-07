@@ -1,14 +1,12 @@
 import { useSimplified } from '../design';
 import { useTechnicalDetails } from '../technical';
 import { Fieldset, Hint, Switch } from '../ui';
-import { StatusLookSetting } from './StatusLookSetting';
 
 type OnError = (action: string) => (error: unknown) => void;
 
 /**
  * The "Simplified design" setting: Classic, today's design, unless it is turned on. Every window switches at once.
- * Under it, Show technical details adds the technical layer back (also in View › Show Technical Details), and each
- * agent's status is shown as icons and words or as characters.
+ * Under it, Show technical details adds the technical layer back (also in View › Show Technical Details).
  */
 export function SimplifiedDesignSetting({ onError }: { onError: OnError }) {
   const simplified = useSimplified();
@@ -25,7 +23,6 @@ export function SimplifiedDesignSetting({ onError }: { onError: OnError }) {
         <>
           <Switch label="Show technical details" checked={technical} onChange={(event) => changeTechnical(event.target.checked)} />
           <Hint>Adds branches, models, pull requests, raw states, terminals and drawing tools back, without moving anything else.</Hint>
-          <StatusLookSetting />
         </>
       )}
     </Fieldset>

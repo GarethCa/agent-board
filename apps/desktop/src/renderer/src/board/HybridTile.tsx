@@ -31,8 +31,10 @@ import { clockBadge } from './schedule';
 import { commandLine } from './command-row';
 import { ArrowUpRight, BellOff, Brain, Check, ClipboardList, Clock, Coins, Dot, Expand, FileCheck, FileText, Folder, GitBranch, Hammer, Network, Pause, PenLine, Play, RefreshCw, RotateCcw, Search, ShieldCheck, SquareArrowOutUpRight, Timer, TriangleAlert, X } from 'lucide-react';
 import { Button, Chip, EditableName, FlowPill, HoverCard, RenameButton, Spinner, StatusPill, Tag, useRenaming, useSlowClickRename } from '../ui';
-import { Character } from './Character';
-import { CommandFigure } from './CommandFigure';
+import { useCharacterStyle } from './characters';
+import { TileCharacter } from './TileCharacter';
+import { poseOfPill } from './tile-pose';
+import { TileRobot } from './CommandFigure';
 import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { HandoffsContext } from './flow-edges';
@@ -64,6 +66,9 @@ import { useSimplified } from '../design';
 import { quickAskOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
 import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
+
+/** How tall an agent's character stands at the leading edge of its tile's body, in px. */
+const TILE_CHARACTER_HEIGHT = 34;
 
 /**
  * Hybrid (v1): a calm white tile with a soft shadow, sitting straight. An agent's tile shows its name, harness,
@@ -140,10 +145,15 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
   // Seen only means something while it still waits: an ended or stopped agent shows its own state.
   const seen = agent.seen && waitsForYou(agent, shows);
   const state = sending ? 'handing-off' : agent.state;
+  const pillFace = sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, shows, TILE_STATE_LABELS);
+  const pickedStyle = useCharacterStyle();
+  // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
+  const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null;
+  const characterStyle = rowWithButton ? 'off' : pickedStyle;
   const pill = receiving ? (
     <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
   ) : (
-    <StatusPill {...(sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, shows, TILE_STATE_LABELS))} {...(agent.shellHarness === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
+    <StatusPill {...pillFace} {...(agent.shellHarness === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
   );
   // Badges that don't fit in its one line fold into the "+N", the lowest ranked first, and fold again whenever what the footer
   // says changes.
@@ -361,79 +371,84 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           trusted by this zone&apos;s setting
         </span>
       )}
-      {agent.undelivered.length > 0 ? (
-        // Before all else: its sender heard it was queued, and nothing else says it never went.
-        <UndeliveredRow
-          fitted={fitted}
-          items={agent.undelivered}
-          onResend={() => resendUndelivered(agent.sessionId)}
-          onClear={() => clearUndelivered(agent.sessionId)}
-        />
-      ) : agent.trustFolder !== null ? (
-        // Before its startup lines: they show the trust screen's last line, which this answers.
-        <TrustRow fitted={fitted} folder={agent.trustFolder} onTrust={() => trustFolder(agent.sessionId)} />
-      ) : startup !== null ? (
-        <>
-          {/* Starting, only the step it is on, its worktree in the tooltip; a failed start keeps the worktree step above the one that failed. */}
-          <StartSteps lines={starting ? agentStartLines(agent).slice(-1) : agentStartLines(agent)} title={starting ? agent.worktree : undefined} />
-          <StartOutput output={startup.output} failed={startup.failed} />
-        </>
-      ) : agent.untypedPrompt !== null ? (
-        <UntypedRow fitted={fitted} prompt={agent.untypedPrompt} onSend={() => typeFirstPrompt(agent.sessionId)} />
-      ) : // Before what it asks: the answer is what sits unsent at its prompt.
-      agent.unsent !== null ? (
-        <UnsentRow
-          fitted={fitted}
-          what={agent.unsent}
-          asked={ask?.text}
-          onSend={() => sendUnsent(agent.sessionId)}
-          onClear={() => clearUnsent(agent.sessionId)}
-        />
-      ) : ask !== undefined ? (
-        <>
-          {quick !== undefined && (
-            <span className="quick-ask-row">
-              <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+      <div className="hybrid-tile-said" data-character={characterStyle === 'off' ? undefined : characterStyle}>
+        {characterStyle !== 'off' && <TileCharacter harness={agent.harness} pose={poseOfPill(pillFace.state)} style={characterStyle} height={TILE_CHARACTER_HEIGHT} />}
+        <div className="hybrid-tile-said-text">
+          {agent.undelivered.length > 0 ? (
+            // Before all else: its sender heard it was queued, and nothing else says it never went.
+            <UndeliveredRow
+              fitted={fitted}
+              items={agent.undelivered}
+              onResend={() => resendUndelivered(agent.sessionId)}
+              onClear={() => clearUndelivered(agent.sessionId)}
+            />
+          ) : agent.trustFolder !== null ? (
+            // Before its startup lines: they show the trust screen's last line, which this answers.
+            <TrustRow fitted={fitted} folder={agent.trustFolder} onTrust={() => trustFolder(agent.sessionId)} />
+          ) : startup !== null ? (
+            <>
+              {/* Starting, only the step it is on, its worktree in the tooltip; a failed start keeps the worktree step above the one that failed. */}
+              <StartSteps lines={starting ? agentStartLines(agent).slice(-1) : agentStartLines(agent)} title={starting ? agent.worktree : undefined} />
+              <StartOutput output={startup.output} failed={startup.failed} />
+            </>
+          ) : agent.untypedPrompt !== null ? (
+            <UntypedRow fitted={fitted} prompt={agent.untypedPrompt} onSend={() => typeFirstPrompt(agent.sessionId)} />
+          ) : // Before what it asks: the answer is what sits unsent at its prompt.
+          agent.unsent !== null ? (
+            <UnsentRow
+              fitted={fitted}
+              what={agent.unsent}
+              asked={ask?.text}
+              onSend={() => sendUnsent(agent.sessionId)}
+              onClear={() => clearUnsent(agent.sessionId)}
+            />
+          ) : ask !== undefined ? (
+            <>
+              {quick !== undefined && (
+                <span className="quick-ask-row">
+                  <TileQuickAsk sessionId={agent.sessionId} name={agent.name} ask={quick} />
+                </span>
+              )}
+              <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" data-question={ask.question} title={ask.title ?? ask.text}>
+                <span className="hybrid-tile-text">
+                  {ask.tool !== undefined && <strong>{ask.tool} </strong>}
+                  {ask.text}
+                </span>
+              </span>
+            </>
+          ) : agent.flag !== null ? (
+            // Its flag: to the user, the needs-you orange; to its orchestrator, the crew's violet.
+            <span ref={fitted} className="hybrid-tile-body hybrid-tile-flag" data-testid="tile-flag" data-to={agent.flag.to} title={agent.flag.reason}>
+              <span className="hybrid-tile-text">
+                {agent.flag.to === 'orchestrator' ? `⚑ to orchestrator: ${agent.flag.reason}` : `⚑ ${agent.flag.reason}`}
+              </span>
+            </span>
+          ) : agent.notice !== null ? (
+            <span ref={fitted} className="hybrid-tile-body hybrid-tile-notice" role="note" title={agent.notice}>
+              <span className="hybrid-tile-text">{agent.notice}</span>
+            </span>
+          ) : (
+            <span
+              ref={fitted}
+              className="hybrid-tile-body hybrid-tile-description"
+              data-testid="tile-description"
+              data-empty={(agent.status === null && agent.description === '') || undefined}
+              title={lastMessage !== undefined ? undefined : agent.status === null ? agent.description : `${statusLine(agent.status)}\n\nTask: ${agent.description}`}
+            >
+              <span className="hybrid-tile-text">{agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}</span>
             </span>
           )}
-          <span ref={fitted} className="hybrid-tile-body hybrid-tile-ask" data-testid="tile-ask" data-question={ask.question} title={ask.title ?? ask.text}>
-            <span className="hybrid-tile-text">
-              {ask.tool !== undefined && <strong>{ask.tool} </strong>}
-              {ask.text}
+          {/* A paused tile says who paused it instead: one line under the body, which yields to the body's lines. */}
+          {/* Not on a start, failed either: its footer is Retry and Delete, and nothing there yields to give it room. */}
+          {ask === undefined && agent.notice === null && agent.status?.setBy != null && agent.hibernated === null && startup === null && (
+            <span className="hybrid-tile-byline" data-testid="tile-set-by" data-yields="">
+              set by ◎ {agent.status.setBy}
             </span>
-          </span>
-        </>
-      ) : agent.flag !== null ? (
-        // Its flag: to the user, the needs-you orange; to its orchestrator, the crew's violet.
-        <span ref={fitted} className="hybrid-tile-body hybrid-tile-flag" data-testid="tile-flag" data-to={agent.flag.to} title={agent.flag.reason}>
-          <span className="hybrid-tile-text">
-            {agent.flag.to === 'orchestrator' ? `⚑ to orchestrator: ${agent.flag.reason}` : `⚑ ${agent.flag.reason}`}
-          </span>
-        </span>
-      ) : agent.notice !== null ? (
-        <span ref={fitted} className="hybrid-tile-body hybrid-tile-notice" role="note" title={agent.notice}>
-          <span className="hybrid-tile-text">{agent.notice}</span>
-        </span>
-      ) : (
-        <span
-          ref={fitted}
-          className="hybrid-tile-body hybrid-tile-description"
-          data-testid="tile-description"
-          data-empty={(agent.status === null && agent.description === '') || undefined}
-          title={lastMessage !== undefined ? undefined : agent.status === null ? agent.description : `${statusLine(agent.status)}\n\nTask: ${agent.description}`}
-        >
-          {agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}
-        </span>
-      )}
-      {/* A paused tile says who paused it instead: one line under the body, which yields to the body's lines. */}
-      {/* Not on a start, failed either: its footer is Retry and Delete, and nothing there yields to give it room. */}
-      {ask === undefined && agent.notice === null && agent.status?.setBy != null && agent.hibernated === null && startup === null && (
-        <span className="hybrid-tile-byline" data-testid="tile-set-by" data-yields="">
-          set by ◎ {agent.status.setBy}
-        </span>
-      )}
-      {agent.hibernated !== null && <PausedLine hibernated={agent.hibernated} />}
-      {agent.state === 'on-command' && <CommandRow agent={agent} />}
+          )}
+          {agent.hibernated !== null && <PausedLine hibernated={agent.hibernated} />}
+          {agent.state === 'on-command' && <CommandRow agent={agent} />}
+        </div>
+      </div>
       {startup?.failed === true ? (
         <StartFailedActions onRetry={() => retryAgentStart(agent.sessionId)} onDelete={() => deleteAgent(agent.sessionId)} />
       ) : (
@@ -525,13 +540,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs }: {
           </span>
       )}
       <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
-      {sending && (
-        // Its robot, handing its payload on, perched at the top left (FlowRules).
-        <span className="hybrid-tile-handoff">
-          <Character harness={agent.harness} pose="handing-off" label={agent.name} />
-        </span>
-      )}
-      {!sending && <CommandFigure agent={agent} />}
+      <TileRobot agent={agent} sending={sending} />
     </div>
     </HoverCard>
   );

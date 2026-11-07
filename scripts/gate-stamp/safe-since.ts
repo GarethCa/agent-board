@@ -5,7 +5,7 @@
  * watch, and it is small (or only tests and docs).
  */
 import { execFileSync } from 'node:child_process';
-import { readStamp } from './stamp.ts';
+import { readPass } from './stamp.ts';
 
 /** A follow-up of more changed lines than this, in files that are not tests or docs, runs the full gate. */
 export const SAFE_MAX_CHANGED_LINES = 20;
@@ -95,28 +95,32 @@ export interface Reuse {
   /** The nearest stamped ancestor and when it passed. */
   ancestor: string;
   stampedAt: Date;
+  /** The commit that ran the gate when it was not `ancestor` itself but another commit of the same tree. */
+  sameTreeAs: string | undefined;
   /** How many commits `ancestor` is behind `sha`. */
   behind: number;
   verdict: SafeVerdict;
 }
 
 /**
- * The nearest ancestor of `sha` (not `sha` itself) whose stamp is `fresh`, with the verdict on the commits since.
- * Undefined when none is within MAX_STAMP_DISTANCE commits. Stamps that are not fresh are walked past: an older
- * ancestor with a fresh stamp still counts.
+ * The nearest ancestor of `sha` (not `sha` itself) whose pass is `fresh`, with the verdict on the commits since. An
+ * ancestor passed if it has a stamp or its tree has one (the gate ran on another commit of the same code). Undefined
+ * when none is within MAX_STAMP_DISTANCE commits. Passes that are not fresh are walked past: an older ancestor with a
+ * fresh stamp still counts.
  */
 export function findReusableStamp(repo: string, sha: string, stampDir: string, fresh: (stampedAt: Date) => boolean = () => true): Reuse | undefined {
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] });
-  let history: string[];
+  let history: string[][];
   try {
-    history = git('rev-list', `--max-count=${MAX_STAMP_DISTANCE + 1}`, sha).split('\n').filter(Boolean);
+    history = git('log', `--max-count=${MAX_STAMP_DISTANCE + 1}`, '--format=%H %T', sha).split('\n').filter(Boolean).map((line) => line.split(' '));
   } catch {
     return undefined;
   }
-  for (const [behind, ancestor] of history.entries()) {
-    if (behind === 0) continue;
-    const stampedAt = readStamp(stampDir, ancestor);
-    if (stampedAt === undefined || !fresh(stampedAt)) continue;
+  for (const [behind, [ancestor, tree]] of history.entries()) {
+    if (behind === 0 || ancestor === undefined) continue;
+    const pass = readPass(stampDir, ancestor, tree);
+    if (pass === undefined || !fresh(pass.at)) continue;
+    const stampedAt = pass.at;
     // A merge commit's diff against the stamp covers everything it brought in, so the range diff is the honest measure.
     let verdict: SafeVerdict;
     try {
@@ -128,7 +132,7 @@ export function findReusableStamp(repo: string, sha: string, stampDir: string, f
     } catch {
       verdict = { safe: false, reason: `git could not diff ${ancestor.slice(0, 7)}..${sha.slice(0, 7)}` };
     }
-    return { ancestor, stampedAt, behind, verdict };
+    return { ancestor, stampedAt, sameTreeAs: pass.via === 'tree' ? pass.commit : undefined, behind, verdict };
   }
   return undefined;
 }
