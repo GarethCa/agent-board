@@ -343,7 +343,7 @@ export function SessionBody({
             onOpenSurface={panes && ((surface) => panes.open(surface))}
             onOpenWeb={panes?.openWeb ?? openLink}
           />
-          {!detailsCollapsed && <DetailsHandle collapsed={false} onCollapsed={onDetailsCollapsed} />}
+          <DetailsHandle collapsed={detailsCollapsed} onCollapsed={onDetailsCollapsed} />
         </>
       )}
       {/* Where the header offers a slot (Classic's window, and the expanded tile) it holds the window's controls while the shelves are its sidebar. */}

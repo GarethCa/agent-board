@@ -234,10 +234,10 @@ export function TileButton(props: Omit<IconButtonProps, 'size'>) {
   return <IconButton size="xs" {...props} className={cx('nodrag', props.className)} onDoubleClick={stopPropagation} />;
 }
 
-/** A tile's More button and its menu of the rarer actions. */
-export function TileMenu({ entries }: { entries: MenuEntry[] }) {
+/** A tile's More button and its menu of the rarer actions; `onOpen` is called as the menu opens. */
+export function TileMenu({ entries, onOpen }: { entries: MenuEntry[]; onOpen?(): void }) {
   return (
-    <Menu entries={entries} align="end">
+    <Menu entries={entries} align="end" onOpenChange={(open) => open && onOpen?.()}>
       <TileButton icon={<MoreHorizontal />} aria-label="More" title="More actions" />
     </Menu>
   );

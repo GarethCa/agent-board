@@ -85,8 +85,13 @@ export interface TileActions {
   deleteShell(shellId: string): void;
   /** Asks to delete the agent, confirming first if that would lose work. */
   deleteAgent(sessionId: string): void;
-  /** Stops the live agent once the user confirms: its session ends, and its worktree, branch and conversation stay. */
+  /**
+   * Stops the live agent once the user confirms: its session ends, and its worktree, branch and conversation stay. A
+   * paused one is closed as it is, no longer paused.
+   */
   stopAgent(sessionId: string): void;
+  /** Interrupts what the agent is doing mid-turn, as Ctrl-C at its prompt does. */
+  interruptAgent(sessionId: string): void;
   /** Asks which issue to link the agent to. */
   linkIssue(agent: Agent): void;
   /** Opens the agent's schedule editor. */
@@ -178,6 +183,7 @@ export const TileActionsContext = createContext<TileActions>({
   deleteShell: () => {},
   deleteAgent: () => {},
   stopAgent: () => {},
+  interruptAgent: () => {},
   linkIssue: () => {},
   scheduleAgent: () => {},
   setMuted: () => {},

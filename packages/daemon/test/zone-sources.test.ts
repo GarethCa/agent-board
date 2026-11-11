@@ -399,13 +399,16 @@ describe('cloning a GitHub repo into a new zone', () => {
     await events.waitFor(zoneCloned(zone.id));
   });
 
-  it('starts no agent while the repo clones', async () => {
+  it('starts no agent while the repo clones, and does not fold', async () => {
     const { client } = await sourcesDaemon({ cloneDelayMs: 30_000 });
     const zone = await client.call('zone.clone', { repo: 'acme/app', ...at });
     await expect(client.call('agent.spawn', { zoneId: zone.id, prompt: 'go', cols: 80, rows: 24 })).rejects.toThrow(
       /still cloning/,
     );
     await expect(client.call('zone.bind', { id: zone.id, as: 'repo', path: tempRepo() })).rejects.toThrow(/still cloning/);
+    // Nor folds to a chip, which would hide how far the clone is.
+    await expect(client.call('zone.fold', { id: zone.id })).rejects.toThrow(/still cloning/);
+    expect((await client.call('zone.list')).find((each) => each.id === zone.id)?.folded).toBe(false);
     await client.call('zone.cancelClone', { id: zone.id });
   });
 

@@ -15,6 +15,7 @@ import {
   type OrchestratorActivityEvent,
 } from '../src/protocol.ts';
 import { refOf } from '../src/crew-flags.ts';
+import { markSender } from '../src/sender-marker.ts';
 import { connectTestClient, recordEvents, startTestDaemon, tempDataDir, tempRepo } from './helpers.ts';
 
 const SIZE = { cols: 120, rows: 40 };
@@ -809,6 +810,94 @@ describe('after a restart', () => {
 });
 
 describe('an answer to an agent between turns', () => {
+  // Around every limit a message passes on its way: what is typed, what Claude folds, what goes in pieces.
+  const LENGTHS = [100, 512, 513, 799, 800, 801, 1_500, 5_000, 12_000, 29_999, 30_001];
+
+  /** About `length` characters, of one line or of a line break every 80 or so. */
+  const wordsOf = (length: number, lines: boolean) => {
+    let text = '';
+    for (let word = 0; text.length < length; word += 1) text += `${word % 12 === 11 && lines ? '\n' : text === '' ? '' : ' '}w${word}`;
+    return text.slice(0, length).trim();
+  };
+
+  it.each([
+    ['claude', false, LENGTHS],
+    ['claude', true, LENGTHS],
+    // Its path takes no pieces: either side of what it folds, and past what Claude's goes in pieces.
+    ['codex', true, [800, 1_001, 30_001]],
+  ] as const)("shows another agent's message as the agent's, never the user's, at any length, at a %s agent (several lines: %s)", async (harness, lines, lengths) => {
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
+    const b = await receiver(setup, 'review', harness);
+    if (harness === 'codex') await setup.recorder.waitForText(b.sessionId, '? for shortcuts');
+    else await setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    for (const length of lengths) {
+      const text = wordsOf(length, lines);
+      const since = setup.recorder.events.length;
+      await setup.client.call('agent.answer', { sessionId: b.sessionId, text: markSender('send', 'Lead', 'agent:ab12cd34', text) });
+      await untilTurnEnds(setup.recorder, b.sessionId, since);
+      const users = (await setup.client.call('agent.transcript', { sessionId: b.sessionId })).entries.filter((entry) => entry.kind === 'user');
+      expect(users.at(-1), `${length} characters`).toMatchObject({ text, from: { name: 'Lead', ref: 'agent:ab12cd34', kind: 'send' } });
+      // None of the messages so far shows as the user's.
+      expect(users.filter((entry) => entry.from === undefined && entry.text.includes('w1 ')), `${length} characters`).toEqual([]);
+    }
+  }, 120_000);
+
+  it('keeps a long answer of many lines as the user\'s words at a Claude agent, which folds a long paste: none folded, none lost', async () => {
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
+    const b = await receiver(setup, 'review');
+    await setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    const line = (n: number) => Array.from({ length: 30 }, (_, index) => `l${n}w${index}`).join(' ');
+    const text = Array.from({ length: 12 }, (_, n) => line(n)).join('\n');
+    expect(text.length).toBeGreaterThan(2_000);
+    const since = setup.recorder.events.length;
+
+    await setup.client.call('agent.answer', { sessionId: b.sessionId, text });
+
+    await untilTurnEnds(setup.recorder, b.sessionId, since);
+    expect(await userPrompts(setup, b.sessionId)).toEqual([text]);
+    const typed = setup.recorder.events.slice(since).find((e): e is HookEvent => e.type === 'hook' && e.event === 'UserPromptSubmit');
+    expect(typed?.payload.prompt).toBe(text);
+  });
+
+  it('leaves nothing unsent when a session ends with a message at its prompt, so its next session takes the next message', async () => {
+    // Its first Enter after text is lost, so the message waits at the prompt as the session is stopped.
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true, loseEnters: 1 });
+    const b = await receiver(setup, 'review');
+    const upSince = (since: number) => setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart' && setup.recorder.events.indexOf(e) >= since);
+    await upSince(0);
+    const text = Array.from({ length: 60 }, (_, index) => `Line ${index} of the plan.`).join('\n');
+    const answered = setup.client.call('agent.answer', { sessionId: b.sessionId, text }).catch(() => undefined);
+    await setup.recorder.waitForText(b.sessionId, 'Line 59');
+    await setup.client.call('agent.stop', { sessionId: b.sessionId });
+    await answered;
+
+    const since = setup.recorder.events.length;
+    const resumed = await setup.client.call('agent.resume', { sessionId: b.sessionId });
+    expect(resumed.unsent).toBeNull();
+    await upSince(since);
+    await setup.client.call('agent.answer', { sessionId: b.sessionId, text: 'The next message' });
+    await untilTurnEnds(setup.recorder, b.sessionId, since);
+    expect((await userPrompts(setup, b.sessionId)).at(-1)).toContain('The next message');
+    expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === b.sessionId)?.unsent).toBeNull();
+  }, 60_000);
+
+  it('shows the words of a message too long to go in pieces, which Claude takes as one paste', async () => {
+    const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
+    const b = await receiver(setup, 'review');
+    await setup.recorder.waitFor((e): e is HookEvent => e.type === 'hook' && e.sessionId === b.sessionId && e.event === 'SessionStart');
+    const text = Array.from({ length: 6_000 }, (_, index) => `w${index}`).join(' ');
+    expect(text.length).toBeGreaterThan(30_000);
+    const since = setup.recorder.events.length;
+
+    await setup.client.call('agent.answer', { sessionId: b.sessionId, text });
+
+    await untilTurnEnds(setup.recorder, b.sessionId, since);
+    // Claude wrapped it, past what is sent in pieces; the chat still shows the message, and only it.
+    const typed = setup.recorder.events.slice(since).find((e): e is HookEvent => e.type === 'hook' && e.event === 'UserPromptSubmit');
+    expect(typed?.payload.prompt).toContain('<pasted_content id=');
+    expect(await userPrompts(setup, b.sessionId)).toEqual([text]);
+  });
+
   it.each(['claude', 'codex'] as const)('sends the user a long one-line answer whole to a %s agent', async (harness) => {
     const setup = await handoffDaemon(0, tempDataDir(), { rawInput: true });
     const b = await receiver(setup, 'review', harness);

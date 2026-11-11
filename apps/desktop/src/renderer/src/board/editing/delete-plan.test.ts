@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, ExternalSession } from '@agent-board/daemon/protocol';
-import { deleteLines, needsConfirmation, type DeleteTargets } from './delete-plan';
+import { deleteLines, needsConfirmation, sameDelete, type DeleteTargets, type PendingDelete } from './delete-plan';
 
 const agent = (patch: Partial<Agent>) => ({ name: 'Ada', endedAt: null, ownsWorktree: true, cwd: '/w', ...patch }) as Agent;
 const external = (patch: Partial<ExternalSession>) => ({ name: 'Ext', state: 'running', ...patch }) as ExternalSession;
@@ -16,6 +16,26 @@ describe('needsConfirmation', () => {
   });
   it('is left to the session itself for a lone one', () => {
     expect(needsConfirmation({ ...none, agents: [agent({})] })).toBe(false);
+  });
+  it('is left to a lone running crew’s card, and needed for one with anything else or for several', () => {
+    expect(needsConfirmation({ ...none, crews: ['Fix the flake'] })).toBe(false);
+    expect(needsConfirmation({ ...none, items: 1, crews: ['Fix the flake'] })).toBe(true);
+    expect(needsConfirmation({ ...none, crews: ['Fix the flake', 'Fix the flake'] })).toBe(true);
+    expect(needsConfirmation({ ...none, agents: [agent({})], crews: ['Fix the flake'] })).toBe(true);
+  });
+});
+
+describe('sameDelete', () => {
+  const ask = (fields: Partial<PendingDelete> = {}): PendingDelete => ({ title: 'Stop this crew?', lines: ['“Fix the flake”'], confirm: 'Stop crew', run: () => {}, ...fields });
+
+  it('takes two questions in the same words as one, where neither has a key', () => {
+    expect(sameDelete(ask(), ask())).toBe(true);
+    expect(sameDelete(ask(), ask({ lines: ['“Fix the build”'] }))).toBe(false);
+  });
+  it('tells two crews asked the same thing apart by their keys', () => {
+    expect(sameDelete(ask({ key: 'crew:a' }), ask({ key: 'crew:b' }))).toBe(false);
+    expect(sameDelete(ask({ key: 'crew:a' }), ask({ key: 'crew:a', lines: ['other words'] }))).toBe(true);
+    expect(sameDelete(ask({ key: 'crew:a' }), ask())).toBe(false);
   });
 });
 
@@ -36,6 +56,15 @@ describe('deleteLines', () => {
     expect(lines).toMatch(/Out.*keeps running/);
     expect(lines).toMatch(/Gone.*taken off the board/);
     expect(lines).toMatch(/can't be undone/);
+  });
+
+  it('names each running crew a delete would stop, with what it was asked', () => {
+    const lines = deleteLines({ ...none, items: 1, agents: [agent({ name: 'Live' })], crews: ['Fix the flake', 'Try a cache'] });
+    expect(lines).toContain('1 board item deleted (undo brings them back).');
+    expect(lines).toContain('The crew asked “Fix the flake” is stopped, and its card taken off the board. It can’t be started again.');
+    expect(lines).toContain('The crew asked “Try a cache” is stopped, and its card taken off the board. It can’t be started again.');
+    // Cards alone end no session.
+    expect(deleteLines({ ...none, crews: ['Fix the flake', 'Try a cache'] }).join('\n')).not.toMatch(/sessions/);
   });
 
   it("says an agent's shells end with it, one in the singular", () => {

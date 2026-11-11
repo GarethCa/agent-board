@@ -69,8 +69,8 @@ for (const { theme, suffix } of THEMES) {
         // A crew of more than three, for its +N.
         await saveBigCrew(window);
         await window.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
-        const spotlight = window.getByRole('dialog', { name: 'Jump to a session or zone' });
-        await spotlight.getByRole('combobox', { name: 'Jump to a session or zone' }).fill('crew');
+        const spotlight = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
+        await spotlight.getByRole('combobox', { name: 'Jump to a session, zone or setting' }).fill('crew');
         await expect(spotlight.getByTestId('spotlight-row').filter({ hasText: 'Crew library' })).toBeVisible();
         await expect(spotlight.getByTestId('spotlight-row').filter({ hasText: 'Five crew checks' })).toBeVisible();
         await settle(window);

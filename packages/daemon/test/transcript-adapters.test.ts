@@ -24,6 +24,36 @@ function untimed(entries: ChatEntry[]): ChatEntry[] {
 describe('the Claude adapter', () => {
   const claude = lines('claude/transcripts/5f0c2a51-7d3e-4b8a-9c11-2e6f0a9b4c7d.jsonl');
 
+  describe('a message Claude wrapped as pasted text', () => {
+    const user = (content: string) => JSON.stringify({ type: 'user', version: '2.1.318', message: { role: 'user', content } });
+    const queued = (prompt: string) => JSON.stringify({ type: 'attachment', version: '2.1.318', attachment: { type: 'queued_command', prompt } });
+    const wrapped = (text: string) => `<pasted_content id="7d1">\n${text}\n</pasted_content id="7d1">`;
+
+    test('is the message itself when nothing else is in it, whether it was sent or queued', () => {
+      const text = 'First line\n\n  second, indented\nthird\nfourth';
+      expect(parse('claude', [user(wrapped(text))]).entries).toEqual([{ kind: 'user', text }]);
+      expect(parse('claude', [queued(`\n${wrapped(text)}\n`)]).entries).toEqual([{ kind: 'user', text }]);
+    });
+
+    test('is the shape Claude writes, with its line breaks round it, and a hand-pasted block starting with a tag of its own stays a message', () => {
+      expect(parse('claude', [user('\n\n<pasted_content id="bec9">\nAll of it\n</pasted_content id="bec9">\n')]).entries).toEqual([{ kind: 'user', text: 'All of it' }]);
+      expect(parse('claude', [user(wrapped('<system-reminder>a log line'))]).entries).toEqual([{ kind: 'user', text: '<system-reminder>a log line' }]);
+    });
+
+    test("says who sent it, the sender's mark read from inside the wrapper", () => {
+      const marked = markSender('send', 'Captain', 'agent:944e1234', 'Fix the login test\nand the next\nand the last\nand push');
+      const [entry] = parse('claude', [user(wrapped(marked))]).entries;
+      expect(entry).toMatchObject({ kind: 'user', text: 'Fix the login test\nand the next\nand the last\nand push', from: { ref: 'agent:944e1234', name: 'Captain', kind: 'send' } });
+    });
+
+    test('stays as it is with the words the user typed beside it, or with a second block', () => {
+      const beside = `Look:\n${wrapped('a\nb')}`;
+      expect(parse('claude', [user(beside)]).entries).toEqual([{ kind: 'user', text: beside }]);
+      const two = `${wrapped('a')}<pasted_content id="2">\nb\n</pasted_content id="2">`;
+      expect(parse('claude', [user(two)]).entries).toEqual([{ kind: 'user', text: two }]);
+    });
+  });
+
   test('reads the conversation from a recorded transcript, leaving out what the TUI hides', () => {
     const { entries, unsupported } = parse('claude', claude);
     expect(unsupported).toBeUndefined();

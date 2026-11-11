@@ -4,7 +4,7 @@ import type { AgentHost } from './agents.ts';
 import { checkPayloadPath } from './flow-payloads.ts';
 import type { FlowEdgeHost } from './flow-edges.ts';
 import { paneIds } from './pane-layout.ts';
-import { invalidParams, optionalBooleanParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, optionalBooleanParam, optionalCharacterParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_CALLER_METHODS,
   BOARD_ERROR,
@@ -151,6 +151,19 @@ export function sessionCaller(sources: Omit<BoardCallerSources, 'sessions'>, ses
   return undefined;
 }
 
+/**
+ * The agent `connection` speaks as: the one whose own session's board token it presented. Undefined for the app's
+ * connection, and for a session that acts for the user (`sessionCaller`): each reads the whole board. Null for a
+ * connection whose session the board no longer knows (its agent deleted while its socket stayed open): no one to read
+ * as, so nothing kept to a scope is its to read.
+ */
+export function connectionAgent(sources: Omit<BoardCallerSources, 'sessions'>, connection: BoardConnection): Agent | null | undefined {
+  if (connection.boardSession === undefined) return undefined;
+  const who = sessionCaller(sources, connection.boardSession);
+  if (who === undefined) return null;
+  return who.side === 'agent' ? (sources.agents.get(who.tileId) ?? null) : undefined;
+}
+
 /** An agent as what a line of the activity log acted on. */
 export const agentTarget = (agent: Pick<Agent, 'sessionId' | 'name'> | undefined): { id: string; name: string } | undefined =>
   agent === undefined ? undefined : { id: agent.sessionId, name: agent.name };
@@ -212,9 +225,11 @@ export function boardHandlers<Context extends BoardConnection>(
       if (who.kind !== 'agent') throw invalidParams('only an agent has a status; this is a shell tile');
       return agents.setStatus(
         who.tileId,
-        stringParam(p, 'summary'),
+        optionalStringParam(p, 'summary') ?? null,
         p.progress === undefined ? null : (p.progress as number),
         optionalBooleanParam(p, 'done') ?? false,
+        null,
+        optionalCharacterParam(p),
       );
     },
     'board.record': (params, connection) => {

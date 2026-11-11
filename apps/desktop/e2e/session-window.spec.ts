@@ -206,7 +206,7 @@ test('⌘\\ belongs to the text while typing, in a terminal leaving the board me
   const { app, window } = await launch(dataDir, SHELL_ENV);
   try {
     const menu = window.getByRole('dialog', { name: 'Board menu' });
-    const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+    const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
     await newShell(window);
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await window.getByTestId('session-terminal').click();

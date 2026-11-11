@@ -223,7 +223,7 @@ test("a stopped agent's tile keeps its stopped pill, and Resume agent in its ⋯
     const pill = tile(window).locator('.hybrid-tile-footer .ui-pill');
     await expect(pill).toHaveText('stopped');
     await expect(pill).toHaveAttribute('data-state', 'stopped-by-restart');
-    await tileAction(tile(window), 'Resume agent');
+    await tileAction(tile(window), 'Resume agent', 'Run');
     await expect(tile(window)).not.toHaveAttribute('data-state', 'stopped-by-restart');
     await expect(pill).not.toHaveText(/ended|stopped/);
   } finally {

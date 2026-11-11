@@ -29,7 +29,7 @@ const run = (outcome: ClockRun['outcome'], fields: Partial<ClockRun> = {}): Cloc
   ...fields,
 });
 
-const status = (fields: Partial<ClockStatus> = {}): ClockStatus => ({ id: 'c', nextRunAt: new Date(2026, 9, 10, 9).toISOString(), runs: [], ...fields });
+const status = (fields: Partial<ClockStatus> = {}): ClockStatus => ({ id: 'c', nextRunAt: new Date(2026, 9, 10, 9).toISOString(), runs: [], skips: null, ...fields });
 
 const names: Record<string, string> = { a: 'Nightly deps check' };
 const nameOf = (sessionId: string) => names[sessionId];
@@ -51,6 +51,20 @@ describe('clockData', () => {
 });
 
 describe('clockCard', () => {
+  it('says its check-ins are being skipped once its agent has been mid-turn through three of them, and needs you', () => {
+    const card = (count: number, ...reasons: string[]) => {
+      const skips = { count, since: new Date(2026, 9, 10, 7, 0).toISOString(), reasons: reasons.length === 0 ? ['it was still working'] : reasons };
+      return clockCard(data({ cron: '*/10 * * * *' }), status({ runs: [run('skipped', { reason: skips.reasons[0]! })], skips }), nameOf, NOW);
+    };
+    expect(card(3)).toMatchObject({ detail: '→ Nightly deps check · skipped ×3 since 07:00 (still working)', stuck: true });
+    expect(card(2)).toMatchObject({ detail: '→ Nightly deps check · next 09:00', stuck: false });
+    expect(card(5, 'it was waiting for you')).toMatchObject({ detail: '→ Nightly deps check · next 09:00', stuck: false });
+    expect(card(5, 'it was waiting for you', 'it was still working')).toMatchObject({
+      detail: '→ Nightly deps check · skipped ×5 since 07:00 (waiting for you, still working)',
+      stuck: true,
+    });
+  });
+
   it('says the schedule in words, the agent it messages and its next run', () => {
     expect(clockCard(data({ cron: '0 9 * * 1-5' }), status(), nameOf, NOW)).toEqual({
       words: 'Weekdays 09:00',
@@ -58,6 +72,7 @@ describe('clockCard', () => {
       soon: 'in 1h 30m',
       runs: [],
       running: false,
+      stuck: false,
     });
   });
 

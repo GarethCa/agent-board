@@ -37,7 +37,7 @@ export const SCANNERS: ReadonlyArray<{ tests: readonly string[]; globs: readonly
   { tests: ['scripts/release-public/public-config.test.ts'], globs: 'release', why: 'release rules and the files they name' },
   { tests: ['scripts/release-public/leak-rules.test.ts'], globs: 'always', why: 'the release leak rules' },
   { tests: ['packages/daemon/src/import-meta-glob.test.ts'], globs: ['{apps,packages}/*/src/**/*.{ts,tsx}'], why: 'source files' },
-  { tests: ['scripts/worker-hooks/status-hook.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker status hook it runs' },
+  { tests: ['scripts/worker-hooks/status-hook.test.ts', 'scripts/worker-hooks/test-budget.test.ts'], globs: ['.claude/worker-hooks/**'], why: 'the worker hooks it runs' },
   { tests: ['scripts/gate-stamp/stamp.test.ts'], globs: ['scripts/**/*.{ts,sh}'], why: 'the scripts it scans for a writer of green stamps' },
 ];
 
@@ -130,8 +130,8 @@ export const SMOKE_SPECS = ['acceptance.spec.ts', 'app.spec.ts', 'tiles.spec.ts'
 /** Source globs to the specs that cover them. Every glob that matches a file adds its specs. */
 export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly string[]]> = [
   ['apps/desktop/src/renderer/src/session/terminal-{gpu,sharpness}*', ['gpu-terminals.spec.ts', 'expanded-tile.spec.ts']],
-  ['apps/desktop/src/renderer/src/board/*zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
-  ['apps/desktop/src/renderer/src/board/*Zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/*zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts', 'zone-fold.spec.ts']],
+  ['apps/desktop/src/renderer/src/board/*Zone*', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts', 'zone-fold.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*flow-edge*', ['flow-edges.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*FlowEdge*', ['flow-edges.spec.ts']],
   ['apps/desktop/src/renderer/src/board/*rename*', ['rename.spec.ts']],
@@ -160,7 +160,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['apps/desktop/src/renderer/src/session/{SessionBody.tsx,TerminalPane.tsx,newline-keys.ts}', ['terminal-newline.spec.ts']],
   ['apps/desktop/src/renderer/src/session/**', ['session.spec.ts', 'session-window.spec.ts', 'shell-panes.spec.ts', 'chat-view.spec.ts', 'agent-tabs.spec.ts', 'shell-tile-tabs.spec.ts', 'tab-moves.spec.ts', 'popout-moves.spec.ts']],
   ['apps/desktop/src/renderer/src/windows/**', ['session-window.spec.ts', 'popout-moves.spec.ts']],
-  ['apps/desktop/src/main/zones.ts', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
+  ['apps/desktop/src/main/zones.ts', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts', 'zone-fold.spec.ts']],
   ['apps/desktop/src/main/flow-edges.ts', ['flow-edges.spec.ts']],
   ['apps/desktop/src/main/reviews.ts', ['reviews.spec.ts']],
   ['apps/desktop/src/main/shells.ts', ['shell-panes.spec.ts', 'agent-tabs.spec.ts', 'shell-tile-tabs.spec.ts', 'tab-moves.spec.ts']],
@@ -191,6 +191,7 @@ export const E2E_MAP: ReadonlyArray<readonly [glob: string, specs: readonly stri
   ['packages/daemon/src/{repo-zone,git,pull-requests}.ts', ['zones.spec.ts', 'zoneless-agents.spec.ts']],
   ['packages/daemon/src/{daemon,lock,pid,cli,paths}.ts', ['daemon.spec.ts', 'daemon-reaping.spec.ts', 'reboot.spec.ts']],
   ['packages/daemon/src/{zones,zone-sources,tile-position}.ts', ['zones.spec.ts', 'add-zone.spec.ts', 'zoneless-agents.spec.ts']],
+  ['packages/daemon/src/zone-fold.ts', ['zone-fold.spec.ts']],
   ['packages/daemon/src/trackers.ts', ['trackers.spec.ts']],
   ['packages/daemon/src/{transcripts,transcript-adapters}.ts', ['chat-view.spec.ts']],
   ['packages/tracker/**', ['trackers.spec.ts']],

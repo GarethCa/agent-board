@@ -110,6 +110,8 @@ const api: AgentBoardApi = {
     bind: (id, as) => invoke(ZONE_IPC.bind, id, as),
     update: (id, layout) => invoke(ZONE_IPC.update, id, layout),
     configure: (id, settings) => invoke(ZONE_IPC.configure, id, settings),
+    fold: (id) => invoke(ZONE_IPC.fold, id),
+    unfold: (id, wake) => invoke(ZONE_IPC.unfold, id, wake),
     setTracker: (id, tracker) => invoke(ZONE_IPC.setTracker, id, tracker),
     unbind: (id) => invoke(ZONE_IPC.unbind, id),
     initRepo: (id) => invoke(ZONE_IPC.initRepo, id),
@@ -240,6 +242,9 @@ const api: AgentBoardApi = {
     clearData: () => invoke(WEB_TAB_IPC.clearData),
     handOff: (tabId) => invoke(WEB_TAB_IPC.handOff, tabId),
     focus: (tabId) => invoke(WEB_TAB_IPC.focus, tabId),
+    focusWindow: (tabId) => invoke(WEB_TAB_IPC.focusWindow, tabId),
+    find: (tabId, text, step) => invoke(WEB_TAB_IPC.find, tabId, text, step),
+    stopFind: (tabId) => invoke(WEB_TAB_IPC.stopFind, tabId),
     cancelHandOff: (tabId) => invoke(WEB_TAB_IPC.cancelHandOff, tabId),
   },
   orchestrators: {
@@ -253,6 +258,8 @@ const api: AgentBoardApi = {
     checkPrefab: (prefab) => invoke(ORCHESTRATOR_IPC.checkPrefab, prefab),
     startPrefab: (params) => invoke(ORCHESTRATOR_IPC.startPrefab, params),
     importPrefab: () => invoke(ORCHESTRATOR_IPC.importPrefab),
+    stopCrew: (crewId) => invoke(ORCHESTRATOR_IPC.stopCrew, crewId),
+    crewRound: (crewId) => invoke(ORCHESTRATOR_IPC.crewRound, crewId),
   },
   agents: {
     list: () => invoke(AGENT_IPC.list),

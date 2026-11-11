@@ -32,6 +32,14 @@ cap, but a card at every limit at once would pass it. So the answers as last sen
 and each change is measured before it is saved: one that would take the card past the cap is refused, saying to shorten
 its longest answers or steps, and tells no one. Its own methods (`steps.ts`) change it, each change to a card in turn.
 
+**Crew cards**: a running crew's card is a board item of kind `crew` whose `data` is a copy of what its crew's rows say
+(`CrewCardData`: its title, its members, the crew as `orchestrator.crews` gives it, when its phase began), and `tiles`,
+the one field that is the user's. No table or column ties a card to its crew: the card names its crew (`crewId`), and
+`crew-cards.ts` finds a crew's card among the `crew` items. The copy is never the truth. Every `item.create` and
+`item.update` of a crew card has its data written over from the crew's rows, so the app needs only `item.list` and
+`item.updated` to draw one, and an undo of a removal brings the card back as its crew is now. As the daemon starts,
+each card is brought up to date, a running crew without one gets one, and a card that names no crew is removed.
+
 **Memories and queues**: a memory or a queue is a board item (kind `memory`, `queue`) whose `data` holds only its
 title, maker, scope switch (`noAgents`), audience (a queue's) and a count for the card, as its contents would soon pass
 the 64 KiB cap: up to 500 entries and 8 MB a memory, files up to 1 MB, and 200 open jobs a queue. Its entries and jobs

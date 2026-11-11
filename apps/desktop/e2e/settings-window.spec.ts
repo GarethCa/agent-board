@@ -161,7 +161,7 @@ test('searching settings filters the sidebar across groups, and ⌘K opens the w
     await openSettings(window, 'advanced');
     await window.bringToFront();
     await window.keyboard.press(windowKey('k'));
-    const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+    const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
     await window.keyboard.type('appearance');
     const row = switcher.getByRole('option', { name: /Appearance/ });
     await expect(row).toContainText('Settings · General');

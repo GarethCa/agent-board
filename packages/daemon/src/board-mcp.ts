@@ -10,6 +10,7 @@ import {
   askUser,
   BoardRefs,
   closeAgent,
+  handOver,
   pauseAgent,
   wakeAgent,
   defaultRolesView,
@@ -37,6 +38,7 @@ import {
   readBoard,
   sendToAgent,
   setDefaultRole,
+  characterAnswer,
   setCrewStatus,
   setOwnStatus,
   flagLine,
@@ -51,6 +53,7 @@ import {
   watchCrew,
   type BoardSession,
 } from './board-ops.ts';
+import { AGENT_FACES, AGENT_POSES, AGENT_PROPS, characterReading, NO_POSE, parseCharacter, type CharacterSet } from './character.ts';
 import { DaemonRpcError } from './client.ts';
 import { documentTitle } from './document-names.ts';
 import {
@@ -314,16 +317,30 @@ export const BOARD_MCP_TOOLS: Tool[] = [
       'Set the one line your tile shows: the change you are making now, not the task you were given. Call it once you ' +
       'understand the work, and again when its direction changes. With done, your work is finished, not only this ' +
       'turn: the agent that started you hears it once. As an orchestrator, pass agent to set the line of an agent in your ' +
-      'crew instead (its tile says you set it); keep your crew\'s lines current. As `agent-board status set`.',
+      'crew instead (its tile says you set it); keep your crew\'s lines current. With character, your tile\'s character ' +
+      'strikes a pose for the work you are doing (summary may then be left out): a working pose goes when your turn ends ' +
+      'or 20 minutes after the set, waiting-on-review (set as your turn ends) when your next turn starts, none gives the ' +
+      'board\'s back. The board\'s own states (needs you, a problem, paused, done) are drawn over it. The answer says ' +
+      'what is shown. As `agent-board status set`.',
     inputSchema: {
       type: 'object',
       properties: {
         summary: { type: 'string', maxLength: MAX_STATUS_LENGTH, description: 'What you are doing now, in a line.' },
+        character: {
+          type: 'object',
+          description: 'Your character\'s pose, with a face and a prop of its own if you like.',
+          properties: {
+            pose: { type: 'string', enum: [...AGENT_POSES, NO_POSE] },
+            face: { type: 'string', enum: [...AGENT_FACES] },
+            prop: { type: 'string', enum: [...AGENT_PROPS] },
+          },
+          required: ['pose'],
+          additionalProperties: false,
+        },
         progress: { type: 'integer', minimum: 0, maximum: 100, description: 'How far through you are, if you know.' },
         done: { type: 'boolean', description: 'Your work is finished (handoff says so too). Your next prompt clears it.' },
-        agent: { type: 'string', description: 'An agent in your crew to set the line of, by ref or unique name; yours without. Not with done.' },
+        agent: { type: 'string', description: 'An agent in your crew to set the line or pose of, by ref or unique name; yours without. Not with done.' },
       },
-      required: ['summary'],
       additionalProperties: false,
     },
   },
@@ -1260,6 +1277,19 @@ export const ORCHESTRATOR_MCP_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'handover',
+    description:
+      "Hand one orchestrator's crew, and what it made on the board, to another, which may then arrange, edit, remove and " +
+      "close them: your own crew to an orchestrator in your scope, or take over one in your scope whose session has ended. " +
+      'As `agent-board orchestrate handover`.',
+    inputSchema: {
+      type: 'object',
+      properties: { from: AGENT_REF, to: AGENT_REF },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /** What a call is handled with: a signal that aborts once the client cancels it (`notifications/cancelled`). */
@@ -1489,16 +1519,29 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
     if (via !== undefined && typeof via !== 'string') throw new BoardError('via must be a string');
     return flagLine(await flagOwn(session, reason, via));
   },
-  set_status: async (session, { summary, progress, done, agent: crewMember }) => {
-    if (typeof summary !== 'string') throw new BoardError('summary must be a string');
+  set_status: async (session, { summary, progress, done, agent: crewMember, character: given }) => {
+    if (summary !== undefined && typeof summary !== 'string') throw new BoardError('summary must be a string');
+    if (summary === undefined && given === undefined) throw new BoardError('give a summary, a character, or both');
     if (progress !== undefined && typeof progress !== 'number') throw new BoardError('progress must be a number');
+    let character: CharacterSet | undefined;
+    try {
+      character = given === undefined ? undefined : parseCharacter(given);
+    } catch (error) {
+      throw new BoardError((error as Error).message);
+    }
     if (crewMember !== undefined) {
       if (typeof crewMember !== 'string') throw new BoardError('agent must be a ref or name');
       if (done === true) throw new BoardError('done is for your own status: a crew member says it is finished itself');
-      return (await setCrewStatus(session, crewMember, summary, progress)).text;
+      return (await setCrewStatus(session, crewMember, summary, progress, character)).text;
     }
-    const agent = await setOwnStatus(session, summary, progress, done === true);
-    return `Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`;
+    const agent = await setOwnStatus(session, summary, progress, done === true, character);
+    const lines =
+      summary === undefined ? [] : [`Your tile now says: ${statusLine(agent.status!)}${agent.workFinishedAt === null ? '' : ', and that your work is finished'}`];
+    if (character !== undefined) {
+      const { shown, yours, expires } = characterReading(agent);
+      lines.push(characterAnswer(agent), JSON.stringify({ ok: true, shown, yours, expires }));
+    }
+    return lines.join('\n');
   },
   new_agent: async (session, args) => {
     const prefab = stringArg(args, 'prefab', true);
@@ -1577,6 +1620,7 @@ const TOOL_CALLS: Record<string, (session: BoardSession, args: Record<string, un
   },
   pause: async (session, args) => (await pauseAgent(session, stringArg(args, 'agent'))).text,
   wake: async (session, args) => (await wakeAgent(session, stringArg(args, 'agent'))).text,
+  handover: async (session, args) => (await handOver(session, stringArg(args, 'from'), stringArg(args, 'to'))).text,
   close: async (session, args) => (await closeAgent(session, stringArg(args, 'agent'), args.remove === true)).text,
   handoff: async (session, args) =>
     (

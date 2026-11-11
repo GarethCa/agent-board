@@ -106,7 +106,7 @@ describe('steps cards an agent puts up through the board MCP', () => {
   });
 
   it("keeps a card to its scope: an agent in another zone can't read or change it", async () => {
-    const { client, start, asAgent, cardOf } = await stepsDaemon();
+    const { client, recorder, start, asAgent, cardOf } = await stepsDaemon();
     const mine = await start(['# Mine', '- [ ] Pull main']);
     const other = await client.call('zone.add', { path: tempRepo('billing'), x: 4000, y: 0, name: 'billing' });
     const stranger = await start(['# Theirs', '- [ ] Their own'], other.id, 'Billing');
@@ -119,16 +119,28 @@ describe('steps cards an agent puts up through the board MCP', () => {
     // Nor does it list it among the board's items, while the user's side lists every card.
     expect((await connection.call('item.list')).some((item) => item.id === card.id)).toBe(false);
     expect((await client.call('item.list')).some((item) => item.id === card.id)).toBe(true);
+    // Nor hears it move: the user's side does, and a later line shows the stranger's stream has gone past it.
+    const heard = recordEvents(connection);
+    await client.call('item.update', { id: card.id, x: card.x + 40, y: card.y });
+    await recorder.waitFor((e): e is DaemonEvent => e.type === 'item.updated' && e.item.id === card.id && e.item.x === card.x + 40);
+    await client.call('zone.add', { path: tempRepo('docs'), x: 8000, y: 0, name: 'docs' });
+    await heard.waitFor((e): e is DaemonEvent => e.type === 'zone.updated' && e.zone.name === 'docs');
+    expect(heard.events.some((e) => e.type === 'item.updated' && e.item.id === card.id)).toBe(false);
 
     // An orchestrator whose scope reaches the zone reads it too.
     await client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: 'board' });
     expect((await connection.call('board.readSteps', { token, id: card.id })).map((item) => item.id)).toEqual([card.id]);
+    // And hears it move, as one.
+    await client.call('item.update', { id: card.id, x: card.x + 80, y: card.y });
+    await heard.waitFor((e): e is DaemonEvent => e.type === 'item.updated' && e.item.id === card.id && e.item.x === card.x + 80);
     await client.call('agent.setOrchestrate', { sessionId: stranger.sessionId, scope: null });
     await expect(connection.call('board.readSteps', { token, id: card.id })).rejects.toMatchObject({ code: BOARD_ERROR.outOfScope });
 
     // Loose, it is every agent's to read.
     await client.call('item.update', { id: card.id, zoneId: null, x: 9000, y: 0 });
     expect((await connection.call('board.readSteps', { token, id: card.id })).map((item) => item.id)).toEqual([card.id]);
+    // And hears it change from then on.
+    await heard.waitFor((e): e is DaemonEvent => e.type === 'item.updated' && e.item.id === card.id && e.item.zoneId === null);
   });
 
   it("puts a crew member's questions to its orchestrator, which answers and sends them", async () => {
@@ -267,6 +279,8 @@ describe('Needs you, for a steps card an agent waits on', () => {
     expect(needsYouNow(asked, 'explicit')).toBe(true);
 
     // An answer moves it on, and isn't a new request: what the user saw stays seen.
+    // Seen once its turn has settled: the idle_prompt that follows `idle` is a new state, which would un-see it, and under load it lands late.
+    await expect.poll(async () => (await listed(client, agent.sessionId)).state).toBe('waiting');
     await client.call('agent.markSeen', { sessionId: agent.sessionId });
     await client.call('steps.answer', { id: card.id, stepId: db!.id, answer: { one: 1 } });
     await expect.poll(async () => (await listed(client, agent.sessionId)).stepsWait?.stepId).toBe(friday!.id);

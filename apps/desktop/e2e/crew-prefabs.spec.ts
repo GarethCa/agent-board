@@ -1,6 +1,7 @@
 // The app's crew prefabs: the crew library from the board menu, the flow editor it opens (a built-in copied under a
 // name of your own, edited, renamed, refused a built-in's name, removed), a file imported, and each way a crew starts:
-// New agent's Crew, a zone's ⋯, and ⌘K, through the one prompt box.
+// New agent's Crew, a zone's ⋯, and ⌘K, through the one prompt box. A started crew's card is on the board, and its
+// crew stops from it on the user's yes.
 import { expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,6 +19,8 @@ const library = (page: Page) => page.getByRole('dialog', { name: 'Crew library',
 const editorOf = (page: Page) => page.getByRole('dialog', { name: 'Crew prefab', exact: true });
 const promptBox = (page: Page) => page.getByRole('dialog', { name: 'Start a crew', exact: true });
 const card = (page: Page, name: string) => library(page).getByTestId('prefab-card').filter({ hasText: name });
+/** A running crew's card on the board, by what its crew was asked. */
+const crewCard = (page: Page, asked: string) => page.getByTestId('crew-card').filter({ hasText: asked });
 
 async function openLibrary(page: Page) {
   await page.getByTestId('board-menu').getByRole('button').first().click();
@@ -179,6 +182,10 @@ test('a crew starts in the right zone from every entry point, through one prompt
     // Still one, now the start has settled: the second press started nothing.
     expect((await agents(window)).filter((agent) => agent.description === 'Add a footer')).toHaveLength(1);
     expect((await prefabs(window)).find((prefab) => prefab.name === 'Implementer + reviewer')?.roundLimit).toBe(3);
+    // Its card is on the board: what it was asked, its round of the five asked for, and a row for each member.
+    const footer = crewCard(window, 'Add a footer');
+    await expect(footer.getByTestId('crew-card-round')).toHaveText('round 1 of 5');
+    await expect(footer.getByTestId('crew-card-row')).toHaveCount(2);
 
     // The sheet remembers a crew was started, and a crew from its library starts in its zone.
     await api.getByRole('button', { name: 'New agent' }).click();
@@ -200,7 +207,7 @@ test('a crew starts in the right zone from every entry point, through one prompt
     // ⌘K: ↵ opens the crew, and no agent starts named for what was typed. Its guess at the zone can be changed.
     const before = (await agents(window)).length;
     await window.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
-    await window.getByRole('dialog', { name: 'Jump to a session or zone' }).getByRole('combobox', { name: 'Jump to a session or zone' }).fill('spike');
+    await window.getByRole('dialog', { name: 'Jump to a session, zone or setting' }).getByRole('combobox', { name: 'Jump to a session, zone or setting' }).fill('spike');
     await window.keyboard.press('Enter');
     await expect(box).toContainText('Spike + reviewer');
     await expect(box.getByRole('combobox', { name: 'Zone' })).toBeVisible();
@@ -238,6 +245,71 @@ test('a crew starts in the right zone from every entry point, through one prompt
     await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
     await run(window, 'agent-board crew');
     await expect(screen(window)).toContainText(/Implementer \+ reviewer +round \d of 5/, { timeout: TURN_MS });
+
+    // A crew stops from its card, on the user's yes: the card then says so, and can be taken off the board.
+    await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
+    await expect(sessionWindow(window)).toBeHidden();
+    await footer.locator('.crew-card-title').click();
+    await window.getByRole('button', { name: 'Stop crew', exact: true }).click();
+    const stop = window.getByRole('alertdialog', { name: 'Stop this crew?' });
+    await expect(stop).toContainText('Add a footer');
+    await stop.getByRole('button', { name: 'Stop crew' }).click();
+    await expect(footer.getByTestId('crew-card-label')).toHaveText('Stopped');
+    await expect(window.getByRole('button', { name: 'Stop crew', exact: true })).toBeHidden();
+    await window.getByRole('button', { name: 'Take it off the board' }).click();
+    await expect(footer).toHaveCount(0);
+    // Its agents stay as they were.
+    expect((await agents(window)).filter((agent) => agent.description === 'Add a footer')).toHaveLength(1);
+
+    // Taking a running crew's card off the board asks to stop its crew first, from its key as from its button: the
+    // card stays drawn while the question waits, and on a no its crew runs on.
+    await window.evaluate((zoneId) => globalThis.window.agentBoard.orchestrators.startPrefab({ name: 'Spike + reviewer', prompt: 'Try a cache', zoneId }), idOf('monorepo'));
+    const cache = crewCard(window, 'Try a cache');
+    const remove = window.getByRole('alertdialog', { name: 'Stop this crew and take its card off the board?' });
+    await cache.locator('.crew-card-title').click();
+    await window.keyboard.press('Backspace');
+    await expect(remove).toContainText('Try a cache');
+    await expect(cache).toBeVisible();
+    await remove.getByRole('button', { name: 'Cancel' }).click();
+    await expect(remove).toBeHidden();
+    await expect(cache).toBeVisible();
+    await expect(cache.getByTestId('crew-card-label')).toHaveCount(0);
+    await expect(window.getByRole('button', { name: 'Stop crew', exact: true })).toBeVisible();
+
+    await cache.locator('.crew-card-title').click();
+    await window.keyboard.press('Backspace');
+    await expect(cache).toBeVisible();
+    await remove.getByRole('button', { name: 'Stop and remove' }).click();
+    // Gone, so its crew stopped: the daemon keeps a running crew's card.
+    await expect(cache).toHaveCount(0);
+    expect((await agents(window)).filter((agent) => agent.description === 'Try a cache')).toHaveLength(1);
+
+    // Its button asks the same.
+    await window.evaluate((zoneId) => globalThis.window.agentBoard.orchestrators.startPrefab({ name: 'Spike + reviewer', prompt: 'Try a queue', zoneId }), idOf('monorepo'));
+    const queue = crewCard(window, 'Try a queue');
+    await queue.locator('.crew-card-title').click();
+    await window.getByRole('button', { name: 'Stop crew and take its card off the board' }).click();
+    await expect(remove).toContainText('Try a queue');
+    await remove.getByRole('button', { name: 'Stop and remove' }).click();
+    await expect(queue).toHaveCount(0);
+
+    // Two running crews' cards deleted together are asked about once, each by what it was asked, and both stop.
+    for (const prompt of ['Try a heap', 'Try a stack']) {
+      await window.evaluate(([zoneId, asked]) => globalThis.window.agentBoard.orchestrators.startPrefab({ name: 'Spike + reviewer', prompt: asked!, zoneId: zoneId! }), [idOf('monorepo'), prompt]);
+    }
+    const heap = crewCard(window, 'Try a heap');
+    const stack = crewCard(window, 'Try a stack');
+    await heap.locator('.crew-card-title').click();
+    await stack.locator('.crew-card-title').click({ modifiers: ['Shift'] });
+    await window.keyboard.press('Backspace');
+    const both = window.getByRole('alertdialog', { name: 'Delete selection?' });
+    await expect(both).toContainText('The crew asked “Try a heap” is stopped');
+    await expect(both).toContainText('The crew asked “Try a stack” is stopped');
+    await expect(heap).toBeVisible();
+    await expect(stack).toBeVisible();
+    await both.getByRole('button', { name: 'Delete' }).click();
+    await expect(heap).toHaveCount(0);
+    await expect(stack).toHaveCount(0);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

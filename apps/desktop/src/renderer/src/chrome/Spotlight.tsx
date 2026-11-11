@@ -238,7 +238,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
         <RadixDialog.Overlay className="spotlight-scrim" />
         <RadixDialog.Content
           className="spotlight"
-          aria-label="Jump to a session or zone"
+          aria-label="Jump to a session, zone or setting"
           aria-describedby={undefined}
           data-testid="spotlight"
           data-mode={place?.mode}
@@ -250,18 +250,18 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
           onCloseAutoFocus={(event) => event.preventDefault()}
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <RadixDialog.Title className="visually-hidden">Jump to a session or zone</RadixDialog.Title>
+          <RadixDialog.Title className="visually-hidden">Jump to a session, zone or setting</RadixDialog.Title>
           <div className="spotlight-field">
             <Search aria-hidden />
             <input
               className="spotlight-input"
               role="combobox"
-              aria-label="Jump to a session or zone"
+              aria-label="Jump to a session, zone or setting"
               aria-expanded
               aria-controls={listId}
               aria-activedescendant={activeKeyNow === undefined ? undefined : `${listId}-${activeKeyNow}`}
               aria-autocomplete="list"
-              placeholder="Jump to a session or zone…"
+              placeholder="Jump to a session, zone or setting…"
               spellCheck={false}
               autoComplete="off"
               value={query}
@@ -275,7 +275,7 @@ export function Spotlight<C>({ ref, agents, shells, zones, windows, placeOf, onP
               ↵ {where}
             </span>
           </div>
-          <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions and zones">
+          <div className="spotlight-list" id={listId} role="listbox" aria-label="Sessions, zones and settings">
             {newLeads && newAgentRow}
             {groups.map((group, index) => (
               <Fragment key={group.label ?? index}>

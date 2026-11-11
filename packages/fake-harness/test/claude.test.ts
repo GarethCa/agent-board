@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SPINNER_LINE, claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
+import { RATE_LIMIT_MENU_TITLE, SPINNER_LINE, claudeHookSettings, startHookRecorder, type HookRecorder } from '../src/index.ts';
 import { startEchoHttpServer } from './fixtures/mcp/echo-http-server.ts';
 import { readJsonl, removeTempDirs, runFake, sleep, startFake, tempDir, untilEvents, untilStdout } from './run-fake.ts';
 
@@ -176,7 +176,60 @@ describe('fake claude', () => {
 
     expect(result.code).toBe(0);
     const prompts = recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt);
-    expect(prompts).toEqual(['set up storage', long.slice(2048), `${'é'.repeat(488)}x`, long]);
+    expect(prompts.slice(0, 3)).toEqual(['set up storage', long.slice(2048), `${'é'.repeat(488)}x`]);
+    expect(prompts[3]).toMatch(/^\n\n<pasted_content id="[0-9a-f]+">\n/);
+    expect(String(prompts[3]).split('\n')[3]).toBe(long);
+  });
+
+  it('folds a paste over 800 characters, or of four lines, as Claude does: a placeholder on screen, a wrapper in the transcript', async () => {
+    const long = 'x'.repeat(801);
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: [
+        `\x1b[200~${long}\x1b[201~`,
+        '\x1b[200~one',
+        'two',
+        'three',
+        'four\x1b[201~',
+      ],
+      env: { FAKE_HARNESS_REPEAT: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('> [Pasted text #1]');
+    expect(result.stdout).toContain('> [Pasted text #2 +3 lines]');
+    expect(result.stdout).not.toContain(`> ${long}`);
+    const prompts = recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt);
+    const block = (text: string) => new RegExp(`^\\n\\n<pasted_content id="([0-9a-f]+)">\\n${text}\\n</pasted_content id="\\1">\\n$`);
+    expect(prompts[1]).toMatch(block(long));
+    expect(prompts[2]).toMatch(block('one\\ntwo\\nthree\\nfour'));
+  });
+
+  it('keeps what fits as plain text: a paste of 800 characters, three lines, or several small ones in a row', async () => {
+    const most = 'x'.repeat(800);
+    const result = await runFake('claude', {
+      scenario: 'waiting',
+      args: ['--settings', settings(), 'set up storage'],
+      input: [
+        `\x1b[200~${most}\x1b[201~`,
+        '\x1b[200~one',
+        'two',
+        'three\x1b[201~',
+        '\x1b[200~one',
+        'two\x1b[201~\x1b[200~',
+        'three',
+        'four\x1b[201~',
+        '\x1b[200~a\tb\x1b[201~',
+        '\x1b[200~typed\x1b[201~ between \x1b[200~pastes\x1b[201~ too',
+      ],
+      env: { FAKE_HARNESS_REPEAT: '1' },
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain('[Pasted text');
+    const prompts = recorder.events.filter((event) => event.hook_event_name === 'UserPromptSubmit').map((event) => event.prompt);
+    expect(prompts.slice(1)).toEqual([most, 'one\ntwo\nthree', 'one\ntwo\nthree\nfour', 'a    b', 'typed between pastes too']);
   });
 
   it('waiting: exits when stdin closes at the prompt', async () => {
@@ -400,6 +453,16 @@ describe('fake claude', () => {
       last_assistant_message: expect.stringContaining('API Error'),
     });
     expect(recorder.events.map((event) => event.hook_event_name)).not.toContain('Stop');
+  });
+
+  it('rate-limit: draws its rate-limit menu before StopFailure reaches its hooks, as the screen is up by the time a hook is read', async () => {
+    // A StopFailure hook slower than the wait below: the menu must not wait for it.
+    const hooks = { hooks: { StopFailure: [{ hooks: [{ type: 'command', command: 'sleep 10' }] }] } };
+    const { child, done } = startFake('claude', { scenario: 'rate-limit', args: ['--settings', JSON.stringify(hooks), 'do it'], env: { FAKE_HARNESS_RATE_LIMIT_SCREEN: 'menu' } });
+
+    await untilStdout(child, RATE_LIMIT_MENU_TITLE, 5_000);
+    child.kill();
+    await done;
   });
 
   it('runs command hooks with the event JSON on stdin', async () => {

@@ -9,7 +9,7 @@ import type { SpawnUsed } from '../src/agent-spawns.ts';
 import { createCrewLoop, type CrewLoopOptions } from '../src/crew-loop.ts';
 import { migrate } from '../src/migrate.ts';
 import type { OrchestratorAccess } from '../src/orchestrators.ts';
-import type { Agent, CrewPrefab, PrefabMember, SpawnAgentParams } from '../src/protocol.ts';
+import { MAX_CREW_CARD_TITLE, type Agent, type CrewPrefab, type PrefabMember, type SpawnAgentParams } from '../src/protocol.ts';
 import type { RunStart } from '../src/schedules.ts';
 
 /** Each test's temporary folders, removed after it. */
@@ -70,6 +70,7 @@ function crewBoard(options: BoardOptions = {}) {
   const flags: { sessionId: string; reason: string }[] = [];
   const closed: string[] = [];
   const news: { sessionId: string; kind: string; detail: string }[] = [];
+  const changed: string[] = [];
   let tries = 0;
 
   const add = (fields: Partial<Agent> & Pick<Agent, 'sessionId' | 'name'>): Agent => {
@@ -124,6 +125,7 @@ function crewBoard(options: BoardOptions = {}) {
       agents.delete(sessionId);
     },
     news: (sessionId, kind, detail) => void news.push({ sessionId, kind, detail }),
+    changed: (crewId) => void changed.push(crewId),
     dir: tempDir(),
     log: () => {},
     now,
@@ -147,7 +149,7 @@ function crewBoard(options: BoardOptions = {}) {
   /** The builder takes the hand-back and starts on it, so its finish clears, as its next prompt clears it. */
   const takeBack = (sessionId: string) => update(sessionId, { state: 'running', workFinishedAt: null });
 
-  return { db, host, loop, agents, add, update, handOff, review, takeBack, tick, now, spawned, delivered, flags, closed, news, tries: () => tries };
+  return { db, host, loop, agents, add, update, handOff, review, takeBack, tick, now, spawned, delivered, flags, closed, news, changed, tries: () => tries };
 }
 
 /** A crew started from `prefab` around a fresh builder, by `startedBy`. */
@@ -497,5 +499,83 @@ describe('a running crew', () => {
     await restarted.idle();
 
     expect(restarted.list()[0]!.stopped).toBe('ready-to-merge');
+  });
+});
+
+describe('a crew’s card', () => {
+  it('shows the crew from its own record: its prompt’s first line, its members as the prefab named them, and the crew as it is', async () => {
+    const board = crewBoard();
+    const builder = board.add({ sessionId: 'impl-1', name: 'impl' });
+    const crew = board.loop.start(trio({ icon: 'spark', onBoard: 'tiles' }), builder.sessionId, null, '\n  Add a footer  \nwith the year in it')!;
+
+    expect(board.loop.card(crew.id)).toEqual({
+      crewId: crew.id,
+      title: 'Add a footer',
+      icon: 'spark',
+      tiles: true,
+      members: [
+        { id: 'impl', name: 'impl', role: 'implementer', harness: 'claude', model: null, starts: 'prompt' },
+        { id: 'review', name: 'review', role: 'reviewer', harness: 'codex', model: 'gpt-5', starts: 'handoff' },
+        { id: 'design', name: 'design', role: 'reviewer', harness: 'claude', model: null, starts: 'handoff' },
+      ],
+      crew: board.loop.list()[0],
+      phaseAt: crew.startedAt,
+      startFailed: false,
+      startError: null,
+    });
+    expect(board.loop.card('nope')).toBeUndefined();
+
+    board.tick();
+    await board.handOff(builder.sessionId);
+    const reviewing = board.loop.card(crew.id)!;
+    expect(reviewing.crew).toMatchObject({ phase: 'reviewing', reviewers: [{ member: 'review' }, { member: 'design' }] });
+    expect(Date.parse(reviewing.phaseAt)).toBeGreaterThan(Date.parse(crew.startedAt));
+  });
+
+  it('is titled by its prefab for a prompt of no words, and keeps a long line short', () => {
+    const board = crewBoard();
+    const blank = board.loop.start(pair(), board.add({ sessionId: 'a', name: 'a' }).sessionId, null, ' \n ')!;
+    const long = board.loop.start(pair(), board.add({ sessionId: 'b', name: 'b' }).sessionId, null, 'é'.repeat(MAX_CREW_CARD_TITLE + 1))!;
+
+    expect(board.loop.card(blank.id)!.title).toBe('Pair');
+    expect(board.loop.card(long.id)!.title).toBe(`${'é'.repeat(MAX_CREW_CARD_TITLE - 1)}…`);
+  });
+
+  it('says a round that couldn’t start and why, until it does', async () => {
+    let refuse = true;
+    const board = crewBoard({
+      spawn: () => {
+        if (refuse) throw new Error('codex is not set up');
+      },
+    });
+    const { builder, crew } = startCrew(board);
+    await board.handOff(builder.sessionId);
+    expect(board.loop.card(crew.id)).toMatchObject({ startFailed: true, startError: 'codex is not set up', crew: { phase: 'building' } });
+
+    refuse = false;
+    await board.loop.handlers(userAccess)['orchestrator.crewRound']({ crewId: crew.id }, NO_CONNECTION);
+    expect(board.loop.card(crew.id)).toMatchObject({ startFailed: false, startError: null, crew: { phase: 'reviewing' } });
+  });
+
+  it('is said to have changed as its crew starts, at each step it takes and as it is stopped, but not once the daemon is closing', async () => {
+    const board = crewBoard();
+    const { builder, crew } = startCrew(board);
+    expect(board.changed).toEqual([crew.id]);
+
+    board.changed.length = 0;
+    await board.handOff(builder.sessionId);
+    expect(board.changed.length).toBeGreaterThan(0);
+    expect(new Set(board.changed)).toEqual(new Set([crew.id]));
+
+    board.changed.length = 0;
+    await board.loop.handlers(userAccess)['orchestrator.stopCrew']({ crewId: crew.id }, NO_CONNECTION);
+    expect(board.changed).toContain(crew.id);
+
+    const closing = crewBoard();
+    const run = startCrew(closing);
+    closing.changed.length = 0;
+    closing.loop.close();
+    await closing.handOff(run.builder.sessionId);
+    expect(closing.changed).toEqual([]);
   });
 });

@@ -146,6 +146,11 @@ const KIND_DATA: Record<BoardItemKind, (data: Record<string, unknown>) => void> 
   steps: (data) => checkStepsData(data),
   memory: (data) => checkMemoryData(data),
   queue: (data) => checkQueueData(data),
+  // The rest of a crew card's data is the board's own, written from its crew (`crew-cards.ts`).
+  crew: (data) => {
+    if (typeof data.crewId !== 'string') throw invalidParams("a crew card's crewId must be a string");
+    checkBoolean('a crew card', data, 'tiles');
+  },
   plan: (data) => {
     const agent = data.agent as Record<string, unknown> | undefined;
     if (!isObject(agent) || typeof agent.sessionId !== 'string' || typeof agent.name !== 'string' || !isOneOf(HARNESSES, agent.harness)) {
@@ -295,7 +300,8 @@ export interface ItemHandlerOptions {
  */
 export function itemHandlers<Context>(
   db: DatabaseSync,
-  broadcast: (event: DaemonEvent) => void,
+  /** Sends `event`; for `item.removed`, `about` is the item it removed, for the daemon to scope it by (never sent). */
+  broadcast: (event: DaemonEvent, about?: BoardItem) => void,
   { images, sweeper, linkCards, log }: ItemHandlerOptions,
 ): RpcHandlers<ItemMethods, Context> {
   const selectAll = db.prepare('SELECT * FROM board_items ORDER BY z, rowid');
@@ -441,7 +447,7 @@ export function itemHandlers<Context>(
       // Its images stay through the grace period, so undoing the delete can make it again.
       for (const sha256 of imagesOf(doomed.data)) images.spare(sha256);
       remove.run(id);
-      broadcast({ type: 'item.removed', id });
+      broadcast({ type: 'item.removed', id }, doomed);
       sweeper.sweep();
       return null;
     },

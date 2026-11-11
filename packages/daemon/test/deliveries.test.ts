@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { submittedText } from '../src/terminal-input.ts';
 import { drawRateLimitMenu, rateLimitMenuRows } from '@agent-board/fake-harness';
 import { createDeliveries, type DeliveryRow, type PromptNow } from '../src/deliveries.ts';
 import { invalidParams } from '../src/params.ts';
@@ -14,6 +15,7 @@ const row = (sessionId: string, fields: Partial<Row> = {}): Row => ({
   session_id: sessionId,
   name: sessionId,
   ended_at: null,
+  harness: 'claude',
   harness_session_id: null,
   hibernated_at: null,
   ...fields,
@@ -91,6 +93,109 @@ function setup(rows: Row[], notReady?: string) {
 
   return { deliveries, writes, relaunches, announced, undelivered, notSent, prompt, shown, ready, failing, advance, land };
 }
+
+describe('a long message at a Claude prompt', () => {
+  const text = Array.from({ length: 12 }, (_, index) => `Line ${index} of the plan.`).join('\n');
+  const pieces = (data: string) => data.split('\x1b[200~').length - 1;
+
+  it('goes as small pastes in one write, and Enter after it lands', async () => {
+    const run = setup([row('a')]);
+    const answered = run.deliveries.answer('a', text);
+    await flush();
+    expect(run.writes).toHaveLength(1);
+    expect(pieces(run.writes[0]![1])).toBeGreaterThan(1);
+    expect(submittedText(run.writes[0]![1]).replaceAll('\r', '\n')).toBe(text);
+    await run.land('a');
+    await answered;
+    expect(run.writes.map(([, data]) => data).slice(1)).toEqual(['\r']);
+  });
+
+  it('counts every row when an unsent one is cleared, as Ctrl-U clears only one of a long line\'s', async () => {
+    const run = setup([row('a')]);
+    const long = 'word '.repeat(50).trim();
+    const answered = run.deliveries.answer('a', long);
+    await flush();
+    run.deliveries.outputSeen('a');
+    await run.advance(150);
+    await run.advance(8_000);
+    expect(await answered).toMatchObject({ unsent: expect.any(String) });
+    expect(run.deliveries.clear('a')).toBe(`\x15${'\x7f\x15'.repeat(12)}`);
+  });
+
+  it('goes in pieces as a first prompt, a hand-off or a flag, but not with an image, nor at Codex', async () => {
+    const first = setup([row('a')]);
+    first.deliveries.firstPrompt('a', text, Promise.resolve(true));
+    await flush();
+    expect(pieces(first.writes[0]![1])).toBeGreaterThan(1);
+
+    const crew = setup([row('a')]);
+    void crew.deliveries.tell('a', text);
+    await flush();
+    expect(pieces(crew.writes[0]![1])).toBeGreaterThan(1);
+
+    const image = setup([row('a')]);
+    void image.deliveries.answer('a', text, true);
+    await flush();
+    expect(pieces(image.writes[0]![1])).toBe(1);
+
+    const codex = setup([row('a', { harness: 'codex' })]);
+    void codex.deliveries.answer('a', text);
+    await flush();
+    expect(pieces(codex.writes[0]![1])).toBe(1);
+  });
+});
+
+describe('a session ending with a message at its prompt', () => {
+  it('keeps nothing unsent for a prompt that has gone, so the next session is sent what it is sent', async () => {
+    const ended = row('a');
+    const run = setup([ended]);
+    const answered = run.deliveries.answer('a', 'Fix the tests');
+    await flush();
+    ended.ended_at = '2026-10-22T10:00:01Z';
+    run.deliveries.ended('a');
+    run.prompt.now = 'moved-on';
+    run.deliveries.outputSeen('a');
+    await run.advance(150);
+    await answered;
+    expect(run.deliveries.unsent('a')).toBeUndefined();
+  });
+
+  it('forgets what the last session left at its prompt, so the first prompt of the next is typed', async () => {
+    const run = setup([row('a')]);
+    const answered = run.deliveries.answer('a', 'Left behind');
+    await flush();
+    run.deliveries.outputSeen('a');
+    await run.advance(8_200);
+    await answered;
+    expect(run.deliveries.unsent('a')).toBe('A message');
+
+    run.deliveries.firstPrompt('a', 'Resent whole', Promise.resolve(true));
+    await flush();
+    expect(run.deliveries.unsent('a')).toBeUndefined();
+    expect(run.writes.at(-1)![1]).toBe('\x1b[200~Resent whole\x1b[201~');
+    expect(run.undelivered).toEqual([]);
+  });
+
+  it('keeps the old count at Codex, whose clearing was not measured', async () => {
+    const run = setup([row('a', { harness: 'codex' })]);
+    const answered = run.deliveries.answer('a', 'word '.repeat(50).trim());
+    await flush();
+    run.deliveries.outputSeen('a');
+    await run.advance(8_200);
+    await answered;
+    expect(run.deliveries.clear('a')).toBe('\x15');
+  });
+
+  it('hands back a first prompt that can\'t be typed, never dropping it', async () => {
+    const gone = row('a', { ended_at: '2026-10-22T10:00:01Z' });
+    const run = setup([gone]);
+    run.deliveries.firstPrompt('a', 'Resent whole', Promise.resolve(true));
+    await flush();
+    await flush();
+    expect(run.writes).toEqual([]);
+    expect(run.undelivered).toEqual(['a Its first prompt: Resent whole (its session has ended)']);
+  });
+});
 
 describe('deliveries', () => {
   it('types a command the harness runs itself only at a free prompt, and keeps it as unsent should the user type meanwhile', async () => {
@@ -685,6 +790,17 @@ describe('an answer queued mid-turn', () => {
     prompt.now = 'at-prompt';
     await advance(20_000);
     expect(writes).toHaveLength(2);
+  });
+
+  it('is taken up when its harness submits it with each tab made four spaces, as Claude does', async () => {
+    const { deliveries, writes, advance, prompt } = await queuedAnswer('first line\nname\tvalue');
+    deliveries.turnSeen('a');
+    deliveries.promptSubmitted('a', 'first line\nname    value');
+    deliveries.turnEnded('a', true);
+    prompt.now = 'at-prompt';
+    await advance(20_000);
+    expect(writes).toHaveLength(2);
+    expect(deliveries.unsent('a')).toBeUndefined();
   });
 
   it('gets Enter again once the turn has ended with no turn of its own started: a slow harness lost the first', async () => {

@@ -1,7 +1,7 @@
 // The schedule commands as the CLI and MCP give them (`schedule add|list|remove`): refs and words turned into the
 // daemon's clock methods, and their results as text and JSON (ADR-0010's one API, two faces).
 import { BoardError, BoardRefs, inZone, readBoard, resolveAgent, type BoardSession, type BoardView } from './board-ops.ts';
-import { cronWords, parseCron } from './cron.ts';
+import { cronWords, lastRunWords, parseCron } from './cron.ts';
 import { CLOCK_RESULTS, HARNESSES, type ClockData, type ClockResult, type ClockStatus, type Harness } from './protocol.ts';
 
 /** What `schedule add` takes, as typed. */
@@ -46,8 +46,8 @@ function clockLine(refs: BoardRefs, data: ClockData, status: ClockStatus | undef
     sessionId === null ? 'no agent' : `${refs.of('agent', sessionId)} ${refs.board.agents.find((each) => each.sessionId === sessionId)?.name ?? '(gone)'}`;
   const does = data.does === 'message' ? `messages ${agentName(data.agent)}` : `starts a fresh ${data.fresh.role ?? 'agent'}${data.result === 'handoff' ? `, handing its result to ${agentName(data.handoffTo)}` : ''}`;
   const next = !data.enabled ? 'off' : status?.nextRunAt == null ? 'not set' : `next ${status.nextRunAt}`;
-  const last = status?.runs[0];
-  return `${refs.of('item', id)}  ${cronWords(data.cron)} (${data.cron})  ${does}  ${next}${last === undefined ? '' : `  last ${last.outcome}`}\n    ${JSON.stringify(data.prompt)}`;
+  const last = status === undefined ? undefined : lastRunWords(status, new Date());
+  return `${refs.of('item', id)}  ${cronWords(data.cron)} (${data.cron})  ${does}  ${next}${last === undefined ? '' : `  ${last}`}\n    ${JSON.stringify(data.prompt)}`;
 }
 
 /** `schedule add`: a clock that messages an agent, or starts a fresh one each run, marked as made by the caller. */

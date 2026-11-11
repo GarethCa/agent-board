@@ -3,6 +3,7 @@ import type { NodeProps } from '@xyflow/react';
 import {
   AGENT_NOTE_SIZE,
   CLOCK_SIZE,
+  CREW_CARD_SIZE,
   DOCUMENT_CARD_SIZE,
   PLAN_CARD_SIZE,
   STEPS_CARD_SIZE,
@@ -20,6 +21,7 @@ import { itemNodeType, type ItemNodeType, type ItemNodeTypeName } from './items'
 import { AgentNoteNode } from './AgentNoteNode';
 import { clockData } from '../clocks';
 import { ClockNode } from './ClockNode';
+import { CrewCardNode } from './CrewCardNode';
 import { DocumentNode } from './DocumentNode';
 import { PlanNode } from './PlanNode';
 import { ImageNode, imageData } from './ImageNode';
@@ -195,6 +197,14 @@ export const ITEM_KINDS: Record<BoardItemKind, ItemKind> = {
     size: QUEUE_CARD_SIZE,
     newData: ({ zoneName }) => ({ ...newQueueData(zoneName) }),
     editOnCreate: true,
+    minimapColor: () => 'var(--raised)',
+  },
+  // The daemon's, made as a crew starts: none is made from the board's menus.
+  crew: {
+    label: 'crew card',
+    node: CrewCardNode,
+    size: CREW_CARD_SIZE,
+    editOnCreate: false,
     minimapColor: () => 'var(--raised)',
   },
 };

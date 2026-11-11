@@ -19,6 +19,12 @@ describe('the Captain’s panel layout', () => {
     expect(maxPanelWidth(300)).toBe(MIN_PANEL_WIDTH);
   });
 
+  it('keeps inside the room the Edge rules panel leaves, even when that is less than the least', () => {
+    expect(maxPanelWidth(600, 426)).toBe(174);
+    expect(clampPanelWidth(360, 600, 426)).toBe(174);
+    expect(maxPanelWidth(400, 500)).toBe(0);
+  });
+
   it('leaves the chat room when the For you list grows', () => {
     const max = maxForYouHeight(700, 200);
     expect(max).toBe(340);

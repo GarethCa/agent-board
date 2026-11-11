@@ -6,10 +6,10 @@
 
 /**
  * Why a terminal was let go: past the budget; its session ended; its connection dropped or its attach failed; another
- * window resized its session while it was parked; it followed an earlier run of a relaunched session; it never showed; or
- * the setting was turned off.
+ * window resized its session while it was parked; it followed an earlier run of a relaunched session; it never showed;
+ * the setting was turned off; or its zone was folded.
  */
-export type LetGoReason = 'budget' | 'ended' | 'disconnected' | 'resized' | 'relaunched' | 'hidden' | 'setting';
+export type LetGoReason = 'budget' | 'ended' | 'disconnected' | 'resized' | 'relaunched' | 'hidden' | 'setting' | 'folded';
 
 /** The saved keep-terminals setting, off unless it was turned on. */
 export function keepTerminalsFrom(saved: unknown): boolean {
@@ -52,6 +52,12 @@ export interface KeptTerminals<Entry extends KeptEntry> {
   park(sessionId: string): void;
   /** It can no longer serve its session: lets go of it now if parked, or as it leaves its pane. */
   forget(sessionId: string, reason: LetGoReason): void;
+  /**
+   * These are the sessions in folded zones now, all of them: their terminals are let go, a parked one now and one that
+   * shows as it leaves its pane, and so is one added while its zone stays folded (its window opened from a list). One
+   * whose zone was unfolded while it showed is kept again.
+   */
+  fold(sessionIds: Iterable<string>): void;
   /** The setting was turned off: lets go of every parked terminal now, and of each that shows as it leaves its pane. */
   forgetAll(reason: LetGoReason): void;
   /** A parked terminal took more output: checks the budget soon, once however much arrives. */
@@ -72,6 +78,8 @@ interface Held<Entry> {
 export function keptTerminals<Entry extends KeptEntry>({ budget, growthCheckMs = 1000 }: { budget: number; growthCheckMs?: number }): KeptTerminals<Entry> {
   /** By session id, the longest unseen first: each moves to the end as it leaves its pane. */
   const held = new Map<string, Held<Entry>>();
+  /** The sessions in folded zones, whose terminals are never parked. */
+  let folded: ReadonlySet<string> = new Set();
   let check: ReturnType<typeof setTimeout> | undefined;
 
   const parkedOnes = () => [...held].filter(([, each]) => !each.shown);
@@ -109,8 +117,9 @@ export function keptTerminals<Entry extends KeptEntry>({ budget, growthCheckMs =
     park(sessionId) {
       const each = held.get(sessionId);
       if (each === undefined) return;
-      if (each.forgotten !== undefined) {
-        letGo(sessionId, each, each.forgotten);
+      const reason = each.forgotten ?? (folded.has(sessionId) ? 'folded' : undefined);
+      if (reason !== undefined) {
+        letGo(sessionId, each, reason);
         return;
       }
       each.shown = false;
@@ -123,6 +132,15 @@ export function keptTerminals<Entry extends KeptEntry>({ budget, growthCheckMs =
       if (each === undefined) return;
       if (each.shown) each.forgotten ??= reason;
       else letGo(sessionId, each, reason);
+    },
+    fold(sessionIds) {
+      folded = new Set(sessionIds);
+      for (const [sessionId, each] of [...held]) {
+        if (!folded.has(sessionId)) {
+          if (each.forgotten === 'folded') delete each.forgotten;
+        } else if (each.shown) each.forgotten ??= 'folded';
+        else letGo(sessionId, each, 'folded');
+      }
     },
     forgetAll(reason) {
       for (const [sessionId, each] of [...held]) {

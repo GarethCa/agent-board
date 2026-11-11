@@ -32,6 +32,10 @@ export interface Submenu {
   icon?: ReactNode;
   entries: MenuEntry[];
   disabled?: boolean;
+  /** A line under the row, such as why it is greyed. */
+  hint?: string;
+  /** A few muted words before its chevron, such as what is picked inside it. */
+  detail?: string;
 }
 
 /** A labelled row of colours to pick from. */
@@ -112,10 +116,13 @@ function MenuSlider({ entry }: { entry: SliderRow }) {
     },
     [],
   );
-  const step = (event: KeyboardEvent) => {
+  const stepFrom = (key: string): number | undefined => {
     const { min, max, step: by } = entry;
-    const next =
-      event.key === 'ArrowRight' ? shown.current + by : event.key === 'ArrowLeft' ? shown.current - by : event.key === 'Home' ? min : event.key === 'End' ? max : undefined;
+    return key === 'ArrowRight' ? shown.current + by : key === 'ArrowLeft' ? shown.current - by : key === 'Home' ? min : key === 'End' ? max : undefined;
+  };
+  const step = (event: KeyboardEvent) => {
+    const { min, max } = entry;
+    const next = stepFrom(event.key);
     if (next === undefined) return;
     // Handled here: the menu must not take Left and Right for its submenus, nor the board the key as its own.
     event.preventDefault();
@@ -136,7 +143,8 @@ function MenuSlider({ entry }: { entry: SliderRow }) {
       // Not a choice: a click on the row, or Enter on it, keeps the menu open.
       onSelect={(event) => event.preventDefault()}
       onKeyDown={step}
-      onKeyUp={commit}
+      // Only a step key's release saves. Escape's own release can arrive before the menu is gone, and must not save a drag it just abandoned.
+      onKeyUp={(event) => stepFrom(event.key) !== undefined && commit()}
     >
       <span className="ui-menu-label" aria-hidden="true">
         {entry.label}
@@ -204,10 +212,12 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
     if (isSubmenu(entry)) {
       return (
         <RadixMenu.Sub key={entry.label}>
-          <RadixMenu.SubTrigger className="ui-menu-item" disabled={entry.disabled}>
+          <RadixMenu.SubTrigger className="ui-menu-item" data-hinted={entry.hint === undefined ? undefined : true} disabled={entry.disabled}>
             {entry.icon}
             {entry.label}
+            {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
             <ChevronRight className="ui-menu-chevron" />
+            {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
           </RadixMenu.SubTrigger>
           <RadixMenu.Portal>
             <RadixMenu.SubContent className="ui-card ui-menu" sideOffset={6} collisionPadding={8} loop onKeyDown={(event) => event.stopPropagation()}>
@@ -229,7 +239,7 @@ function Entries({ entries }: { entries: MenuEntry[] }) {
       >
         {entry.icon ?? radioOf(entry.checked)}
         {entry.label}
-        {entry.detail !== undefined && <span className="ui-menu-detail">{entry.detail}</span>}
+        {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
         {entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
         {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
       </RadixMenu.Item>
@@ -329,17 +339,17 @@ export function MenuPreview({ entries, active }: { entries: MenuEntry[]; active?
             className="ui-menu-item"
             aria-haspopup={submenu ? 'menu' : undefined}
             data-danger={(!submenu && entry.danger) || undefined}
-            data-hinted={!submenu && entry.hint !== undefined ? true : undefined}
+            data-hinted={entry.hint === undefined ? undefined : true}
             data-active={entry.label === active || undefined}
             data-disabled={entry.disabled ? '' : undefined}
             aria-disabled={entry.disabled || undefined}
           >
             {entry.icon ?? (submenu ? undefined : radioOf(entry.checked))}
             {entry.label}
-            {!submenu && entry.detail !== undefined && <span className="ui-menu-detail">{entry.detail}</span>}
+            {entry.detail !== undefined && <span className="ui-menu-detail" title={entry.detail}>{entry.detail}</span>}
             {submenu && <ChevronRight className="ui-menu-chevron" />}
             {!submenu && entry.shortcut !== undefined && <Kbd>{entry.shortcut}</Kbd>}
-            {!submenu && entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
+            {entry.hint !== undefined && <span className="ui-menu-hint">{entry.hint}</span>}
           </div>
         );
       })}

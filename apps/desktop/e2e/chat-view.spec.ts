@@ -1,5 +1,5 @@
-import { expect } from '@playwright/test';
-import { appendFileSync, readdirSync, rmSync } from 'node:fs';
+import { expect, type Page } from '@playwright/test';
+import { appendFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { agents, launch, screen, sessionWindow, setClickOpens, spawnAgent, tile, TURN_MS } from './agent-helpers.ts';
 import { browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
@@ -439,6 +439,53 @@ test('a message sent while the agent is in a turn shows at once as queued, and a
     // Taken in that turn, it starts none of its own.
     await expect(tile(window)).not.toHaveAttribute('data-state', /^(running|thinking)$/);
     await expect(chat.getByTestId('chat-user')).toHaveCount(3);
+  } finally {
+    await app.close();
+    await removeDataDir(dataDir);
+  }
+});
+
+const answer = (page: Page, sessionId: string, text: string) => page.evaluate(([id, typed]) => window.agentBoard.agents.answer(id!, typed!), [sessionId, text]);
+
+test("a long message from the chat's message box shows in full and reaches the agent as the user's own words, never as a paste", async () => {
+  const { dir, repo, env } = scratch('waiting');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, env);
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Pick a database');
+    await tile(window).dblclick();
+    await sessionWindow(window).getByRole('group', { name: 'View' }).getByRole('button', { name: 'Chat' }).click();
+    const chat = sessionWindow(window).getByTestId('chat-view');
+    await expect(chat.getByTestId('chat-assistant')).toHaveText(['Which database should I use, Postgres or SQLite?']);
+
+    // Over 800 characters and many lines: as one paste, the fake claude folds it, as Claude does.
+    const lines = Array.from({ length: 12 }, (_, index) => `Point ${index}: keep the words of this long message as they were written.`);
+    const message = lines.join('\n');
+    expect(message.length).toBeGreaterThan(800);
+    const composer = sessionWindow(window).getByRole('textbox', { name: 'Message to the agent' });
+    await composer.fill(message);
+    await composer.press('Enter');
+
+    const sent = chat.getByTestId('chat-user').last();
+    await expect(sent).toContainText('Point 11', { timeout: TURN_MS });
+    expect(await sent.textContent()).toBe(message);
+    await expect(chat.getByTestId('chat-pasted')).toHaveCount(0);
+    await expect(chat.getByTestId('chat-sent')).toHaveCount(0);
+    const transcript = readFileSync(transcriptIn(join(dir, 'home'), 'Claude'), 'utf8');
+    expect(transcript).not.toContain('pasted_content');
+
+    // Another agent's long message is that agent's, in its own bubble, never shown as the user's.
+    const users = await chat.getByTestId('chat-user').count();
+    const fromAgent = `⟨send from Lead · agent:ab12cd34⟩ ${lines.join('\n')}`;
+    await answer(window, (await agents(window))[0]!.sessionId, fromAgent);
+    const bubble = chat.getByTestId('chat-agent-message');
+    await expect(bubble).toHaveCount(1, { timeout: TURN_MS });
+    await expect(bubble).toContainText('From Lead');
+    await bubble.getByTestId('chat-agent-more').click();
+    await expect(bubble).toContainText('Point 11');
+    await expect(chat.getByTestId('chat-user')).toHaveCount(users);
   } finally {
     await app.close();
     await removeDataDir(dataDir);

@@ -245,5 +245,14 @@ export function recordEvents(client: DaemonClient) {
         () => screenText(sessionId).length,
         () => `${JSON.stringify(text)} from ${sessionId}; got ${JSON.stringify(screenText(sessionId))}`,
       ),
+    /** Resolves with the first match of `pattern` in what the client has been shown from the session. */
+    async waitForMatch(sessionId: string, pattern: RegExp): Promise<RegExpExecArray> {
+      await until(
+        () => pattern.test(screenText(sessionId)),
+        () => screenText(sessionId).length,
+        () => `${String(pattern)} from ${sessionId}; got ${JSON.stringify(screenText(sessionId))}`,
+      );
+      return pattern.exec(screenText(sessionId))!;
+    },
   };
 }

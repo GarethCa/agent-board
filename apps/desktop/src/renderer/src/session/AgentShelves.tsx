@@ -42,7 +42,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { branchLine, shelvesSetupLine } from '../board/AgentSetup';
+import { branchLine, plainWhereLine, shelvesSetupLine } from '../board/AgentSetup';
 import { clockBadge } from '../board/schedule';
 import { checksLabel } from '../board/tile-footer';
 import { keyText } from '../keys/registry';
@@ -134,7 +134,7 @@ export function AgentShelves({ width, collapsed, onCollapsed, initialShelf = 'pa
       <div className="agent-shelves-body" {...(tabs.length > 1 ? { role: 'tabpanel', 'aria-labelledby': tabId(on) } : {})} id={`${ids}-panel`} data-shelf={on}>
         <ShelfBody {...data} shelf={on} narrow={iconsOnly} onShelf={setAsked} />
       </div>
-      {technical && <WorkspaceFooter {...data} onCollapse={() => onCollapsed(true)} />}
+      <WorkspaceFooter {...data} onCollapse={() => onCollapsed(true)} />
     </aside>
   );
 }
@@ -881,14 +881,17 @@ function SetupShelf({ agent, agents, shows, technical, folder, home, gate, now, 
   );
 }
 
-/** The workspace, two lines at the foot of every shelf: its branch, with copy and reveal of its folder and Collapse; its AI and model. */
-function WorkspaceFooter({ agent, folder, actions, onCollapse }: ShelvesData & { onCollapse(): void }) {
+/**
+ * The workspace, two lines at the foot of every shelf: its branch (in plain words, with no branch name, while technical details
+ * are off), with copy and reveal of its folder and Collapse; its AI and model.
+ */
+function WorkspaceFooter({ agent, folder, actions, technical, onCollapse }: ShelvesData & { onCollapse(): void }) {
   return (
     <footer className="agent-shelves-footer" data-testid="shelves-footer">
       <p className="agent-shelves-footer-top">
         <FolderGit2 className="agent-shelves-footer-lead" aria-hidden />
         <span className="agent-shelves-footer-branch" title={folder}>
-          {branchLine(agent)}
+          {technical ? branchLine(agent) : plainWhereLine(agent)}
         </span>
         <IconButton icon={<Copy />} size="sm" aria-label="Copy folder" tooltip="Copy the folder's path" onClick={() => actions.copyFolder(folder)} />
         <IconButton icon={<FolderOpen />} size="sm" aria-label="Reveal folder in Finder" tooltip="Reveal in Finder" onClick={() => actions.revealFolder(folder)} />

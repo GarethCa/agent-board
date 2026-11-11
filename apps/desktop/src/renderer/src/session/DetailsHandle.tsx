@@ -24,7 +24,8 @@ const RAIL_WIDTH = 54;
  * strip, below its minimum to collapse it to the icon rail, and out from the rail to open it again; arrow keys step it
  * and a double-click resets it. The width is one preference for every window, so the terminal beside it just refits
  * (throttled) when its element changes size. Placed in the body, right after the strip (the details
- * strip or the shelves, both on the left); pulling the shelves below their minimum collapses them to their rail.
+ * strip or the shelves, both on the left); pulling the shelves below their minimum collapses them to their rail, which
+ * keeps the handle at its trailing edge, so dragging out from it opens them again.
  */
 export function DetailsHandle({ collapsed, onCollapsed }: { collapsed: boolean; onCollapsed(collapsed: boolean): void }) {
   const width = useDetailsWidth();

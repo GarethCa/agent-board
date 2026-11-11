@@ -347,7 +347,7 @@ exports[`agent-board --help > has help for mcp 1`] = `
 
 Serves the board as MCP tools on stdio: whoami, board, connections, handoff, ask, present_plan,
 show_doc, set_status, needs_you, open_pr, record_pr, record_doc, pin, unpin and set_page, and for an agent that may orchestrate as it starts, new_agent, send, wait, read,
-interrupt, set_effort, continue_on_credits, restart, pause, wake, close, add_edge, remove_edge, move, arrange, map,
+interrupt, set_effort, continue_on_credits, restart, pause, wake, close, handover, add_edge, remove_edge, move, arrange, map,
 zone_layout, add_note, edit_note, remove_note, prefabs, roles, set_role and remove_role. The app adds it to the agents it starts; add it to another Claude
 with:
 
@@ -550,6 +550,7 @@ commit. Marking it ready, running the gate and merging stay the user's.
 
 exports[`agent-board --help > has help for orchestrate 1`] = `
 "usage: agent-board orchestrate on|off <ref> [--scope zone|repo|board]
+       agent-board orchestrate handover <from> <to>
 
 Orchestrating: one agent leading others, as a lead hands work to workers and reviewers and
 reads what they hand back.
@@ -572,6 +573,12 @@ It may always act on the agents it started, wherever they are, and never on itse
 read and wait for another orchestrator, but not steer one (send, interrupt, effort, restart, pause, wake,
 close, or wire an edge into it) whose scope is wider than its own (board > repo > zone): a message
 runs under the permissions of the agent that gets it.
+
+\`agent-board orchestrate handover <from> <to>\` hands one orchestrator's crew and what it made
+(notes, lane labels, clocks, shapes, connectors, zones and edges) to another, which may then
+arrange, edit, remove and close them as its own. An orchestrator hands over its own crew, or
+takes over one in its scope, no wider than its own, whose session has ended; either way the one
+that gets the crew must have every agent in it in its scope. From a shell, the user hands over any.
 
 As an orchestrator, a loop of implementing and reviewing looks like this:
   agent-board new --name impl -- 'Fix the flaky login test. Commit on your branch, write
@@ -967,6 +974,7 @@ and, for an agent the user lets orchestrate, the orchestrator commands:
   orchestrator.pause
   orchestrator.wake
   orchestrator.close
+  orchestrator.handover
   orchestrator.addEdge
   orchestrator.removeEdge
   orchestrator.move
@@ -1018,15 +1026,16 @@ marked as made by you, that fires on a five-field cron expression (minute hour d
 weekday, or @daily, @hourly…) in the machine's local time. Quote the expression.
 
 With --to, it sends <prompt> to that agent at each fire time, as its next message (relaunching
-it if its session has ended; a time at which it is busy is skipped). The clock goes on the
-agent's tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
+it if its session has ended; a time at which it is busy is skipped, and three skipped in a
+row while it was still working flag it: its turn looks stuck). The clock goes on the agent's
+tile's left. With --fresh, it starts a fresh agent each time, in --zone (your zone by
 default) with <prompt> as its task, waits for its turn to end, keeps its final message in the
 clock's run history, and closes it (--keep leaves it open); a time at which the last run is
 still going is skipped. --result note also leaves the result as a note where its tile was;
 --result handoff hands it to --handoff-to's agent.
 
 \`schedule list\` prints each clock's ref, its schedule, what it does, when it next runs and how
-its last run went. \`schedule remove\` removes only a clock you, or an agent you started, made;
+its last run went: for a run of skips, how many, since when and why. \`schedule remove\` removes only a clock you, or an agent you started, made;
 in a shell, or outside agent-board, any.
 
   --to <ref>         The agent it messages, in your scope.
@@ -1133,7 +1142,7 @@ Everything about one zone, agent, shell, edge or item. \`agent-board show me\` s
 `;
 
 exports[`agent-board --help > has help for status 1`] = `
-"usage: agent-board status set <summary> [--agent <ref>] [--progress <0-100>] [--done]
+"usage: agent-board status set [<summary>] [--agent <ref>] [--progress <0-100>] [--done] [--pose <pose> [--face <face>] [--prop <prop>]] | status poses
 
 Sets your own tile's status: one line, at most 200 characters, saying what you are doing
 now, as the change you are making ("Moving session ids to the daemon"), not the task you were
@@ -1154,9 +1163,21 @@ and theirs) instead of your own, and its tile says who set it. Keep your crew's 
 each is doing now, from what you see of it. The latest write wins, its own or yours. An agent
 outside your crew is refused.
 
-  --agent <ref>    Set this crew member's line, not your own.
+--pose sets the pose your tile's character strikes, with or without a summary: thinking,
+running-a-tool, reading, writing or testing for the work you are doing now, and
+waiting-on-review as your turn ends with your work up for review. --face and --prop give it a
+face and a prop of their own; \`status poses\` lists them all. A word outside the lists is
+refused. A working pose goes when your turn ends, or 20 minutes after you set it;
+waiting-on-review when your next turn starts; \`--pose none\` gives the board's back now. The
+board's own states (needs you, a problem, a usage limit, paused, done) are drawn over yours,
+which shows again after. Setting a pose often is fine: the tile draws the last one.
+
+  --agent <ref>    Set this crew member's line or pose, not your own.
   --progress <n>   0 to 100.
   --done           Your work is finished (not with --agent).
+  --pose <pose>    Your character's pose, or none (\`status poses\`).
+  --face <face>    Its face, with --pose.
+  --prop <prop>    Its prop, with --pose.
   --json           Print the agent as JSON (with --agent, as \`show --json\` prints it).
 "
 `;
@@ -1426,9 +1447,9 @@ COMMANDS
   edges                 Every edge: its two agents, what it carries, when, and how it stands.
   show <ref>            Everything about one zone, agent, shell, edge, item or connector.
   usage                 The 5-hour and weekly plan usage. See \`usage --help\`.
-  status set <summary> [--progress <0-100>] [--done]
+  status set <summary> [--progress <0-100>] [--done] [--pose <pose>]
                         Set your own tile's status (agents only); --done says your work is
-                        finished. See \`status --help\`.
+                        finished; --pose your character's pose. See \`status --help\`.
   needs-you [--] <reason> [--via <ref>] | --clear
                         Ask for a look: blocked, ready for review, or a decision needed. A
                         turn ending tells no one. See \`needs-you --help\`.

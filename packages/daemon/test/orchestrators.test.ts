@@ -5,6 +5,10 @@ import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { BOARD_MCP_INSTRUCTIONS, ORCHESTRATOR_INSTRUCTIONS } from '../src/board-mcp.ts';
 import { AGENT_ERROR, BOARD_ERROR, RPC_ERROR, SETTLED_STATES, type Agent, type AgentUpdatedEvent, type DaemonEvent, type HookEvent, type OrchestratorActivityEvent } from '../src/protocol.ts';
 import type { DaemonClient } from '../src/client.ts';
+import type { Clock } from '../src/clock.ts';
+import { CHARACTER_EXPIRY_MS } from '../src/character.ts';
+import { QUIET_TURN_MS, readTranscriptTail, turnEndedInTranscript } from '../src/quiet-turns.ts';
+import { createFakeClock } from './fake-clock.ts';
 import { BOARD_SOCKET_ENV, BOARD_TOKEN_ENV } from '../src/board-env.ts';
 import { reviewedAgent } from '../src/orchestrators.ts';
 import { BoardRefs, identifyView, newAgent, openBoardSession, readBoard, treeView } from '../src/board-ops.ts';
@@ -20,7 +24,9 @@ const SIZE = { cols: 120, rows: 40 };
  * A daemon whose agents play the fake harnesses' `orchestrate` scenario, with two zones of one repo and one of another.
  * Their agents may not orchestrate unless a test lets them: the zones' setting is off.
  */
-async function orchestrateDaemon(options: { dataDir?: string; home?: string; log?: (message: string) => void; replyWindowMs?: number; repeat?: boolean } = {}) {
+async function orchestrateDaemon(
+  options: Parameters<typeof startOrchestrateDaemon>[0] = {},
+) {
   const daemon = await startOrchestrateDaemon(options);
   const client = await connectTestClient(daemon);
   const recorder = recordEvents(client);
@@ -37,7 +43,7 @@ type Setup = Awaited<ReturnType<typeof orchestrateDaemon>>;
 
 /**
  * A daemon whose agents play the `orchestrate` scenario, in `dataDir` and with the fakes' `home` (fresh by default);
- * with `repeat`, each later message too.
+ * with `repeat`, each later message too, and with `fakes`, what else its fakes do.
  */
 function startOrchestrateDaemon({
   dataDir,
@@ -45,19 +51,24 @@ function startOrchestrateDaemon({
   log,
   replyWindowMs,
   repeat,
+  clock,
+  fakes,
 }: {
   dataDir?: string;
   home?: string;
   log?: (message: string) => void;
   replyWindowMs?: number;
   repeat?: boolean;
+  clock?: Clock;
+  fakes?: Partial<Parameters<typeof fakeHarnessEnv>[0]>;
 }) {
   return startTestDaemon({
     ...(dataDir === undefined ? {} : { dataDir }),
+    ...(clock === undefined ? {} : { clock }),
     ...(log === undefined ? {} : { log }),
     ...(replyWindowMs === undefined ? {} : { replyWindowMs }),
     worktreesDir: tempDataDir(),
-    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home, idleNotifyMs: 200, ...(repeat === undefined ? {} : { repeat }) }),
+    agentEnv: fakeHarnessEnv({ scenario: 'orchestrate', home, idleNotifyMs: 200, ...(repeat === undefined ? {} : { repeat }), ...fakes }),
   });
 }
 
@@ -1152,7 +1163,7 @@ describe('agent-board mcp for an orchestrator', () => {
     expect((await leadMcp.initialize()).instructions).toBe(`${BOARD_MCP_INSTRUCTIONS} ${ORCHESTRATOR_INSTRUCTIONS}`);
     expect(await leadMcp.listTools()).toEqual([
       'whoami', 'board', 'usage', 'connections', 'handoff', 'ask', 'present_plan', 'show_doc', 'set_status', 'needs_you', 'open_pr', 'record_pr', 'record_doc', 'pin', 'unpin', 'steps_new', 'steps_read', 'steps_update', 'memory_new', 'memory_read', 'memory_update', 'queue_new', 'queue_read', 'queue_update', 'set_page', 'new_agent', 'send', 'wait', 'read', 'interrupt', 'set_effort', 'continue_on_credits', 'restart', 'pause', 'wake', 'add_edge', 'list_edges', 'remove_edge', 'move', 'arrange', 'zone_layout', 'map', 'zone_screenshot', 'add_note',
-      'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close',
+      'edit_note', 'remove_note', 'add_shape', 'add_diagram', 'export_diagram', 'edit_shape', 'remove_shape', 'connect', 'edit_connector', 'remove_connector', 'add_schedule', 'list_schedules', 'remove_schedule', 'prefabs', 'roles', 'set_role', 'remove_role', 'close', 'handover',
     ]);
 
     const plainMcp = mcpAs(setup, plain.token);
@@ -1587,6 +1598,60 @@ describe('pausing and waking an agent', () => {
     await expect(lead.connection.call('orchestrator.pause', { token: lead.token, sessionId: elsewhere.sessionId })).rejects.toMatchObject({
       code: BOARD_ERROR.outOfScope,
     });
+  });
+});
+
+describe('handing a crew over', () => {
+  const refTo = (agent: Agent) => `agent:${agent.sessionId.slice(0, 8)}`;
+
+  it('is a tool an orchestrator lists, and tells the app who made each edge it moves', async () => {
+    const setup = await orchestrateDaemon();
+    const first = await agentSide(setup, setup.zone.id, 'zone');
+    const second = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await first.connection.call('orchestrator.spawn', { token: first.token, name: 'one' });
+    const edge = await first.connection.call('orchestrator.addEdge', { token: first.token, from: worker.sessionId, to: first.agent.sessionId, trigger: 'manual' });
+
+    const mcp = mcpAs(setup, first.token);
+    expect(await mcp.listTools()).toContain('handover');
+    const before = setup.recorder.events.length;
+    expect(await mcp.callTool('handover', { from: refTo(first.agent), to: refTo(second.agent) })).toMatchObject({
+      isError: false,
+      text: expect.stringMatching(/crew to agent:\w+ .*: agent:\w+ one, and 1 thing on the board\.$/),
+    });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === worker.sessionId)?.spawnedBy).toBe(second.agent.sessionId);
+    await setup.recorder.waitFor(
+      (e: DaemonEvent): e is DaemonEvent =>
+        e.type === 'flowEdge.updated' && e.edge.id === edge.id && e.edge.madeBy === second.agent.sessionId && setup.recorder.events.indexOf(e) >= before,
+    );
+  });
+
+  it('never carries a crew past the scope of the orchestrator that gets it', async () => {
+    const setup = await orchestrateDaemon();
+    const boss = await agentSide(setup, setup.zone.id, 'board');
+    const small = await agentSide(setup, setup.zone.id, 'zone');
+    const far = await boss.connection.call('orchestrator.spawn', { token: boss.token, zoneId: setup.other.id, name: 'far' });
+    const hand = { from: boss.agent.sessionId, to: small.agent.sessionId };
+
+    // Given away: far is in a zone the zone-scope orchestrator can't reach.
+    await expect(boss.connection.call('orchestrator.handover', { token: boss.token, ...hand })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringContaining(`far is outside ${small.agent.name}'s scope`),
+    });
+    // Taken over once boss has ended: its scope was wider.
+    await setup.client.call('agent.stop', { sessionId: boss.agent.sessionId });
+    await untilAgent(setup.recorder, boss.agent.sessionId, (seen) => seen.endedAt !== null);
+    await expect(small.connection.call('orchestrator.handover', { token: small.token, ...hand })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+      message: expect.stringContaining('scope wider than yours'),
+    });
+    await expect(small.connection.call('orchestrator.close', { token: small.token, sessionId: far.sessionId, remove: true })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    expect((await setup.client.call('agent.list')).find((each) => each.sessionId === far.sessionId)?.spawnedBy).toBe(boss.agent.sessionId);
+
+    // The user's side may hand it over all the same.
+    const handed = await setup.client.call('orchestrator.handover', hand);
+    expect(handed.crew.map((agent) => agent.name)).toEqual(['far']);
   });
 });
 
@@ -2095,6 +2160,285 @@ describe('an orchestrator setting its crew’s status lines', () => {
     expect(await mcp.callTool('set_status', { summary: 'From the MCP', agent: ref(worker) })).toMatchObject({ isError: false, text: expect.stringMatching(/^Set the status of agent:/) });
     expect(await mcp.callTool('set_status', { summary: 'Not yours', agent: ref(outsider) })).toMatchObject({ isError: true, text: expect.stringMatching(/not in your crew/) });
     expect((await setup.client.call('agent.list')).find((agent) => agent.sessionId === outsider.sessionId)!.status).toBeNull();
+  });
+});
+
+describe('agents setting their characters’ poses', () => {
+  const AT_WORK: readonly string[] = ['running', 'thinking'];
+  const listed = async (setup: Setup, sessionId: string) => (await setup.client.call('agent.list')).find((agent) => agent.sessionId === sessionId)!;
+
+  /** The first update of the agent after the event at `since`, that matches. */
+  const updateAfter = (setup: Setup, since: number, sessionId: string, match: (agent: Agent) => boolean = () => true) =>
+    setup.recorder
+      .waitFor(
+        (e: DaemonEvent): e is AgentUpdatedEvent =>
+          e.type === 'agent.updated' && e.agent.sessionId === sessionId && setup.recorder.events.indexOf(e) >= since && match(e.agent),
+      )
+      .then((event) => event.agent);
+
+  /** The index of the agent's own hook `event` seen after `since`, once it comes. */
+  const hookAfter = async (setup: Setup, since: number, sessionId: string, event: string) => {
+    const hook = await setup.recorder.waitFor(
+      (e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === sessionId && e.event === event && setup.recorder.events.indexOf(e) >= since,
+    );
+    return setup.recorder.events.indexOf(hook);
+  };
+
+  /** An agent from `agentSide`, once its first turn has ended: that turn's end would take a working pose off. */
+  const settled = async (setup: Setup) => {
+    const side = await agentSide(setup, setup.zone.id);
+    await hookAfter(setup, 0, side.agent.sessionId, 'Stop');
+    return side;
+  };
+
+  it('sets its own pose with a line or without, keeps each when the other is set, and takes it off with none', async () => {
+    const setup = await orchestrateDaemon();
+    const { agent, token, connection } = await settled(setup);
+
+    const since = setup.recorder.events.length;
+    const posed = await connection.call('board.setStatus', { token, character: { pose: 'testing', prop: 'flask' } });
+    expect(posed).toMatchObject({ status: null, character: { pose: 'testing', face: null, prop: 'flask', setBy: null } });
+    expect(await updateAfter(setup, since, agent.sessionId)).toMatchObject({ character: { pose: 'testing' } });
+
+    // A line alone leaves the pose, and a pose alone the line.
+    expect(await connection.call('board.setStatus', { token, summary: 'Running the suite' })).toMatchObject({
+      status: { summary: 'Running the suite' },
+      character: { pose: 'testing', prop: 'flask' },
+    });
+    expect(await connection.call('board.setStatus', { token, character: { pose: 'reading', face: 'focused' } })).toMatchObject({
+      status: { summary: 'Running the suite' },
+      character: { pose: 'reading', face: 'focused', prop: null },
+    });
+    expect(await connection.call('board.setStatus', { token, character: { pose: 'none' } })).toMatchObject({ status: { summary: 'Running the suite' }, character: null });
+    expect((await listed(setup, agent.sessionId)).character).toBeNull();
+  });
+
+  it('refuses a word outside the lists by naming them, a set of nothing, and progress with no line', async () => {
+    const setup = await orchestrateDaemon();
+    const { token, connection } = await agentSide(setup, setup.zone.id);
+
+    await expect(connection.call('board.setStatus', { token, character: { pose: 'dancing' } } as never)).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/unknown pose 'dancing'; poses: thinking, running-a-tool, reading, writing, testing, waiting-on-review, none/),
+    });
+    await expect(connection.call('board.setStatus', { token, character: { pose: 'testing', prop: 'hammer' } } as never)).rejects.toMatchObject({
+      message: expect.stringMatching(/unknown prop 'hammer'; props: dots/),
+    });
+    await expect(connection.call('board.setStatus', { token })).rejects.toMatchObject({ message: expect.stringMatching(/a status summary, a character pose, or both/) });
+    await expect(connection.call('board.setStatus', { token, progress: 40, character: { pose: 'testing' } })).rejects.toMatchObject({
+      message: expect.stringMatching(/progress goes with a status summary/),
+    });
+  });
+
+  it("keeps a working pose through its turn's start and takes it off at its end; keeps a resting one to its next turn's start", async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const { agent, token, connection } = await settled(setup);
+    await connection.call('board.setStatus', { token, character: { pose: 'testing' } });
+
+    let since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Ask permission\r' });
+    const asking = await updateAfter(setup, since, agent.sessionId, (seen) => seen.permissions.length > 0);
+    // The board draws its ask over the pose, which waits under it.
+    expect(asking.character).toMatchObject({ pose: 'testing' });
+
+    // Its work put up for review as its turn ends: the turn's end leaves it.
+    await connection.call('board.setStatus', { token, character: { pose: 'waiting-on-review' } });
+    since = setup.recorder.events.length;
+    await setup.client.call('agent.decidePermission', { sessionId: agent.sessionId, requestId: asking.permissions[0]!.id, behavior: 'allow' });
+    await updateAfter(setup, await hookAfter(setup, since, agent.sessionId, 'Stop'), agent.sessionId);
+    expect((await listed(setup, agent.sessionId)).character).toMatchObject({ pose: 'waiting-on-review' });
+
+    // Its next turn's start takes it off.
+    since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    expect(await updateAfter(setup, await hookAfter(setup, since, agent.sessionId, 'UserPromptSubmit'), agent.sessionId)).toMatchObject({ character: null });
+
+    // A working pose its turn ends.
+    await connection.call('board.setStatus', { token, character: { pose: 'writing' } });
+    since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    await hookAfter(setup, since, agent.sessionId, 'Stop');
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => seen.character === null)).toMatchObject({ character: null });
+
+    // Its session's end takes a resting pose off too.
+    await connection.call('board.setStatus', { token, character: { pose: 'waiting-on-review' } });
+    await setup.client.call('agent.stop', { sessionId: agent.sessionId });
+    expect(await untilAgent(setup.recorder, agent.sessionId, (seen) => seen.endedAt !== null)).toMatchObject({ character: null });
+  });
+
+  it('takes a working pose off a turn the app interrupts, which sends no hook, and leaves a resting one', async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const { agent, token, connection } = await settled(setup);
+
+    for (const [pose, left] of [
+      ['testing', null],
+      ['waiting-on-review', { pose: 'waiting-on-review' }],
+    ] as const) {
+      const since = setup.recorder.events.length;
+      await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Ask permission\r' });
+      await updateAfter(setup, since, agent.sessionId, (seen) => seen.permissions.length > 0);
+      expect(await connection.call('board.setStatus', { token, character: { pose } })).toMatchObject({ state: 'needs-permission', character: { pose } });
+
+      const interrupted = await setup.client.call('agent.interrupt', { sessionId: agent.sessionId });
+      expect(interrupted.state).toBe('idle');
+      expect(interrupted.character).toEqual(left === null ? null : expect.objectContaining(left));
+      expect((await listed(setup, agent.sessionId)).character).toEqual(interrupted.character);
+    }
+  });
+
+  it('takes a working pose off a turn whose Stop never came, as it is moved to idle', async () => {
+    const clock = createFakeClock(new Date());
+    // No idle prompt either: every hook after a turn's work is lost, its first turn's and the next's.
+    const setup = await orchestrateDaemon({ clock, repeat: true, fakes: { loseStopHooks: 2, promptBox: true, idleNotifyMs: 600_000 } });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    // A turn that ends on words, as the net reads a turn's end in its transcript.
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Ask back: All done?\r' });
+    await setup.recorder.waitForText(agent.sessionId, 'All done?');
+    expect(await connection.call('board.setStatus', { token, character: { pose: 'testing' } })).toMatchObject({ character: { pose: 'testing' } });
+    expect(AT_WORK).toContain((await listed(setup, agent.sessionId)).state);
+
+    // The net moves it once its transcript says its turn ended and its screen shows its prompt.
+    const start = await setup.recorder.waitFor((e: DaemonEvent): e is HookEvent => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'SessionStart');
+    await vi.waitFor(async () => expect(turnEndedInTranscript(await readTranscriptTail(String(start.payload.transcript_path)))).toBe(true), { timeout: 10_000 });
+    await vi.waitFor(() => expect(setup.recorder.screenText(agent.sessionId)).toContain('❯'));
+    const since = setup.recorder.events.length;
+    clock.advance(QUIET_TURN_MS);
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => seen.state === 'idle')).toMatchObject({ character: null });
+  });
+
+  it('takes a working pose off a turn whose Stop never came as its idle prompt comes, so the next turn is drawn without it', async () => {
+    // Its idle prompt still comes, soon after each turn's work: it finds the agent at work and leaves it waiting.
+    const setup = await orchestrateDaemon({ repeat: true, fakes: { loseStopHooks: 2 } });
+    const { agent, token, connection } = await agentSide(setup, setup.zone.id);
+    await updateAfter(setup, 0, agent.sessionId, (seen) => seen.state === 'waiting');
+
+    let since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Work slowly\r' });
+    await updateAfter(setup, since, agent.sessionId, (seen) => AT_WORK.includes(seen.state));
+    expect(await connection.call('board.setStatus', { token, character: { pose: 'testing' } })).toMatchObject({ character: { pose: 'testing' } });
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => seen.state === 'waiting')).toMatchObject({ character: null });
+    expect(setup.recorder.events.some((e) => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'Stop')).toBe(false);
+
+    since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => AT_WORK.includes(seen.state))).toMatchObject({ character: null });
+  });
+
+  it('takes a resting pose off as a turn starts with no UserPromptSubmit, at its first sign of work', async () => {
+    // Its first prompt is typed at it too, and loses its hook as the next does.
+    const setup = await orchestrateDaemon({ repeat: true, fakes: { losePromptHooks: 2 } });
+    const { agent, token, connection } = await settled(setup);
+    await connection.call('board.setStatus', { token, character: { pose: 'waiting-on-review' } });
+
+    const since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Work slowly\r' });
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => AT_WORK.includes(seen.state))).toMatchObject({ character: null });
+    expect(setup.recorder.events.some((e) => e.type === 'hook' && e.sessionId === agent.sessionId && e.event === 'UserPromptSubmit')).toBe(false);
+  });
+
+  it('takes a working pose off on a Codex turn’s end too', async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const agent = await setup.client.call('agent.spawn', { zoneId: setup.zone.id, harness: 'codex', prompt: 'Print your board identity', ...SIZE });
+    const { token, connection } = await agentSideOf(setup, agent.sessionId);
+    await connection.call('board.setStatus', { token, character: { pose: 'thinking', face: 'puzzled' } });
+
+    const since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: agent.sessionId, data: 'Print your board identity\r' });
+    await hookAfter(setup, since, agent.sessionId, 'Stop');
+    expect(await updateAfter(setup, since, agent.sessionId, (seen) => seen.character === null)).toMatchObject({ character: null });
+  });
+
+  it('lapses a working pose 20 minutes after its last set, redrawing its tile, and keeps a resting one', async () => {
+    const clock = createFakeClock(new Date());
+    const setup = await orchestrateDaemon({ clock });
+    const { agent, token, connection } = await settled(setup);
+
+    await connection.call('board.setStatus', { token, character: { pose: 'running-a-tool' } });
+    clock.advance(CHARACTER_EXPIRY_MS / 2);
+    // A new set starts its 20 minutes again.
+    await connection.call('board.setStatus', { token, character: { pose: 'running-a-tool', prop: 'gear' } });
+    clock.advance(CHARACTER_EXPIRY_MS / 2);
+    expect((await listed(setup, agent.sessionId)).character).toMatchObject({ pose: 'running-a-tool', prop: 'gear' });
+    const since = setup.recorder.events.length;
+    clock.advance(CHARACTER_EXPIRY_MS / 2);
+    expect(await updateAfter(setup, since, agent.sessionId)).toMatchObject({ character: null });
+
+    await connection.call('board.setStatus', { token, character: { pose: 'waiting-on-review' } });
+    clock.advance(2 * CHARACTER_EXPIRY_MS);
+    expect((await listed(setup, agent.sessionId)).character).toMatchObject({ pose: 'waiting-on-review' });
+  });
+
+  it('sets the pose of an agent in its crew, saying who set it, and refuses one outside it', async () => {
+    const setup = await orchestrateDaemon();
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker', prompt: 'Print your board identity' });
+    const outsider = await userAgent(setup.client, setup.zone.id, 'outsider');
+
+    expect(await lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, character: { pose: 'waiting-on-review' } })).toMatchObject({
+      status: null,
+      character: { pose: 'waiting-on-review', setBy: lead.agent.name },
+    });
+    await expect(lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: outsider.sessionId, character: { pose: 'testing' } })).rejects.toMatchObject({
+      code: BOARD_ERROR.outOfScope,
+    });
+    await expect(lead.connection.call('orchestrator.setStatus', { token: lead.token, sessionId: worker.sessionId, character: { pose: 'sulking' } } as never)).rejects.toMatchObject({
+      code: RPC_ERROR.invalidParams,
+      message: expect.stringMatching(/unknown pose 'sulking'/),
+    });
+    expect((await listed(setup, outsider.sessionId)).character).toBeNull();
+
+    // The agent's own set replaces it, and is its own.
+    const workerSide = await agentSideOf(setup, worker.sessionId);
+    expect(await workerSide.connection.call('board.setStatus', { token: workerSide.token, character: { pose: 'writing' } })).toMatchObject({
+      character: { pose: 'writing', setBy: null },
+    });
+  });
+
+  it('is `status set --pose` and `status poses` over the CLI, `set_status` with character over the MCP, and in identify', async () => {
+    const setup = await orchestrateDaemon({ repeat: true });
+    const lead = await agentSide(setup, setup.zone.id, 'zone');
+    const worker = await lead.connection.call('orchestrator.spawn', { token: lead.token, name: 'worker' });
+    // In a turn, as an agent that runs its CLI is: the board draws a working pose only then.
+    const since = setup.recorder.events.length;
+    await setup.client.call('session.write', { sessionId: lead.agent.sessionId, data: 'Work until interrupted\r' });
+    await updateAfter(setup, since, lead.agent.sessionId, (seen) => AT_WORK.includes(seen.state));
+    await setup.recorder.waitForText(lead.agent.sessionId, 'Working until interrupted.');
+    const env = { [BOARD_SOCKET_ENV]: setup.daemon.socketPath, [BOARD_TOKEN_ENV]: lead.token };
+    const run = async (command: string, args: string[]) => {
+      let out = '';
+      const code = await runBoardCommand(command, args, { out: (text) => (out += text), err: (text) => (out += text), env });
+      return { code, out };
+    };
+
+    expect(await run('status', ['poses'])).toEqual({ code: 0, out: expect.stringMatching(/^poses: thinking, running-a-tool, .*, none\nfaces: .*\nprops: /) });
+    expect(await run('status', ['set', '--pose', 'testing', '--prop', 'flask'])).toEqual({
+      code: 0,
+      out: expect.stringMatching(/^Your character: testing, yours; it goes at turn end, or 20 minutes after this set\.\n?$/),
+    });
+    expect(await run('status', ['set', 'Running the suite', '--pose', 'none'])).toEqual({
+      code: 0,
+      out: expect.stringMatching(/^status set: Running the suite\nYour character: .*, the board's \(set one with `agent-board status set --pose`\)\.\n?$/),
+    });
+    expect(await run('status', ['set', '--pose', 'dancing'])).toEqual({ code: 2, out: expect.stringMatching(/unknown pose 'dancing'; poses: thinking/) });
+    expect(await run('status', ['set', '--face', 'happy'])).toEqual({ code: 2, out: expect.stringMatching(/--face and --prop go with a --pose/) });
+    expect(await run('status', ['set', '--pose', 'testing', '--progress', '40'])).toEqual({ code: 2, out: expect.stringMatching(/--progress goes with a summary/) });
+    expect(await run('send', ['agent:x', 'hi', '--pose', 'testing'])).toEqual({ code: 2, out: expect.stringMatching(/--pose is only for `status set`/) });
+    expect(await run('status', ['set', '--agent', `agent:${worker.sessionId.slice(0, 4)}`, '--pose', 'waiting-on-review'])).toEqual({
+      code: 0,
+      out: expect.stringMatching(/\nIts character: waiting-on-review, set by .+; it goes when its next turn starts\.\n?$/),
+    });
+
+    await run('status', ['set', '--pose', 'writing']);
+    expect(await run('identify', [])).toMatchObject({ code: 0, out: expect.stringMatching(/\npose {5}writing, yours; it goes at turn end/) });
+    const whoami = JSON.parse((await run('identify', ['--json'])).out) as { you: { character: unknown } };
+    expect(whoami.you.character).toEqual({ shown: 'writing', yours: 'writing', setBy: 'you', expires: 'at turn end, or 20 minutes after this set' });
+
+    const mcp = mcpAs(setup, lead.token);
+    const answer = await mcp.callTool('set_status', { character: { pose: 'reading', face: 'focused', prop: 'book' } });
+    expect(answer).toMatchObject({ isError: false });
+    expect(answer.text.split('\n').at(-1)).toBe(JSON.stringify({ ok: true, shown: 'reading', yours: 'reading', expires: 'at turn end, or 20 minutes after this set' }));
+    expect(await mcp.callTool('set_status', { character: { pose: 'dancing' } })).toMatchObject({ isError: true, text: expect.stringMatching(/unknown pose 'dancing'/) });
+    expect(await mcp.callTool('set_status', {})).toMatchObject({ isError: true, text: expect.stringMatching(/a summary, a character, or both/) });
   });
 });
 

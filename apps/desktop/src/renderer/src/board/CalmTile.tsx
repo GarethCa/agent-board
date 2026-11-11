@@ -3,10 +3,7 @@ import { Expand, FoldVertical, SquareArrowOutUpRight, X } from 'lucide-react';
 import { isClosed } from '@agent-board/daemon/board-layout';
 import { needsYouNow, waitsForYou, type Agent } from '@agent-board/daemon/protocol';
 import { Button, EditableName, HoverCard, RenameButton, Spinner, useRenaming, useSlowClickRename } from '../ui';
-import { useGateRun } from '../gate/GatesProvider';
 import { useNeedsYouShows } from '../needs-you-setting';
-import { useReviews } from '../review/ReviewsProvider';
-import { roundsOf } from '../review/reviews';
 import { dropKey, dropOver as dropOverValue } from '../session/shell-moves';
 import { calmFace, technicalLine, type CalmAction } from './calm-tile';
 import { TileRobot } from './CommandFigure';
@@ -16,9 +13,10 @@ import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { useBoardCommands } from './commands';
 import { HarnessMark } from './HarnessMark';
-import { agentMenu } from './menu-model';
+import { useAgentTileMenu } from './agent-tile-menu';
 import { useRenameRequest } from './rename';
 import { StatusMark } from './StatusMark';
+import { poseShown } from '@agent-board/daemon/character';
 import { poseOfStatus } from './tile-pose';
 import { SubagentPerch } from './SubagentPerch';
 import { ClickOpensContext, TileActionsContext, type TileActions, type TileData } from './tile';
@@ -41,12 +39,11 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
   const tileActions = useContext(TileActionsContext);
   const { expand, openAgent, popOutAgent, setFolded, stopAgent, rename, sendUnsent, clearUnsent, typeFirstPrompt, trustFolder, resendUndelivered, clearUndelivered } = tileActions;
   const clickOpens = useContext(ClickOpensContext);
-  const gate = useGateRun(agent.sessionId);
-  const rounds = roundsOf(useReviews(), agent.sessionId);
   const dropOver = dropOverValue.use();
   const jobDrop = useJobDropOver() === agent.sessionId;
   const handoffs = useContext(HandoffsContext);
   const renaming = useRenaming(agent.name, (name) => rename({ kind: 'agent', sessionId: agent.sessionId }, name));
+  const menu = useAgentTileMenu(id, agent, { from, implementer }, renaming.startSoon);
   useRenameRequest(id, renaming);
   const nameClicks = useSlowClickRename(renaming, selected);
   const fitted = useFittedLines();
@@ -102,7 +99,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
             />
             <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
             <TileButton icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
-            <TileMenu entries={agentMenu({ nodeId: id, agent, clickOpens, gate, rounds, rename: renaming.startSoon, actions: tileActions })} />
+            <TileMenu entries={menu.entries} onOpen={menu.reread} />
             {/* Close never deletes: live, it stops (asking first); closed, it folds to its chip. A paused agent, one a
                 restart stopped and one whose pane is a live shell are woken, resumed or restarted, so it is disabled. */}
             <TileButton
@@ -136,7 +133,7 @@ export function CalmTile({ id, selected, agent, repo, from, crew, crewFlags, imp
           )
         )}
         <span className="calm-tile-foot">
-          <StatusMark status={face.status} character={{ harness: agent.harness, pose: sending ? 'handing-off' : poseOfStatus(face.status, agent) }} />
+          <StatusMark status={face.status} character={{ harness: agent.harness, pose: sending ? 'handing-off' : poseShown(poseOfStatus(face.status, agent), agent) }} />
           {repo !== undefined && (
             // Outside every zone of its repo, the tile says which repo it works in.
             <span className="calm-tile-repo" data-testid="tile-repo" title={`Works in ${agent.repoRoot}`}>

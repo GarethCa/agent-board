@@ -59,6 +59,7 @@ import {
   type Zone,
 } from './protocol.ts';
 import { cutText } from './text-cut.ts';
+import { characterReading, type CharacterReading, type CharacterSet } from './character.ts';
 import { parsePrefab, prefabFile, prefabFileName } from './crew-prefabs.ts';
 import { minutes, planDecisionText } from './plan-told.ts';
 
@@ -314,6 +315,7 @@ function itemText(item: BoardItem): string {
   if (item.kind === 'link') return String(data.title ?? data.url ?? '');
   if (item.kind === 'issue') return `${String(data.id ?? '')} ${String(data.title ?? '')}`.trim();
   if (item.kind === 'clock') return `${cronWords(String(data.cron ?? ''))}: ${String(data.prompt ?? '')}`;
+  if (item.kind === 'crew') return String(data.title ?? '');
   return typeof data.text === 'string' ? data.text : '';
 }
 
@@ -583,6 +585,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
   if (caller.side === 'agent' && tile !== undefined) {
     const agent = tile as Agent;
     lines.push(`state    ${agent.state}`, `status   ${agent.status === null ? 'not set: your tile shows your task' : agentDoing(agent)}`);
+    lines.push(`pose     ${characterWords(characterReading(agent))}`);
     lines.push(`branch   ${branchWords(agent)} in ${tilde(agent.worktree)}`);
     const role = roleLabel(agent);
     if (role !== null) lines.push(`role     ${role}`);
@@ -603,6 +606,7 @@ export function identifyView(refs: BoardRefs, caller: BoardCaller | null, socket
         session: caller.sessionId,
         orchestrate: caller.orchestrate,
         role: caller.side === 'agent' && tile !== undefined ? roleLabel(tile as Agent) : null,
+        character: caller.side === 'agent' && tile !== undefined ? characterReading(tile as Agent) : null,
         zone: zone === undefined ? null : zoneJson(refs, zone),
       },
       socket: socketPath,
@@ -889,17 +893,44 @@ export function showView(refs: BoardRefs, object: BoardObject, caller: BoardCall
   }
 }
 
-/** Sets the caller's own status. Throws `BoardError` outside an agent-board session. */
-export async function setOwnStatus(session: BoardSession, summary: string, progress: number | undefined, done = false): Promise<Agent> {
+/**
+ * Sets the caller's own status: its line (`summary`), its character's pose (`character`), or both. Throws `BoardError`
+ * outside an agent-board session.
+ */
+export async function setOwnStatus(
+  session: BoardSession,
+  summary: string | undefined,
+  progress: number | undefined,
+  done = false,
+  character?: CharacterSet,
+): Promise<Agent> {
   if (session.token === undefined || session.caller === null) {
     throw new BoardError(`Only an agent in an agent-board session can set its status: there is no ${BOARD_TOKEN_ENV} here.`);
   }
   return session.client.call('board.setStatus', {
     token: session.token,
-    summary,
+    ...(summary === undefined ? {} : { summary }),
     ...(progress === undefined ? {} : { progress }),
     ...(done ? { done } : {}),
+    ...(character === undefined ? {} : { character }),
   });
+}
+
+/**
+ * A character's reading in words: the pose drawn, whose it is (`own` for the agent's own), and when a pose set goes;
+ * a pose the board draws over waits under it.
+ */
+function characterWords(reading: CharacterReading, own = 'yours'): string {
+  if (reading.yours === null) return `${reading.shown}, the board's (set one with \`agent-board status set --pose\`)`;
+  const whose = reading.setBy === 'you' ? own : `set by ${reading.setBy}`;
+  // Each pose an agent sets is shown by its own word.
+  const drawn = reading.shown === reading.yours ? whose : `the board's, over ${reading.yours} (${whose}), shown again after`;
+  return `${reading.shown}, ${drawn}; it goes ${reading.expires}`;
+}
+
+/** What a status set with a pose answers: the pose drawn, the one set, and when that goes. */
+export function characterAnswer(agent: Agent): string {
+  return `Your character: ${characterWords(characterReading(agent))}.`;
 }
 
 /**
@@ -929,17 +960,29 @@ export function flagLine(agent: Agent, cleared = false): string {
   return `Flagged for the user in Needs you${via}: "${flag.reason}". Opening your session, or \`agent-board needs-you --clear\`, clears it.`;
 }
 
-/** `status set --agent`: the line of an agent in the caller's crew, which its tile says the caller set. */
-export async function setCrewStatus(session: BoardSession, ref: string, summary: string, progress: number | undefined): Promise<BoardView> {
+/** `status set --agent`: the line or pose of an agent in the caller's crew, which its tile says the caller set. */
+export async function setCrewStatus(
+  session: BoardSession,
+  ref: string,
+  summary: string | undefined,
+  progress: number | undefined,
+  character?: CharacterSet,
+): Promise<BoardView> {
   const { token, agent } = await orchestratorTarget(session, ref);
   await session.client.call('orchestrator.setStatus', {
     token,
     sessionId: agent.sessionId,
-    summary,
+    ...(summary === undefined ? {} : { summary }),
     ...(progress === undefined ? {} : { progress }),
+    ...(character === undefined ? {} : { character }),
   });
   const fresh = await freshAgentLine(session, agent.sessionId);
-  return { text: `Set the status of ${fresh.line}`, json: agentJson(fresh.refs, fresh.agent, session.caller) };
+  const reading = characterReading(fresh.agent, 'its');
+  const pose = character === undefined ? '' : `\nIts character: ${characterWords(reading, 'its own')}.`;
+  return {
+    text: `Set the status of ${fresh.line}${pose}`,
+    json: { ...agentJson(fresh.refs, fresh.agent, session.caller), ...(character === undefined ? {} : { character: reading }) },
+  };
 }
 
 /** The orchestrator commands' options for a new agent, as typed: refs and names, not ids. */
@@ -1521,6 +1564,21 @@ export async function closeAgent(session: BoardSession, ref: string, remove: boo
   const closed = await session.client.call('orchestrator.close', { token, sessionId: agent.sessionId, remove });
   if (closed === null) return { text: `Removed ${label}, its worktree and its branch.`, json: null };
   return { text: `Closed ${label}: its session ended; its tile, worktree and branch stay.`, json: agentJson(refs, closed, session.caller) };
+}
+
+/**
+ * `orchestrate handover`: hands the orchestrator `fromRef`'s crew and what it made (notes, lane labels, clocks, shapes,
+ * connectors, zones and edges) to the orchestrator `toRef`, which may then arrange, edit, remove and close them.
+ */
+export async function handOver(session: BoardSession, fromRef: string, toRef: string): Promise<BoardView> {
+  const { caller, token, refs } = await orchestratingCaller(session);
+  const [from, to] = [resolveAgent(refs, fromRef, caller), resolveAgent(refs, toRef, caller)];
+  const { crew, made } = await session.client.call('orchestrator.handover', { token, from: from.sessionId, to: to.sessionId });
+  const agentsText = crew.length === 0 ? 'no agents' : crew.map((agent) => `${refs.of('agent', agent.sessionId)} ${agent.name}`).join(', ');
+  return {
+    text: `Handed ${refs.of('agent', from.sessionId)} ${from.name}'s crew to ${refs.of('agent', to.sessionId)} ${to.name}: ${agentsText}, and ${made} thing${made === 1 ? '' : 's'} on the board.`,
+    json: { crew: crew.map((agent) => agentJson(refs, agent, caller)), made },
+  };
 }
 
 /** `orchestrate on|off`: the user lets an agent orchestrate, or stops it. Refused to an agent's own session. */

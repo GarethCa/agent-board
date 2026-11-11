@@ -114,7 +114,7 @@ test('a muted agent raises no notifications but still counts on the badge, until
   await withApp(async (page, app) => {
     const agent = await spawn(page, 'Pick a database');
     await expect.poll(async () => (await notifications(app)).length).toBe(1);
-    await tileAction(agentTile(page, agent), 'Mute notifications');
+    await tileAction(agentTile(page, agent), 'Mute notifications', 'Settings');
     await expect(agentTile(page, agent)).toHaveAttribute('data-muted', 'true');
     await expect(agentTile(page, agent).getByTestId('tile-muted')).toBeVisible();
     await answer(page, 'SQLite');
@@ -122,7 +122,7 @@ test('a muted agent raises no notifications but still counts on the badge, until
     expect(await badge(app)).toBe(1);
     expect(await notifications(app)).toHaveLength(1);
 
-    await tileAction(agentTile(page, agent), 'Unmute notifications');
+    await tileAction(agentTile(page, agent), 'Unmute notifications', 'Settings');
     await expect(agentTile(page, agent)).toHaveAttribute('data-muted', 'false');
     await answer(page, 'Ship it');
     await expect.poll(async () => (await notifications(app)).at(-1)?.body).toBe('Done: Ship it.');
@@ -146,9 +146,16 @@ test('clicking a notification after the window was closed opens a new window on 
   });
 });
 
-/** The page of every window the app has open: the board, a popped-out session, Settings. */
+/**
+ * The page of every window the app has open: the board, a popped-out session, Settings. A window still closing is
+ * listed with its page already destroyed, and reading that throws: it is left out, as it is no longer open.
+ */
 const windowsOpen = (app: ElectronApplication) =>
-  app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((window) => window.webContents.getURL()));
+  app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()
+      .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+      .map((window) => window.webContents.getURL()),
+  );
 
 for (const state of ['hidden', 'minimised', 'closed'] as const) {
   test(`clicking a notification with the board's window ${state} brings back the one board window on the agent, never a second`, async () => {

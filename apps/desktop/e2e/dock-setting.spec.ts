@@ -7,7 +7,7 @@ import { classicOnly, newShell, removeDataDir, tempDataDir, test } from './launc
 // still found in ⌘K's Windows group.
 
 const dockItems = (page: Page) => page.getByTestId('dock-item');
-const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session or zone' });
+const spotlight = (page: Page) => page.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
 const SPOTLIGHT_KEY = process.platform === 'darwin' ? 'Meta+k' : 'Control+k';
 
 /** Opens a shell's window and minimises it; resolves with the shell's id. */

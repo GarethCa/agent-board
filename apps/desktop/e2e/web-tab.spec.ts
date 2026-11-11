@@ -660,3 +660,44 @@ test("OSC 8 hyperlinks as Claude Code writes them open whole in the OS browser o
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('⌘F in a web tab finds in its page: a count, ↵ and ⇧↵ to step, esc to close', async () => {
+  const server = await serveWebPages();
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await newShellInZone(window);
+    await openWebTab(app, window, 'Web…', server.url, 'Dev home');
+
+    await expect(window.getByTestId('find-bar')).toHaveCount(0);
+    // ⌘F with the page holding the keyboard, sent as the OS sends a key press (Playwright's reach the page through
+    // devtools, which the app never hears): the page hands it to the window, and the field takes the keyboard.
+    await app.evaluate(({ BrowserWindow }, mac) => {
+      const [view] = BrowserWindow.getAllWindows()[0]!.contentView.children as Electron.WebContentsView[];
+      view!.webContents.focus();
+      view!.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: mac ? ['meta'] : ['control', 'shift'] });
+    }, process.platform === 'darwin');
+    const field = window.getByTestId('find-field');
+    await expect(field).toBeVisible();
+    await expect(field).toBeFocused();
+    await field.fill('e');
+    const count = window.getByTestId('find-count');
+    await expect(count).toHaveText(/^1 of [2-9]\d*$/);
+    await field.press('Enter');
+    await expect(count).toHaveText(/^2 of /);
+    await field.press('Shift+Enter');
+    await expect(count).toHaveText(/^1 of /);
+    await field.fill('zzzz');
+    await expect(count).toHaveText('No matches');
+    await field.press('Escape');
+    await expect(window.getByTestId('find-bar')).toHaveCount(0);
+  } finally {
+    await app.close();
+    await server.close();
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

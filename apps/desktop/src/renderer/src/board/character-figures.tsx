@@ -2,32 +2,11 @@
 // kept: a tile that redraws hands React the same elements, which it skips, however many agents are on the board.
 
 import type { ReactNode } from 'react';
+import type { CharacterPose } from '@agent-board/daemon/character';
 import type { DrawnStyle } from './characters';
 
-/**
- * Every pose a character can strike: each state an agent or a subagent can be drawn in. The board sets most; an agent's
- * work has its own (reading, writing, testing, waiting on review).
- */
-export const CHARACTER_POSES = [
-  'running',
-  'thinking',
-  'waiting',
-  'needs-permission',
-  'idle',
-  'rate-limited',
-  'failed',
-  'done',
-  'handing-off',
-  'on-command',
-  'starting',
-  'reading',
-  'writing',
-  'testing',
-  'waiting-on-review',
-  'hibernated',
-  'stopped-by-restart',
-] as const;
-export type CharacterPose = (typeof CHARACTER_POSES)[number];
+// Every pose a character can strike: the board's, and the ones an agent sets for its work.
+export { CHARACTER_POSES, type CharacterPose } from '@agent-board/daemon/character';
 
 /** A character's body: round for Claude, square for Codex. */
 export type CharacterBody = 'bean' | 'block';

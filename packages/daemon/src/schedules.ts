@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock } from './clock.ts';
 import { nextRun, parseCron, type Cron } from './cron.ts';
-import { CLOCK_RUNS_KEPT, type AgentSchedule, type ClockData, type ClockRun, type ClockRunOutcome, type ClockStatus } from './protocol.ts';
+import { CLOCK_RUNS_KEPT, type AgentSchedule, type ClockData, type ClockRun, type ClockRunOutcome, type ClockSkips, type ClockStatus } from './protocol.ts';
 
 /**
  * The longest the scheduler sleeps before it looks at the clock again. Timers don't count time the machine spends
@@ -50,6 +50,8 @@ export interface ScheduleHostOptions {
    * settles its run). `count` is which run of the clock it is, from 1.
    */
   fire(clock: FiringClock, count: number): Fired;
+  /** Called once a firing's run is recorded, with the clock's status then: what it fired, or the skips in a row. */
+  afterFire?(clock: FiringClock, status: ClockStatus): void;
   /** Called after a clock is planned again or fires, or a run of it changes, so clients hear of it. */
   onChange(clockId: string): void;
   log(message: string): void;
@@ -131,6 +133,11 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
   const selectRun = db.prepare('SELECT * FROM clock_runs WHERE id = ?');
   const selectRuns = db.prepare('SELECT * FROM clock_runs WHERE clock_id = ? ORDER BY id DESC LIMIT ?');
   const countRuns = db.prepare('SELECT count(*) AS count FROM clock_runs WHERE clock_id = ?');
+  // The skips in a row are the runs after its last that is not a skip: each reason once, the latest first.
+  const selectSkips = db.prepare(
+    `SELECT reason, count(*) AS count, min(fired_at) AS since FROM clock_runs WHERE clock_id = ?1 AND id > coalesce(
+       (SELECT max(id) FROM clock_runs WHERE clock_id = ?1 AND outcome != 'skipped'), 0) GROUP BY reason ORDER BY max(id) DESC`,
+  );
   const selectRunning = db.prepare("SELECT * FROM clock_runs WHERE outcome = 'running' ORDER BY id");
   const selectRunningOf = db.prepare("SELECT id FROM clock_runs WHERE clock_id = ? AND outcome = 'running' LIMIT 1");
   const selectRunOf = db.prepare("SELECT id, clock_id FROM clock_runs WHERE session_id = ? AND outcome = 'running' LIMIT 1");
@@ -185,10 +192,21 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
     const times = [new Date(dueAt).toISOString(), new Date(now).toISOString()] as const;
     const insert = (outcome: ClockRunOutcome, reason: string | null, sessionId: string | null = null, agentName: string | null = null) =>
       (insertRun.get(firing.id, ...times, outcome, reason, sessionId, agentName) as { id: number }).id;
+    const recorded = () => {
+      options.onChange(firing.id);
+      const now = status(firing.id);
+      if (now === null) return;
+      // What its caller does with a run never stops the clocks: they are planned again after this.
+      try {
+        options.afterFire?.(firing, now);
+      } catch (error) {
+        options.log(`clock ${firing.id}: after its run: ${(error as Error).message}`);
+      }
+    };
     if (selectRunningOf.get(firing.id) !== undefined) {
       insert('skipped', 'its last run is still going');
       options.log(`clock ${firing.id} skipped: its last run is still going`);
-      options.onChange(firing.id);
+      recorded();
       return;
     }
     const { count } = countRuns.get(firing.id) as { count: number };
@@ -206,7 +224,7 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
       insert(fired.started ? 'started' : 'skipped', reason, fired.sessionId ?? null, fired.agentName ?? null);
       options.log(`clock ${firing.id} fired: ${reason === null ? 'started a run' : `skipped, ${reason}`}`);
     }
-    options.onChange(firing.id);
+    recorded();
   };
 
   function tick() {
@@ -246,10 +264,18 @@ export function createScheduleHost(options: ScheduleHostOptions): ScheduleHost {
     return next === undefined ? null : new Date(next.at).toISOString();
   };
 
-  const status = (id: string): ClockStatus | null => {
-    if (selectOne.get(id) === undefined) return null;
-    return { id, nextRunAt: nextRunAt(id), runs: (selectRuns.all(id, CLOCK_RUNS_KEPT) as unknown as RunRow[]).map(toRun) };
+  const skipsOf = (id: string, latest: ClockRun | undefined): ClockSkips | null => {
+    if (latest?.outcome !== 'skipped') return null;
+    const rows = selectSkips.all(id) as { reason: string | null; count: number; since: string }[];
+    const reasons = rows.flatMap((row) => (row.reason === null ? [] : [row.reason]));
+    return { count: rows.reduce((sum, row) => sum + row.count, 0), since: rows.map((row) => row.since).sort()[0]!, reasons };
   };
+
+  function status(id: string): ClockStatus | null {
+    if (selectOne.get(id) === undefined) return null;
+    const runs = (selectRuns.all(id, CLOCK_RUNS_KEPT) as unknown as RunRow[]).map(toRun);
+    return { id, nextRunAt: nextRunAt(id), runs, skips: skipsOf(id, runs[0]) };
+  }
 
   function updateRun(runId: number, patch: RunPatch) {
     const row = selectRun.get(runId) as RunRow | undefined;

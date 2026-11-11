@@ -415,7 +415,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
     await spawnAgent(window, 'monorepo', 'Pick a database');
 
     // ⌘K finds the agent by name, with its state; picking it shows its tile.
-    const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+    const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
     await window.keyboard.press(windowKey('k'));
     await window.keyboard.type('database');
     const found = switcher.getByTestId('spotlight-row');
@@ -430,7 +430,7 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
     await more.focus();
     await window.keyboard.press('Enter');
     const menu = window.getByRole('menu');
-    await expect(menu.getByRole('menuitem', { name: 'Schedule…' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: 'Delete agent' })).toBeVisible();
     await window.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
@@ -438,6 +438,8 @@ test('an agent is found by name from ⌘K, and its tile’s More menu works from
 
     // Opened again from the keyboard, a pick does what it says.
     await window.keyboard.press('Enter');
+    await window.getByRole('menuitem', { name: 'Settings' }).focus();
+    await window.keyboard.press('ArrowRight');
     await window.getByRole('menuitem', { name: 'Schedule…' }).focus();
     await window.keyboard.press('Enter');
     await expect(window.getByRole('dialog', { name: 'Clock' })).toBeVisible();

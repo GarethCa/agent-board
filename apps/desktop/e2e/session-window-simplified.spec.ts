@@ -178,6 +178,8 @@ test("the header's one action stops a step with ⌘. and wakes a paused agent, a
     // Paused from ⋯, the header's action is Wake, which wakes it.
     await more.click();
     await menu.getByRole('menuitem', { name: /^Pause/ }).click();
+    // The next ⋯ click must not land on a menu still closing, which it would shut.
+    await expect(menu).toBeHidden();
     await expect(tile(window)).toHaveAttribute('data-state', 'hibernated');
     const wake = header(window).getByRole('button', { name: 'Wake' });
     await wake.click();
@@ -188,11 +190,14 @@ test("the header's one action stops a step with ⌘. and wakes a paused agent, a
     // End agent… asks first, then ends it: its tile stays, ended, and ⋯ offers Restart in End agent…'s place.
     await more.click();
     await menu.getByRole('menuitem', { name: /^End agent…/ }).click();
+    await expect(menu).toBeHidden();
     const confirm = window.getByRole('alertdialog', { name: /^End / });
     await confirm.getByRole('button', { name: 'End agent' }).click();
     await expect(confirm).toBeHidden();
     await expect(tile(window)).toHaveAttribute('data-state', 'done');
     await expect(tile(window)).toHaveCount(1);
+    // Its SessionEnd hook shows it done before its process has exited; Restart is offered once it has (`endedAt`).
+    await expect.poll(async () => (await agents(window))[0]!.endedAt).not.toBeNull();
     await more.click();
     await expect(menu.getByRole('menuitem', { name: /^Restart agent/ })).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: /^End agent…/ })).toHaveCount(0);

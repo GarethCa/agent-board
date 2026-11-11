@@ -56,6 +56,7 @@ export const ClockNode = memo(function ClockNode({ data, selected: picked, dragg
       data-folded={clock.folded}
       data-running={card.running}
       data-off={!clock.enabled}
+      data-stuck={card.stuck}
       title={title}
       onDoubleClick={(event) => {
         // Not a new note on the board behind it.

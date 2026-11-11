@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, RotateCw } from 'lucide-react';
 import type { WebSurface } from '@agent-board/daemon/window-layout';
 import { keptWebUrl, WEB_TAB_RULE, webTabLabel, webTabUrl } from '@agent-board/daemon/web-url';
@@ -7,6 +7,9 @@ import { errorMessage } from '../../../shared/errors';
 import { Button, ErrorText, IconButton, Input, Tag } from '../ui';
 import { newWebTabs, type LocalServer } from './tabs';
 import { useWebViewBounds } from './use-web-view';
+import { FindBar } from '../find/FindBar';
+import { pageFinder } from '../find/page-find';
+import { useFindKey } from '../find/use-find';
 
 /** What a web tab says when its page asks for a passkey: this app can't serve most, and a request it can't serve never answers. */
 const PASSKEY_NOTICE = "This page is asking for a passkey. Web tabs can't use Touch ID, iCloud Keychain or a phone passkey; if nothing happens, sign in in your browser.";
@@ -51,6 +54,9 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
   const latest = useRef({ onNavigate, onFocus, onPaneKey });
   latest.current = { onNavigate, onFocus, onPaneKey };
   const drawn = useWebViewBounds(web.id, host, visible);
+  const view = useRef<HTMLDivElement>(null);
+  const finder = useMemo(() => pageFinder(web.id), [web.id]);
+  const find = useFindKey(() => view.current, visible && opened !== undefined);
 
   useEffect(() => {
     if (opened === undefined) return;
@@ -129,7 +135,7 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
   }, [blank, keyboard]);
   const shownProblem = problem ?? state.problem;
   return (
-    <div className="web-view" data-testid="web-view" data-web-tab={web.id} aria-busy={state.loading}>
+    <div className="web-view" ref={view} data-testid="web-view" data-web-tab={web.id} aria-busy={state.loading}>
       <form className="web-head" onSubmit={go}>
         <IconButton icon={<ArrowLeft />} aria-label="Back" size="xs" disabled={!state.canGoBack} onClick={() => run(() => window.agentBoard.webTabs.back(web.id))} />
         <IconButton icon={<ArrowRight />} aria-label="Forward" size="xs" disabled={!state.canGoForward} onClick={() => run(() => window.agentBoard.webTabs.forward(web.id))} />
@@ -165,6 +171,7 @@ export function WebTab({ web, visible, servers, keyboard, autoFocus, onNavigate,
         {/* Its name is its tooltip: a tooltip of the window's would be drawn under the page. */}
         <IconButton icon={<ExternalLink />} aria-label="Open in browser" size="xs" disabled={blank} onClick={() => run(() => window.agentBoard.webTabs.openInBrowser(web.id))} />
       </form>
+      {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
       {state.offered !== undefined && (
         <div className="web-offer" data-testid="web-offer" role="status">
           <span className="web-offer-text">

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { fakeHarnessEnv, McpClient } from '@agent-board/fake-harness';
 import { COMMAND_HELP, COMMAND_OPTIONS } from '../src/board-cli.ts';
@@ -139,7 +140,8 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'whoami', command: 'identify' },
     { tool: 'board', command: 'tree' },
     { tool: 'handoff', command: 'handoff', renamed: { handover_path: 'handover', json: 'data' } },
-    { tool: 'set_status', command: 'status', positional: ['summary'] },
+    // The tool's character, one object, is the CLI's --pose with its --face and --prop.
+    { tool: 'set_status', command: 'status', positional: ['summary'], renamed: { character: 'pose' }, options: ['progress', 'done', 'agent', 'pose'] },
     { tool: 'needs_you', command: 'needs-you', positional: ['reason'] },
     { tool: 'open_pr', command: 'open-pr' },
     // With plan, it is present_plan, which waits on the user longer than a shell command runs: the tool's alone.
@@ -168,6 +170,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
     { tool: 'pause', command: 'pause', positional: ['agent'] },
     { tool: 'wake', command: 'wake', positional: ['agent'] },
     { tool: 'close', command: 'close', positional: ['agent'] },
+    { tool: 'handover', command: 'orchestrate', positional: ['from', 'to'], options: [] },
     { tool: 'add_edge', command: 'edge', positional: ['from', 'to'], renamed: { conditions: 'condition' } },
     { tool: 'list_edges', command: 'edges' },
     { tool: 'remove_edge', command: 'edge', positional: ['edge'], options: [] },
@@ -229,7 +232,7 @@ describe('the board MCP tools and the agent-board CLI', () => {
   // A question and a plan wait minutes for the user: longer than a harness lets a shell command run.
   const MCP_ONLY = ['connections', 'ask', 'present_plan'];
   // `watch` prints as things happen, as no tool call can: the wait tool with since is one round of it.
-  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'orchestrate', 'activity', 'rpc', 'watch', 'crew'];
+  const CLI_ONLY = ['zones', 'agents', 'shells', 'show', 'mcp', 'activity', 'rpc', 'watch', 'crew'];
 
   const tools = [...BOARD_MCP_TOOLS, ...ORCHESTRATOR_MCP_TOOLS];
   const toolProperties = (name: string) => Object.keys((tools.find((t) => t.name === name)!.inputSchema.properties as object | undefined) ?? {});
@@ -237,6 +240,15 @@ describe('the board MCP tools and the agent-board CLI', () => {
   it('pairs every tool with a command, and every command with a tool', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([...PARITY.map((p) => p.tool), ...MCP_ONLY].sort());
     expect(Object.keys(COMMAND_HELP).sort()).toEqual([...new Set(PARITY.map((p) => p.command)), ...CLI_ONLY].sort());
+  });
+
+  it('lists every tool it can call', () => {
+    // The tools it answers are the keys of its call table: each one must be listed, or no harness ever offers it.
+    const source = readFileSync(new URL('../src/board-mcp.ts', import.meta.url), 'utf8');
+    const table = source.slice(source.indexOf('const TOOL_CALLS'), source.indexOf('\n};\n', source.indexOf('const TOOL_CALLS')));
+    const callable = [...table.matchAll(/^ {2}(\w+): /gm)].map((match) => match[1]!);
+    expect(callable.length).toBeGreaterThan(20);
+    expect(callable.filter((name) => !tools.some((tool) => tool.name === name))).toEqual([]);
   });
 
   it.each(PARITY)('gives $tool the options of `agent-board $command`', ({ tool, command, positional = [], renamed = {}, options }) => {

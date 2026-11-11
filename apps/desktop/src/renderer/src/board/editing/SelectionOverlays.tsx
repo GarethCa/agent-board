@@ -25,6 +25,7 @@ const NAMES: Record<BoardItemKind | 'zone' | 'agent' | 'shell' | 'external', [st
   steps: ['steps card', 'steps cards'],
   memory: ['memory', 'memories'],
   queue: ['queue', 'queues'],
+  crew: ['crew card', 'crew cards'],
   clock: ['clock', 'clocks'],
   zone: ['zone', 'zones'],
   agent: ['agent', 'agents'],

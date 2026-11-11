@@ -1,6 +1,6 @@
 import { isObject } from './json.ts';
 import type { ChatEntry, Harness } from './protocol.ts';
-import { readSender } from './sender-marker.ts';
+import { onlyPasted, readSender } from './sender-marker.ts';
 
 /**
  * Versioned adapters from each harness's transcript to chat entries (ADR-0004). Both formats are internal to
@@ -172,12 +172,17 @@ function claudeQueued(attachment: unknown): ChatEntry[] {
   return userText(attachment.prompt);
 }
 
+/**
+ * Claude's own lines are told by what it wrote, so a block pasted by hand that starts with one of its tags stays a message.
+ * A message that is nothing but one block of pasted text, as Claude wraps a long one, is that text: blocks with the user's
+ * words beside them are the chat's to fold.
+ */
 function userText(text: string): ChatEntry[] {
   const interrupted = CLAUDE_INTERRUPTED.exec(text.trim());
   if (interrupted) return [{ kind: 'notice', text: 'Interrupted', ...(interrupted[1] === undefined ? {} : { forToolUse: true as const }) }];
   if (CLAUDE_TASK_NOTIFICATION.test(text.trimStart())) return [{ kind: 'notified' }];
   if (CLAUDE_HIDDEN_USER_TEXT.test(text.trimStart()) || text.trim() === '') return [];
-  return [{ kind: 'user', text }];
+  return [{ kind: 'user', text: onlyPasted(text) ?? text }];
 }
 
 function claudeAssistant(content: unknown): ChatEntry[] {

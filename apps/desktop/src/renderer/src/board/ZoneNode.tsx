@@ -11,6 +11,7 @@ import { CrewFrameBoxes } from './CrewFrameBoxes';
 import { tokenNumber } from '../theme';
 import { useZoneTabFold } from './zone-tab-fold';
 import { useSimplified } from '../design';
+import { FoldButton, FoldedZone } from './FoldedZone';
 import { ProjectWell } from './ProjectWell';
 import type { ClusterView, ShelfView } from './shelves';
 import { ClustersView, ShelvesView } from './ShelvesView';
@@ -110,6 +111,8 @@ export const ZoneBindingContext = createContext<ZoneBindingActions>({
   setSpacing: () => {},
   openSettings: () => {},
   setLayoutMode: () => {},
+  fold: () => {},
+  unfold: () => {},
   rename: () => Promise.resolve(),
   recolor: () => {},
   previewFill: () => {},
@@ -161,7 +164,7 @@ function TidyChips({ zone, binding }: { zone: Zone; binding: ZoneBindingActions 
 }
 
 /** The tab's chips, the first to fold into ⋯ first when the zone is too narrow for them all. */
-const FOLD_ORDER: readonly ZoneTabChip[] = ['tidy', 'issue', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
+const FOLD_ORDER: readonly ZoneTabChip[] = ['fold', 'tidy', 'issue', 'tracker', 'bind', 'default-repo', 'shell', 'agent', 'cancel-clone'];
 
 /** A chip on the tab now, and what ⋯ offers in its place once it folds: nothing when ⋯ has it already. */
 interface TabChip {
@@ -354,6 +357,16 @@ function ClassicZone({
       chip: <TidyChips zone={zone} binding={binding} />,
       entry: tabEntries.tidy,
     },
+    // The first to give way: ⋯ folds the zone too, so a narrow zone keeps its + agent.
+    ...(clone === null
+      ? [
+          {
+            key: 'fold' as const,
+            chip: <FoldButton className="zone-tab-control" noun="zone" onFold={() => binding.fold(zone)} />,
+            entry: tabEntries.fold,
+          },
+        ]
+      : []),
   ];
   const foldable = FOLD_ORDER.filter((key) => chips.some((chip) => chip.key === key));
   // What changes the tab's width without changing the zone's.
@@ -440,5 +453,8 @@ function ClassicZone({
  * project's neutral well (`ProjectWell`). Resizable from its edges once selected.
  */
 export const ZoneNode = memo(function ZoneNode(props: NodeProps<ZoneNodeType>) {
-  return useSimplified() ? <ProjectWell {...props} /> : <ClassicZone {...props} />;
+  const simplified = useSimplified();
+  // Folded, it is one chip in either design.
+  if (props.data.zone.folded) return <FoldedZone {...props} />;
+  return simplified ? <ProjectWell {...props} /> : <ClassicZone {...props} />;
 });

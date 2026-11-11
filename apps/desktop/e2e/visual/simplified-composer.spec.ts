@@ -458,7 +458,7 @@ for (const { theme, suffix } of THEMES) {
       await expect(sessionWindow(window)).toHaveCount(1);
 
       await window.keyboard.press(windowKey('k'));
-      const switcher = window.getByRole('dialog', { name: 'Jump to a session or zone' });
+      const switcher = window.getByRole('dialog', { name: 'Jump to a session, zone or setting' });
       await expect(switcher.getByTestId('spotlight-row').first()).toContainText('Tidy the tokens');
       await expect(switcher.locator('.spotlight-group').first()).toHaveText('Windows');
       await pinRandomText(window);

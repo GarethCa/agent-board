@@ -109,9 +109,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
 > & {
   /**
    * Ends the live agent's session as `stop` does, marked paused (`hibernated`) by `by` (null for the user), so its
-   * pane keeps its last screen and drops into no shell. Its caller checks it may be paused.
+   * pane keeps its last screen and drops into no shell. `fold` is the zone whose fold pauses it, or null. Its caller
+   * checks it may be paused.
    */
-  hibernate(sessionId: string, by: string | null, why: string): Promise<Agent>;
+  hibernate(sessionId: string, by: string | null, why: string, fold: string | null): Promise<Agent>;
   /**
    * While the agent is being paused, what resolves once its session has ended (or failed to): what is sent to it
    * meanwhile then wakes it instead of being typed into a terminal that is going. Undefined while it isn't.
@@ -167,7 +168,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
   const startConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = NULL, had_turn = 0 WHERE session_id = ?');
   const restoreConversation = db.prepare('UPDATE agents SET harness_session_id = ?, transcript_path = ?, had_turn = ? WHERE session_id = ?');
   const updateBypass = db.prepare('UPDATE agents SET codex_bypass_hook_trust = ? WHERE session_id = ?');
-  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ? WHERE session_id = ?');
+  // One statement for all three, so whatever wakes or closes a paused agent also forgets the fold that paused it.
+  const updateHibernated = db.prepare('UPDATE agents SET hibernated_at = ?, hibernated_by = ?, hibernated_fold = ? WHERE session_id = ?');
   /** Live Codex agents running with the bypass flag, watched for project config appearing. */
   const guards = new Map<string, CodexConfigGuard>();
   const remove = db.prepare('DELETE FROM agents WHERE session_id = ?');
@@ -280,7 +282,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     subagents.set(sessionId, []);
     hookStates.relaunched(sessionId);
     // Whatever started it, it is awake now.
-    updateHibernated.run(null, null, sessionId);
+    updateHibernated.run(null, null, null, sessionId);
     // A resume after a restart is normal and says nothing. Only a conversation really lost says so: an agent that never
     // had a turn has nothing to lose.
     updateNotice.run(noConversation && prompt === undefined && !fresh && row.had_turn === 1 ? NO_CONVERSATION_NOTICE : null, sessionId);
@@ -479,7 +481,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
     async stop(sessionId, why) {
       // A paused agent is closed as it is, never woken: a plain closed agent then, with its last screen and no shell.
       if (requireAgent(sessionId).state === 'hibernated') {
-        updateHibernated.run(null, null, sessionId);
+        updateHibernated.run(null, null, null, sessionId);
         options.log(`closed paused agent ${sessionId} for ${why}`);
         announce(sessionId);
         return get(sessionId)!;
@@ -487,10 +489,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       return stop(sessionId, why);
     },
 
-    hibernate(sessionId, by, why) {
-      updateHibernated.run(new Date().toISOString(), by, sessionId);
+    hibernate(sessionId, by, why, fold) {
+      updateHibernated.run(new Date().toISOString(), by, fold, sessionId);
       const pause = stop(sessionId, why).catch((error: unknown) => {
-        updateHibernated.run(null, null, sessionId);
+        updateHibernated.run(null, null, null, sessionId);
         throw error;
       });
       const settled = pause.then(
@@ -519,10 +521,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
       const shell = sessions.list().find((session) => session.id === agent.shellSessionId);
       // Two harness instances never share its worktree: not even with `force`. Read now, not as of the last quiet save.
       if (shell !== undefined && (await sessions.shellHarnessNow(shell.id)) === agent.harness) {
-        throw invalidParams(`${agent.name} can't be restarted: ${agent.harness} is running in its shell. Exit it first`);
+        throw invalidParams(`${agent.name} can't be restarted: ${agent.harness} is running in its shell. Exit it first`, `${agent.harness} is running in its shell: exit it first`);
       }
       if (shell !== undefined && !force && (await isRunningSomething(shell.pid))) {
-        throw new RpcMethodError(AGENT_ERROR.shellBusy, `${agent.name}'s shell is running something`);
+        throw new RpcMethodError(AGENT_ERROR.shellBusy, `${agent.name}'s shell is running something`, 'its shell is running something');
       }
       await endFallbackShell(sessionId, `restart for ${asked}`);
       let row = getRow(sessionId);
@@ -553,7 +555,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions): Pick<
           if (old !== null) keepConversation.run(sessionId, old, previous.transcript);
         }
       }
-      if (!resumed.started) throw invalidParams(`${agent.name} can't be resumed: ${resumed.reason}`);
+      if (!resumed.started) throw invalidParams(`${agent.name} can't be resumed: ${resumed.reason}`, resumed.reason);
       return get(sessionId)!;
     },
 

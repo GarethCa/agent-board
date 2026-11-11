@@ -106,7 +106,8 @@ export function useEditing(options: EditingOptions) {
     const { rectOf, connectorsRef } = optionsRef.current;
     const items = selection().items.flatMap((node) => {
       const rect = rectOf(node.id);
-      return rect === undefined ? [] : [{ item: node.data.item, at: { x: rect.x, y: rect.y } }];
+      // A crew has one card, which the daemon keeps: there is no copy of it to make.
+      return rect === undefined || node.data.item.kind === 'crew' ? [] : [{ item: node.data.item, at: { x: rect.x, y: rect.y } }];
     });
     return items.length === 0 ? undefined : copied(items, connectorsRef.current);
   }, [optionsRef, selection]);
@@ -196,11 +197,14 @@ export function useEditing(options: EditingOptions) {
     [optionsRef, selectedForDelete],
   );
 
-  /** Brings the selected items and tiles forward or to the front, or sends them back, each among its own kind. */
+  /**
+   * Brings the selected items and tiles forward or to the front, or sends them back, each among its own kind; or only the
+   * nodes `ids`, selected or not.
+   */
   const restack = useCallback(
-    (how: Reorder) => {
+    (how: Reorder, ids?: ReadonlySet<string>) => {
       const { nodesRef, updateItem, moveTile } = optionsRef.current;
-      const picked = new Set(selection().nodes.map((node) => node.id));
+      const picked = ids ?? new Set(selection().nodes.map((node) => node.id));
       const items = nodesRef.current.filter(isItemNode);
       for (const [id, z] of reorder(
         items.map((node) => ({ id: node.id, z: node.data.item.z })),
@@ -343,7 +347,8 @@ export function useEditing(options: EditingOptions) {
       event.preventDefault();
       event.clipboardData.setData(BOARD_CLIPBOARD_TYPE, serialiseCopied(copy));
       event.clipboardData.setData('text/plain', plainText(copy));
-      if (event.type === 'cut') deleteSelection();
+      // A cut takes what it copied: a crew card, which has no copy, stays.
+      if (event.type === 'cut') deleteSelection({ ...selectedForDelete(), items: copy.items.map((item) => item.id) });
     };
     for (const type of ['beforecopy', 'beforecut']) document.addEventListener(type, offer as EventListener);
     document.addEventListener('copy', onCopy);
@@ -353,7 +358,7 @@ export function useEditing(options: EditingOptions) {
       document.removeEventListener('copy', onCopy);
       document.removeEventListener('cut', onCopy);
     };
-  }, [options.loaded, selection, copySelection, deleteSelection]);
+  }, [options.loaded, selection, copySelection, deleteSelection, selectedForDelete]);
 
   return {
     selection,

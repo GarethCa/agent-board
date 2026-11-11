@@ -7946,6 +7946,11 @@ button.chat-chip[aria-expanded='true'] {
   left: var(--connector-zone-top-handle-at);
 }
 
+/* A folded zone's chip has no tab: its top handle is in the middle, as its bottom one is, clear of its buttons. */
+.react-flow__node-zone:has(.folded-zone) .react-flow__handle.connector-handle.react-flow__handle-top {
+  left: 50%;
+}
+
 /* Add zone: the outline the Zone tool drags, the popover beside it, a cloning zone's tab */
 
 .board-tool-rubber[data-zone],
@@ -8397,6 +8402,49 @@ button.chat-chip[aria-expanded='true'] {
   --chip-edge: transparent;
 
   flex: none;
+}
+
+/*
+ * A zone folded to a chip, in either design: its colour's tint and edge as the zone's own, one row of dot, name, what
+ * needs the user, a count of the rest and its two controls. It is the chip's size (FOLDED_ZONE_SIZE), so the row never
+ * wraps; the name and the count give way before the controls do.
+ */
+.zone.folded-zone {
+  display: flex;
+  align-items: center;
+  border-width: 1px;
+  border-style: solid;
+}
+
+.folded-zone-row {
+  display: flex;
+  gap: var(--space-1-75);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0 var(--space-1-5) 0 var(--space-3);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* The count of the rest gives way well before the name does, and takes no room when there is no rest to count. */
+.folded-zone-summary {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folded-zone-summary:empty {
+  display: none;
+}
+
+.folded-zone-unfold {
+  margin-left: auto;
+}
+
+.folded-zone-row .editable-name {
+  cursor: inherit;
 }
 
 /* Issue cards and the "issue brief" flow edge that feeds an agent from one (R1) */
@@ -14909,6 +14957,292 @@ button.steps-link-open:focus-visible {
   font-size: var(--font-size-2xs);
 }
 
+/* A running crew's card on the board (`CrewCardView`): its left rule says where its crew is. */
+.crew-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2-5) var(--space-3) var(--space-2-5) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: var(--crew-card-edge) solid var(--prefab);
+  border-radius: var(--radius-card);
+  background: var(--raised);
+  box-shadow: var(--shadow-tile);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+}
+
+.crew-card[data-tone='ready'] {
+  border-left-color: var(--success);
+}
+
+.crew-card[data-tone='needs'] {
+  border-left-color: var(--state-waiting);
+  box-shadow: var(--shadow-attention), var(--shadow-tile);
+}
+
+/* Stopped at its round limit, it waits on the user as well: ringed as one that does, in its prefab's pink still. */
+.crew-card[data-tone='limit'] {
+  box-shadow: var(--shadow-attention), var(--shadow-tile);
+}
+
+.crew-card[data-tone='over'] {
+  border-left-color: var(--crew-card-over);
+}
+
+.react-flow__node.selected .crew-card {
+  box-shadow: var(--shadow-tile), var(--shadow-picked);
+}
+
+.crew-card-head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.crew-card-icon {
+  flex: none;
+}
+
+/* What its crew was asked: two lines of it at most. */
+.crew-card-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--size-crew-face);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.crew-card-loop {
+  display: flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.crew-card-loop > svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  color: var(--prefab-ink);
+}
+
+.crew-card-rounds {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-0-5);
+  align-items: center;
+}
+
+/* A round: filled once done, outlined in the prefab's pink while the crew is in it, dashed where it was cut short, grey until then. */
+.crew-card-rounds i {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-width: var(--size-crew-round);
+  height: var(--size-chip);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-bold);
+}
+
+.crew-card-rounds i[data-state='done'] {
+  border-color: var(--prefab-soft);
+  background: var(--prefab-soft);
+  color: var(--prefab-ink);
+}
+
+.crew-card-rounds i[data-state='now'] {
+  border-color: var(--prefab);
+  color: var(--prefab-ink);
+}
+
+.crew-card-rounds i[data-state='cut'] {
+  border-style: dashed;
+  border-color: var(--crew-card-over);
+}
+
+/* A row a member: what follows sits right under them, they take what room the card has at most, and scroll past that. */
+.crew-card-rows {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.crew-card-row {
+  flex: none;
+  min-width: 0;
+}
+
+.crew-card-row-body {
+  display: flex;
+  gap: var(--space-1-25);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: var(--size-pill);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.crew-card-row-body {
+  cursor: pointer;
+}
+
+button.crew-card-row-body:hover {
+  background: var(--hover);
+}
+
+button.crew-card-row-body:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.crew-card-row-body .crew-face {
+  flex: none;
+}
+
+/* An agent's status as the Simplified design reads it, at the row's size. */
+.crew-card-row-body .status-mark {
+  flex: none;
+  font-size: var(--font-size-xs);
+}
+
+/* Where the crew has a member, not a state of its agent's: no dot that reads as one. */
+.crew-card-row-body .ui-pill[data-mark='waits'] .ui-pill-dot {
+  box-sizing: border-box;
+  border: 1px solid currentcolor;
+  background: none;
+}
+
+.crew-card-row-text {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-card-row-detail {
+  color: var(--muted);
+}
+
+/* Below its members: its last hand-off and its foot while it runs, or where it stopped and what to do there. */
+.crew-card-end {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.crew-card-last,
+.crew-card-why {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.crew-card-last {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crew-card-why {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: var(--leading-snug);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.crew-card-label {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--prefab-soft);
+  color: var(--prefab-ink);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+
+.crew-card[data-tone='ready'] .crew-card-label {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.crew-card[data-tone='needs'] .crew-card-label {
+  background: var(--state-waiting-soft);
+  color: var(--state-waiting-ink);
+}
+
+.crew-card[data-tone='over'] .crew-card-label {
+  background: var(--state-idle-soft);
+  color: var(--state-idle-ink);
+}
+
+.crew-card-foot,
+.crew-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.crew-card-foot {
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+/* Its pull request, at the end of the buttons where it stopped: under them where the card is too narrow for both. */
+.crew-card-actions {
+  flex-wrap: wrap;
+}
+
+.crew-card-actions > .hybrid-tile-pr {
+  margin-left: auto;
+}
+
+/* What went wrong, as the daemon said it: two lines of it, the rest in its title. */
+.crew-card-error {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .crew-prompt-no-zone {
   display: flex;
   gap: var(--space-2-5);
@@ -15224,4 +15558,36 @@ button.tile-folded-row {
 button.tile-folded-row:is(:hover, :focus-visible) {
   background: var(--hover);
   outline: none;
+}
+
+/* Find in a document or web page (⌘F): a bar under the tab's head, and the matches drawn in a document. */
+.find-bar {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--separator);
+  background: var(--surface);
+}
+
+.find-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.find-count {
+  flex: none;
+  min-width: 4.5rem;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  text-align: right;
+}
+
+::highlight(find) {
+  background-color: var(--find-match);
+}
+
+::highlight(find-active) {
+  background-color: var(--find-match-active);
 }

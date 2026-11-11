@@ -95,6 +95,15 @@ function letGoWhenTurnedOff(): void {
   });
 }
 
+/**
+ * Tells this page which sessions are in folded zones now (all of them, each time that changes): their kept terminals
+ * are let go, whatever the setting says, as a folded zone's memory is freed. One in a pane goes as it leaves it, and so
+ * does one opened while its zone stays folded. The sessions go on.
+ */
+export function letGoFoldedTerminals(sessionIds: Iterable<string>): void {
+  kept.fold(sessionIds);
+}
+
 function park(sessionId: string, entry: KeptTerminal): void {
   entry.leave();
   if (!entry.everShown()) kept.forget(sessionId, 'hidden');

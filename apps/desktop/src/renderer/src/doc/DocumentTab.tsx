@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { FileText } from 'lucide-react';
 import type { Agent, DocumentContent, DocumentSummary } from '@agent-board/daemon/protocol';
 import type { WebTabKey } from '../../../preload/api';
 import { errorMessage } from '../../../shared/errors';
 import { binding, isActive, keyText, pressed } from '../keys/registry';
+import { FindBar } from '../find/FindBar';
+import { domFinder } from '../find/dom-find';
+import { useFindKey } from '../find/use-find';
 import { PlanPage } from '../plan/PlanTab';
 import { Markdown } from '../session/Markdown';
 import { Button, ErrorText, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
@@ -68,6 +71,8 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
   const source = useRef<HTMLTextAreaElement>(null);
   const markdown = document.format === 'markdown';
   const keepMine = useRef<HTMLButtonElement>(null);
+  const viewer = useRef<HTMLDivElement>(null);
+  const finder = useMemo(() => domFinder(() => viewer.current?.querySelector('[data-testid="doc-body"]') ?? null), []);
   // Edit takes the text as read at the version the board knows: not a read from before a newer save landed.
   const current = content !== undefined && content.text !== null && content.version === document.version;
   // The agent wrote the file again since the user began editing.
@@ -114,8 +119,10 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
 
   const changed = draft === undefined ? 0 : changedLineCount(draft.from, draft.text);
   const text = content?.text ?? null;
+  // Markdown being read; an HTML document's page finds in itself (PlanPage).
+  const find = useFindKey(() => viewer.current, visible && markdown && !editing && text !== null);
   return (
-    <div className="doc-viewer" data-testid="document-view" data-mode={mode} data-format={document.format}>
+    <div className="doc-viewer" ref={viewer} data-testid="document-view" data-mode={mode} data-format={document.format}>
       <header className="doc-head">
         <div className="doc-title">
           <FileText aria-hidden />
@@ -133,6 +140,7 @@ export function DocumentTab({ agent, document, visible, onFocus, onPaneKey }: Do
           </span>
         </div>
       </header>
+      {find.finding > 0 && <FindBar finder={finder} focusSignal={find.finding} onClose={find.close} />}
       {problem !== undefined && <ErrorText>{problem}</ErrorText>}
       {content?.problem !== undefined && <ErrorText>{`The file can’t be shown: ${content.problem}`}</ErrorText>}
       {editing ? (

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.6.19 (2026-11-11)
+
+- ⌘K's accessible names say it finds settings too
+- Hand an orchestrator's crew, notes and clocks to another; arrange reuses a lane's label and note
+- Flag an agent whose check-ins keep skipping as it is still working; count skips in schedule list; timestamp daemon.log
+- Draw code in the Captain's panel in the board's code colours, and keep the panel inside the room Edge rules leave
+- Item events reach an agent's connection only for items in its scope
+- Show the sidebar footer with technical details off
+- Flake sweep part 3: wait on settled state in the tests that failed gates on 10–11 Nov
+- An agent tile's menu, grouped, from ⋯ and right-click
+- check:pr --quick runs the static checks and selected unit tests, prints one short table
+- Fold a zone from the board: the chip, the Fold button and the menus
+- The board draws each crew's card, with the user's own stops on it
+- Check the account name and keychain path before a keychain write
+- Agents find code cheaply and keep to a test budget
+- Flake sweep, part 2: wait out the menu fade and the tile state before the shot
+- ⌘F finds in a Markdown document, a doc view and a web tab
+- Characters: agents set their own pose (set_status character, status set --pose)
+- Zones can be folded in the daemon: zone.fold pauses what can pause, zone.unfold wakes only when asked
+- Crew card, daemon half: the board keeps a card for each running crew, written from the crew's own record
+- Drag the shelves' resize handle out from their rail to open them again
+- A zoomed terminal's coloured rows reach the edge of the grid
+- A long message reaches Claude as plain text in small pastes and shows in full; an agent's long message shows as the agent's
+- Flake sweep: slider Escape save, header spec menu wait, steps seen wait, clock layout
+
 ## v0.6.18 (2026-11-07)
 
 - Light agent notes are beige, not grey

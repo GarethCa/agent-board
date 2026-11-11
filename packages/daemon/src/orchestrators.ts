@@ -14,7 +14,7 @@ import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
 import { createReplyPaths } from './reply-paths.ts';
-import { invalidParams, oneOf, optionalBooleanParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
+import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
   BOARD_ERROR,
   CREW_EVENT_KINDS,
@@ -110,6 +110,7 @@ const LOGGED_METHODS: Partial<Record<DaemonMethod, OrchestratorAction>> = {
   'orchestrator.pause': 'pause',
   'orchestrator.wake': 'wake',
   'orchestrator.close': 'close',
+  'orchestrator.handover': 'handover',
   'orchestrator.addEdge': 'add-edge',
   'orchestrator.removeEdge': 'remove-edge',
   'orchestrator.move': 'move',
@@ -202,7 +203,7 @@ export interface OrchestratorHostOptions extends BoardCallerSources {
   db: DatabaseSync;
   agents: Pick<
     AgentHost,
-    'get' | 'list' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
+    'get' | 'list' | 'announce' | 'handCrew' | 'fallbackOwner' | 'spawn' | 'answer' | 'interrupt' | 'setEffort' | 'continueOnCredits' | 'resume' | 'stop' | 'pause' | 'finalMessage' | 'orchestrateFacts' | 'waitsAtPrompt' | 'setStatus' | 'clearFlag' | 'sendUnsent' | 'clearUnsent' | 'queueAfterTurn' | 'deliverAfterTurn'
   >;
   zones: () => Zone[];
   flowEdges: Pick<FlowEdgeHost, 'create' | 'get' | 'link' | 'remove'>;
@@ -236,6 +237,11 @@ export interface OrchestratorAccess {
   reachesZone(me: Orchestrator, zone: Zone): boolean;
   /** Whether `me` made what `madeBy` names, or an agent of its crew did; the user's side made everything. */
   madeByCrew(me: Orchestrator, madeBy: string | null): boolean;
+  /**
+   * Whether `me` may take over what `madeBy` made, as a handover would: an agent (not the user's side) whose session has
+   * ended, or that is gone, in `me`'s scope and no wider in its own.
+   */
+  mayTakeOver(me: Orchestrator, madeBy: string | null): boolean;
   /** Whether `agent`, in `zone`, would orchestrate where it can't now: by the zone's switch, as no hand-made scope does. */
   wouldGainOrchestrating(agent: Agent, zone: Zone | undefined): boolean;
   /** `me`'s scope in words, for a refusal. */
@@ -308,6 +314,26 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     `INSERT INTO orchestrator_activity (at, orchestrator_id, orchestrator_name, action, target_id, target_name, detail, outcome, reason)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
   );
+  /** What an orchestrator made on the board, kept by its session id: handed over with its crew. */
+  const handMade = ['board_items', 'zones', 'connectors', 'flow_edges'].map((table) => db.prepare(`UPDATE ${table} SET made_by = ? WHERE made_by = ?`));
+  const edgesMadeBy = db.prepare('SELECT id FROM flow_edges WHERE made_by = ?');
+  /**
+   * Hands `from`'s crew and what it made to `to`, in one transaction: the agents moved, how many things on the board
+   * changed hands, and the ids of the edges among them (the app shows who made an edge).
+   */
+  const handOverRows = (from: string, to: string): { crew: string[]; made: number; edges: string[] } => {
+    db.exec('BEGIN');
+    try {
+      const edges = (edgesMadeBy.all(from) as { id: string }[]).map((row) => row.id);
+      const crew = agents.handCrew(from, to);
+      const made = handMade.reduce((count, update) => count + Number(update.run(to, from).changes), 0);
+      db.exec('COMMIT');
+      return { crew, made, edges };
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  };
   const selectActivity = db.prepare('SELECT * FROM orchestrator_activity WHERE id < ? ORDER BY id DESC LIMIT ?');
   const selectActivityOf = db.prepare('SELECT * FROM orchestrator_activity WHERE orchestrator_id = ? AND id < ? ORDER BY id DESC LIMIT ?');
 
@@ -537,6 +563,33 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
     }
   };
 
+  /** Whether `receiver` could steer `agent` from its own scope, as `checkSteerable` asks, leaving out who started it. */
+  const steerableFrom = (receiver: Orchestrator, agent: Agent): boolean =>
+    SCOPES[receiver.orchestrate].agent(receiver, agent) && (agent.orchestrate === null || SCOPE_RANK[agent.orchestrate] <= SCOPE_RANK[receiver.orchestrate]);
+
+  /** `agent` as an orchestrator at the scope it orchestrates at (the narrowest, if it has none set). */
+  const asOrchestrator = (agent: Agent): Orchestrator => ({
+    sessionId: agent.sessionId,
+    name: agent.name,
+    zoneId: agent.zoneId,
+    repoRoot: agent.repoRoot,
+    orchestrate: agent.orchestrate ?? 'zone',
+    agent,
+  });
+
+  /**
+   * Why `me` may not take over what `from` left; undefined if it may: `from`'s session has ended, it is in `me`'s scope
+   * (or `me` started it), and its scope is no wider than `me`'s, so no orchestrator reaches past its scope through it.
+   */
+  const takeOverRefusal = (me: Orchestrator, from: Agent): string | undefined => {
+    if (from.endedAt === null) return `${from.name} is still running: it hands its crew over itself, or the user does`;
+    if (!startedBy(me, from) && !SCOPES[me.orchestrate].agent(me, from)) return `${from.name} is outside your scope (${scopeText(me)}), and you did not start it`;
+    if (from.orchestrate !== null && SCOPE_RANK[from.orchestrate] > SCOPE_RANK[me.orchestrate]) {
+      return `${from.name} orchestrated with a scope wider than yours (${orchestrateScopeWords(from.orchestrate)}): only the user may hand its crew on`;
+    }
+    return undefined;
+  };
+
   /** The agent `sessionId` names, which `me` may look at. */
   const target = (me: Orchestrator, sessionId: string): Agent => {
     const agent = agentNamed(sessionId);
@@ -665,6 +718,11 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
       reachesAgent: (me, agent) => agent.sessionId === me.agent?.sessionId || startedBy(me, agent) || SCOPES[me.orchestrate].agent(me, agent),
       reachesZone: (me, zone) => SCOPES[me.orchestrate].zone(me, zone),
       madeByCrew: (me, madeBy) => me.agent === null || inCrewOf(me.agent, madeBy),
+      mayTakeOver(me, madeBy) {
+        if (me.agent === null || madeBy === null) return false;
+        const maker = agents.get(madeBy);
+        return maker === undefined || takeOverRefusal(me, maker) === undefined;
+      },
       wouldGainOrchestrating(agent, zone) {
         if (agent.orchestrate !== null || agent.endedAt !== null || zone === undefined || !zone.agentsOrchestrate) return false;
         const facts = agents.orchestrateFacts(agent.sessionId);
@@ -1007,7 +1065,14 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (me.agent !== null && !inCrewOf(me.agent, agent.spawnedBy)) {
               throw outOfScope(`${agent.name} is not in your crew, and you did not start it: only its own agent, or the orchestrator that started it, sets its status`);
             }
-            return agents.setStatus(agent.sessionId, stringParam(p, 'summary'), p.progress === undefined ? null : (p.progress as number), false, me.agent === null ? null : me.name);
+            return agents.setStatus(
+              agent.sessionId,
+              optionalStringParam(p, 'summary') ?? null,
+              p.progress === undefined ? null : (p.progress as number),
+              false,
+              me.agent === null ? null : me.name,
+              optionalCharacterParam(p),
+            );
           });
         },
 
@@ -1094,6 +1159,49 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             if (agent.state !== 'hibernated') throw invalidParams(`${agent.name} is not paused`);
             // Never forced: a paused agent's pane drops into no shell.
             return agents.resume(agent.sessionId, actedBy(me, 'wake'), false);
+          });
+        },
+
+        'orchestrator.handover': (params, connection) => {
+          const p = paramsObject(params);
+          const me = orchestrator('orchestrator.handover', p, connection);
+          const entry: Entry = { detail: '' };
+          return logged(me, 'handover', entry, () => {
+            const from = agentNamed(stringParam(p, 'from'));
+            const to = agentNamed(stringParam(p, 'to'));
+            entry.on = agentTarget(from);
+            entry.detail = `to ${to.name} (agent:${to.sessionId})`;
+            if (from.sessionId === to.sessionId) throw invalidParams('give two different orchestrators');
+            if (!mayOrchestrate(to.sessionId)) throw invalidParams(notOrchestrating(to.sessionId));
+            // Never deeper: the crew it takes would sit below the cap it was started under.
+            if (agents.orchestrateFacts(to.sessionId).depth > agents.orchestrateFacts(from.sessionId).depth) {
+              throw invalidParams(`${to.name} is deeper in a crew than ${from.name}: hand ${from.name}'s crew to an orchestrator no deeper than it`);
+            }
+            if (me.agent !== null) {
+              const mine = me.agent.sessionId;
+              if (mine === from.sessionId) checkTarget(me, to);
+              else if (mine === to.sessionId) {
+                checkTarget(me, from);
+                const refusal = takeOverRefusal(me, from);
+                if (refusal !== undefined) throw outOfScope(refusal);
+              } else throw outOfScope('an orchestrator hands over only its own crew, or takes over one whose session has ended');
+              // Each agent moved must be one `to` could steer from its own scope: a crew never carries it past its scope.
+              const receiver = mine === to.sessionId ? me : asOrchestrator(to);
+              const beyond = agents.list().filter((agent) => agent.spawnedBy === from.sessionId && agent.sessionId !== to.sessionId && !steerableFrom(receiver, agent));
+              if (beyond.length > 0) {
+                throw outOfScope(`${beyond.map((agent) => agent.name).join(', ')} ${beyond.length === 1 ? 'is' : 'are'} outside ${to.name}'s scope (${orchestrateScopeWords(receiver.orchestrate)}): only the user may hand this crew over`);
+              }
+            }
+            const moved = handOverRows(from.sessionId, to.sessionId);
+            for (const id of moved.crew) agents.announce(id);
+            for (const id of moved.edges) {
+              const edge = options.flowEdges.get(id);
+              if (edge !== undefined) options.broadcast({ type: 'flowEdge.updated', edge });
+            }
+            const crew = moved.crew.map((id) => agents.get(id)).filter((agent) => agent !== undefined);
+            const { made } = moved;
+            entry.detail = `${entry.detail}: ${crew.length} agent${crew.length === 1 ? '' : 's'} and ${made} thing${made === 1 ? '' : 's'} on the board`;
+            return { crew, made };
           });
         },
 

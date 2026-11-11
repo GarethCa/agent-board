@@ -4,10 +4,10 @@ import { handoffLine } from './handoff-text.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender } from './sender-marker.ts';
 import { invalidParams } from './params.ts';
-import { questionPrompt, type Agent } from './protocol.ts';
+import { questionPrompt, type Agent, type Harness } from './protocol.ts';
 import type { RunStart } from './schedules.ts';
 import { CONTINUE, readRateLimitScreen } from './rate-limit-screen.ts';
-import { answerInput, draftAfterInput, oneLine, submittedText } from './terminal-input.ts';
+import { answerInput, draftAfterInput, oneLine, pastePieces, promptRows, submittedText } from './terminal-input.ts';
 import { cutText } from './text-cut.ts';
 
 /**
@@ -73,13 +73,16 @@ export interface AfterTurn {
 /** Why a message queued in a turn its rate limit stopped was given up on: Enter there may pick from Claude's menu. */
 const RATE_LIMITED_REASON = 'its turn hit a rate limit';
 
+/** `text` as Claude submits it, a tab made four spaces, to compare what was typed with what it submitted. */
+const withoutTabs = (text: string) => text.replaceAll('\t', '    ');
+
 /** Why nothing more is typed at a prompt holding a message that was never sent: it would run on from it. */
 const UNSENT_REASON = 'a message typed at its prompt was never sent';
 
 /**
- * What clears a draft of `lines` lines at a harness's prompt, its cursor at its end, as the board's Clear does with an
- * unsent message: Ctrl-U clears the line up to the cursor, and Backspace at a line's start joins it to the one above,
- * for the next Ctrl-U. Both Claude Code and Codex take these keys so; a paste a harness shows as one placeholder
+ * What clears a draft of `lines` rows at a harness's prompt (`promptRows`), its cursor at its end, as the board's Clear
+ * does with an unsent message: Ctrl-U clears the row up to the cursor, and Backspace at a row's start joins it to the one
+ * above, for the next Ctrl-U. Both Claude Code and Codex take these keys so; a paste a harness shows as one placeholder
  * (`[Pasted text +4 lines]`) goes at the first Ctrl-U, and the keys after it do nothing at an empty prompt.
  */
 const clearKeys = (lines: number) => `\x15${'\x7f\x15'.repeat(lines - 1)}`;
@@ -117,6 +120,7 @@ export type PromptNow = 'at-prompt' | 'typing' | 'working' | 'moved-on';
 export interface DeliveryRow {
   name: string;
   ended_at: string | null;
+  harness: Harness;
   /** The harness's own name for its conversation: Codex's, which `codex resume` needs. */
   harness_session_id: string | null;
   /** Set once the agent is being paused, or is: a pause under way has it set while its session still runs. */
@@ -328,7 +332,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const reason = unsent.has(sessionId) ? UNSENT_REASON : stillReady();
     if (reason !== undefined) return { typed: false, reason };
     await typeAndSettle(sessionId, line);
-    const lines = line.split('\r').length;
+    // Measured at Claude, where Ctrl-U clears one wrapped row; not at Codex, which keeps its count by lines.
+    const lines = getRow(sessionId)?.harness === 'claude' ? promptRows(line) : line.split('\r').length;
     let inTurn = false;
     let why: string | undefined;
     // Two queued in one turn may go up as one message: the second Enter landed on the first's text.
@@ -345,18 +350,26 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     const sent = await pressEnter(sessionId, (now) => {
       why = whyGaveUp(now);
       options.log(`${what} to ${sessionId} was typed at its prompt but not sent: ${why}`);
-      setUnsent(sessionId, { what, lines }, why);
+      // A session that has ended has no prompt to hold it: kept, it would stop whatever its next session is sent.
+      if (getRow(sessionId)?.ended_at === null) setUnsent(sessionId, { what, lines }, why);
       return false;
     }, midTurn ? queue : undefined);
     return { typed: true, sent, ...(inTurn ? { inTurn } : {}), ...(why === undefined ? {} : { why }) };
   };
 
   /**
+   * What to write for `input` (`answerInput`) at the agent's prompt. Claude folds a long paste and marks it as pasted, so
+   * it goes as smaller ones (`pastePieces`); from what is known of Codex, it expands one as it submits it, with no wrapper,
+   * so it goes whole.
+   */
+  const inputFor = (sessionId: string, input: string): string => (getRow(sessionId)?.harness === 'claude' ? pastePieces(input).join('') : input);
+
+  /**
    * Types `text` at the agent's prompt as one line (a long one pasted, `answerInput`) and submits it, as `typeInput`
    * does: a turn that started meanwhile takes it as queued, as for the user's answers (`midTurn`).
    */
   const typeLine = (sessionId: string, text: string, what: string, stillReady?: () => string | undefined) =>
-    typeInput(sessionId, answerInput(oneLine(text)), what, stillReady, true);
+    typeInput(sessionId, inputFor(sessionId, answerInput(oneLine(text))), what, stillReady, true);
 
   /**
    * Why the agent's unsent message can't be sent from the board now, or with `clearing` cleared, or undefined if it
@@ -543,8 +556,9 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
     promptSubmitted(sessionId: string, prompt: unknown) {
       const kept = queued.get(sessionId);
       if (kept === undefined) return;
-      const submitted = typeof prompt === 'string' ? oneLine(prompt) : undefined;
-      const taken = submitted === undefined || submitted === kept.text || (kept.count > 1 && submitted.endsWith(` ${kept.text}`));
+      const submitted = typeof prompt === 'string' ? withoutTabs(oneLine(prompt)) : undefined;
+      const text = withoutTabs(kept.text);
+      const taken = submitted === undefined || submitted === text || (kept.count > 1 && submitted.endsWith(` ${text}`));
       if (taken || options.promptNow(sessionId) !== 'working') queued.delete(sessionId);
     },
 
@@ -745,9 +759,11 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
      * it waits behind it (`queueUntilUp`). Never typed blind: nothing is typed if `ready` resolves false (its session
      * ended first). Kept as its unsent message if no turn starts on it. With no `prompt` (an agent started with no task,
      * or relaunched with no new one), only what was sent to it meanwhile waits for `ready`: a message typed into a
-     * harness still loading would sit at its prompt, unsent.
+     * harness still loading would sit at its prompt, unsent. A new session's prompt holds nothing, so what the last one
+     * left there is forgotten; a first prompt refused once its session is up is handed back (`undelivered`).
      */
     firstPrompt(sessionId: string, prompt: string | undefined, ready: Promise<boolean>) {
+      setUnsent(sessionId, undefined);
       const settled = ready.then(
         (up) => up,
         () => false,
@@ -760,7 +776,8 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
         if (!(await settled) || prompt === undefined) return;
         typingFirst.add(sessionId);
         try {
-          await typeNow(sessionId, answerInput(prompt, true), 'Its first prompt', ended, false);
+          const typed = await typeNow(sessionId, inputFor(sessionId, answerInput(prompt, true)), 'Its first prompt', ended, false);
+          if (!typed.typed) options.undelivered(sessionId, 'Its first prompt', prompt, typed.reason);
         } finally {
           typingFirst.delete(sessionId);
         }
@@ -841,7 +858,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       };
       typingAfterTurn.add(sessionId);
       item.typing();
-      void typeInput(sessionId, answerInput(item.text, false), 'A message', () => stillReady(sessionId, true))
+      void typeInput(sessionId, inputFor(sessionId, answerInput(item.text)), 'A message', () => stillReady(sessionId, true))
         .then(
           (typed) => {
             if (!typed.typed) {
@@ -896,11 +913,13 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       // Claude's question dialog is up: typed keys would pick its answers, which only the user does.
       if (questionPrompt(agent) !== undefined) throw invalidParams(`${agent.name} is asking you questions: answer them in its terminal`);
       if (oneLine(text) === '') throw invalidParams('the answer must not be empty');
+      // One with an image goes whole: a cut through its path would keep the harness from taking it as a dropped file.
+      const line = paste ? answerInput(text, true) : inputFor(sessionId, answerInput(text));
       if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, answerInput(text, paste), 'A message', text);
+        queueOrHandBack(sessionId, line, 'A message', text);
         return { queued: true };
       }
-      const typed = await typeInput(sessionId, answerInput(text, paste), 'A message', () => whyNotAnswer(sessionId), true);
+      const typed = await typeInput(sessionId, line, 'A message', () => whyNotAnswer(sessionId), true);
       if (typed.typed && !typed.sent) return { queued: false, unsent: typed.why ?? UNSENT_REASON };
       if (typed.typed) return typed.inTurn === true ? { queued: false, inTurn: true } : { queued: false };
       // Refused, never typed: the caller still has it.
@@ -916,7 +935,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (row.ended_at !== null) return relaunch(row, prompt, 'for its scheduled run', row.hibernated_at === null ? undefined : row.harness_session_id);
       if (beingPaused(row)) return { started: false, reason: 'it was being paused' };
       if (notUp.has(sessionId)) {
-        queueOrHandBack(sessionId, answerInput(oneLine(prompt)), 'A scheduled run', prompt);
+        queueOrHandBack(sessionId, inputFor(sessionId, answerInput(oneLine(prompt))), 'A scheduled run', prompt);
         return { started: true, queued: true };
       }
       const reason = unsent.has(sessionId) ? UNSENT_REASON : whyNotReadyNow(sessionId, row);
@@ -941,7 +960,7 @@ export function createDeliveries<Row extends DeliveryRow>(options: DeliveryOptio
       if (beingPaused(row)) return { started: false, reason: 'it was being paused', busy: true };
       const reason = unsent.has(to) ? UNSENT_REASON : whyNotReadyNow(to, row, true);
       if (reason !== undefined) return { started: false, reason, busy: true };
-      const typed = await typeInput(to, answerInput(text, false), 'A crew flag', () => stillReady(to, true), true);
+      const typed = await typeInput(to, inputFor(to, answerInput(text)), 'A crew flag', () => stillReady(to, true), true);
       if (!typed.typed) return { started: false, reason: typed.reason, busy: true };
       return typed.sent ? { started: true } : { started: true, unsent: true };
     },

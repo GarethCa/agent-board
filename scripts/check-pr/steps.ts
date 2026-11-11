@@ -47,9 +47,11 @@ export interface StepContext {
   exists: (file: string) => boolean;
   /** Linux with no display: the Electron runs go on a virtual one (scripts/e2e-headless.sh). */
   headless: boolean;
+  /** `--quick`: the static steps and the unit tests only. The build and the Electron runs (e2e, visual) are left out. */
+  quick?: boolean;
 }
 
-export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDisplay }: StepContext): Step[] {
+export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDisplay, quick = false }: StepContext): Step[] {
   const headless = onVirtualDisplay ? ['sh', 'scripts/e2e-headless.sh'] : [];
   const steps: Step[] = [
     // A merge conflict with main, a left conflict marker or a clashing migration number (scripts/preflight).
@@ -73,6 +75,7 @@ export function stepsFor(plan: Plan, { leakCheck, exists, headless: onVirtualDis
   } else if (related.length > 0) {
     steps.push({ name: 'unit', argv: ['pnpm', 'exec', 'vitest', 'related', '--run', '--passWithNoTests', ...related] });
   }
+  if (quick) return steps;
   if (plan.e2e.length > 0 || plan.e2eAll || plan.visual || visualFiles.length > 0) steps.unshift({ name: 'build', argv: ['pnpm', 'build'] });
   if (plan.e2e.length > 0 || plan.e2eAll) {
     // Every app spec, or the listed ones: a list beside `e2eAll` would narrow the run to it.

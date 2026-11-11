@@ -87,7 +87,7 @@ test("an agent's merge gate: run in its worktree into a Gate tab, its failure se
     // Passing now (the zone's command changed behind the window), run from the tile's More menu.
     await configureGate(window, agent!.zoneId!, gateCommand('pass'));
     await sessionWindow(window).getByRole('button', { name: 'Close session window' }).click();
-    await tileAction(tile(window), 'Run gate');
+    await tileAction(tile(window), 'Run gate', 'Review & gate');
     await expect(gateView(window).getByTestId('gate-headline')).toContainText('Passed: 3 of 3');
     await expect(tile(window).getByTestId('tile-gate')).toHaveText('✓ gate 3/3');
     await expect(header(window).getByTestId('header-open-pr')).toHaveCount(0);

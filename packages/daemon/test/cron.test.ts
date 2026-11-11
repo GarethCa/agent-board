@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CronError, cronWords, nextRun, parseCron } from '../src/cron.ts';
+import { CronError, cronWords, lastRunWords, looksStuck, nextRun, parseCron, skipsWords, stuckFlagReason } from '../src/cron.ts';
 import { pinTimeZone } from './pin-time-zone.ts';
 
 // Local time, in a zone with daylight saving, so the DST cases mean something.
@@ -172,5 +172,61 @@ describe('cronWords', () => {
     expect(cronWords('0 9 * 1 *')).toBe('0 9 * 1 *');
     expect(cronWords('@yearly')).toBe('@yearly');
     expect(cronWords(' 61 * * * * ')).toBe('61 * * * *');
+  });
+});
+
+describe('skipsWords', () => {
+  const now = at(2026, 11, 1, 19, 37);
+
+  it('says how many skips in a row, since when and why', () => {
+    expect(skipsWords({ count: 8, since: at(2026, 11, 1, 16, 0).toISOString(), reasons: ['it was still working'] }, now)).toBe('skipped ×8 since 16:00 (still working)');
+    expect(skipsWords({ count: 1, since: at(2026, 11, 1, 9, 5).toISOString(), reasons: ['its last run is still going'] }, now)).toBe('skipped ×1 since 09:05 (its last run is still going)');
+  });
+
+  it('gives the day too, for a run of skips that began before today', () => {
+    expect(skipsWords({ count: 50, since: at(2026, 10, 31, 2, 36).toISOString(), reasons: ['it was waiting for you'] }, now)).toBe('skipped ×50 since 2026-10-31 02:36 (waiting for you)');
+  });
+
+  it('gives each reason once, the latest first', () => {
+    const skips = { count: 8, since: at(2026, 11, 1, 16, 0).toISOString(), reasons: ['it was waiting for you', 'it was still working'] };
+    expect(skipsWords(skips, now)).toBe('skipped ×8 since 16:00 (waiting for you, still working)');
+  });
+});
+
+describe('looksStuck', () => {
+  const since = at(2026, 11, 1, 16, 0).toISOString();
+
+  it('takes three or more skips, one at least as it was still working and the rest as it was still working or waiting for you', () => {
+    expect(looksStuck(null)).toBe(false);
+    expect(looksStuck({ count: 2, since, reasons: ['it was still working'] })).toBe(false);
+    expect(looksStuck({ count: 3, since, reasons: ['it was still working'] })).toBe(true);
+    expect(looksStuck({ count: 8, since, reasons: ['it was waiting for you', 'it was still working'] })).toBe(true);
+    expect(looksStuck({ count: 8, since, reasons: ['it was waiting for you'] })).toBe(false);
+    expect(looksStuck({ count: 8, since, reasons: ['it was still working', 'it was rate-limited'] })).toBe(false);
+    expect(looksStuck({ count: 8, since, reasons: ['you were typing in its terminal', 'it was still working'] })).toBe(false);
+  });
+});
+
+describe('stuckFlagReason', () => {
+  it('says how long the agent has been mid-turn, at least, and that its check-ins are skipped', () => {
+    const skips = { count: 3, since: at(2026, 11, 1, 16, 0).toISOString(), reasons: ['it was still working'] };
+    expect(stuckFlagReason('Planner', skips, at(2026, 11, 1, 17, 30))).toBe(
+      'Planner has been working for at least 1h 30m without a turn ending; its check-ins are being skipped (×3 since 16:00)',
+    );
+    expect(stuckFlagReason('Planner', skips, at(2026, 11, 1, 16, 2))).toBe(
+      'Planner has been working for at least 2m without a turn ending; its check-ins are being skipped (×3 since 16:00)',
+    );
+  });
+});
+
+describe('lastRunWords', () => {
+  const now = at(2026, 11, 1, 19, 37);
+  const run = (outcome: 'started' | 'skipped', reason: string | null = null) => ({ id: 1, dueAt: '', firedAt: '', outcome, reason, sessionId: null, agentName: null, finishedAt: null, result: null });
+
+  it("says how its last run went, and a run of skips as how many since when", () => {
+    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [], skips: null }, now)).toBeUndefined();
+    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [run('started')], skips: null }, now)).toBe('last started');
+    const skips = { count: 8, since: at(2026, 11, 1, 16, 0).toISOString(), reasons: ['it was still working'] };
+    expect(lastRunWords({ id: 'c', nextRunAt: null, runs: [run('skipped', skips.reasons[0])], skips }, now)).toBe('skipped ×8 since 16:00 (still working)');
   });
 });

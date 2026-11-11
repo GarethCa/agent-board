@@ -46,6 +46,9 @@ export function registerOrchestratorIpc(daemon: DaemonLink): void {
     return saved;
   });
   passthrough(daemon, ORCHESTRATOR_IPC.startPrefab, 'orchestrator.startPrefab', (params: { name: string; prompt: string; zoneId: string; repo?: string; roundLimit?: number }) => params);
+  // The user's own stops of a crew's loop, from its card: checked and logged by the daemon as any other caller's.
+  passthrough(daemon, ORCHESTRATOR_IPC.stopCrew, 'orchestrator.stopCrew', (crewId: string) => ({ crewId }));
+  passthrough(daemon, ORCHESTRATOR_IPC.crewRound, 'orchestrator.crewRound', (crewId: string) => ({ crewId }));
   // Only read: the editor shows it whole, and Save adds it.
   ipcMain.handle(ORCHESTRATOR_IPC.importPrefab, async (event) => {
     const options = { title: 'Import a crew prefab', properties: ['openFile' as const], filters: [{ name: 'Crew prefab', extensions: ['json'] }] };

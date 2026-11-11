@@ -1,6 +1,8 @@
 // Cron expressions for schedules: the standard five fields, in the daemon's local time. Pure and free of Node imports,
 // so the app's schedule editor can check an expression and show its next run as it is typed.
 
+import { STILL_WORKING, STUCK_CLOCK_SKIPS, WAITING_FOR_YOU, type ClockSkips, type ClockStatus } from './protocol.ts';
+
 /** A cron expression that can't be used, with a message that says why. */
 export class CronError extends Error {
   override name = 'CronError';
@@ -257,4 +259,46 @@ export function cronWords(expression: string): string {
   // Monday first, as a week is read.
   const listed = [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((each) => DAY_NAMES[each]);
   return `${listed.join(', ')} ${time}`;
+}
+
+const twoDigits = (value: number) => String(value).padStart(2, '0');
+
+/** `at` in local time from `now`: `16:00` today, else `2026-10-31 02:36`. */
+function sinceWords(at: Date, now: Date): string {
+  const time = `${twoDigits(at.getHours())}:${twoDigits(at.getMinutes())}`;
+  if (at.toDateString() === now.toDateString()) return time;
+  return `${at.getFullYear()}-${twoDigits(at.getMonth() + 1)}-${twoDigits(at.getDate())} ${time}`;
+}
+
+/** A clock's skips in a row, in words: `skipped ×8 since 16:00 (still working, waiting for you)`. */
+export function skipsWords(skips: ClockSkips, now: Date): string {
+  const why = skips.reasons.map((reason) => reason.replace(/^it was /, '')).join(', ');
+  return `skipped ×${skips.count} since ${sinceWords(new Date(skips.since), now)}${why === '' ? '' : ` (${why})`}`;
+}
+
+/**
+ * Whether a clock's skips in a row say its agent's turn looks stuck: `STUCK_CLOCK_SKIPS` or more, at least one as it
+ * was still working, and the rest as it was still working or waiting for you (a hung turn flickers between the two).
+ */
+export function looksStuck(skips: ClockSkips | null): boolean {
+  if (skips === null || skips.count < STUCK_CLOCK_SKIPS || !skips.reasons.includes(STILL_WORKING)) return false;
+  return skips.reasons.every((reason) => reason === STILL_WORKING || reason === WAITING_FOR_YOU);
+}
+
+/**
+ * What the flag on an agent whose turn looks stuck says: how long it has been mid-turn at least (since the first of the
+ * skips), and that its check-ins can't reach it.
+ */
+export function stuckFlagReason(name: string, skips: ClockSkips, now: Date): string {
+  const minutes = Math.max(1, Math.round((now.getTime() - new Date(skips.since).getTime()) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const lasted = hours === 0 ? `${minutes}m` : `${hours}h ${minutes % 60}m`;
+  return `${name} has been working for at least ${lasted} without a turn ending; its check-ins are being skipped (×${skips.count} since ${sinceWords(new Date(skips.since), now)})`;
+}
+
+/** How a clock's last run went, for `schedule list`: `last started`, or its skips in a row; undefined before its first. */
+export function lastRunWords(status: ClockStatus, now: Date): string | undefined {
+  const last = status.runs[0];
+  if (last === undefined) return undefined;
+  return status.skips === null ? `last ${last.outcome}` : skipsWords(status.skips, now);
 }

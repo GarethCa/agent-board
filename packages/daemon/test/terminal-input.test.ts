@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerInput, draftAfterInput, submitsDraft } from '../src/terminal-input.ts';
+import { answerInput, draftAfterInput, pastePieces, promptRows, submittedText, submitsDraft } from '../src/terminal-input.ts';
 
 describe('submitsDraft', () => {
   it('is Enter on a draft: one the user had, or text typed before it in the same write', () => {
@@ -69,5 +69,87 @@ describe('answerInput', () => {
 
   it('keeps them out of a typed line too, so it cannot press keys or start a paste', () => {
     expect(answerInput('stop\x03 here \x1b[200~please')).toBe('stop here [200~please');
+  });
+});
+
+describe('pastePieces', () => {
+  const inside = (piece: string) => piece.slice('\x1b[200~'.length, -'\x1b[201~'.length);
+  const breaks = (piece: string) => piece.split('\r').length - 1;
+
+  it('leaves alone what a harness keeps as it is: typed text, and a paste too short to fold', () => {
+    expect(pastePieces('Ship it')).toEqual(['Ship it']);
+    expect(pastePieces('\x1b[200~one\rtwo\rthree\x1b[201~')).toEqual(['\x1b[200~one\rtwo\rthree\x1b[201~']);
+    const fits = 'a'.repeat(600);
+    expect(pastePieces(`\x1b[200~${fits}\x1b[201~`)).toEqual([`\x1b[200~${fits}\x1b[201~`]);
+  });
+
+  it('cuts a long line at spaces, every piece its own paste, and loses nothing', () => {
+    const text = Array.from({ length: 800 }, (_, index) => `word${index}`).join(' ');
+    const pieces = pastePieces(answerInput(text));
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces) {
+      expect(piece.startsWith('\x1b[200~') && piece.endsWith('\x1b[201~')).toBe(true);
+      expect(inside(piece).length).toBeLessThanOrEqual(600);
+    }
+    expect(pieces.map(inside).join('')).toBe(text);
+    // Every cut falls just after a space: no word is split.
+    for (const piece of pieces.slice(0, -1)) expect(inside(piece).endsWith(' ')).toBe(true);
+    expect(submittedText(pieces.join(''))).toBe(text);
+  });
+
+  it('cuts many short lines so no piece has more than two line breaks, keeping them all', () => {
+    const text = Array.from({ length: 40 }, (_, index) => `line ${index}`).join('\n');
+    const pieces = pastePieces(answerInput(text));
+    for (const piece of pieces) expect(breaks(piece)).toBeLessThanOrEqual(2);
+    expect(pieces.map(inside).join('').replaceAll('\r', '\n')).toBe(text);
+  });
+
+  it('keeps a run of blank lines, and cuts a word with no space in it without halving a character', () => {
+    const blank = pastePieces(answerInput(`a${'\n'.repeat(9)}b`));
+    for (const piece of blank) expect(breaks(piece)).toBeLessThanOrEqual(2);
+    expect(blank.map(inside).join('')).toBe(`a${'\r'.repeat(9)}b`);
+
+    const emoji = '😀'.repeat(700);
+    const cut = pastePieces(answerInput(emoji));
+    expect(cut.length).toBeGreaterThan(1);
+    for (const piece of cut) expect(inside(piece)).toMatch(/^(😀)+$/u);
+    expect(cut.map(inside).join('')).toBe(emoji);
+  });
+
+  it('counts a tab as the four spaces a harness makes of it, but writes it as it is', () => {
+    const text = `start${'\t'.repeat(300)}\nend`;
+    const pieces = pastePieces(answerInput(text));
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const piece of pieces) expect(inside(piece).replaceAll('\t', '    ').length).toBeLessThanOrEqual(600);
+    expect(pieces.map(inside).join('').replaceAll('\r', '\n')).toBe(text);
+  });
+
+  it('leaves whole a message longer than was ever tried in pieces', () => {
+    const inputOf = (length: number) => answerInput('word '.repeat(length / 5));
+    expect(pastePieces(inputOf(30_000)).length).toBeGreaterThan(1);
+    expect(pastePieces(inputOf(30_100))).toEqual([inputOf(30_100)]);
+    const tabs = answerInput(`a${'\t'.repeat(7_600)}b`);
+    expect(pastePieces(tabs)).toEqual([tabs]);
+  });
+
+  it('leaves whole a message of more pieces than were ever tried in one write', () => {
+    const linesOf = (count: number) => answerInput(Array.from({ length: count }, () => 'x').join('\n'));
+    expect(pastePieces(linesOf(398))).toHaveLength(199);
+    expect(pastePieces(linesOf(400))).toEqual([linesOf(400)]);
+  });
+
+  it('leaves whole a long message starting with ! or /, as a small first piece of one could run as a command', () => {
+    for (const mark of ['!', '/']) {
+      const input = answerInput(`${mark}${'word '.repeat(300)}`);
+      expect(pastePieces(input)).toEqual([input]);
+    }
+  });
+});
+
+describe('promptRows', () => {
+  it('counts the lines of what was typed, and the rows a long one may wrap to, however it was pasted', () => {
+    expect(promptRows('one line')).toBe(1);
+    expect(promptRows('\x1b[200~one\rtwo\x1b[201~\x1b[200~\rthree\x1b[201~')).toBe(3);
+    expect(promptRows('x'.repeat(100))).toBe(6);
   });
 });

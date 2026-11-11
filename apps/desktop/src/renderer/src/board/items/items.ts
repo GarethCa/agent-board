@@ -158,11 +158,13 @@ export const ItemActionsContext = createContext<ItemActions>({
 /**
  * The data an undo or redo puts back for `item`, as it was: a shape's in full, and an agent note with its size mark
  * cleared unless it was set. A steps card's answers, ticks, steps and Send are the daemon's, changed only through its
- * steps methods, so an undo puts back its fold alone, never a copy of what it said before.
+ * steps methods, so an undo puts back its fold alone, never a copy of what it said before. A crew card's is its crew's
+ * own, written by the daemon: an undo names the crew and puts back its `tiles` alone.
  */
 export function restoredData(item: BoardItem): Record<string, unknown> {
   if (item.kind === 'shape') return completeShapeData(item.data);
   if (item.kind === 'agent-note') return { userSized: false, ...item.data };
   if (item.kind === 'steps') return { collapsed: item.data.collapsed === true };
+  if (item.kind === 'crew') return { crewId: item.data.crewId, tiles: item.data.tiles === true };
   return item.data;
 }

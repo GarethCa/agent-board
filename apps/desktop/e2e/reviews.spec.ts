@@ -23,7 +23,7 @@ test("a reviewer spawned from an implementer's tile leaves its doc and ends; the
     const [coderAgent] = await agents(window);
 
     // From its tile: a reviewer starts on the board, dashed, writes its review and is stopped.
-    await tileAction(coder, 'Review its work');
+    await tileAction(coder, 'Review its work', 'Review & gate');
     const reviewer = window.locator('[data-testid="agent-tile"][data-reviewer]');
     await expect(reviewer).toHaveCount(1);
     // Its round is a subtitle, not part of its name; the whole name is the tooltip.

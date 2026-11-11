@@ -130,6 +130,12 @@ describe('restoredData', () => {
     expect(restoredData(item({ kind: 'steps', data: { title: 'Release', steps: [] } }))).toEqual({ collapsed: false });
   });
 
+  it('names a crew card’s crew and puts back its tiles alone: what it shows is the daemon’s, from the crew', () => {
+    const card = item({ kind: 'crew', data: { crewId: 'c1', title: 'Add a footer', tiles: true, crew: { stopped: 'stopped' } } });
+    expect(restoredData(card)).toEqual({ crewId: 'c1', tiles: true });
+    expect(restoredData(item({ kind: 'crew', data: { crewId: 'c1' } }))).toEqual({ crewId: 'c1', tiles: false });
+  });
+
   it('puts back any other item’s data whole, and an agent note with its size mark cleared unless it was set', () => {
     expect(restoredData(item())).toEqual({ text: '', color: '#fff3a3' });
     expect(restoredData(item({ kind: 'agent-note', data: { text: 'hi' } }))).toEqual({ userSized: false, text: 'hi' });

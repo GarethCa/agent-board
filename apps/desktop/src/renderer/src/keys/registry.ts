@@ -186,6 +186,7 @@ export const KEYS = [
   { id: 'window.openLinkBrowser', label: 'Open an https link in the terminal in the browser', section: 'window', scope: 'window', status: 'today', keys: [{ mod: 'command', shift: true, text: 'click' }] },
   { id: 'window.send', label: 'Send the message box to the agent', section: 'window', scope: 'window', status: 'today', keys: [{ text: '↵' }] },
   { id: 'window.saveDoc', label: 'Save the document you are editing, and tell its agent', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'command', key: 's', text: 'S' }] },
+  { id: 'window.find', label: 'Find in the document or web page you are reading', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'window', code: 'KeyF', text: 'F' }] },
   { id: 'window.leaveDocEdit', label: 'Leave Edit in a document, dropping what is unsaved', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Escape', text: 'esc' }] },
 
   // The dialog, menu or popover with the focus: its own keys, matched where it is drawn.
