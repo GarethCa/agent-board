@@ -35,6 +35,7 @@ import { followDesign } from './design';
 import { followTechnical } from './technical';
 import { followDock } from './dock';
 import { followExtendedShortcuts } from './keys/extended-shortcuts';
+import { followEscapeHatch } from './keys/escape-hatch';
 import { ToastProvider, TooltipProvider } from './ui';
 
 const root = document.getElementById('root');
@@ -72,6 +73,7 @@ if (DEMO) document.documentElement.dataset.demo = '';
 
 // Whether the keys added since the key registry work: read as the window opens, and again as it comes to the front.
 followExtendedShortcuts();
+followEscapeHatch();
 followViewSettings();
 
 // How the window is framed, for the styles that leave room for macOS's traffic lights and draw the drag regions round

@@ -44,6 +44,7 @@ const agent = (sessionId: string, state: AgentState, fields: Partial<Agent> = {}
   page: null,
   lastMessage: null,
   compactingSince: null,
+  stateSince: '2026-10-09T10:00:00.000Z',
   finishedAt: null,
   permissions: [],
   ask: null,

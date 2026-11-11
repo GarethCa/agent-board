@@ -9,6 +9,7 @@ import { pageFinder } from '../find/page-find';
 import { useFindKey } from '../find/use-find';
 import { binding, isActive, keyText, pressed } from '../keys/registry';
 import { Markdown } from '../session/Markdown';
+import { planSurfaceOf } from '../session/tabs';
 import { useWebViewBounds } from '../session/use-web-view';
 import { Button, ErrorText, Kbd, Segmented, Tag, Textarea, type SegmentedOption } from '../ui';
 import { useAction } from '../use-action';
@@ -199,7 +200,7 @@ function PlanEditor({ agent, plan, draft, from, onChange, onLeave, onSaved }: Pl
   const leaveKey = isActive(binding('window.leaveDocEdit')) ? keyText('window.leaveDocEdit') : undefined;
   return (
     <>
-      <div className="doc-split plan-split" onKeyDown={onKey}>
+      <div className="doc-split plan-split" onKeyDown={onKey} data-unsaved={unsaved ? JSON.stringify(planSurfaceOf(sessionId)) : undefined}>
         <Textarea ref={source} className="doc-source" aria-label={`Markdown of ${plan.title}`} spellCheck={false} value={draft} onChange={(event) => onChange(event.target.value)} />
         <div className="doc-render doc-markdown" aria-label="Preview">
           <Markdown text={draft} onOpenLink={openLink} />

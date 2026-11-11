@@ -1,6 +1,8 @@
 // What the user chose for the shelved zones: the leads freed from the head row (kept, and heard by every window), the
 // zones whose Done chips are shown, and the stack fanned out (this window's, gone with it). Esc folds the fan back.
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEscStep } from '../keys/esc-ladder';
+import { isTyping } from '../keys/typing';
 import { storedValue } from '../stored-value';
 import type { ShelvesChoice } from './shelves';
 
@@ -28,17 +30,9 @@ export function useShelves() {
   const [doneShown, setDoneShown] = useState<ReadonlySet<string>>(new Set());
   const [open, setOpen] = useState<ShelvesChoice['open']>(null);
 
-  useEffect(() => {
-    if (open === null) return;
-    const fold = (event: KeyboardEvent) => {
-      // Not while typing: Esc there is the field's, or the terminal's.
-      const target = event.target as HTMLElement | null;
-      if (target !== null && (target.isContentEditable || target.closest('input, textarea, select, .xterm') !== null)) return;
-      if (event.key === 'Escape') setOpen(null);
-    };
-    window.addEventListener('keydown', fold);
-    return () => window.removeEventListener('keydown', fold);
-  }, [open]);
+  // Esc folds the shelves, one step on the ladder; not while typing, where Esc is the field's or the terminal's, nor in a
+  // session window or an expanded tile, the inner thing, which Esc leaves first.
+  useEscStep('shelves', (event) => open !== null && !isTyping(event) && !(event.target instanceof Element && event.target.closest('.session-window, .expanded-tile') !== null), () => setOpen(null));
 
   /** Frees a lead from its shelved zone's head row, or pins it there again; `live` is every agent on the board. */
   const setPinned = useCallback((sessionId: string, pinned: boolean, live: ReadonlySet<string>) => {

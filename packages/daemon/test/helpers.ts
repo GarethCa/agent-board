@@ -256,3 +256,17 @@ export function recordEvents(client: DaemonClient) {
     },
   };
 }
+
+/**
+ * The daemon log's lines (`logs`) of each send to `sessionId`, by its id, in order: each as its length, then what it
+ * says (`15: turn started on it`).
+ */
+export function sendLogLines(logs: readonly string[], sessionId: string): string[][] {
+  const lines = new Map<string, string[]>();
+  const pattern = new RegExp(`^send ([0-9a-f]{6}) to ${sessionId} \\((\\d+) chars\\): (.*)$`);
+  for (const message of logs) {
+    const match = pattern.exec(message);
+    if (match !== null) lines.set(match[1]!, [...(lines.get(match[1]!) ?? []), `${match[2]}: ${match[3]}`]);
+  }
+  return [...lines.values()];
+}

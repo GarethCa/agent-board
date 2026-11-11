@@ -1040,6 +1040,66 @@ kbd {
   opacity: 1;
 }
 
+/* The quiet tile's corner shows only on hover, focus, selection, or with its menu open. It keeps its room at rest, so
+   showing it moves nothing and covers nothing. Hidden, it still takes clicks: a pointer over it hovers the tile, which
+   shows it. */
+.hybrid-tile[data-corner='hover'] .hybrid-tile-corner {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.hybrid-tile[data-corner='hover']:is(:hover, :focus-within) .hybrid-tile-corner,
+.react-flow__node.selected .hybrid-tile[data-corner='hover'] .hybrid-tile-corner,
+.hybrid-tile[data-corner='hover'] .hybrid-tile-corner:has([data-state='open']) {
+  opacity: 1;
+}
+
+.hybrid-tile[data-corner='hover'] .hybrid-tile-actions {
+  opacity: 1;
+}
+
+/* How far through it says it is: a hairline on the tile's bottom edge, which takes no room. */
+.hybrid-tile-progress {
+  position: absolute;
+  inset-inline: var(--space-2-5);
+  bottom: 3px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--separator);
+  pointer-events: none;
+}
+
+.hybrid-tile-progress::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--progress);
+  border-radius: var(--radius-pill);
+  background: var(--state-running);
+}
+
+/* An orchestrator set its status line: who is in the hover card. */
+.hybrid-tile-set-by-mark {
+  color: var(--muted);
+}
+
+/* What the quiet tile leaves off, under its last message in its hover card. */
+.hybrid-tile-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+}
+
+.ui-hover-card-text > .hybrid-tile-details:not(:first-child) {
+  margin-top: var(--space-1-5);
+  padding-top: var(--space-1-5);
+  border-top: 1px solid var(--separator);
+}
+
 /* A scheduled agent's clock chip: its next run, or that its schedule is paused or off. */
 .hybrid-tile-clock {
   --chip: var(--state-scheduled-soft);
@@ -2152,6 +2212,11 @@ kbd {
   -webkit-line-clamp: 2;
 }
 
+/* How long it has been in its state, and its next run, lead its grey line. */
+.calm-tile-times {
+  font-variant-numeric: tabular-nums;
+}
+
 .calm-tile-foot {
   display: flex;
   align-items: center;
@@ -2841,6 +2906,12 @@ kbd {
   padding: 0 var(--space-3) 0 var(--space-4);
   border-bottom: 1px solid var(--separator);
   background: var(--panel);
+}
+
+/* ⌘J has left the terminal for the header: ringed inside it, as the window's edge would clip a ring outside. */
+.session-window-head:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 /* Popped out on macOS, its traffic lights sit at the header's start (main/chrome.ts), unless full screen hid them. */

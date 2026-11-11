@@ -8,8 +8,6 @@ const BENCH = /(render|agents)-bench\.spec\.ts/;
 const PACKAGED = /packaged\.spec\.ts/;
 const VISUAL = /(^|\/)e2e\/visual\/[^/]+\.spec\.ts$/;
 const README = /readme-screenshots\.spec\.ts/;
-/** The board recordings for the promo: the capture spike and one spec per storyboard shot. */
-const PROMO = /(^|\/)e2e\/capture\/[^/]+\.spec\.ts$/;
 /** How many tests run at once: 3 (2 when the load average is above the core count), or `AGENT_BOARD_E2E_WORKERS`, a count or a share of the cores such as `50%`. */
 function workers(): number | string {
   const value = process.env.AGENT_BOARD_E2E_WORKERS;
@@ -29,15 +27,13 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
   globalSetup: './e2e/global-setup.ts',
   projects: [
-    { name: 'app', testIgnore: [PERF, BENCH, PACKAGED, VISUAL, README, PROMO] },
+    { name: 'app', testIgnore: [PERF, BENCH, PACKAGED, VISUAL, README] },
     // Screenshots against per-platform baselines, run by `pnpm test:visual` and the visual steps of `pnpm check:local`.
     // One spec file per surface in e2e/visual/, so the shots run on several workers; the baselines stay in
     // e2e/visual.spec.ts-snapshots/, named as they were before the split. The shots launch Electron apps like the app project does.
     { name: 'visual', testMatch: VISUAL, snapshotPathTemplate: '{testDir}/visual.spec.ts-snapshots/{arg}{-projectName}{-snapshotSuffix}{ext}' },
     // The README's screenshots, written to docs/assets/screenshots by `pnpm readme:screenshots`; no test run takes them.
     { name: 'readme', testMatch: README },
-    // Recordings of the board for the promo video, made by `pnpm promo:capture` (and the spike's by `promo:spike`); no gate runs them.
-    { name: 'promo', testMatch: PROMO },
     // Frame timings are only meaningful with no other app running, so the benchmark waits for the rest.
     { name: 'perf', testMatch: PERF, dependencies: ['app'] },
     // The benchmarks: no gate runs them.

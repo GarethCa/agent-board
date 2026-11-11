@@ -1,5 +1,5 @@
 import { useBoardCommands } from './commands';
-import { memo, useContext, useState, type ReactNode } from 'react';
+import { memo, useContext, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   shortIssueId,
   statusLine,
@@ -40,7 +40,7 @@ import { JobTicket, useHeldJobs } from './items/taken-jobs';
 import { useJobDropOver } from './items/queue-board';
 import { HandoffsContext } from './flow-edges';
 import { PlusChip, type PlusItem } from './PlusChip';
-import { badgeLine, checksLabel, EXTRA_FOLD_RANK, foldRanking, isStarting, tileFooter } from './tile-footer';
+import { badgeLine, checksLabel, EXTRA_FOLD_RANK, foldRanking, isStarting, setupText, tileFooter } from './tile-footer';
 import { useFooterFold } from './use-footer-fold';
 import { agentPill, STATE_LABELS, TILE_STATE_LABELS } from '../states';
 import { useNeedsYouShows } from '../needs-you-setting';
@@ -67,6 +67,8 @@ import { ShellFolderChip } from './shell-parts';
 import { useSimplified } from '../design';
 import { quickAskOf } from './quick-ask';
 import { TileQuickAsk } from './TileQuickAsk';
+import { branchSaysMore, pillShowsAge, sinceLabel, stateAge, tileDetails, tileProgress, timeToGo, type TileShows } from './tile-shows';
+import { useTileShows } from './view-settings';
 import { askOf, lastMessageCard, nameClass, stopPropagation, TileButton, TileMenu, TrustRow, UndeliveredRow, UnsentRow, UntypedRow } from './tile-parts';
 
 /** How tall an agent's character stands at the leading edge of its tile's body, in px. */
@@ -129,7 +131,9 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const handoffs = useContext(HandoffsContext);
   const shells = windowShells({ kind: 'agent', agent }, tabs ?? []);
   const held = useHeldJobs(agent.sessionId);
-  const { shown, overflow } = tileFooter(agent, shells.length, held);
+  // What the tile shows at rest: the quiet tile unless Settings › Board › Agent tiles turns parts back on; the rest is in its hover card.
+  const look: TileShows = useTileShows();
+  const { shown, overflow } = tileFooter(agent, shells.length, held, look);
   const ranking = foldRanking(shown);
   const fitted = useFittedLines();
   const ask = askOf(agent);
@@ -149,6 +153,9 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const seen = agent.seen && waitsForYou(agent, shows);
   const state = sending ? 'handing-off' : agent.state;
   const pillFace = sending ? { state, label: TILE_STATE_LABELS[state] } : agentPill(agent, shows, TILE_STATE_LABELS);
+  // How long it has been in its state, on its pill: re-read at each whole minute of it.
+  const stateNow = useNowForSince(agent.stateSince);
+  const age = look.stateTime && !sending && pillShowsAge(pillFace.state) ? stateAge(agent.stateSince, stateNow) : undefined;
   const pickedStyle = useCharacterStyle();
   // A row with a button of its own needs the tile's width more than the tile needs its character: its pill still says.
   const rowWithButton = agent.undelivered.length > 0 || agent.trustFolder !== null || agent.untypedPrompt !== null || agent.unsent !== null;
@@ -156,7 +163,12 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   const pill = receiving ? (
     <FlowPill title="Receiving a hand-off">receiving…</FlowPill>
   ) : (
-    <StatusPill {...pillFace} {...(agent.shellHarness === null ? {} : { label: endedShellLabel(agent) })} title={STATE_LABELS[state]} />
+    <StatusPill
+      {...pillFace}
+      {...(agent.shellHarness === null ? {} : { label: endedShellLabel(agent) })}
+      time={age}
+      title={age === undefined ? STATE_LABELS[state] : `${STATE_LABELS[state]} ${sinceLabel(agent.stateSince, stateNow)}`}
+    />
   );
   // Badges that don't fit in its one line fold into the "+N", the lowest ranked first, and fold again whenever what the footer
   // says changes.
@@ -273,8 +285,23 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
   // Its last message, a hover away, while the body says what it is doing; an ask or a notice is the body's, as it was.
   const card = lastMessageCard(agent);
   const lastMessage = card?.text;
+  // Its branch row, when it says more than its issue chip (or its look shows it always); its warnings always show.
+  const branchShown = startup === null && (look.branchAlways || notIsolated !== undefined || branchSaysMore(agent));
+  // What the quiet tile leaves off, under its last message in its hover card.
+  const details = starting ? [] : tileDetails(agent, look, branchShown);
+  // With details to show and no last message, the card leads with its status or task in full, which the tile's body
+  // would otherwise give as a native tooltip: one tooltip at a time.
+  const bodyInCard = lastMessage === undefined && details.length > 0;
+  const hoverCard = bodyInCard
+    ? hoverCardContent(agent.status === null ? agent.description || undefined : statusLine(agent.status), [
+        ...(agent.status !== null && agent.description !== '' ? [`Task: ${agent.description}`] : []),
+        ...details,
+      ])
+    : hoverCardContent(lastMessage, details);
+  const setBy = agent.status?.setBy ?? null;
+  const progress = tileProgress(agent, look);
   return (
-    <HoverCard label={card?.label ?? 'Last message'} content={lastMessage}>
+    <HoverCard label={card?.label ?? 'Details'} content={hoverCard}>
     <div
       className="hybrid-tile hybrid-tile-agent"
       data-testid="agent-tile"
@@ -288,6 +315,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-drop-over={dropOver === dropKey({ kind: 'agent', id: agent.sessionId }) || undefined}
       data-job-drop={jobDrop || undefined}
       data-muted={agent.muted}
+      data-corner={look.cornerAlways ? undefined : 'hover'}
       data-seen={seen || undefined}
       data-needs-you={needsYouNow(agent, shows) || undefined}
       data-crowded={shown.length > 1 || undefined}
@@ -298,7 +326,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       data-crew={crewOf}
       onMouseEnter={crew === undefined ? undefined : () => lightCrew(agent.sessionId)}
       onMouseLeave={crew === undefined ? undefined : () => lightCrew(undefined)}
-      title={lastMessage !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
+      title={hoverCard !== undefined ? undefined : clickOpens !== 'expand' ? 'Double-click to open its session window' : 'Double-click to expand it here'}
       onDoubleClick={() => (clickOpens !== 'expand' ? openAgent(agent) : expand(id))}
     >
       {agent.master && (
@@ -310,6 +338,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
         {startup !== null && !startup.failed ? <Spinner /> : <HarnessMark className="hybrid-tile-icon" harness={agent.harness} />}
         <EditableName className={nameClass(shownName.name)} value={agent.name} title={agent.name} shown={shownName.name} renaming={renaming} clicks={nameClicks} label="Agent name" />
         <RenameButton renaming={renaming} />
+        {!look.mutedInFooter && agent.muted && <MutedBell />}
         <TileCorner>
           <TileButton icon={<Expand />} aria-label="Expand" title="Expand it here, with its terminal" onClick={() => expand(id)} />
           <TileButton className="hybrid-tile-minor" icon={<SquareArrowOutUpRight />} aria-label="Pop out" title="Open its session in its own window" onClick={() => popOutAgent(agent)} />
@@ -329,7 +358,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
       )}
       {shownName.subtitle !== undefined && <span className="hybrid-tile-subtitle">{shownName.subtitle}</span>}
       {/* Not while it starts: the tile's room is its name, its step and its footer; its crew frame or the board's zone says whose it is. */}
-      {!starting && (startup === null || chip || repo !== undefined) && (
+      {!starting && (branchShown || chip || repo !== undefined) && (
         <span className="hybrid-tile-branch" title={agent.worktree}>
           {chip && (
             <span
@@ -348,7 +377,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               {repo}
             </Tag>
           )}
-          {startup === null &&
+          {branchShown &&
             (notIsolated !== undefined ? (
               <span className="hybrid-tile-shared" data-testid="not-isolated" title={`Not isolated: it works in ${agent.worktree} itself, shared with any other agent there`}>
                 <Folder aria-hidden />
@@ -368,7 +397,7 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
           {checkoutWarning}
         </span>
       )}
-      {!starting && agent.trustedByZone && (
+      {!starting && look.trusted && agent.trustedByZone && (
         <span className="hybrid-tile-trusted" data-testid="tile-trusted-by-zone" title="Its zone trusts its folder for new agents: Claude's trust screen was answered by that setting, not by you.">
           <ShieldCheck aria-hidden />
           trusted by this zone&apos;s setting
@@ -436,16 +465,24 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
               className="hybrid-tile-body hybrid-tile-description"
               data-testid="tile-description"
               data-empty={(agent.status === null && agent.description === '') || undefined}
-              title={lastMessage !== undefined ? undefined : agent.status === null ? agent.description : `${statusLine(agent.status)}\n\nTask: ${agent.description}`}
+              title={hoverCard !== undefined ? undefined : agent.status === null ? agent.description : `${statusLine(agent.status)}\n\nTask: ${agent.description}`}
             >
-              <span className="hybrid-tile-text">{agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}</span>
+              <span className="hybrid-tile-text">
+                {/* Who set it is in the hover card; a mark says one did. */}
+                {!look.setBy && setBy !== null && (
+                  <span className="hybrid-tile-set-by-mark" data-testid="tile-set-by-mark" aria-label={`Set by ${setBy}:`}>
+                    ◎{' '}
+                  </span>
+                )}
+                {agent.status === null ? agent.description || 'No task yet' : statusLine(agent.status)}
+              </span>
             </span>
           )}
           {/* A paused tile says who paused it instead: one line under the body, which yields to the body's lines. */}
           {/* Not on a start, failed either: its footer is Retry and Delete, and nothing there yields to give it room. */}
-          {ask === undefined && agent.notice === null && agent.status?.setBy != null && agent.hibernated === null && startup === null && (
+          {look.setBy && ask === undefined && agent.notice === null && setBy !== null && agent.hibernated === null && startup === null && (
             <span className="hybrid-tile-byline" data-testid="tile-set-by" data-yields="">
-              set by ◎ {agent.status.setBy}
+              set by ◎ {setBy}
             </span>
           )}
           {agent.hibernated !== null && <PausedLine hibernated={agent.hibernated} />}
@@ -458,6 +495,13 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
         <span className="hybrid-tile-footer" ref={footer.ref}>
             {shown.map((badge) => {
               switch (badge.kind) {
+                case 'setup':
+                  return (
+                    <Tag key="setup" className="hybrid-tile-setup" data-testid="tile-setup" {...(badge.pending === null ? {} : { 'data-pending': badge.pending })} title={agentSetupLine(agent)}>
+                      <HarnessMark harness={agent.harness} />
+                      <span className="hybrid-tile-badge-text">{setupText(badge)}</span>
+                    </Tag>
+                  );
                 case 'model':
                   return (
                     <Tag key="model" className="hybrid-tile-setup" data-testid="tile-model" title={agentSetupLine(agent)}>
@@ -519,15 +563,11 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
                 case 'pr':
                   return <PullRequestChip key={badge.pr.number} pr={badge.pr} pushed={badge.pushed} open={() => openPullRequest(agent, badge.pr)} />;
                 case 'schedule':
-                  return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} open={() => commands.showItem(badge.schedule.clockId)} />;
+                  return <ClockChip key="schedule" schedule={badge.schedule} ended={agent.endedAt !== null} inWords={look.wakeInWords} open={() => commands.showItem(badge.schedule.clockId)} />;
                 case 'shells':
                   return <ShellsChip key="shells" agent={agent} shells={shells} />;
                 case 'muted':
-                  return (
-                    <span key="muted" className="hybrid-tile-muted" data-testid="tile-muted" role="img" aria-label="Notifications muted" title="Notifications muted">
-                      <BellOff aria-hidden />
-                    </span>
-                  );
+                  return <MutedBell key="muted" />;
               }
             })}
             {extras.map((each) => each.chip)}
@@ -542,10 +582,37 @@ function AgentTile({ id, selected, agent, repo, from, crew, crewFlags, tabs, imp
             {agent.state === 'hibernated' && <WakeButton onWake={() => resumeAgent(agent.sessionId)} />}
           </span>
       )}
+      {progress !== undefined && (
+        <span className="hybrid-tile-progress" data-testid="tile-progress" role="progressbar" aria-label="Its progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} style={{ '--progress': `${progress}%` } as CSSProperties} />
+      )}
       <SubagentPerch harness={agent.harness} subagents={agent.subagents} />
       <TileRobot agent={agent} sending={sending} />
     </div>
     </HoverCard>
+  );
+}
+
+/** A muted agent's bell, beside its name (or, with every part shown, in its footer). */
+function MutedBell() {
+  return (
+    <span className="hybrid-tile-muted" data-testid="tile-muted" role="img" aria-label="Notifications muted" title="Notifications muted">
+      <BellOff aria-hidden />
+    </span>
+  );
+}
+
+/** A tile's hover card: its last message, then the details the quiet tile leaves off; nothing when it has neither. */
+function hoverCardContent(lastMessage: string | undefined, details: string[]): ReactNode {
+  if (details.length === 0) return lastMessage;
+  return (
+    <>
+      {lastMessage}
+      <span className="hybrid-tile-details" data-testid="tile-details">
+        {details.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </span>
+    </>
   );
 }
 
@@ -769,10 +836,13 @@ function CommandRow({ agent }: { agent: Agent }) {
 }
 
 /** A scheduled agent's clock chip: when it next runs, or that its schedule is paused or off. Selects its clock. */
-function ClockChip({ schedule, ended, open }: { schedule: AgentSchedule; ended: boolean; open(): void }) {
-  // Re-rendered every second, so "tomorrow 09:00" turns into "09:00" at midnight.
+function ClockChip({ schedule, ended, inWords, open }: { schedule: AgentSchedule; ended: boolean; inWords: boolean; open(): void }) {
+  // Re-rendered every second, so "tomorrow 09:00" turns into "09:00" at midnight, and "in 2 m" into "in 1 m".
   const now = useNow(true);
-  const { label, title } = clockBadge(schedule, ended, new Date(now));
+  const badge = clockBadge(schedule, ended, new Date(now));
+  // In words, the time to go; its clock time stays in its tooltip.
+  const label = inWords && schedule.enabled && schedule.nextRunAt !== null ? timeToGo(new Date(schedule.nextRunAt), new Date(now)) : badge.label;
+  const { title } = badge;
   return (
     <Chip
       icon={<Clock />}

@@ -183,11 +183,12 @@ test("a zone that trusts its folder, ticked in Add zone and changed from its men
     await expect(popover).toBeHidden();
     expect((await zones(window))[0]!.trustsFolder).toBe(true);
 
-    // Its agent is never asked: the zone's setting answered, its tile says so, and the task is typed.
+    // Its agent is never asked: the zone's setting answered, its hover card says so, and the task is typed.
     await spawnAgent(window, 'monorepo', 'Pick a database');
     const first = tile(window).filter({ hasText: 'Pick a database' });
-    await expect(first.getByTestId('tile-trusted-by-zone')).toHaveText("trusted by this zone's setting", { timeout: TURN_MS });
     await expect(first.getByTestId('tile-trust')).toHaveCount(0);
+    await first.hover();
+    await expect(window.getByTestId('tile-details')).toContainText("Trusted by its zone's setting", { timeout: TURN_MS });
     await first.dblclick();
     await expect(screen(window)).toContainText('> Pick a database', { timeout: TURN_MS });
     await window.getByRole('button', { name: 'Close session window' }).click();

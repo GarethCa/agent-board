@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QUIET_TILE } from './tile-shows';
 import { DEFAULT_VIEW_SETTINGS, followViewSettings, restoreViewSettings, setCrewLook, setViewSetting, viewSettings, viewSettingsLoaded } from './view-settings';
 
 /** A window whose view state holds `saved` by key, and whose change listener the test can fire. */
@@ -25,7 +26,7 @@ afterEach(() => {
 
 describe('the board view settings', () => {
   it('start as the board has always opened', () => {
-    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false });
+    expect(DEFAULT_VIEW_SETTINGS).toEqual({ clickOpens: 'window', crewLook: 'frames', connections: 'all', agentNoteLook: 'document', agentSidebar: 'shelves', gpuTerminals: true, keepTerminals: false, tileShows: QUIET_TILE });
   });
 
   it('change at once and are saved in the view state under their keys', () => {
@@ -45,6 +46,17 @@ describe('the board view settings', () => {
     setViewSetting('clickOpens', 'window');
     restoreViewSettings({ crewLook: 'nonsense' });
     expect(viewSettings()).toBe(before);
+  });
+
+  it('save the tile look whole, and keep the same object when a window reads back an equal one', () => {
+    const { view } = stubView();
+    const look = { ...QUIET_TILE, branchAlways: true };
+    setViewSetting('tileShows', look);
+    expect(view.set).toHaveBeenCalledWith('tileShows', look);
+    const after = viewSettings();
+    restoreViewSettings({ tileShows: { ...look } });
+    expect(viewSettings()).toBe(after);
+    expect(viewSettings().tileShows.branchAlways).toBe(true);
   });
 
   it('read back what was saved, a value it does not know as the default', () => {

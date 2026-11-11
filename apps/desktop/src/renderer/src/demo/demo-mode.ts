@@ -1,4 +1,4 @@
-// Demo mode, for recording the promo: the main process opens the board with `?demo=1` only under `AGENT_BOARD_DEMO=1`
+// Demo mode, for recording a demo video: the main process opens the board with `?demo=1` only under `AGENT_BOARD_DEMO=1`
 // in a build that isn't packaged (main/index.ts), so nothing here is reachable from a packaged app. It hides the
 // chrome that only matters while developing (demo.css, `:root[data-demo]`), and gives a recording spec a scripted
 // camera and a drawn cursor through `window.__demo`.

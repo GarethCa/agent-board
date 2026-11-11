@@ -17,7 +17,7 @@ test('the packaged app launches, starts its own daemon, runs a shell session in 
       ...BACKGROUND_ENV,
       AGENT_BOARD_DATA_DIR: dataDir,
       AGENT_BOARD_HOOK_SHIM: join(dataDir, 'bin', 'agent-board-hook'),
-      // Demo mode is for recording the promo from a dev build: a packaged app ignores it.
+      // Demo mode is for recording a demo video from a dev build: a packaged app ignores it.
       AGENT_BOARD_DEMO: '1',
     },
   });

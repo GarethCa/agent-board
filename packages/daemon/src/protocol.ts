@@ -1864,6 +1864,12 @@ export interface Agent {
    */
   compactingSince: string | null;
   /**
+   * When its shown `state` began, timed by the daemon as it reads the agent. A hand-off is timed as part of the state it
+   * came from, so it never restarts the time. After a daemon restart, a paused or ended agent keeps its row's time; any
+   * other starts at the restart.
+   */
+  stateSince: string;
+  /**
    * When its own turn last ended with a final message (`Stop`), kept across a new prompt and a daemon restart; null
    * before its first. A manual edge out of it has something new to send once this is after its last delivery.
    */

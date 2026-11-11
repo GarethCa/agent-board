@@ -15,7 +15,7 @@ import { boundsOnBoard, isItemNode, placeOnBoard } from '../items/items';
 import { shapeData } from '../items/text-style';
 import { shapeWords } from '../items/shapes/sections';
 import { isSessionTile, isZone, repoName, type BoardNode } from '../tiles';
-import { isTyping } from '../use-tile-moves';
+import { isTyping } from '../../keys/typing';
 import { answerSpots, captureZoom, selectionAsk, selectionSummary, type DiagramObject, type SelectionAsk } from './selection-diagram';
 
 /** What the popover asks to begin with. */

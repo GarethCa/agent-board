@@ -32,11 +32,15 @@ export function daemonViewState(daemon: DaemonLink): ViewState {
   };
 }
 
-/** The view state IPC the preload's `view` API calls. */
-export function registerViewIpc(view: ViewState): void {
+/**
+ * The view state IPC the preload's `view` API calls. `saved` hears each window's save once it is made, for what the
+ * main process must know at once (a key press in a web tab's page), as every other window does.
+ */
+export function registerViewIpc(view: ViewState, saved?: (key: string, value: unknown) => void): void {
   ipcMain.handle(VIEW_IPC.get, (_event, key: string) => view.get(key));
   ipcMain.handle(VIEW_IPC.set, async (event, key: string, value: unknown) => {
     await view.set(key, value);
+    saved?.(key, value);
     sendToWindowsExcept(event.sender, VIEW_IPC.changed, { key, value });
   });
   ipcMain.handle(VIEW_IPC.measured, (_event, report: LayoutMeasured) => view.measured(report));

@@ -876,6 +876,34 @@ describe('Claude agents', () => {
     expect((await second.client.call('agent.setMuted', { sessionId: agent.sessionId, muted: false })).muted).toBe(false);
   });
 
+  it('times how long an agent has been in its state, and a paused one from its pause across a daemon restart', async () => {
+    const dataDir = tempDataDir();
+    const clock = createFakeClock(new Date('2026-01-05T09:00:00.000Z'));
+    const first = await agentDaemon('waiting', { dataDir, clock });
+    const zone = await addZone(first.client, tempRepo());
+    const agent = await spawnAttached(first.client, zone.id, 'Set up the app');
+    const waiting = await untilState(first.recorder, agent.sessionId, 'waiting');
+    const read = async (client: DaemonClient) => (await client.call('agent.list')).find((a) => a.sessionId === agent.sessionId)!;
+
+    // Read again in the same state, it keeps its time.
+    clock.advance(5 * 60_000);
+    expect((await read(first.client)).stateSince).toBe(waiting.stateSince);
+
+    // Paused, its time is its pause's.
+    await first.client.call('agent.pause', { sessionId: agent.sessionId });
+    const paused = await untilAgent(first.recorder, agent.sessionId, (a) => a.state === 'hibernated');
+    expect(paused.stateSince).toBe(new Date(clock.now()).toISOString());
+    await first.daemon.stop();
+
+    // A fresh daemon reads it from its row: when it was paused, not when it was first read again.
+    clock.advance(60 * 60_000);
+    const second = await agentDaemon('waiting', { dataDir, home: first.home, clock });
+    const again = await read(second.client);
+    expect(again.state).toBe('hibernated');
+    expect(again.stateSince).toBe(again.hibernated!.at);
+    expect(again.stateSince).not.toBe(new Date(clock.now()).toISOString());
+  });
+
   it('marks an ask seen when its session is opened, until the agent works and asks again', async () => {
     const { client, recorder } = await agentDaemon('waiting', { repeat: true });
     const zone = await addZone(client, tempRepo());

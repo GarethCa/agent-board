@@ -649,3 +649,37 @@ for (const { theme, suffix } of [
     }
   });
 }
+
+/** Settings › Board › Agent tiles: its switches, two of them on, light and dark. */
+for (const { theme, suffix } of [
+  { theme: 'light', suffix: '' },
+  { theme: 'dark', suffix: '-dark' },
+] as const) {
+  test(`the Agent tiles section with two parts turned back on, ${theme}`, async () => {
+    needsBaselines(`settings-agent-tiles${suffix}`);
+    const dataDir = tempDataDir();
+    const appearance: Record<string, string> = theme === 'dark' ? { AGENT_BOARD_APPEARANCE: 'dark' } : {};
+    const { app, window } = await launch(dataDir, { ...RENDER_ENV, ...appearance }, RENDER_ARGS);
+    try {
+      const settings = await openSettings(window, 'board.tiles');
+      await settings.emulateMedia({ colorScheme: theme });
+      await expect.poll(() => settings.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+      await pinFonts(settings);
+      const section = settingsSection(settings, 'Agent tiles');
+      for (const name of ['Expand, Pop out and ⋯, without hovering', 'Who set its status line']) {
+        const toggle = section.getByRole('switch', { name });
+        await toggle.click();
+        await expect(toggle).toBeChecked();
+      }
+      const box = section.locator('.settings-box');
+      await box.scrollIntoViewIfNeeded();
+      const restorePointer = await ignorePointer(settings);
+      await settle(settings);
+      await expect.soft(box).toHaveScreenshot(`settings-agent-tiles${suffix}.png`, SHOT);
+      await restorePointer();
+    } finally {
+      await app.close().catch(() => {});
+      await removeDataDir(dataDir);
+    }
+  });
+}

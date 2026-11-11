@@ -1193,6 +1193,14 @@
   text-overflow: ellipsis;
 }
 
+/* How long it has been in its state ("3m"), softer than the state's word. */
+.ui-pill-time {
+  flex: none;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
 .ui-pill > svg,
 .ui-pill-dot {
   flex: none;

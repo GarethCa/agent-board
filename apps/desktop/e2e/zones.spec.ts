@@ -592,6 +592,8 @@ test('the fill opacity slider is reached and set with the keyboard alone, and a 
     await window.mouse.move(box.x + box.width * 0.8, y);
     await expect(zone).not.toHaveAttribute('data-fill', '0');
     await escapeLayer(window);
+    // Under load the menu can outlive Escape for a moment, the slider still in it: a release before it is gone would land on the slider.
+    await expect(window.getByRole('menu')).toHaveCount(0);
     await window.mouse.up();
     await expect(zone).toHaveAttribute('data-fill', '0');
     expect(await fill()).toBe(0);

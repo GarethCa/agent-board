@@ -3,7 +3,7 @@ import type { BoardItemKind } from '@agent-board/daemon/protocol';
 import { BOARD_CLIPBOARD_TYPE } from './editing/clipboard';
 import type { ItemKind } from './items/kinds';
 import { classifyDrop, classifyPaste, imageBoardSize, imageProblem, type Incoming } from './items/paste';
-import { isTyping } from './use-tile-moves';
+import { isTyping } from '../keys/typing';
 
 type Point = { x: number; y: number };
 

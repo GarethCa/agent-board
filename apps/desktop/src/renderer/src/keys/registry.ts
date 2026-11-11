@@ -188,6 +188,19 @@ export const KEYS = [
   { id: 'window.saveDoc', label: 'Save the document you are editing, and tell its agent', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'command', key: 's', text: 'S' }] },
   { id: 'window.find', label: 'Find in the document or web page you are reading', section: 'window', scope: 'window', status: 'new', keys: [{ mod: 'window', code: 'KeyF', text: 'F' }] },
   { id: 'window.leaveDocEdit', label: 'Leave Edit in a document, dropping what is unsaved', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Escape', text: 'esc' }] },
+  // The way out of a terminal, which owns every other key, Esc included: to the header, then Esc as anywhere else.
+  { id: 'window.jumpOut', label: 'Leave the terminal for the header of its window or expanded tile', section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', code: 'KeyJ', text: 'J' }] },
+  {
+    id: 'window.regions',
+    label: 'Next or previous region: terminal, tabs, details, message box, header, board',
+    section: 'window',
+    scope: 'terminal-safe',
+    status: 'new',
+    keys: [{ key: 'F6' }, { key: 'F6', shift: true }],
+  },
+  { id: 'window.backIn', label: 'Back into the terminal, from the header', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Enter', text: '↵' }] },
+  { id: 'window.escape', label: 'Collapse the expanded tile or minimise the window, from its header: the focus goes to its tile', section: 'window', scope: 'window', status: 'new', keys: [{ key: 'Escape', text: 'esc' }] },
+  { id: 'window.leave', label: 'Collapse the expanded tile or minimise the window from anywhere in it, its terminal too', section: 'window', scope: 'terminal-safe', status: 'new', keys: [{ mod: 'window', key: 'Escape', text: 'esc' }] },
 
   // The dialog, menu or popover with the focus: its own keys, matched where it is drawn.
   { id: 'dialog.move', label: 'Move between the rows', section: 'dialog', scope: 'dialog', status: 'today', keys: [{ text: '↑' }, { text: '↓' }] },

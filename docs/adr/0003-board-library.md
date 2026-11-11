@@ -73,8 +73,8 @@ Performance rules from day one: memoised node components, `onlyRenderVisibleElem
   by unscaled cells, so `TerminalPane` wraps xterm's mouse service (`session/zoomed-mouse.ts`) to rescale each pointer
   about the terminal's origin by on-screen width ÷ `offsetWidth` first. Selection and mouse reports are right at any zoom.
   A WebGL terminal redraws its canvas for the zoom once it settles, leaving its CSS cells and so its columns as they were
-  (`session/terminal-sharpness.ts`). Its whole-pixel cells leave the grid a little narrower than its layout, and a strip
-  beside it carries each row's last colour to the layout's right side (`session/terminal-strip-fill.ts`).
+  (`session/terminal-sharpness.ts`). Its cells take the nearest whole device pixels, and a transform on its screen shows
+  the grid at its exact layout size whatever they come to, so it fills its pane on all four sides at every zoom.
 
 **Update**:
 

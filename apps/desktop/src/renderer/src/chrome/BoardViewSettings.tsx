@@ -1,6 +1,7 @@
-import { Choice, Choices, Fieldset, Hint, Segmented, Tag } from '../ui';
+import { Choice, Choices, Fieldset, Hint, Segmented, Switch, Tag } from '../ui';
 import { keyText } from '../keys/registry';
-import { setCrewLook, setViewSetting, useViewSettings } from '../board/view-settings';
+import { PARTS_TO_TURN_ON, tileShowsWith } from '../board/tile-shows';
+import { setCrewLook, setViewSetting, useTileShows, useViewSettings } from '../board/view-settings';
 
 /** Settings › Board › Opening tiles: what a double-click on an agent's or shell's tile opens. */
 export function ClickOpensSetting() {
@@ -114,5 +115,18 @@ export function AgentNoteLookSetting() {
       />
       <Hint>How a note an agent writes looks: a typed card, or a cut of its terminal.</Hint>
     </>
+  );
+}
+
+/** Settings › Board › Agent tiles: which parts an agent's Classic tile shows at rest, where the quiet tile hides them. */
+export function TileShowsSetting() {
+  const tileShows = useTileShows();
+  return (
+    <Fieldset legend="Tile shows">
+      <Hint>An agent&apos;s tile says what it is doing and since when. Turn a part on to keep it on the tile. Off, a part waits for hover or the tile&apos;s hover card, or takes its quieter form.</Hint>
+      {PARTS_TO_TURN_ON.map(({ part, label }) => (
+        <Switch key={part} label={label} checked={tileShows[part]} onChange={(event) => setViewSetting('tileShows', tileShowsWith(tileShows, part, event.target.checked))} />
+      ))}
+    </Fieldset>
   );
 }

@@ -3,6 +3,8 @@ import { NodeResizeControl, ResizeControlVariant, type ControlPosition } from '@
 import { shortIssueId, TRACKER_PROVIDERS, type Agent, type ExternalSession, type PullRequest, type Shell } from '@agent-board/daemon/protocol';
 import { paneIds } from '@agent-board/daemon/pane-layout';
 import { Folder, GitBranch, Maximize2, Minimize2, Play, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import { useLeaveKeys } from '../keys/escape-hatch';
+import { useExtendedShortcuts } from '../keys/extended-shortcuts';
 import { pressed } from '../keys/registry';
 import { DetailsHandle } from '../session/DetailsHandle';
 import { DetailsToggle } from '../session/DetailsToggle';
@@ -53,6 +55,8 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
   const { collapse, expand, resizeExpanded, maximise, popOutAgent, popOutShell, deleteAgent, deleteShell, dismissExternal, openLink, openPullRequest } = useContext(TileActionsContext);
   const shows = useNeedsYouShows();
   const simplified = useSimplified();
+  // The header takes the focus (⌘J's way out) only with the extended keys on; off, a click on it leaves the focus as before.
+  const extended = useExtendedShortcuts();
   /** Where its top-left was as the resize under way began, relative to its parent. */
   const resizeStart = useRef({ x: 0, y: 0 });
   const { agent, shell, external } = tile;
@@ -66,6 +70,8 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
   const sidebar = useAgentSidebar();
   const shelves = content !== undefined && showsShelves(sidebar, content);
   const root = useRef<HTMLElement>(null);
+  // Esc from its header (⌘J has the focus there), or ⌘Esc from anywhere in it: collapsed, the focus on its tile.
+  useLeaveKeys(root, () => collapse(id));
   // A tile too narrow for the shelves beside a terminal opens them on the rail, for itself alone: the choice every window
   // and tile shares is not changed by it.
   const [detailsCollapsed, setDetailsCollapsed] = useSidebarCollapsed(shelves, root, () => isNarrowTile(root.current?.offsetWidth ?? EXPANDED_SIZE.width));
@@ -107,7 +113,7 @@ function ExpandedTileShown({ id, tile, parent }: TileProps & { parent: ExpandedP
       onDoubleClick={stopPropagation}
       onKeyDown={onKeyDown}
     >
-      <header className="session-window-head expanded-tile-head">
+      <header className="session-window-head expanded-tile-head" tabIndex={extended ? -1 : undefined}>
         <HarnessMark className="session-window-mark" harness={harness} />
         <SessionName agent={agent} shell={shell} name={name} title={name} nodeId={id} />
         {agent && (simplified ? <StatusMark status={humanStatus(agent, shows).status} /> : <StatusPill {...agentPill(agent, shows)} />)}

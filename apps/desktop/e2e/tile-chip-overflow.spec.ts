@@ -50,8 +50,9 @@ test('a crowded tile’s footer, narrowed, stays on one line, folds the rest int
     await startCrowdedAgent(window);
 
     const footer = tile(window).locator('.hybrid-tile-footer');
-    await expect(footer.getByTestId('tile-model')).toHaveText(LONG_MODEL);
-    await expect(footer.getByTestId('tile-muted')).toHaveCount(1);
+    await expect(footer.getByTestId('tile-setup')).toHaveText(LONG_MODEL);
+    // Its muted bell is beside its name, not in the footer.
+    await expect(tile(window).locator('.hybrid-tile-head').getByTestId('tile-muted')).toHaveCount(1);
     await expectChildrenWithin(footer, tile(window));
 
     // However far it narrows, nothing runs out, the footer takes one line, and what folded is in the +N.
@@ -75,7 +76,7 @@ test('a crowded tile’s footer, narrowed, stays on one line, folds the rest int
     await expect(window.getByTestId('tile-folded-row').filter({ hasText: 'Role: Follow-up reviewer' })).toBeVisible();
     await window.keyboard.press('Escape');
     // The model badge keeps its full id in its tooltip while its text is cut short.
-    await expect(footer.getByTestId('tile-model')).toHaveAttribute('title', new RegExp(LONG_MODEL));
+    await expect(footer.getByTestId('tile-setup')).toHaveAttribute('title', new RegExp(LONG_MODEL));
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -99,7 +100,7 @@ test('a PR chip arriving in a crowded tile’s footer moves nothing: the name, b
     const rows = [tile(window).locator('.hybrid-tile-name'), tile(window).locator('.hybrid-tile-branch'), tile(window).locator('.hybrid-tile-body')];
     const boxes = () => Promise.all(rows.map((row) => row.boundingBox()));
     // The role is already in the +N: one line has room for the model and little more.
-    await expect(footer.getByTestId('tile-model')).toBeVisible();
+    await expect(footer.getByTestId('tile-setup')).toBeVisible();
     // Its description changes as its turn runs, and with it the rows' heights: measure once the turn is over and they
     // have stopped moving.
     await expect(tile(window)).toHaveAttribute('data-state', 'waiting', { timeout: TURN_MS });

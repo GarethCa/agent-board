@@ -34,7 +34,9 @@ test("an agent's Schedule… puts a clock beside its tile, joined to it: the age
 
     // Waiting for its next run, not for you: out of the inbox.
     await expect(tile(page)).toHaveAttribute('data-state', 'scheduled');
-    await expect(tile(page).getByTestId('tile-clock')).toHaveText(/^ ?(tomorrow )?06:30$/);
+    await expect(tile(page).getByTestId('tile-clock')).toHaveText(/^ ?in \d+ [mhd]( \d+ m)?$/);
+    // Its clock time is in its tooltip.
+    await expect(tile(page).getByTestId('tile-clock')).toHaveAttribute('title', /(tomorrow )?06:30/);
     await expect(page.getByTestId('inbox-count')).toHaveAttribute('data-count', '0');
     const [agent] = await page.evaluate(() => window.agentBoard.agents.list());
     expect(agent!.schedule).toMatchObject({ cron: '30 6 * * *', prompt: 'Check last night’s build', enabled: true });

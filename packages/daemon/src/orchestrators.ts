@@ -13,6 +13,7 @@ import { checkedBranchName, noBranchWhy } from './worktrees.ts';
 import { createCrewEventLog, type LoggedEvent } from './crew-events.ts';
 import { refOf } from './crew-flags.ts';
 import { markSender, sendTrailer } from './sender-marker.ts';
+import { sendTrail } from './send-log.ts';
 import { createReplyPaths } from './reply-paths.ts';
 import { invalidParams, oneOf, optionalBooleanParam, optionalCharacterParam, optionalCountParam, optionalStringParam, paramsObject, stringParam } from './params.ts';
 import {
@@ -906,21 +907,29 @@ export function createOrchestratorHost(options: OrchestratorHostOptions): Orches
             // An orchestrator is busy much of the time, and what it is sent is mostly news for it: kept until its turn
             // ends, never typed into that turn, so its end is never taken for the reply's. Sent between turns while
             // others still wait for it, it goes behind them.
+            // Each step of its delivery is logged with a time, by a short id and its length: never what it says, which
+            // may be secret.
+            const logSend = sendTrail(options.log, to.sessionId, text.length);
             if (midTurn || to.messagesWaiting > 0) {
               agents.queueAfterTurn(to.sessionId, {
                 text: typed,
-                typing: () => awaitingTurn.add(to.sessionId),
-                settled: (started) => {
+                typing: () => {
+                  logSend('typing at its prompt, its turn ended');
+                  awaitingTurn.add(to.sessionId);
+                },
+                settled: (started, why) => {
+                  logSend(started ? 'turn started on it' : (why ?? 'no turn started on it'));
                   if (!started) awaitingTurn.delete(to.sessionId);
                   else if (sender !== null && opens) replies.open(to.sessionId, sender.sessionId, me!.orchestrate);
                 },
               });
+              logSend(`queued until its turn ends (${to.messagesWaiting + 1} waiting)`);
               return { ...sentTo(to, sender, 'queued-after-turn'), typed };
             }
             awaitingTurn.add(to.sessionId);
             let answered: Answered;
             try {
-              answered = await agents.answer(to.sessionId, typed);
+              answered = await agents.answer(to.sessionId, typed, false, logSend);
             } catch (error) {
               awaitingTurn.delete(to.sessionId);
               throw error;

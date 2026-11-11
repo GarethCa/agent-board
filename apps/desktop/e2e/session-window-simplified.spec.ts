@@ -197,7 +197,8 @@ test("the header's one action stops a step with ⌘. and wakes a paused agent, a
     await expect(tile(window)).toHaveAttribute('data-state', 'done');
     await expect(tile(window)).toHaveCount(1);
     // Its SessionEnd hook shows it done before its process has exited; Restart is offered once it has (`endedAt`).
-    await expect.poll(async () => (await agents(window))[0]!.endedAt).not.toBeNull();
+    // The window's exit banner is the sign this window has heard so, which the daemon's own list can be ahead of.
+    await expect(sessionWindow(window).getByTestId('agent-exit-banner')).toBeVisible();
     await more.click();
     await expect(menu.getByRole('menuitem', { name: /^Restart agent/ })).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: /^End agent…/ })).toHaveCount(0);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, AgentSchedule, LinkedIssue, PullRequest, TakenJob } from '@agent-board/daemon/protocol';
-import { badgeLine, foldCount, foldRanking, tileFooter, type FooterItem } from './tile-footer';
+import { badgeLine, foldCount, foldRanking, setupText, tileFooter, type FooterItem } from './tile-footer';
+import { QUIET_TILE } from './tile-shows';
 
 const issue = { provider: 'linear', id: 'ACME-58', title: 'Movable sessions', url: 'https://linear.app/x' } as LinkedIssue;
 const pr = (number: number, state: PullRequest['state'] = 'open', checks: PullRequest['checks'] = 'passing') =>
@@ -189,5 +190,41 @@ describe('how many badges fold to keep the footer to two lines', () => {
     const items = [badge(60, 0), plus(30), fixed(90), fixed(90), fixed(90)];
 
     expect(foldCount({ items, available: 100, gap: 5, maxLines: 2, plusShown: false })).toBe(1);
+  });
+});
+
+describe('the quiet tile’s footer', () => {
+  it('merges the model and the reasoning effort into one tag', () => {
+    const { shown } = tileFooter(agent({ model: 'opus', effort: 'high', role: 'reviewer' }), 0, [], QUIET_TILE);
+    expect(shown).toEqual([
+      { kind: 'setup', model: 'opus', effort: 'high', pending: null },
+      { kind: 'role', role: 'reviewer', name: null },
+    ]);
+    expect(setupText({ kind: 'setup', model: 'opus', effort: 'high', pending: null })).toBe('Opus · High');
+    expect(badgeLine(shown[0]!, 0)).toBe('Model and reasoning: Opus · High');
+    expect(foldRanking(shown).map((index) => shown[index]!.kind)).toEqual(['role', 'setup']);
+  });
+
+  it('shows the one tag for a model alone, or an effort alone, still to come', () => {
+    expect(tileFooter(agent({ model: 'opus' }), 0, [], QUIET_TILE).shown).toEqual([{ kind: 'setup', model: 'opus', effort: null, pending: null }]);
+    const coming = tileFooter(agent({ effort: 'low', effortPending: 'after-turn' }), 0, [], QUIET_TILE).shown;
+    expect(coming).toEqual([{ kind: 'setup', model: null, effort: 'low', pending: 'after-turn' }]);
+    expect(setupText(coming[0] as Parameters<typeof setupText>[0])).toBe('Low…');
+  });
+
+  it('shows no tag for the harness’s own model and effort', () => {
+    expect(tileFooter(agent(), 0, [], QUIET_TILE).shown).toEqual([]);
+  });
+
+  it('keeps Max effort a tag of its own', () => {
+    expect(tileFooter(agent({ model: 'opus', effort: 'max' }), 0, [], QUIET_TILE).shown).toEqual([
+      { kind: 'setup', model: 'opus', effort: null, pending: null },
+      { kind: 'effort', effort: 'max', pending: null },
+    ]);
+    expect(tileFooter(agent({ effort: 'max' }), 0, [], QUIET_TILE).shown).toEqual([{ kind: 'effort', effort: 'max', pending: null }]);
+  });
+
+  it('leaves the muted bell out: it is beside the name', () => {
+    expect(tileFooter(agent({ issue, muted: true }), 0, [], QUIET_TILE).shown).toEqual([{ kind: 'issue', issue }]);
   });
 });

@@ -13,7 +13,7 @@ The daemon owns the board: the SQLite database, the agents' terminals, the hooks
 
 | Subsystem | Files |
 |---|---|
-| Start, stop, the socket | `daemon.ts`, `daemon-launch.ts`, `restart.ts`, `stop.ts`, `lock.ts`, `spawn.ts`, `rpc.ts`, `params.ts`, `client.ts`, `paths.ts`, `migrate.ts` (SQL in `migrations/`) |
+| Start, stop, the socket | `daemon.ts`, `daemon-launch.ts`, `restart.ts`, `stop.ts`, `lock.ts`, `spawn.ts`, `rpc.ts`, `params.ts`, `client.ts`, `paths.ts`, `migrate.ts` (SQL in `migrations/`), `schema-rollback.ts` (backups before migrating, and an older daemon on a newer database) |
 | Agents | `agents.ts`, `agent-spawns.ts` (the harness command line and env), `agent-starts.ts`, `agent-lifecycle.ts`, `worktrees.ts`, `harness-path.ts`, `login-path.ts`, `board-env.ts` |
 | Agent state from hooks | `hook-ingress.ts`, `hook-forwarder.ts`, `hook-states.ts`, `harness-state.ts`, `claude-state.ts`, `codex-state.ts`, `human-status.ts`, `turn-status.ts`, `quiet-turns.ts`, `subagents.ts` |
 | Reading the harness's screen | `startup-screen.ts`, `codex-screen.ts`, `rate-limit-screen.ts`, `codex-config-guard.ts` |

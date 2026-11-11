@@ -305,7 +305,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   let ingress: HookIngress | undefined;
   let external: ExternalSessionHost | undefined;
   try {
-    db = openDatabase(paths.database);
+    db = openDatabase(paths.database, log);
     const liveSessions = db.prepare('SELECT count(*) AS n FROM sessions WHERE ended_at IS NULL');
     const sessionForToken = db.prepare('SELECT id FROM sessions WHERE hook_token_sha256 = ? AND ended_at IS NULL');
     // An ended agent's pane's shell is no session to the user: it neither keeps the daemon up nor stops it stopping.
@@ -1173,7 +1173,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       });
       socket.on('error', () => socket.destroy());
       const feed = lineSplitter((line) => {
-        void handleRpcLine(line, guardedHandlers, subscriber).then((response) => {
+        void handleRpcLine(line, guardedHandlers, subscriber, { log, logPath: paths.log }).then((response) => {
           if (response !== undefined && !socket.destroyed) socket.write(`${JSON.stringify(response)}\n`);
         });
       });
@@ -1343,7 +1343,7 @@ function sessionHandlers(
   };
 }
 
-function openDatabase(path: string): DatabaseSync {
+function openDatabase(path: string, log: (message: string) => void): DatabaseSync {
   const db = new DatabaseSync(path);
   try {
     db.exec('PRAGMA journal_mode = WAL');
@@ -1351,7 +1351,11 @@ function openDatabase(path: string): DatabaseSync {
     db.exec('PRAGMA busy_timeout = 5000');
     // What is deleted is overwritten, so a held payload's copy, once delivered or dropped, doesn't linger in the file.
     db.exec('PRAGMA secure_delete = ON');
-    migrate(db);
+    const { from, to, backup } = migrate(db);
+    if (backup !== undefined) log(`backed up the database at schema version ${from} to ${backup}, then migrated it to ${to}`);
+    if (from > to) {
+      log(`the database is at schema version ${from}, newer than this daemon knows (${to}); opening it, as every newer migration is marked backward-safe`);
+    }
     return db;
   } catch (error) {
     db.close();

@@ -2,16 +2,17 @@
 // pixel ratio, which the board's CSS transform then stretches, so its text blurs at any zoom but 100%. The DOM renderer
 // has no such problem: the browser rasterises its text at the final scale.
 //
-// So once the zoom settles, the canvas is redrawn at the size it has on the screen, each of its pixels one device pixel.
-// Only the device side of xterm's dimensions moves. The CSS side stays at the size for 100%, so fitting, columns and rows
-// never depend on the zoom, and the session is never resized by it (each resize redraws the agent's screen). A transform
-// on the terminal's screen takes up what remains: cells hold whole device pixels, so a zoomed grid falls a little short of
-// its layout size (`terminal-strip-fill.ts` carries its rows' colours across the difference), and the screen's corner moves onto a whole device pixel. The mouse mapping reads the screen's on-screen
-// box (`zoomed-mouse.ts`), so it follows the transform by itself.
+// So once the zoom settles, the canvas is redrawn at about the size it has on the screen. Only the device side of
+// xterm's dimensions moves. The CSS side stays at the size for 100%, so fitting, columns and rows never depend on the
+// zoom, and the session is never resized by it (each resize redraws the agent's screen). Its cells hold the whole device
+// pixels nearest the zoomed cell, and a transform on the terminal's screen shows the grid at its exact layout size: it
+// fills its pane as at 100%, keeps its proportions, and stays put as the zoom settles, at the cost of the canvas being
+// resampled by under half a device pixel a cell (none where the zoomed cell is whole, as at 100%). The screen's corner
+// moves onto a whole device pixel. The mouse mapping reads the screen's on-screen box (`zoomed-mouse.ts`), so it follows
+// the transform by itself.
 //
 // While the zoom moves the canvas is stretched as before, as redrawing every frame would cost far more than it shows.
 import type { Terminal } from '@xterm/xterm';
-import { fillStrip, type StripBox, type StripFill, type ThemeColours } from './terminal-strip-fill';
 
 /**
  * Below this zoom text is past reading, and the canvas stops shrinking: the transform scales it down the rest of the way.
@@ -20,25 +21,6 @@ import { fillStrip, type StripBox, type StripFill, type ThemeColours } from './t
 const MIN_RASTER_ZOOM = 0.25;
 /** The most pixels a terminal's canvas holds, about 60 MB at four bytes each: past it, the transform scales it up the rest of the way. */
 const MAX_RASTER_PIXELS = 16_000_000;
-
-/** A cell at a zoom measured from a box's float size can land just under the whole number it should be: this keeps `floor` from losing a pixel to it. */
-const FLOOR_EPSILON = 1e-3;
-
-/**
- * The most of a cell rounding down may lose. Past it the cell takes the next whole pixel, and the transform squeezes the
- * canvas: about 3% at the zooms people use, more at the low end where text is barely readable anyway (up to about 26%).
- * That is softer than one pixel to a pixel, but far less visible than text and a grid that much smaller. At a ratio of 2 it matters only at free zooms; at a ratio of 1, where a pixel is much of a cell, at ordinary ones.
- */
-const MAX_CELL_LOSS = 0.1;
-
-/** The fewest device pixels whole-pixel cells must lose across a row for the strip beside the grid to be shown. */
-const MIN_STRIP_LOSS = 0.5;
-
-/** The whole pixels a cell of `exact` pixels holds: rounded down, unless that loses too much of it. */
-function wholeCell(exact: number): number {
-  const floor = Math.max(1, Math.floor(exact + FLOOR_EPSILON));
-  return (exact - floor) / exact > MAX_CELL_LOSS ? floor + 1 : floor;
-}
 
 export interface RasterInput {
   /** The measured character, in CSS pixels. */
@@ -68,15 +50,13 @@ export interface Raster {
     cell: { width: number; height: number };
     canvas: { width: number; height: number };
   };
-  /** The scale on the screen element that lands each canvas pixel on one device pixel. */
+  /** The scale on the screen element that shows the grid at its exact layout size, past `css.canvas`'s rounding to whole CSS pixels. */
   screenScale: { x: number; y: number };
-  /** The strip right of the grid that its whole-pixel cells leave, in the screen's own CSS pixels, for `fillStrip` to carry the rows on to their layout width. */
-  strip: StripBox;
 }
 
 /**
- * The canvas and cells for a zoom. At 100% the cells are those xterm's own renderer computes; zoomed, they are as many
- * whole device pixels as fit in the zoomed cell (see `MAX_CELL_LOSS`), so the grid never runs past its layout size.
+ * The canvas and cells for a zoom. At 100% the cells are those xterm's own renderer computes; zoomed, they are the whole
+ * device pixels nearest the zoomed cell, and the grid is shown at its layout size whatever they come to.
  */
 export function raster({ charWidth, charHeight, lineHeight, letterSpacing, dpr, zoom, cols, rows }: RasterInput): Raster {
   const spacing = Math.round(letterSpacing);
@@ -84,22 +64,18 @@ export function raster({ charWidth, charHeight, lineHeight, letterSpacing, dpr, 
   const baseCellHeight = Math.floor(Math.ceil(charHeight * dpr) * lineHeight);
   const largest = Math.sqrt(MAX_RASTER_PIXELS / Math.max(1, cols * baseCellWidth * rows * baseCellHeight));
   const scale = Math.max(MIN_RASTER_ZOOM, Math.min(zoom, largest));
-  const cellWidth = wholeCell(baseCellWidth * scale);
-  const cellHeight = wholeCell(baseCellHeight * scale);
+  // A zoom read off a float box can land a hair under a whole cell: rounding to the nearest takes it either way. At the
+  // cap, rounding up would pass it, so the cells round down there.
+  const capped = scale === largest;
+  const whole = (base: number) => Math.max(1, (capped ? Math.floor : Math.round)(base * scale));
+  const cellWidth = whole(baseCellWidth);
+  const cellHeight = whole(baseCellHeight);
   const charHeightDevice = lineHeight === 1 ? cellHeight : Math.max(1, Math.floor(cellHeight / lineHeight));
   const canvas = { width: cols * cellWidth, height: rows * cellHeight };
   const css = {
     cell: { width: baseCellWidth / dpr, height: baseCellHeight / dpr },
     canvas: { width: Math.round((cols * baseCellWidth) / dpr), height: Math.round((rows * baseCellHeight) / dpr) },
   };
-  const screenScale = {
-    x: (cols * Math.min(cellWidth, baseCellWidth * scale)) / (dpr * scale * css.canvas.width),
-    y: (rows * Math.min(cellHeight, baseCellHeight * scale)) / (dpr * scale * css.canvas.height),
-  };
-  // The strip takes up what the transform drew in. It is shown only when whole-pixel cells lose half a device pixel or
-  // more on the screen: what is left at 100% (or wherever the cells are whole) is `css.canvas`'s own rounding.
-  const lost = (cols * (baseCellWidth * scale - Math.min(cellWidth, baseCellWidth * scale)) * zoom) / scale;
-  const strip = lost < MIN_STRIP_LOSS ? 0 : css.canvas.width / screenScale.x - css.canvas.width;
   return {
     devicePixelRatio: dpr * Math.min(cellWidth / baseCellWidth, cellHeight / baseCellHeight),
     device: {
@@ -108,9 +84,8 @@ export function raster({ charWidth, charHeight, lineHeight, letterSpacing, dpr, 
       canvas,
     },
     css,
-    // A cell rounded up is shown at its exact size, so the grid never runs past its layout size.
-    screenScale,
-    strip: { left: css.canvas.width, width: strip, height: css.canvas.height },
+    // Half an odd device width rounds `css.canvas` up to a whole CSS pixel: this takes the grid back to its exact size.
+    screenScale: { x: (cols * baseCellWidth) / (dpr * css.canvas.width), y: (rows * baseCellHeight) / (dpr * css.canvas.height) },
   };
 }
 
@@ -153,7 +128,6 @@ interface Core {
   _coreBrowserService?: BrowserService;
   _charSizeService?: CharSizeService;
   _renderService?: RenderService;
-  _themeService?: { readonly colors: ThemeColours };
   screenElement?: HTMLElement;
 }
 
@@ -201,14 +175,12 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
   let zoom = 1;
   let offset = { x: 0, y: 0 };
   let current: Raster | undefined;
-  let fill: StripFill | undefined;
 
   const place = () => {
     if (current === undefined) return;
     const { x, y } = current.screenScale;
     screen.style.transformOrigin = '0 0';
     screen.style.transform = `translate(${offset.x}px, ${offset.y}px) scale(${x}, ${y})`;
-    fill?.place(current.strip);
   };
 
   const compute = () =>
@@ -313,8 +285,6 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
         glyphScale = 1;
         zoom = 1;
         offset = { x: 0, y: 0 };
-        fill?.dispose();
-        fill = undefined;
         screen.style.removeProperty('transform');
         screen.style.removeProperty('transform-origin');
         // The DOM renderer took its sizes as it was made, through the scale it no longer has.
@@ -327,8 +297,6 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
         return;
       }
       renderer = webgl;
-      const theme = core?._themeService;
-      if (fill === undefined && theme !== undefined) fill = fillStrip(terminal, screen, () => theme.colors);
       adopt(webgl);
       settle();
     },
@@ -338,7 +306,6 @@ export function sharpen(terminal: Terminal, onRedrawn?: (startedAt: number) => v
       for (const name of ARRIVALS) page.removeEventListener(name, arrived, true);
       tileMoves.disconnect();
       clearTimeout(afterMove);
-      fill?.dispose();
       renderer = undefined;
     },
   };

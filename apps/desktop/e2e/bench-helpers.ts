@@ -341,7 +341,9 @@ export function tracer(session: CDPSession): Tracer {
 /** The board's viewport: React Flow's transform on its viewport element. */
 async function viewport(window: Page): Promise<{ x: number; y: number; zoom: number }> {
   const style = (await window.locator('.react-flow__viewport').getAttribute('style')) ?? '';
-  const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)\s*scale\(([-\d.]+)\)/.exec(style);
+  // A number as CSS writes it, exponent too: a pan that eases to a stop can leave `-1.3635e-06px`.
+  const number = String.raw`(-?[\d.]+(?:e[-+]?\d+)?)`;
+  const match = new RegExp(String.raw`translate\(${number}px,\s*${number}px\)\s*scale\(${number}\)`).exec(style);
   if (!match) throw new Error(`unexpected viewport transform: ${style}`);
   return { x: Number(match[1]), y: Number(match[2]), zoom: Number(match[3]) };
 }

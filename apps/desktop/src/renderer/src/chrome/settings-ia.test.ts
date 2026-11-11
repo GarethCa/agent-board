@@ -48,6 +48,8 @@ describe('the Settings window’s groups', () => {
       'conversationAs',
       // Added since, under Classic only: the Simplified design always has the simple sidebar.
       'agentSidebar',
+      // Added since, under Classic only: what an agent's tile shows at rest.
+      'tileShows',
       // Added since: whether terminals draw with the GPU.
       'gpuTerminals',
       'keepTerminals',

@@ -89,16 +89,19 @@ export const canvasOnScreen = (terminal: Locator) =>
   });
 
 /**
- * Each canvas pixel of `terminal` is one device pixel, its corner on a whole one: nothing is left for the compositor to
- * resample. A terminal gets there a moment after the board comes to rest, so a shot of one waits for this first.
+ * `terminal` draws for the zoom on the screen it is on, its corner on a whole device pixel: each canvas pixel covers one
+ * device pixel, or within an eighth of one where the zoomed cell is not a whole number of them (half a device pixel on a
+ * cell of four or more). A terminal gets there a moment after the board comes to rest, so a shot of one waits for this
+ * first.
  */
 export async function expectSharp(terminal: Locator, { soft = false } = {}): Promise<void> {
   await expect
     .configure({ soft })
     .poll(async () => {
       const { pixels, onScreen, corner } = await canvasOnScreen(terminal);
-      const off = [Math.abs(onScreen.width - pixels.width), Math.abs(onScreen.height - pixels.height), Math.abs(corner.x - Math.round(corner.x)), Math.abs(corner.y - Math.round(corner.y))];
-      return Math.max(...off) < 0.05 ? 'sharp' : `canvas ${pixels.width}×${pixels.height}, on screen ${onScreen.width}×${onScreen.height} at ${corner.x}, ${corner.y}`;
+      const stretch = Math.max(Math.abs(onScreen.width / pixels.width - 1), Math.abs(onScreen.height / pixels.height - 1));
+      const offCorner = Math.max(Math.abs(corner.x - Math.round(corner.x)), Math.abs(corner.y - Math.round(corner.y)));
+      return stretch <= 0.125 && offCorner < 0.05 ? 'sharp' : `canvas ${pixels.width}×${pixels.height}, on screen ${onScreen.width}×${onScreen.height} at ${corner.x}, ${corner.y}`;
     }, { timeout: 5_000 })
     .toBe('sharp');
 }

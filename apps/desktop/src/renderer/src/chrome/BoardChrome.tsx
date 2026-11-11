@@ -3,7 +3,7 @@ import type { Agent, Shell, Zone } from '@agent-board/daemon/protocol';
 import type { Node } from '@xyflow/react';
 import { VIEW_KEYS } from '../../../shared/view-saver';
 import { useDaemonStatus } from '../DaemonStatus';
-import { isTyping } from '../board/use-tile-moves';
+import { isTyping } from '../keys/typing';
 import { pressed } from '../keys/registry';
 import { BoardMenu, type BoardMenuState } from './BoardMenu';
 import { CreateToolbar, type CreateToolbarProps } from './CreateToolbar';

@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { launch, sessionWindow, SHELL_ENV, spawnAgent, tile, windowKey } from './agent-helpers.ts';
+import { launch, sessionWindow, setClickOpens, SHELL_ENV, spawnAgent, tile, windowKey } from './agent-helpers.ts';
 import { test, browseForZone, pickFolderNext, removeDataDir, tempDataDir } from './launch.ts';
 import { scratch } from './scratch.ts';
 import { openSettings, settingsSection } from './settings-helpers.ts';
@@ -102,6 +102,88 @@ test('? opens the cheat sheet for where it is pressed, ⌘/ from a terminal, and
     await window.keyboard.press('?');
     await expect(sheet(window)).toBeVisible();
     await expect(row(window, 'move.cheatSheet')).toBeVisible();
+  } finally {
+    await app.close().catch(() => {});
+    await removeDataDir(dataDir);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Whether the focus is somewhere, by a test run in the page. */
+const focusIn = (page: Page, selector: string) => page.evaluate((each) => document.activeElement?.closest(each) !== null && document.activeElement !== null, selector);
+/** Whether the focus is on the board tile of the one agent: its node, which stays as its window or expanded tile goes. */
+const onAgentTile = (page: Page) => page.evaluate(() => document.activeElement?.matches('.react-flow__node') === true && document.activeElement.querySelector('[data-testid="agent-tile"]') !== null);
+
+test('⌘J leaves the terminal for the header, ↵ goes back, Esc there and ⌘Esc anywhere leave it for its tile, F6 steps regions; with the extended keys off, none do', async () => {
+  const { dir, repo, env } = scratch('output');
+  const dataDir = tempDataDir();
+  const { app, window } = await launch(dataDir, { ...env, ...SHELL_ENV });
+  try {
+    await pickFolderNext(app, repo);
+    await browseForZone(window);
+    await spawnAgent(window, 'monorepo', 'Way out');
+    await expect(tile(window)).toHaveCount(1);
+    const inTerminal = () => window.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') === true);
+    const head = sessionWindow(window).locator('.session-window-head');
+
+    // A session window: ⌘J to its header, ↵ back into the terminal.
+    await tile(window).dblclick({ position: { x: 40, y: 70 } });
+    await expect(sessionWindow(window)).toBeVisible();
+    await expect.poll(inTerminal).toBe(true);
+    await window.keyboard.press(windowKey('j'));
+    await expect(head).toBeFocused();
+    await window.keyboard.press('Enter');
+    await expect.poll(inTerminal).toBe(true);
+    // F6 to the next region, ⇧F6 back into the terminal.
+    await window.keyboard.press('F6');
+    await expect.poll(inTerminal).toBe(false);
+    await expect.poll(() => focusIn(window, '.session-window')).toBe(true);
+    await window.keyboard.press('Shift+F6');
+    await expect.poll(inTerminal).toBe(true);
+    // Esc in the terminal is the terminal's; from the header it minimises the window, the focus on its tile.
+    await window.keyboard.press('Escape');
+    await expect(sessionWindow(window)).toBeVisible();
+    await window.keyboard.press(windowKey('j'));
+    await window.keyboard.press('Escape');
+    await expect(sessionWindow(window)).toBeHidden();
+    await expect.poll(() => onAgentTile(window)).toBe(true);
+    // ⌘Esc does it from the terminal.
+    await window.getByTestId('dock-item').getByRole('button').first().click();
+    await expect(sessionWindow(window)).toBeVisible();
+    await sessionWindow(window).locator('.xterm').click();
+    await expect.poll(inTerminal).toBe(true);
+    await window.keyboard.press(windowKey('Escape'));
+    await expect(sessionWindow(window)).toBeHidden();
+    await expect.poll(() => onAgentTile(window)).toBe(true);
+    await window.getByTestId('dock-item').getByRole('button').first().click();
+    await window.getByRole('button', { name: 'Close session window' }).click();
+    await expect(sessionWindow(window)).toHaveCount(0);
+
+    // An expanded tile: ⌘J to its header, Esc collapses it, the focus on its tile.
+    await setClickOpens(window, 'Expand in place');
+    const expanded = window.getByTestId('expanded-tile');
+    await tile(window).dblclick({ position: { x: 40, y: 70 } });
+    await expect(expanded).toBeVisible();
+    await expanded.locator('.xterm').click();
+    await expect.poll(inTerminal).toBe(true);
+    await window.keyboard.press(windowKey('j'));
+    await expect(expanded.locator('.expanded-tile-head')).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(expanded).toHaveCount(0);
+    await expect(tile(window)).toHaveCount(1);
+    await expect.poll(() => onAgentTile(window)).toBe(true);
+
+    // The setting off: as before, the terminal keeps ⌘J, F6 and ⌘Esc, and the tile stays expanded.
+    const settings = await openSettings(window, 'general.keyboard');
+    await settingsSection(settings, 'Keyboard').getByRole('switch', { name: 'Extended keyboard shortcuts' }).uncheck();
+    await settings.close();
+    await tile(window).dblclick({ position: { x: 40, y: 70 } });
+    await expect(expanded).toBeVisible();
+    await expanded.locator('.xterm').click();
+    await expect.poll(inTerminal).toBe(true);
+    for (const key of [windowKey('j'), 'F6', windowKey('Escape'), 'Escape']) await window.keyboard.press(key);
+    await expect.poll(inTerminal).toBe(true);
+    await expect(expanded).toBeVisible();
   } finally {
     await app.close().catch(() => {});
     await removeDataDir(dataDir);

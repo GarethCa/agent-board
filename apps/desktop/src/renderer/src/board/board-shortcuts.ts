@@ -3,7 +3,7 @@ import type { PointerMode } from '../chrome/CreateToolbar';
 import { centreOf, type Point, type Rect } from '../geometry';
 import { pressed, type KeyId } from '../keys/registry';
 import type { ArmedTool } from './ToolOverlay';
-import { isTyping } from './use-tile-moves';
+import { isTyping } from '../keys/typing';
 
 /** Where ⌫ belongs to what is shown, not to the selected tile: an expanded tile or a session window. */
 export const SESSION_SURFACES = '.expanded-tile, [data-testid="session-window"]';

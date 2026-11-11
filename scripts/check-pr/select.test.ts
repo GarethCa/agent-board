@@ -70,12 +70,6 @@ describe('selectChecks', () => {
     expect(selectChecks(['scripts/visual-linux.sh'])).toMatchObject({ full: false, unit: [STAMP_GUARD], e2e: [], visual: false });
   });
 
-  it('runs nothing for the board recordings, which no gate step runs', () => {
-    for (const file of ['apps/desktop/e2e/capture/capture-spike.spec.ts', 'apps/desktop/e2e/capture/shots.ts']) {
-      expect(selectChecks([file])).toMatchObject({ full: false, unit: [], e2e: [], visual: false });
-    }
-  });
-
   it('always runs the release leak rules with the unit tests, since vitest related would never pick them', () => {
     expect(selectChecks(['apps/desktop/src/x.test.ts']).unit).toContain('scripts/release-public/leak-rules.test.ts');
     expect(selectChecks(['docs/BRIEF.md']).unit).toEqual([]);

@@ -193,8 +193,8 @@ test('a start an orchestrator made, in the gallery with a long name, an issue an
     expect(failed).toHaveLength(1);
     expect(failed[0]).toMatchObject({ outside: [], shown: [] });
     expect(failed[0]!.errorHeight).toBeGreaterThanOrEqual(14);
-    // Live, the same line from its orchestrator shows.
-    await expect(window.locator('[data-session-id="gallery-receiving"]').getByTestId('tile-set-by')).toBeVisible();
+    // Live, the same line from its orchestrator shows, marked as set by one.
+    await expect(window.locator('[data-session-id="gallery-receiving"]').getByTestId('tile-set-by-mark')).toBeVisible();
   } finally {
     await app.close();
     await removeDataDir(dataDir);
@@ -238,7 +238,10 @@ test('an orchestrator starts a slow worker with a long name, a role, its status 
     for (const each of await startingTiles(window, EVERY_TILE)) expect({ name: each.name, outside: each.outside }).toEqual({ name: each.name, outside: [] });
     // Live, the line its orchestrator set is drawn again (it yields to the body's lines, so a two-line name can hide it).
     const worker = tile(window).filter({ has: window.getByTitle('Rework the movable sessions follow-up so the dock keeps up', { exact: true }) });
-    await expect(worker.getByTestId('tile-set-by')).toHaveText('set by ◎ Lead a crowded crew: Fix the flaky test');
+    // Marked on the tile; who set it is in its hover card.
+    await expect(worker.getByTestId('tile-set-by-mark')).toBeVisible();
+    await worker.hover();
+    await expect(window.getByTestId('tile-details')).toContainText('Status set by Lead a crowded crew: Fix the flaky test');
   } finally {
     await app.close();
     await removeDataDir(dataDir);

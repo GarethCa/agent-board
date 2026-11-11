@@ -6,7 +6,7 @@ import { agents, launch, spawnAgent, tile, zones } from './agent-helpers.ts';
 import { addEmptyZone, browseForZone, pickFolderNext, removeDataDir, tempDataDir, test } from './launch.ts';
 import { scratch } from './scratch.ts';
 
-// Demo mode (AGENT_BOARD_DEMO=1, for recording the promo): off unless asked for, and then the board hides its dev
+// Demo mode (AGENT_BOARD_DEMO=1, for recording a demo video): off unless asked for, and then the board hides its dev
 // chrome and gives a recording its camera and cursor through window.__demo.
 
 /** The board's viewport, as React Flow transforms it. */
@@ -53,10 +53,10 @@ test('with AGENT_BOARD_DEMO=1, hides the daemon status, moves the camera on cue 
     expect(cutShort).toBe('settled');
 
     // Frames a zone, and says when the move has finished.
-    await addEmptyZone(page, 'Promo');
+    await addEmptyZone(page, 'Showcase');
     // The view is still easing to the new zone: let it finish, or its frames land after the moves below and undo them.
     await untilStill(() => viewTransform(page));
-    const zone = await page.evaluate(async () => (await window.agentBoard.zones.list()).find((each) => each.name === 'Promo')!);
+    const zone = await page.evaluate(async () => (await window.agentBoard.zones.list()).find((each) => each.name === 'Showcase')!);
     await page.evaluate(() => window.__demo!.camera!({ x: -5000, y: -5000, width: 40, height: 40 }, 0));
     await page.evaluate((id) => window.__demo!.fit!(id, 300, 'linear'), zone.id);
     // A move resolves once its time is up, which a stalled window can reach before its last frame: read the view once it is still.

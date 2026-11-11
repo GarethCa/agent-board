@@ -5,7 +5,7 @@ import { pressed } from '../../keys/registry';
 import { boundsOnBoard, isItemNode, ITEM_NODE_PREFIX, placeOnBoard, type ItemNodeType } from '../items/items';
 import type { TileData, TileNodeType } from '../tile';
 import { compactSizeOf, isSessionTile, isZone, subjectOf, type BoardNode } from '../tiles';
-import { isTyping } from '../use-tile-moves';
+import { isTyping } from '../../keys/typing';
 import type { Rect } from '../../geometry';
 import { align, distribute, reorder, type Alignment, type Reorder } from './arrange';
 import { BOARD_CLIPBOARD_TYPE, centreOf, copied, diagramCopy, mermaidOf, parseCopied, placed, plainText, serialiseCopied, skippedNotice, type Copied } from './clipboard';

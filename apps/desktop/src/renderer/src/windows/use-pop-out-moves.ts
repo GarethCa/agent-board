@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { errorMessage } from '../../../shared/errors';
-import { isTyping } from '../board/use-tile-moves';
+import { isTyping } from '../keys/typing';
 import { historyStep, inOverlay } from '../keys';
 import { agentWorktrees, tabMover, useDragsFromOtherWindows, type TabMove } from '../session/shell-moves';
 import { useLiveAgents } from '../session/use-live-board';

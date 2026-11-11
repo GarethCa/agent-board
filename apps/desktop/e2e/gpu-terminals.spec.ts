@@ -197,19 +197,19 @@ test('an expanded pane panned out of view and back comes back on WebGL, and its 
 /** A window that paints as a Retina display does, with the app's own renderer choice. */
 const RETINA_ENV = { ...GPU_ENV, AGENT_BOARD_TEST_DEVICE_SCALE: '2' };
 
-/** A shell tile expanded in place, drawing with WebGL. */
-async function expandedShell(window: Page): Promise<Locator> {
+/** A shell tile expanded in place, drawing with `renderer` (WebGL unless the window keeps to the DOM renderer). */
+async function expandedShell(window: Page, renderer: 'webgl' | 'dom' = 'webgl'): Promise<Locator> {
   await setClickOpens(window, 'Expand in place');
   await newShell(window);
   await expect(sessionWindow(window)).toHaveAttribute('data-state', 'attached');
   await window.getByRole('button', { name: 'Close session window' }).click();
   await window.getByTestId('shell-tile').dblclick();
   const tile = window.getByTestId('expanded-tile');
-  await expect(xterm(tile)).toHaveAttribute('data-renderer', 'webgl');
+  await expect(xterm(tile)).toHaveAttribute('data-renderer', renderer);
   return tile;
 }
 
-test('at a device pixel ratio of 2 an expanded terminal draws one canvas pixel to a device pixel at every zoom, and the zoom never resizes its session', async () => {
+test('at a device pixel ratio of 2 an expanded terminal draws for each zoom it settles at, and the zoom never resizes its session', async () => {
   const dataDir = tempDataDir();
   const { app, window } = await launch(dataDir, RETINA_ENV);
   try {
@@ -252,6 +252,55 @@ test('at a device pixel ratio of 2 an expanded terminal draws one canvas pixel t
     await removeDataDir(dataDir);
   }
 });
+
+/**
+ * Where the terminal in `pane` draws its grid, in the board's own pixels (its box on the screen over the board's zoom),
+ * from the pane's top-left corner: the same at every zoom for a grid that stays put, fills its pane as it does at 100%
+ * and keeps its proportions.
+ */
+const gridInPane = (pane: Locator) =>
+  pane.evaluate((element) => {
+    const zoom = new DOMMatrix(getComputedStyle(document.querySelector('.react-flow__viewport')!).transform).a;
+    const outer = element.getBoundingClientRect();
+    const grid = element.querySelector('.xterm-screen')!.getBoundingClientRect();
+    return { left: (grid.left - outer.left) / zoom, top: (grid.top - outer.top) / zoom, right: (outer.right - grid.right) / zoom, bottom: (outer.bottom - grid.bottom) / zoom };
+  });
+
+for (const renderer of ['webgl', 'dom'] as const) {
+  test(`at a device pixel ratio of 2 an expanded terminal (${renderer}) fills its pane as at 100%, on all four sides, at every zoom in and out`, async () => {
+    const dataDir = tempDataDir();
+    const { app, window } = await launch(dataDir, renderer === 'webgl' ? RETINA_ENV : { ...SHELL_ENV, AGENT_BOARD_TEST_DEVICE_SCALE: '2' });
+    try {
+      const tile = await expandedShell(window, renderer);
+      const pane = tile.getByTestId('session-terminal');
+      await expectFitted(window, tile);
+      await viewSettled(window);
+      await settledBox(tile);
+      const atFull = await gridInPane(pane);
+      /** Within a device pixel on the screen, in the board's pixels at `zoom`. */
+      const off = (now: typeof atFull, zoom: number) => {
+        const worst = Math.max(...(['left', 'top', 'right', 'bottom'] as const).map((side) => Math.abs(now[side] - atFull[side]) * zoom));
+        return worst <= 0.5 ? 'fills' : `${JSON.stringify(now)} against ${JSON.stringify(atFull)} at 100%, at a zoom of ${zoom}`;
+      };
+      const zooms: number[] = [];
+      for (const [button, clicks] of [['Zoom In', 2], ['Zoom Out', 5]] as const) {
+        for (let i = 0; i < clicks; i++) {
+          await window.getByRole('button', { name: button }).click();
+          await settledBox(tile);
+          const zoom = await boardZoom(window);
+          zooms.push(zoom);
+          await expect.poll(async () => off(await gridInPane(pane), zoom), { timeout: 3_000 }).toBe('fills');
+        }
+      }
+      // It went both ways past 100%.
+      expect(Math.max(...zooms)).toBeGreaterThan(1.2);
+      expect(Math.min(...zooms)).toBeLessThan(0.8);
+    } finally {
+      await app.close();
+      await removeDataDir(dataDir);
+    }
+  });
+}
 
 test('at a device pixel ratio of 2 a terminal of an odd number of columns has no canvas a pixel wider than its grid, in the session window', async () => {
   const dataDir = tempDataDir();

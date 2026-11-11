@@ -23,6 +23,19 @@ const nearEdge = async (element: Locator, edge: 'right' | 'bottom') => {
 
 /** Every shell the daemon has, tiles and tabs. */
 const shells = (page: Page) => page.evaluate(() => window.agentBoard.shells.list());
+/**
+ * Shows the session `name` as a tab from the window's + menu. A click on + as the tab beside it closes can be lost,
+ * and one on a menu already opening shuts it: so + is clicked only while its menu is shut, until the session is listed.
+ */
+const showSession = async (win: Locator, name: string) => {
+  const plus = win.getByRole('button', { name: 'New tab' });
+  const row = win.page().getByRole('menuitem', { name });
+  await expect(async () => {
+    if ((await plus.getAttribute('aria-expanded')) !== 'true') await plus.click();
+    await expect(row).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 10_000 });
+  await row.click();
+};
 /** Whether the session still runs, never restarted. */
 const running = async (page: Page, sessionId: string) =>
   (await page.evaluate(() => window.agentBoard.sessions.list())).some((session) => session.id === sessionId && session.endedAt === null);
@@ -344,8 +357,7 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
     await expect(agentView.locator('.xterm[data-kept="yes"]')).toHaveCount(1);
 
     // + shows another agent's session as a tab, its own still: × only takes the tab away.
-    await win.getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: review!.name }).click();
+    await showSession(win, review!.name);
     await expect(tabNamed(win, review!.name)).toHaveAttribute('data-active', 'true');
     const reviewView = win.locator(`[data-testid="session-tab-view"][data-tab="session:agent:${review!.sessionId}"]`);
     await expect(reviewView).toContainText('Which database should I use', { timeout: TURN_MS });
@@ -354,8 +366,7 @@ test("a window's tabs drag onto a pane's edge to split it and onto another pane'
     expect(await running(window, review!.sessionId)).toBe(true);
 
     // Shown again, below the rest: the window is kept as it is laid out, across a restart.
-    await win.getByRole('button', { name: 'New tab' }).click();
-    await window.getByRole('menuitem', { name: review!.name }).click();
+    await showSession(win, review!.name);
     await dragTo(tabNamed(win, review!.name), await nearEdge(shownViews(win), 'bottom'));
     await expect(panesOf(win)).toHaveCount(2);
     await expect(panesOf(win).nth(1).getByTestId('session-tab')).toHaveText([review!.name]);
